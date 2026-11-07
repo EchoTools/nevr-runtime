@@ -1,16 +1,18 @@
 """#1424: docs/reference/content-packs.md stays true of the tree.
 
-The page tells a plugin author how a plugin serves a content pack: the runtime serves none itself, so the plugin
-answers the game's package opens and its script loads, from the early plugin pass. Prose cannot be wrong
-in a way anything notices, so these checks read the sources the page relies on:
+The page says the runtime serves an installed content pack itself: one hook on the game's CFile::Open for manifests and
+packages, a load rewriter on the runtime's own LoadLibrary hooks for scripts, installed after the early plugin pass and
+before the game's first command-line pass reads its data. Prose cannot be wrong in a way anything notices, so these
+checks read the sources the page relies on:
 
-- nothing this tree loads into the game process hooks CreateFileW or CreateFileA or touches the game's script loader,
-  so a pack plugin may (when that changes, the page is wrong and this fails);
-- the runtime owns the four LoadLibrary hooks and records each with HookGuard, and a plugin that re-hooks a recorded
-  address is reported through ServerFatal after its init, so the page's "never hook LoadLibrary*" holds;
+- the hook's address and the page's agree, and the hook is on CFile::Open, not on kernel32's CreateFileW/A (no source the
+  game process loads takes their address) and not on the game's script loader (no source names it);
+- the script rewriter is registered on the runtime's LoadLibrary hooks, which the runtime owns and records with HookGuard,
+  and a plugin that re-hooks a recorded address is reported through ServerFatal, so the page's "never hook LoadLibrary*"
+  holds;
 - the page and the SDK give the script loader the same address and the same four arguments;
-- plugins load from <root>\\plugins, so a plugin finds the root as its own directory's parent;
-- the early pass the page asks for exists and is documented under the key the page names.
+- packs are read from <root>\\content, and the install runs after the early pass and before the original call;
+- every refusal reason the page lists is a token the code writes.
 """
 
 import pathlib
@@ -76,7 +78,7 @@ def takes_create_file(line: str) -> bool:
     return bool(CREATE_FILE_BY_NAME.search(joined) or CREATE_FILE_AS_VALUE.search(without_strings(line)))
 
 
-class TheRuntimeLeavesThePackSeamsToAPlugin(unittest.TestCase):
+class ThePackIsServedThroughTheGamesOwnOpen(unittest.TestCase):
     def test_the_matcher_tells_a_hook_from_a_call(self):
         hooks = ('auto p = GetProcAddress(k32, "CreateFileW");', "Hooking::Attach(&CreateFileW, Hook);",
                  "auto p = reinterpret_cast<void*>(CreateFileA);", "MH_CreateHook(::CreateFileW, Hook, &orig);",
@@ -101,8 +103,8 @@ class TheRuntimeLeavesThePackSeamsToAPlugin(unittest.TestCase):
             for number, line in enumerate(code(path.read_text(encoding="utf-8", errors="replace")).splitlines(), 1):
                 if takes_create_file(line):
                     hits.append(f"{path.relative_to(REPO)}:{number}: {line.strip()}")
-        self.assertEqual(hits, [], f"the runtime now takes CreateFileW/A's address; update {DOC} (a pack plugin may "
-                                   "no longer hook it)")
+        self.assertEqual(hits, [], f"the runtime now takes CreateFileW/A's address; packs are served through CFile::Open "
+                                   f"alone ({DOC}), so a kernel32 hook is a second path")
 
     def test_no_runtime_source_names_the_script_loader(self):
         spelling = re.compile(r"\b(?:0x0*1400eb0f0|0x0*eb0f0|VA_LOAD_SCRIPT_DLL)\b", re.I)
@@ -111,8 +113,8 @@ class TheRuntimeLeavesThePackSeamsToAPlugin(unittest.TestCase):
             for number, line in enumerate(code(path.read_text(encoding="utf-8", errors="replace")).splitlines(), 1):
                 if spelling.search(line):
                     hits.append(f"{path.relative_to(REPO)}:{number}: {line.strip()}")
-        self.assertEqual(hits, [], f"the runtime now names the script loader; update {DOC} (a pack plugin may no "
-                                   "longer hook it)")
+        self.assertEqual(hits, [], f"the runtime now names the script loader; {DOC} says scripts are served by the "
+                                   "content-pack load rewriter, not a hook on the loader")
 
     def test_the_scan_sees_the_game_process_sources(self):
         # A scope that reads nothing passes every check above.
@@ -154,24 +156,48 @@ class TheScriptLoaderIsDescribedOnce(unittest.TestCase):
         self.assertIn(f"`{SDK}`", doc)
 
 
-class WhereThePluginFindsTheRoot(unittest.TestCase):
-    def test_plugins_load_from_the_roots_plugins_directory(self):
-        root = code(read("src/core/nevr_root.h"))
-        self.assertRegex(root, r'kPlugins\s*=\s*L"plugins"\s*;')
-        self.assertIn("nevr_root::PluginsDir(nevr_root::RootA())", code(read("src/runtime/ext/plugin_loader.cpp")))
-        self.assertIn("Plugins load from `<root>\\plugins\\`", read(DOC))
+INSTALL = "src/runtime/content/content_pack_install.cpp"
+SERVE = "src/runtime/content/content_pack.cpp"
+JSON = "src/runtime/content/content_json.cpp"
 
 
-class TheEarlyPassThePageAsksFor(unittest.TestCase):
-    def test_the_early_pass_runs_before_the_games_first_command_line_pass(self):
+class TheHookThePageNames(unittest.TestCase):
+    def test_the_hook_is_on_cfile_open_at_the_address_the_page_gives(self):
+        install = code(read(INSTALL))
+        self.assertRegex(install, r"kCFileOpenVa\s*=\s*0x1400e15e0\s*;")
+        self.assertIn("PatchDetour(&g_cfileOpen,", install)
+        self.assertIn("`CFile::Open` (echovr.exe `0x1400e15e0`", read(DOC))
+
+    def test_scripts_go_through_the_runtimes_own_load_rewriter(self):
+        install = code(read(INSTALL))
+        self.assertIn('nevr_dll_load_hook::AddLoadRewriter("content-pack", &RewriteScript)', install)
+        self.assertIn("registered as `content-pack`", read(DOC))
+
+
+class WhereAndWhen(unittest.TestCase):
+    def test_packs_are_read_from_the_roots_content_folder(self):
+        self.assertRegex(code(read("src/core/nevr_root.h")), r'kContent\s*=\s*L"content"\s*;')
+        self.assertIn("nevr_root::ContentDir(root)", code(read(INSTALL)))
+        self.assertIn("`<root>\\content\\<id>\\`", read(DOC))
+
+    def test_the_install_runs_after_the_early_pass_and_before_the_games_first_command_line_pass(self):
         boot = code(read("src/runtime/lifecycle/boot.cpp"))
         early = boot.index("LoadPlugins(PluginPhase::Early);")
-        original = boot.index("EchoVR::PreprocessCommandLine(pGame);", early)
-        self.assertLess(early, original)
+        install = boot.index("nevr_content::Install(", early)
+        original = boot.index("EchoVR::PreprocessCommandLine(pGame);", install)
+        self.assertLess(early, install)
+        self.assertLess(install, original)
 
-    def test_the_key_the_page_names_is_the_documented_one(self):
-        self.assertRegex(read("docs/reference/example-config.yaml"), r"(?m)^#\s+early\s+— if true, the plugin loads")
-        self.assertIn("`early: true`", read(DOC))
+
+class TheRefusalsThePageLists(unittest.TestCase):
+    def test_every_reason_in_the_table_is_a_token_the_code_writes(self):
+        doc = read(DOC)
+        table = doc[doc.index("| `reason` |"):doc.index("Each file that passes")]
+        reasons = set(re.findall(r"`([a-z_]+)`", table)) - {"reason", "content", "json"}
+        self.assertGreaterEqual(len(reasons), 12, reasons)
+        sources = read(SERVE) + read(INSTALL) + read(JSON)
+        for reason in sorted(reasons):
+            self.assertIn(f'"{reason}"', sources, f"{DOC} lists reason {reason}, which no source writes")
 
 
 if __name__ == "__main__":
