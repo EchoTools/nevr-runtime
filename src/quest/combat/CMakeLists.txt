@@ -22,6 +22,7 @@ add_library(nevr_quest_combat STATIC
   pfx.cpp
   pfxtev.cpp
   refresh_rate.cpp
+  sendguard.cpp
   shaderstep.cpp
   table_step.cpp
   tablestep.cpp)

@@ -203,7 +203,8 @@ void OnUnloading(std::uint64_t script, void* base) {
   auto it = g_modules.find(base);
   if (it == g_modules.end()) {
     Log(EchoVR::LogLevel::Debug,
-        "[NEVR.SCRIPT] script freed script=%016llx base=%p (loaded before the script hooks were in place)",
+        "[NEVR.SCRIPT] script freed script=%016llx base=%p (the table did not see it loaded: it loaded before the script hooks "
+        "were in place, or its Load failed after the DLL loaded; it holds no hooks)",
         static_cast<unsigned long long>(script), base);
     return;
   }

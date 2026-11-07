@@ -28,6 +28,11 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
+// sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
+namespace sentinel {
+const char* FilesDir() { return "/nonexistent-nevr-files"; }
+}  // namespace sentinel
+
 namespace {
 
 namespace bv = nevr_quest::build_variant;
@@ -292,7 +297,7 @@ void TheShippedRowsReadTheirSwitch() {
   Begin(bv::Variant::kCombat);
   combat::SetConfig(cfg);
   combat::Outcome o = combat::InstallEarly();
-  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 1);  // heaps is off, memsys installs
+  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 0 && o.off == 1);  // heaps is off (counted apart), memsys installs
   for (const heaps::RowPin& row : heaps::kRows) QCHECK(g_image.Get<std::uintptr_t>(row.slot) == g_image.Base() + row.ro);
   QCHECK(*g_image.Slot(g_pins.initSlot) == memsys::InitThunk::EntryAddress());
   End();
@@ -302,7 +307,7 @@ void TheShippedRowsReadTheirSwitch() {
   Begin(bv::Variant::kCombat);
   combat::SetConfig(cfg);
   o = combat::InstallEarly();
-  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 1);  // memsys is off, heaps installs without the System heap
+  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 0 && o.off == 1);  // memsys is off (counted apart), heaps installs without the System heap
   QCHECK(g_image.Get<std::uintptr_t>(heaps::kRows[1].slot) == g_image.Base() + heaps::kRows[1].ro);
   QCHECK(g_image.Get<std::uintptr_t>(heaps::kRows[0].slot) != g_image.Base() + heaps::kRows[0].ro);
   QCHECK(*g_image.Slot(g_pins.initSlot) == reinterpret_cast<void*>(&FakeInit) && *g_image.Slot(g_pins.allocSlot) == reinterpret_cast<void*>(&FakeAlloc));

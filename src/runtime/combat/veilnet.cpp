@@ -64,6 +64,7 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -101,7 +102,7 @@ constexpr uintptr_t LOC_TOKEN_RVA = 0x2104d20;
 constexpr uintptr_t LOC_COUNTER_RVA = 0x2104d40;
 constexpr uintptr_t OC_TOKEN_RVA = 0x2104ca8;
 constexpr uintptr_t OC_COUNTER_RVA = 0x2104ca4;
-constexpr uintptr_t EQUIP_RVA = 0x2104e80;          // tools/equip_guard.py: +00 equipped, +08 writer, +10 skips
+constexpr uintptr_t EQUIP_RVA = nevr_combat::kEquipCellRva;  // nEVR port (#600), equip_cell.h: +00 equipped, +08 writer, +10 skips
 constexpr uintptr_t POINT_FIRED_RVA = 0x2104d44;    // POINTs whose stun went off here
 constexpr ULONGLONG TOKEN_LIFE = 15000000;      // 1.5 s, in 100 ns
 constexpr uint32_t MAGIC = 0x4c564345;          // "ECVL"

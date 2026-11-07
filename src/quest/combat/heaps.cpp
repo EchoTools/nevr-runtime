@@ -138,7 +138,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const char* device, bool he
   if (!heapsOn) {
     const Counts none;
     LogInstall("off", "combat.heaps", none, 0, device, "combat.heaps is false: the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)");
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_heaps_refused",
