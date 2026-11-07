@@ -26,11 +26,13 @@ add_library(nevr_quest_combat STATIC
   match_tags.cpp
   memsys.cpp
   meshstep.cpp
+  music.cpp
   pfx.cpp
   pfxtev.cpp
   powerboost.cpp
   refresh_rate.cpp
   sendguard.cpp
+  sensorwd.cpp
   shaderstep.cpp
   table_step.cpp
   tablestep.cpp

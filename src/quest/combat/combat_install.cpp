@@ -19,11 +19,13 @@
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
+#include "quest/combat/music.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/sendguard.h"
+#include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
 #include "quest/combat/wallfire.h"
@@ -90,6 +92,8 @@ ModuleResult WallfireNormal() noexcept {
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
+ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
+ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -141,6 +145,10 @@ constexpr std::array kModules{
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
+    // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
+    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},
+    Module{"music", nullptr, &MusicNormal, "combat.music", &nevr_quest::CombatConfig::music},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's

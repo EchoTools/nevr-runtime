@@ -51,6 +51,10 @@ std::atomic<std::uint64_t> g_arenaReads{0};
   nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
 }
 [[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+// The arena path's level scans, through combat_level.h's process count: ScanCount is the scans since StartScanCount.
+std::uint64_t g_scanBase = 0;
+[[maybe_unused]] void StartScanCount() { g_scanBase = nevr_quest::combat::level::ScanCalls(); }
+[[maybe_unused]] std::uint64_t ScanCount() { return nevr_quest::combat::level::ScanCalls() - g_scanBase; }
 }  // namespace
 
 using namespace nevr_quest::combat::ec;
@@ -1259,7 +1263,7 @@ static void ArenaTests() {
   OnNetTick(&NetTick);
   g_tick_calls = 0;
   StartReadCount();  // the arena path from here: no read of game memory, no scan of the levels (the count, not only what the game gets)
-  nevr_quest::combat::level::ResetScanCallsForTest();
+  StartScanCount();
   GameTalks();
   CHECK(StatsNow().sends == 0 && !StatsNow().haveServer, "a send in arena was counted");
   uint8_t buf[64];
@@ -1268,8 +1272,8 @@ static void ArenaTests() {
   g_in.push_back(Veil('T', 99));
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1, "an EC datagram in arena was consumed");
   CHECK(StatsNow().tokens == 0 && StatsNow().passed == 0 && StatsNow().consumed == 0 && g_tick_calls == 0, "arena: counted, tokened or ticked");
-  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans on the arena path",
-        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  CHECK(ReadCount() == 0 && ScanCount() == 0, "arena: %llu reads and %llu scans on the arena path",
+        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(ScanCount()));
   // the arena lobbies are no combat level either
   for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
     LoadLevels({lobby});

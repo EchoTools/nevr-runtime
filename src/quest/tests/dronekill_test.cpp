@@ -42,6 +42,10 @@ std::atomic<std::uint64_t> g_arenaReads{0};
   nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
 }
 [[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+// The arena path's level scans, through combat_level.h's process count: ScanCount is the scans since StartScanCount.
+std::uint64_t g_scanBase = 0;
+[[maybe_unused]] void StartScanCount() { g_scanBase = nevr_quest::combat::level::ScanCalls(); }
+[[maybe_unused]] std::uint64_t ScanCount() { return nevr_quest::combat::level::ScanCalls() - g_scanBase; }
 }  // namespace
 
 using namespace nevr_quest::combat::dronekill;
@@ -2152,7 +2156,7 @@ static void ExpectInert(const char* where) {
   const Stats before = CurrentStats();
   // what follows is the arena path: no read of game memory and no scan of the levels on any hook (the scope was refreshed before this), counted
   StartReadCount();
-  nevr_quest::combat::level::ResetScanCallsForTest();
+  StartScanCount();
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
   ND touch = Drone(dk::kR14Touch, dk::kR14Touch, 0);
@@ -2170,17 +2174,17 @@ static void ExpectInert(const char* where) {
   CallAttack(g_cs, kAtHandle);
   CHECK(g_attacks.size() == 1, "%s: the game's AttackTarget was not called", where);
   OnKilled(0x11);
-  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0,
+  CHECK(ReadCount() == 0 && ScanCount() == 0,
         "%s: %llu reads and %llu scans on the arena path of the hooks", where,
         static_cast<unsigned long long>(ReadCount()),
-        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+        static_cast<unsigned long long>(ScanCount()));
   const uint32_t ticksBefore = CurrentStats().ticks;
-  nevr_quest::combat::level::ResetScanCallsForTest();
+  StartScanCount();
   for (uint32_t i = 0; i < 2 * kScopeFrames + 1; ++i) Tick(GameAddress());  // two more asks of the level: the same answer says nothing
   uint64_t asks = 0;  // the tick scans only on its own cadence: one level ask per kScopeFrames frames, nothing else
   for (uint32_t n = ticksBefore; n < ticksBefore + 2 * kScopeFrames + 1; ++n) asks += n % kScopeFrames == 0 ? 1 : 0;
-  CHECK(nevr_quest::combat::level::ScanCallsForTest() == asks, "%s: the tick scanned %llu times in %u frames, want %llu", where,
-        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()), 2 * kScopeFrames + 1, static_cast<unsigned long long>(asks));
+  CHECK(ScanCount() == asks, "%s: the tick scanned %llu times in %u frames, want %llu", where,
+        static_cast<unsigned long long>(ScanCount()), 2 * kScopeFrames + 1, static_cast<unsigned long long>(asks));
   const Stats after = CurrentStats();
   CHECK(after.enter_drone == before.enter_drone && after.enter_other == before.enter_other && after.fires == before.fires &&
             after.attacks == before.attacks && after.due_runs == before.due_runs,

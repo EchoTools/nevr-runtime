@@ -20,7 +20,7 @@ foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_combat_${f} GROUP combat NOEXC INCS ${_csent} SRC src/quest/sentinel/${f}.cpp)
 endforeach()
 set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
-set(_cf NOEXC PTHREAD DL INCS ${_csent} DEFS NEVR_COMBAT_READ_COUNTERS)
+set(_cf NOEXC PTHREAD DL INCS ${_csent})
 # The EC client and what it brings into a program that links the registration table (#2187): its NEUTRON effects, the sentinel's page and
 # the module-loaded observer table it registers with, and the two drone modules whose rows sit beside them (dronekill registers with the EC client).
 set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp
@@ -41,7 +41,7 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
 # Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
 # CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
 # stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
@@ -53,7 +53,7 @@ nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -86,7 +86,8 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
+      src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
+      src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
 # combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
@@ -98,13 +99,14 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
+      src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp ${_ctables})
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
       src/quest/combat/combat_install.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
       src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp ${_ctables})
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
@@ -240,3 +242,16 @@ nevr_ht_test(bvh_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
 # leave alone, the switch and its lines, and the scope: no combat map, no check. got_pinned_test resolves the two relocations and the site word.
 nevr_ht_test(wallfire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/wallfire_test.cpp src/quest/combat/wallfire.cpp src/quest/combat/bvh.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The combat music (#2184, docs/adr/0046): the real handler through the real thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in
+# memory, against a model of CWwiseEngine::PostSoundEvent that records every call's registers. The 24 bank ids, the Stops before each Play, the game's own
+# registers and answer, the unload tick, the refusals, and the scope: a Play outside a combat map (an arena level, a lobby, no level, no frame yet) is the
+# game's call and nothing else. got_pinned_test resolves the relocation and the 29 code words in the real libr15.
+nevr_ht_test(music_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/music_test.cpp src/quest/combat/music.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The scanner-sphere watchdog (#2184, docs/adr/0046): the real handlers through the real thunks, installed by the real GotHook into the two vtable words (ABS64) and
+# the JUMP_SLOT of a libr15 image built in memory, against models of the three game functions and of CModelCS components. A sphere timed and turned off after 6000 ms
+# through the game's own function, turned back on at its actor's next ping, the limits, the sweep, the lock never held across a game call or a log line, all three
+# words or none, and the scope: every handler is a pass-through outside a combat map (an arena level, a lobby, no level, a stale or missing answer). got_pinned_test
+# resolves the three relocations and the 34 code words in the real libr15.
+nevr_ht_test(sensorwd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/sensorwd_test.cpp src/quest/combat/sensorwd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)

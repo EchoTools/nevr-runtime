@@ -32,7 +32,8 @@ static int g_fail = 0;
   } while (0)
 
 #if defined(WIRING_TICK_ONLY)
-// only Q15T_SENSORWD on (no T-26): its tick (registered whatever its install says) alone must register and make InitEx install the game tick
+// only Q15T_GUNCONNECT on (no T-26): its tick (registered whatever the game library says, gunconnect resolves its functions on the first tick) alone
+// must register and make InitEx install the game tick
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDisplayRefreshRate(void*, float) { return 0; }
@@ -84,7 +85,7 @@ int main() {
     if (l.find("game tick callbacks registered=1 max=16") != std::string::npos) ticks = true;
     if (l.find("hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok") != std::string::npos) tick_hook = true;
   }
-  CHECK(ticks && tick_hook, "sensorwd alone must register one tick and install the game tick (ticks=%d hook=%d)", ticks, tick_hook);
+  CHECK(ticks && tick_hook, "gunconnect alone must register one tick and install the game tick (ticks=%d hook=%d)", ticks, tick_hook);
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   if (g_fail == 0) std::printf("wiring_test (tick only): all checks pass (one tick registered, game tick installed)\n");
   return g_fail == 0 ? 0 : 1;
@@ -185,7 +186,7 @@ int main() {
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
-                        "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
+                        "hudmeter", "shieldgamma", "levelname", "boosterpool"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -203,8 +204,7 @@ int main() {
     const char* reason;  // the reason token the record must carry
   };
   const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
-                              {"peerclamp", "word_pin_mismatch"}, {"music", "word_pin_mismatch"}, {"sensorwd", "word_pin_mismatch"},
-                              {"hudmeter", "unexpected_original"},
+                              {"peerclamp", "word_pin_mismatch"}, {"hudmeter", "unexpected_original"},
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
     CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
@@ -235,13 +235,13 @@ int main() {
   }
   CHECK(at_tick > at_mod_last, "the game tick (line %zu) must be installed after the last module (line %zu)", at_tick, at_mod_last);
 
-  // the tick table: gunconnect, aibots and sensorwd register; weapon_arm did not install here, so it registers nothing.
+  // the tick table: gunconnect and aibots register; weapon_arm did not install here, so it registers nothing.
   // The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=3 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  CHECK(CountLines("game tick callbacks registered=2 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
-  CHECK(CountLines("module install FAILED") == 8, "%d FAILED lines, want 8", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 6, "%d FAILED lines, want 6", CountLines("module install FAILED"));
 
   // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks of gunconnect and aibots run
   // (each starts, finds no game library on the host and says so once, at ERROR)
@@ -253,7 +253,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (13 modules named, 2 installed, 2 armed, 1 off, 8 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (11 modules named, 2 installed, 2 armed, 1 off, 6 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

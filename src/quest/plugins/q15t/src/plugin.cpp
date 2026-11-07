@@ -15,11 +15,9 @@
 #include "hudmeter.h"
 #include "levelname.h"
 #include "boosterpool.h"
-#include "music.h"
 #include "peerclamp.h"
 #include "plugin_log.h"
 #include "script_redirect.h"
-#include "sensorwd.h"
 #include "shieldgamma.h"
 #include "module_switch.h"
 #include "voipdrop.h"
@@ -65,12 +63,6 @@
 #endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
-#endif
-#ifndef Q15T_MUSIC
-#define Q15T_MUSIC 0
-#endif
-#ifndef Q15T_SENSORWD
-#define Q15T_SENSORWD 0
 #endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
@@ -134,12 +126,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_LEVELNAME
     "levelname "
     "boosterpool "
-#endif
-#if Q15T_MUSIC
-    "music "
-#endif
-#if Q15T_SENSORWD
-    "sensorwd "
 #endif
     "";
 
@@ -211,7 +197,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
+  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), hudmeter and
   // shieldgamma (what is drawn).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -275,17 +261,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     off.reason = "off_file";  // levelname.off turns the pair off together
     ReportModule("levelname", off);
     ReportModule("boosterpool", off);
-  }
-#endif
-#if Q15T_SENSORWD
-  ReportModule("sensorwd", InstallSensorWd(base));
-  AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
-#endif
-#if Q15T_MUSIC
-  {
-    const InstallResult r = InstallMusic(base);
-    ReportModule("music", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("music", &MusicTick, &want_tick);
   }
 #endif
 #if Q15T_GUNCONNECT

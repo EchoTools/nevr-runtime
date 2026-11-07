@@ -41,6 +41,10 @@ std::atomic<std::uint64_t> g_arenaReads{0};
   nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
 }
 [[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+// The arena path's level scans, through combat_level.h's process count: ScanCount is the scans since StartScanCount.
+std::uint64_t g_scanBase = 0;
+[[maybe_unused]] void StartScanCount() { g_scanBase = nevr_quest::combat::level::ScanCalls(); }
+[[maybe_unused]] std::uint64_t ScanCount() { return nevr_quest::combat::level::ScanCalls() - g_scanBase; }
 }  // namespace
 
 using namespace nevr_quest::combat::dronemuzzle;
@@ -675,11 +679,11 @@ static void TestArenaPaysNothing() {
   g_tp.clear();
   g_fire.clear();
   StartReadCount();
-  nevr_quest::combat::level::ResetScanCallsForTest();
+  StartScanCount();
   CHECK(TpIn(TpSlot(), g_pose) == 0x1234 && TpOut(TpSlot(), g_pose) == 0x1234 && FireIn(FireSlot()) == 0x5678 && FireOut(FireSlot()) == 0x5678, "results");
   for (int i = 0; i < 10; ++i) Tick(0);
-  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans",
-        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  CHECK(ReadCount() == 0 && ScanCount() == 0, "arena: %llu reads and %llu scans",
+        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(ScanCount()));
   CHECK(g_tp.size() == 2 && g_tp[0].pose == g_pose && g_tp[1].pose == g_pose && g_fire.size() == 2, "arena: a call was changed");
   float v3[3];
   memcpy(v3, Rec() + 0x11c, 12);

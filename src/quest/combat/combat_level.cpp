@@ -42,12 +42,6 @@ bool In(std::uint64_t level, const std::uint64_t (&set)[N]) noexcept {
 
 }  // namespace
 
-#if defined(NEVR_COMBAT_READ_COUNTERS)
-namespace {
-std::atomic<std::uint64_t> g_scanCalls{0};
-}
-#endif
-
 bool IsCombatMap(std::uint64_t level) noexcept { return In(level, kCombatLevels); }
 bool IsCombatLobby(std::uint64_t level) noexcept { return level == kCombatLobby; }
 bool IsEchoArenaLevel(std::uint64_t level) noexcept { return In(level, kEchoArenaLevels); }
@@ -62,6 +56,7 @@ const char* LevelName(std::uint64_t level) noexcept {
 namespace {
 
 std::atomic<void (*)()> g_seam{nullptr};
+std::atomic<std::uint64_t> g_scans{0};
 
 void Between() noexcept {
   if (const auto seam = g_seam.load(std::memory_order_acquire)) seam();
@@ -127,17 +122,12 @@ void ScanLoaded(Loaded& out, std::uintptr_t game) noexcept {
 
 }  // namespace
 
+std::uint64_t ScanCalls() noexcept { return g_scans.load(std::memory_order_relaxed); }
+
 void SetScanSeamForTest(void (*seam)()) noexcept { g_seam.store(seam, std::memory_order_release); }
 
-#if defined(NEVR_COMBAT_READ_COUNTERS)
-std::uint64_t ScanCallsForTest() noexcept { return g_scanCalls.load(std::memory_order_relaxed); }
-void ResetScanCallsForTest() noexcept { g_scanCalls.store(0, std::memory_order_relaxed); }
-#endif
-
 Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
-#if defined(NEVR_COMBAT_READ_COUNTERS)
-  g_scanCalls.fetch_add(1, std::memory_order_relaxed);
-#endif
+  g_scans.fetch_add(1, std::memory_order_relaxed);
   Loaded out;
   if (inFlight) ScanInFlight(out, game);
   Between();

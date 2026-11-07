@@ -12,7 +12,7 @@
  * combat's, and a step that is reached anyway writes one `skipped` line and runs no module function. The sequence does not reach them in
  * that case (it skips `install_combat_early` and asks for no post-load action), so the line is the second line of defence, not the first.
  *
- * The table. Each phase runs one registration table, in the table's order: `Modules()` in combat_install.cpp. A module registers one
+ * The table. Each phase runs one registration table, in the table's order: `kModules` in combat_install.cpp (`ShippedModules()` hands it to a test). A module registers one
  * function per phase it has a step in, or null for none, at the position the q15t plugin installed it (plugin.cpp's order: decals after
  * impactsnd, wallfire after bvh, the net-tick modules after ec, and so on); the order is explicit, never the order of a directory or a
  * link. A function is `noexcept`, returns whether the module installed and a fixed status token, and writes the module's own lines

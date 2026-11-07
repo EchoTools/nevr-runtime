@@ -289,6 +289,16 @@ combat:
   # bvh_gate: false
   # bvh_touch: false
   # wallfire: false
+  # Quest only. Booleans. Combat music (src/quest/combat/music.h): one combat music instance at a time. A music Play posted while a combat map is loaded
+  # first posts both music Stops, and the Stops are posted again when the combat map unloads; every other sound, and every Echo Arena level, is the game's own.
+  # `false` leaves the game's music alone. Read once at launch; the sentinel log lines `combat_config_switch` and `combat_music_install` say what was read.
+  # A value that is not a boolean keeps the default, with a warning that names the key. Default (absent): true.
+  # music: false
+  # The scanner-sphere watchdog (src/quest/combat/sensorwd.h): in a combat map, a threat-scanner sphere still enabled 6 seconds after its enable is turned off
+  # on the game thread, and turned on again at its actor's next ping. An Echo Arena level, every lobby and every other state pass through untouched. `false`
+  # leaves the sphere to the game. Read once at launch; the sentinel log lines `combat_config_switch` and `combat_sensorwd_install` say what was read.
+  # Default (absent): true.
+  # sensorwd: false
   # Quest only. A boolean. The EC network client (src/quest/combat/ec.h): on a combat map or the combat lobby it exchanges the EC network's
   # 16-byte datagrams with the game server (the server needs EC), writes re33_ec_page for the EC script libraries, stores the selected tac mod
   # and, with the `hide` word, hides EC's three tac mods on a server without EC. In every other level, arena included, it passes the game's

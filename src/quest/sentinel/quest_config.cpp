@@ -70,6 +70,8 @@ constexpr const char* kCombatBvhGateKey = "combat.bvh_gate";       // Quest only
 constexpr const char* kCombatBvhTouchKey = "combat.bvh_touch";     // Quest only (default true, #2182)
 constexpr const char* kCombatWallfireKey = "combat.wallfire";      // Quest only (default true, #2182)
 constexpr const char* kCombatSendguardKey = "combat.sendguard";   // Quest only (default true, #2179)
+constexpr const char* kCombatMusicKey = "combat.music";            // Quest only (default true, #2184)
+constexpr const char* kCombatSensorwdKey = "combat.sensorwd";      // Quest only (default true, #2184)
 constexpr const char* kCombatEcKey = "combat.ec";                  // Quest only (default true, #2187)
 constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only (default: types=VPTO equip hide, #2187)
 constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
@@ -445,6 +447,8 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.bvhTouch = ReadCombatSwitch(cfg, kCombatBvhTouchKey, r);
   r.config.combat.wallfire = ReadCombatSwitch(cfg, kCombatWallfireKey, r);
   r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);
+  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r);
+  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);
   r.config.combat.ec = ReadCombatSwitch(cfg, kCombatEcKey, r);
   r.config.combat.ecWords = ReadCombatText(cfg, kCombatEcWordsKey, r);
   r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);

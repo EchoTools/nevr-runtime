@@ -43,6 +43,10 @@ std::atomic<std::uint64_t> g_arenaReads{0};
   nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
 }
 [[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+// The arena path's level scans, through combat_level.h's process count: ScanCount is the scans since StartScanCount.
+std::uint64_t g_scanBase = 0;
+[[maybe_unused]] void StartScanCount() { g_scanBase = nevr_quest::combat::level::ScanCalls(); }
+[[maybe_unused]] std::uint64_t ScanCount() { return nevr_quest::combat::level::ScanCalls() - g_scanBase; }
 }  // namespace
 
 namespace {
@@ -971,7 +975,7 @@ int main() {
     g_lines.clear();
     const pb::Stats before = pb::CurrentStats();
     StartReadCount();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
-    level::ResetScanCallsForTest();
+    StartScanCount();
     g_node_heals = true;
     NodeData d = Data(1250030.0f, 5);
     NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
@@ -986,9 +990,9 @@ int main() {
     const PhTarget ta{{1, 0, 0}};
     const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
     pb::NetTick();
-    CHECK(ReadCount() == 0 && level::ScanCallsForTest() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
+    CHECK(ReadCount() == 0 && ScanCount() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
           level != nullptr ? level : "no game", static_cast<unsigned long long>(ReadCount()),
-          static_cast<unsigned long long>(level::ScanCallsForTest()));
+          static_cast<unsigned long long>(ScanCount()));
     CHECK(g_heals.size() == 3 && g_heals[0].amount == 1250030.0f && g_heals[1].amount == 1250030.0f && g_heals[2].amount == 1250030.0f,
           "arena (%s): a heal was swallowed or changed (%zu heals)", level != nullptr ? level : "no game", g_heals.size());
     CHECK(g_node_calls == 1 && g_link_calls == 1 && body == g_body_a && g_sends.empty(), "arena (%s): a call was changed or something was sent",

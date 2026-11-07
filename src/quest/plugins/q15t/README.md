@@ -24,7 +24,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, music, sensorwd, droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, gunconnect, aibots, droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - The impact sounds and the level decals are not this plugin's: the runtime owns them (`src/quest/combat/impactsnd.h`, `src/quest/combat/decals.h`). Their
   switches are the `combat:` keys `impactsnd`, `impactsnd_write`, `decals`, `decals_flip_u`, `decals_flip_v` in `config.yaml`; the plugin's `decals.off`,
@@ -39,6 +39,8 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   `ec_words` and `ecfx` in `config.yaml`; the plugin's `ec.on`, `ec.off`, `ec_preset*.on` and `neutronfx.on` files are no longer read.
 - POWER BOOST is not this plugin's: the runtime owns its five words (`src/quest/combat/powerboost.h`). Its switch is the `combat:` key
   `powerboost_stage` (0 to 3, default 3: swallow and cone) in `config.yaml`.
+- Combat music and the scanner-sphere watchdog are not this plugin's either: the runtime owns them (`src/quest/combat/music.h`, `src/quest/combat/sensorwd.h`), switched by the
+  `combat:` keys `music` and `sensorwd` (both on by default) in `config.yaml`; no kill file switches either.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
 - dronekill and dronemuzzle are not this plugin's: the runtime owns them (`src/quest/combat/dronekill.h`, `src/quest/combat/dronemuzzle.h`).
   Their switches are the `combat:` keys `dronekill` and `dronemuzzle` in `config.yaml`.
