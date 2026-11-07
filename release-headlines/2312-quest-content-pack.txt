@@ -1,0 +1,1 @@
+On Quest, a content pack copied into nevr/content in the game's media folder is now checked and used as on PC; a pack with scripts is refused.

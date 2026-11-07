@@ -992,6 +992,35 @@ inline constexpr CR15GameWord kCR15GameSettingsCode[] = {
     {0x11fd28c, 0x3ca86b60},  // str q0, [x27, x8]
 };
 
+// libr15.so's slot for NRadEngine::CSysFile::Open(char const*, unsigned int flags, long& handle), defined in libr15 itself at
+// kCSysFileOpenVaddr (JUMP_SLOT 0x36f6450, `readelf -rW` on the pinned image; the PLT stub at kCSysFileOpenStub loads it). The
+// content pack (#2312, quest/sentinel/content_pack_hook.h) hooks it: every package the game adds and every manifest it reads is
+// opened through this slot (kCSysFileOpenContentSites). Returns 0 on success; flags 1 is O_RDONLY.
+struct LibR15CSysFileOpenTag {};
+using CSysFileOpenSig = int(const char* path, unsigned flags, long* handle);
+using LibR15CSysFileOpenThunk = CallbackThunk<LibR15CSysFileOpenTag, CSysFileOpenSig>;
+inline GotTarget LibR15CSysFileOpen() {
+  return {kLibR15, kCSysFileOpenSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f6450ULL};
+}
+inline constexpr std::uint64_t kCSysFileOpenStub = 0xf3dad0;
+// The calls through the stub that open a package set's files: CPackageManifest::AddPackage opens each package (two `bl`), and
+// CFile::Open(CFlagsT) tail-calls the stub (`b`), which every manifest read reaches (ReadManifestFile, DecompressAndReadFile,
+// ReadFileIntoMemBlock, CFile::Open(path, flags)). got_pinned_test.cpp checks each is a bl or b to the stub in the real library.
+struct CSysFileOpenSite {
+  std::uint64_t at;
+  bool tail;  // `b` rather than `bl`
+  const char* name;
+};
+inline constexpr CSysFileOpenSite kCSysFileOpenContentSites[] = {
+    {0x2540f38, false, "add_package_a"},
+    {0x2540fe0, false, "add_package_b"},
+    {0x11e8978, true, "cfile_open"},
+};
+// The pointer CEngine::InitGlobals stores its new CResourceManager in (`str x20, [x8, #0xd60]` at 0x2aa89bc), before it adds the
+// two boot package sets (CResourceManager::AddPackage at 0x2aa8fe4 and 0x2aa903c): set means the game has read its manifests.
+// The twin of echovr.exe's 0x1420a2ab8 (runtime/content/content_pack_install.cpp, kResourceManagerVa).
+inline constexpr std::uint64_t kResourceManagerPtrVaddr = 0x376ed60;
+
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {

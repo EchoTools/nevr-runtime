@@ -26,12 +26,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include "content_pack_hook.h"
 #include "data_wiring.h"
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "probe_command.h"
 #include "process_end_hook.h"
+#include "quest/data/content_folder.h"
 #include "quest/data/data_step.h"
 #include "quest/data/pack.h"
 #include "quest/data/sha256.h"
@@ -1233,6 +1235,234 @@ void NoPackStepRunsWhenTheDataStepFailedOrWasMissingOrTheStorageMessageEndedTheP
   }
 }
 
+// ---- the content pack installed as a folder (#2312) ----
+
+std::vector<std::string> g_content_roots;  // the root each run of the content step was given
+void RecordContent(const std::string& root) noexcept {
+  g_content_roots.push_back(root);
+  g_lines.emplace_back("{\"event\":\"content_step_ran\"}");
+}
+std::size_t IndexOf(const char* event) {
+  const std::string want = std::string("\"event\":\"") + event + "\"";
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (Has(g_lines[i], want)) return i;
+  }
+  return std::string::npos;
+}
+
+void TheFolderPackIsDecidedOnceAfterTheBundledPackStepInItsRoot() {
+  for (const bool with_pack : {true, false}) {
+    Rig rig;
+    g_content_roots.clear();
+    rig.options.content = &RecordContent;
+    PackRig(rig, with_pack);
+    rig.BootRequest();
+    QCHECK(g_ends == 0);
+    QCHECK(g_content_roots.size() == 1 && g_content_roots[0] == rig.options.fetch_root_override);
+    const std::size_t pack = IndexOf("pack_check"), content = IndexOf("content_step_ran");
+    QCHECK(pack != std::string::npos && content != std::string::npos && pack < content);
+    if (with_pack) QCHECK(IndexOf("pack_step") < content);  // the placed manifest's `.stock` is there when the folder is checked
+  }
+}
+
+void NoFolderPackIsDecidedWhenTheDataStepOrTheBundledPackFailed() {
+  {
+    Rig rig(false);  // a development build, no network and no data: the fetch fails
+    g_content_roots.clear();
+    rig.options.content = &RecordContent;
+    PackRig(rig);
+    g_present.clear();
+    rig.BootRequest();
+    QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed" && g_content_roots.empty());
+  }
+  {
+    Rig rig;  // the bundled pack's placement fails
+    g_content_roots.clear();
+    rig.options.content = &RecordContent;
+    PackRig(rig);
+    rig.options.pack_available_bytes = [](const std::string&) { return std::uint64_t{1} * 1024 * 1024; };
+    rig.BootRequest();
+    QCHECK(g_ends == 1 && g_exit_reason == "pack_failed" && g_content_roots.empty());
+  }
+  {
+    Rig rig;  // no storage grant, the engine reads the legacy root
+    g_content_roots.clear();
+    rig.options.content = &RecordContent;
+    PackRig(rig);
+    rig.BootRequest(&DeniedCheck);
+    QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant" && g_content_roots.empty());
+  }
+}
+
+// The game's CSysFile::Open as the handler calls it: records what it was asked and answers `g_open_result`.
+std::vector<std::string> g_opened;
+std::vector<unsigned> g_opened_flags;
+std::vector<long*> g_opened_handles;
+int g_open_result = 0;
+int FakeOpen(const char* path, unsigned flags, long* handle) {
+  g_opened.emplace_back(path);
+  g_opened_flags.push_back(flags);
+  g_opened_handles.push_back(handle);
+  return g_open_result;
+}
+
+void ServeOneManifest() {
+  auto pack = std::make_unique<nevr_content::Pack>();
+  pack->id = "echocombat";
+  auto s = std::make_unique<nevr_content::Served>();
+  s->kind = nevr_content::Kind::kManifest;
+  s->name = "48037dc70b0ecab2";
+  s->key = Media("_data/5932408047/rad15/android/manifests/48037dc70b0ecab2");
+  s->serve_path = "/proc/self/fd/77";
+  s->pack_file = Media("nevr/content/echocombat/manifests/48037dc70b0ecab2");
+  pack->opens.push_back(std::move(s));
+  nevr_quest::content::ServeForTest(std::move(pack), "com.readyatdawn.r15");
+}
+
+std::vector<std::string> ContentRecords() {
+  std::vector<std::string> out;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"content\"")) out.push_back(l);
+  }
+  return out;
+}
+
+// The production step (no `content` seam): content_pack_hook::Run over <media root>/nevr/content, which the host does not
+// have. It runs once per process, so this test is the first in main to reach it.
+void TheProductionContentStepRunsOnceOverTheMediaRootsFolder() {
+  Rig rig;
+  PackRig(rig, /*with_pack=*/false);
+  rig.BootRequest();
+  QCHECK(g_ends == 0);
+  const std::string dir = Media("nevr/content");
+  std::vector<std::string> records = ContentRecords();
+  QCHECK(records.size() == 1);
+  if (!records.empty()) {
+    QCHECK(Has(records[0], "\"msg\":\"[NEVR.CONTENT] no content pack installed dir=" + dir + " (") &&
+           Has(records[0], "\"level\":\"info\""));
+  }
+  nevr_quest::content_pack_hook::Run(rig.options.fetch_root_override);  // a second call does nothing
+  QCHECK(ContentRecords().size() == 1);
+}
+
+// A pack that passes every check, through the production body: the hook goes on libr15's slot, which the host process does not
+// have, so the pack is refused with the slot and the GOT status and nothing is served.
+void APackWhoseHookDoesNotGoInIsRefusedWithTheSlotAndNothingIsServed() {
+  Rig rig;
+  PackRig(rig, /*with_pack=*/false);
+  const std::string root = rig.options.fetch_root_override;
+  const std::string content = rig.scratch.Path("content");
+  const std::string pack = content + "/hostpack";
+  const std::string manifest = "a manifest the pack serves";
+  ::mkdir(content.c_str(), 0755);
+  ::mkdir(pack.c_str(), 0755);
+  ::mkdir((pack + "/manifests").c_str(), 0755);
+  WriteFile(pack + "/manifests/48037dc70b0ecab2", manifest);
+  const nlohmann::json j = {
+      {"format", 1}, {"id", "hostpack"}, {"name", "host"}, {"version", "1.0.0"}, {"data_dir", "_data/5932408047/rad15/android"},
+      {"manifests", nlohmann::json::array({{{"package", "48037dc70b0ecab2"}, {"stock_sha256", StockSha()},
+                                             {"stock_packages", 1}, {"file", "manifests/48037dc70b0ecab2"}}})},
+      {"files", {{"manifests/48037dc70b0ecab2", nevr_quest::data::Sha256Hex(manifest.data(), manifest.size())}}}};
+  WriteFile(pack + "/content.json", j.dump());
+  nevr_quest::content::Forget();
+  nevr_quest::content_pack_hook::RunIn(root, content);
+  const std::vector<std::string> records = ContentRecords();
+  QCHECK(records.size() == 1);
+  if (!records.empty()) {
+    QCHECK(Has(records[0], "content pack refused id=hostpack reason=hook_failed detail=\\\"CSysFile::Open slot 0x36f6450 status="));
+    QCHECK(Has(records[0], "\"level\":\"warn\""));
+  }
+  const std::string stock = root + "/" + kManifestRel;
+  QCHECK(nevr_quest::content::ServedFor(stock.c_str(), 1) == nullptr);
+  // The thunk was disarmed: an open through its entry is the game's own, even with a pack served.
+  namespace cph = nevr_quest::content_pack_hook;
+  *cph::OpenThunk::OriginalOut() = reinterpret_cast<void*>(&FakeOpen);
+  ServeOneManifest();
+  g_opened.clear();
+  long handle = 0;
+  const std::string served = Media("_data/5932408047/rad15/android/manifests/48037dc70b0ecab2");
+  g_open_result = 0;
+  cph::OpenThunk::EntryFn()(served.c_str(), 1, &handle);
+  QCHECK(g_opened.size() == 1 && g_opened[0] == served);
+  nevr_quest::content::Forget();
+  cph::OpenThunk::Reset();
+}
+
+void TheResourceManagerIsReadAtItsPinnedSlot() {
+  namespace cph = nevr_quest::content_pack_hook;
+  void* slot = nullptr;
+  int manager = 0;
+  const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(&slot) - sentinel::pinned::kResourceManagerPtrVaddr;
+  QCHECK(!cph::ResourceManagerExists(base));
+  slot = &manager;
+  QCHECK(cph::ResourceManagerExists(base));
+}
+
+void TheRunningPackageIsTheFirstFieldOfTheCommandLine() {
+  namespace cph = nevr_quest::content_pack_hook;
+  Scratch scratch;
+  const std::string service = scratch.Path("service");
+  WriteFile(service, std::string("com.readyatdawn.r15:nevr\0--flag\0", 32));
+  QCHECK(cph::PackageOfCmdlineFile(service.c_str()) == "com.readyatdawn.r15");
+  const std::string app = scratch.Path("app");
+  WriteFile(app, std::string("com.readyatdawn.afk\0", 20));
+  QCHECK(cph::PackageOfCmdlineFile(app.c_str()) == "com.readyatdawn.afk");
+  const std::string empty = scratch.Path("empty");
+  WriteFile(empty, "");
+  QCHECK(cph::PackageOfCmdlineFile(empty.c_str()).empty());
+  QCHECK(cph::PackageOfCmdlineFile(scratch.Path("missing").c_str()).empty());
+  const std::string binary = scratch.Path("binary");
+  WriteFile(binary, std::string("/system/bin/app_process64\0", 26));  // a path is no package
+  QCHECK(cph::PackageOfCmdlineFile(binary.c_str()).empty());
+}
+
+void TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen() {
+  namespace cph = nevr_quest::content_pack_hook;
+  Rig rig;  // the log sink
+  const std::string stock = Media("_data/5932408047/rad15/android/manifests/48037dc70b0ecab2");
+  const std::string afk =
+      "/sdcard/Android/media/com.readyatdawn.afk/files/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2";
+  long handle = 0;
+  g_opened.clear();
+  g_opened_flags.clear();
+  g_opened_handles.clear();
+  nevr_quest::content::Forget();
+  // No pack: every open is the game's.
+  g_open_result = 0;
+  QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 0);
+  QCHECK(g_opened.size() == 1 && g_opened[0] == stock);
+  ServeOneManifest();
+  // A read of the served path, in either spelling of the media root: the held file, with the game's flags and handle, and the
+  // game's result as it came.
+  g_open_result = 0;
+  QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 0);
+  QCHECK(g_opened.size() == 2 && g_opened[1] == "/proc/self/fd/77" && g_opened_flags[1] == 1u && g_opened_handles[1] == &handle);
+  QCHECK(cph::HandleForTest(&FakeOpen, afk.c_str(), 1, &handle) == 0);
+  QCHECK(g_opened.size() == 3 && g_opened[2] == "/proc/self/fd/77");
+  g_open_result = 2;
+  QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 2);
+  QCHECK(g_opened.size() == 4 && g_opened[3] == "/proc/self/fd/77");
+  // A write of the served path, and a read of another path: the game's own, unchanged.
+  QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1u | 0x2u, &handle) == 2);
+  QCHECK(g_opened.size() == 5 && g_opened[4] == stock && g_opened_flags[4] == 3u);
+  const std::string other = Media("_data/5932408047/rad15/android/manifests/0000000000000000");
+  QCHECK(cph::HandleForTest(&FakeOpen, other.c_str(), 1, &handle) == 2);
+  QCHECK(g_opened.size() == 6 && g_opened[5] == other);
+  // One content record per served open, after the game's function returned: first Info, then Debug, then the failed open's Warning.
+  std::vector<std::string> records;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"content\"")) records.push_back(l);
+  }
+  QCHECK(records.size() == 3);
+  if (records.size() == 3) {
+    QCHECK(Has(records[0], "\"msg\":\"[NEVR.CONTENT] manifest served id=echocombat") &&
+           Has(records[0], "count=1") && Has(records[0], "\"level\":\"info\""));
+    QCHECK(Has(records[1], "count=2") && Has(records[1], "game_path=" + afk) && Has(records[1], "\"level\":\"debug\""));
+    QCHECK(Has(records[2], "manifest open failed") && Has(records[2], "result=0x2") && Has(records[2], "\"level\":\"warn"));
+  }
+  nevr_quest::content::Forget();
+}
+
 // ---- the production exists check (obb_skip::PathExists), over two launches ----
 
 std::string g_map_root;  // where the legacy root (the engine's root without an OBB file) lives in this test
@@ -1340,6 +1570,7 @@ void TheRetryWaitUsesTheFetchsDefaultBackoffInSlices() {
 }  // namespace
 
 int main() {
+  TheProductionContentStepRunsOnceOverTheMediaRootsFolder();  // first: the step runs once per process
   DataAlreadyThereIsNotFetchedAndTheProcessContinues();
   AFetchPlacesTheDataInTheRootTheEngineReads();
   AFetchWithAnObbServingTheMediaRootTargetsTheMediaRoot();
@@ -1392,6 +1623,12 @@ int main() {
   APackWhoseBytesAreNotItsDigestEndsTheProcessAndWritesNothing();
   AKillBetweenThePackageAndTheManifestIsFinishedByTheNextLaunch();
   NoPackStepRunsWhenTheDataStepFailedOrWasMissingOrTheStorageMessageEndedTheProcess();
+  TheFolderPackIsDecidedOnceAfterTheBundledPackStepInItsRoot();
+  NoFolderPackIsDecidedWhenTheDataStepOrTheBundledPackFailed();
+  TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen();
+  APackWhoseHookDoesNotGoInIsRefusedWithTheSlotAndNothingIsServed();
+  TheResourceManagerIsReadAtItsPinnedSlot();
+  TheRunningPackageIsTheFirstFieldOfTheCommandLine();
   ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
   ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain();
   TheProbeIsNotReadInAShippedBuild();
