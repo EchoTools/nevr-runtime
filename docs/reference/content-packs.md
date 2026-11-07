@@ -1,8 +1,11 @@
-# Content packs (PC)
+# Content packs
 
 A content pack is a mod's game data, served while the game runs, with no game file changed: manifests that replace stock ones,
 the packages those add, and the script DLLs that go with them. The runtime serves an installed pack itself, on a client and on
-a dedicated server (`src/runtime/content/content_pack.h`); no plugin is needed.
+a dedicated server (`src/runtime/content/content_pack.h`); no plugin is needed. The Quest build serves a pack installed as a
+folder the same way, with the same checks and the same log lines, and no scripts ("On Quest" below, #2312). Both builds compile
+one decision: `src/runtime/content/content_core.h` reads `content.json`, checks every file, decides, and writes the lines; each
+build supplies only its file access and its hook.
 
 Use the smaller tools first when they are enough. `NEVR_RegisterResourceOverride` replaces a buffer of a resource the
 game already lists: the first at any size, and the second (a texture's payload, keyed `Make(<logical>, "Win10GPU")`,
@@ -18,7 +21,7 @@ ADR 0012), never the game install: nothing of ours is written there (the standin
 folder"). The folder holds `content.json` and the files it lists. A pack that is installed is served: no `config.yaml`
 key turns it on or off. To run the game stock, remove the pack's folder. One pack at a time: with two or more folders
 under `content\`, none is served (a pack's manifest replaces a stock manifest whole, so two packs that change one set
-would need one merged manifest, which nothing makes).
+would need one merged manifest, which nothing makes). On Quest the folder is `<media root>/nevr/content/<id>/` ("On Quest").
 
 ## content.json
 
@@ -93,6 +96,8 @@ runs on its stock data, when:
 | `signed_only` | the pack carries scripts and the run was started with `-require-signed-plugins` (a script is native code the game runs; a pack without scripts is served) |
 | `unsupported_game` | the pack carries scripts and the game is not echovr.exe 631547 |
 | `hook_target_changed`, `hook_failed` | the game's file open is not the bytes the hook was written against, or the hook did not install |
+| `scripts_unsupported` | Quest only: the pack carries scripts, and the Quest loads no script from a pack folder |
+| `bundled_pack_placed` | Quest only: a manifest the pack replaces was replaced by the APK's bundled pack (ADR 0029), which kept the stock one as `<set>.stock` |
 
 Each file that passes is opened once, hashed through that handle, and held open with read sharing only for the rest of
 the process, so nothing can change, rename or delete it between the check and the game's read.
@@ -122,6 +127,31 @@ Never hook `LoadLibraryA`, `LoadLibraryW`, `LoadLibraryExA` or `LoadLibraryExW`.
 that re-hooked one is reported through `ServerFatal`, whose line says the runtime's patches at those addresses "are no
 longer applied" (`src/runtime/ext/plugin_loader.cpp`): a dedicated server stops, a client logs it as a warning.
 
+## On Quest
+
+The Quest build (`src/quest/sentinel/content_pack_hook.h`, `src/quest/data/content_folder.h`) runs the same decision over its
+own data. What differs:
+
+| | PC | Quest |
+| --- | --- | --- |
+| Where a pack lives | `<root>\content\<id>\` | `<media root>/nevr/content/<id>/`; the media root is `/sdcard/Android/media/com.readyatdawn.r15/files` (`data_root::kMediaRoot`), where the sentinel's logs are too |
+| `data_dir` | `_data/5932408047/rad15/win10` | `_data/5932408047/rad15/android`, relative to the root the engine reads |
+| When it is checked | the first command-line pass, before the original call | in the data step, after the bundled pack step (ADR 0029) and before the game's first manifest read (`src/quest/sentinel/data_wiring.h`) |
+| The function hooked | `CFile::Open`, echovr.exe `0x1400e15e0`, detoured | `NRadEngine::CSysFile::Open(const char* path, unsigned flags, long* handle)`, libr15 `0xf85538`, through libr15's GOT slot `0x36f6450` (no code page is written, N151) |
+| Who opens through it | AddPackage and `CFileStream` | AddPackage (`bl` at `0x2540f38` and `0x2540fe0`) and `CFile::Open`'s tail call (`b` at `0x11e8978`), which every manifest read takes; all three branch to the PLT stub `0xf3dad0` (`kCSysFileOpenContentSites`, `src/quest/sentinel/pinned_targets.h`) |
+| A read | flags 1: bit 0 set and none of `0x2`, `0x4`, `0x8`, `0x10` (`nevr_content::IsServedRead`) | the same rule |
+| The file handed to the game | the pack's file by path, held open with read sharing only | the held descriptor reopened through `/proc/self/fd/<n>`: the file that was hashed, even after a rename over its path, with an offset of its own (shown on the host's file systems; not yet on the headset's shared storage) |
+| A path's spelling | any case, `/` or `\`, the `\\?\` prefix | the game's path as it is: the engine reads below the root the data step names (`engine_root`: the media root, the OBB-skip root or the legacy root), the root a pack's files are checked against; the pack's own folder stays under the media root |
+| Scripts | served | the pack is refused whole (`scripts_unsupported`) |
+| Too late | the game's resource manager exists | the same, read at libr15 `0x376ed60` (written at `0x2aa89bc`) |
+| Refusals of its own | `hook_target_changed` | `bundled_pack_placed`; `hook_failed` names the slot and the GOT status |
+| Which builds | every runtime build | the patched libr15 only. On the service-only libr15 (the reference build's file, `src/quest/sentinel/libr15_attach.h`) only the service-side hooks install; neither this slot nor the permission-wait hook that reaches the data step is one. So no folder pack is served there and no `[NEVR.CONTENT]` line is written |
+
+The game's function returns 0 for an open that succeeded (AddPackage tests it with `cbnz w0` at `0x2540f3c`), as on PC, so a
+served open it fails is the same Warning. A Quest pack is made like a PC one; `tools/cmd/content-test-pack -platform android`
+makes the test pack from a copy of the Quest's data folder. To install a pack, copy its folder to
+`<media root>/nevr/content/<id>/`; to run the game stock, remove that folder.
+
 ## What the log shows
 
 `[NEVR.CONTENT]` (`docs/standards/logging.md`):
@@ -138,6 +168,9 @@ longer applied" (`src/runtime/ext/plugin_loader.cpp`): a dedicated server stops,
 The first serve of each file is Info; a repeat is Debug. A served open the game's function fails is a Warning with its
 result.
 
+On Quest each line is one sentinel record, `{"event":"content","msg":"<the line>"}`, in `<media root>/nevr/logs` and logcat;
+the text is the PC's, with the Quest's paths.
+
 ## Trust
 
 A pack's script DLLs are native code the game runs. In a run started with `-require-signed-plugins` (N147) a pack that
@@ -153,5 +186,5 @@ Nothing reports what a pack contains: `nevr_assets` in the login lists only what
 
 - What a pack may contain. This page says how a pack is served, not where its bytes come from. ADR 0028 keeps
   game-derived packs off release pages.
-- Quest. The Quest build places a bundled pack's files into its own data tree instead (ADR 0029); it serves no script.
+- Scripts on Quest. The Quest loads no script from a pack folder; a pack that carries one is refused.
 - Two packs at once.

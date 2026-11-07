@@ -2,7 +2,7 @@ package main
 
 // #1424: content-test-pack makes a pack the runtime's rules accept, from a fake install this test writes: a manifest with
 // the stock layout (a 24-byte ZSTD header, three table descriptors, three tables) and two script DLLs. Nothing of the
-// game's is read.
+// game's is read. #2312: -platform android makes the Quest's pack from the Quest's data folder, with no script.
 
 import (
 	"bytes"
@@ -64,7 +64,7 @@ func newFixture(t *testing.T) fixture {
 	f := fixture{game: filepath.Join(dir, "echovr"), content: filepath.Join(dir, "content"),
 		env: map[string]string{"XDG_STATE_HOME": filepath.Join(dir, "state")}}
 	f.stock, f.plain = fakeManifest(t, 3, 2, 2, 4)
-	mustWrite(t, filepath.Join(f.game, filepath.FromSlash(dataDir), "manifests", set), f.stock)
+	mustWrite(t, filepath.Join(f.game, filepath.FromSlash(platforms["windows"].dataDir), "manifests", set), f.stock)
 	scripts := filepath.Join(f.game, "bin", "win10", "scripts")
 	mustWrite(t, filepath.Join(scripts, "190ed14fe6c74dd3.dll"), []byte("script one"))
 	mustWrite(t, filepath.Join(scripts, "0000000000000001.dll"), []byte("script two"))
@@ -183,6 +183,54 @@ func TestContentJsonListsEveryFileByItsDigestAndNamesTheStockManifest(t *testing
 	}
 }
 
+func TestAnAndroidPackIsTheQuestsDataDirAndCarriesNoScript(t *testing.T) {
+	f := newFixture(t) // a PC install; the Quest's stock manifest is written beside it under the android data_dir
+	quest := filepath.Join(t.TempDir(), "files")
+	stock, _ := fakeManifest(t, 2, 2, 2, 3)
+	mustWrite(t, filepath.Join(quest, "_data", "5932408047", "rad15", "android", "manifests", set), stock)
+	mustWrite(t, filepath.Join(quest, "bin", "win10", "scripts", "190ed14fe6c74dd3.dll"), []byte("never copied"))
+	out := filepath.Join(f.content, "testpack")
+	code, stdout, stderr := f.run("-platform", "android", "-game-dir", quest, "-out", out)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var result made
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil || result.Scripts != 0 || result.Files != 2 ||
+		result.Platform != "android" {
+		t.Fatalf("stdout %q (%v)", stdout, err)
+	}
+	text, _ := os.ReadFile(filepath.Join(out, "content.json"))
+	var content map[string]any
+	if err := json.Unmarshal(text, &content); err != nil {
+		t.Fatal(err)
+	}
+	if content["data_dir"] != "_data/5932408047/rad15/android" {
+		t.Errorf("data_dir %v", content["data_dir"])
+	}
+	if _, has := content["scripts"]; has {
+		t.Errorf("an android pack names scripts: %s", text)
+	}
+	m := content["manifests"].([]any)[0].(map[string]any)
+	if m["stock_sha256"] != digest(stock) || m["stock_packages"] != float64(2) {
+		t.Errorf("manifest entry %v", m)
+	}
+	if _, err := os.Stat(filepath.Join(out, "scripts")); !os.IsNotExist(err) {
+		t.Errorf("an android pack has a scripts folder (%v)", err)
+	}
+	if pkg, err := os.ReadFile(filepath.Join(out, "packages", set+"_2")); err != nil || len(pkg) != addedSize {
+		t.Errorf("added package %x (%v)", pkg, err)
+	}
+	// The PC's data folder is not read for an android pack.
+	if code, _, stderr := f.run("-platform", "android", "-game-dir", f.game, "-out", filepath.Join(f.content, "pcdata"),
+		"-id", "pcdata"); code != 1 || !strings.Contains(stderr, "rad15/android") && !strings.Contains(stderr, `rad15\android`) {
+		t.Errorf("an android pack from a PC install: exit %d, %q", code, stderr)
+	}
+	if code, _, stderr := f.run("-platform", "ios", "-game-dir", quest, "-out", filepath.Join(f.content, "x"), "-id", "x"); code != 2 ||
+		!strings.Contains(stderr, "not windows or android") {
+		t.Errorf("an unknown platform: exit %d, %q", code, stderr)
+	}
+}
+
 func TestRefusals(t *testing.T) {
 	f := newFixture(t)
 	existing := filepath.Join(f.content, "testpack")
@@ -192,7 +240,7 @@ func TestRefusals(t *testing.T) {
 	broken, _ := fakeManifest(t, 3, 2, 2, 4)
 	copy(broken, "XXXX")
 	brokenGame := filepath.Join(t.TempDir(), "echovr")
-	mustWrite(t, filepath.Join(brokenGame, filepath.FromSlash(dataDir), "manifests", set), broken)
+	mustWrite(t, filepath.Join(brokenGame, filepath.FromSlash(platforms["windows"].dataDir), "manifests", set), broken)
 	cases := []struct {
 		name string
 		args []string

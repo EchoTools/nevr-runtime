@@ -6,51 +6,17 @@
 
 #include <algorithm>
 #include <atomic>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "core/logging.h"
-#include "runtime/content/content_json.h"
+#include "runtime/content/content_core.h"
 #include "runtime/hook/dll_load_hook.h"
 
 namespace nevr_content {
 
 namespace {
-
-// CFile::Open's flags: bit 0 reads; 0x2, 0x4, 0x8 and 0x10 write, create or truncate. A read is bit 0 alone among those.
-constexpr std::uint32_t kOpenRead = 0x1;
-constexpr std::uint32_t kOpenWriteBits = 0x2 | 0x4 | 0x8 | 0x10;
-
-enum class Kind { kManifest, kPackage, kScript };
-
-const char* KindName(Kind kind) {
-  switch (kind) {
-    case Kind::kManifest: return "manifest";
-    case Kind::kPackage: return "package";
-    case Kind::kScript: return "script";
-  }
-  return "?";
-}
-
-struct Served {
-  Kind kind;
-  std::string name;          // the stock file's name (the package set, the package, the script)
-  std::wstring pack_path;    // the pack's file, as held
-  std::string pack_path_utf8;
-  std::shared_ptr<std::atomic<unsigned>> hits = std::make_shared<std::atomic<unsigned>>(0);
-};
-
-struct Pack {
-  std::string id;
-  std::map<std::wstring, Served> opens;    // canonical stock path -> the pack's file
-  std::map<std::wstring, Served> scripts;  // canonical <exe dir>\scripts\<name>.dll -> the pack's file
-  std::vector<HANDLE> held;
-};
-
-// Written once, before any hook is installed, and only read after.
-Pack* g_pack = nullptr;
 
 std::wstring Widen(const std::string& utf8) {
   if (utf8.empty()) return std::wstring();
@@ -83,95 +49,126 @@ std::wstring Canonical(std::wstring path) {
   return path;
 }
 
-std::wstring Under(const std::wstring& dir, const std::string& relative) {
-  std::wstring out = dir;
-  if (!out.empty() && out.back() != L'\\') out += L'\\';
-  out += Widen(relative);
-  std::replace(out.begin(), out.end(), L'/', L'\\');
-  return out;
-}
-
 // Opens `path` for reading with read sharing only, so nothing can write, rename or delete it while the handle is held.
 HANDLE OpenHeld(const std::wstring& path) {
   return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
-std::string DigestOf(HANDLE file) { return StreamSha256(file, kDigestChunkBytes); }
+// The shared decision's file access on Windows (content_core.h, PackFiles). Paths are UTF-8 outside, wide inside.
+class Win32PackFiles final : public PackFiles {
+ public:
+  ~Win32PackFiles() override { ReleaseAll(); }
 
-std::string DigestOfPath(const std::wstring& path) {
-  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return std::string();
-  const std::string digest = DigestOf(file);
-  CloseHandle(file);
-  return digest;
-}
-
-// The folders directly under `dir`, by name (hidden ones and "." and ".." left out).
-std::vector<std::wstring> Folders(const std::wstring& dir) {
-  std::vector<std::wstring> out;
-  WIN32_FIND_DATAW found;
-  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &found);
-  if (find == INVALID_HANDLE_VALUE) return out;
-  do {
-    const std::wstring name = found.cFileName;
-    if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || name == L"." || name == L"..") continue;
-    out.push_back(name);
-  } while (FindNextFileW(find, &found));
-  FindClose(find);
-  std::sort(out.begin(), out.end());
-  return out;
-}
-
-bool ReadText(const std::wstring& path, std::string* text) {
-  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return false;
-  LARGE_INTEGER size;
-  bool ok = GetFileSizeEx(file, &size) && size.QuadPart >= 0 &&
-            static_cast<std::uint64_t>(size.QuadPart) <= kMaxContentJsonBytes;
-  if (ok) {
-    text->assign(static_cast<std::size_t>(size.QuadPart), '\0');
-    DWORD got = 0;
-    ok = text->empty() || (ReadFile(file, text->data(), static_cast<DWORD>(text->size()), &got, nullptr) && got == text->size());
+  std::vector<std::string> Folders(const std::string& dir) override {
+    std::vector<std::wstring> wide;
+    WIN32_FIND_DATAW found;
+    HANDLE find = FindFirstFileW((Widen(dir) + L"\\*").c_str(), &found);
+    if (find != INVALID_HANDLE_VALUE) {
+      do {
+        const std::wstring name = found.cFileName;
+        if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || name == L"." || name == L"..") continue;
+        wide.push_back(name);
+      } while (FindNextFileW(find, &found));
+      FindClose(find);
+    }
+    std::sort(wide.begin(), wide.end());
+    std::vector<std::string> out;
+    for (const std::wstring& w : wide) out.push_back(Narrow(w));
+    return out;
   }
-  CloseHandle(file);
-  return ok;
-}
 
-Decision Refused(Decision d, const char* reason, std::string detail) {
-  d.outcome = Outcome::kRefused;
-  d.reason = reason;
-  d.detail = std::move(detail);
-  return d;
-}
-
-void Release(Pack* pack) {
-  for (HANDLE h : pack->held) CloseHandle(h);
-  pack->held.clear();
-}
-
-// One record per served file: the first serve of each file is Info, a repeat is Debug (AddPackage reopens a set's files when a
-// set is added again). `result` is CFile::Open's own return (0: opened); a script has none (the load comes after the rewrite).
-void LogServed(const Served& served, const std::string& game_path, bool has_result, std::uint64_t result) {
-  const unsigned n = served.hits->fetch_add(1, std::memory_order_relaxed) + 1;
-  if (has_result && result != 0) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.CONTENT] %s open failed id=%s name=%s game_path=%s pack_file=%s result=0x%llx (the game gets the open's failure)",
-        KindName(served.kind), g_pack->id.c_str(), served.name.c_str(), game_path.c_str(), served.pack_path_utf8.c_str(),
-        static_cast<unsigned long long>(result));
-    return;
+  bool ReadText(const std::string& path, std::size_t max_bytes, std::string* text) override {
+    HANDLE file = CreateFileW(Widen(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size;
+    bool ok = GetFileSizeEx(file, &size) && size.QuadPart >= 0 && static_cast<std::uint64_t>(size.QuadPart) <= max_bytes;
+    if (ok) {
+      text->assign(static_cast<std::size_t>(size.QuadPart), '\0');
+      DWORD got = 0;
+      ok = text->empty() || (ReadFile(file, text->data(), static_cast<DWORD>(text->size()), &got, nullptr) && got == text->size());
+    }
+    CloseHandle(file);
+    return ok;
   }
-  Log(n == 1 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug,
-      "[NEVR.CONTENT] %s served id=%s name=%s game_path=%s pack_file=%s count=%u", KindName(served.kind), g_pack->id.c_str(),
-      served.name.c_str(), game_path.c_str(), served.pack_path_utf8.c_str(), n);
+
+  HeldFile Hold(const std::string& path) override {
+    HeldFile held;
+    HANDLE file = OpenHeld(Widen(path));
+    if (file == INVALID_HANDLE_VALUE) {
+      held.error = GetLastError();
+      return held;
+    }
+    held_.push_back(file);
+    held.opened = true;
+    LARGE_INTEGER size;
+    if (GetFileSizeEx(file, &size)) held.size = size.QuadPart;
+    if (held.size != 0) held.sha256 = StreamSha256(file, kDigestChunkBytes);
+    held.serve_path = path;  // the handle keeps the file as it was checked: no write, rename or delete while it is held
+    return held;
+  }
+
+  void ReleaseAll() override {
+    for (HANDLE h : held_) CloseHandle(h);
+    held_.clear();
+  }
+
+  std::string Sha256Of(const std::string& path) override {
+    HANDLE file = CreateFileW(Widen(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return std::string();
+    const std::string digest = StreamSha256(file, kDigestChunkBytes);
+    CloseHandle(file);
+    return digest;
+  }
+
+  bool Exists(const std::string& path) override { return GetFileAttributesW(Widen(path).c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+  std::string Join(const std::string& dir, const std::string& relative) override {
+    std::string out = dir;
+    if (!out.empty() && out.back() != '\\') out += '\\';
+    out += relative;
+    std::replace(out.begin(), out.end(), '/', '\\');
+    return out;
+  }
+
+  std::string Key(const std::string& path) override { return Narrow(Canonical(Widen(path))); }
+
+ private:
+  std::vector<HANDLE> held_;
+};
+
+// The pack this process serves: the shared table and the files that hold its files open. Written once, before any hook is
+// installed, and only read after.
+struct State {
+  std::unique_ptr<Pack> pack;
+  std::unique_ptr<Win32PackFiles> files;
+};
+State* g_state = nullptr;
+
+EchoVR::LogLevel LevelOf(LineLevel level) {
+  switch (level) {
+    case LineLevel::kDebug: return EchoVR::LogLevel::Debug;
+    case LineLevel::kInfo: return EchoVR::LogLevel::Info;
+    case LineLevel::kWarning: return EchoVR::LogLevel::Warning;
+  }
+  return EchoVR::LogLevel::Warning;
+}
+
+// One record per served file (content_core.h, FormatServed): the first serve of each file is Info, a repeat is Debug (AddPackage
+// reopens a set's files when a set is added again). `result` is CFile::Open's own return (0: opened); a script passes 0 (the
+// load comes after the rewrite).
+void LogServed(const Served& served, const std::string& game_path, std::uint64_t result) {
+  char line[4096];
+  const LineLevel level = FormatServed(served, g_state->pack->id.c_str(), game_path.c_str(), result, line, sizeof(line));
+  Log(LevelOf(level), "%s", line);
 }
 
 const Served* FindOpen(const char* game_path, std::uint32_t flags) {
-  const Pack* pack = g_pack;
-  if (pack == nullptr || game_path == nullptr || pack->opens.empty()) return nullptr;
-  if ((flags & kOpenRead) == 0 || (flags & kOpenWriteBits) != 0) return nullptr;
-  const auto it = pack->opens.find(Canonical(Widen(game_path)));
-  return it == pack->opens.end() ? nullptr : &it->second;
+  const State* state = g_state;
+  if (state == nullptr || game_path == nullptr || state->pack->opens.empty()) return nullptr;
+  if (!IsServedRead(flags)) return nullptr;
+  return FindKey(state->pack->opens, Narrow(Canonical(Widen(game_path))).c_str());
 }
 
 }  // namespace
@@ -214,124 +211,41 @@ std::string StreamSha256(HANDLE file, std::size_t chunk_bytes) {
   return hex;
 }
 
-const char* OutcomeName(Outcome outcome) {
-  switch (outcome) {
-    case Outcome::kNone: return "none";
-    case Outcome::kServed: return "served";
-    case Outcome::kRefused: return "refused";
-  }
-  return "?";
-}
-
 Decision Decide(const Inputs& in) {
-  Decision d;
-  const std::vector<std::wstring> folders = Folders(in.content_dir);
-  if (folders.empty()) return d;
-  if (folders.size() > 1) {
-    std::string names;
-    for (const std::wstring& f : folders) names += (names.empty() ? "" : ",") + Narrow(f);
-    return Refused(d, "several_packs", names);
-  }
-  const std::string folder = Narrow(folders.front());
-  d.id = folder;
-  if (in.data_read_already) return Refused(d, "loaded_too_late", "the game has read its manifests already");
-
-  const std::wstring dir = in.content_dir + L"\\" + folders.front();
-  std::string text;
-  if (!ReadText(dir + L"\\content.json", &text)) return Refused(d, "no_content_json", Narrow(dir) + "\\content.json");
-  Descriptor desc;
-  std::string reason;
-  std::string detail;
-  if (!ParseContentJson(text, folder, &desc, &reason, &detail)) return Refused(d, reason.c_str(), detail);
-  d.version = desc.version;
-
-  if (!desc.scripts.empty() && in.signed_only) {
-    return Refused(d, "signed_only", "the pack carries " + std::to_string(desc.scripts.size()) +
-                                         " script DLLs and this run loads signed code only (-require-signed-plugins)");
-  }
-  if (!desc.scripts.empty() && !in.game_supported) {
-    return Refused(d, "unsupported_game", "the pack carries scripts, which fit echovr.exe 631547 only");
-  }
-
-  auto pack = std::make_unique<Pack>();
-  pack->id = desc.id;
-  // Every pack file, hashed through the handle that is then held.
-  std::map<std::string, std::wstring> held_path;
-  for (const auto& [rel, want] : desc.files) {
-    const std::wstring path = Under(dir, rel);
-    HANDLE file = OpenHeld(path);
-    if (file == INVALID_HANDLE_VALUE) {
-      const DWORD error = GetLastError();
-      Release(pack.get());
-      return Refused(d, "file_missing", rel + " error=" + std::to_string(error));
-    }
-    pack->held.push_back(file);
-    LARGE_INTEGER size;
-    if (GetFileSizeEx(file, &size) && size.QuadPart == 0) {
-      Release(pack.get());
-      return Refused(d, "file_empty", rel);  // a pack file always has bytes; an empty one is a broken copy
-    }
-    const std::string got = DigestOf(file);
-    if (got != want) {
-      Release(pack.get());
-      return Refused(d, "file_changed", rel + " sha256=" + (got.empty() ? "unreadable" : got) + " want=" + want);
-    }
-    held_path[rel] = path;
-    ++d.files_checked;
-  }
-
-  const std::wstring data = Under(in.game_dir, desc.data_dir);
-  for (const ManifestEntry& m : desc.manifests) {
-    const std::wstring stock = data + L"\\manifests\\" + Widen(m.package);
-    const std::string got = DigestOfPath(stock);
-    if (got != m.stock_sha256) {
-      Release(pack.get());
-      return Refused(d, "stock_mismatch", m.package + " sha256=" + (got.empty() ? "missing" : got) + " built_from=" + m.stock_sha256);
-    }
-    const std::wstring& file = held_path[m.file];
-    pack->opens[Canonical(stock)] = Served{Kind::kManifest, m.package, file, Narrow(file)};
-    ++d.manifests;
-    for (const std::string& rel : m.packages) {
-      const std::string name = LeafOf(rel);
-      const std::wstring& pfile = held_path[rel];
-      pack->opens[Canonical(data + L"\\packages\\" + Widen(name))] = Served{Kind::kPackage, name, pfile, Narrow(pfile)};
-      ++d.packages;
-    }
-  }
-  for (const std::string& rel : desc.scripts) {
-    const std::string name = LeafOf(rel);
-    const std::wstring& sfile = held_path[rel];
-    pack->scripts[Canonical(in.exe_dir + L"\\scripts\\" + Widen(name))] = Served{Kind::kScript, name, sfile, Narrow(sfile)};
-    ++d.scripts;
-  }
-
-  if (g_pack != nullptr) {
-    Release(g_pack);
-    delete g_pack;
-  }
-  g_pack = pack.release();
-  d.outcome = Outcome::kServed;
+  CoreInputs core;
+  core.content_dir = Narrow(in.content_dir);
+  core.game_dir = Narrow(in.game_dir);
+  core.exe_dir = Narrow(in.exe_dir);
+  core.data_read_already = in.data_read_already;
+  core.signed_only = in.signed_only;
+  core.game_supported = in.game_supported;
+  auto files = std::make_unique<Win32PackFiles>();
+  std::unique_ptr<Pack> pack;
+  const Decision d = Decide(core, *files, &pack);
+  if (d.outcome != Outcome::kServed) return d;
+  Forget();
+  g_state = new State{std::move(pack), std::move(files)};
   return d;
 }
 
 bool ServeOpen(const char* game_path, std::uint32_t flags, std::string* pack_path) {
   const Served* served = FindOpen(game_path, flags);
   if (served == nullptr) return false;
-  *pack_path = served->pack_path_utf8;
+  *pack_path = served->serve_path;
   return true;
 }
 
 bool RewriteScript(const wchar_t* lower_path, std::wstring* load_path) {
-  const Pack* pack = g_pack;
-  if (pack == nullptr || lower_path == nullptr || pack->scripts.empty()) return false;
-  const auto it = pack->scripts.find(Canonical(lower_path));
-  if (it == pack->scripts.end()) return false;
-  *load_path = it->second.pack_path;
+  const State* state = g_state;
+  if (state == nullptr || lower_path == nullptr || state->pack->scripts.empty()) return false;
+  const Served* served = FindKey(state->pack->scripts, Narrow(Canonical(lower_path)).c_str());
+  if (served == nullptr) return false;
+  *load_path = Widen(served->serve_path);
   // A line here is safe outside the loader lock only; a load from a DllMain is served and counted, not logged.
   if (nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
-    it->second.hits->fetch_add(1, std::memory_order_relaxed);
+    served->hits.fetch_add(1, std::memory_order_relaxed);
   } else {
-    LogServed(it->second, Narrow(lower_path), false, 0);
+    LogServed(*served, Narrow(lower_path), 0);
   }
   return true;
 }
@@ -339,17 +253,14 @@ bool RewriteScript(const wchar_t* lower_path, std::wstring* load_path) {
 std::uint64_t OpenThrough(CFileOpenFn original, const char* path, std::uint32_t flags, HANDLE* out) {
   const Served* served = FindOpen(path, flags);
   if (served == nullptr) return original(path, flags, out);
-  const std::uint64_t result = original(served->pack_path_utf8.c_str(), flags, out);
-  LogServed(*served, path, true, result);
+  const std::uint64_t result = original(served->serve_path.c_str(), flags, out);
+  LogServed(*served, path, result);
   return result;
 }
 
 void Forget() {
-  if (g_pack != nullptr) {
-    Release(g_pack);
-    delete g_pack;
-    g_pack = nullptr;
-  }
+  delete g_state;  // its files close their handles
+  g_state = nullptr;
 }
 
 }  // namespace nevr_content

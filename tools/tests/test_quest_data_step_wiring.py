@@ -85,8 +85,8 @@ class TheStepOrder(unittest.TestCase):
 
     def test_a_failed_step_ends_nonzero_through_the_end_with_its_reason(self):
         body = self.body()
-        self.assertRegex(body, r'if \(failed\) EndFailed\("data_step_failed"\)')
-        self.assertLess(body.index("RunDataStep"), body.index("if (failed) EndFailed("))
+        self.assertRegex(body, r'if \(failed\) \{\s*EndFailed\("data_step_failed"\);')
+        self.assertLess(body.index("RunDataStep"), body.index('EndFailed("data_step_failed")'))
         wiring = extract_braced_function(read("data_wiring.cpp"), "void EndFailed(const char* reason) noexcept {")
         self.assertIn("process_end::EndWithExitCode(process_end::kFailureExitCode, reason)", wiring)
         self.assertNotIn("EndProcess", re.sub(r"//[^\n]*", "", read("data_wiring.cpp")))
@@ -380,19 +380,24 @@ class TheBundledPackRunsAfterTheDataStep(unittest.TestCase):
         for ender in ('EndFailed("no_storage_grant")', 'EndFailed("game_data_missing")', 'EndFailed("data_step_failed")'):
             self.assertLess(body.rindex(ender), run, ender)
         self.assertLess(body.index("data::RunDataStep(config, *transport)"), run)
-        # A failed data step takes the other branch: the pack step never runs over data that is not there.
-        self.assertRegex(body, r'if \(failed\) EndFailed\("data_step_failed"\);\s*else RunPack\(engineRoot\);')
+        # A failed data step takes the other branch: the pack step never runs over data that is not there. The folder pack
+        # (#2312) runs only when the bundled pack step went through (RunPack is true), so it reads the `.stock` marker that
+        # step leaves.
+        self.assertRegex(
+            body,
+            r'if \(failed\) \{\s*EndFailed\("data_step_failed"\);\s*\} else if \(RunPack\(engineRoot\)\) \{\s*RunContent\(engineRoot\);\s*\}',
+        )
 
     def test_the_pack_step_is_not_gated_on_a_development_build(self):
         # The variant APK that carries a pack is a release build (allow_fetch false): the pack step must not read it.
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
-        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        run_pack = extract_braced_function(text, "bool RunPack(const std::string& engineRoot) noexcept {")
         self.assertNotIn("allow_fetch", run_pack)
         self.assertNotIn("kIsDev", run_pack)
 
     def test_a_failed_placement_ends_the_process_with_its_own_reason(self):
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
-        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        run_pack = extract_braced_function(text, "bool RunPack(const std::string& engineRoot) noexcept {")
         self.assertIn('EndFailed("pack_failed")', run_pack)
         self.assertIn("PackOutcome::kFailed", run_pack)
 
@@ -415,7 +420,7 @@ class TheBundledPackRunsAfterTheDataStep(unittest.TestCase):
     def test_the_apk_is_found_from_where_the_sentinel_was_mapped_when_no_path_is_given(self):
         # No host test maps the sentinel from an APK, so the production source of the path is pinned by shape (ADR 0029).
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
-        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        run_pack = extract_braced_function(text, "bool RunPack(const std::string& engineRoot) noexcept {")
         self.assertIn("pack.apk_path = !Opts().apk_path.empty() ? Opts().apk_path : OwnApkPath();", run_pack)
         own = extract_braced_function(text, "std::string OwnApkPath() {")
         self.assertIn("dladdr(reinterpret_cast<const void*>(&AfterStorage), &info)", own)

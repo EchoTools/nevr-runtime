@@ -95,6 +95,7 @@ set(PATCHES_SOURCES
     "combat/team_ready.cpp"
     # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
     "content/content_json.cpp"
+    "content/content_core.cpp"
     "content/content_pack.cpp"
     "content/content_pack_install.cpp"
     "combat/cat_compat.cpp"
@@ -1973,10 +1974,10 @@ if(BUILD_TESTING)
     # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
     # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's
     # loader-lock probe and the real Log().
-    add_executable(test_content_pack tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp
-      host/file_digest.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
-    set_source_files_properties(tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp host/file_digest.cpp
-      hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    add_executable(test_content_pack tests/test_content_pack.cpp content/content_json.cpp content/content_core.cpp
+      content/content_pack.cpp host/file_digest.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_content_pack.cpp content/content_json.cpp content/content_core.cpp content/content_pack.cpp
+      host/file_digest.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_content_pack PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_content_pack PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_content_pack PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)

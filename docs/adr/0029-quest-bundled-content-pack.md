@@ -144,3 +144,16 @@ value) and is not this repository's.
   `pack_failed`, a kill between the writes finished by the next launch, and no pack step after a failed or missing data step.
 - Python, `just test-tools`: `tools/tests/test_quest_repack_pack.py` (`stage-pack`, `pack-problems`, `verify-signed` over the pack, and the
   recipe end to end with and without a pack).
+
+## Amendment (#2312): a pack installed as a folder
+
+The Quest also serves a content pack installed as a folder, as PC does, through the runtime's shared decision
+(`src/runtime/content/content_core.h`; `docs/reference/content-packs.md`, "On Quest"). It does not change this record's overlay:
+
+- It runs after this record's runtime step (section 3), in the same data step, and only when that step did not fail
+  (`pack_failed` ends the process before it).
+- The overlay writes into the data tree and keeps the stock manifest as `<set>.stock`; the folder pack writes nothing and hands
+  the game its own files through a GOT hook on `CSysFile::Open`. Both cannot apply to one manifest: a folder pack that replaces a
+  manifest with a `.stock` beside it is refused whole as `bundled_pack_placed`, so the game reads the overlay's manifest and no
+  mix of the two.
+- A folder pack carries no script on Quest (`scripts_unsupported`), as this record's pack carries none.

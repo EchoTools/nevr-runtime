@@ -41,7 +41,9 @@
  * same thread, in the root the data step used: an APK without `assets/nevr-pack/pack.json` logs one `pack_check outcome=none`;
  * one with it overlays the pack's files over the stock data when the stock manifest is one the pack names (`pack_check`,
  * `pack_place`, `pack_step`, and `data_version` for what is in place). A failed placement shows the floor message, holds it
- * and ends the process nonzero with reason `pack_failed`.
+ * and ends the process nonzero with reason `pack_failed`. After a bundled pack step that did not fail, the content pack installed
+ * as a folder is decided and, when it passes, served (#2312, content_pack_hook.h): one `content` record with the decision's
+ * [NEVR.CONTENT] line, still before the game's first manifest read.
  *
  * Events (sentinel log, no URL): `data_step_install`; `data_check` (carries `data_version` and `manifest_sha256`: the data found), `data_fetch`,
  * `data_extract`, `data_swap`, `data_version` (the data a fetch placed) (the step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
@@ -79,6 +81,7 @@ using ShowFn = const char* (*)(void* app, const char* text, bool* looperPrepared
 using EnderFn = void (*)(int exitCode, const char* reason) noexcept;
 using SleepFn = void (*)(unsigned ms) noexcept;
 using AppFn = void* (*)() noexcept;
+using ContentFn = void (*)(const std::string& engineRoot) noexcept;
 
 // What the step touches. Production leaves everything but `show` at its default (null / empty).
 struct Options {
@@ -104,6 +107,9 @@ struct Options {
   std::string apk_path;
   std::function<std::uint64_t(const std::string& root)> pack_available_bytes;
   std::function<bool(const char* point, const std::string& path)> pack_probe;
+  // The content pack installed as a folder (#2312), run after the bundled pack step with the engine root; null:
+  // content_pack_hook::Run. A test seam.
+  ContentFn content = nullptr;
   // Test seams for the pinned zip: when `zip_sha256` is not empty the fetch uses these instead of the pins in
   // data/plan.h, with two attempts and no real backoff.
   std::string zip_sha256;

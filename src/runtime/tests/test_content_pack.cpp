@@ -8,13 +8,18 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdarg>
+#include <cstdio>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "core/logging.h"
 #include "runtime/content/content_json.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/content/pack_rules.h"
+#include "runtime/tests/content_line_golden.h"
 #include "runtime/host/file_digest.h"
 
 namespace {
@@ -301,6 +306,24 @@ TEST_F(ContentPack, AFolderWithoutContentJsonIsRefused) {
   EXPECT_EQ(d.reason, "no_content_json");
 }
 
+TEST_F(ContentPack, AContentJsonOfExactlyTheCapIsReadAndOneByteMoreIsNot) {
+  // kMaxContentJsonBytes is the largest descriptor Win32PackFiles::ReadText reads: padded with spaces (JSON whitespace) to
+  // exactly the cap it is decided as any other; one byte more is not read at all.
+  nlohmann::json written;
+  const std::wstring dir = MakePack("testpack", true, [&written](nlohmann::json& j) { written = j; });
+  std::string text = written.dump();
+  ASSERT_LT(text.size(), nevr_content::kMaxContentJsonBytes);
+  text.resize(nevr_content::kMaxContentJsonBytes, ' ');
+  WriteFileBytes(dir + L"\\content.json", text);
+  EXPECT_EQ(Decide(In()).outcome, Outcome::kServed);
+  nevr_content::Forget();
+  text.push_back(' ');
+  WriteFileBytes(dir + L"\\content.json", text);
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kRefused);
+  EXPECT_EQ(d.reason, "no_content_json");
+}
+
 TEST_F(ContentPack, AChangedPackFileIsRefused) {
   const std::wstring dir = MakePack("testpack");
   WriteFileBytes(dir + L"\\packages\\48037dc70b0ecab2_1", "changed");
@@ -385,6 +408,102 @@ nlohmann::json GoodJson() {
   j["scripts"] = {"scripts/190ed14fe6c74dd3.dll"};
   j["files"] = {{"manifests/48037dc70b0ecab2", h}, {"packages/48037dc70b0ecab2_3", h}, {"scripts/190ed14fe6c74dd3.dll", h}};
   return j;
+}
+
+// #2312: the PC keeps what the shared core moved. A `.stock` file beside a stock manifest is the Quest's bundled-pack marker
+// (ADR 0029) and means nothing on PC, and a pack's scripts are served here.
+TEST_F(ContentPack, AStockMarkerBesideAManifestIsNoRefusalOnPc) {
+  WriteFileBytes(data_ + L"\\manifests\\48037dc70b0ecab2.stock", "a file named like the Quest's marker");
+  MakePack("testpack");
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason << " " << d.detail;
+  EXPECT_EQ(d.scripts, 1u);
+}
+
+// #2312: the Windows file access the shared core reads through. A file beside the pack's folder is no pack, and a missing pack
+// file's refusal carries the system's error (2: ERROR_FILE_NOT_FOUND).
+TEST_F(ContentPack, AFileBesideThePackFolderIsNoPack) {
+  WriteFileBytes(content_ + L"\\readme.txt", "not a pack");
+  MakePack("testpack");
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason << " " << d.detail;
+  EXPECT_EQ(d.id, "testpack");
+}
+
+TEST_F(ContentPack, AMissingPackFileNamesItsSystemError) {
+  const std::wstring dir = MakePack("testpack");
+  ASSERT_TRUE(DeleteFileW((dir + L"\\scripts\\190ed14fe6c74dd3.dll").c_str()));
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.reason, "file_missing");
+  EXPECT_EQ(d.detail, "scripts/190ed14fe6c74dd3.dll error=2");
+}
+
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_logged;
+
+VOID RecordLog(EchoVR::LogLevel level, UINT64, const CHAR* format, va_list args) {
+  char buf[4096];
+  vsnprintf(buf, sizeof(buf), format, args);
+  g_logged.emplace_back(level, buf);
+}
+
+// #2312: each served file is logged through Log() at the shared line's level: the first serve Info, a repeat Debug, an open the
+// game failed Warning (content_core.h, FormatServed).
+TEST_F(ContentPack, AServedFileIsLoggedAtItsLevel) {
+  MakePack("testpack");
+  ASSERT_EQ(Decide(In()).outcome, Outcome::kServed);
+  EchoVR::WriteLogFunc* const saved = EchoVR::WriteLog;
+  EchoVR::WriteLog = &RecordLog;
+  g_logged.clear();
+  const nevr_content::CFileOpenFn opened = [](const char*, std::uint32_t, HANDLE* out) -> std::uint64_t {
+    *out = nullptr;
+    return 0;
+  };
+  const nevr_content::CFileOpenFn failed = [](const char*, std::uint32_t, HANDLE* out) -> std::uint64_t {
+    *out = nullptr;
+    return 2;
+  };
+  HANDLE h = nullptr;
+  const std::string manifest = GamePath(data_ + L"\\manifests\\48037dc70b0ecab2");
+  nevr_content::OpenThrough(opened, manifest.c_str(), 1, &h);
+  nevr_content::OpenThrough(opened, manifest.c_str(), 1, &h);
+  nevr_content::OpenThrough(failed, manifest.c_str(), 1, &h);
+  EchoVR::WriteLog = saved;
+  ASSERT_EQ(g_logged.size(), 3u);
+  EXPECT_EQ(g_logged[0].first, EchoVR::LogLevel::Info);
+  EXPECT_EQ(g_logged[0].second.rfind("[NEVR.CONTENT] manifest served id=testpack ", 0), 0u) << g_logged[0].second;
+  EXPECT_EQ(g_logged[1].first, EchoVR::LogLevel::Debug);
+  EXPECT_EQ(g_logged[2].first, EchoVR::LogLevel::Warning);
+}
+
+// #2312: the [NEVR.CONTENT] lines are one text on both builds (content_line_golden.h; the Quest compares the same bytes in
+// src/quest/tests/content_folder_test.cpp).
+TEST(ContentLines, TheDecisionLinesAreTheSharedText) {
+  nevr_content::LineLevel level = nevr_content::LineLevel::kDebug;
+  EXPECT_EQ(nevr_content::FormatDecision(content_golden::ServedDecision(), content_golden::kDir, &level),
+            content_golden::kServed);
+  EXPECT_EQ(level, nevr_content::LineLevel::kInfo);
+  level = nevr_content::LineLevel::kDebug;
+  EXPECT_EQ(nevr_content::FormatDecision(Decision{}, content_golden::kDir, &level), content_golden::kNone);
+  EXPECT_EQ(level, nevr_content::LineLevel::kInfo);
+  EXPECT_EQ(nevr_content::FormatDecision(content_golden::RefusedDecision(), content_golden::kDir, &level),
+            content_golden::kRefused);
+  EXPECT_EQ(level, nevr_content::LineLevel::kWarning);
+}
+
+TEST(ContentLines, TheServedLinesAreTheSharedText) {
+  nevr_content::Served s;
+  content_golden::FillServedManifest(&s);
+  char buf[1024];
+  s.hits = 0;
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 0, buf, sizeof(buf)),
+            nevr_content::LineLevel::kInfo);
+  EXPECT_STREQ(buf, content_golden::kFirstServe);
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 0, buf, sizeof(buf)),
+            nevr_content::LineLevel::kDebug);
+  EXPECT_STREQ(buf, content_golden::kSecondServe);
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 2, buf, sizeof(buf)),
+            nevr_content::LineLevel::kWarning);
+  EXPECT_STREQ(buf, content_golden::kFailedServe);
 }
 
 TEST(ContentJson, AWellFormedDescriptorParses) {

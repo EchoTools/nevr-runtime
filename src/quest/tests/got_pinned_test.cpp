@@ -820,6 +820,7 @@ int main(int argc, char** argv) {
   CheckRealImpactsndAndDecals(r15);
   CheckRealBvhAndWallfire(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CSysFileOpen(), "libr15 CSysFile::Open JUMP_SLOT (content pack)");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
@@ -1352,6 +1353,27 @@ int main(int argc, char** argv) {
     if ((word & 0xfc000000U) != 0x94000000U || target != pinned::kFillResourceFileRequestStub) {
       std::fprintf(stderr, "libr15 FillResourceFileRequest call site %s at %#llx is not a bl to the stub (word %#x)\n", site.name,
                    static_cast<unsigned long long>(site.bl), word);
+      QCHECK(false);
+    }
+  }
+
+  // CSysFile::Open (#2312): the symbol the content pack's slot names is defined at the pinned vaddr, and each call the content
+  // pack serves through is a `bl` (or the tail call's `b`) to the PLT stub that loads the slot.
+  if (DynamicSymbolValue(r15, pinned::kCSysFileOpenSymbol) != pinned::kCSysFileOpenVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCSysFileOpenSymbol,
+                 static_cast<unsigned long long>(pinned::kCSysFileOpenVaddr));
+    QCHECK(false);
+  }
+  for (const pinned::CSysFileOpenSite& site : pinned::kCSysFileOpenContentSites) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + site.at, sizeof(word));
+    std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+    if ((imm & 0x02000000) != 0) imm -= 0x04000000;  // 26-bit signed word offset
+    const std::uint64_t target = site.at + static_cast<std::uint64_t>(imm * 4);
+    const std::uint32_t opcode = site.tail ? 0x14000000U : 0x94000000U;  // b, bl
+    if ((word & 0xfc000000U) != opcode || target != pinned::kCSysFileOpenStub) {
+      std::fprintf(stderr, "libr15 CSysFile::Open call site %s at %#llx is not a %s to the stub (word %#x)\n", site.name,
+                   static_cast<unsigned long long>(site.at), site.tail ? "b" : "bl", word);
       QCHECK(false);
     }
   }

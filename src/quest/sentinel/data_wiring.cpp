@@ -14,6 +14,7 @@
 
 #include <dlfcn.h>
 
+#include "content_pack_hook.h"
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
@@ -206,8 +207,8 @@ sentinel::LogLevel LogLevelOf(data::EventLevel level) noexcept {
 }
 
 // The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md): after the data step found or fetched the data. An APK
-// with no pack is one `pack_check` line and nothing else. A failed placement ends the process like a failed data step.
-void RunPack(const std::string& engineRoot) noexcept {
+// with no pack is one `pack_check` line and nothing else. A failed placement ends the process like a failed data step (false).
+bool RunPack(const std::string& engineRoot) noexcept {
   data::PackConfig pack;
   pack.apk_path = !Opts().apk_path.empty() ? Opts().apk_path : OwnApkPath();
   // The root the data step used (the test seam moves it, as it moves the fetch).
@@ -222,7 +223,23 @@ void RunPack(const std::string& engineRoot) noexcept {
   };
   pack.hold = [&lastMessage] { HoldMessage(lastMessage); };
   const data::PackResult result = data::RunPackStep(pack);
-  if (result.outcome == data::PackOutcome::kFailed) EndFailed("pack_failed");
+  if (result.outcome == data::PackOutcome::kFailed) {
+    EndFailed("pack_failed");
+    return false;
+  }
+  return true;
+}
+
+// The content pack installed as a folder (#2312, content_pack_hook.h): after the bundled pack, so a manifest that step replaced
+// carries its `.stock` marker when the folder pack is checked, and before the game's first manifest read.
+void RunContent(const std::string& engineRoot) noexcept {
+  // The root the data step and the bundled pack used (the test seam moves it for all three).
+  const std::string root = Opts().fetch_root_override.empty() ? engineRoot : Opts().fetch_root_override;
+  if (Opts().content != nullptr) {
+    Opts().content(root);
+  } else {
+    content_pack_hook::Run(root);
+  }
 }
 
 }  // namespace
@@ -329,8 +346,11 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   }
   // The data is in place (found or fetched): the bundled pack, when this APK carries one, goes over it. A release build
   // takes this step too: the variant APK that carries a pack is a release build, and an APK without one only logs.
-  if (failed) EndFailed("data_step_failed");
-  else RunPack(engineRoot);
+  if (failed) {
+    EndFailed("data_step_failed");
+  } else if (RunPack(engineRoot)) {
+    RunContent(engineRoot);
+  }
 }
 
 bool Install(const Options& options) noexcept {

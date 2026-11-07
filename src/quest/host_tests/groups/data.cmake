@@ -3,8 +3,13 @@
 
 # ── data ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 nevr_ht_group(data)
-foreach(f sha256 zip staging fetch data_step pack)
+foreach(f sha256 zip staging fetch data_step pack content_folder)
   nevr_ht_obj(o_data_${f} GROUP data NOEXC HOST SRC src/quest/data/${f}.cpp)
+endforeach()
+# The content pack's shared decision and content.json rules (#2312): the sources the Windows runtime compiles, built as the
+# Quest build builds them.
+foreach(f content_core content_json)
+  nevr_ht_obj(o_data_${f} GROUP data NOEXC HOST SRC src/runtime/content/${f}.cpp)
 endforeach()
 # The tests' scratch directories are made in the build tree (the recipes run from different directories).
 set(_data_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/data)
@@ -16,6 +21,10 @@ nevr_ht_test(data_step_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
+# The content pack installed as a folder (#2312, src/quest/data/content_folder.h).
+nevr_ht_test(content_folder_test GROUP data HOST PTHREAD TIMEOUT 300 ENV ${_data_env}
+  SRC src/quest/tests/content_folder_test.cpp
+  OBJS o_data_sha256 o_data_zip o_data_staging o_data_content_folder o_data_content_core o_data_content_json LIBS ${NEVR_ZLIB_LIB})
 
 # ── data-net ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # curl_transport_test needs a throwaway CA and six servers, which the recipe starts; data_wiring_test runs after it. Both are
@@ -34,4 +43,6 @@ nevr_ht_test(data_wiring_test GROUP data-net HOST CURL PTHREAD NOEXC DL NO_TEST 
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp
       src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp
       src/quest/data/data_step.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
+      src/quest/sentinel/content_pack_hook.cpp src/quest/data/content_folder.cpp src/runtime/content/content_core.cpp
+      src/runtime/content/content_json.cpp
   LIBS ${NEVR_ZLIB_LIB} ssl crypto)
