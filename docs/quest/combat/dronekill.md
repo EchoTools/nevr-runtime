@@ -190,7 +190,7 @@ No per-call line on a hook path out of scope; no secret is logged.
 
 What a headset run must show, on the combat APK with `combat.dronekill` absent (default true):
 1. Boot: four `combat_dronekill_hook` lines with `"status":"installed"`, `combat_dronekill_install` `"result":"installed"`, `combat_dronekill_link`,
-   `combat_dronekill_tick_first`, and `combat_install` naming `dronekill=installed`.
+   `combat_dronekill_tick_first`, and a `combat_install_module` record for dronekill with `"outcome":"installed"`.
 2. An arena match: one `combat_dronekill_scope` `"in_combat":0` (or none, if the first ask already found no combat map: the scope starts out of
    combat), no other `combat_dronekill_*` line; its call counts on the next change are the arena rates (Enter and Actor per script node).
 3. A combat match against drones with an EC server: `combat_dronekill_scope` `"in_combat":1`, `combat_dronekill_release` and `_component` lines at a

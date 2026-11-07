@@ -114,7 +114,7 @@ not FireBulletLocal's, which goes through the PLT).
 
 With `combat.dronekill` and `combat.dronemuzzle` at their defaults (true) in an EC drone match on the combat APK:
 1. Two `combat_dronemuzzle_hook` lines with `"status":"installed"` and `combat_dronemuzzle_install` `"result":"installed"` at Info; no Warning or
-   Error from dronemuzzle; `combat_install` names `dronemuzzle=installed`.
+   Error from dronemuzzle; the `combat_install_module` record for dronemuzzle has `"outcome":"installed"`.
 2. Each drone shot produces one `combat_dronemuzzle_shot` line (to 40) with `spawn` minus `root` equal to `kMuzzle` in the aim basis built from
    `velocity`, each to 1e-5 m: `kMuzzle[2]` (0.147 m) along the aim, less the back-off `min(|velocity| * frame_ms / 1000, 0.25)`; `kMuzzle[1]` (0.076 m) along the aim's Y (up for a level aim); `kMuzzle[0]` (0.000024 m) along X. The bullets visibly leave the drone's gun.
 3. The first three bullets: `combat_dronemuzzle_tracer` with `x,y,z` equal to the same shot's `spawn`.

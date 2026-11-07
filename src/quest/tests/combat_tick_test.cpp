@@ -416,7 +416,8 @@ void OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing() {
   CallSlot(Game(VptrValue()));
   QCHECK((g_order == std::vector<std::string>{"game", "plugin1", "combat1"}));  // the game's function once, then the plugin's callbacks, then combat's
   QCHECK(!AnyLineHas("unexpected_original"));
-  QCHECK(Lines("combat_install").size() == 1U && Has(Lines("combat_install")[0].text, "\"results\":\"tick=installed\""));
+  QCHECK(Lines("combat_install").size() == 1U && Lines("combat_install_module").size() == 1U &&
+         Has(Lines("combat_install_module")[0].text, "\"module\":\"tick\",\"outcome\":\"installed\",\"status\":\"installed\""));
   const std::vector<Line> install = Lines("combat_tick_install");
   QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\""));
   Done();

@@ -62,6 +62,35 @@ std::vector<Line> Lines(const char* event) {
   return out;
 }
 
+// The `combat_install_module` records between the phase line before and this one (the records its phase wrote), as
+// `"results":"<module>=<status> ..."`, so a check reads the outcomes in the table's order.
+std::string ResultsOf(const Line& phaseLine) {
+  std::size_t at = g_lines.size();
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (g_lines[i].text == phaseLine.text) {
+      at = i;
+      break;
+    }
+  }
+  std::vector<std::string> parts;
+  for (std::size_t i = at; i-- > 0;) {
+    const std::string& t = g_lines[i].text;
+    if (Has(t, "\"event\":\"combat_install\"")) break;  // the phase line before: its records are not this phase's
+    if (!Has(t, "\"event\":\"combat_install_module\"")) continue;  // a module's own lines sit between the records
+    const auto field = [&t](const char* key) {
+      const std::string k = std::string("\"") + key + "\":\"";
+      const std::size_t b = t.find(k);
+      if (b == std::string::npos) return std::string();
+      const std::size_t e = t.find('"', b + k.size());
+      return t.substr(b + k.size(), e - b - k.size());
+    };
+    parts.insert(parts.begin(), field("module") + "=" + field("status"));
+  }
+  std::string out = "\"results\":\"";
+  for (std::size_t i = 0; i < parts.size(); ++i) out += (i == 0 ? "" : " ") + parts[i];
+  return out + "\"";
+}
+
 std::vector<std::string> g_calls;
 combat::ModuleResult Ok() noexcept { return {true, "installed"}; }
 combat::ModuleResult Refused() noexcept { return {false, "build_id_mismatch"}; }
@@ -132,7 +161,7 @@ void EachPhaseWritesOneAggregateLine() {
     QCHECK(Has(l.text, "\"modules\":3"));
     QCHECK(Has(l.text, "\"installed\":3"));
     QCHECK(Has(l.text, "\"failed\":0"));
-    QCHECK(Has(l.text, "\"results\":\"alpha=installed impactsnd=installed decals=installed\""));
+    QCHECK(ResultsOf(l) == "\"results\":\"alpha=installed impactsnd=installed decals=installed\"");
     QCHECK(Has(l.text, "\"msg\":\"3 of 3 combat modules installed in this phase\""));
   }
   Done();
@@ -149,7 +178,7 @@ void AModuleSwitchedOffByItsKeyIsCountedApart() {
   if (lines.size() == 1U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"modules\":2,\"installed\":1,\"failed\":0,\"off\":1,"));
-    QCHECK(Has(lines[0].text, "\"results\":\"alpha=installed switched=off_config\""));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"alpha=installed switched=off_config\"");
     QCHECK(Has(lines[0].text, "\"msg\":\"1 of 2 combat modules installed in this phase; 1 off by its config key\""));
   }
   // Every module off: nothing was installed, and the line says 0 of 1, not 1 of 1.
@@ -192,7 +221,9 @@ void AFailingModuleIsNamedAndTheOthersStillInstall() {
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(Has(lines[0].text, "broken=build_id_mismatch"));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"first=installed broken=build_id_mismatch last=installed\"");
+    const std::vector<Line> records = Lines("combat_install_module");
+    QCHECK(records.size() == 3U && records[1].level == sentinel::LogLevel::kWarn && Has(records[1].text, "\"outcome\":\"failed\""));
     QCHECK(Has(lines[0].text, "\"failed\":1"));
     QCHECK(Has(lines[0].text, "2 of 3 combat modules installed in this phase"));
   }
@@ -247,8 +278,9 @@ void APhaseRunsOnce() {
   Done();
 }
 
-// A table whose results do not fit the line's list keeps the counts exact and says the list was cut, rather than writing a broken line.
-void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
+// A table too long for one line's list (14 names of 26 bytes) writes every module's record, whole, and a phase line that is whole: no line is
+// cut, and the counts are exact.
+void ALongTableWritesEveryModuleRecordAndAWholePhaseLine() {
   Process(bv::Variant::kCombat);
   static const combat::Module many[] = {
       {"module_with_a_long_name_01", nullptr, &NormalA}, {"module_with_a_long_name_02", nullptr, &NormalA},
@@ -265,8 +297,14 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
     QCHECK(Has(lines[0].text, "\"modules\":14") && Has(lines[0].text, "\"installed\":14"));
-    QCHECK(Has(lines[0].text, "\"results_truncated\":1"));
-    QCHECK(Has(lines[0].text, "module_with_a_long_name_01=installed"));
+    QCHECK(Has(lines[0].text, "\"msg\":\"14 of 14 combat modules installed in this phase\"") && !Has(lines[0].text, "\"truncated\""));
+  }
+  const std::vector<Line> records = Lines("combat_install_module");
+  QCHECK(records.size() == 14U);
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    char want[160];
+    std::snprintf(want, sizeof(want), "\"event\":\"combat_install_module\",\"phase\":\"normal\",\"module\":\"module_with_a_long_name_%02zu\",\"outcome\":\"installed\",\"status\":\"installed\"}", i + 1);
+    QCHECK(records[i].level == sentinel::LogLevel::kInfo && Has(records[i].text, want));
   }
   Done();
 }
@@ -334,13 +372,20 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\"");
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text,
-               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
+    QCHECK(ResultsOf(lines[1]) ==
+               std::string("\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
                "shaderstep=module_not_loaded ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded dronemuzzle=needs_dronekill_shot "
                "powerboost=module_not_loaded gates=module_not_loaded bvh=module_not_loaded wallfire=bvh_not_installed sendguard=module_not_loaded "
                "pfx=installed pfxtev=installed\""));
+    // every record and the phase line are whole: 17 outcomes no longer share one 768-byte line (the phase line's msg is its last field)
+    QCHECK(Has(lines[1].text, "\"msg\":\"3 of 17 combat modules installed in this phase; the others keep the game's own behaviour\"}"));
+    for (const Line& l : g_lines) QCHECK(!Has(l.text, "\"truncated\":true"));
+    // a refused module's record is a Warning, an installed one's Info
+    for (const Line& r : Lines("combat_install_module")) {
+      QCHECK(r.level == (Has(r.text, "\"outcome\":\"installed\"") ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn));
+    }
   }
   Done();
 }
@@ -364,10 +409,10 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
-    QCHECK(Has(lines[0].text, "\"results\":\"heaps=off memsys=module_not_loaded\"") && Has(lines[0].text, "\"off\":1"));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=off memsys=module_not_loaded\"" && Has(lines[0].text, "\"off\":1"));
     QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key; the others keep"));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick
-    QCHECK(Has(lines[1].text, "sendguard=off_config pfx=installed pfxtev=installed"));
+    QCHECK(Has(ResultsOf(lines[1]), "sendguard=off_config pfx=installed pfxtev=installed"));
     QCHECK(Has(lines[1].text, "\"off\":1"));
     QCHECK(Has(lines[1].text, "3 of 17 combat modules installed in this phase; 1 off by its config key; the others keep"));
   }
@@ -385,7 +430,7 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   const std::vector<Line> offLines = Lines("combat_install");
   QCHECK(offLines.size() == 1U);
   if (offLines.size() == 1U) {
-    QCHECK(Has(offLines[0].text, "bvh=off_config wallfire=off_config sendguard=module_not_loaded"));
+    QCHECK(Has(ResultsOf(offLines[0]), "bvh=off_config wallfire=off_config sendguard=module_not_loaded"));
     QCHECK(Has(offLines[0].text, "\"off\":2") && Has(offLines[0].text, "3 of 17 combat modules installed in this phase; 2 off by their config key"));
   }
   combat::SetConfig(nevr_quest::CombatConfig{});
@@ -547,7 +592,7 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   QCHECK(defaults.refreshRate.on && !defaults.refreshRateLobby.on && defaults.refreshRateQuest2At72.on);
   combat::SetConfig(defaults);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "refresh_rate=installed"));
   QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"match\""));
   Done();
   // The file's word reaches the row: the rule off is the witness.
@@ -556,7 +601,7 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   off.refreshRate = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=witness"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "refresh_rate=witness"));
   Done();
   // And the lobby key on: lobby mode.
   Process(bv::Variant::kCombat);
@@ -606,7 +651,7 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   off.gateLink = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "gates=off"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "gates=off"));
   Done();
 
   // A libr15 holding the pinned words and slots, and a policy text the file gave: the menu gate's policy line says "config" and carries the text.
@@ -632,7 +677,7 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   combat::InstallNormal();
   const std::vector<Line> policy = Lines("combat_gates_link_policy");
   QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"0e4384a5 1703a89b\"") && Has(policy[0].text, "\"source\":\"config\""));
-  QCHECK(Has(Lines("combat_install")[0].text, "gates=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "gates=installed"));
   hg::ResetForTest();
 
   hg::ResetForTest();
@@ -645,7 +690,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=installed pfxtev=installed"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
   Done();
@@ -655,7 +700,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   pfxOff.pfx = {false, nevr_quest::Source::kFile};
   combat::SetConfig(pfxOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=off_config pfxtev=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=off_config pfxtev=installed"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"reason\":\"off_config\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
   Done();
@@ -664,7 +709,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   tevOff.pfxtev = {false, nevr_quest::Source::kFile};
   combat::SetConfig(tevOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=off_config"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=installed pfxtev=off_config"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"reason\":\"off_config\""));
   Done();
@@ -709,7 +754,7 @@ void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
     QCHECK(o.modules == 17 && o.off == 1 && o.installed + o.failed == 16);
     if (o.off != 1) std::fprintf(stderr, "%s off by its key: off=%zu failed=%zu\n", c.name, o.off, o.failed);
     const std::vector<Line> lines = Lines("combat_install");
-    QCHECK(lines.size() == 1U && Has(lines[0].text, std::string(" ") + c.name + "=off ") && Has(lines[0].text, "\"off\":1"));
+    QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), std::string(" ") + c.name + "=off ") && Has(lines[0].text, "\"off\":1"));
     Done();
   }
   reset();
@@ -718,7 +763,7 @@ void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
   const combat::Outcome o = combat::InstallNormal();
   QCHECK(o.modules == 17 && o.off == 5 && o.installed + o.failed == 12);
   const std::vector<Line> lines = Lines("combat_install");
-  QCHECK(lines.size() == 1U && Has(lines[0].text, "ec=off ecfx=off dronekill=off dronemuzzle=off powerboost=off") && Has(lines[0].text, "\"off\":5"));
+  QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), "ec=off ecfx=off dronekill=off dronemuzzle=off powerboost=off") && Has(lines[0].text, "\"off\":5"));
   combat::SetConfig(nevr_quest::CombatConfig{});
   reset();
   Done();
@@ -735,7 +780,7 @@ void TheEcRowsReadTheirKeysFromTheResolvedSection() {
   off.ecfx = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "ec=off ecfx=off"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "ec=off ecfx=off"));
   Done();
   Process(bv::Variant::kCombat);
   nevr_quest::combat::ec::ResetForTest();
@@ -748,7 +793,7 @@ void TheEcRowsReadTheirKeysFromTheResolvedSection() {
   const std::vector<Line> line = Lines("combat_ec_words");
   QCHECK(line.size() == 1U && Has(line[0].text, "\"source\":\"config\"") && Has(line[0].text, "\"types_mask\":\"0x0000000000000001\"") &&
          Has(line[0].text, "\"equip_store\":0"));
-  QCHECK(Has(Lines("combat_install")[0].text, "ec=module_not_loaded ecfx=needs_ec"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "ec=module_not_loaded ecfx=needs_ec"));
   Done();
   // The defaults: the shipped words.
   Process(bv::Variant::kCombat);
@@ -772,7 +817,7 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "bvh=module_not_loaded wallfire=bvh_not_installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=module_not_loaded wallfire=bvh_not_installed"));
   Done();
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -784,7 +829,7 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   off.wallfire = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "bvh=off_config wallfire=off_config"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=off_config wallfire=off_config"));
   Done();
   // The row hands the module each of its three keys as the file gave it: bvh on, its gate off, its touch hook off.
   nevr_quest::combat::bvh::ResetForTest();
@@ -850,7 +895,7 @@ int main() {
   APlainReleaseInstallsNothingAndSaysSoOnce();
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
-  ALongListIsCutAndSaysSoWhileTheCountsStayExact();
+  ALongTableWritesEveryModuleRecordAndAWholePhaseLine();
   TheShippedTableRowsAreWiredToTheirSteps();
   TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   AShippedRowSwitchedOffByTheConfigIsCountedAsOff();

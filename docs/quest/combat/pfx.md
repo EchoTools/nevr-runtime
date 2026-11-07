@@ -58,5 +58,5 @@ Until those land, turning the gate on changes nothing in the game. The `combat_p
 ## Headset test
 
 1. A combat APK (or a development APK repacked with the `combat` variant word, or `combat.force: true` in `config.yaml`); start the game.
-2. The sentinel log holds one `combat_pfx_install` line with `"state":"on","reason":"default"`, and `combat_install` names `pfx=installed`.
+2. The sentinel log holds one `combat_pfx_install` line with `"state":"on","reason":"default"`, and the `combat_install_module` record for pfx has `"outcome":"installed"`.
 3. Set `combat: {pfx: false}` in `config.yaml`, relaunch: `"state":"off","reason":"off_config"`.

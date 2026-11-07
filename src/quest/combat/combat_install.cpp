@@ -154,31 +154,27 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (!g_inactiveSaid.exchange(true, std::memory_order_acq_rel)) WriteSkipped(phase);
     return outcome;
   }
-  char results[448];  // the 17 normal-step modules' host-test results (no libr15 loaded) are 414 bytes
-  results[0] = '\0';
-  std::size_t used = 0;
-  bool truncated = false;
   for (std::size_t i = 0; i < count; ++i) {
     const Module& module = table[i];
     const InstallFn fn = phase == Phase::kEarly ? module.early : module.normal;
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
+    const char* outcomeName = "failed";
     if (result.off) {
       ++outcome.off;
+      outcomeName = "off";
     } else if (result.installed) {
       ++outcome.installed;
+      outcomeName = "installed";
     } else {
       ++outcome.failed;
     }
-    const int wrote = std::snprintf(results + used, sizeof(results) - used, "%s%s=%s", used == 0 ? "" : " ", module.name,
-                                    result.status != nullptr ? result.status : "unset");
-    if (wrote < 0 || static_cast<std::size_t>(wrote) >= sizeof(results) - used) {
-      truncated = true;  // the counts are exact; the list is cut where it stopped fitting
-      results[used] = '\0';
-    } else {
-      used += static_cast<std::size_t>(wrote);
-    }
+    // One record per module (N17: each outcome by name): a list of every module on the phase line grows with the table and no longer fits
+    // one 768-byte sentinel line, so the phase line carries the counts and the consequence, and each module's outcome is its own record.
+    sentinel::LogFields(result.installed || result.off ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install_module",
+                        {{"phase", PhaseName(phase)}, {"module", module.name}, {"outcome", outcomeName},
+                         {"status", result.status != nullptr ? result.status : "unset"}});
   }
   outcome.ran = true;
   char msg[160];
@@ -193,8 +189,7 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
-                       {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"msg", msg}});
   return outcome;
 }
 
