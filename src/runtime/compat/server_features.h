@@ -17,9 +17,12 @@
 // drives it.
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -171,6 +174,8 @@ inline Gate GateOf(const Statement& s) {
 // thread (the combat module's tick). One word, so a reader never sees half of an update.
 class ClientState {
  public:
+  using Lobby = std::array<std::uint8_t, 16>;  // the lobby session's GUID, as compat/lobby_frame.h decodes it
+
   static constexpr std::uint32_t kEchoCombatBit = 1U;
   static constexpr std::uint32_t kMedigunBit = 2U;
 
@@ -187,14 +192,68 @@ class ClientState {
     return Gate{(b & kEchoCombatBit) != 0U, (b & kMedigunBit) != 0U};
   }
 
+  // A lobby session success (PC ws_bridge, the Quest session router): a session in another lobby begins, so what the
+  // last server stated no longer holds until this server's document comes. A second success for the lobby already in
+  // changes nothing. Returns true when the lobby changed; `wasOpen` says whether a gate was open then.
+  bool ClearForLobby(const Lobby& lobby, bool* wasOpen) {
+    std::lock_guard<std::mutex> lock(lobbyMu_);
+    if (lobby == lobby_) return false;
+    lobby_ = lobby;
+    const bool open = Clear();
+    if (wasOpen != nullptr) *wasOpen = open;
+    return true;
+  }
+
  private:
   std::atomic<std::uint32_t> bits_{0U};
+  std::mutex lobbyMu_;
+  Lobby lobby_{};  // guarded by lobbyMu_
 };
+
+// The line both writers (PC ws_bridge, the Quest session router) give a ClearForLobby that changed the lobby.
+inline std::string FormatCleared(const std::string& lobbyText, bool wasOpen) {
+  return "[NEVR.WS] server features cleared lobby=" + lobbyText + " was_stated=" + (wasOpen ? "yes" : "no") +
+         " (the EchoCombat tac mods stay hidden until this server's lobby settings state them)";
+}
 
 // The one state of this process.
 inline ClientState& Client() {
   static ClientState state;
   return state;
+}
+
+// The game's lobby-settings message, as CR15NetGame::LobbySettingsCB(const SMsg<SNSLobbySettingsResponse>&) reads it on
+// both binaries: the text at +0x18 and its size at +0x20, no terminator (echovr.exe 0x14017de7b MOV R8,[RBX+0x20];
+// 0x14017de7f MOV RDX,[RBX+0x18]; libr15.so 0x1367afc ldp x1, x2, [x20, #0x18]).
+inline constexpr std::size_t kMsgTextOffset = 0x18;
+inline constexpr std::size_t kMsgSizeOffset = 0x20;
+// The relay refuses a larger document (server/lobby_settings_relay.h kLobbySettingsMaxJsonBytes); a client reads no more.
+inline constexpr std::uint64_t kMaxTextBytes = 1024ULL * 1024ULL;
+
+struct Received {
+  Statement statement;
+  Gate gate;
+  std::uint64_t size = 0;  // the size the message gave
+  bool changed = false;    // the gate in force changed
+};
+
+// What one lobby-settings message the game receives says, applied to `state`. Each binary's hook calls this and logs
+// the result; the game's own call is forwarded unchanged.
+inline Received Receive(const void* msg, ClientState& state) {
+  Received r;
+  const char* text = nullptr;
+  if (msg != nullptr) {
+    std::memcpy(&text, static_cast<const std::uint8_t*>(msg) + kMsgTextOffset, sizeof(text));
+    std::memcpy(&r.size, static_cast<const std::uint8_t*>(msg) + kMsgSizeOffset, sizeof(r.size));
+  }
+  if (text == nullptr || r.size > kMaxTextBytes) {
+    r.statement.kind = Statement::Kind::kMalformed;
+  } else {
+    r.statement = ReadDocument(text, static_cast<std::size_t>(r.size));
+  }
+  r.gate = GateOf(r.statement);
+  r.changed = state.Apply(r.gate);
+  return r;
 }
 
 }  // namespace nevr_server_features

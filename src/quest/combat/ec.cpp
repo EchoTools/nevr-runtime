@@ -21,6 +21,7 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/compat/server_features.h"
 
 namespace nevr_quest::combat::ec {
 
@@ -37,18 +38,21 @@ template <int I>
 struct LogVTag {};
 struct ReloadTag {};
 struct UnloadTag {};
+struct LobbySettingsTag {};
 using RecvThunk = sentinel::CallbackThunk<RecvTag, RecvfromSig>;
 using SendThunk = sentinel::CallbackThunk<SendTag, SendtoSig>;
 template <int I>
 using LogVThunk = sentinel::CallbackThunk<LogVTag<I>, WriteLogVSig>;
 using ReloadThunk = sentinel::CallbackThunk<ReloadTag, GearSig>;
 using UnloadThunk = sentinel::CallbackThunk<UnloadTag, GearSig>;
+using LobbySettingsThunk = sentinel::CallbackThunk<LobbySettingsTag, LobbySettingsSig>;
 
 sentinel::GotHook g_recvHook;
 sentinel::GotHook g_sendHook;
 sentinel::GotHook g_logHook[kLogLibs];
 sentinel::GotHook g_reloadHook;
 sentinel::GotHook g_unloadHook;
+sentinel::GotHook g_lobbySettingsHook;
 
 constexpr int kLineCap = 48;
 constexpr std::uint64_t kScopeEveryMs = 250;  // the level is read at most this often; the thread's period out of scope
@@ -69,6 +73,7 @@ std::atomic<std::uintptr_t> g_tacListWord{0};  // absolute address of the tac-mo
 bool g_hideWrite = false;   // set before the thread starts
 bool g_equipStore = false;  // set before the thread starts
 bool g_listOn = false;      // both gate thunks in
+bool g_settingsOn = false;  // the lobby settings callback hooked (#2333): without it no server's statement is read
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_ran{false};
 std::atomic<bool> g_logOn[kLogLibs] = {};
@@ -185,14 +190,13 @@ __attribute__((noinline)) ssize_t RecvInScope(RecvThunk::Fn real, int fd, void* 
       return n;
     }
     if (*fl >= sizeof(sockaddr_in) && f->sa_family == AF_INET) {
-      const sockaddr_in* a = reinterpret_cast<const sockaddr_in*>(f);
       std::uint32_t killed;
       std::uint64_t tokensBefore, tokensAfter;
       {
         LockG l;
         tokensBefore = g_st.tokens;
         const std::uint64_t now = Now100();
-        killed = g_st.Handle(sentinel::EcPage(), p, a->sin_addr.s_addr, a->sin_port, now, now / 10000);
+        killed = g_st.Handle(sentinel::EcPage(), p, now);
         tokensAfter = g_st.tokens;
       }
       if (killed != 0) {  // outside the lock: the handler is another module's
@@ -249,6 +253,23 @@ void UnloadHandler(UnloadThunk::Fn real) noexcept {
   g_gear.Leave();
 }
 
+// #2333: the server states what it runs in the lobby settings it gives its clients (runtime/compat/server_features.h). The game's own
+// callback reads the message's text the same way; this reads it, sets the gate the tac-mod hide follows, and forwards the call
+// unchanged. Once per document the game receives (a session's start, a join), never per frame.
+void LobbySettingsHandler(LobbySettingsThunk::Fn real, std::uintptr_t netGame, const void* msg) noexcept {
+  const nevr_server_features::Received r = nevr_server_features::Receive(msg, nevr_server_features::Client());
+  sentinel::LogFields(r.statement.kind == nevr_server_features::Statement::Kind::kMalformed ? LogLevel::kWarn : LogLevel::kInfo,
+                      "combat_ec_lobby_settings",
+                      {{"statement", nevr_server_features::KindName(r.statement.kind)},
+                       {"features", nevr_server_features::Joined(r.statement.features).c_str()},
+                       {"dropped", static_cast<long long>(r.statement.dropped)},
+                       {"bytes", static_cast<long long>(r.size)},
+                       {"changed", r.changed ? 1 : 0},
+                       {"msg", r.gate.echoCombat ? "the server states EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT are shown"
+                                                 : "the server states no EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT stay hidden"}});
+  real(netGame, msg);
+}
+
 NEVR_HOOK_RECORD(kRecvRecord, RecvThunk, &RecvHandler);
 NEVR_HOOK_RECORD(kSendRecord, SendThunk, &SendHandler);
 NEVR_HOOK_RECORD(kLogV0Record, LogVThunk<0>, &LogVHandler<0>);
@@ -256,6 +277,7 @@ NEVR_HOOK_RECORD(kLogV1Record, LogVThunk<1>, &LogVHandler<1>);
 NEVR_HOOK_RECORD(kLogV2Record, LogVThunk<2>, &LogVHandler<2>);
 NEVR_HOOK_RECORD(kReloadRecord, ReloadThunk, &ReloadHandler);
 NEVR_HOOK_RECORD(kUnloadRecord, UnloadThunk, &UnloadHandler);
+NEVR_HOOK_RECORD(kLobbySettingsRecord, LobbySettingsThunk, &LobbySettingsHandler);
 
 const char* StatusOf(sentinel::GotStatus status) noexcept {
   return status == sentinel::GotStatus::kOk ? "installed" : sentinel::GotStatusName(status);
@@ -559,6 +581,13 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Log
     return Refused(StatusOf(send));
   }
 
+  // #2333: what the server states it runs. BeginMultiplayer reads the slot when it registers the callback, after this install.
+  // Refused: the tac mods stay hidden on every server (the hide's gate stays closed), and the rest of the client works.
+  const sentinel::GotStatus settings =
+      InstallOne<LobbySettingsThunk>(g_lobbySettingsHook, LobbySettingsTarget(pins, base), kLobbySettingsRecord, lookup);
+  LogHook("lobby_settings_cb", pinned::kLibR15, kLobbySettingsSymbol, StatusOf(settings), settings == sentinel::GotStatus::kOk);
+  g_settingsOn = settings == sentinel::GotStatus::kOk;
+
   // The selected tac mod: libr15 now, the platform libraries when they load.
   {
     pthread_mutex_lock(&g_platformMu);
@@ -604,7 +633,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Log
     }
     pthread_attr_destroy(&attr);
   }
-  const bool full = g_listOn && g_logOn[0].load() && observing;
+  const bool full = g_listOn && g_logOn[0].load() && observing && g_settingsOn;
   return InstallLine(full ? "installed" : "partial", full ? "ok" : !observing ? "observer_table_full" : "hook_refused", "installed", gear, true,
                      full ? "the EC client acts on a combat map and the combat lobby; every other level keeps the game's own traffic"
                           : "the EC network client acts on a combat map and the combat lobby; a part that is not installed is named above");
@@ -641,8 +670,8 @@ void Step(std::uint64_t now100) noexcept {
       g_st.PickServer();
     }
     haveDest = g_st.Server(&d);
-    ans = g_st.Answered(nowMs);
   }
+  ans = nevr_server_features::Client().Current().echoCombat;  // #2333: the server's statement, not an answer to the hello
   g_gameSrc.store(haveDest ? (static_cast<std::uint64_t>(d.addr) << 16) | d.port : 0, std::memory_order_relaxed);
   g_gameFd.store(haveDest ? d.sock : -1, std::memory_order_relaxed);  // cleared when no server is picked
   for (int i = 0; i < n; ++i) {
@@ -714,8 +743,9 @@ void Step(std::uint64_t now100) noexcept {
   }
   if (ans != L.answered && StepLine()) {
     L.answered = ans;
-    sentinel::LogFields(LogLevel::kInfo, "combat_ec_answer",
-                        {{"state", ans ? "seen" : "lost"}, {"msg", ans ? "ec: answer seen: the server has EC" : "ec: answer lost: no 'A' for 6 s"}});
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_server_features",
+                        {{"state", ans ? "stated" : "not_stated"},
+                         {"msg", ans ? "ec: the server states EchoCombat" : "ec: no EchoCombat stated by this server (yet)"}});
   }
   if (g_locTokenS > 0 && nowMs >= L.nextLocToken) {
     const bool first = L.nextLocToken == 0;
@@ -785,11 +815,12 @@ Stats StatsNow() noexcept {
     s.serverAddr = d.addr;
     s.serverPort = d.port;
     s.serverFd = s.haveServer ? d.sock : -1;
-    s.answered = g_st.Answered(Now100() / 10000);
+    s.answered = nevr_server_features::Client().Current().echoCombat;
   }
   s.hideWrite = g_hideWrite;
   s.equipStore = g_equipStore;
   s.listOn = g_listOn;
+  s.settingsOn = g_settingsOn;
   for (std::size_t i = 0; i < kLogLibs; ++i) s.logLib[i] = g_logOn[i].load();
   return s;
 }
@@ -814,6 +845,7 @@ void ResetForTest() noexcept {
   for (sentinel::GotHook& h : g_logHook) h.Forget();
   g_reloadHook.Forget();
   g_unloadHook.Forget();
+  g_lobbySettingsHook.Forget();
   RecvThunk::Reset();
   SendThunk::Reset();
   LogVThunk<0>::Reset();
@@ -821,6 +853,8 @@ void ResetForTest() noexcept {
   LogVThunk<2>::Reset();
   ReloadThunk::Reset();
   UnloadThunk::Reset();
+  LobbySettingsThunk::Reset();
+  nevr_server_features::Client().Clear();
   {
     LockG l;
     g_st = State();
@@ -839,7 +873,7 @@ void ResetForTest() noexcept {
   g_gameTid = 0;
   g_locTokenS = 0;
   g_tacListWord = 0;
-  g_hideWrite = g_equipStore = g_listOn = false;
+  g_hideWrite = g_equipStore = g_listOn = g_settingsOn = false;
   g_installed = false;
   g_ran = false;
   for (auto& on : g_logOn) on = false;

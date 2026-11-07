@@ -11,6 +11,11 @@
  *   libr15  NR15::ReloadEquipmentConfig     JUMP_SLOT 0x36ea1b0 -> 0x20feda8
  *   libr15  NR15::UnloadEquipmentConfig     JUMP_SLOT 0x36f1878 -> 0x20ff7b4
  *   libr15  the tac-mod list pointer        .bss word 0x37af5f8 (read only, never hooked)
+ *   libr15  CR15NetGame::LobbySettingsCB(SMsg<SNSLobbySettingsResponse> const&)
+ *                                           GLOB_DAT  0x3712410 -> 0x1267ae0  (#2333: BeginMultiplayer loads it at 0x13897a8, disassembly VA,
+ *                                                     `adrp x8, 0x3812000; ldr x8, [x8, #0x410]`, and registers it on the peer broadcaster
+ *                                                     in the client branch, the same gate as echovr.exe 0x140157fb0; the server's features
+ *                                                     are read there, runtime/compat/server_features.h)
  *   pnsovr  NWriteLog::WriteLogV            JUMP_SLOT 0x6e1238  -> 0x1ca79c
  *   pnsrad  NWriteLog::WriteLogV            JUMP_SLOT 0x731ee8  -> 0x1be7b0
  *
@@ -49,6 +54,8 @@ inline constexpr const char* kWriteLogSymbol = "_ZN10NRadEngine9NWriteLog8WriteL
 inline constexpr const char* kWriteLogVSymbol = "_ZN10NRadEngine9NWriteLog9WriteLogVENS0_9ELogLevelEyPKcSt9__va_list";
 inline constexpr const char* kReloadSymbol = "_ZN10NRadEngine8NRadGame4NR1521ReloadEquipmentConfigEv";
 inline constexpr const char* kUnloadSymbol = "_ZN10NRadEngine8NRadGame4NR1521UnloadEquipmentConfigEv";
+inline constexpr const char* kLobbySettingsSymbol =
+    "_ZN10NRadEngine8NRadGame11CR15NetGame15LobbySettingsCBERKNS_4SMsgINS_24SNSLobbySettingsResponseEEE";
 
 // libr15's slots, functions and words (its WriteLogV hook is kLogLib[0]).
 struct Pins {
@@ -56,8 +63,10 @@ struct Pins {
   std::uint64_t reloadSlot, reloadFn;
   std::uint64_t unloadSlot, unloadFn;
   std::uint64_t tacModList;  // .bss word: pointer to the tac-mod list { allocator, entries, u64 count, u64 capacity }
+  std::uint64_t lobbySettingsSlot, lobbySettingsFn;  // GLOB_DAT of CR15NetGame::LobbySettingsCB(SMsg) (#2333)
 };
-inline constexpr Pins kPins = {0x36d3e88ULL, 0x36db3d0ULL, 0x36ea1b0ULL, 0x20feda8ULL, 0x36f1878ULL, 0x20ff7b4ULL, 0x37af5f8ULL};
+inline constexpr Pins kPins = {0x36d3e88ULL, 0x36db3d0ULL, 0x36ea1b0ULL, 0x20feda8ULL, 0x36f1878ULL,
+                               0x20ff7b4ULL, 0x37af5f8ULL, 0x3712410ULL, 0x1267ae0ULL};
 
 // WriteLog's 25 words, the same in the three libraries but for the `bl` (word 21), which each library's pins give.
 inline constexpr std::size_t kWriteLogWords = 25;
@@ -92,6 +101,7 @@ using RecvfromSig = ssize_t(int, void*, size_t, int, sockaddr*, socklen_t*);
 using SendtoSig = ssize_t(int, const void*, size_t, int, const sockaddr*, socklen_t);
 using WriteLogVSig = std::uintptr_t(int, unsigned long long, const char*, va_list);
 using GearSig = void();
+using LobbySettingsSig = void(std::uintptr_t netGame, const void* msg);  // a member function: x0 = this, x1 = the message
 
 // The slot as a manager target. recvfrom / sendto hold libc's function (plausibility only); every libr15 function slot holds
 // `base + fn`; a platform library's WriteLogV slot is checked by the install itself (its own function or libr15's), so it asks
@@ -103,6 +113,13 @@ inline sentinel::GotTarget LibcTarget(const char* symbol, std::uint64_t slot) {
 inline sentinel::GotTarget LibR15FnTarget(const char* symbol, std::uint64_t slot, std::uintptr_t base, std::uint64_t fn) {
   sentinel::GotTarget target(sentinel::pinned::kLibR15, symbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(), slot);
   target.expectedOriginal = reinterpret_cast<const void*>(base + fn);
+  return target.Owned("combat_ec");
+}
+// The GLOB_DAT word BeginMultiplayer registers the callback from: it holds `base + fn` (#2333).
+inline sentinel::GotTarget LobbySettingsTarget(const Pins& pins, std::uintptr_t base) {
+  sentinel::GotTarget target(sentinel::pinned::kLibR15, kLobbySettingsSymbol, sentinel::RelocKind::kGlobDat,
+                             sentinel::pinned::LibR15PatchedBuildId(), pins.lobbySettingsSlot);
+  target.expectedOriginal = reinterpret_cast<const void*>(base + pins.lobbySettingsFn);
   return target.Owned("combat_ec");
 }
 inline sentinel::GotTarget LogLibTarget(const LogLib& lib, std::uintptr_t base) {

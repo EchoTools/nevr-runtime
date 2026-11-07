@@ -3,11 +3,13 @@
  *
  * What it does, on a combat map or the combat lobby only (see "Arena"):
  *   - the libc recvfrom / sendto slots of libr15 (thunks): a datagram of exactly 16 bytes with both EC magics and a known type is the EC
- *     network's and is not handed to the game (tokens 'V' 'P' 'T' 'O' into the page, 'A' the server's answer, 'K' a drone killed on the
- *     server, 'M' counted); the busiest sendto destination of the last second is the server;
+ *     network's and is not handed to the game (tokens 'V' 'P' 'T' 'O' into the page, 'K' a drone killed on the server, 'A' and 'M'
+ *     counted); the busiest sendto destination of the last second is the server;
  *   - a thread that, every 5 ms, turns the page's use counters into 'V' / 'P' / 'T' / 'O' packets sent twice to the server, sends the hello
- *     'H' every 2 s, writes the page's "the server answers the EC network" word (+0x40) and, with the `hide` word, hides EC's three tac mods
- *     (smoke, buff, point: the tac-mod list's last three) from the list on a server without EC;
+ *     'H' every 2 s (the server's relay subscription), writes the page's "the server states EchoCombat" word (+0x40) and, with the `hide`
+ *     word, hides EC's three tac mods (smoke, buff, point: the tac-mod list's last three) from the list on a server that does not state it;
+ *   - CR15NetGame::LobbySettingsCB(SMsg) (GLOB_DAT thunk, #2333): the server's features from the lobby settings it gives its clients
+ *     (runtime/compat/server_features.h), the gate the hide follows; a session in another lobby clears them (compat/session_router.cpp);
  *   - the WriteLogV slots of libr15, libpnsovr.so and libpnsrad.so (thunks, ec_targets.h says why WriteLogV): the profile-update line
  *     "[NSUSER] sent profile update: %s" names the selected tac mod, which is stored at page +0xe80 (with the `equip` word);
  *   - ReloadEquipmentConfig / UnloadEquipmentConfig (thunks): the gate the hide holds, so the list is never read while it is rebuilt.
@@ -100,12 +102,13 @@ void OnModuleLoaded(const char* name, void* handle) noexcept;
 struct Stats {
   std::uint64_t sends, passed, consumed;  // sendto calls, datagrams passed to the game, EC network datagrams consumed (in scope)
   std::uint64_t answers, tokens, dropped, kills, medi;
-  bool answered;  // the current server answers the EC network
+  bool answered;  // the current server states EchoCombat in its lobby settings (#2333, runtime/compat/server_features.h)
   bool haveServer;
   std::uint32_t serverAddr;
   std::uint16_t serverPort;
   int serverFd;
   bool hideWrite, equipStore, listOn;
+  bool settingsOn;  // the lobby settings callback is hooked (#2333)
   std::uint32_t types;
   bool logLib[kLogLibs];  // which WriteLogV hooks are in
 };

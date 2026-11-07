@@ -106,7 +106,11 @@ func TestASessionInAnotherLobbyClearsTheStatement(t *testing.T) {
 	if m == nil || !strings.Contains(m[1], "ClearServerFeaturesOnNewLobby(state.lobby);") {
 		t.Errorf("a lobby session success no longer clears the last server's statement: %q", m)
 	}
-	if !strings.Contains(src, "nevr_server_features::Client().Clear()") {
-		t.Error("ClearServerFeaturesOnNewLobby no longer clears the client state")
+	if !strings.Contains(src, "nevr_server_features::Client().ClearForLobby(lobby, &wasOpen)") {
+		t.Error("ClearServerFeaturesOnNewLobby no longer clears the client state for a new lobby")
+	}
+	router := code(t, "src/runtime/compat/session_router.cpp")
+	if !strings.Contains(router, "nevr_server_features::Client().ClearForLobby(success.lobby, &wasOpen)") {
+		t.Error("the session router (Quest) no longer clears the client state on a success in another lobby")
 	}
 }

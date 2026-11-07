@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -158,5 +160,45 @@ TEST(ServerFeaturesClient, ApplyClearAndCurrent) {
 }
 
 TEST(ServerFeaturesClient, OneStatePerProcess) { EXPECT_EQ(&Client(), &Client()); }
+
+// A session in another lobby clears the statement; a repeat of the lobby already in does not.
+TEST(ServerFeaturesClient, ANewLobbyClearsAndTheSameLobbyDoesNot) {
+  ClientState state;
+  const ClientState::Lobby a = {1}, b = {2};
+  state.Apply(Gate{true, true});
+  bool was = false;
+  EXPECT_TRUE(state.ClearForLobby(a, &was));
+  EXPECT_TRUE(was);
+  EXPECT_FALSE(state.Current().echoCombat);
+  state.Apply(Gate{true, false});
+  EXPECT_FALSE(state.ClearForLobby(a, &was));
+  EXPECT_TRUE(state.Current().echoCombat);
+  EXPECT_TRUE(state.ClearForLobby(b, nullptr));
+  EXPECT_FALSE(state.Current().echoCombat);
+}
+
+// The message as both binaries' callback reads it: the text at +0x18, its size at +0x20.
+TEST(ServerFeaturesReceive, ReadsTheMessageWhereTheGameDoes) {
+  ClientState state;
+  const std::string text = R"({"nevr_server":{"features":["echocombat","echocombat_medigun"]}})";
+  unsigned char msg[0x40] = {};
+  const char* p = text.data();
+  const std::uint64_t n = text.size();
+  std::memcpy(msg + 0x18, &p, sizeof p);
+  std::memcpy(msg + 0x20, &n, sizeof n);
+  const nevr_server_features::Received r = nevr_server_features::Receive(msg, state);
+  EXPECT_EQ(r.statement.kind, Statement::Kind::kStated);
+  EXPECT_EQ(r.size, text.size());
+  EXPECT_TRUE(r.changed);
+  EXPECT_TRUE(state.Current().medigun);
+  EXPECT_EQ(nevr_server_features::Receive(nullptr, state).statement.kind, Statement::Kind::kMalformed);
+  EXPECT_FALSE(state.Current().echoCombat);
+}
+
+TEST(ServerFeaturesCleared, TheLineBothWritersGive) {
+  EXPECT_EQ(nevr_server_features::FormatCleared("none", false),
+            "[NEVR.WS] server features cleared lobby=none was_stated=no (the EchoCombat tac mods stay hidden until this server's "
+            "lobby settings state them)");
+}
 
 }  // namespace

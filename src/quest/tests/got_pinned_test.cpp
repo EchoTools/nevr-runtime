@@ -567,6 +567,10 @@ void CheckRealEc(const LoadedElf& r15, const LoadedElf& ovr, const LoadedElf& ra
               "libr15 NR15::UnloadEquipmentConfig JUMP_SLOT");
   CheckDefinedAt(r15, ec::kReloadSymbol, ec::kPins.reloadFn);
   CheckDefinedAt(r15, ec::kUnloadSymbol, ec::kPins.unloadFn);
+  // #2333: the GLOB_DAT word BeginMultiplayer registers CR15NetGame::LobbySettingsCB(SMsg) from, and the function it holds
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kLobbySettingsSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, ec::kPins.lobbySettingsSlot},
+              "libr15 ec lobby settings callback");
+  CheckDefinedAt(r15, ec::kLobbySettingsSymbol, ec::kPins.lobbySettingsFn);
   const LoadedElf* const elfs[ec::kLogLibs] = {&r15, &ovr, &rad};
   const char* const stockIds[ec::kLogLibs] = {pinned::kLibR15StockBuildId, pinned::kPnsovrBuildId, pinned::kPnsradBuildId};
   for (std::size_t i = 0; i < ec::kLogLibs; ++i) {

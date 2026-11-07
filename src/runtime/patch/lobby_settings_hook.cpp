@@ -24,38 +24,20 @@ constexpr std::uint64_t kCallbackVA = 0x14017DE60;
 constexpr std::array<std::uint8_t, 10> kCallbackPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30};
 using CallbackFn = void (*)(void* netGame, void* msg);
 
-// The message the callback reads (0x14017de7b: MOV R8,[RBX+0x20]; 0x14017de7f: MOV RDX,[RBX+0x18]): the text, then its
-// size, which CJson_LoadFromBuffer (0x1405f0bd0) takes; the text has no terminator.
-constexpr std::size_t kMsgTextOffset = 0x18;
-constexpr std::size_t kMsgSizeOffset = 0x20;
-// The relay refuses a larger document (lobby_settings_relay.h kLobbySettingsMaxJsonBytes); a client reads no more.
-constexpr std::uint64_t kMaxTextBytes = 1024ULL * 1024ULL;
-
 std::uintptr_t g_gameBase = 0;
 CallbackFn g_originalCallback = nullptr;
 
 const char* ShownOrHidden(bool on) { return on ? "shown" : "hidden"; }
 
 void Read(void* msg) {
-  const char* text = nullptr;
-  std::uint64_t size = 0;
-  std::memcpy(&text, static_cast<const std::uint8_t*>(msg) + kMsgTextOffset, sizeof(text));
-  std::memcpy(&size, static_cast<const std::uint8_t*>(msg) + kMsgSizeOffset, sizeof(size));
-  nevr_server_features::Statement statement;
-  if (text == nullptr || size > kMaxTextBytes) {
-    statement.kind = nevr_server_features::Statement::Kind::kMalformed;
-  } else {
-    statement = nevr_server_features::ReadDocument(text, static_cast<std::size_t>(size));
-  }
-  const nevr_server_features::Gate gate = nevr_server_features::GateOf(statement);
-  const bool changed = nevr_server_features::Client().Apply(gate);
-  Log(statement.kind == nevr_server_features::Statement::Kind::kMalformed ? EchoVR::LogLevel::Warning
-                                                                          : EchoVR::LogLevel::Info,
+  const nevr_server_features::Received r = nevr_server_features::Receive(msg, nevr_server_features::Client());
+  Log(r.statement.kind == nevr_server_features::Statement::Kind::kMalformed ? EchoVR::LogLevel::Warning
+                                                                            : EchoVR::LogLevel::Info,
       "[NEVR.PATCH] lobby settings received statement=%s features=%s dropped=%zu bytes=%llu changed=%s (EchoCombat tac "
       "mods %s, MEDIGUN %s on this server)",
-      nevr_server_features::KindName(statement.kind), nevr_server_features::Joined(statement.features).c_str(),
-      statement.dropped, static_cast<unsigned long long>(size), changed ? "yes" : "no", ShownOrHidden(gate.echoCombat),
-      ShownOrHidden(gate.medigun));
+      nevr_server_features::KindName(r.statement.kind), nevr_server_features::Joined(r.statement.features).c_str(),
+      r.statement.dropped, static_cast<unsigned long long>(r.size), r.changed ? "yes" : "no",
+      ShownOrHidden(r.gate.echoCombat), ShownOrHidden(r.gate.medigun));
 }
 
 void CallbackHook(void* netGame, void* msg) {
