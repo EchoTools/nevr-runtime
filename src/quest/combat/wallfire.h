@@ -2,7 +2,8 @@
  * muzzle crosses static level geometry, as on the PC. It depends on bvh.h (the static BVH has to answer CBVHTree::Occluded).
  *
  * One hook (wallfire_targets.h), a CallbackThunk on CncaGameSpace::QueryCollision's JUMP_SLOT: the game's function runs; only when it returns to
- * FireGunLocal's call site and found nothing, and a combat map is loaded, the check asks the engine's own static query,
+ * FireGunLocal's call site and found nothing, and a combat map or the combat lobby is loaded (and no Echo Arena level), the check asks the
+ * engine's own static query,
  * CncaGameSpace::StaticRaycastOccluded (called directly: its JUMP_SLOT is read at install, never hooked), for the same segment. The stub reaches
  * CBVHTree::Occluded through CncaGame's virtual +0x278, which is bvh's Occluded hook. A segment that is blocked makes QueryCollision answer 1, and
  * FireGunLocal returns without firing. Every other caller of QueryCollision gets the game's answer.
@@ -65,7 +66,7 @@ Counters GetCounters() noexcept;
 
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 void SetPinsForTest(const Pins* pins) noexcept;
-// The return address (an ELF vaddr) of the last QueryCollision call the hook saw while a combat map was loaded.
+// The return address (an ELF vaddr) of the last QueryCollision call the hook saw while a combat map or the combat lobby was loaded.
 std::uintptr_t LastReturnForTest() noexcept;
 // Forgets the hook, the thunk and the counters.
 void ResetForTest() noexcept;

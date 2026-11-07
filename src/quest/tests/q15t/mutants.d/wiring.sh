@@ -25,8 +25,6 @@ runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\
 runm wiring wire_drop_custctx      src/plugin.cpp "s/^  ReportModule(\"custctx\", InstallCustCtx(base));//"
 runm wiring wire_drop_droneguard   src/plugin.cpp "s/^  ReportModule(\"droneguard\", InstallDroneGuard(base));//"
 runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp\", InstallPeerClamp(base));//"
-runm wiring wire_drop_impactsnd    src/plugin.cpp "s/^  ReportModule(\"impactsnd\", InstallImpactSnd(base));//"
-runm wiring wire_drop_impact_tick  src/plugin.cpp "s/^  AddModuleTick(\"impactsnd\", \&ImpactSndTick, \&want_tick);.*//"
 runm wiring wire_drop_ec           src/plugin.cpp "s/const InstallResult r = InstallEc(base);/const InstallResult r{};/"
 runm wiring wire_drop_ecfx         src/plugin.cpp "s/^  ReportModule(\"ecfx\", InstallEcfx(base));//"
 runm wiring wire_drop_dronekill    src/plugin.cpp "s/if (!ResolveDroneKillFns(base, \&fns)) {/if (false) {/"

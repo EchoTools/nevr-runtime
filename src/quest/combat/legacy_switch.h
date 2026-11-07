@@ -17,12 +17,9 @@ namespace nevr_quest::combat::legacy {
 inline std::atomic<bool> g_dirSet{false};
 inline char g_dir[300] = "";  // tests only (SetDirectoryForTest)
 
-// The plugin's data directory, or the test's. False when none can be named.
-inline bool Directory(char* out, std::size_t n) noexcept {
-  if (g_dirSet.load(std::memory_order_acquire)) {
-    std::snprintf(out, n, "%s", g_dir);
-    return true;
-  }
+// This process's package name (the first field of /proc/self/cmdline up to a ':'), the part of the game's storage paths it is keyed by. False when it
+// cannot be worked out.
+inline bool PackageName(char* out, std::size_t n) noexcept {
   char cmd[256] = {};
   std::FILE* f = std::fopen("/proc/self/cmdline", "re");
   if (f == nullptr) return false;
@@ -30,8 +27,20 @@ inline bool Directory(char* out, std::size_t n) noexcept {
   std::fclose(f);
   cmd[got] = '\0';
   if (char* colon = std::strchr(cmd, ':')) *colon = '\0';
-  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return false;
-  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", cmd);
+  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160 || std::strlen(cmd) >= n) return false;
+  std::snprintf(out, n, "%.160s", cmd);
+  return true;
+}
+
+// The plugin's data directory, or the test's. False when none can be named.
+inline bool Directory(char* out, std::size_t n) noexcept {
+  if (g_dirSet.load(std::memory_order_acquire)) {
+    std::snprintf(out, n, "%s", g_dir);
+    return true;
+  }
+  char pkg[200] = {};
+  if (!PackageName(pkg, sizeof(pkg))) return false;
+  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", pkg);
   return true;
 }
 

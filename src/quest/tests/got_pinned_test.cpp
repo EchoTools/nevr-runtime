@@ -29,8 +29,10 @@
 #include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/decals_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
+#include "quest/combat/impactsnd_targets.h"
 #include "quest/combat/instmodel_targets.h"
 #include "quest/combat/memsys_targets.h"
 #include "quest/combat/wallfire_targets.h"
@@ -486,6 +488,43 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The impact sounds' and the level decals' pins (src/quest/combat/impactsnd_targets.h, decals_targets.h) against the real libr15: LoadSoundSettings' JUMP_SLOT,
+// UpdateMovement's GLOB_DAT and kSoundSettings' GLOB_DAT resolve at their pins; the functions are defined at the pinned
+// addresses; the four hit-code words and the seven stub words of the rebuilt loader are the ones in the file; the two modules name the same Shutdown word,
+// whose ABS64 relocation kRealAbs64Words resolves.
+void CheckRealImpactsndAndDecals(const LoadedElf& elf) {
+  namespace is = nevr_quest::combat::impactsnd;
+  namespace dc = nevr_quest::combat::decals;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, is::kLoadSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, is::kLoadSlotVa}, "libr15 LoadSoundSettings JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, "_ZN10NRadEngine8NRadGame15CR15NetBulletCS14kSoundSettingsE", RelocKind::kGlobDat, pinned::kLibR15StockBuildId,
+                             is::kSoundSettingsGotVa},
+              "libr15 kSoundSettings GLOB_DAT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, dc::kUpdateSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, dc::kUpdateSlotVa},
+              "libr15 CR15NetBulletCS::UpdateMovement GLOB_DAT");
+  CheckDefinedAt(elf, is::kLoadSymbol, is::kLoadFnVa);
+  CheckDefinedAt(elf, is::kShutdownSymbol, is::kShutdownFnVa);
+  CheckDefinedAt(elf, "_ZN10NRadEngine8NRadGame15CR15NetBulletCS14kSoundSettingsE", is::kSoundSettingsVa);
+  CheckDefinedAt(elf, dc::kUpdateSymbol, dc::kUpdateRealVa);
+  QCHECK(std::strcmp(is::kShutdownSymbol, dc::kShutdownSymbol) == 0 && is::kShutdownSlotVa == dc::kShutdownSlotVa && is::kShutdownFnVa == dc::kShutdownRealVa);
+  for (const is::CodeWord& w : is::kCode) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.va, sizeof(have));
+    if (have != w.want) {
+      std::fprintf(stderr, "libr15 impact-sound hit-code word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.va), have, w.want);
+      QCHECK(false);
+    }
+  }
+  for (const is::RebuildCallee& c : is::kRebuildCallees) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + c.elf, sizeof(have));
+    if (have != c.firstWord) {
+      std::fprintf(stderr, "libr15 stub %s at %#llx is %#x, pinned %#x\n", c.name, static_cast<unsigned long long>(c.elf), have, c.firstWord);
+      QCHECK(false);
+    }
+  }
+}
+
 // The static BVH's and the wall-fire check's pins (src/quest/combat/bvh_targets.h, wallfire_targets.h) against the real libr15: the six bvh JUMP_SLOTs and the
 // QueryCollision JUMP_SLOT resolve at their pins, each symbol is defined at the function the pin calls real, the StaticRaycastOccluded slot (read, not hooked)
 // resolves, FireGunLocal's site word is the pinned one, and the word before each of the three allowed return addresses is a `bl` to StaticRaycast's PLT stub.
@@ -778,6 +817,7 @@ int main(int argc, char** argv) {
   CheckRealHeapsAndMemsys(r15);
   CheckRealTableSteps(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealImpactsndAndDecals(r15);
   CheckRealBvhAndWallfire(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
