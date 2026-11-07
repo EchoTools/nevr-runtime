@@ -70,7 +70,11 @@ runm ec_off_switch      $E "s#  if (!switches.on) {#  if (false) {#"
 # the server's statement (#2333)
 runm ec_gate_source     $E "s#  ans = nevr_server_features::Client().Current().echoCombat;#  ans = false;#"
 runm ec_settings_fwd    $E "s#^  real(netGame, msg);#  real(netGame, nullptr);#"
-runm ec_settings_read   $E "s#nevr_server_features::Receive(msg, nevr_server_features::Client())#nevr_server_features::Received{}#"
+runm ec_settings_read   $E "s#    statement = nevr_server_features::ReadDocument(text.data(), text.size());#    (void)text;#"
+runm ec_settings_copy   $E "s#  if (!g_settingsBad) std::memcpy(g_settingsText, text, static_cast<std::size_t>(size));#  (void)0;#"
+runm ec_settings_cap    $E "s#  g_settingsBad = text == nullptr || size > kSettingsCap;#  g_settingsBad = text == nullptr;#"
+runm ec_settings_seq    $E "s#^  ++g_settingsSeq;#  (void)0;#"
+runm ec_drain_step      $E "s#^  DrainLobbySettings();  // \#2333#  (void)0;#"
 runm ec_settings_full   $E "s# \&\& observing \&\& g_settingsOn;# \&\& observing;#"
 runm ec_settings_stats  $E "s#    s.answered = nevr_server_features::Client().Current().echoCombat;#    s.answered = false;#"
 # ec_settings_slot (the pinned slot's address) is got_pinned_test's, against the store file: the fake image takes its slot from the same pins

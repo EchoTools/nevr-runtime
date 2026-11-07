@@ -27,15 +27,16 @@ func TestMedigunFollowsTheServersStatement(t *testing.T) {
 	}
 }
 
-func TestNoAnswerIsSentOrRead(t *testing.T) {
+func TestTheAnswerIsSentForOlderClientsAndReadByNone(t *testing.T) {
 	src := code(t, veilnet)
-	if regexp.MustCompile(`Send\(\s*s\s*,\s*from\s*,\s*'A'`).MatchString(src) {
-		t.Error("the server sends an 'A' again")
+	// The Quest combat APK players have (r15 61700999) shows the tac mods only after an 'A': the server keeps answering.
+	if !regexp.MustCompile(`if \(p\.type == 'H'\) \{\s*Send\(s, from, 'A', g_medigun_on_server \? kAnswerMedigun : 0\);`).MatchString(src) {
+		t.Error("the server no longer answers a hello with an 'A' (clients of older builds need it)")
 	}
 	if regexp.MustCompile(`p\.type\s*==\s*'A'`).MatchString(src) {
 		t.Error("a client reads an 'A' again")
 	}
-	for _, gone := range []string{"g_last_answer", "SERVER_TIMEOUT", "ANSWER_MEDIGUN"} {
+	for _, gone := range []string{"g_last_answer", "SERVER_TIMEOUT", "g_last_answer_flags"} {
 		if strings.Contains(src, gone) {
 			t.Errorf("%s is back", gone)
 		}
@@ -47,8 +48,8 @@ func TestTheHelloStaysTheRelaySubscription(t *testing.T) {
 	if !strings.Contains(src, "SendToServer('H', 0)") {
 		t.Error("the client no longer says hello: the server would relay to nobody")
 	}
-	if !regexp.MustCompile(`if \(p\.type == 'H'\) \{\s*uint32_t total`).MatchString(src) {
-		t.Error("the server's hello branch no longer goes straight to the RULES and LOADOUTS words")
+	if !regexp.MustCompile(`'A', g_medigun_on_server \? kAnswerMedigun : 0\);\s*uint32_t total`).MatchString(src) {
+		t.Error("the server's hello branch no longer sends the RULES and LOADOUTS words after the answer")
 	}
 }
 

@@ -34,8 +34,9 @@
 //
 // Clients say hello every 2 s; the server relays only to clients that have (so a
 // player without VeilNet never gets a packet the game would not understand).
-// nEVR port (#2333): the server no longer answers each hello with an 'A'. Whether a server
-// runs EchoCombat, and allows MEDIGUN, is the server's to state: it lists its features in
+// nEVR port (#2333): a client of this build no longer reads the server's 'A' answer to each hello
+// (the server still sends it, for clients of older builds). Whether a server runs EchoCombat, and
+// allows MEDIGUN, is the server's to state: it lists its features in
 // the lobby settings the game gives every client it accepts (runtime/compat/server_features.h),
 // and the client reads them where the game receives them (runtime/patch/lobby_settings_hook.h).
 // A client whose server states no EchoCombat hides the three new tac mods (UMBRAL VEIL,
@@ -118,7 +119,7 @@ constexpr uint32_t MAGIC2 = 0x4c494556;         // "VEIL"
 constexpr uintptr_t TACMOD_LIST_RVA = 0x20d3430;
 constexpr size_t TACMOD_ENTRY = 0x88;
 const char *const kNewTacMods[3] = {"smoke", "buff", "point"};
-// nEVR port (#2333): SERVER_TIMEOUT (6 s without an answer to the hello) is gone with the answer.
+// nEVR port (#2333): SERVER_TIMEOUT (6 s without an answer to the hello) is gone: a client of this build reads no answer.
 //: MEDIGUN is off unless the server turns it on: PowerBoost.ini [server] medigun=1 next to this
 //: DLL on the server (nEVR port: combat.medigun). nEVR port (#2333): the server states it as the
 //: feature echocombat_medigun in its lobby settings, not in an answer to each hello; a client
@@ -127,6 +128,8 @@ const char *const kNewTacMods[3] = {"smoke", "buff", "point"};
 //: otherwise. The weapon list sits just before the tac mod list (gear_table order: weapons,
 //: ordnances, tac mods; each filled by +0xc4e410 from InitAndLoadGearTables).
 constexpr uintptr_t WEAPON_LIST_RVA = 0x20d3420;
+// nEVR port (#2333): the old ANSWER_MEDIGUN bit of the 'A' a server still sends for clients of older builds.
+constexpr uint32_t kAnswerMedigun = 1;
 bool g_medigun_on_server = false;               // server: [server] medigun (nEVR port: combat.medigun)
 bool g_match_control = false;                   // nEVR port: combat.match_control
 bool g_quick_exit = false;                      // nEVR port: the clean exit is in place
@@ -796,7 +799,11 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         Remember(s, from);
         if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
-            // nEVR port (#2333): no 'A' ("this server has EchoCombat"): the server states that in its lobby settings.
+            // nEVR port (#2333): the 'A' ("this server has EchoCombat") stays for clients of older builds only: the Quest combat
+            // APK players have (Ducky's base, r15 61700999, EchoQuestCombat) shows the three tac mods only after one. A client of this
+            // build reads no 'A' and follows the server's lobby settings (server_features.h). It reaches a client once the sendto /
+            // recvfrom hooks see the game's datagrams (#2334), and goes when no 6.17.0-era client remains.
+            Send(s, from, 'A', g_medigun_on_server ? kAnswerMedigun : 0);
             uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
             if (total) Send(s, from, 'R', total);                            // its RULES unlock / capture time
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
