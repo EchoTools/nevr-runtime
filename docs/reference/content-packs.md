@@ -141,7 +141,7 @@ own data. What differs:
 | Who opens through it | AddPackage and `CFileStream` | AddPackage (`bl` at `0x2540f38` and `0x2540fe0`) and `CFile::Open`'s tail call (`b` at `0x11e8978`), which every manifest read takes; all three branch to the PLT stub `0xf3dad0` (`kCSysFileOpenContentSites`, `src/quest/sentinel/pinned_targets.h`) |
 | A read | flags 1: bit 0 set and none of `0x2`, `0x4`, `0x8`, `0x10` (`nevr_content::IsServedRead`) | the same rule |
 | The file handed to the game | the pack's file by path, held open with read sharing only | the held descriptor reopened through `/proc/self/fd/<n>`: the file that was hashed, even after a rename over its path, with an offset of its own (shown on the host's file systems; not yet on the headset's shared storage) |
-| A path's spelling | any case, `/` or `\`, the `\\?\` prefix | the game's path as it is: the engine reads below the media root the data step names, the root a pack's files are checked against |
+| A path's spelling | any case, `/` or `\`, the `\\?\` prefix | the game's path as it is: the engine reads below the root the data step names (`engine_root`: the media root, the OBB-skip root or the legacy root), the root a pack's files are checked against; the pack's own folder stays under the media root |
 | Scripts | served | the pack is refused whole (`scripts_unsupported`) |
 | Too late | the game's resource manager exists | the same, read at libr15 `0x376ed60` (written at `0x2aa89bc`) |
 | Refusals of its own | `hook_target_changed` | `bundled_pack_placed`; `hook_failed` names the slot and the GOT status |
