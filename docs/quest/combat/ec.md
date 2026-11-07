@@ -123,6 +123,9 @@ menu must reach the combat lobby) and writes its capped `combat_ec_sel` line, an
 UnloadEquipmentConfig (an event, not a frame) so a rebuild that began before the scope changed is never read half-built.
 
 The q15t plugin acted in every level: in an arena lobby it picked the busiest sendto destination and sent it the hello every 2 s. That is gone.
+A difference a player can see: the plugin, like kotorvr's q15t-upstream (which pauses only while an Echo Arena level is loaded), also ran the EC client in the
+lobbies arena players use, and there `hide` cut the tac-mod list (smoke, buff and point) on a server without EC. Here those lobbies are out of scope, so the
+list is not cut in them; it is cut in the combat lobby and on a combat map.
 `combat_scope` (#2246) will replace the cache; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
 the PR body (ADR 0038).
 
@@ -160,6 +163,11 @@ match with EC on the server, `combat_ec_server` and `combat_ec_answer` `seen` (`
 `on` and `combat_ecfx_gate`. **Falsified by** `combat_ec_install` not `installed`/`partial`, `combat_ec_page` `invisible` or `other` (or an EC
 script's `RE33_EC_BASE_MISSING`), no `combat_ec_answer` `seen` on an EC server, or any EC datagram (`combat_ec_used`, a hello) while
 `in_scope` is 0.
+
+The page's visibility to the script libraries is not shown by `state`: `PublishEcPage` asks from inside the sentinel, whose own local group may find the
+export whether or not the `RTLD_GLOBAL` promotion took. The cheap on-device probe: from the publish step call bionic's `__loader_dlsym(RTLD_DEFAULT,
+"re33_ec_page", <an address inside a loaded script library>)` (the caller address a script's own `dlsym` passes) and log the result next to `state`; the
+row is met when it returns the page. Not built yet.
 
 ## Not built here
 

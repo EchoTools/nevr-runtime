@@ -6,6 +6,7 @@
 #   2. each continuation, compiled for arm64 (-O2, as the sentinel is), calls (blr) or jumps (br) through registers that only an ldar or ldapr of the
 #      next word sets (a move from such a register counts; so does the frame restore of a path that returns), so a plain or relaxed load fails;
 #   3. the freestanding program src/quest/tests/dronemuzzle_qemu.cpp, which includes that very text, runs under qemu-aarch64.
+# This script reads instructions and relocations; it reads no CFI. The frame sensor (tests/quest, on the built sentinel) is what checks the entries's frame description.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 : "${ANDROID_NDK_HOME:?dronemuzzle.sh: ANDROID_NDK_HOME must name the NDK r26d directory}"

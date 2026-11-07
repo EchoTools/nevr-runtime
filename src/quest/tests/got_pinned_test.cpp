@@ -447,6 +447,8 @@ void CheckRealTableSteps(const LoadedElf& elf) {
               "libr15 CPresence vtable GLOB_DAT");
   CheckTarget(elf, GotTarget{pinned::kLibR15, ms::kVtblMeshSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, ms::kPins.vtblMesh},
               "libr15 CGMeshListResource vtable GLOB_DAT");
+}
+
 // dronekill's and dronemuzzle's pins (src/quest/combat/dronekill_targets.h, dronemuzzle_targets.h) against the real libr15: the six JUMP_SLOTs resolve
 // at their pins, each symbol is defined at the function the pin calls real, the comparator's slot is the BinarySearch lambda's, and FireBulletLocal's
 // two calls are the `bl`s whose return addresses the entries compare x30 with (0x97b7910e bl WorldTeleport's stub at 0x210c228, 0x97b8b260 bl

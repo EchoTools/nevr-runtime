@@ -7,6 +7,7 @@
 #      continuation, compiled for arm64 (-O2, as the sentinel is), loads the next word it calls through with ldar or ldapr;
 #   3. the freestanding program src/quest/tests/pb_thunk_qemu.cpp, which includes that very text, runs under qemu-aarch64.
 # PB_THUNK_WANT names another expected listing (a test of this script).
+# This script reads instructions and relocations; it reads no CFI. The frame sensor (tests/quest, on the built sentinel) is what checks the entry's frame description.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 : "${ANDROID_NDK_HOME:?powerboost_thunk.sh: ANDROID_NDK_HOME must name the NDK r26d directory}"
