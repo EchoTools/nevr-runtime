@@ -26,7 +26,7 @@ func ParseRowTable(b []byte) (*RowTable, error) {
 	}
 	le := binary.LittleEndian
 	nbytes, capacity, count := le.Uint64(b[0x08:]), le.Uint64(b[0x28:]), le.Uint64(b[0x30:])
-	if count == 0 || capacity != count || nbytes%count != 0 || rowHeader+nbytes > uint64(len(b)) {
+	if count == 0 || capacity != count || nbytes%count != 0 || nbytes > uint64(len(b))-rowHeader {
 		return nil, fmt.Errorf("row table header does not fit: %d bytes, capacity %d, count %d, table %d", nbytes, capacity, count, len(b))
 	}
 	t := &RowTable{Head: append([]byte(nil), b[:rowHeader]...), Size: int(nbytes / count), Tail: append([]byte(nil), b[rowHeader+nbytes:]...)}

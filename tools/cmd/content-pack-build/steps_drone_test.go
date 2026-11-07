@@ -124,6 +124,10 @@ func TestTheDroneActorGetsTheSharedScriptRowBeforeItsOwn(t *testing.T) {
 	if radpack.U64(out.Rows[4], 0) != 0x2222 || !bytes.Equal(out.Tail, []byte("tail data")) {
 		t.Error("the drone's own row is not right after the inserted one, or the tail changed")
 	}
+	// Once is enough: a table that already has the drone's row of the script is refused.
+	if err := droneScriptRow(out); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Errorf("a second run was not refused: %v", err)
+	}
 	if err := droneScriptRow(parse(t, table(720, nil, row(720, map[int]uint64{0: sharedScript})))); err == nil {
 		t.Error("a table with no drone actor row was changed")
 	}
@@ -134,6 +138,14 @@ func TestARowTableWhoseHeaderDoesNotFitIsRefused(t *testing.T) {
 	binary.LittleEndian.PutUint64(b[0x28:], 5) // capacity above the count: not the layout these tables have
 	if _, err := radpack.ParseRowTable(b); err == nil {
 		t.Error("a table whose capacity is not its count was read")
+	}
+	// A byte size so large that header plus rows wraps around is refused, not read.
+	b = table(16, nil, row(16, nil))
+	binary.LittleEndian.PutUint64(b[0x08:], ^uint64(0)-0x37)
+	binary.LittleEndian.PutUint64(b[0x28:], 1)
+	binary.LittleEndian.PutUint64(b[0x30:], 1)
+	if _, err := radpack.ParseRowTable(b); err == nil {
+		t.Error("a table whose byte size wraps was read")
 	}
 	b = table(16, nil, row(16, nil))
 	if _, err := radpack.ParseRowTable(b[:0x38+8]); err == nil {
@@ -196,5 +208,25 @@ func TestFindSkipsAnOffsetPastTheRow(t *testing.T) {
 	}
 	if i := tb.Find(8, 5); i != 0 {
 		t.Errorf("Find at +8 is %d, want 0", i)
+	}
+}
+
+func TestTablesWithRowsTooShortForTheKeyAreRefused(t *testing.T) {
+	for _, size := range []int{0, 8} {
+		var rows [][]byte
+		if size > 0 {
+			rows = append(rows, row(size, nil))
+		}
+		b := table(size, nil, rows...)
+		if size == 0 { // a count of 1 with rows of no bytes: the header ParseRowTable accepts
+			binary.LittleEndian.PutUint64(b[0x28:], 1)
+			binary.LittleEndian.PutUint64(b[0x30:], 1)
+		}
+		if err := droneParticleRows(parse(t, b)); err == nil {
+			t.Errorf("particle step: rows of %d bytes were read", size)
+		}
+		if err := droneScriptRow(parse(t, b)); err == nil {
+			t.Errorf("script step: rows of %d bytes were read", size)
+		}
 	}
 }
