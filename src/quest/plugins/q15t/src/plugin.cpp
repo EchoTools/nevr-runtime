@@ -8,10 +8,6 @@
 #include "aibots.h"
 #include "custctx.h"
 #include "droneguard.h"
-#include "dronekill.h"
-#include "dronemuzzle.h"
-#include "ec.h"
-#include "ecfx.h"
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
 #include "game_tick.h"
@@ -21,7 +17,6 @@
 #include "boosterpool.h"
 #include "peerclamp.h"
 #include "plugin_log.h"
-#include "powerboost.h"
 #include "script_redirect.h"
 #include "shieldgamma.h"
 #include "module_switch.h"
@@ -63,21 +58,6 @@
 #ifndef Q15T_AIBOTS
 #define Q15T_AIBOTS 0
 #endif
-#ifndef Q15T_EC
-#define Q15T_EC 0
-#endif
-#ifndef Q15T_ECFX  // needs Q15T_EC
-#define Q15T_ECFX 0
-#endif
-#ifndef Q15T_DRONEKILL
-#define Q15T_DRONEKILL 0
-#endif
-#ifndef Q15T_DRONEMUZZLE  // needs Q15T_DRONEKILL
-#define Q15T_DRONEMUZZLE 0
-#endif
-#ifndef Q15T_POWERBOOST  // 0 off, 1 read-only, 2 swallow, 3 cone (cone sends from ec's net tick: needs Q15T_EC)
-#define Q15T_POWERBOOST 0
-#endif
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
 #endif
@@ -95,20 +75,11 @@
 NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 
 // What this binary was compiled with, as one string in .rodata: `just build-quest-q15t` reads it back from the built library and
-// refuses a build whose defaults are not the shipped ones (a stale CMake cache once built a library with the ec words empty).
-#ifdef Q15T_EC_DEFAULT_WORDS
-#define Q15T_MARK_EC_WORDS Q15T_EC_DEFAULT_WORDS
-#else
-#define Q15T_MARK_EC_WORDS ""
-#endif
-#ifndef Q15T_ECFX_DEFAULT_ON
-#define Q15T_ECFX_DEFAULT_ON 0
-#endif
+// refuses a build whose defaults are not the shipped ones.
 #define Q15T_MARK_STR2(x) #x
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
-    "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
+    "q15t-config levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -145,21 +116,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_AIBOTS
     "aibots "
-#endif
-#if Q15T_EC
-    "ec "
-#endif
-#if Q15T_ECFX
-    "ecfx "
-#endif
-#if Q15T_DRONEKILL
-    "dronekill "
-#endif
-#if Q15T_DRONEMUZZLE
-    "dronemuzzle "
-#endif
-#if Q15T_POWERBOOST
-    "powerboost "
 #endif
 #if Q15T_HUDMETER
     "hudmeter "
@@ -242,16 +198,12 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
   // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), hudmeter and
-  // shieldgamma (what is drawn), ecfx (rides ec).
+  // shieldgamma (what is drawn).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
-  if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
   return caps;
 }
 
@@ -276,8 +228,8 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
-  // The modules, in an order the docs fix: ecfx, powerboost's net tick and dronekill's kill feed after ec;
-  // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
+  // The modules, in an order the docs fix (bvh, wallfire, impactsnd, decals, ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).
+  // Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
 #if Q15T_FXTRAIL
   ReportModule("fxtrail", InstallFxTrail(base));
@@ -293,60 +245,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_PEERCLAMP
   ReportModule("peerclamp", InstallPeerClamp(base));
-#endif
-  [[maybe_unused]] bool ec_on = false;
-#if Q15T_EC
-  {
-    const InstallResult r = InstallEc(base);
-    ReportModule("ec", r);
-    ec_on = r.status == SwapStatus::kOk;
-  }
-#endif
-#if Q15T_ECFX
-  ReportModule("ecfx", InstallEcfx(base));
-#endif
-#if Q15T_DRONEKILL
-  {
-    DroneKillFns fns{};
-    if (!ResolveDroneKillFns(base, &fns)) {
-      ReportModuleRefused("dronekill", "engine_export_missing");
-    } else {
-      const DroneKillInstall dk = InstallDroneKill(base, DroneKillWords{}, fns);
-      const InstallResult hooks[] = {dk.actor, dk.enter, dk.fire, dk.attack};
-      ReportModule("dronekill", FirstFailure(dk.ok, hooks, 4));
-      if (dk.ok && dk.needs_tick) AddModuleTick("dronekill", &DroneKillTick, &want_tick);
-#if Q15T_EC
-      if (dk.ok) {  // the server's "drone killed" datagrams reach `kill` through ec's recvfrom wrapper
-        EcOnDroneKilled(&DroneKillOnKilled);
-        const NevrLogField f[] = {{"module", "dronekill"}, {"feed", "ec recvfrom"}, {"ec_on", ec_on ? "1" : "0"}};
-        Log(NEVR_LOG_INFO, "module link", f, 3);
-      }
-#endif
-    }
-  }
-#endif
-#if Q15T_DRONEMUZZLE
-  if (!DroneKillShotActive()) {
-    ReportModuleRefused("dronemuzzle", "needs_dronekill_shot");
-  } else {
-    const DroneMuzzleInstall dm = InstallDroneMuzzle(base);
-    const InstallResult hooks[] = {dm.teleport, dm.fire};
-    ReportModule("dronemuzzle", FirstFailure(dm.ok, hooks, 2));
-    if (dm.ok) AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick);
-  }
-#endif
-#if Q15T_POWERBOOST > 0
-  {
-    bool net_tick = false;
-#if Q15T_POWERBOOST >= 3 && Q15T_EC
-    net_tick = ec_on && EcOnNetTick(&PowerboostNetTick);  // stage 3 sends from ec's recvfrom wrapper; without it the stage is refused
-#endif
-    const InstallResult r = InstallPowerboost(base, Q15T_POWERBOOST, net_tick);
-    ReportModule("powerboost", r);
-#if Q15T_POWERBOOST >= 3
-    if (r.status == SwapStatus::kOk) AddModuleTick("powerboost", &PowerboostGameTick, &want_tick);
-#endif
-  }
 #endif
 #if Q15T_HUDMETER
   ReportModule("hudmeter", InstallHudmeter(base));
