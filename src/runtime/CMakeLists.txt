@@ -87,8 +87,10 @@ set(PATCHES_SOURCES
     "hook/script_hooks.cpp"
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/clock_pause.cpp"
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/orb_pause.cpp"
     "combat/script_guard.cpp"
     "combat/shared_magazine.cpp"
     "combat/station_cells.cpp"
@@ -1194,6 +1196,24 @@ if(BUILD_TESTING)
     target_include_directories(test_shared_magazine PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
+
+    # #600: the spawn orbs' PAUSE hook and slot (runtime/combat/orb_pause.h), on a fake spawn point script.
+    add_executable(test_orb_pause tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_orb_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_orb_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_orb_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_orb_pause DISCOVERY_MODE PRE_TEST)
+
+    # #600: Combat's clocks and PAUSE (runtime/combat/clock_pause.h), 15 hooks on a fake game-mode script.
+    add_executable(test_clock_pause tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_clock_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_clock_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_clock_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_clock_pause DISCOVERY_MODE PRE_TEST)
 
     # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
     add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
