@@ -61,8 +61,7 @@ back `b243509c08ce677aeb95fa348016949b3fc45230`):
 
 The RW LOAD ends at `0x35f9eb0 + 0x1d8688 = 0x37d2538`; RELRO ends at `0x35f9eb0 + 0x132150 = 0x372c000`. D (`0x37af8d0`)
 and `kSoundSettings` (`0x37af6a0`) are in `.bss` (`0x3761180` to `0x37d2538`), above the RELRO end: writable at run time, no
-mprotect (the module writes D with one aligned store after checking the page is `rw-` and not executable in
-`/proc/self/maps`). The JUMP_SLOT `0x36fa3c0` and the GLOB_DAT `0x370fa70` are in `.got`, inside RELRO (read-only after
+mprotect (the module only reads D and writes nothing there: R12 / R13 below). The JUMP_SLOT `0x36fa3c0` and the GLOB_DAT `0x370fa70` are in `.got`, inside RELRO (read-only after
 relocation): the slot swap needs the one-page mprotect that `got_swap.cpp` does and undoes (data page only, never executable).
 
 ### The Shutdown slot (R17), proven
@@ -145,8 +144,8 @@ So the disassembly shows a store to D in the library's own static initialiser (`
 is .bss with no visible store, so it reads 0", `:6-8`). That comment was superseded by the source's own device read (v2,
 `:19-20`: "the device read of v1 showed D already set"). The constant itself occurs in `.rodata` of the store libr15
 (`grep` of the bytes `9e5b615f998ad32f`: 2 hits, file offsets 45744392 and 45744600); I did not trace which load feeds the
-`str` at `0x10712fc`, so "that store writes CSymbol64(default)" is unverified (the device read is the evidence). The module's
-D write is therefore a guard that is expected to be a no-op.
+`str` at `0x10712fc`, so "that store writes CSymbol64(default)" is unverified (the device read is the evidence). The module
+keeps no store to D (R12 / R13 below).
 
 ```
 R12  xrefs to kSoundSettings (VA 0x38af6a0): reads at 22207dc 2220894 22208b0 2220940 2221e9c 2221fa8 2222798 2222fd8 2223094;
@@ -227,7 +226,7 @@ the tick's once-per-table unsorted pass does not repeat it; a pass the lock or t
 
 ## Behaviour
 
-- Install, once: four hit-code words checked, GLOB_DAT word checked, D read (and written only if 0), the Shutdown word swapped,
+- Install, once: four hit-code words checked, GLOB_DAT word checked, D read (a D that reads 0 refuses the module), the Shutdown word swapped,
   the LoadSoundSettings slot swapped. One line each: `combat_impactsnd_default_symbol` (D, whether it matches), `combat_impactsnd_hook` for `shutdown`
   (status, `row_writes`) and `load` (status, mode), `combat_impactsnd_rebuild` and one `combat_impactsnd_install`, or
   `combat_impactsnd_refused` (ERROR, with reason, vaddr, read, pinned). Any refusal before the wrapper: nothing is written and the tick does nothing.
@@ -289,7 +288,8 @@ are no class):
 | Where | What the module does |
 |---|---|
 | `LoadSoundSettings` in a combat map or the combat lobby | the rebuilt loader, or the stock loader and the after-load pass; marks the scope |
-| `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else, and the scope of an earlier combat load ends (the table it leaves may be one that another bullet system still holds); one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
+| `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else, and the scope flag is cleared (fail closed: through the game's one caller it is already clear, see below); one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
+| a game space that loads while a combat match is played (any level) | nothing: no `LoadSoundSettings` runs while a bullet system lives (below), so the scope and the poll go on until the last bullet system's `Shutdown` frees the table |
 | `Shutdown`, any level | takes the table lock around the game's function; the scope ends when the game has cleared the global |
 | the tick, no table of a combat level live | one atomic load of the game and one of the scope flag, per frame |
 | the tick, a combat table live | the poll, four times a second |
@@ -297,7 +297,26 @@ are no class):
 Cost in an arena match, per ADR 0038: a load is one `Classify` (two table reads of the game, each `process_vm_readv`) once per game-space load, then the game's own
 loader; a Shutdown is one uncontended mutex lock and unlock and two pthread-key accesses, once per bullet system teardown; the tick callback is two relaxed/acquire
 loads and a branch, once per rendered frame, no system call and no clock read. When the load handler could not be hooked the tick asks the levels itself once a
-second (a degraded mode that the `combat_impactsnd_hook` Error names). The measured host numbers are in the pull request that moved the module. The table global is one for the process: when a combat map's bullet system is still alive while an arena lobby loads, the arena match uses the table that the combat load rebuilt (15 rows). The module writes no id into it after the arena load (the scope ended), and the rows are already right.
+second (a degraded mode that the `combat_impactsnd_hook` Error names). The host numbers, and the command that measures them, are in the pull request that moved the module.
+
+One table for every bullet system. The game makes and loads the table only for the first bullet system and frees it only with the last (disassembly VA, ELF
+= VA - 0x100000):
+
+- `CR15NetBulletCS::Initialize` (`0x222160c`) reads `kBulletSystemCount` (`0x22217b8`) and, when it is not 0, skips to `0x2221890` (`cbnz x8` at
+  `0x22217bc`): no table is made and `LoadSoundSettings` is not called. When it is 0 it allocates a new `0x80`-byte table (`0x22217c0` to `0x22217d0`),
+  zeroes it, constructs its two `CMemBlock`s, stores it in `kSoundSettings` (`0x2221840`) and calls `LoadSoundSettings` (`0x2221844`). Every
+  `Initialize` adds 1 to the count (`0x2221894`, `0x2221898`).
+- `Shutdown` (`0x22226f0`) subtracts 1 (`0x222276c`) and frees the table and clears the global (`0x22227f8`) only when the count reaches 0.
+- `LoadSoundSettings` has one call, from the thunk at `0x10459b0` (`0x10459bc`), whose one caller is `Initialize` (`0x2221844`); its other references are
+  the JUMP_SLOT and the two unread `data` words above.
+
+So the stock loader always runs on a new, empty table, never on one a combat load rebuilt, and it cannot add its 5 stock rows to the 15. When an arena
+game space's bullet system starts while a combat map's still lives, no load runs: the module sees none, the scope stays on, the arena system uses the 15
+rebuilt rows (as stock, it would use the stock 5), and the tick keeps polling that table 4 times a second and writes nothing while every id is right
+(`NeedsWrite`). The scope ends when the last `Shutdown` frees the table (the handler reads the global 0). The handler's clear on a non-combat load is
+therefore reached through `Initialize` only when no table survives; a load reaching it through another path (the unread `data` words) while a combat
+table lives would stop the poll of that table until the next combat load, and the ids already written stay. Whether two bullet systems are ever alive at
+once on a headset is unverified.
 
 ## Tests and mutants
 

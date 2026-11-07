@@ -145,7 +145,7 @@ level yet) is skipped for 64 updates at a time by a lock-free per-system entry t
 game's function, a few relaxed loads and a branch, with no lock, no clock and no read. After the skip the space is looked at again (the state machine, under
 the module's lock, with the clock), and the Host's own rule still reads the level of a space that does not act at most once a second. A combat game space
 is looked at on every update, as the plugin did. With `combat.decals` false, or no `decals.bin`, nothing is hooked and an arena match pays nothing. The
-host tests count the state-machine calls and the reads (0 reads and 1 call in 50 arena updates). The measured numbers are in the pull request.
+host tests count the state-machine calls and the reads (0 reads and 1 call in 50 arena updates). The host numbers, and the command that measures them, are in the pull request that moved the module.
 
 ## Prediction (written before any headset run)
 

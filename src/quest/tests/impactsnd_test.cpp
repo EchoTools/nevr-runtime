@@ -928,14 +928,15 @@ static void TestArenaPaysNothingByCount() {
   CHECK(nevr_quest::combat::ReadCountForTest() > reads2 && !impactsnd::GetStats().scoped, "the Shutdown of a combat table did not end the scope by a read");
 }
 
-// A combat match ends but the combat map's bullet system still holds the table (the global stays set); the arena lobby's load then runs the game's own
-// loader. The scope of the combat load ends with that load: the tick does not poll, and writes no id into the table the arena match uses.
+// A non-combat load reaches the handler while a combat table lives (the global stays set). The game's own caller does not do this (Initialize loads only
+// when no bullet system lives, docs/quest/combat/impactsnd.md "Scope and arena cost"); the handler fails closed: the scope ends with that load, the tick does
+// not poll, and writes no id into the table the load filled.
 static void TestAnArenaLoadEndsTheScopeOfAnEarlierCombatLoad() {
   Fresh();
   Install();
   CallLoader();  // a combat load: scoped
   CHECK(impactsnd::GetStats().scoped, "the combat load did not mark the scope");
-  g_shut_mode = kShutHold;  // a Shutdown that leaves the table, as when another system still holds it
+  g_shut_mode = kShutHold;  // a Shutdown that leaves the table, as when another bullet system still lives
   g_hold_release = true;
   CallShutdown(1);
   CHECK(impactsnd::GetStats().scoped, "a Shutdown that left the table cleared the scope");

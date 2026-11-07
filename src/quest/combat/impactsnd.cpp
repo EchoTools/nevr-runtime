@@ -478,8 +478,10 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
   g_loads.fetch_add(1, std::memory_order_relaxed);
   const Scope scope = DecideScope();
   if (scope != Scope::kCombat) {
-    // This load is the game's own, and the table it makes or extends is not a combat level's: the scope of an earlier combat load (a table that another bullet
-    // system still held when the combat map left) ends here, so the tick does not write ids into this table.
+    // This load is the game's own, and the table it fills is not a combat level's: the scope flag is cleared here, so the tick does not write ids into this
+    // table. Through the game's one caller the flag is already clear: Initialize makes a new table and loads it only when kBulletSystemCount is 0
+    // (disassembly 0x22217b8..0x22217bc, 0x2221840, 0x2221844), after the last Shutdown freed the old one (0x22227f8). The clear is the fail-closed answer
+    // for a load that reaches this handler another way while a combat table lives.
     g_scoped.store(false, std::memory_order_release);
     const std::uint64_t r = original();
     NoteScope(scope, "game");
