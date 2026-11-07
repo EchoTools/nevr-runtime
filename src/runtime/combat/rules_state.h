@@ -6,22 +6,28 @@
 //
 // The mailbox is the .data page end (0x2105000 for the supported build) less 0x140 (veilnet.cpp RulesMailboxRva, which
 // computes it at run time; the image guard makes the build the supported one). The fields the script hooks use:
+//  +0x00, +0x04  starting scores, blue and orange (float points; 0 is the stock 0; the game-mode script's publish nodes
+//                write them, the capture point hooks read them)
 //  +0x14..+0x16  station cells shown per gear type (u8 each; VeilNet writes, the station hooks read)
 //  +0x2E         PAUSE shown (u8: 0 off, 1 paused, 2 the 5 s resume countdown; VeilNet writes, on server and client)
 //  +0x2F         match live (u8: 1 once the spawn orbs read a set spawn_access other than pre_match; the orb hook
 //                writes, VeilNet reads for TEAM READY -> PAUSE)
-// Every field is one byte, written and read whole by one store or load, as VeilNet's code does.
+// Every byte field is written and read whole by one store or load, as VeilNet's code does; the two scores are floats,
+// each one aligned 4-byte store or load.
 
 #include <cstdint>
 
 namespace nevr_combat::rules {
 
 inline constexpr std::uintptr_t kMailboxRva = 0x2104ec0;
+inline constexpr std::uint32_t kBlueStartScore = 0x00;
+inline constexpr std::uint32_t kOrangeStartScore = 0x04;
 inline constexpr std::uint32_t kStationCells = 0x14;
 inline constexpr std::uint32_t kPausedShown = 0x2e;
 inline constexpr std::uint32_t kMatchLive = 0x2f;
 
 enum class Pause : std::uint8_t { kOff = 0, kOn = 1, kResuming = 2 };
+enum class Team : std::uint8_t { kBlue, kOrange };
 
 /// A typed view of the mailbox at `mailbox` (game base + kMailboxRva). A null mailbox reads as all zero and drops writes.
 class RulesState {
@@ -30,6 +36,17 @@ class RulesState {
   Pause Paused() const { return m_ != nullptr ? static_cast<Pause>(m_[kPausedShown]) : Pause::kOff; }
   void SetMatchLive(bool live) const {
     if (m_ != nullptr) m_[kMatchLive] = live ? 1 : 0;
+  }
+  /// A team's starting score, the float at +0x00 (blue) or +0x04 (orange); 0 with no mailbox.
+  float StartScore(Team team) const {
+    return m_ != nullptr ? *reinterpret_cast<const volatile float*>(m_ + (team == Team::kBlue ? kBlueStartScore
+                                                                                              : kOrangeStartScore))
+                         : 0.0f;
+  }
+  void SetStartScores(float blue, float orange) const {
+    if (m_ == nullptr) return;
+    *reinterpret_cast<volatile float*>(m_ + kBlueStartScore) = blue;
+    *reinterpret_cast<volatile float*>(m_ + kOrangeStartScore) = orange;
   }
   const volatile std::uint8_t* StationCells() const { return m_ != nullptr ? m_ + kStationCells : nullptr; }
 

@@ -12,6 +12,7 @@
 #include "core/logging.h"
 #include "runtime/combat/balance_merge.h"
 #include "runtime/combat/balance_values.h"
+#include "runtime/combat/capture_scores.h"
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
 #include "runtime/combat/combat_settings.h"
@@ -169,8 +170,10 @@ void Install(std::uintptr_t gameBase, bool isServer) {
 
     // PAUSE gives the players the pre-match spawn orbs, and the orbs say when the match is live (orb_pause.h): both go
     // through the RULES mailbox VeilNet's match control keeps, so they register with it.
+    // The RULES page's starting scores reach the capture points through the same mailbox (capture_scores.h).
     if (veilnet::MatchControlStarted()) {
       orb_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      capture_scores::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
