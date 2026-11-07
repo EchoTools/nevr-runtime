@@ -40,9 +40,6 @@ option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
 option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
-# sendguard: CSendEventNode::Enter (disassembly libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
-# reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
-option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
 # decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
 # content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
 # Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
@@ -86,9 +83,6 @@ endif()
 if(Q15T_SHIELDGAMMA GREATER 0)
   list(APPEND Q15T_SOURCES src/shieldgamma.cpp)
 endif()
-if(Q15T_SENDGUARD)
-  list(APPEND Q15T_SOURCES src/sendguard.cpp)
-endif()
 if(Q15T_LEVELNAME)
   list(APPEND Q15T_SOURCES src/boosterpool.cpp)  # the levelname companion: same option, same feature
 endif()
@@ -113,7 +107,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
+  Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()

@@ -44,6 +44,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/meshstep.cpp", 1, 0},
     {"combat/shaderstep.cpp", 1, 0},
     {"combat/tablestep.cpp", 1, 0},
+    {"combat/sendguard.cpp", 1, 0},
     {"diag/hwdump_install.cpp", 18, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},

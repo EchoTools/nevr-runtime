@@ -29,7 +29,6 @@
 #include "script_redirect.h"
 #include "sensorwd.h"
 #include "shieldgamma.h"
-#include "sendguard.h"
 #include "module_switch.h"
 #include "voipdrop.h"
 #include "wallfire.h"
@@ -96,9 +95,6 @@
 #endif
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
-#endif
-#ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
-#define Q15T_SENDGUARD 0
 #endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
@@ -203,9 +199,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SHIELDGAMMA
     "shieldgamma "
-#endif
-#if Q15T_SENDGUARD
-    "sendguard "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -418,9 +411,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_SHIELDGAMMA
   ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
-#endif
-#if Q15T_SENDGUARD
-  ReportModule("sendguard", InstallSendGuard(base));
 #endif
 #if Q15T_LEVELNAME
   if (levelname_on) {

@@ -1154,8 +1154,8 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
-// combat.heaps and combat.memsys (#2175, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
-// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. The two are
+// combat.heaps, combat.memsys and combat.sendguard (#2175, #2179, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
+// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. Each is
 // independent, and a file rejected as a whole contributes nothing.
 void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
   struct Key {
@@ -1168,7 +1168,8 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
                       {"meshstep", &nevr_quest::CombatConfig::meshstep},
                       {"instmodel", &nevr_quest::CombatConfig::instmodel},
                       {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
-                      {"tablestep", &nevr_quest::CombatConfig::tablestep}};
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep},
+                      {"sendguard", &nevr_quest::CombatConfig::sendguard}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
     const std::string full = std::string("combat.") + key.name;
