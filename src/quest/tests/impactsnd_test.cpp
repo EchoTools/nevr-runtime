@@ -904,6 +904,7 @@ static void TestArenaPaysNothingByCount() {
         "300 arena frames made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
         (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
   for (int i = 0; i < 5; ++i) CallShutdown(1);
+  CHECK(CountLines("role=shutdown") == 0, "an arena teardown noted its thread (a gettid syscall)");
   CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
         "5 arena Shutdowns made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
         (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));

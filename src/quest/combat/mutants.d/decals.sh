@@ -95,5 +95,5 @@ runm dm_quick_always_quiet     $C 's/QuickSet(sys, g_host.Quiet(sys));/QuickSet(
 runm dm_quick_skip_forever     $C 's/g_quickSkip\[i\].store(n - 1, std::memory_order_relaxed);/(void)n;/'
 runm dm_quiet_no_record        $K 's/return r == nullptr || r->inert;/return r != nullptr \&\& r->inert;/'
 runm dm_quiet_never            $K 's/return r == nullptr || r->inert;/return false \&\& r == nullptr;/'
-runm dm_quick_drop_skipped     $C 's/^    QuickDrop(static_cast<std::uintptr_t>(self));$//'
+runm dm_quick_drop_skipped     $C 's/^    QuickDrop(static_cast<std::uintptr_t>(self));$/    if (false) QuickDrop(static_cast<std::uintptr_t>(self));/'
 runm dm_flip_v_key_dropped     src/quest/combat/combat_install.cpp 's/"combat.decals_flip_v", \&nevr_quest::CombatConfig::decalsFlipV/nullptr, nullptr/' quest-host-combat combat_install_test

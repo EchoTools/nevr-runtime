@@ -1003,7 +1003,18 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   s.gs[0x58 / 8] = kDyson;
   for (int i = 0; i < 70; ++i) UpdateSlot()(s.addr());
   CHECK(dc::CountersForTest().tick_calls >= 2, "the throttled space was never looked at again");
-  // a combat space is looked at on every update, and Shutdown forgets the entry
+  // Shutdown forgets the entry: a new bullet system at the same address, in a combat level, is looked at on its first update
+  Fresh();
+  CHECK(Install(table.c_str(), &api).installed, "install");
+  Sys re;
+  MakeSys(&re, EchoVR::CSymbol64Hash("mpl_arena_a"));
+  UpdateSlot()(re.addr());  // looked at, found quiet, skipped from now on
+  ShutSlot()(re.addr());
+  MakeSys(&re, kDyson);
+  const uint64_t before = dc::CountersForTest().tick_calls;
+  UpdateSlot()(re.addr());
+  CHECK(dc::CountersForTest().tick_calls == before + 1, "a new system at a freed address was skipped");
+  // a combat space is looked at on every update
   Fresh();
   CHECK(Install(table.c_str(), &api).installed, "install");
   Sys c;

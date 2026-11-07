@@ -48,7 +48,6 @@ runm im_scope_arena_lobby    $C 's/== level::Kind::kCombatOrLobby ? Scope::kComb
 runm im_scope_no_game_ok     $C 's/^  if (game == 0) return Scope::kNoGame;$//'
 runm im_scope_game_not_used  $C 's/const std::uintptr_t game = g_game.load(std::memory_order_acquire);/const std::uintptr_t game = 0x1000;/'
 runm im_scoped_never         $C 's/^    g_scoped.store(true, std::memory_order_release);$//'
-runm im_scoped_by_any_load   $C 's/^  g_loads.fetch_add(1, std::memory_order_relaxed);$/  g_loads.fetch_add(1, std::memory_order_relaxed); g_scoped.store(true, std::memory_order_release);/'
 runm im_scoped_count_dropped $C 's/^  g_scopedLoads.fetch_add(1, std::memory_order_relaxed);$//'
 runm im_loads_not_counted    $C 's/^  g_loads.fetch_add(1, std::memory_order_relaxed);$//'
 runm im_other_level_note     $C 's/^    NoteScope(scope, "game");$//'
@@ -151,7 +150,7 @@ runm im_shutdown_drops_arg   $C 's/const std::uint64_t r = original(self);/const
 runm im_shutdown_drops_return $C 's/const std::uint64_t r = original(self);/const std::uint64_t r = original(self) \& 0xff;/'
 # which thread runs what
 runm im_thread_tick_unlogged $C 's/^  NoteThread(kRoleTick);$//'
-runm im_thread_shutdown_unlogged $C 's/^  NoteThread(kRoleShutdown);$//'
+runm im_thread_shutdown_unlogged $C 's/^  if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);.*$//'
 runm im_thread_logged_each   $C 's/ == tid) return;/ == -1) return;/'
 runm im_thread_cap_value     $C 's/kThreadLines = 24;/kThreadLines = 1000;/'
 runm im_depth_not_restored   $C 's/^  g_tShutdownDepth.Set(depth);$/  (void)depth;/'
@@ -166,8 +165,8 @@ runm im_load_no_inflight       $C 's/\&level, \/\*inFlight=\*\/true)/\&level, fa
 
 # an arena load ends the scope of an earlier combat load; a module off by its key is counted off; the Shutdown thread note is not an arena syscall
 runm im_arena_load_keeps_scope2 $C 's/^    g_scoped.store(false, std::memory_order_release);$/    (void)0;/'
-runm im_off_counted_failed     $C 's/return {false, "off_config", true};/return {false, "off_config"};/'
-runm im_shutdown_thread_always $C 's/if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);/NoteThread(kRoleShutdown);/' quest-host-combat impactsnd_test
+runm im_off_counted_failed     $C 's/return {false, "off_config", true};/return {false, "off_config"};/' quest-host-combat combat_install_test
+runm im_shutdown_thread_always $C 's/if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);/NoteThread(kRoleShutdown);/'
 runm ci_off_field_dropped      src/quest/combat/combat_install.cpp 's/ {"off", outcome.off},//' quest-host-combat combat_install_test
 runm ci_off_not_counted        src/quest/combat/combat_install.cpp 's/^    if (result.off) {$/    if (false) {/' quest-host-combat combat_install_test
 runm ci_key3_dropped           src/quest/combat/combat_install.cpp 's/{module.switchKey3, module.switchMember3}/{nullptr, nullptr}/' quest-host-combat combat_install_test
