@@ -56,10 +56,10 @@ runm im_tick_ignores_scope   $C 's/^  if (!g_scoped.load(std::memory_order_acqui
 runm im_tick_runs_when_off   $C 's/^  if (!g_on.load(std::memory_order_acquire)) return;$//'
 runm im_tick_only_never      $C 's/^  if (!g_loadHooked \&\& !g_scoped.load(std::memory_order_acquire)) {.*$/  if (false) {/'
 runm im_tick_only_always     $C 's/^  if (!g_loadHooked \&\& !g_scoped.load(std::memory_order_acquire)) {.*$/  if (!g_scoped.load(std::memory_order_acquire)) {/'
-runm im_tick_only_asks_each  $C 's/^      g_nextScope = at + 1.0;$//'
+runm im_tick_only_asks_each  $C 's/^      g_nextScope = at + kRecheckS;$//'
 runm im_load_hooked_not_set  $C 's/^  g_loadHooked = loadOk;$//'
-runm im_scope_cleared_never  $C 's/if (map == 0) g_scoped.store(false, std::memory_order_release);//'
-runm im_scope_cleared_always $C 's/if (map == 0) g_scoped.store(false, std::memory_order_release);/g_scoped.store(false, std::memory_order_release);/'
+runm im_scope_cleared_never  $C 's/^    if (map == 0) {  \/\/ the table is gone: nothing is left to put back$/    if (false) {/'
+runm im_scope_cleared_always $C 's/^    if (map == 0) {  \/\/ the table is gone: nothing is left to put back$/    if (true) {/'
 # the load handler
 runm im_load_drops_return    $C 's/^  const std::uint64_t r = original();$/  const std::uint64_t r = original() \& 0xffff;/'
 runm im_load_no_afterload    $C 's/^  AfterLoad();$//'
