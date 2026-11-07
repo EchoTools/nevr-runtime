@@ -9,6 +9,8 @@
 
 #include "runtime/server/bearer_reconnect_auth.h"
 #include "runtime/server/event_ring_buffer.h"
+#include "runtime/server/telemetry_events.h"
+#include "runtime/server/telemetry_player_pose.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "runtime/server/telemetry_snapshot_store.h"
 
@@ -20,9 +22,6 @@ using WebSocketMessagePtr = std::unique_ptr<WebSocketMessage>;
 
 namespace nevr_game_server {
 class ServerContext;
-}
-namespace telemetry::v2 {
-class EchoArenaFrame;
 }
 
 // Telemetry event pushed from broadcaster callbacks (game thread).
@@ -92,7 +91,6 @@ class TelemetryStreamer {
 
   // Game thread: snapshot all game state into the write buffer
   void SnapshotGameState(TelemetrySnapshot* snap);
-  void SnapshotPlayerBones(TelemetrySnapshot* snap);
 
   // Telemetry thread: build protobuf frame from snapshot
   void BuildAndSendFrame(const TelemetrySnapshot& snap);
@@ -120,6 +118,10 @@ class TelemetryStreamer {
   std::atomic<bool> m_stopping{false};
   uint32_t m_rateHz{30};
   std::chrono::steady_clock::time_point m_lastSnapshotTime;
+
+  // Game thread: players the reader left out (a slot of 16 or more, no lobby entry, a slot held twice) are
+  // warned about once per session
+  bool m_leftOutWarned{false};
 
   // Diagnostics (game thread, 1Hz)
   std::chrono::steady_clock::time_point m_lastDiagTime;
@@ -155,29 +157,21 @@ class TelemetryStreamer {
   // Previous snapshot for event diffing (Phase 4)
   TelemetrySnapshot m_prevSnapshot;
 
-  // Detect events by comparing current and previous snapshots
-  void DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev,
-                    telemetry::v2::EchoArenaFrame* frame);
+  // What event detection keeps across frames (telemetry thread; telemetry_events.h)
+  TelemetryEventState m_eventState;
 
   // Game function pointers (resolved once on first snapshot)
   bool m_funcPtrsResolved{false};
   GetSymbolHashFn m_getSymbolHash{nullptr};
   GetFloatPropertyFn m_getFloatProperty{nullptr};
   GetIntPropertyFn m_getIntProperty{nullptr};
-  EntityLookupFn m_entityLookup{nullptr};
-  ResolveEntityHandleFn m_resolveEntityHandle{nullptr};
-  GetBoneDataFn m_getBoneData{nullptr};
-  GetTransformComponentFn m_getTransformComponent{nullptr};
+  GetUserNameFn m_getUserName{nullptr};
+  nevr_telemetry_pose::PoseFunctions m_poseFunctions;
 
   // Cached game pointers (resolved per snapshot)
   void* m_netGame{nullptr};
   void* m_gameStateData{nullptr};
-  void* m_entityManager{nullptr};
-  void* m_handleResolver{nullptr};
 
   void ResolveFunctionPointers();
   bool ResolveGamePointers();
-
-  // Resolve entity for a player by account ID, returns entity pointer or nullptr
-  void* ResolvePlayerEntity(uint64_t accountId);
 };
