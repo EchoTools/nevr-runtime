@@ -1286,6 +1286,12 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
                       {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
+                      // The impact sounds and the level decals (#2183). decals is on by default (upstream's fxdecal.on) and inert without decals.bin; its two flips are off.
+                      {"impactsnd", &nevr_quest::CombatConfig::impactsnd, true},
+                      {"impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite, true},
+                      {"decals", &nevr_quest::CombatConfig::decals, true},
+                      {"decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU, false},
+                      {"decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV, false},
                       // The static BVH and the wall-fire check (#2182): all four are on by default, as q15t-upstream has them.
                       {"bvh", &nevr_quest::CombatConfig::bvh, true},
                       {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},

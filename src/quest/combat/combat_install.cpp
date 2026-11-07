@@ -8,8 +8,10 @@
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/decals.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
@@ -43,6 +45,15 @@ ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshs
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
+
+ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
+ModuleResult DecalsNormal() noexcept {
+  decals::Switches switches;
+  switches.on = g_config.decals.on;
+  switches.flipU = g_config.decalsFlipU.on;
+  switches.flipV = g_config.decalsFlipV.on;
+  return decals::Install(switches);
+}
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -83,9 +94,19 @@ constexpr std::array kModules{
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
     Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    // impactsnd (#2183) sits where the plugin installed it, after meshstep and before the other table steps; it acts only in combat levels (impactsnd.h).
+    // impactsnd_write, decals_flip_u and decals_flip_v are switches of their module's with no step of their own (as bvh_gate and bvh_touch below): each
+    // row exists so the switch is one generated `combat_config_switch` record.
+    Module{"impactsnd", nullptr, &ImpactsndNormal, "combat.impactsnd", &nevr_quest::CombatConfig::impactsnd},
+    Module{"impactsnd_write", nullptr, nullptr, "combat.impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite},
     Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // decals (#2183): last of the plugin's table steps; its Shutdown handler chains above impactsnd's, so impactsnd's row comes first. It acts only in combat
+    // levels (decals.h).
+    Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
+    Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
+    Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
@@ -138,47 +159,42 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (!g_inactiveSaid.exchange(true, std::memory_order_acq_rel)) WriteSkipped(phase);
     return outcome;
   }
-  char results[400];  // fourteen normal-step names and statuses fit (#2184 brings the list to 340 bytes on the host)
-  results[0] = '\0';
-  std::size_t used = 0;
-  bool truncated = false;
   for (std::size_t i = 0; i < count; ++i) {
     const Module& module = table[i];
     const InstallFn fn = phase == Phase::kEarly ? module.early : module.normal;
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
+    const char* outcomeName = "failed";
     if (result.off) {
       ++outcome.off;
+      outcomeName = "off";
     } else if (result.installed) {
       ++outcome.installed;
+      outcomeName = "installed";
     } else {
       ++outcome.failed;
     }
-    const int wrote = std::snprintf(results + used, sizeof(results) - used, "%s%s=%s", used == 0 ? "" : " ", module.name,
-                                    result.status != nullptr ? result.status : "unset");
-    if (wrote < 0 || static_cast<std::size_t>(wrote) >= sizeof(results) - used) {
-      truncated = true;  // the counts are exact; the list is cut where it stopped fitting
-      results[used] = '\0';
-    } else {
-      used += static_cast<std::size_t>(wrote);
-    }
+    // One record per module, as its step returns (N17: each outcome by name). A list of every module on the phase line grows with the table
+    // and stops fitting one 768-byte sentinel line, so the phase line keeps the counts and the consequence, and each outcome is its own record.
+    sentinel::LogFields(result.installed || result.off ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install_module",
+                        {{"phase", PhaseName(phase)}, {"module", module.name}, {"outcome", outcomeName},
+                         {"status", result.status != nullptr ? result.status : "unset"}});
   }
   outcome.ran = true;
   char msg[160];
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    char off[64] = "";
-    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    char off[80] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key or with nothing to act on", outcome.off, outcome.off == 1 ? "its" : "their");
     std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
-                       {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"msg", msg}});
   return outcome;
 }
 

@@ -13,9 +13,11 @@ add_library(nevr_quest_combat STATIC
   combat_tick.cpp
   combat_level.cpp
   combat_tick.cpp
+  decals.cpp
   equip_refire.cpp
   headset_gates.cpp
   heaps.cpp
+  impactsnd.cpp
   instmodel.cpp
   match_tags.cpp
   memsys.cpp
@@ -33,4 +35,4 @@ add_library(nevr_quest_combat STATIC
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
-target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook)
+target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk)

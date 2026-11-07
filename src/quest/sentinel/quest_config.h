@@ -186,6 +186,11 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch impactsnd{true, Source::kAbsent};        // `combat.impactsnd`: the impact table's rows and Wwise ids, repaired in combat levels only (combat/impactsnd.h)
+  CombatSwitch impactsndWrite{true, Source::kAbsent};   // `combat.impactsnd_write`: false reads and logs the table and writes nothing to it
+  CombatSwitch decals{true, Source::kAbsent};           // `combat.decals`: the level decals of decals.bin (combat/decals.h); on, and inert without that file (upstream's fxdecal.on)
+  CombatSwitch decalsFlipU{false, Source::kAbsent};     // `combat.decals_flip_u`: mirror the decals' u inside each quad
+  CombatSwitch decalsFlipV{false, Source::kAbsent};     // `combat.decals_flip_v`: mirror the decals' v inside each quad
   CombatSwitch bvh{true, Source::kAbsent};       // `combat.bvh`: the static BVH answers casts on combat maps only (combat/bvh.h)
   CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
   CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does

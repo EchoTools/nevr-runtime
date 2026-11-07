@@ -6,9 +6,10 @@
 // Moved from the q15t plugin's wallfire_test: the assertions on the shots are the same (a stock hit passes through, a clear segment is not
 // blocked, a segment through each wall is, another call site gets the stock answer, a null gamespace, a non-finite segment and every wrong game
 // structure get the stock answer, the log volume, the refusals and what they leave alone). What changed is the fixture (the manager's install on an
-// image, not a slot swap; the plugin's kill file is the `combat.wallfire` switch) and three deliberate behaviours: the check acts only on a combat map,
-// the request and the game chain are read with plain loads (the assertions that gave an unreadable pointer went with the system call; a null pointer
-// in the chain still gets the stock answer), and the counters of the dropped cases. New here: the scope, the switch and its lines, the legacy file.
+// image, not a slot swap; the plugin's kill file is the `combat.wallfire` switch) and three deliberate behaviours: the check acts only on a combat map
+// or in the combat lobby, the request and the game chain are read with plain loads (the assertions that gave an unreadable pointer went with the
+// system call; a null pointer in the chain still gets the stock answer), and the counters of the dropped cases. New here: the scope, the switch and
+// its lines, the legacy file.
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/wallfire.h"
@@ -349,14 +350,21 @@ void TheSwitchAndItsLines() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
-    const std::string dir = "/tmp/combat-wallfire-legacy";
-    mkdir(dir.c_str(), 0700);
-    nevr_quest::combat::legacy::SetDirectoryForTest(dir.c_str());
-    if (FILE* f = std::fopen((dir + "/wallfire.off").c_str(), "w")) std::fclose(f);
-    QCHECK(wf::Install(true).installed);
-    QCHECK(Count(Event("combat_wallfire_legacy_switch"), kWarn) == 1 && Count("\"replaced_by\":\"combat.wallfire: false\"") == 1);
-    unlink((dir + "/wallfire.off").c_str());
-    rmdir(dir.c_str());
+    // a fresh directory of its own in the system temp directory, so no other run's file can be found and nothing of another run's is removed
+    const char* const tmp = std::getenv("TMPDIR");
+    std::string dir = std::string(tmp != nullptr && tmp[0] != '\0' ? tmp : "/tmp") + "/combat-wallfire-legacy-XXXXXX";
+    const bool made = mkdtemp(dir.data()) != nullptr;
+    QCHECK(made);
+    if (made) {
+      nevr_quest::combat::legacy::SetDirectoryForTest(dir.c_str());
+      const std::string file = dir + "/wallfire.off";
+      if (FILE* f = std::fopen(file.c_str(), "w")) std::fclose(f);
+      QCHECK(wf::Install(true).installed);
+      QCHECK(Count(Event("combat_wallfire_legacy_switch"), kWarn) == 1 && Count("\"replaced_by\":\"combat.wallfire: false\"") == 1);
+      nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
+      unlink(file.c_str());  // the one file this test made, then the directory mkdtemp made
+      rmdir(dir.c_str());
+    }
     End();
   }
 }

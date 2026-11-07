@@ -241,7 +241,7 @@ void LogFirstBlock(const float* a, const float* b) noexcept {
 }
 
 // ---- Intersect ----
-// With no combat map loaded the game's function answers (the arena path). The ray is the caller's CRay (six floats: origin, direction).
+// With neither a combat map nor the combat lobby loaded, or with an Echo Arena level loaded, the game's function answers (the arena path). The ray is the caller's CRay (six floats: origin, direction).
 bool OnIntersect(IntersectThunk::Fn original, const void* self, const float* ray, std::uint8_t* hit) noexcept {
   if (!InCombatOrLobby()) return original(self, ray, hit);
   if (g_gateOn.load(std::memory_order_relaxed) && g_mark.Get() == 0) {  // not a cast the tree is for: the stock miss
@@ -451,7 +451,8 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"hooks", hooks}, {"gate", switches.gate ? 1 : 0}, {"touch", touchOn ? 1 : 0},
                        {"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},
-                       {"msg", "CBVHTree answers from the game's own static BVH on a combat map; every other level keeps the game's own answers"}});
+                       {"msg", "CBVHTree answers from the game's own static BVH on a combat map or in the combat lobby; every other level, an Echo Arena "
+                               "level included, keeps the game's own answers"}});
   return {true, "installed"};
 }
 

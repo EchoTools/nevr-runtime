@@ -17,8 +17,11 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/decals.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/wallfire.h"
@@ -57,6 +60,43 @@ std::vector<Line> Lines(const char* event) {
   return out;
 }
 
+// The `combat_install_module` records that the phase of `phaseLine` wrote (the ones between the phase line before it and it), as
+// `"results":"<module>=<status> ..."` in the table's order, so a check reads every module's outcome from the log.
+std::string ResultsOf(const Line& phaseLine) {
+  std::size_t at = g_lines.size();
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (g_lines[i].text == phaseLine.text) {
+      at = i;
+      break;
+    }
+  }
+  const auto field = [](const std::string& t, const char* key) {
+    const std::string k = std::string("\"") + key + "\":\"";
+    const std::size_t b = t.find(k);
+    if (b == std::string::npos) return std::string();
+    const std::size_t e = t.find('"', b + k.size());
+    return t.substr(b + k.size(), e - b - k.size());
+  };
+  std::vector<std::string> parts;
+  for (std::size_t i = at; i-- > 0;) {
+    const std::string& t = g_lines[i].text;
+    if (Has(t, "\"event\":\"combat_install\"")) break;  // the phase line before: its records are not this phase's
+    if (!Has(t, "\"event\":\"combat_install_module\"")) continue;  // a module's own lines sit between the records
+    parts.insert(parts.begin(), field(t, "module") + "=" + field(t, "status"));
+  }
+  std::string out = "\"results\":\"";
+  for (std::size_t i = 0; i < parts.size(); ++i) out += (i == 0 ? "" : " ") + parts[i];
+  return out + "\"";
+}
+
+// No sentinel line of this process was cut: the writer ends a line that does not fit its 768 bytes with `"truncated":true`.
+bool NoLineIsCut() {
+  for (const Line& l : g_lines) {
+    if (Has(l.text, "\"truncated\":true")) return false;
+  }
+  return true;
+}
+
 std::vector<std::string> g_calls;
 combat::ModuleResult Ok() noexcept { return {true, "installed"}; }
 combat::ModuleResult Refused() noexcept { return {false, "build_id_mismatch"}; }
@@ -73,6 +113,9 @@ void EndB() noexcept { g_calls.emplace_back("b_end"); }
 void Process(bv::Variant variant) {
   combat::ResetForTest();
   combat::ResetInstallForTest();
+  // A new process has an empty tick table: every normal step registers the refresh-rate rule's callback again, and the table holds 16 (#2184's
+  // rows added the runs that filled it).
+  nevr_quest::combat::tick::ResetForTest();
   g_lines.clear();
   g_calls.clear();
   combat::SetVariant(variant);
@@ -127,7 +170,7 @@ void EachPhaseWritesOneAggregateLine() {
     QCHECK(Has(l.text, "\"modules\":3"));
     QCHECK(Has(l.text, "\"installed\":3"));
     QCHECK(Has(l.text, "\"failed\":0"));
-    QCHECK(Has(l.text, "\"results\":\"alpha=installed impactsnd=installed decals=installed\""));
+    QCHECK(ResultsOf(l) == "\"results\":\"alpha=installed impactsnd=installed decals=installed\"");
     QCHECK(Has(l.text, "\"msg\":\"3 of 3 combat modules installed in this phase\""));
   }
   Done();
@@ -144,8 +187,8 @@ void AModuleSwitchedOffByItsKeyIsCountedApart() {
   if (lines.size() == 1U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"modules\":2,\"installed\":1,\"failed\":0,\"off\":1,"));
-    QCHECK(Has(lines[0].text, "\"results\":\"alpha=installed switched=off_config\""));
-    QCHECK(Has(lines[0].text, "\"msg\":\"1 of 2 combat modules installed in this phase; 1 off by its config key\""));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"alpha=installed switched=off_config\"");
+    QCHECK(Has(lines[0].text, "\"msg\":\"1 of 2 combat modules installed in this phase; 1 off by its config key or with nothing to act on\""));
   }
   // Every module off: nothing was installed, and the line says 0 of 1, not 1 of 1.
   Process(bv::Variant::kCombat);
@@ -154,7 +197,7 @@ void AModuleSwitchedOffByItsKeyIsCountedApart() {
   QCHECK(none.modules == 1 && none.installed == 0 && none.failed == 0 && none.off == 1);
   lines = Lines("combat_install");
   QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo);
-  if (lines.size() == 1U) QCHECK(Has(lines[0].text, "\"msg\":\"0 of 1 combat modules installed in this phase; 1 off by its config key\""));
+  if (lines.size() == 1U) QCHECK(Has(lines[0].text, "\"msg\":\"0 of 1 combat modules installed in this phase; 1 off by its config key or with nothing to act on\""));
   Done();
 }
 
@@ -187,7 +230,14 @@ void AFailingModuleIsNamedAndTheOthersStillInstall() {
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(Has(lines[0].text, "broken=build_id_mismatch"));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"first=installed broken=build_id_mismatch last=installed\"");
+    const std::vector<Line> records = Lines("combat_install_module");
+    QCHECK(records.size() == 3U);
+    if (records.size() == 3U) {
+      QCHECK(records[0].level == sentinel::LogLevel::kInfo && Has(records[0].text, "\"outcome\":\"installed\""));
+      QCHECK(records[1].level == sentinel::LogLevel::kWarn &&
+             Has(records[1].text, "\"phase\":\"normal\",\"module\":\"broken\",\"outcome\":\"failed\",\"status\":\"build_id_mismatch\""));
+    }
     QCHECK(Has(lines[0].text, "\"failed\":1"));
     QCHECK(Has(lines[0].text, "2 of 3 combat modules installed in this phase"));
   }
@@ -242,8 +292,9 @@ void APhaseRunsOnce() {
   Done();
 }
 
-// A table whose results do not fit the line's list keeps the counts exact and says the list was cut, rather than writing a broken line.
-void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
+// A table too long for one line to name every module (14 names of 26 bytes, past what one 768-byte sentinel line holds beside the counts and
+// the message): every module's outcome is a record of its own, whole, and the phase line is whole, with exact counts and its message.
+void ALongTableWritesEveryModuleRecordAndAWholePhaseLine() {
   Process(bv::Variant::kCombat);
   static const combat::Module many[] = {
       {"module_with_a_long_name_01", nullptr, &NormalA}, {"module_with_a_long_name_02", nullptr, &NormalA},
@@ -260,19 +311,30 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
     QCHECK(Has(lines[0].text, "\"modules\":14") && Has(lines[0].text, "\"installed\":14"));
-    QCHECK(Has(lines[0].text, "\"results_truncated\":1"));
-    QCHECK(Has(lines[0].text, "module_with_a_long_name_01=installed"));
+    QCHECK(Has(lines[0].text, "\"msg\":\"14 of 14 combat modules installed in this phase\"}"));
   }
+  const std::vector<Line> records = Lines("combat_install_module");
+  QCHECK(records.size() == 14U);
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    char want[192];
+    std::snprintf(want, sizeof(want),
+                  "\"event\":\"combat_install_module\",\"phase\":\"normal\",\"module\":\"module_with_a_long_name_%02zu\",\"outcome\":\"installed\","
+                  "\"status\":\"installed\"}",
+                  i + 1);
+    QCHECK(records[i].level == sentinel::LogLevel::kInfo && Has(records[i].text, want));
+  }
+  QCHECK(NoLineIsCut());
   Done();
 }
 
-// The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps, the gates, bvh with its two switch
-// rows, wallfire, sendguard, pfx, pfxtev, sensorwd and music in the normal phase. Rows are found by name, so a module that moves in adds its row without
+// The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps with impactsnd and its write-switch row
+// after the first and decals with its two flip-switch rows after the last, the gates, bvh with its two switch rows, wallfire, sendguard, pfx,
+// pfxtev, sensorwd and music in the normal phase. Rows are found by name, so a module that moves in adds its row without
 // renumbering this test; the order the plugin installed them in is checked between the named rows.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 18);
+  QCHECK(count == 23);
   const auto at = [&](const char* name) -> std::size_t {
     for (std::size_t i = 0; i < count; ++i) {
       if (std::strcmp(table[i].name, name) == 0) return i;
@@ -308,6 +370,32 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
     QCHECK(w.switchKey != nullptr && std::strcmp(w.switchKey, "combat.wallfire") == 0 && w.switchMember == &nevr_quest::CombatConfig::wallfire);
     QCHECK(w.early == nullptr && w.normal != nullptr);
   }
+  // impactsnd sits after meshstep and before tablestep, decals after shaderstep and before the gates (#2183); each switch of theirs beyond the first
+  // is a row with no step, right after its module, and neither module has an end step.
+  const std::size_t meshstep = at("meshstep"), impact = at("impactsnd"), impactWrite = at("impactsnd_write"), tablestep = at("tablestep"),
+                    shaderstep = at("shaderstep"), decals = at("decals"), flipU = at("decals_flip_u"), flipV = at("decals_flip_v");
+  QCHECK(meshstep < impact && impact + 1 == impactWrite && impactWrite < tablestep && shaderstep < decals && decals + 1 == flipU && flipU + 1 == flipV &&
+         flipV < gates && gates < count);
+  if (flipV < count) {
+    const combat::Module& is = table[impact];
+    QCHECK(is.early == nullptr && is.normal != nullptr && is.end == nullptr);
+    QCHECK(is.switchKey != nullptr && std::strcmp(is.switchKey, "combat.impactsnd") == 0 && is.switchMember == &nevr_quest::CombatConfig::impactsnd);
+    const combat::Module& dc = table[decals];
+    QCHECK(dc.early == nullptr && dc.normal != nullptr && dc.end == nullptr);
+    QCHECK(dc.switchKey != nullptr && std::strcmp(dc.switchKey, "combat.decals") == 0 && dc.switchMember == &nevr_quest::CombatConfig::decals);
+    const struct {
+      std::size_t row;
+      const char* key;
+      nevr_quest::CombatSwitch nevr_quest::CombatConfig::* member;
+    } switchRows[] = {{impactWrite, "combat.impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite},
+                      {flipU, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
+                      {flipV, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV}};
+    for (const auto& sr : switchRows) {
+      const combat::Module& m = table[sr.row];
+      QCHECK(m.early == nullptr && m.normal == nullptr && m.end == nullptr && m.switchMember == sr.member && m.switchKey != nullptr &&
+             std::strcmp(m.switchKey, sr.key) == 0);
+    }
+  }
 }
 
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and ten modules have a normal one (the tick,
@@ -325,31 +413,47 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2 && early.off == 0);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
-  // (#2177), the headset gates (#2180), the static BVH and the wall-fire check (#2182: the BVH is refused for want of a libr15, and the wall-fire
-  // check for want of the BVH), sendguard (#2179), the pfx gate and the event-effect decision, which hook nothing (#2188), and, last, the scanner-sphere
-  // watchdog and the combat music (#2184), on by default. On the host no libr15 is loaded, so the tick, the table steps, the gates, the BVH, the
-  // wall-fire check, sendguard, the watchdog and the music are refused and named ; the rule installs (it registers its callback for a tick that may
-  // come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 14 && normal.installed == 3 && normal.failed == 11 && normal.off == 0);
+  // (#2177) with the impact sounds (#2183) after the first and the level decals after the last, the headset gates (#2180), the static BVH and the
+  // wall-fire check (#2182: the BVH is refused for want of a libr15, and the wall-fire check for want of the BVH), sendguard (#2179), the pfx gate
+  // and the event-effect decision, which hook nothing (#2188), and, last, the scanner-sphere watchdog and the combat music (#2184), on by default. On
+  // the host no libr15 is loaded, so the tick, the table steps, the impact sounds, the gates, the BVH, the wall-fire check, sendguard, the watchdog and
+  // the music are refused and named; the rule installs (it registers its callback for a tick that may come later), and so do the two decisions; the
+  // level decals, on by default, find no decals.bin and are off: counted apart, neither installed nor failed.
+  QCHECK(normal.ran && normal.modules == 16 && normal.installed == 3 && normal.failed == 12 && normal.off == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\"");
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text,
-               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
-               "shaderstep=module_not_loaded gates=module_not_loaded bvh=module_not_loaded wallfire=bvh_not_installed sendguard=module_not_loaded "
-               "pfx=installed pfxtev=installed sensorwd=module_not_loaded music=module_not_loaded\""));
+    QCHECK(ResultsOf(lines[1]) ==
+           std::string("\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
+               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table gates=module_not_loaded bvh=module_not_loaded "
+               "wallfire=bvh_not_installed sendguard=module_not_loaded pfx=installed pfxtev=installed sensorwd=module_not_loaded music=module_not_loaded\""));
+    // one record per module with a step, early first: 2 early and 16 normal
+    const std::vector<Line> records = Lines("combat_install_module");
+    QCHECK(records.size() == 18U && Has(records[0].text, "\"phase\":\"early\"") && Has(records[1].text, "\"phase\":\"early\"") &&
+           Has(records[2].text, "\"phase\":\"normal\""));
+    // an installed or off module's record is Info, a refused one's a Warning, and its outcome says which
+    for (const Line& r : records) {
+      const bool failed = Has(r.text, "\"outcome\":\"failed\"");
+      QCHECK(failed || Has(r.text, "\"outcome\":\"installed\"") || Has(r.text, "\"outcome\":\"off\""));
+      QCHECK(r.level == (failed ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo));
+    }
+    QCHECK(Has(records.back().text, "\"module\":\"music\",\"outcome\":\"failed\",\"status\":\"module_not_loaded\""));
+    QCHECK(Has(Lines("combat_install_module")[9].text, "\"module\":\"decals\",\"outcome\":\"off\",\"status\":\"no_table\""));
+    QCHECK(NoLineIsCut());
+    // the phase line ends with its message, uncut
+    QCHECK(Has(lines[1].text, "1 off by its config key or with nothing to act on; the others keep the game's own behaviour\"}"));
   }
   Done();
 }
 
 // The shipped rows switched off by the configuration the constructor's step handed over: each answers off, and the phase line counts it
 // apart (neither installed nor failed), at Info, with the message saying so. heaps off and memsys on: heaps is off, memsys (no libr15 here)
-// fails; sendguard off in the normal phase: the tick, the table steps, the gates, the BVH, the wall-fire check, the watchdog and the music still fail (no libr15), and
-// the rule, pfx and pfxtev install.
+// fails; sendguard off in the normal phase: the tick, the table steps, the impact sounds, the gates, the BVH, the wall-fire check, the watchdog
+// and the music still fail (no libr15), the level decals are off for want of a decals.bin, and the rule, pfx and pfxtev install.
 void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
@@ -361,19 +465,20 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.modules == 2 && early.installed == 0 && early.failed == 1 && early.off == 1);
-  QCHECK(normal.modules == 14 && normal.installed == 3 && normal.failed == 10 && normal.off == 1);
+  QCHECK(normal.modules == 16 && normal.installed == 3 && normal.failed == 11 && normal.off == 2);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
-    QCHECK(Has(lines[0].text, "\"results\":\"heaps=off memsys=module_not_loaded\"") && Has(lines[0].text, "\"off\":1"));
-    QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key; the others keep"));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=off memsys=module_not_loaded\"" && Has(lines[0].text, "\"off\":1"));
+    QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key or with nothing to act on; the others keep"));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick
-    QCHECK(Has(lines[1].text, "sendguard=off_config pfx=installed pfxtev=installed"));
-    QCHECK(Has(lines[1].text, "\"off\":1"));
-    QCHECK(Has(lines[1].text, "3 of 14 combat modules installed in this phase; 1 off by its config key; the others keep"));
+    QCHECK(Has(ResultsOf(lines[1]), "sendguard=off_config pfx=installed pfxtev=installed"));
+    QCHECK(Has(lines[1].text, "\"off\":2"));
+    QCHECK(Has(lines[1].text, "3 of 16 combat modules installed in this phase; 2 off by their config key or with nothing to act on; the others keep"));
   }
   Done();
-  // bvh and wallfire switched off (#2182): both are off, not failed; the BVH's two switches of its own have no step and are not counted.
+  // bvh and wallfire switched off (#2182): both are off, not failed, beside the decals (no decals.bin); the BVH's two switches of its own have no step
+  // and are not counted.
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
   Process(bv::Variant::kCombat);
@@ -382,12 +487,12 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   noBvh.wallfire = {false, nevr_quest::Source::kFile};
   combat::SetConfig(noBvh);
   const combat::Outcome off2 = combat::InstallNormal();
-  QCHECK(off2.modules == 14 && off2.installed == 3 && off2.failed == 9 && off2.off == 2);
+  QCHECK(off2.modules == 16 && off2.installed == 3 && off2.failed == 10 && off2.off == 3);
   const std::vector<Line> offLines = Lines("combat_install");
   QCHECK(offLines.size() == 1U);
   if (offLines.size() == 1U) {
-    QCHECK(Has(offLines[0].text, "bvh=off_config wallfire=off_config sendguard=module_not_loaded"));
-    QCHECK(Has(offLines[0].text, "\"off\":2") && Has(offLines[0].text, "3 of 14 combat modules installed in this phase; 2 off by their config key"));
+    QCHECK(Has(ResultsOf(offLines[0]), "bvh=off_config wallfire=off_config sendguard=module_not_loaded"));
+    QCHECK(Has(offLines[0].text, "\"off\":3") && Has(offLines[0].text, "3 of 16 combat modules installed in this phase; 3 off by their config key or with nothing to act on"));
   }
   combat::SetConfig(nevr_quest::CombatConfig{});
   Done();
@@ -404,6 +509,8 @@ void TheRealStepsConsultTheGate() {
     QCHECK(lines.size() == 1U && Has(lines[0].text, "\"state\":\"skipped\""));
     QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
     QCHECK(Lines("combat_bvh_install").empty() && Lines("combat_wallfire_install").empty());
+    // the impact sounds and the level decals (#2183): neither installs, refuses or reads its table, so the arena APK keeps the game's own table and draws no decal
+    QCHECK(Lines("combat_impactsnd_install").empty() && Lines("combat_impactsnd_refused").empty() && Lines("combat_decals_install").empty());
     combat::NoteProcessEnd();
     QCHECK(Lines("combat_sendguard_stats").empty());
     Done();
@@ -498,17 +605,24 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   tables.sendguard = {false, nevr_quest::Source::kFile};  // sendguard's record (#2179) is generated from its table row like the four
   combat::LogConfig(tables);
   const std::vector<Line> records = Lines("combat_config_switch");
-  // eleven per call (the four table steps, bvh's three switches, wallfire's, sendguard's, then the watchdog's and the combat music's, #2184), in the table's order
-  QCHECK(records.size() == 22U);
-  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard", "sensorwd", "music"};
+  // sixteen per call, in the table's order: the table steps with impactsnd and its write key after meshstep and decals with its two flip keys after
+  // shaderstep (#2183), bvh's three switches, wallfire's and sendguard's (#2182, #2179), then the watchdog's and the combat music's (#2184)
+  QCHECK(records.size() == 32U);
+  const char* const order[] = {"meshstep",      "impactsnd", "impactsnd_write", "tablestep", "instmodel", "shaderstep", "decals",
+                               "decals_flip_u", "decals_flip_v", "bvh",          "bvh_gate",  "bvh_touch", "wallfire",   "sendguard",
+                               "sensorwd",      "music"};
   const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
                                    "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\"", "\"on\":0,\"source\":\"default\"", "\"on\":0,\"source\":\"default\"",
                                    "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
-                                   "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\""};
-  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\""};
+  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\"", "\"on\":0,\"source\":\"default\"", "\"on\":0,\"source\":\"default\"",
                                     "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
-                                    "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":0,\"source\":\"config\"",
-                                    "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\""};
+                                    "\"on\":1,\"source\":\"default\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\""};
   constexpr std::size_t kPerCall = sizeof(order) / sizeof(order[0]);
   if (records.size() == 2 * kPerCall) {
     for (std::size_t i = 0; i < kPerCall; ++i) {
@@ -532,7 +646,7 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   QCHECK(defaults.refreshRate.on && !defaults.refreshRateLobby.on && defaults.refreshRateQuest2At72.on);
   combat::SetConfig(defaults);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "refresh_rate=installed"));
   QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"match\""));
   Done();
   // The file's word reaches the row: the rule off is the witness.
@@ -541,7 +655,7 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   off.refreshRate = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=witness"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "refresh_rate=witness"));
   Done();
   // And the lobby key on: lobby mode.
   Process(bv::Variant::kCombat);
@@ -591,7 +705,7 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   off.gateLink = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "gates=off"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "gates=off"));
   Done();
 
   // A libr15 holding the pinned words and slots, and a policy text the file gave: the menu gate's policy line says "config" and carries the text.
@@ -617,7 +731,7 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   combat::InstallNormal();
   const std::vector<Line> policy = Lines("combat_gates_link_policy");
   QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"0e4384a5 1703a89b\"") && Has(policy[0].text, "\"source\":\"config\""));
-  QCHECK(Has(Lines("combat_install")[0].text, "gates=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "gates=installed"));
   hg::ResetForTest();
 
   hg::ResetForTest();
@@ -630,7 +744,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=installed pfxtev=installed"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
   Done();
@@ -640,7 +754,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   pfxOff.pfx = {false, nevr_quest::Source::kFile};
   combat::SetConfig(pfxOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=off_config pfxtev=installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=off_config pfxtev=installed"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"reason\":\"off_config\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
   Done();
@@ -649,7 +763,7 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   tevOff.pfxtev = {false, nevr_quest::Source::kFile};
   combat::SetConfig(tevOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=off_config"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "pfx=installed pfxtev=off_config"));
   QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
   QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"reason\":\"off_config\""));
   Done();
@@ -689,7 +803,7 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=module_not_loaded music=module_not_loaded"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=module_not_loaded music=module_not_loaded"));
   QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"module_not_loaded\""));
   QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"module_not_loaded\""));
   Done();
@@ -698,9 +812,11 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   musicOff.music = {false, nevr_quest::Source::kFile};
   combat::SetConfig(musicOff);
   const combat::Outcome mOff = combat::InstallNormal();
-  QCHECK(mOff.modules == 14 && mOff.off == 1 && mOff.failed == 10 && mOff.installed == 3);  // off by its key: counted apart, not failed
-  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=module_not_loaded music=off_config"));
-  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":1"));
+  // off by its key: counted apart, not failed (the decals are off too, for want of a decals.bin)
+  QCHECK(mOff.modules == 16 && mOff.off == 2 && mOff.failed == 11 && mOff.installed == 3);
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=module_not_loaded music=off_config"));
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2"));
+  QCHECK(Has(Lines("combat_install_module").back().text, "\"module\":\"music\",\"outcome\":\"off\",\"status\":\"off_config\""));
   QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
@@ -708,9 +824,13 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   sensorOff.sensorwd = {false, nevr_quest::Source::kFile};
   combat::SetConfig(sensorOff);
   const combat::Outcome sOff = combat::InstallNormal();
-  QCHECK(sOff.modules == 14 && sOff.off == 1 && sOff.failed == 10 && sOff.installed == 3);
-  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=off_config music=module_not_loaded"));
-  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":1"));
+  QCHECK(sOff.modules == 16 && sOff.off == 2 && sOff.failed == 11 && sOff.installed == 3);
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=off_config music=module_not_loaded"));
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2"));
+  {
+    const std::vector<Line> recs = Lines("combat_install_module");
+    QCHECK(recs.size() >= 2U && Has(recs[recs.size() - 2].text, "\"module\":\"sensorwd\",\"outcome\":\"off\",\"status\":\"off_config\""));
+  }
   QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   // A plain release and the arena APK (#2300, combat does not run there) install neither and write neither line, on by default or not.
@@ -718,9 +838,72 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
     Process(variant);
     combat::SetConfig(nevr_quest::CombatConfig{});
     QCHECK(!combat::InstallNormal().ran);
-    QCHECK(Lines("combat_music_install").empty() && Lines("combat_sensorwd_install").empty());
+    QCHECK(Lines("combat_music_install").empty() && Lines("combat_sensorwd_install").empty() && Lines("combat_install_module").empty());
     Done();
   }
+}
+
+// The impact sounds and the level decals (#2183) read their keys from the resolved section: impactsnd on by default and decals on by default (inert without a
+// decals.bin, which a host has none of), each off by the file's word alone, and a `combat_config_switch` record for each key of the two rows.
+void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
+  namespace impactsnd = nevr_quest::combat::impactsnd;
+  impactsnd::ResetForTest();
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "impactsnd=module_not_loaded") && Has(ResultsOf(Lines("combat_install")[0]), "decals=no_table"));  // no libr15 on the host, and no decals.bin
+  QCHECK(Lines("combat_impactsnd_refused").size() == 1U);
+  QCHECK(Lines("combat_decals_install").size() == 1U && Has(Lines("combat_decals_install")[0].text, "\"reason\":\"no_table\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig impactOff;
+  impactOff.impactsnd = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(impactOff);
+  combat::InstallNormal();
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "impactsnd=off_config") && Has(ResultsOf(Lines("combat_install")[0]), "decals=no_table"));
+  // a module off by its key is off, not failed: the phase line counts it apart (impactsnd by its key, decals for want of a decals.bin), and the eleven
+  // modules that cannot install on a host without a libr15 (the tick, the four table steps, the gates, bvh, wallfire, sendguard, sensorwd, music) are
+  // the failed ones
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2") && Has(Lines("combat_install")[0].text, "\"failed\":11"));
+  QCHECK(Lines("combat_impactsnd_refused").empty() && Has(Lines("combat_impactsnd_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig decalsOff;
+  decalsOff.decals = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(decalsOff);
+  combat::InstallNormal();
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "impactsnd=module_not_loaded") && Has(ResultsOf(Lines("combat_install")[0]), "decals=off_config"));
+  QCHECK(Has(Lines("combat_decals_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // The config switch records: one for each key a row names, with the value and where it came from.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.impactsndWrite = {false, nevr_quest::Source::kFile};
+  cfg.decalsFlipU = {true, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> sw = Lines("combat_config_switch");
+  auto find = [&sw](const char* key) -> std::string {
+    for (const Line& l : sw) {
+      if (Has(l.text, std::string("\"key\":\"") + key + "\"")) return l.text;
+    }
+    return std::string();
+  };
+  QCHECK(Has(find("combat.impactsnd"), "\"module\":\"impactsnd\"") && Has(find("combat.impactsnd"), "\"on\":1") && Has(find("combat.impactsnd"), "\"source\":\"default\""));
+  QCHECK(Has(find("combat.impactsnd_write"), "\"on\":0") && Has(find("combat.impactsnd_write"), "\"source\":\"config\""));
+  QCHECK(Has(find("combat.decals"), "\"module\":\"decals\"") && Has(find("combat.decals"), "\"on\":1") && Has(find("combat.decals"), "\"source\":\"default\""));
+  QCHECK(Has(find("combat.decals_flip_u"), "\"on\":1") && Has(find("combat.decals_flip_u"), "\"source\":\"config\""));
+  // The table's order: impactsnd before decals (decals' Shutdown handler chains above impactsnd's), both after the tick.
+  std::size_t n = 0;
+  const combat::Module* table = combat::ShippedModules(&n);
+  std::size_t tick = n, impact = n, decals = n;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (std::strcmp(table[i].name, "tick") == 0) tick = i;
+    if (std::strcmp(table[i].name, "impactsnd") == 0) impact = i;
+    if (std::strcmp(table[i].name, "decals") == 0) decals = i;
+  }
+  QCHECK(tick < impact && impact < decals && decals < n);
+  QCHECK(table[impact].early == nullptr && table[impact].normal != nullptr && table[decals].early == nullptr && table[decals].normal != nullptr);
+  Done();
 }
 
 }  // namespace
@@ -733,7 +916,7 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "bvh=module_not_loaded wallfire=bvh_not_installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=module_not_loaded wallfire=bvh_not_installed"));
   Done();
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -745,7 +928,7 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   off.wallfire = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "bvh=off_config wallfire=off_config"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=off_config wallfire=off_config"));
   Done();
   // The row hands the module each of its three keys as the file gave it: bvh on, its gate off, its touch hook off.
   nevr_quest::combat::bvh::ResetForTest();
@@ -811,7 +994,7 @@ int main() {
   APlainReleaseInstallsNothingAndSaysSoOnce();
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
-  ALongListIsCutAndSaysSoWhileTheCountsStayExact();
+  ALongTableWritesEveryModuleRecordAndAWholePhaseLine();
   TheShippedTableRowsAreWiredToTheirSteps();
   TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   AShippedRowSwitchedOffByTheConfigIsCountedAsOff();
@@ -823,6 +1006,7 @@ int main() {
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
   TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem();
+  TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection();
   TheBvhRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());

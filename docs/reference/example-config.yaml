@@ -257,13 +257,31 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
+  # Quest only. A boolean. The bullet impact sounds (src/quest/combat/impactsnd.h): the game builds its impact table with 5 of 15 rows and a stock id in
+  # every row, so a bullet hit plays no impact sound; with this on, a combat level's table gets every row and its Wwise ids. It acts only while a combat
+  # level is loaded (an Echo Arena match keeps the game's own table). The sentinel log lines `combat_impactsnd_install` and `combat_impactsnd_scope` say what
+  # was read and which loads it acted on. A value that is not a boolean keeps the default, with a warning that names the key. Read once at launch. Default
+  # (absent): true.
+  # impactsnd: false
+  # impactsnd_write: false makes the module read and log the table and write nothing to it (and keeps the game's own loader). Default (absent): true.
+  # impactsnd_write: false
+
+  # Quest only. A boolean. The level decals (src/quest/combat/decals.h): the combat levels' static decals, which the Quest renderer cannot draw, as quads in
+  # dynamic-mesh nodes from the content pack's `decals.bin`. It draws nothing without that file, and only in a combat level (a combat map or the war room).
+  # Without that file it installs nothing and an arena match pays nothing; the sentinel log line `combat_decals_install` says what was read. Default
+  # (absent): true.
+  # decals: false
+  # decals_flip_u and decals_flip_v mirror the decals' uv inside each quad (the uv orientation of the bake is inferred, not read). Default (absent): false.
+  # decals_flip_u: true
+  # decals_flip_v: true
+
   # Quest only. Booleans. The static BVH (src/quest/combat/bvh.h): the Quest's level collision tree is a stub, so no cast against the level's walls
-  # ever hits. `bvh` answers casts from the game's own static BVH on a combat map (walls block the AI's sight and bullets); every other level,
-  # an Echo Arena level included, keeps the game's own answers. Default (absent): true.
+  # ever hits. `bvh` answers casts from the game's own static BVH on a combat map or in the combat lobby (walls block the AI's sight and bullets);
+  # every other level, an Echo Arena level included, keeps the game's own answers. Default (absent): true.
   # bvh: false leaves the game's stubbed static BVH.
   # bvh_gate: false lets every cast use the tree instead of only the three callers the PC answers from the level. Default (absent): true.
   # bvh_touch: false leaves the touch-interaction ray with the game's own answer instead of a miss. Default (absent): true.
-  # wallfire refuses a gun's shot when the segment from the player to the muzzle crosses static geometry on a combat map. It needs
+  # wallfire refuses a gun's shot when the segment from the player to the muzzle crosses static geometry on a combat map or in the combat lobby. It needs
   # `bvh: true` and installs nothing without it. Default (absent): true. The sentinel log lines `combat_config_switch`, `combat_bvh_install`,
   # `combat_bvh_summary` and `combat_wallfire_install` say what was read and what was done. A value that is not a boolean keeps the default, with a
   # warning that names the key. Read once at launch.
