@@ -172,7 +172,7 @@ func copyFile(t *testing.T, from, to string) {
 func TestWithNoStepThatChangesAnythingNothingIsWritten(t *testing.T) {
 	f := newFixture(t)
 	out := f.out("emptypack")
-	code, _, stderr := f.run(steps, "-game-dir", f.game, "-out", out, "-id", "emptypack", "-version", "1.0.0")
+	code, _, stderr := f.run(nil, "-game-dir", f.game, "-out", out, "-id", "emptypack", "-version", "1.0.0")
 	if code != 1 || !strings.Contains(stderr, "nothing to pack") {
 		t.Errorf("exit %d, stderr %q", code, stderr)
 	}
@@ -220,9 +220,19 @@ func TestRefusalsWriteNothing(t *testing.T) {
 	}
 }
 
-func TestTheProductionStepListIsEmptyUntilTheEchoCombatSlicesAddTo(t *testing.T) {
-	if len(steps) != 0 {
-		t.Errorf("steps has %d entries; each EchoCombat step lands in its own slice with its own tests", len(steps))
+func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
+	want := []string{
+		"drone bullet takes the assault bullet's effects",
+		"drone bullet gets the assault bullet's particle rows",
+		"drone actor runs script 190ed14fe6c74dd3",
+	}
+	if len(steps) != len(want) {
+		t.Fatalf("steps has %d entries, want %d: each EchoCombat step lands in its own slice with its own tests", len(steps), len(want))
+	}
+	for i, w := range want {
+		if steps[i].Name != w {
+			t.Errorf("step %d is %q, want %q", i, steps[i].Name, w)
+		}
 	}
 }
 

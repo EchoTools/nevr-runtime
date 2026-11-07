@@ -67,7 +67,9 @@ scripts and say what the pack replaces or adds, and it writes the folder above (
 per changed set over the stock one, one new package per changed set, and `scripts/<16 hex>.dll`). The manifest and
 package code is `tools/internal/radpack`. A pack is built on the machine that has the stock files, never from game bytes
 in this repository (ADR 0028). The build's step list holds the EchoCombat pack's steps as they land (#600); with no step
-that changes anything it refuses.
+that changes anything it refuses. The steps today give the DRONE the assault bullet's effects and particle rows and its
+actor the shared script row, in the bullet, particle and script tables of the five combat levels
+(`tools/cmd/content-pack-build/steps_drone.go`).
 
 ## When a pack is refused
 
