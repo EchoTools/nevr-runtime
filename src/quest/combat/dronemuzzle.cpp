@@ -13,10 +13,10 @@
 
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill.h"
-#include "quest/combat/dronemuzzle_core.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/patch/dronemuzzle_rules.h"
 
 extern "C" {
 // The words the entries read with ldar. The manager publishes each next word (InstallAsmEntry's nextOut) before the slot changes; the install
@@ -31,7 +31,7 @@ namespace nevr_quest::combat::dronemuzzle {
 
 namespace {
 
-using namespace dm;
+using namespace ::nevr_dronemuzzle;  // the muzzle rule, shared with PC (runtime/patch/dronemuzzle_rules.h, #2337)
 namespace pinned = sentinel::pinned;
 using sentinel::LogLevel;
 

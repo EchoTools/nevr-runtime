@@ -3,7 +3,7 @@
 A combat drone's bullets leave its gun, not its root (drone fix F4 and F6). Two reviewed assembly entries through the hook manager; **no code page
 is written**.
 
-Files: `src/quest/combat/dronemuzzle.{h,cpp}`, `dronemuzzle_core.h` (the spawn rule), `dronemuzzle_targets.h` (the pins), `dronemuzzle_entry.inc`
+Files: `src/quest/combat/dronemuzzle.{h,cpp}`, `src/runtime/patch/dronemuzzle_rules.h` (the spawn rule, shared with PC's `src/runtime/combat/dronefix.cpp` and tested on PC by `src/runtime/tests/test_dronemuzzle_rules.cpp`), `dronemuzzle_targets.h` (the pins), `dronemuzzle_entry.inc`
 (the two entries); tests `src/quest/tests/dronemuzzle_test.cpp` (`just test-quest-combat dronemuzzle`), `src/quest/combat/check/dronemuzzle.sh`
 with `src/quest/tests/dronemuzzle_qemu.cpp`, the pins in `src/quest/tests/got_pinned_test.cpp`; mutants `src/quest/combat/mutants.d/dronemuzzle.sh`.
 
@@ -42,8 +42,8 @@ above it (`slot_held_by_entry`), and it installs above a handler already there a
 
 - **F4, `nevr_combat_dm_teleport`** (df 916-941): a drone shot (`dronekill::ShotVelocity` non-null) reads the 32-byte pose (`CTransfQ`, passed by
   invisible reference in x2) with `SafeRead`; the spawn = the pose's position (+0x10) plus the muzzle offset `(0.000024, 0.075634, 0.147283)`
-  in the aim basis (Z = v/|v|, X = (z, 0, -x)/|..|, Y = Z x X; `dronemuzzle_core.h`), then back along the aim by min(|v| dt, 0.25 m), dt the running average of host frame intervals (`FrameDt`, then `ClampDt`); the real function gets
-  a **copy** with that position (the caller's pose is never written). |v| < 1e-4, or an unreadable pose: the call goes through untouched.
+  in the aim basis (Z = v/|v|, X = (z, 0, -x)/|..|, Y = Z x X; `dronemuzzle_rules.h`), then back along the aim by min(|v| dt, 0.25 m), dt the running average of host frame intervals (`FrameDt`, then `ClampDt`); the real function gets
+  a **copy** with that position (the caller's pose is never written). |v| < 1e-4 or NaN, or an unreadable pose: the call goes through untouched.
 - **F6, `nevr_combat_dm_fire`** (df 943-1019): the real FireBullet first; then for a drone shot with 1e-6 < v^2 < inf: the bullet record
   (`[bcs+0xf8] + ldrh([bcs+0xc8] + (handle & 0xffff) * 4) * 0x298`, the lookup FireBullet itself just made) gets shooter velocity (+0x11c) = 0 and
   shooter position (+0x128) = the record's spawn (+0x134), after readability probes on the three fields (a recycled handle or a short page:
@@ -80,7 +80,7 @@ clock (`clock_gettime`) and updates a float average.
 
 Source build (read-only): the source build's dronemuzzle:7-10 (F4/F6 description, return addresses), `:16` (F4 thunk), `:55-56` (`kFnTeleport = 0x180a384,
 kFnFire = 0x210c9c4`, `kTeleportRet = 0x210c22c, kFireRet = 0x210c2a4`), `:145` and `:164` (the two thunks), `:278-280` (the install and the
-rollback). The core (`dronemuzzle_core.h`) takes its aim basis from AttackTarget's matrix (the game's code, see that header). The spawn rule and
+rollback). The core (`dronemuzzle_rules.h`) takes its aim basis from AttackTarget's matrix (the game's code, see that header). The spawn rule and
 its three constants are Ducky's reference combat build's (its drone fix F4), not verified in the game. The host test checks the core against
 values worked out by hand (the aim along +Z with the cap, a slow aim, a zero, a NaN, a 1e-5 and a 2e-4 velocity) and against a trigonometric oracle (yaw and pitch, 200000 aims, every 97th vertical), to 1e-5 m.
 
@@ -155,7 +155,7 @@ With `combat.dronekill` and `combat.dronemuzzle` at their defaults (true) in an 
 
 ## Open: whether a back-off belongs
 
-The spawn rule moves the bullet back along the aim by `min(|v| dt, 0.25 m)` (`dronemuzzle_core.h`, `MuzzleMove`). The game's own bullet
+The spawn rule moves the bullet back along the aim by `min(|v| dt, 0.25 m)` (`dronemuzzle_rules.h`, `MuzzleMove`). The game's own bullet
 update, `CR15NetBulletCS::UpdateMovement` (VA 0x2224290), already moves each bullet every frame, so whether the back-off is needed depends on
 where that step falls in the frame. Read in the disassembly (libr15.so ELF vaddr + 0x100000):
 
