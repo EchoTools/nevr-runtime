@@ -35,11 +35,14 @@
 // to MuzzleTransform. Every auto-target component is the drone's, and both the server's and
 // the clients' shots go through it. Each bullet starts a frame's travel (at most BACK_MAX) behind the muzzle,
 // so it is first drawn there (see TickFrame). The first SHOT_LOG shots are logged.
+// nEVR port: MUZZLE, BACK_MAX, the frame average and the move are runtime/patch/dronemuzzle_rules.h, the one
+// definition the Quest's dronemuzzle.cpp calls too (#2337); this file keeps its clock, its pose read and its lines.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
+#include "runtime/patch/dronemuzzle_rules.h"  // nEVR port: the muzzle rule, shared with the Quest (#2337)
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -66,9 +69,8 @@ follow_update_fn Real_FollowUpdate = nullptr;
 constexpr uintptr_t FIRE_GET_CALL_RVA = 0xce27e3;           // in FireBulletLocal
 constexpr uintptr_t TRANSFORM_GET_RVA = 0x3c4470;           // CTransformCS::get
 constexpr uint8_t FIRE_GET_CALL_BYTES[] = { 0xe8, 0x88, 0x1c, 0x6e, 0xff, 0x0f, 0x10, 0x45, 0x40 };
-// the gun's muzzle in the drone (x, y, z; metres): fix_drone_model.py's MUZZLE
-constexpr float MUZZLE[3] = { 0.000024f, 0.075634f, 0.147283f };
-constexpr float BACK_MAX = 0.25f;                           // m a bullet may start behind the muzzle
+// nEVR port: the gun's muzzle in the drone (MUZZLE, fix_drone_model.py's) and BACK_MAX are dm::kMuzzle and dm::kBackMax
+namespace dm = nevr_dronemuzzle;
 
 constexpr uintptr_t FIRE_LOCAL_RVA = 0xce2550;              // CR15NetAutoTargetCS::FireBulletLocal
 constexpr uint8_t FIRE_LOCAL_BYTES[] = { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x53, 0x57, 0x41, 0x54 };
@@ -195,8 +197,7 @@ void TickFrame() {
     QueryPerformanceCounter(&now);
     if (g_last_frame.QuadPart) {
         float dt = (float)(now.QuadPart - g_last_frame.QuadPart) / (float)g_qpf.QuadPart;
-        if (dt > 1.0f / 240.0f && dt < 0.1f)
-            g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f;
+        g_frame_dt = dm::FrameDt(g_frame_dt, dt);                // nEVR port: the shared rule (#2337)
     }
     g_last_frame = now;
 }
@@ -975,21 +976,13 @@ Pose *__fastcall MuzzleTransform(void *transforms, Pose *out, uint32_t index) {
     Real_TransformGet(transforms, out, index);
     const float *v = t_velocity;
     if (!v) return out;
-    float len = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if (len < 1e-4f) return out;
-    // AttackTarget's basis: Z = aim, X = (z, 0, -x) / |..|, Y = Z x X
-    float z[3] = { v[0] / len, v[1] / len, v[2] / len };
-    float xl = sqrtf(z[2] * z[2] + z[0] * z[0]);
-    float x[3] = { xl > 1e-4f ? z[2] / xl : 1.0f, 0.0f, xl > 1e-4f ? -z[0] / xl : 0.0f };
-    float y[3] = { z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0] };
-    float root[3] = { out->p[0], out->p[1], out->p[2] };
-    float dt = g_frame_dt;
-    dt = dt < 1.0f / 120.0f ? 1.0f / 120.0f : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
-    // ...but no more than BACK_MAX behind it: at 30 fps a frame is 4 m, which put the start
-    // inside the wall behind a drone backed into a corner (and through the drone itself).
-    float back = len * dt > BACK_MAX ? BACK_MAX / len : dt;
-    for (int i = 0; i < 3; ++i)
-        out->p[i] += MUZZLE[0] * x[i] + MUZZLE[1] * y[i] + MUZZLE[2] * z[i] - v[i] * back;
+    // nEVR port: AttackTarget's basis (Z = aim, X = (z, 0, -x) / |..|, Y = Z x X), the clamped frame and the
+    // BACK_MAX cap (at 30 fps a frame is 4 m, which put the start inside the wall behind a drone backed into a
+    // corner, and through the drone itself) are dm::MuzzleMove. A velocity below 1e-4 or NaN leaves the pose (#2337).
+    const float root[3] = { out->p[0], out->p[1], out->p[2] };
+    const float frame = g_frame_dt;
+    if (!dm::MuzzleMove(root, v, frame, out->p)) return out;
+    const float dt = dm::ClampDt(frame);                        // the frame time the move used, for the line below
     LONG n = InterlockedIncrement(&g_muzzle_shots);
     if (n <= SHOT_LOG)
         LogDebug("[pid %lu] shot %ld%s: root (%.3f %.3f %.3f) spawn (%.3f %.3f %.3f) velocity (%.2f %.2f %.2f) "
@@ -1677,7 +1670,7 @@ void InstallMuzzle(uintptr_t base) {
         return;
     }
     g_fire_site = site;
-    Log("drone bullets fire from the muzzle (%.4f %.4f %.4f) (+0x%llx)", MUZZLE[0], MUZZLE[1], MUZZLE[2],
+    Log("drone bullets fire from the muzzle (%.4f %.4f %.4f) (+0x%llx)", dm::kMuzzle[0], dm::kMuzzle[1], dm::kMuzzle[2],
         (unsigned long long)FIRE_GET_CALL_RVA);
 }
 

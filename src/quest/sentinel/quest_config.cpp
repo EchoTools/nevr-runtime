@@ -70,6 +70,14 @@ constexpr const char* kCombatBvhGateKey = "combat.bvh_gate";       // Quest only
 constexpr const char* kCombatBvhTouchKey = "combat.bvh_touch";     // Quest only (default true, #2182)
 constexpr const char* kCombatWallfireKey = "combat.wallfire";      // Quest only (default true, #2182)
 constexpr const char* kCombatSendguardKey = "combat.sendguard";   // Quest only (default true, #2179)
+constexpr const char* kCombatMusicKey = "combat.music";            // Quest only (default true, #2184)
+constexpr const char* kCombatSensorwdKey = "combat.sensorwd";      // Quest only (default true, #2184)
+constexpr const char* kCombatEcKey = "combat.ec";                  // Quest only (default true, #2187)
+constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only (default: types=VPTO equip hide, #2187)
+constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
+constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
+constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
+constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -351,6 +359,22 @@ CombatText ReadCombatText(const nevr::NevrConfig& cfg, const char* key, LoadResu
   return out;
 }
 
+// A folded combat module's integer (#2187). An integer in [lo, hi]: that value, from the file. Absent: the default. Anything else (not an
+// integer, or outside the range): the default, with a Warning that names the key.
+CombatInt ReadCombatInt(const nevr::NevrConfig& cfg, const char* key, int lo, int hi, int fallback, LoadResult& r) {
+  if (cfg.Kind(key) == nevr::NodeKind::kAbsent) return {fallback, Source::kAbsent};
+  const std::optional<std::int64_t> value = cfg.GetInt(key);
+  if (!value) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_an_integer (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  if (*value < lo || *value > hi) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=out_of_range (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  return {static_cast<int>(*value), Source::kFile};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -423,6 +447,14 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.bvhTouch = ReadCombatSwitch(cfg, kCombatBvhTouchKey, r);
   r.config.combat.wallfire = ReadCombatSwitch(cfg, kCombatWallfireKey, r);
   r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);
+  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r);
+  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);
+  r.config.combat.ec = ReadCombatSwitch(cfg, kCombatEcKey, r);
+  r.config.combat.ecWords = ReadCombatText(cfg, kCombatEcWordsKey, r);
+  r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);
+  r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
+  r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
+  r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
   r.config.plugins = cfg.Plugins();
 }
 

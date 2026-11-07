@@ -12,19 +12,22 @@
  * combat's, and a step that is reached anyway writes one `skipped` line and runs no module function. The sequence does not reach them in
  * that case (it skips `install_combat_early` and asks for no post-load action), so the line is the second line of defence, not the first.
  *
- * The table. Each phase runs one registration table, in the table's order: `Modules()` in combat_install.cpp. A module registers one
+ * The table. Each phase runs one registration table, in the table's order: `kModules` in combat_install.cpp (`ShippedModules()` hands it to a test). A module registers one
  * function per phase it has a step in, or null for none, at the position the q15t plugin installed it (plugin.cpp's order: decals after
  * impactsnd, wallfire after bvh, the net-tick modules after ec, and so on); the order is explicit, never the order of a directory or a
  * link. A function is `noexcept`, returns whether the module installed and a fixed status token, and writes the module's own lines
  * itself (`combat_<module>_*`).
  *
- * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
+ * The lines (sentinel log), N17: each module's outcome by name, and one aggregate. Each module with a step in the phase writes one record as
+ * its function returns, in the table's order, Info, or Warning when it failed:
+ *   {"event":"combat_install_module","phase":"early|normal","module":"<name>","outcome":"installed|failed|off","status":"<token>"}
+ * and then the phase writes its line, one per phase per process:
  *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe|arena","active":1,
- *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"results":"<name>=<status> ...",
- *    "results_truncated":0,"msg":"..."}
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"msg":"..."}
+ * The outcomes are records of their own, not a list on the phase line: one sentinel line is 768 bytes, and a list of every module outgrows it.
  * `modules` = `installed` + `failed` + `off`: a module switched off by its key, or with nothing to act on (decals without a decals.bin), is counted
  * in `off` and nowhere else.
- * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
+ * `active` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
  * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.

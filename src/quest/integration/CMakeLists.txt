@@ -50,6 +50,7 @@ add_library(nevr_quest_integration STATIC
   ../sentinel/build_variant.cpp
   libr15_attach_step.cpp
   post_load.cpp
+  module_observers.cpp
   identity_source.cpp
   stage_log.cpp
   bridge_uri.cpp

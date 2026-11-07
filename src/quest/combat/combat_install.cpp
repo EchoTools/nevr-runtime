@@ -9,16 +9,23 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/decals.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
+#include "quest/combat/music.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
+#include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/sendguard.h"
+#include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
 #include "quest/combat/wallfire.h"
@@ -53,6 +60,17 @@ ModuleResult DecalsNormal() noexcept {
   return decals::Install(switches);
 }
 
+ModuleResult EcNormal() noexcept {
+  ec::Switches switches;
+  switches.on = g_config.ec.on;
+  switches.words = g_config.ecWords.source == nevr_quest::Source::kFile ? g_config.ecWords.text : nullptr;
+  return ec::Install(switches);
+}
+ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
+ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
+ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
+
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
   switches.perm = g_config.gatePerm.on;
@@ -74,6 +92,8 @@ ModuleResult WallfireNormal() noexcept {
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
+ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
+ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -103,7 +123,15 @@ constexpr std::array kModules{
     Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
     Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
     Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
-    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
+    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
+    Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
+    Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
+    // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill},
+    Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
+    Module{"powerboost", nullptr, &PowerboostNormal},
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
     // the scope the tick refreshes.
@@ -117,6 +145,10 @@ constexpr std::array kModules{
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
+    // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
+    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},
+    Module{"music", nullptr, &MusicNormal, "combat.music", &nevr_quest::CombatConfig::music},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -151,31 +183,27 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (!g_inactiveSaid.exchange(true, std::memory_order_acq_rel)) WriteSkipped(phase);
     return outcome;
   }
-  char results[400];
-  results[0] = '\0';
-  std::size_t used = 0;
-  bool truncated = false;
   for (std::size_t i = 0; i < count; ++i) {
     const Module& module = table[i];
     const InstallFn fn = phase == Phase::kEarly ? module.early : module.normal;
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
+    const char* outcomeName = "failed";
     if (result.off) {
       ++outcome.off;
+      outcomeName = "off";
     } else if (result.installed) {
       ++outcome.installed;
+      outcomeName = "installed";
     } else {
       ++outcome.failed;
     }
-    const int wrote = std::snprintf(results + used, sizeof(results) - used, "%s%s=%s", used == 0 ? "" : " ", module.name,
-                                    result.status != nullptr ? result.status : "unset");
-    if (wrote < 0 || static_cast<std::size_t>(wrote) >= sizeof(results) - used) {
-      truncated = true;  // the counts are exact; the list is cut where it stopped fitting
-      results[used] = '\0';
-    } else {
-      used += static_cast<std::size_t>(wrote);
-    }
+    // One record per module, as its step returns (N17: each outcome by name). A list of every module on the phase line grows with the table
+    // and stops fitting one 768-byte sentinel line, so the phase line keeps the counts and the consequence, and each outcome is its own record.
+    sentinel::LogFields(result.installed || result.off ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install_module",
+                        {{"phase", PhaseName(phase)}, {"module", module.name}, {"outcome", outcomeName},
+                         {"status", result.status != nullptr ? result.status : "unset"}});
   }
   outcome.ran = true;
   char msg[160];
@@ -190,8 +218,7 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
-                       {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"msg", msg}});
   return outcome;
 }
 
@@ -246,6 +273,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
                         {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
   }
+  // The two keys of the EC modules and POWER BOOST that are not a boolean (#2187): the EC client's words (a text, its own `combat_ec_words` line
+  // says what was read) and POWER BOOST's stage (an integer).
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "ec"}, {"key", "combat.ec_words"}, {"on", config.ec.on ? 1 : 0}, {"source", source(config.ecWords.source)}});
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "powerboost"}, {"key", "combat.powerboost_stage"}, {"stage", config.powerboostStage.value},
+                       {"on", config.powerboostStage.value > 0 ? 1 : 0}, {"source", source(config.powerboostStage.source)}});
   // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
                       {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
