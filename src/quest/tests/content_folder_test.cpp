@@ -19,6 +19,7 @@
 #include "quest/data/content_folder.h"
 #include "quest/data/sha256.h"
 #include "runtime/content/content_core.h"
+#include "runtime/content/content_json.h"
 #include "runtime/tests/content_line_golden.h"
 
 namespace {
@@ -261,6 +262,26 @@ TEST(AContentJsonThatIsNoRegularFileIsRefusedAsMissing) {
   const Decision d = rig.Run();
   CheckRefused(rig, d, "no_content_json");
   CHECK_EQ(d.detail, rig.content + "/echocombat/content.json");
+}
+
+TEST(AContentJsonOfExactlyTheCapIsReadAndOneByteMoreIsNot) {
+  // kMaxContentJsonBytes is the largest descriptor read: padded with spaces (JSON whitespace) to exactly the cap it is decided
+  // as any other; one byte more is not read at all.
+  Rig rig;
+  const std::string json_path = rig.MakePack("echocombat") + "/content.json";
+  std::string text = ReadFile(json_path);
+  CHECK(text.size() < nevr_content::kMaxContentJsonBytes);
+  text.resize(nevr_content::kMaxContentJsonBytes, ' ');
+  Write(json_path, text);
+  CHECK(rig.Run().outcome == Outcome::kServed);
+  nevr_quest::content::Forget();
+  rig.seen.lines.clear();
+  rig.seen.installs = 0;
+  text.push_back(' ');
+  Write(json_path, text);
+  const Decision d = rig.Run();
+  CheckRefused(rig, d, "no_content_json");
+  CHECK_EQ(d.detail, json_path);
 }
 
 TEST(AMalformedContentJsonIsRefusedWithItsReason) {

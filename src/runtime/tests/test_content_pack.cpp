@@ -306,6 +306,24 @@ TEST_F(ContentPack, AFolderWithoutContentJsonIsRefused) {
   EXPECT_EQ(d.reason, "no_content_json");
 }
 
+TEST_F(ContentPack, AContentJsonOfExactlyTheCapIsReadAndOneByteMoreIsNot) {
+  // kMaxContentJsonBytes is the largest descriptor Win32PackFiles::ReadText reads: padded with spaces (JSON whitespace) to
+  // exactly the cap it is decided as any other; one byte more is not read at all.
+  nlohmann::json written;
+  const std::wstring dir = MakePack("testpack", true, [&written](nlohmann::json& j) { written = j; });
+  std::string text = written.dump();
+  ASSERT_LT(text.size(), nevr_content::kMaxContentJsonBytes);
+  text.resize(nevr_content::kMaxContentJsonBytes, ' ');
+  WriteFileBytes(dir + L"\\content.json", text);
+  EXPECT_EQ(Decide(In()).outcome, Outcome::kServed);
+  nevr_content::Forget();
+  text.push_back(' ');
+  WriteFileBytes(dir + L"\\content.json", text);
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kRefused);
+  EXPECT_EQ(d.reason, "no_content_json");
+}
+
 TEST_F(ContentPack, AChangedPackFileIsRefused) {
   const std::wstring dir = MakePack("testpack");
   WriteFileBytes(dir + L"\\packages\\48037dc70b0ecab2_1", "changed");
