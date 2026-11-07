@@ -32,8 +32,8 @@
  * Owner (ADR 0039). This file owns stopping the combat music trees before a new Play and when the combat map unloads. The arguments and the result of
  * PostSoundEvent are not changed.
  *
- * Origin. kotorvr's echoquest-combat music module: runtime/native/afkxr/afk_music.cpp (commit c5a67e8, the whole file: the bank at :51-60, the wrapper
- * at :83-125, the unload tick at :128-190). Its combat-map scope is ours: upstream acts on every Play.
+ * Origin. kotorvr's echoquest-combat music module: runtime/native/afkxr/afk_music.cpp (commit c5a67e8, the whole file: the slot and function at :51-52, the bank
+ * at :54-58, the wrapper at :83-118, the combat-map walk at :127-146, the unload tick at :154-172). Its combat-map scope is ours: upstream acts on every Play.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_music_install","state":"on|off|refused","reason":"default|off_config|<refusal>","switch":"combat.music","scope":"combat_map",

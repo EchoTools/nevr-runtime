@@ -34,8 +34,9 @@
  *
  * Owner (ADR 0039). This file owns turning a stuck scanner sphere off. The arguments and the results of the three functions are not changed.
  *
- * Origin. kotorvr's echoquest-combat fxsensor / sensorwd: runtime/native/afkxr/afk_fx.cpp (commit c5a67e8): the constants at :6115-6120, the sphere test at
- * :6150, the enable and disable hooks, the event hook, the tick at :6204-6250 and the combat-map gate at :6137. The ring of 8 waiting pings, the sweep and the
+ * Origin. kotorvr's echoquest-combat fxsensor / sensorwd: runtime/native/afkxr/afk_fx.cpp (commit c5a67e8): the constants at :6115-6121, the sphere test at
+ * :6141-6152, the enable and disable hooks at :6162-6201, the tick at :6204-6243, the event hook from :6244, and the combat-map gate: the policy at :127-137
+ * (`kIsoSns`, :136) and `SnsOpen` at :6137-6140, which applies it to the sensor hooks. The ring of 8 waiting pings, the sweep and the
  * log budgets are the plugin's.
  *
  * Lines (sentinel log):
