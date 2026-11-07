@@ -381,6 +381,14 @@ class ArenaApk(TimerCase):
                 self.assertIn("cleanup.worktree", fake.steps())
                 self.assertEqual(list((self.root / "work").glob("extra-*.json")), [], "a claim file is not left for the retry")
 
+    def test_a_gate_command_that_fails_is_the_arenas_failure_too(self) -> None:
+        fake = Fake(self.root)
+        fake.overrides["arena_gate"] = lambda argv: completed(argv, 127, "", "cannot run release-signer")
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = [e for e in self.events() if e["event"] == "failed"]
+        self.assertEqual([(e["step"], e["part"], e["reason"]) for e in failed], [("arena_gate", "arena", "arena_blocks_dispatch")])
+        self.assertNotIn("dispatch", fake.steps())
+
     def test_a_claim_the_signer_wrote_for_another_file_blocks_the_dispatch(self) -> None:
         fake = Fake(self.root)
         fake.signer_usage = SIGNER_WITH_KIND
@@ -403,6 +411,13 @@ class ArenaApk(TimerCase):
         with self.assertRaises(timer.StepFailure):
             timer.Timer.check_arena_listed(
                 {"releases": {"5.17.0": {"artifacts": [{**ARENA_CLAIM, "kind": "quest-apk"}]}}}, "5.17.0", ARENA_CLAIM)
+
+    def test_the_live_check_names_both_sha256_values_when_only_the_digest_differs(self) -> None:
+        listed = {**ARENA_CLAIM, "kind": "quest-apk-arena", "sha256": "ef" * 32}
+        with self.assertRaises(timer.StepFailure) as caught:
+            timer.Timer.check_arena_listed({"releases": {"5.17.0": {"artifacts": [listed]}}}, "5.17.0", ARENA_CLAIM)
+        self.assertIn("ef" * 32, str(caught.exception))
+        self.assertIn(ARENA_CLAIM["sha256"], str(caught.exception))
 
 
 class ConfigureBeforeTheBuild(TimerCase):

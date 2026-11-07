@@ -535,7 +535,12 @@ class Timer:
         claims (none while the signer lacks `--kind`: recorded as `arena_skipped`, and the run is today's flow). From the gate on, a
         failure is recorded with part `arena` and the reason `arena_blocks_dispatch`: nothing is dispatched, and a run after the fix
         goes on (a tag is published once, so publishing without arena would lose it for good)."""
-        if not self.signer_lists_arena(binary, signer_dir):
+        try:
+            lists_arena = self.signer_lists_arena(binary, signer_dir)
+        except StepFailure as failure:
+            raise StepFailure(failure.step, f"{failure}; the manifest was not published, so the release is not listed until a later run",
+                              ARENA_BLOCKS) from failure
+        if not lists_arena:
             self.log.event("arena_skipped", reason="signer_lacks_kind", kind=ARENA_KIND)
             return []
         self.ok("arena_gate", kind=ARENA_KIND)
@@ -568,8 +573,9 @@ class Timer:
             raise StepFailure(step, f"the {version} release lists {len(found)} entries named {wanted.get('name')}, not one")
         have = found[0]
         if (have.get("kind"), have.get("size"), have.get("sha256")) != (ARENA_KIND, wanted.get("size"), wanted.get("sha256")):
-            raise StepFailure(step, f"{wanted.get('name')} is listed as kind {have.get('kind')}, size {have.get('size')}; "
-                                    f"the claim was kind {ARENA_KIND}, size {wanted.get('size')}")
+            raise StepFailure(step, f"{wanted.get('name')} is listed as kind {have.get('kind')}, size {have.get('size')}, "
+                                    f"sha256 {have.get('sha256')}; the claim was kind {ARENA_KIND}, size {wanted.get('size')}, "
+                                    f"sha256 {wanted.get('sha256')}")
 
     def mark_main_complete(self, tag: str) -> None:
         """The main release is published, listed and verified live: from here a failure is the variant's, and a later run
