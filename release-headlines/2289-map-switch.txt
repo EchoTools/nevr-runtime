@@ -1,0 +1,1 @@
+On PC combat servers, the MAP SWITCH buttons and END MATCH now work in private matches.
