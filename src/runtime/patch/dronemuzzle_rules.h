@@ -1,10 +1,27 @@
-// Drone bullet muzzle: where a drone's bullet starts, from the drone's transform and the shot velocity. Platform-free: nothing here calls the game.
+#pragma once
+// Drone bullet muzzle: where a drone's bullet starts, from the drone's transform and the shot velocity (#2337). This header is the whole
+// rule, for both builds: the muzzle offset, the back-off cap, the running frame time and its clamp, and the spawn. It reads no memory and
+// calls nothing of the game's, so it needs no Env. The hooks that feed it are runtime/combat/dronefix.cpp on PC (TickFrame, MuzzleTransform)
+// and quest/combat/dronemuzzle.cpp on Quest (the frame tick, the teleport continuation); each keeps its own clock, its own read of the pose
+// and its own log lines. The PC GTest (runtime/tests/test_dronemuzzle_rules.cpp) and the Quest host test (quest/tests/dronemuzzle_test.cpp)
+// both compile this one definition.
 //
-// Origin. The reference build's `runtime/native/afkxr/afk_dronemuzzle_core.h` (kotorvr's q15t-upstream; MuzzleMove, ClampDt and FrameDt are its
-// lines), which ports EchoCombat `c14c3e0a` `plugin/dronefix.cpp` rule for rule: MUZZLE df 51, BACK_MAX df 52, the frame average df 143-144, the
-// frame time df 928-929, the transform df 916-934, `p[i] += ...` df 933-934.
+// Origin. EchoCombat's `plugin/dronefix.cpp` (he_is_the_cat, heisthecat31/EchoCombat): MUZZLE, BACK_MAX, the frame average and the
+// transform. PC ports it at `c3ff4b54` (runtime/combat/dronefix.cpp), the Quest at `c14c3e0a` through the reference build's
+// `runtime/native/afkxr/afk_dronemuzzle_core.h` (kotorvr's q15t-upstream; MuzzleMove, ClampDt and FrameDt are its lines), rule for rule:
+// MUZZLE df 51, BACK_MAX df 52, the frame average df 143-144, the frame time df 928-929, the transform df 916-934, `p[i] += ...` df 933-934.
+// The two ports have the same constants and the same arithmetic. They differed in one guard: PC skipped the move only when `len < 1e-4f`,
+// which is false for a NaN length, so a NaN velocity moved the pose by NaN. The guard below, `!(len >= 1e-4f)`, leaves the pose alone
+// for a NaN velocity too, on both builds (#2337: it guards against bad input; moving a pose by NaN is never gameplay).
 //
-// The game's code on this path (libr15.so, ReVault binary 576). Every address is a VA: libr15.so's ELF vaddr + 0x100000.
+// The game's code on this path, PC (echovr.exe; offsets from the image base, runtime/combat/dronefix.cpp):
+//   CR15NetAutoTargetCS::FireBulletLocal  +0xce2550 (cs, handle, velocity, remote). Its call at +0xce27e3 to CTransformCS::get (+0x3c4470)
+//                                         reads the bullet's spawn pose, which is the drone's root; dronefix.cpp redirects that one call
+//                                         to MuzzleTransform, which applies MuzzleMove to the pose's position.
+//   CR15NetFollowPlayerCS::Update         +0xd65cb0, once a frame: dronefix.cpp's TickFrame takes the frame interval there (QPC) and feeds
+//                                         FrameDt.
+//
+// The game's code on this path, Quest (libr15.so, ReVault binary 576). Every address is a VA: libr15.so's ELF vaddr + 0x100000.
 //   CR15NetAutoTargetCS::AttackTarget     VA 0x220b8c4. Builds the aim matrix at sp+0x28..0x48 from the unit aim: row 0 is (uz, 0, -ux)
 //                                         unscaled, row 1 is Z x X / |X| (the division at 0x220bbdc), row 2 is Z. It calls FromRotationMatrix
 //                                         through thunk 0x1005370 (call at 0x220bc08). ReVault names that thunk thunk_FUN_0140ad54; the
@@ -41,7 +58,7 @@
 // carries a CComponentHandle<CR15NetGunCS> copied at 0x220c250..0x220c298, so the drone gun's own transform may be the real muzzle. That is a
 // lead, not a finding.
 //
-// The spawn rule (Ducky's reference combat build's, its drone fix F4). With v the shot velocity (FireBulletLocal's x4):
+// The spawn rule (Ducky's reference combat build's, its drone fix F4). With v the shot velocity (FireBulletLocal's velocity):
 //   Z = v / |v|
 //   X = (z2, 0, -z0) / |(z2, 0, -z0)|: AttackTarget's row 0 with its length divided out; (1, 0, 0) when that length is <= 1e-4
 //   Y = Z x X: the game's row 1 for that X
@@ -50,22 +67,23 @@
 // pose's quaternion, because the rotation write may be queued (0x220bcdc) and whether the queue drains before the pose is read (0x220c208) was
 // not read.
 //
-// The game reads its frame delta from the game space's clock: [[space+0x10]+0x3c], with space = [this+0x80] (AttackTarget 0x220bc44..0x220bc48,
+// The Quest game reads its frame delta from the game space's clock: [[space+0x10]+0x3c], with space = [this+0x80] (AttackTarget 0x220bc44..0x220bc48,
 // the float read at 0x220bc60). It calls GlobalClock() only when [space+0x10] is 0 (UpdateMovement 0x22242cc..0x22242e0). That call is the
 // thunk at 0xfd4860, a GOT jump to 0x1907720, which loads `ldr x0, [0x386cb30]`. The time scale is read through one GOT word (VA 0x3812618,
 // loaded at 0x22242f8; the float it points to is read at 0x2224318), and the step is the delta times the scale (0x2224414).
-// This module keeps main's clock on purpose and does not read the game's clock. It could read the delta from the `gs` that
+// The Quest module keeps main's clock on purpose and does not read the game's clock. It could read the delta from the `gs` that
 // nevr_combat_dm_teleport already receives: FireBulletLocal passes [this+0x80] to WorldTeleport (x0 at 0x220c21c; the value comes through the
 // thunk at 0xfe2f50, which jumps to GetST 0x18ff2fc, a bare ret), so no new address is needed. Switching to the game's clock is #2036's
 // decision. dt here is a running average of host frame intervals (FrameDt, weights 0.9 and 0.1; 1/90 s until the second tick;
-// CLOCK_MONOTONIC in dronemuzzle.cpp), clamped by ClampDt. kBackMax is the reference build's cap; the code read does not show it.
-#pragma once
+// CLOCK_MONOTONIC in dronemuzzle.cpp, QueryPerformanceCounter in dronefix.cpp), clamped by ClampDt. kBackMax is the reference build's cap;
+// the code read does not show it.
 #include <math.h>
 
-namespace nevr_quest::combat::dronemuzzle::dm {
+namespace nevr_dronemuzzle {
 
 // The drone gun's muzzle offset, in the aim basis built from v: x along X, y along Y, z along Z, metres. Ducky's reference combat build's
-// values (its drone fix F4). The code read does not contain them (see above); a headset run measures the bullet's start against them.
+// values (its drone fix F4; tools/fix_drone_model.py's MUZZLE on PC). The code read does not contain them (see above); a headset run
+// measures the bullet's start against them.
 constexpr float kMuzzle[3] = { 0.000024f, 0.075634f, 0.147283f };
 constexpr float kBackMax = 0.25f;   // m a bullet may start behind the muzzle: the reference build's cap, not read from the game
 
@@ -93,4 +111,4 @@ inline bool MuzzleMove(const float* root, const float* v, float frameDt, float* 
     return true;
 }
 
-}  // namespace nevr_quest::combat::dronemuzzle::dm
+}  // namespace nevr_dronemuzzle

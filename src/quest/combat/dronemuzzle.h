@@ -1,5 +1,5 @@
 /* dronemuzzle (#2187, docs/adr/0046): a combat drone's bullets leave its gun (rows R49 CncaGameSpace::WorldTeleport and R50
- * CR15NetBulletCS::FireBullet; drone fix F4 + F6). docs/quest/combat/dronemuzzle.md has the disassembly reads; the rule is dronemuzzle_core.h.
+ * CR15NetBulletCS::FireBullet; drone fix F4 + F6). docs/quest/combat/dronemuzzle.md has the disassembly reads; the rule is runtime/patch/dronemuzzle_rules.h (shared with PC).
  *
  * What it hooks. Two reviewed assembly entries (callback_thunk.h rule 7, dronemuzzle_entry.inc) on the two JUMP_SLOTs of dronemuzzle_targets.h,
  * through the hook manager (InstallAsmEntry). An entry needs the caller's return address as it is in x30, which a CallbackThunk's handler cannot
