@@ -266,17 +266,37 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
-// The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps, the gates, sendguard, pfx and pfxtev in the normal phase, sendguard with an end-of-process step and a `combat_config_switch` record.
+// The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps, the gates, bvh with its two switch
+// rows, wallfire, sendguard, pfx and pfxtev in the normal phase. Rows are found by name, so a module that moves in adds its row without
+// renumbering this test; the order the plugin installed them in is checked between the named rows.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 12);
-  if (count == 12) {
-    QCHECK(std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
-    QCHECK(std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
-    QCHECK(std::strcmp(table[9].name, "sendguard") == 0);
-    QCHECK(table[9].switchKey != nullptr && std::strcmp(table[9].switchKey, "combat.sendguard") == 0 && table[9].switchMember == &nevr_quest::CombatConfig::sendguard);
-    QCHECK(table[9].early == nullptr && table[9].normal != nullptr && table[9].end != nullptr);
+  QCHECK(count == 16);
+  const auto at = [&](const char* name) -> std::size_t {
+    for (std::size_t i = 0; i < count; ++i) {
+      if (std::strcmp(table[i].name, name) == 0) return i;
+    }
+    return count;
+  };
+  QCHECK(count >= 2 && std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
+  QCHECK(count >= 2 && std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
+  const std::size_t gates = at("gates"), bvhRow = at("bvh"), bvhGate = at("bvh_gate"), bvhTouch = at("bvh_touch"), wallfire = at("wallfire"),
+                    sendguard = at("sendguard"), pfx = at("pfx");
+  QCHECK(gates < bvhRow && bvhRow < bvhGate && bvhGate < bvhTouch && bvhTouch < wallfire && wallfire < sendguard && sendguard < pfx && pfx < count);
+  if (pfx < count) {
+    const combat::Module& sg = table[sendguard];
+    QCHECK(sg.switchKey != nullptr && std::strcmp(sg.switchKey, "combat.sendguard") == 0 && sg.switchMember == &nevr_quest::CombatConfig::sendguard);
+    QCHECK(sg.early == nullptr && sg.normal != nullptr && sg.end != nullptr);
+    const combat::Module& b = table[bvhRow];
+    QCHECK(b.switchKey != nullptr && std::strcmp(b.switchKey, "combat.bvh") == 0 && b.switchMember == &nevr_quest::CombatConfig::bvh);
+    QCHECK(b.early == nullptr && b.normal != nullptr && b.end == nullptr);
+    // bvh's two switches have no step of their own: their rows exist for their combat_config_switch records.
+    QCHECK(table[bvhGate].early == nullptr && table[bvhGate].normal == nullptr && table[bvhGate].switchMember == &nevr_quest::CombatConfig::bvhGate);
+    QCHECK(table[bvhTouch].early == nullptr && table[bvhTouch].normal == nullptr && table[bvhTouch].switchMember == &nevr_quest::CombatConfig::bvhTouch);
+    const combat::Module& w = table[wallfire];
+    QCHECK(w.switchKey != nullptr && std::strcmp(w.switchKey, "combat.wallfire") == 0 && w.switchMember == &nevr_quest::CombatConfig::wallfire);
+    QCHECK(w.early == nullptr && w.normal != nullptr);
   }
 }
 
