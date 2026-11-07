@@ -89,6 +89,7 @@ set(PATCHES_SOURCES
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/rules_button.cpp"
     "combat/script_guard.cpp"
     "combat/shared_magazine.cpp"
     "combat/station_cells.cpp"
@@ -1203,6 +1204,15 @@ if(BUILD_TESTING)
     target_include_directories(test_team_ready PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_team_ready PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_team_ready DISCOVERY_MODE PRE_TEST)
+
+    # #600: the podium terminal's RULES button in Combat (runtime/combat/rules_button.h), on a fake podium script.
+    add_executable(test_rules_button tests/test_rules_button.cpp combat/rules_button.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_rules_button.cpp combat/rules_button.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_rules_button PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_rules_button PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_rules_button PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_rules_button DISCOVERY_MODE PRE_TEST)
 
     # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
     add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
