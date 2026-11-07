@@ -11,11 +11,12 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/radpack"
 )
 
-// The DRONE rows against the shipped data, when a machine has it: NEVR_STOCK_DATA names a stock PC data folder
+// The EchoCombat steps against the shipped data, when a machine has it: NEVR_STOCK_DATA names a stock PC data folder
 // (`_data/5932408047/rad15/win10` of an install). Each step's output, per level, must be byte for byte the combat gun
 // patch's table that he_is_the_cat's pack starts from; only those files' sha-256 values are kept here, no bytes.
 // Skipped without the variable.
 var gunPatchTables = map[uint64]map[uint64]string{
+	jsonResourceType: {equipmentName: "3ae2cbc89ab64daa9b6989eb23feeb45ce9e0b549aa684ba79f974ad3b42f57d"},
 	bulletTableType: {
 		0x42670f2bed45703c: "0f8c755be03f720edd229a4d4627facc91a295a6c6336447c3f3c85456aa13c6",
 		0x43e2da7914642604: "0f8c755be03f720edd229a4d4627facc91a295a6c6336447c3f3c85456aa13c6",
@@ -39,7 +40,7 @@ var gunPatchTables = map[uint64]map[uint64]string{
 	},
 }
 
-func TestTheDroneStepsReproduceTheGunPatchTablesFromTheShippedData(t *testing.T) {
+func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
 	data := os.Getenv("NEVR_STOCK_DATA")
 	if data == "" {
 		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
@@ -68,8 +69,8 @@ func TestTheDroneStepsReproduceTheGunPatchTablesFromTheShippedData(t *testing.T)
 			}
 		}
 	}
-	if n := len(p.changes[Sets[0]]); n != 15 {
-		t.Errorf("%d resources changed, want 15 (3 tables x 5 levels)", n)
+	if n := len(p.changes[Sets[0]]); n != 16 {
+		t.Errorf("%d resources changed, want 16 (3 tables x 5 levels, and mp_equipment)", n)
 	}
-	t.Log(fmt.Sprintf("%d tables match the gun patch's", len(p.changes[Sets[0]])))
+	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }
