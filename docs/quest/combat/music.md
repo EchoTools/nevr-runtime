@@ -42,7 +42,10 @@ A handler on libr15's JUMP_SLOT for `CWwiseEngine::PostSoundEvent` (`Post` in `m
   as `off` (`ModuleResult.off`). The plugin's kill file `music.off` is not read: one found in the plugin's data directory is a Warning, `combat_music_legacy_switch` (`WarnLegacyKillFile`).
   Upstream's `setprop debug.echoquestcombat.music 0` has no counterpart.
 - Install: the build id, then the 29 code words (`targets::kWords`), then the tick (a full tick table refuses the module), then the thunk. Any refusal is one Error
-  `combat_music_install` with `"state":"refused"` and its reason, and nothing is changed.
+  `combat_music_install` with `"state":"refused"` and its reason. A refusal before the tick (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pin_mismatch`,
+  `tick_table_full`) changes nothing; `music_test` `ARefusedInstallChangesNothing` checks the slot for each and the tick count for `module_not_loaded`. A `hook` refusal
+  leaves the slot as it was and the thunk disarmed, but the tick callback it registered stays registered: it runs every frame, publishes the game and finds no Play (only
+  the handler, which the slot never reaches, marks one), so it posts nothing and writes nothing, and it holds one of the tick table's 16 places.
 
 Logging (AGENTS.md): the lines are listed under "Lines" below. No secrets; no event text, only ids.
 
