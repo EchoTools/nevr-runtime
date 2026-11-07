@@ -119,6 +119,19 @@ id, a plain file name, a lowercase digest), which `ParsePackJson` applies. This 
 script. The release manifest's `platform` for a pack that is a Quest APK asset is a release-signer matter (an `android-arm64`
 value) and is not this repository's.
 
+### 5. Amendment (#2312): a pack installed as a folder
+
+The Quest also serves a content pack installed as a folder, as PC does, through the runtime's shared decision
+(`src/runtime/content/content_core.h`; `docs/reference/content-packs.md`, "On Quest"). It does not change this record's overlay:
+
+- It runs after the pack step of item 5, in the same data step, and only when that step did not fail (`pack_failed` ends the
+  process before it).
+- The overlay writes into the data tree and keeps the stock manifest as `<set>.stock`; the folder pack writes nothing and hands
+  the game its own files through a GOT hook on `CSysFile::Open`. Both cannot apply to one manifest: a folder pack that replaces a
+  manifest with a `.stock` beside it is refused whole as `bundled_pack_placed`, so the game reads the overlay's manifest and no
+  mix of the two.
+- A folder pack carries no script on Quest (`scripts_unsupported`), as this record's pack carries none.
+
 ## Not handled
 
 - A newer pack over an installed older pack of the same id is `stock_mismatch` (#1614).

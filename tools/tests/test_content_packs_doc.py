@@ -13,6 +13,10 @@ checks read the sources the page relies on:
 - the page and the SDK give the script loader the same address and the same four arguments;
 - packs are read from <root>\\content, and the install runs after the early pass and before the original call;
 - every refusal reason the page lists is a token the code writes.
+
+#2312, the Quest twin: the page's "On Quest" table names the hook's function, slot, stub, call sites and resource-manager
+pointer that src/quest/sentinel/pinned_targets.h pins, the folder content_folder.h reads, the step order data_wiring.cpp runs,
+and the Quest's refusal tokens; and the Quest compiles the runtime's shared decision instead of a copy of it (#1598).
 """
 
 import pathlib
@@ -160,6 +164,7 @@ INSTALL = "src/runtime/content/content_pack_install.cpp"
 SERVE = "src/runtime/content/content_pack.cpp"
 JSON = "src/runtime/content/content_json.cpp"
 CORE = "src/runtime/content/content_core.cpp"
+QUEST_FOLDER = "src/quest/data/content_folder.cpp"
 
 
 class TheHookThePageNames(unittest.TestCase):
@@ -196,9 +201,91 @@ class TheRefusalsThePageLists(unittest.TestCase):
         table = doc[doc.index("| `reason` |"):doc.index("Each file that passes")]
         reasons = set(re.findall(r"`([a-z_]+)`", table)) - {"reason", "content", "json"}
         self.assertGreaterEqual(len(reasons), 12, reasons)
-        sources = read(SERVE) + read(INSTALL) + read(JSON) + read(CORE)
+        sources = read(SERVE) + read(INSTALL) + read(JSON) + read(CORE) + read(QUEST_FOLDER)
         for reason in sorted(reasons):
             self.assertIn(f'"{reason}"', sources, f"{DOC} lists reason {reason}, which no source writes")
+
+
+PINNED = "src/quest/sentinel/pinned_targets.h"
+QUEST_HOOK = "src/quest/sentinel/content_pack_hook.cpp"
+WIRING = "src/quest/sentinel/data_wiring.cpp"
+
+
+def quest_section() -> str:
+    doc = read(DOC)
+    return doc[doc.index("## On Quest"):doc.index("## What the log shows")]
+
+
+class TheQuestHookThePageNames(unittest.TestCase):
+    def test_the_slot_and_function_are_the_pinned_ones_and_a_got_slot(self):
+        pinned = code(read(PINNED))
+        self.assertRegex(pinned, r"LibR15CSysFileOpen\(\)\s*\{\s*return \{kLibR15, kCSysFileOpenSymbol, RelocKind::kJumpSlot, "
+                                 r"LibR15PatchedBuildId\(\), 0x36f6450ULL\};")
+        self.assertRegex(pinned, r"kCSysFileOpenVaddr\s*=\s*0xf85538\s*;")
+        self.assertRegex(pinned, r"kCSysFileOpenStub\s*=\s*0xf3dad0\s*;")
+        section = quest_section()
+        for spelling in ("libr15 `0xf85538`", "GOT slot `0x36f6450`", "PLT stub `0xf3dad0`", "N151"):
+            self.assertIn(spelling, section)
+        self.assertIn("InstallThunk<OpenThunk>(g_hook, sentinel::pinned::LibR15CSysFileOpen())", code(read(QUEST_HOOK)))
+
+    def test_the_call_sites_on_the_page_are_the_pinned_ones(self):
+        pinned = code(read(PINNED))
+        block = pinned[pinned.index("kCSysFileOpenContentSites[] = {"):]
+        block = block[:block.index("};")]
+        sites = re.findall(r"\{(0x[0-9a-f]+), (true|false), ", block)
+        self.assertEqual(len(sites), 3, block)
+        section = quest_section()
+        calls = [f"`{at}`" for at, tail in sites if tail == "false"]
+        tails = [f"`{at}`" for at, tail in sites if tail == "true"]
+        self.assertIn("(`bl` at " + " and ".join(calls) + ")", section)
+        self.assertIn("(`b` at " + " and ".join(tails) + ")", section)
+
+    def test_the_resource_manager_pointer_is_the_pinned_one(self):
+        self.assertRegex(code(read(PINNED)), r"kResourceManagerPtrVaddr\s*=\s*0x376ed60\s*;")
+        self.assertIn("kResourceManagerPtrVaddr", code(read(QUEST_HOOK)))
+        self.assertIn("libr15 `0x376ed60`", quest_section())
+
+
+class TheQuestFolderAndOrder(unittest.TestCase):
+    def test_packs_are_read_from_the_media_roots_nevr_content(self):
+        self.assertRegex(code(read("src/quest/data/content_folder.h")), r'kContentSubdir\s*=\s*"nevr/content"\s*;')
+        self.assertIn("content::ContentDir(data_root::kMediaRoot)", code(read(QUEST_HOOK)))
+        media = re.search(r'kMediaRoot\s*=\s*"([^"]+)"\s*;', code(read("src/quest/sentinel/data_root.h"))).group(1)
+        section = quest_section()
+        self.assertIn("`<media root>/nevr/content/<id>/`", section)
+        self.assertIn(f"`{media}`", section)
+        self.assertIn("`_data/5932408047/rad15/android`", section)
+
+    def test_the_folder_pack_is_decided_after_the_bundled_pack_step(self):
+        wiring = code(read(WIRING))
+        after = wiring[wiring.index("void AfterStorage("):]
+        self.assertRegex(after, r"else if \(RunPack\(engineRoot\)\) \{\s*RunContent\(engineRoot\);")
+        self.assertIn("after the bundled pack step", quest_section())
+
+
+class TheQuestSharesTheDecision(unittest.TestCase):
+    def test_the_quest_compiles_the_runtimes_core_and_turns_on_its_own_refusals(self):
+        cmake = read("src/quest/CMakeLists.txt")
+        for source in ("../runtime/content/content_core.cpp", "../runtime/content/content_json.cpp"):
+            self.assertIn(source, cmake, f"the Quest no longer compiles {source}; a Quest-only copy breaks #1598")
+        folder = code(read(QUEST_FOLDER))
+        self.assertIn("in.scripts_supported = false;", folder)
+        self.assertIn("in.refuse_placed_bundle = true;", folder)
+        self.assertNotIn("nlohmann", folder, "the Quest parses content.json itself again; it is content_json.cpp's job")
+
+    def test_the_pc_leaves_the_quests_refusals_off(self):
+        header = code(read("src/runtime/content/content_core.h"))
+        self.assertRegex(header, r"bool scripts_supported = true;")
+        self.assertRegex(header, r"bool refuse_placed_bundle = false;")
+        serve = code(read(SERVE))
+        self.assertNotIn("scripts_supported", serve)
+        self.assertNotIn("refuse_placed_bundle", serve)
+
+    def test_the_quests_own_tokens_are_on_the_page(self):
+        doc = read(DOC)
+        table = doc[doc.index("| `reason` |"):doc.index("Each file that passes")]
+        for token in ("scripts_unsupported", "bundled_pack_placed"):
+            self.assertIn(f"| `{token}` | Quest only:", table)
 
 
 if __name__ == "__main__":
