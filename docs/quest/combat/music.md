@@ -14,40 +14,37 @@ function `0x2549264`). It came into this tree with the q15t plugin import (#1591
 
 ## Default
 
-On. The seat brief's table of q15t-upstream defaults (`UPSTREAM-DEFAULTS.md`, row `music`) lists upstream's shipped build with it on (`afk_music.cpp:49`, `music.off` is the kill
-file) and the plugin's `Q15T_MUSIC` was on. **No headset run of ours has shown it acting:** every q15t session in the integration runs (`run-quest2-2044`, `-handflip4`, `-sheet7`) logs the
-module's install (`music on ... status=ok`) and no `music play` or `music post` line, because none reached a combat map; the one log with a combat match is the reference build's
+On. kotorvr's build has the module on by default (`afk_music.cpp:1`, "ON by default"), with `music.off` or a system property as its off switch (`afk_music.cpp:31`,
+`:174-193`), and the plugin's `Q15T_MUSIC` was on. **No headset run of ours has shown it acting:** every q15t session in the integration runs (`run-quest2-2044`, `-handflip4`, `-sheet7`) logs the
+plugin's install of the module (`music on ... status=ok`) and no `music play` or `music post` line, because none reached a combat map; the one log with a combat match is the reference build's
 (`run-quest2-sheet8`, `EchoQuestCombat: music: play b1b06cfb obj 8: stops first ...`), which is not this code. Its headset row therefore requires the acting lines below.
 
 ## What it does
 
 Two combat-music Wwise trees start with a script Play (capture maps `2f22c384`, payload maps `b1b06cfb`); the only Stops of them
 (`de586538`, `2acba759`) are posted by the PC's `nevt_return_to_lobby` listener. A match left any other way leaves the old instance
-playing and the next match's Play starts a second one on top (tester report of overlapping music, source `:3-12`; source claim, not
-re-verified here).
+playing and the next match's Play starts a second one on top (upstream's account, `afk_music.cpp:3-12`; read, not re-verified here).
 
-Wrapper on libr15's JUMP_SLOT for `CWwiseEngine::PostSoundEvent`:
-- A Play event (`kMusicPlay`): first both Stops (`kMusicStop`, in that order) on the Play's own object, then both on the previous
-  Play's object when it differs and is not the "none yet" sentinel `0xFFFFFFFF`, then the game's own Play with its own arguments
-  (source `:96-114`). Logged: `music play: both music Stops posted first` with `event`, `obj`, `prev_obj` and the `stops` list (each
-  `<stop id> obj <o> -> <rc> id <playing id>;`), then the post line.
-- Every post of a bank event (24 ids: 2 Play, 2 Stop, 20 SetState) is logged once, after the real call: `music post` with `event`,
-  `kind` (`play`/`stop`/`state`), `obj`, `rc` (low byte of the result), `playing_id` (read from the caller's id pointer with SafeRead,
-  0 when none or unreadable) (source `:115-116`).
-- Any other event: forwarded untouched, no work, no log, no counter (the hot path; `PostSoundEvent` is called for every sound).
-- `MusicTick` (game thread, via the tick table, looks every 0.5 s): when a combat map was loaded at the last look and is not now, and a
-  music Play was seen since the last such Stop, it posts both Stops once on the last Play's object with the Play's `self`, and logs
-  `music: combat map gone, both music Stops posted` (source `:154-172`). "Combat map" is `CombatMapLoaded` (the four `mpl_combat_*`
-  levels at `gs+0x58` in the two gamespace tables), which is the same walk as the source's `CombatLoaded` (`:128-146`; tables
-  `game+0x1f48/0x1f78` and `game+0x1f88/0x1fb8`, `gs+0x8 == game`, 4 level hashes `:60-62`; compared by reading both, not by a diff).
-- The line budget of the source (`kMaxLines = 4000` per process, `:59`) is kept, with one addition: the line that crosses it logs one
-  WARNING (`music: line budget used up ...`), so a silenced log is never silent. Counters keep counting.
-- Kill file: `<plugin data dir>/music.off` (`ModuleSwitchPresent`, `module_switch.h`, same directory as `fxtrail.off`) present at install:
-  refused with reason `off_file` and one INFO line `music off`; posts are untouched. The source's `setprop debug.<app>.music 0` is
-  dropped.
+A handler on libr15's JUMP_SLOT for `CWwiseEngine::PostSoundEvent` (`Post` in `music.cpp`, a typed thunk installed by the manager):
+- Every post is first looked up in the 24 ids of the bank (`Classify`, a binary search of `kPlay`, `kStop` and `kState` sorted into one table). Any other event is the game's call with
+  the same registers and nothing else: no counter, no line (the hot path; `PostSoundEvent` is called for every sound).
+- A bank post adds one to `bank_posts`. A Play adds one to `plays` and asks the level once (`combat_level.h` `Classify` with the init-fiber table read, below). In a combat map it posts both
+  Stops (`kStop`, in that order) on the Play's own object, then both on the previous Play's object when that differs and is not the "none yet" value `0xFFFFFFFF`, through the game's own
+  function (`PostStop`: `PostEvent(stop, object, flags 0, no callback, no cookie)`, seek 0, a stack word for the playing id), then lets the Play through with its own arguments and marks
+  the music as playing. Outside a combat map the Play is counted in `plays_out_of_scope` and passed through untouched. Upstream posts the Stops on every Play (`afk_music.cpp:96-113`).
+- The handler writes its lines after the game's function has returned: `combat_music_first` once for the first bank post of the process, and `combat_music_play` for each Play up to
+  `kMaxPlayLines` (32), with the object, the previous object, the Stops posted and whether a combat map was loaded. A post that is not a Play writes no line.
+- The tick callback (`Tick`, registered with the combat tick, `combat_tick.h`, on the game thread once per frame) publishes the game for the handler. From an acted Play until the music is
+  stopped it looks at the levels every `kTickPeriodMs` (500 ms); when no combat map is loaded (`level::CombatMapLoaded`, the four `mpl_combat_*` levels in the two gamespace tables, the
+  walk upstream does at `afk_music.cpp:127-146`) it posts both Stops once on the last Play's object with that Play's `self` and writes `combat_music_unload` with the counts. Before the
+  first acted Play, and in arena, the tick is one relaxed load and one acquire load.
+- Switch: `combat.music` in `config.yaml`. `false` installs nothing and writes `combat_music_install` with `"state":"off"`, `"reason":"off_config"` at Info; the install step counts the module
+  as `off` (`ModuleResult.off`). The plugin's kill file `music.off` is not read: one found in the plugin's data directory is a Warning, `combat_music_legacy_switch` (`WarnLegacyKillFile`).
+  Upstream's `setprop debug.echoquestcombat.music 0` has no counterpart.
+- Install: the build id, then the 29 code words (`targets::kWords`), then the tick (a full tick table refuses the module), then the thunk. Any refusal is one Error
+  `combat_music_install` with `"state":"refused"` and its reason, and nothing is changed.
 
-Logging (AGENTS.md): INFO `music on` (slot, real, status) at install; ERROR `music refused` / `music refused: code word pin mismatch`
-on a refusal; INFO `music off`; INFO `music play`, `music post`, `music: combat map gone`; WARNING at the budget. No secrets.
+Logging (AGENTS.md): the lines are listed under "Lines" below. No secrets; no event text, only ids.
 
 ## Arena (same APK)
 
@@ -62,7 +59,7 @@ Arena has its own music (`mp_arena_music`), which stays exactly as stock. PostSo
    pass the Play through and count it (`plays_out_of_scope`).
 3. The unload tick looks at the levels only from an acted Play until the music is stopped; before that it is a published pointer and one load.
 
-`music_test` `ArenaPaysNothingByCount` counts what the arena path asks (`SafeReadCalls()`, `level::ScanCalls()`): 2,000 sounds outside the bank and the 22 other bank ids ask nothing, a Play asks the level once, a long arena match with no acted Play makes the tick ask nothing. `APlayWhileItsMapIsStillBuildingPostsTheStops` runs the map-to-map states. `music_test` `ArenaMusicIsExactlyStock` runs one stream (all 24 bank ids, forty ids of arena music's kind, and the odd registers) directly and through the installed module on an
+`music_test` `ArenaPaysNothingByCount` counts what the arena path asks (the reads through `safe_read.h`'s `SetReadCounterForTest` counter, and `level::ScanCalls()`): 2,000 sounds outside the bank and the 22 other bank ids ask nothing, a Play asks the level once, a long arena match with no acted Play makes the tick ask nothing. `APlayWhileItsMapIsStillBuildingPostsTheStops` runs the map-to-map states. `music_test` `ArenaMusicIsExactlyStock` runs one stream (all 24 bank ids, forty ids of arena music's kind, and the odd registers) directly and through the installed module on an
 arena level, the arena lobby, the social lobby and no level: the game sees the same calls in the same order with the same registers, answers the same, and no extra Stop is
 posted by a Play or by the tick. `APlayOutsideACombatMapIsTheGamesCallAndNothingElse` does the same for the Play alone on ten level states.
 
@@ -81,7 +78,7 @@ arena; the plugin paid a 24-id linear scan on the same path.
 
 `combat_music_install` (state `on|off|refused`, reason `default|off_config|module_not_loaded|no_build_id|build_id_mismatch|pin_mismatch|tick_table_full|hook`, `status` the manager's),
 `combat_music_first`, `combat_music_play` (the first 32), `combat_music_unload`, `combat_music_legacy_switch` (the plugin's `music.off` is not read; one found is a Warning). The handler
-writes every line after the game's function has returned. The plugin's per-post line (`music post`, up to 4000 a process) is not kept: a post is counted, and `combat_music_unload` reports the counts.
+writes every line after the game's function has returned. A post writes no line of its own: it is counted, and `combat_music_unload` reports the counts.
 
 ## Headset row (owed)
 
@@ -95,7 +92,7 @@ the last three and the arena music plays as stock.
 - Slot: `R0_readelf_r.txt:118641`: `00000000036d76e8  0001724500000402 R_AARCH64_JUMP_SLOT    0000000002549264 _ZN10NRadEngine12CWwiseEngine14PostSoundEventENS_12CSoundSymbolEjNS_7CFlagsTIjLy1EEEPFviPvES4_jRj + 0`.
   Source kotorvr's echoquest-combat music:51-52: `kGotPostSoundEvent = 0x36d76e8`, `kFnPostSoundEvent = 0x2549264`.
 - Disassembly (read-only query): `functions`: `2649264 | PostSoundEvent | 564` (ELF 0x2549264 = VA - 0x100000).
-- Bank ids: copied as literals from the source `:54-58` (2 Play `0x2f22c384 0xb1b06cfb`, 2 Stop `0xde586538 0x2acba759`, 20 SetState
+- Bank ids: copied as literals from the source `afk_music.cpp:54-58` (2 Play `0x2f22c384 0xb1b06cfb`, 2 Stop `0xde586538 0x2acba759`, 20 SetState
   `0x045d3c23 ... 0xffae8834`); a script compared the 24 values in `src/quest/combat/music.h` with those source lines: equal (24 = 24, same order).
   The test restates them independently.
 - Argument layout, instructions of `PostSoundEvent` as read from the disassembly (VA, word):
@@ -120,8 +117,8 @@ the last three and the arena music plays as stock.
   So: x0 `self`, x1 the event (only `w20` goes on), w2 the object (0xFFFFFFFF becomes all ones), **x3 is a pointer** to the flags word
   (`ldr w8,[x3]`), x4 callback, x5 cookie, w6 the seek in ms (`cbz w19` skips the seek call when 0), x7 a pointer that receives the
   result of the first engine call (`str w0,[x22]`, written unconditionally, so x7 must be valid: the extra Stops pass a stack word).
-  The extra Stops therefore pass `(self, stop, object, &flags(=0), 0, 0, 0, &id)`, as the source does (`:83-88`).
-  The 29 words 0x2649264..0x26492d4 above are the pins (`kMusicWordPins`, ELF = VA - 0x100000). A query built from the header's table
+  The extra Stops therefore pass `(self, stop, object, &flags(=0), 0, 0, 0, &id)`, as the source does (`afk_music.cpp:83-88`).
+  The 29 words 0x2649264..0x26492d4 above are the pins (`targets::kWords` in `music_targets.h`, ELF = VA - 0x100000). A query built from the header's table
   returned `MATCH | 29 | 0 | 0` (29 pins, 0 not shown, 0 mismatched) against the disassembly.
 - With seek 0 and a non-zero playing id the function returns `w22 = 0` (`2649440 mov w22, wzr` as the `cbz w19` target, then
   `2649444 mov w0, w22 ... 2649460 ret`); the other paths (id 0 at `0x2649348`, the seek call) I listed but did not analyse
