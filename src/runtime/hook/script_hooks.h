@@ -60,6 +60,10 @@ void OnLoaded(std::uint64_t script, void* base);
 void OnUnloading(std::uint64_t script, void* base);
 
 /// The number of modules the table holds as loaded, and how many of them carry hooks (for tests and the summary).
+/// The base of a loaded module of script `script`, or null when none is loaded (a hook that calls the script's own
+/// code reads it; the table holds it from OnLoaded to the last OnUnloading).
+void* LoadedBase(std::uint64_t script);
+
 std::size_t LoadedModules();
 std::size_t HookedModules();
 

@@ -241,6 +241,14 @@ void OnUnloading(std::uint64_t script, void* base) {
   }
 }
 
+void* LoadedBase(std::uint64_t script) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  for (const auto& [base, m] : g_modules) {
+    if (m.script == script) return base;
+  }
+  return nullptr;
+}
+
 std::size_t LoadedModules() {
   std::lock_guard<std::mutex> lock(g_mu);
   return g_modules.size();

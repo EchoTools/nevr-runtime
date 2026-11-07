@@ -164,6 +164,18 @@ TEST_F(ScriptHooks, APinWhoseBytesDifferRefusesTheWholeScript) {
   sh::OnUnloading(kScript, s_.base);
 }
 
+TEST_F(ScriptHooks, TheLoadedBaseIsKnownFromTheLoadToTheLastFree) {
+  EXPECT_EQ(sh::LoadedBase(kScript), nullptr);
+  sh::OnLoaded(kScript, s_.base);
+  EXPECT_EQ(sh::LoadedBase(kScript), s_.base) << "a script with no rows is known too";
+  EXPECT_EQ(sh::LoadedBase(kScript + 1), nullptr);
+  sh::OnLoaded(kScript, s_.base);
+  sh::OnUnloading(kScript, s_.base);
+  EXPECT_EQ(sh::LoadedBase(kScript), s_.base) << "one reference is left";
+  sh::OnUnloading(kScript, s_.base);
+  EXPECT_EQ(sh::LoadedBase(kScript), nullptr);
+}
+
 TEST_F(ScriptHooks, ARowPastTheImageIsRefusedNotRead) {
   const sh::Hook rows[] = {Row(0x1800, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "past the image")};
   sh::Register(rows, 1);
