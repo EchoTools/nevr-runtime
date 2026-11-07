@@ -2,6 +2,7 @@
 // for a test of the runtime's serving (#1424):
 //
 //	content-test-pack -game-dir <copy>/echovr -out <root>/content/<id> [-id testpack] [-set 48037dc70b0ecab2]
+//	content-test-pack -platform android -game-dir <copy of the media root's files> -out <dir>/<id> [-id testpack]
 //
 // The pack changes nothing the game does, and shows that each kind of file is served:
 //
@@ -9,7 +10,11 @@
 //     zero-size chunk record, the end of the new package's chunk list (offset = the package's size), is appended to the
 //     chunk table, so every resource record and every stock chunk is the stock one;
 //   - that new package, <set>_<stock count>, 16 zero bytes no chunk reads;
-//   - every stock script DLL under bin/win10/scripts, copied byte for byte.
+//   - on windows (the default), every stock script DLL under bin/win10/scripts, copied byte for byte.
+//
+// -platform android (#2312) makes the Quest's pack: data_dir _data/5932408047/rad15/android, and no script, because the
+// Quest refuses a pack that carries one (scripts_unsupported). -game-dir is then a copy of the folder that holds the Quest's
+// _data (the media root's files folder), and the pack is copied to <media root>/nevr/content/<id>.
 //
 // content.json lists each file with its sha-256 and the stock manifest's sha-256. Nothing of the game's is written anywhere
 // but -out, which must not exist yet. A refusal exits 1 and names what failed; success prints one JSON line. Each run is a
@@ -39,8 +44,18 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 )
 
+// What differs between the two builds' packs: where the stock data is, relative to -game-dir, and whether scripts go in.
+type platform struct {
+	dataDir string
+	scripts bool
+}
+
+var platforms = map[string]platform{
+	"windows": {dataDir: "_data/5932408047/rad15/win10", scripts: true},
+	"android": {dataDir: "_data/5932408047/rad15/android", scripts: false},
+}
+
 const (
-	dataDir = "_data/5932408047/rad15/win10"
 	// The manifest file: "ZSTD", u32 0x10, u64 decompressed length, u64 compressed length, then one zstd frame.
 	headerSize = 24
 	// Decompressed, three table descriptors of 0x40 bytes from 0x08 (resources, files, chunks; +0x08 the table's byte size,
@@ -72,6 +87,7 @@ func run(_ context.Context, args []string, getenv func(string) string, _ io.Read
 		out := flags.String("out", "", "the pack's new folder, <root>/content/<id>")
 		id := flags.String("id", "testpack", "the pack's id")
 		set := flags.String("set", "48037dc70b0ecab2", "the package set whose manifest the pack replaces")
+		platformName := flags.String("platform", "windows", "the build the pack is for: windows or android")
 		if err := flags.Parse(args); err != nil {
 			return 2
 		}
@@ -79,14 +95,22 @@ func run(_ context.Context, args []string, getenv func(string) string, _ io.Read
 			fmt.Fprintln(stderr, "content-test-pack: -game-dir and -out are required")
 			return 2
 		}
-		result, err := build(*gameDir, *out, *id, *set)
+		target, known := platforms[*platformName]
+		if !known {
+			fmt.Fprintf(stderr, "content-test-pack: -platform %q is not windows or android\n", *platformName)
+			return 2
+		}
+		result, err := build(*gameDir, *out, *id, *set, target)
 		if err != nil {
-			log.Warn("refused", "game_dir", *gameDir, "out", *out, "id", *id, "set", *set, "error", err.Error())
+			log.Warn("refused", "game_dir", *gameDir, "out", *out, "id", *id, "set", *set, "platform", *platformName,
+				"error", err.Error())
 			fmt.Fprintf(stderr, "content-test-pack: %v\n", err)
 			return 1
 		}
-		log.Info("pack_made", "out", result.Out, "id", result.ID, "stock_manifest_sha256", result.StockManifestSha256,
-			"stock_packages", result.StockPackages, "scripts", result.Scripts, "files", result.Files)
+		result.Platform = *platformName
+		log.Info("pack_made", "out", result.Out, "id", result.ID, "platform", result.Platform,
+			"stock_manifest_sha256", result.StockManifestSha256, "stock_packages", result.StockPackages,
+			"scripts", result.Scripts, "files", result.Files)
 		line, _ := json.Marshal(result)
 		fmt.Fprintln(stdout, string(line))
 		return 0
@@ -97,6 +121,7 @@ type made struct {
 	Event               string `json:"event"`
 	ID                  string `json:"id"`
 	Out                 string `json:"out"`
+	Platform            string `json:"platform"`
 	StockManifestSha256 string `json:"stock_manifest_sha256"`
 	StockPackages       uint32 `json:"stock_packages"`
 	Scripts             int    `json:"scripts"`
@@ -157,7 +182,7 @@ func addOnePackage(manifest []byte) ([]byte, uint32, error) {
 	return append(header, packed...), packages, nil
 }
 
-func build(gameDir, out, id, set string) (made, error) {
+func build(gameDir, out, id, set string, target platform) (made, error) {
 	if !packID.MatchString(id) {
 		return made{}, fmt.Errorf("%q is not a pack id", id)
 	}
@@ -170,7 +195,7 @@ func build(gameDir, out, id, set string) (made, error) {
 	if _, err := os.Lstat(out); !errors.Is(err, fs.ErrNotExist) {
 		return made{}, fmt.Errorf("%s exists; a pack is made into a new folder", out)
 	}
-	stockPath := filepath.Join(gameDir, filepath.FromSlash(dataDir), "manifests", set)
+	stockPath := filepath.Join(gameDir, filepath.FromSlash(target.dataDir), "manifests", set)
 	stock, err := os.ReadFile(stockPath)
 	if err != nil {
 		return made{}, fmt.Errorf("no stock manifest at %s: %w", stockPath, err)
@@ -180,19 +205,21 @@ func build(gameDir, out, id, set string) (made, error) {
 		return made{}, err
 	}
 	scriptsDir := filepath.Join(gameDir, "bin", "win10", "scripts")
-	entries, err := os.ReadDir(scriptsDir)
-	if err != nil {
-		return made{}, fmt.Errorf("no stock scripts at %s: %w", scriptsDir, err)
-	}
 	var scripts []string
-	for _, e := range entries {
-		if e.Type().IsRegular() && scriptName.MatchString(e.Name()) {
-			scripts = append(scripts, e.Name())
+	if target.scripts {
+		entries, err := os.ReadDir(scriptsDir)
+		if err != nil {
+			return made{}, fmt.Errorf("no stock scripts at %s: %w", scriptsDir, err)
 		}
-	}
-	sort.Strings(scripts)
-	if len(scripts) == 0 {
-		return made{}, errors.New("no stock script under bin/win10/scripts")
+		for _, e := range entries {
+			if e.Type().IsRegular() && scriptName.MatchString(e.Name()) {
+				scripts = append(scripts, e.Name())
+			}
+		}
+		sort.Strings(scripts)
+		if len(scripts) == 0 {
+			return made{}, errors.New("no stock script under bin/win10/scripts")
+		}
 	}
 
 	files := map[string]string{}
@@ -232,7 +259,7 @@ func build(gameDir, out, id, set string) (made, error) {
 		"id":       id,
 		"name":     "serving test pack",
 		"version":  "0.0.1",
-		"data_dir": dataDir,
+		"data_dir": target.dataDir,
 		"manifests": []map[string]any{{
 			"package":        set,
 			"stock_sha256":   digest(stock),
@@ -240,8 +267,10 @@ func build(gameDir, out, id, set string) (made, error) {
 			"file":           manifestRel,
 			"packages":       []string{packageRel},
 		}},
-		"scripts": scriptRels,
-		"files":   files,
+		"files": files,
+	}
+	if target.scripts {
+		content["scripts"] = scriptRels
 	}
 	text, err := json.MarshalIndent(content, "", " ")
 	if err != nil {
