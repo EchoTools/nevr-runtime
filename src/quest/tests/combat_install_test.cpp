@@ -428,6 +428,8 @@ void TheRealStepsConsultTheGate() {
     QCHECK(lines.size() == 1U && Has(lines[0].text, "\"state\":\"skipped\""));
     QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
     QCHECK(Lines("combat_bvh_install").empty() && Lines("combat_wallfire_install").empty());
+    // the impact sounds and the level decals (#2183): neither installs, refuses or reads its table, so the arena APK keeps the game's own table and draws no decal
+    QCHECK(Lines("combat_impactsnd_install").empty() && Lines("combat_impactsnd_refused").empty() && Lines("combat_decals_install").empty());
     combat::NoteProcessEnd();
     QCHECK(Lines("combat_sendguard_stats").empty());
     Done();

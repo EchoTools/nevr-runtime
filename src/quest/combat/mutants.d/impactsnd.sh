@@ -173,3 +173,5 @@ runm ci_write_row_dropped      src/quest/combat/combat_install.cpp 's/^    Modul
 # the phase line names why a module is off (decals is off for want of a decals.bin as well as by its key), and the list of the shipped table fits it
 runm ci_off_msg_reason_dropped src/quest/combat/combat_install.cpp 's/ config key or with nothing to act on", outcome.off/ config key", outcome.off/' quest-host-combat combat_install_test
 runm ci_results_buffer_320     src/quest/combat/combat_install.cpp 's/char results\[400\];/char results[320];/' quest-host-combat combat_install_test
+# the arena APK and a plain release (#2300): the gate keeps the impact sounds and the level decals from running at all
+runm ci_arena_runs_impactsnd_decals src/quest/combat/combat_install.cpp 's/^Outcome InstallNormal() noexcept { return RunPhase(/Outcome InstallNormal() noexcept { ImpactsndNormal(); DecalsNormal(); return RunPhase(/' quest-host-combat combat_install_test
