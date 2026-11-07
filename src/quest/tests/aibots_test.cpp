@@ -33,6 +33,7 @@
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_pins.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -241,13 +242,13 @@ void NotInGameNotCombat() {  // 3
   CHECK(g_calls.size() == 1, "not enabled once everything held: %zu", g_calls.size());
 }
 
-void TheIdleLine() {  // 3b: in a match for 10 s with nothing to do: one line says why, once per match; none when the call was made
+void TheIdleLine() {  // 3b: in a combat match for 10 s with nothing to do: one line says why, once per match; none when the call was made, none in an arena match
   Reset();
-  Put<std::uint8_t>(g_net, 0x6341b, 0);
+  SetCount(0);  // a combat match (the flag is set) with no bots
   Run(9);
   CHECK(!HasLine("combat_aibots_idle"), "idle line before 10 s");
   Run(3);
-  CHECK(Count("combat_aibots_idle", "\"matchiscombat\":0,\"scenarios_object\":\"yes\"") == 1 && Count("combat_aibots_idle", "", kInfo) == 1, "no idle line after 10 s");
+  CHECK(Count("combat_aibots_idle", "\"matchiscombat\":1,\"scenarios_object\":\"yes\"") == 1 && Count("combat_aibots_idle", "", kInfo) == 1, "no idle line after 10 s");
   Run(10);
   CHECK(Count("combat_aibots_idle") == 1, "idle line repeated");
   SetState(10);
@@ -260,6 +261,11 @@ void TheIdleLine() {  // 3b: in a match for 10 s with nothing to do: one line sa
   Reset();
   Run(14);
   CHECK(!HasLine("combat_aibots_idle"), "idle line after a successful call");
+  // an arena match (the game's combat flag is 0) never writes it, however long it lasts
+  Reset();
+  Put<std::uint8_t>(g_net, 0x6341b, 0);
+  Run(40);
+  CHECK(!HasLine("combat_aibots_idle"), "an idle line in a match that is not a combat match");
 }
 
 void TheCountAndTheLook() {  // 4, 4b, 5
@@ -524,9 +530,9 @@ void AnArenaMatchIsFourReadsALookAndNoScan() {
     Put<std::uint8_t>(g_net, 0x6341b, 0);
     SetCount(0);
     const std::uint32_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
-    Run(9);
+    Run(30);  // well past the 10 s the idle line waits for
     const std::uint32_t looks = ai::CurrentStats().looks;
-    CHECK(looks >= 35 && g_calls.empty(), "%s: %u looks, %zu calls", name, looks, g_calls.size());
+    CHECK(looks >= 115 && g_calls.empty() && !HasLine("combat_aibots_idle"), "%s: %u looks, %zu calls, an idle line %d", name, looks, g_calls.size(), HasLine("combat_aibots_idle") ? 1 : 0);
     CHECK(nevr_quest::combat::level::ScanCalls() == scans0, "%s: %u level scans in an arena match", name, nevr_quest::combat::level::ScanCalls() - scans0);
     CHECK(nevr_quest::combat::SafeReadCalls() - reads0 == looks * 4, "%s: %u reads for %u looks, wanted 4 each", name, nevr_quest::combat::SafeReadCalls() - reads0, looks);
   }
@@ -547,10 +553,8 @@ void TheInstallOnAnImage() {  // 16
     *out = sImage->Elf();
     return true;
   };
-  auto put = [&image] {
-    for (const auto& w : at::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
-    for (const auto& w : nevr_quest::combat::netgame::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
-  };
+  const nevr_quest::combat::pinned::Pins pins[] = {at::kPins, nevr_quest::combat::netgame::kPins};
+  auto put = [&] { combat_test::PutPins(image, pins, 2); };
   auto begin = [&] {
     g_lines.clear();
     nevr_quest::combat::tick::ResetForTest();
@@ -564,21 +568,13 @@ void TheInstallOnAnImage() {  // 16
   begin();
   nevr_quest::combat::ModuleResult r = ai::InstallAt(lookup, nullptr, sw);
   CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && ai::Phase() == 1 && nevr_quest::combat::tick::Count() == 1, "install on the pinned image");
-  for (const auto& w : at::kWords) {
-    image.Put<std::uint32_t>(w.vaddr, w.word ^ 1u);
+  const std::size_t bent = combat_test::ForEachBentPin(image, pins, 2, [&](const char* what) {
     begin();
     r = ai::InstallAt(lookup, nullptr, sw);
-    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_aibots_pinned_word", w.what),
-          "word %s: %s", w.what, r.status);
-    image.Put<std::uint32_t>(w.vaddr, w.word);
-  }
-  for (const auto& w : nevr_quest::combat::netgame::kWords) {  // the net game step the three modules share
-    image.Put<std::uint32_t>(w.vaddr, w.word ^ 1u);
-    begin();
-    r = ai::InstallAt(lookup, nullptr, sw);
-    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0, "net game word %s: %s", w.what, r.status);
-    image.Put<std::uint32_t>(w.vaddr, w.word);
-  }
+    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_aibots_pinned_word", what),
+          "pin %s: %s", what, r.status);
+  });
+  CHECK(bent >= 15, "only %zu pins were bent", bent);
   image.Build({}, "0123456789abcdef0123456789abcdef01234567");
   put();
   begin();

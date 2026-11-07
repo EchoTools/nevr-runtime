@@ -42,7 +42,7 @@ ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tab
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
-// The three modules of #2185. Each is off unless its key says true; aibots also takes its scenario text and whether this is a development build.
+// The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
 ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
 ModuleResult AibotsNormal() noexcept {
   aibots::Switches switches;

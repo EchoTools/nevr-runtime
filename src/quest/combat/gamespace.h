@@ -2,10 +2,9 @@
  * #2187). The game thread reads CR15Game's two gamespace tables ({sym, gs*} rows of 16 bytes) and, in each gamespace of the game, its list of
  * {key, component system*} rows. Every read is a SafeRead (process_vm_readv), so a stale or half-built table is a skipped entry, never a fault.
  *
- * Offsets. The two tables are the ones combat_level_targets.h pins. A gamespace's list is at gs+0x420 with its count at gs+0x450, a row is 16 bytes,
- * the gamespace's game is at gs+0x8 (pinned: combat_level_targets.h) and a component system's gamespace is at cs+0x80. [UNVERIFIED] the list and
- * count offsets and cs+0x80 are the reference build's constants (afk_gunconnect.cpp:186-218, FindCs); the store file's code that loads them was not
- * traced for this move.
+ * Offsets. The two tables are the ones combat_level_targets.h pins. A gamespace's list is at gs+0x420 with its count at gs+0x450, a row is 16 bytes, the
+ * gamespace's game is at gs+0x8 (pinned: combat_level_targets.h) and a component system's gamespace is at cs+0x80; gamespace_targets.h ties the three to the game's
+ * own lookup.
  *
  * Origin. The reference build's `FindCs` (kotorvr's echoquest-combat repository, commit c5a67e8, runtime/native/afkxr/afk_gunconnect.cpp:186-218),
  * which the q15t plugin carried as `gamespace.cpp`; the plugin's copy stays until powerboost moves (KNOWN-WRONG #2168).

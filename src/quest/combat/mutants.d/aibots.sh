@@ -68,3 +68,6 @@ runm ai_word src/quest/combat/aibots_targets.h 's/kEnableFirstWord = 0xd100c3ffU
 A=src/quest/combat/aibots.cpp
 runm ai_scan_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  (void)level::Scan(game);/'
 runm ai_extra_read_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  bool probe = true;\n  (void)SafeRead<std::uint8_t>(game, \&probe);/'
+# An arena match writes no idle line, however long it lasts.
+runm ai_arena_idle $A 's/  if (!ok || combat == 0) return;/  if (!ok) return;/'
+runm ai_pins_unchecked $A 's/const pinned::Pins lists\[\] = {at::kPins, netgame::kPins};/const pinned::Pins lists[] = {netgame::kPins};/'

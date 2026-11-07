@@ -263,9 +263,10 @@ combat:
   # aibots_scenario: which scenario `aibots` starts: a number 0-6 or one of patrol, randomattack, weaponattack, spike, aithrowtest, aionevone, aibdebugarena;
   # `off` turns the bots off. A word that is none of these keeps RandomAttack, with a warning that does not name it. Default (absent): randomattack.
   # aibots_scenario: randomattack
-  # weapon_arm: false leaves the gun hand of a new profile as the game has it. Otherwise the gun of a profile the module has not handled before is put in the
-  # right hand, once per profile, the first time it is in a combat level. The profile's marker file stays under `files/q15t` of the app's external files
-  # directory. Default (absent): true.
+  # weapon_arm: false leaves the gun hand as the game has it. Otherwise a profile that has never saved a gun hand (its `weaponarm` is absent) gets the gun in the
+  # right hand, once per profile, the first time it is in a combat map; a profile that has saved a hand, left or right, is left alone. The game saves the hand
+  # into the profile, so this changes the saved profile. The profile's marker file stays under `files/q15t` of the app's external files directory. Default
+  # (absent): true.
   # weapon_arm: false
 
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value

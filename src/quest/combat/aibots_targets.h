@@ -11,8 +11,10 @@
  *   CR15NetGame::UpdateGameExpressionData @ 0x12809f0   `cmp w9,#9` at 0x1280a88 stores (state == 9) as the byte at x27+8, with x27 = net + 0x6340c
  *       (`mov w9,#0x340c; movk w9,#6,lsl #16; add x27,x0,x9`), and stores bytes at x27+0xf
  *
- * [UNVERIFIED] Which of the byte stores at x27+0xf (net+0x6341b) carries `matchiscombat` is not traced; the string exists in the file, the pairing is
- * the reference build's (afk_aibots.cpp:55). The net game's state is the i32 at net+0 (the load before the compare).
+ * `matchiscombat` is the game's own field: `SR15NetGameExpressionData::Inspect<CBindingsOffsetOfInspector<bool>>` @ 0x24399f4 binds the record of the name
+ * `matchiscombat` (0x31e1ad8) to the offset `w0 + 0xf` (`add w13,w0,#0xf` at 0x2439df8), and the same function binds `ingame` to +0x8 and `matchisarena` to +0xe; the
+ * byte store at x27+0xf in UpdateGameExpressionData (0x1280e74) is the game type being one of several combat symbols, `echo_combat_practice_ai` among them. The net
+ * game's state is the i32 at net+0 (the load before the compare).
  */
 #pragma once
 
@@ -53,7 +55,10 @@ inline constexpr pinned::Word kWords[] = {
     {"UpdateGameExpressionData: cmp w9,#9 (in game)", 0x1280a88ULL, 0x7100253fU},
     {"UpdateGameExpressionData: strb w11,[x27,#8] (state == 9)", 0x1280a98ULL, 0x3900236bU},
     {"UpdateGameExpressionData: strb w8,[x27,#0xf]", 0x1280e74ULL, 0x39003f68U},
+    {"Inspect<bool>: add x13,x13,#0xadc (the record of matchiscombat)", 0x2439ddcULL, 0x912b71adU},
+    {"Inspect<bool>: add w13,w0,#0xf (matchiscombat's field offset)", 0x2439df8ULL, 0x11003c0dU},
 };
+inline constexpr pinned::Pins kPins = {kWords, sizeof(kWords) / sizeof(kWords[0]), nullptr, 0};
 
 static_assert(pinned::LdrXOffset(kWords[1].word) == kScenGame, "the pinned word does not carry kScenGame");
 static_assert(pinned::LdrXOffset(kWords[2].word) == kNetFlagsPtr, "the pinned word does not carry kNetFlagsPtr");
@@ -65,6 +70,7 @@ static_assert(pinned::MovImmediate(kWords[10].word) + (pinned::MovImmediate(kWor
               "the pinned words do not build kExpressionBase");
 static_assert(pinned::AddImmediate(kWords[12].word) == kInGame, "the pinned compare is not with kInGame");
 static_assert(pinned::LdrbOffset(kWords[14].word) == kExpressionCombatByte, "the pinned store does not carry kExpressionCombatByte");
+static_assert(pinned::AddImmediate(kWords[16].word) == kExpressionCombatByte, "the pinned word does not carry the matchiscombat field offset");
 static_assert(kExpressionBase + kExpressionCombatByte == kNetMatchIsCombat, "kNetMatchIsCombat is not the expression base plus the byte");
 
 }  // namespace nevr_quest::combat::aibots::targets

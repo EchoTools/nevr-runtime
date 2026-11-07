@@ -17,7 +17,7 @@
  * (`scenario=<0-6|name|off> delay=<seconds>`) is also polled at 1 Hz and overrides both; in a release build it is not read, and one found is a
  * Warning (`combat_aibots_legacy_switch`) naming the key.
  *
- * Arena (same APK). The bot count is zero in an arena match, so the look finds nothing; and the call itself is refused while an Echo Arena level is
+ * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle line, no scan); and the call itself is refused while an Echo Arena level is
  * loaded (combat_level.h `Scan`: `echoArena`), whatever the game's flags say, with one Info line per match (`combat_aibots_scoped_out`). The
  * combat-map flag the plugin logged beside the call (`combat_map`) is now `combat_level.h`'s detector, not a copy of its level list.
  * KNOWN-WRONG #2168: the scope asks `combat_level` directly, once per call; it moves to combat_scope (F19, #2246) when that lands.
@@ -42,7 +42,7 @@
  *              "scenario_object":"set|not_set","host":"yes|no|unknown","combat_map":<0|1>,"delay_ms":<n>}
  *   scoped    {"event":"combat_aibots_scoped_out","bots":<n>,"msg":".."}   an Echo Arena level is loaded; EnableScenario was not called
  *   rearmed   {"event":"combat_aibots_rearmed","msg":".."}   left the match
- *   idle      {"event":"combat_aibots_idle","matchiscombat":<n>,"scenarios_object":"yes|no","scenario":<n>,"bots":<n>,"read_failed":<0|1>}   10 s in game, no call
+ *   idle      {"event":"combat_aibots_idle","matchiscombat":<n>,"scenarios_object":"yes|no","scenario":<n>,"bots":<n>,"read_failed":<0|1>}   10 s in a combat match (the game's combat flag set), no call; never in an arena match
  *   legacy    {"event":"combat_aibots_legacy_switch","file":"aibots.req","replaced_by":"combat.aibots_scenario","msg":".."}   Warning
  *
  * Built with -fno-exceptions, like every combat translation unit.

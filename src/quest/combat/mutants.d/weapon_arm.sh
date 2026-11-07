@@ -19,7 +19,7 @@ runm wa_tick_ignores_done src/quest/combat/weapon_arm.cpp 's/ || g_done.load(std
 runm wa_id_whole src/quest/combat/weapon_arm.cpp 's/Tail(const char\* id) noexcept {/Tail(const char* id) noexcept { return id;/'
 runm wa_safe_name src/quest/combat/weapon_arm.cpp 's/(isalnum(static_cast<unsigned char>(\*p)) || \*p == .-. || \*p == ._.) ? \*p : ._./*p/'
 runm wa_scope_always src/quest/combat/weapon_arm.cpp 's/\&levelId) == level::Kind::kCombatOrLobby;/\&levelId) == level::Kind::kCombatOrLobby || true;/'
-runm wa_scope_no_lobby src/quest/combat/weapon_arm.cpp 's/\/\*lobby=\*\/true/\/*lobby=*\/false/'
+runm wa_scope_with_lobby src/quest/combat/weapon_arm.cpp 's/\/\*lobby=\*\/false/\/*lobby=*\/true/'
 runm wa_scope_inverted src/quest/combat/weapon_arm.cpp 's/\&levelId) == level::Kind::kCombatOrLobby;/\&levelId) != level::Kind::kCombatOrLobby;/'
 runm wa_scope_unseen src/quest/combat/weapon_arm.cpp 's/g_scopedOut.fetch_add(1, std::memory_order_relaxed);/;/'
 runm wa_off_ignored src/quest/combat/weapon_arm.cpp 's/  if (!on) {/  if (!on \&\& false) {/'
@@ -45,3 +45,9 @@ W=src/quest/combat/weapon_arm.cpp
 runm wa_read_before_scope $W 's/^  if (!InScope(game)) {$/  { gamespace::CompSys pre[1]; (void)gamespace::FindComponentSystems(game, wt::kEquipCsKey, g_base + wt::kEquipCsVptrVaddr, pre, 1); }\n  if (!InScope(game)) {/'
 runm wa_scan_before_scope $W 's/^  if (!InScope(game)) {$/  (void)level::Scan(game);\n  if (!InScope(game)) {/'
 runm wa_scan_before_marker $W 's/^  g_passes.fetch_add(1, std::memory_order_relaxed);$/  g_passes.fetch_add(1, std::memory_order_relaxed);\n  (void)level::Scan(game);/'
+# The profile: only a profile that has never saved a gun hand is set.
+runm wa_saved_zero_is_set $W 's/  if (profArm != -1) {/  if (profArm == 1) {/'
+runm wa_saved_hand_ignored $W 's/  if (profArm != -1) {/  if (false) {/'
+runm wa_saved_one_is_set $W 's/  if (profArm != -1) {/  if (profArm == 0) {/'
+runm wa_pins_unchecked $W 's/const pinned::Pins lists\[\] = {wt::kPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {netgame::kPins, gamespace::targets::kPins};/'
+runm wa_gamespace_pins_unchecked $W 's/const pinned::Pins lists\[\] = {wt::kPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {wt::kPins, netgame::kPins};/'

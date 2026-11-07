@@ -1,6 +1,7 @@
 #include "quest/combat/gamespace.h"
 
 #include "quest/combat/combat_level_targets.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/safe_read.h"
 
 namespace nevr_quest::combat::gamespace {
@@ -11,7 +12,7 @@ namespace pin = level::targets;
 constexpr std::uintptr_t kTables[2][2] = {{pin::kTable0Rows, pin::kTable0Count}, {pin::kTable1Rows, pin::kTable1Count}};
 constexpr std::uint64_t kMaxGamespaces = 64, kMaxSystems = 1024;
 constexpr std::uintptr_t kRowGamespace = 8;
-constexpr std::uintptr_t kSystems = 0x420, kSystemCount = 0x450, kSystemGamespace = 0x80;
+constexpr std::uintptr_t kSystems = targets::kSystems, kSystemCount = targets::kSystemCount, kSystemGamespace = targets::kSystemGamespace;
 
 }  // namespace
 

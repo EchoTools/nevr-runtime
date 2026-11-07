@@ -80,3 +80,6 @@ G=src/quest/combat/gunconnect.cpp
 # By count (the arena test counts SafeRead calls and level scans): a read, or a scan, made before the scope test.
 runm gc_read_before_scope $G 's/^  if (!InScope(game)) {$/  (void)ReadLocal(game);\n  if (!InScope(game)) {/'
 runm gc_scan_before_scope $G 's/^  if (!InScope(game)) {$/  (void)level::Scan(game);\n  if (!InScope(game)) {/'
+runm gc_pins_connect_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, netgame::kPins, gamespace::targets::kPins};/'
+runm gc_pins_gamespace_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, gt::kConnectPins, netgame::kPins};/'
+runm gc_ring_u32 $G 's/c.ring = SafeRead<std::uint64_t>(cs + gt::kConnectRing, \&ok);/c.ring = SafeRead<std::uint32_t>(cs + gt::kConnectRing, \&ok);/'

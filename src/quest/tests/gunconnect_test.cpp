@@ -28,12 +28,14 @@
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_pins.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -295,6 +297,11 @@ void TheRing() {  // 3. the connect ring is not empty: nothing; once it is empty
   Run(3);
   CHECK(g_connects.size() == 1 && g_connects[0].at >= tRing + 2.0 && g_connects[0].at <= tRing + 2.3125, "ring cleared at %.4f, Connect at %.4f", tRing,
         g_connects.empty() ? 0.0 : g_connects[0].at);
+  // The game loads the ring as a u64 (ExclusiveUpdateConnect): a count held in the upper half is not an empty ring.
+  Reset(1);
+  Put<std::uint64_t>(g_gc[0].cs, 0x1c0, 1ull << 32);
+  Run(5);
+  CHECK(g_connects.empty(), "Connect while the upper half of the ring count is set");
 }
 
 void TheTag() {  // 4. the local actor has no combat tag: nothing; the hold restarts when the tag comes back
@@ -572,10 +579,8 @@ void TheInstallOnAnImage() {  // 18
     *out = sImage->Elf();
     return true;
   };
-  auto put = [&image] {
-    for (const auto& w : gt::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
-    for (const auto& w : nevr_quest::combat::netgame::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
-  };
+  const nevr_quest::combat::pinned::Pins pins[] = {gt::kPins, gt::kConnectPins, nevr_quest::combat::netgame::kPins, nevr_quest::combat::gamespace::targets::kPins};
+  auto put = [&] { combat_test::PutPins(image, pins, 4); };
   auto begin = [&] {
     g_lines.clear();
     nevr_quest::combat::tick::ResetForTest();
@@ -591,22 +596,14 @@ void TheInstallOnAnImage() {  // 18
   nevr_quest::combat::ModuleResult r = gc::InstallAt(lookup, &LookupRight, true);
   CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && gc::Phase() == 1 && nevr_quest::combat::tick::Count() == 1, "install on the pinned image");
   CHECK(HasLine("combat_gunconnect_install", "\"named\":4"), "named count not logged");
-  // a word that differs refuses, names the word, registers nothing
-  for (const auto& w : gt::kWords) {
-    image.Put<std::uint32_t>(w.vaddr, w.word ^ 1u);
+  // every word and record that differs refuses, names it, registers nothing
+  const std::size_t bent = combat_test::ForEachBentPin(image, pins, 4, [&](const char* what) {
     begin();
     r = gc::InstallAt(lookup, &LookupRight, true);
-    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_gunconnect_pinned_word", w.what),
-          "word %s: %s", w.what, r.status);
-    image.Put<std::uint32_t>(w.vaddr, w.word);
-  }
-  for (const auto& w : nevr_quest::combat::netgame::kWords) {  // the net game step the three modules share
-    image.Put<std::uint32_t>(w.vaddr, w.word ^ 1u);
-    begin();
-    r = gc::InstallAt(lookup, &LookupRight, true);
-    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0, "net game word %s: %s", w.what, r.status);
-    image.Put<std::uint32_t>(w.vaddr, w.word);
-  }
+    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_gunconnect_pinned_word", what),
+          "pin %s: %s", what, r.status);
+  });
+  CHECK(bent >= 30, "only %zu pins were bent", bent);
   // another build id
   image.Build({}, "0123456789abcdef0123456789abcdef01234567");
   put();

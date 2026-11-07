@@ -1,13 +1,17 @@
-/* A new profile starts with the gun on the right hand, once per user id (#2185, docs/adr/0046; docs/quest/combat/adr/0003-weapon-arm-new-profile.md).
+/* A profile that has never saved a gun hand starts with the gun on the right hand, once per user id (#2185, docs/adr/0046; docs/quest/combat/adr/0003-weapon-arm-new-profile.md).
  * Runs on the game-thread tick (combat_tick.h), 1 Hz until done. The profile id is CR15NetGame::ClientProfile()'s "xplatformid"; a marker file
- * `t26arm.<id>` in the player's data directory means this profile was handled before and nothing is done. Otherwise the local equipment component
- * system is found in the gamespace tables (gamespace.h), held for 3 passes, and
- *   - GetWeaponArm == 1 or the profile's "weaponarm" == 1: the marker only (the player's own right-hand choice stands);
- *   - else SetWeaponArm(cs, handle, 1) once (direct when [gs+0x368] is set, else through the gamespace's deferred method queue), and the marker once
- *     GetWeaponArm reads 1 (within 10 s, else no marker: the next launch retries).
+ * `t26arm.<id>` in the player's data directory means this profile was handled before and nothing is done. Otherwise, in a combat map, the local equipment
+ * component system is found in the gamespace tables (gamespace.h), held for 3 passes, and
+ *   - GetWeaponArm == 1: the marker only (the gun is on the right already);
+ *   - the profile has a saved `weaponarm` (the key is present, 0 or 1): the marker only. The player's own choice stands, a left-handed player's included;
+ *   - else the profile has never saved a gun hand: SetWeaponArm(cs, handle, 1) once (direct when [gs+0x368] is set, else through the gamespace's deferred
+ *     method queue), and the marker once GetWeaponArm reads 1 (within 10 s, else no marker: the next launch retries).
+ * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile. A missing marker alone
+ * (after a reinstall, or a move between the store and the combat APK, which clears the app's external files directory) does not set anything: the profile's own
+ * `weaponarm` decides.
  *
  * Player state (ADR 0046 rule 4). The marker directory is `/sdcard/Android/data/<package>/files/q15t`, where the plugin's markers already are; it is
- * state, not a switch, and renaming it would arm every existing profile again. A marker the plugin wrote stops this module from touching that
+ * state, not a switch, and renaming it would make every profile look unhandled. A marker the plugin wrote stops this module from touching that
  * profile (weapon_arm_test). The marker file is the module's only write.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
@@ -17,11 +21,12 @@
  * right hand and found the marker on later runs, and never a `set`, so its headset row requires `combat_weapon_arm_set`. The plugin's kill file
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
- * Arena (same APK). The module reads the loaded levels and goes on only while a combat map or the combat lobby is loaded and no Echo Arena level is
- * (combat_level.h `Classify`); in an arena match, in the lobbies arena players use and in a transition that still holds an arena level it neither
- * looks for the equipment system nor sets the hand nor writes the marker, and writes no line. A profile that has a marker never scans the levels:
- * the marker check comes first and ends the module. A profile with no marker that only ever plays arena is looked at once a second and never
- * touched. KNOWN-WRONG #2168: the scope asks `combat_level` directly; it moves to combat_scope (F19, #2246) when that lands.
+ * Arena (same APK). The module reads the loaded levels and goes on only while a combat map is loaded and no Echo Arena level is (combat_level.h `Classify`,
+ * without the lobby): in an arena match, in every lobby (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an
+ * arena player never has mpl_lobby_b_combat loaded) and in a transition that still holds an arena level it neither looks for the equipment system nor sets the
+ * hand nor writes the marker, and writes no line. A profile that has a marker never scans the levels: the marker check comes first and ends the module. A
+ * profile with no marker that only ever plays arena is looked at once a second and never touched. KNOWN-WRONG #2168: the scope asks `combat_level` directly; it
+ * moves to combat_scope (F19, #2246) when that lands.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per frame:
  * once the module is done, one atomic load and a branch; before that, one clock read and one compare, and a pass at 1 Hz (the netgame, the profile

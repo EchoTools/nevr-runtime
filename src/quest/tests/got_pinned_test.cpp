@@ -29,6 +29,7 @@
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/aibots_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
@@ -513,18 +514,29 @@ void CheckRealGunsAndBots(const LoadedElf& elf) {
   QCHECK(gt::kGunCsVptrVaddr == 0x3696050 && wt::kEquipCsVptrVaddr == 0x3698200);  // the values an object's first word carries in the reference build
   const struct {
     const char* what;
-    const nevr_quest::combat::pinned::Word* words;
-    std::size_t count;
-  } lists[] = {{"gunconnect", gt::kWords, sizeof(gt::kWords) / sizeof(gt::kWords[0])},
-               {"aibots", at::kWords, sizeof(at::kWords) / sizeof(at::kWords[0])},
-               {"netgame", ng::kWords, sizeof(ng::kWords) / sizeof(ng::kWords[0])}};
+    nevr_quest::combat::pinned::Pins pins;
+  } lists[] = {{"gunconnect", gt::kPins},
+               {"gunconnect (ExclusiveUpdateConnect)", gt::kConnectPins},
+               {"aibots", at::kPins},
+               {"weapon_arm", wt::kPins},
+               {"netgame", ng::kPins},
+               {"gamespace", nevr_quest::combat::gamespace::targets::kPins}};
   for (const auto& list : lists) {
-    for (std::size_t i = 0; i < list.count; ++i) {
+    for (std::size_t i = 0; i < list.pins.wordCount; ++i) {
       std::uint32_t have = 0;
-      std::memcpy(&have, mem + list.words[i].vaddr, sizeof(have));
-      if (have != list.words[i].word) {
-        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#x, pinned %#x\n", list.what, list.words[i].what, static_cast<unsigned long long>(list.words[i].vaddr), have,
-                     list.words[i].word);
+      std::memcpy(&have, mem + list.pins.words[i].vaddr, sizeof(have));
+      if (have != list.pins.words[i].word) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#x, pinned %#x\n", list.what, list.pins.words[i].what, static_cast<unsigned long long>(list.pins.words[i].vaddr), have,
+                     list.pins.words[i].word);
+        QCHECK(false);
+      }
+    }
+    for (std::size_t i = 0; i < list.pins.quadCount; ++i) {
+      std::uint64_t have = 0;
+      std::memcpy(&have, mem + list.pins.quads[i].vaddr, sizeof(have));
+      if (have != list.pins.quads[i].value) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#llx, pinned %#llx\n", list.what, list.pins.quads[i].what, static_cast<unsigned long long>(list.pins.quads[i].vaddr),
+                     static_cast<unsigned long long>(have), static_cast<unsigned long long>(list.pins.quads[i].value));
         QCHECK(false);
       }
     }

@@ -13,9 +13,14 @@
  *   CR15NetGame::SendLobbyMemberEvent @ 0x125168c builds the same user id and bounds: member count u16 at net+0xe2, a second count u16 at net+0xdc, the slot
  *       u16 at member+0x178 masked with 0x1f, the generation u16 at net + slot*4 + 0x13a, the id `slot | gen << 16`
  *
- * [UNVERIFIED] Not read in the disassembly, kept as the reference build has them (afk_gunconnect.cpp:91-93 and the passes below it): the gun CS's
- * key 0x7a804a0a9b2f5386, net+0xde, net+0x138 (the member index of a slot), inst+0xd8 (the gun's state: 3 never processed, 1 disconnected, 0
- * connected) and cs+0x1c0 (the connect ring count). They are the conditions the reference build adds to Connect's own; Connect does not read them.
+ * The gun system's key is the record of the name `R14NetGun`, which `CR15NetGunCS::DefaultName` @ 0x2225c5c returns (`add x8,x8,#0x43c` at 0x2225c60, then the 8
+ * bytes at 0x3184438); `FindRequiredComponentSystemMT<CR15NetGunCS>` @ 0x2106738 searches the gamespace's list for it (gamespace_targets.h). The connect ring is the
+ * count `CR15NetGunCS::ExclusiveUpdateConnect` @ 0x215330c tests (`ldr x8,[x0,#0x1c0]; cbz` at 0x2153320; the game loads it as a u64) and a gun's state is the u32 it
+ * tests at inst+0xd8 (`cbnz` at 0x21533dc; 1 is the value it stores on its disconnect path).
+ *
+ * [UNVERIFIED] Not found as a direct load in the disassembly: net+0x138 (the member index of a slot; it follows the compact-pool layout the verified generation at
+ * +0x13a shows), and that inst+0xd8 == 0 is what Connect stores for a connected gun. net+0xde is the local-user count (`CR15NetGame::PartyCount` @ 0x1241f90 tests it
+ * and then asks member 0): an inference that member 0 is the local user.
  */
 #pragma once
 
@@ -35,18 +40,18 @@ inline constexpr const char* kGunCsVtableSymbol = "_ZTVN10NRadEngine8NRadGame12C
 inline constexpr std::uint64_t kGunCsVtableVaddr = 0x3696040ULL;
 inline constexpr std::uint64_t kGunCsVptrVaddr = kGunCsVtableVaddr + 0x10;  // an object's first word
 
-inline constexpr std::uint64_t kGunCsKey = 0x7a804a0a9b2f5386ULL;  // [UNVERIFIED] the reference build's constant
+inline constexpr std::uint64_t kGunCsKey = 0x7a804a0a9b2f5386ULL;  // the record of R14NetGun
 
 // The gun CS (Connect's loop).
 inline constexpr std::uintptr_t kGunCount = 0xf2, kInstances = 0xf8, kProperties = 0xb8, kInstanceStride = 0x168, kPropertyIndex = 0xa0;
 inline constexpr std::uintptr_t kPropertyStride = 0xa0, kPropertyOwner = 0x20, kPropertyFlag = 0x9c;
-// [UNVERIFIED] The reference build's own conditions.
+// ExclusiveUpdateConnect's own conditions.
 inline constexpr std::uintptr_t kInstanceState = 0xd8, kConnectRing = 0x1c0;
 // The local member (SendLobbyMemberEvent's id).
 inline constexpr std::uintptr_t kMemberCount = 0xe2, kMemberCountCheck = 0xdc, kMemberRowSlot = 0x178, kSlotGeneration = 0x13a, kSlotStride = 4;
 inline constexpr std::uint32_t kSlotMask = 0x1f;
 inline constexpr std::uintptr_t kMemberStride = 0x250, kMemberGuid = 0x180;
-// [UNVERIFIED] The reference build's: net+0xde (non-zero), net+0x138 (a slot's member index).
+// net+0xde (non-zero; an inference, see above) and net+0x138 (a slot's member index; [UNVERIFIED]).
 inline constexpr std::uintptr_t kNetReady = 0xde, kSlotMember = 0x138;
 
 inline constexpr pinned::Word kWords[] = {
@@ -71,6 +76,19 @@ inline constexpr pinned::Word kWords[] = {
     {"SendLobbyMemberEvent: add x9,x20,x8,lsl #2", 0x125172cULL, 0x8b080a89U},
     {"SendLobbyMemberEvent: ldrh w9,[x9,#0x13a] (generation)", 0x1251730ULL, 0x79427529U},
 };
+
+inline constexpr pinned::Quad kQuads[] = {
+    {"R14NetGun's record (the gun system's key)", 0x3184438ULL, kGunCsKey},
+};
+inline constexpr pinned::Word kConnectWords[] = {
+    {"CR15NetGunCS::DefaultName: add x8,x8,#0x43c (the record's address)", 0x2225c60ULL, 0x9110f108U},
+    {"ExclusiveUpdateConnect: ldr x8,[x0,#0x1c0] (the ring)", 0x2153320ULL, 0xf940e008U},
+    {"ExclusiveUpdateConnect: ldr w9,[x27,#0xd8] (a gun's state)", 0x21533dcULL, 0xb940db69U},
+};
+static_assert(pinned::LdrXOffset(kConnectWords[1].word) == kConnectRing, "the pinned word does not carry kConnectRing");
+static_assert(pinned::LdrWOffset(kConnectWords[2].word) == kInstanceState, "the pinned word does not carry kInstanceState");
+inline constexpr pinned::Pins kPins = {kWords, sizeof(kWords) / sizeof(kWords[0]), kQuads, sizeof(kQuads) / sizeof(kQuads[0])};
+inline constexpr pinned::Pins kConnectPins = {kConnectWords, sizeof(kConnectWords) / sizeof(kConnectWords[0]), nullptr, 0};
 
 static_assert(pinned::LdrhOffset(kWords[0].word) == kGunCount, "the pinned word does not carry kGunCount");
 static_assert(pinned::MovImmediate(kWords[1].word) == kPropertyStride, "the pinned word does not carry kPropertyStride");

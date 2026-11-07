@@ -29,11 +29,13 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/netgame_targets.h"
 #include "quest/combat/safe_read.h"
 #include "quest/combat/weapon_arm_targets.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_pins.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -273,6 +275,30 @@ void AMarkerThatCannotBeWrittenIsLoud() {  // the set is made, then the director
   CHECK(wa::Phase() == 2, "not done");
 }
 
+// A profile that has saved a gun hand keeps it: the key is present (0 or 1), so the module writes the marker and sets nothing. A missing marker alone (a reinstall)
+// arms nothing for such a profile, and a profile that has never saved one is still set.
+void ASavedGunHandIsKeptWithOrWithoutAMarker() {
+  for (const long long saved : {0LL, 1LL}) {
+    Reset(1, 0, saved);  // the component reads left; the profile holds `weaponarm` saved
+    for (int i = 0; i < 4; ++i) Pass();
+    CHECK(g_setCalls == 0 && g_queueCalls == 0, "profile weaponarm %lld was overwritten", saved);
+    CHECK(FileExists("t26arm.OVR-ORG-1234567890") && HasLine("combat_weapon_arm_done", "\"outcome\":\"profile has a saved gun hand, nothing changed\"", kInfo), "no marker for a saved hand");
+    // the marker is gone (a reinstall): the next launch reads the profile again and still sets nothing
+    ClearDir();
+    wa::ResetForTest();
+    wa::SetClockForTest(&Clock);
+    wa::SetLegacyDirForTest(g_dir.c_str());
+    nevr_quest::combat::tick::ResetForTest();
+    QCHECK(wa::InstallResolved(kBase, Fns()).installed);
+    for (int i = 0; i < 6; ++i) Pass();
+    CHECK(g_setCalls == 0 && g_queueCalls == 0, "a missing marker set the hand of a profile that holds weaponarm %lld", saved);
+  }
+  // the control: a profile with no saved hand is set, marker or not
+  Reset(1, 0, -1);
+  for (int i = 0; i < 3; ++i) Pass();
+  CHECK(g_setCalls == 1, "a profile that never saved a hand was not set");
+}
+
 void AMarkerFromAnEarlierLaunch() {  // 5
   Reset(1, 0, -1);
   std::FILE* m = std::fopen((g_dir + "/t26arm.OVR-ORG-1234567890").c_str(), "w");
@@ -446,7 +472,9 @@ std::uint32_t ReadsPerScan(std::uintptr_t game) {
 }
 
 void ArenaAndOtherLevelsAreLeftAlone() {  // 17
-  const char* quiet[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_social", "mpl_lobby_b_arena"};
+  // The combat lobby is quiet too: its script is shared with the arena lobby, and it is not established that an arena player never has it loaded.
+  const char* quiet[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_social", "mpl_lobby_b_arena",
+                         "mpl_lobby_b_combat"};
   for (const char* name : quiet) {
     Reset(1, 0, -1, name);
     const std::uint32_t perScan = ReadsPerScan(reinterpret_cast<std::uintptr_t>(g_game));
@@ -472,8 +500,8 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
   CHECK(g_setCalls == 0, "no hold after leaving the arena level");
   Pass();
   CHECK(g_setCalls == 1, "not set in the combat level");
-  // every combat level, and the combat lobby, goes on
-  for (const char* name : {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss", "mpl_lobby_b_combat"}) {
+  // every combat map goes on
+  for (const char* name : {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"}) {
     Reset(1, 0, -1, name);
     for (int i = 0; i < 4; ++i) Pass();
     CHECK(g_setCalls == 1, "%s: %d sets", name, g_setCalls);
@@ -489,9 +517,9 @@ void TheInstallOnAnImage() {  // 18
     *out = sImage->Elf();
     return true;
   };
-  auto put = [&image] {
-    for (const auto& w : nevr_quest::combat::netgame::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
-  };
+  const nevr_quest::combat::pinned::Pins pins[] = {nevr_quest::combat::weapon_arm::targets::kPins, nevr_quest::combat::netgame::kPins,
+                                                   nevr_quest::combat::gamespace::targets::kPins};
+  auto put = [&] { combat_test::PutPins(image, pins, 3); };
   auto begin = [&] {
     g_lines.clear();
     nevr_quest::combat::tick::ResetForTest();
@@ -530,13 +558,13 @@ void TheInstallOnAnImage() {  // 18
     CHECK(!r.installed && std::strcmp(r.status, "export_elsewhere") == 0 && nevr_quest::combat::tick::Count() == 0, "a name elsewhere installed: %s", sym);
   }
   sWrong = nullptr;
-  for (const auto& w : nevr_quest::combat::netgame::kWords) {
-    image.Put<std::uint32_t>(w.vaddr, w.word ^ 1u);
+  const std::size_t bent = combat_test::ForEachBentPin(image, pins, 3, [&](const char* what) {
     begin();
     r = wa::InstallAt(lookup, symbols, true);
-    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0, "word %s: %s", w.what, r.status);
-    image.Put<std::uint32_t>(w.vaddr, w.word);
-  }
+    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_weapon_arm_pinned_word", what), "pin %s: %s",
+          what, r.status);
+  });
+  CHECK(bent >= 15, "only %zu pins were bent", bent);
   begin();
   for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) nevr_quest::combat::tick::Add([](std::uintptr_t) noexcept {});
   r = wa::InstallAt(lookup, symbols, true);
@@ -588,6 +616,7 @@ int main() {
   TheDeferredRoute();
   AlreadyRight();
   AMarkerThatCannotBeWrittenIsLoud();
+  ASavedGunHandIsKeptWithOrWithoutAMarker();
   AMarkerFromAnEarlierLaunch();
   GivingUp();
   AnInvalidComponent();

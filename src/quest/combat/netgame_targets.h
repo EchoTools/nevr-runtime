@@ -29,6 +29,8 @@ inline constexpr pinned::Word kWords[] = {
     {"UserActor: ldr x0,[x0,#8] (the game)", 0x1251674ULL, 0xf9400400U},
 };
 
+inline constexpr pinned::Pins kPins = {kWords, sizeof(kWords) / sizeof(kWords[0]), nullptr, 0};
+
 static_assert(pinned::MovImmediate(kWords[0].word) == kNetGameOffset, "the pinned word does not carry kNetGameOffset");
 static_assert(pinned::LdrXOffset(kWords[2].word) == kNetGameGame, "the pinned word does not carry kNetGameGame");
 

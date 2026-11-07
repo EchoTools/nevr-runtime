@@ -118,18 +118,19 @@ void Look(std::uintptr_t game, double now) noexcept {
     return;
   }
   if (g_inSince < 0) g_inSince = now;
-  if (!g_called && !g_idleLogged && now - g_inSince >= kIdleLogS) {  // in a match this long and still nothing to do: say why, once
+  // The game's own combat flag first: in an arena match it is 0 and the look ends here, with four reads and no line, however long the match lasts.
+  const auto combat = SafeRead<std::uint8_t>(net + at::kNetMatchIsCombat, &ok);
+  if (!ok || combat == 0) return;
+  if (!g_called && !g_idleLogged && now - g_inSince >= kIdleLogS) {  // in a combat match this long and still nothing to do: say why, once
     g_idleLogged = true;
     bool ok3 = true;
-    const auto c = SafeRead<std::uint8_t>(net + at::kNetMatchIsCombat, &ok3);
     const auto sc = SafeRead<std::uintptr_t>(net + at::kNetScenarios, &ok3);
     const auto n = sc != 0 ? SafeRead<std::uint32_t>(sc + at::kScenBotCount, &ok3) : 0u;
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_aibots_idle",
-                        {{"matchiscombat", c}, {"scenarios_object", sc != 0 ? "yes" : "no"}, {"scenario", g_scenario}, {"bots", n},
-                         {"read_failed", ok3 ? 0 : 1}, {"msg", "ten seconds in game and EnableScenario has not been called"}});
+                        {{"matchiscombat", combat}, {"scenarios_object", sc != 0 ? "yes" : "no"}, {"scenario", g_scenario}, {"bots", n},
+                         {"read_failed", ok3 ? 0 : 1}, {"msg", "ten seconds in a combat match and EnableScenario has not been called"}});
   }
-  const auto combat = SafeRead<std::uint8_t>(net + at::kNetMatchIsCombat, &ok);
-  if (!ok || combat == 0 || g_scenario < 0) return;
+  if (g_scenario < 0) return;
   const auto scen = SafeRead<std::uintptr_t>(net + at::kNetScenarios, &ok);
   if (!ok || scen == 0) return;
   const long long count = SafeRead<std::uint32_t>(scen + at::kScenBotCount, &ok);
@@ -283,16 +284,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, const
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id", "");
   if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");
-  std::uint32_t have = 0;
-  bool readable = true;
-  const pinned::Word* mismatch = pinned::FirstMismatch(image.base, at::kWords, sizeof(at::kWords) / sizeof(at::kWords[0]), &have, &readable);
-  if (mismatch == nullptr) mismatch = pinned::FirstMismatch(image.base, netgame::kWords, sizeof(netgame::kWords) / sizeof(netgame::kWords[0]), &have, &readable);
-  if (mismatch != nullptr) {
+  const pinned::Pins lists[] = {at::kPins, netgame::kPins};
+  pinned::Failure failure;
+  if (pinned::FirstFailure(image.base, lists, sizeof(lists) / sizeof(lists[0]), &failure)) {
     char atText[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_aibots_pinned_word",
-                        {{"vaddr", sentinel::HexString(atText, mismatch->vaddr)}, {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
-                         {"want", sentinel::HexString(wantText, mismatch->word)}, {"what", mismatch->what}});
-    return Refused("pinned_word_mismatch", mismatch->what);
+                        {{"vaddr", sentinel::HexString(atText, failure.vaddr)}, {"have", failure.readable ? sentinel::HexString(haveText, failure.have) : "unreadable"},
+                         {"want", sentinel::HexString(wantText, failure.want)}, {"what", failure.what}});
+    return Refused("pinned_word_mismatch", failure.what);
   }
   Fns fns{};
   const char* why = "";

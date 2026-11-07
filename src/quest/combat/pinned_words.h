@@ -21,6 +21,13 @@ struct Word {
   std::uint32_t word;
 };
 
+// Eight bytes of the game's data that a constant of ours is, read from the file: the CSymbol64 record a component system's DefaultName returns, for one.
+struct Quad {
+  const char* what;
+  std::uint64_t vaddr;
+  std::uint64_t value;
+};
+
 // One function of the game, by its exported name and its ELF virtual address.
 struct Symbol {
   const char* symbol;
@@ -34,20 +41,52 @@ constexpr std::uintptr_t LdrWOffset(std::uint32_t word) { return static_cast<std
 constexpr std::uintptr_t LdrhOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 2; }
 constexpr std::uintptr_t LdrQOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 16; }
 constexpr std::uintptr_t LdrbOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff); }
+// `stur q, [x, #imm]`: the signed 9-bit offset in bits 12-20.
+constexpr std::uintptr_t SturOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 12) & 0x1ff); }
 // `add x, x, #imm` and `mov w, #imm`.
 constexpr std::uintptr_t AddImmediate(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff); }
 constexpr std::uintptr_t MovImmediate(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 5) & 0xffff); }
 
-// The first word at which `have` differs from the pinned `words[0..count)` in the libr15 loaded at `base`, or null when every word holds. An
-// unreadable word is a mismatch (`readable` false).
-inline const Word* FirstMismatch(std::uintptr_t base, const Word* words, std::size_t count, std::uint32_t* have, bool* readable) noexcept {
-  for (std::size_t i = 0; i < count; ++i) {
-    std::uint32_t word = 0;
-    *readable = SafeRead(base + words[i].vaddr, &word, sizeof(word));
-    *have = word;
-    if (!*readable || word != words[i].word) return &words[i];
+// The lists one module pins: instruction words and 8-byte records.
+struct Pins {
+  const Word* words;
+  std::size_t wordCount;
+  const Quad* quads;
+  std::size_t quadCount;
+};
+
+// What failed to hold: the word or record, what it holds (`have`, valid when `readable`) and what is pinned.
+struct Failure {
+  const char* what = "";
+  std::uint64_t vaddr = 0;
+  std::uint64_t have = 0;
+  std::uint64_t want = 0;
+  bool readable = true;
+};
+
+// The first pinned word or record that is not the file's in the libr15 loaded at `base`, over every list; false when all hold.
+inline bool FirstFailure(std::uintptr_t base, const Pins* lists, std::size_t listCount, Failure* out) noexcept {
+  for (std::size_t l = 0; l < listCount; ++l) {
+    for (std::size_t i = 0; i < lists[l].wordCount; ++i) {
+      const Word& w = lists[l].words[i];
+      std::uint32_t have = 0;
+      const bool readable = SafeRead(base + w.vaddr, &have, sizeof(have));
+      if (!readable || have != w.word) {
+        *out = Failure{w.what, w.vaddr, have, w.word, readable};
+        return true;
+      }
+    }
+    for (std::size_t i = 0; i < lists[l].quadCount; ++i) {
+      const Quad& q = lists[l].quads[i];
+      std::uint64_t have = 0;
+      const bool readable = SafeRead(base + q.vaddr, &have, sizeof(have));
+      if (!readable || have != q.value) {
+        *out = Failure{q.what, q.vaddr, have, q.value, readable};
+        return true;
+      }
+    }
   }
-  return nullptr;
+  return false;
 }
 
 }  // namespace nevr_quest::combat::pinned

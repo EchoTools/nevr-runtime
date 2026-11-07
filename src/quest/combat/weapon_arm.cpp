@@ -14,6 +14,7 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/gamespace.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
 #include "quest/combat/safe_read.h"
@@ -93,9 +94,11 @@ void WriteMarker(const char* outcome, std::uint32_t arm, long long profArm) noex
   g_done.store(true, std::memory_order_release);
 }
 
+// A combat map only: the combat lobby is not in scope, because the lobby script is shared with the arena lobby and it is not established that an arena player
+// never has mpl_lobby_b_combat loaded (docs/quest/combat/headset_gates.md). The hand is only meaningful in a match.
 bool InScope(std::uintptr_t game) noexcept {
   std::uint64_t levelId = 0;
-  return level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
+  return level::Classify(game, /*lobby=*/false, &levelId) == level::Kind::kCombatOrLobby;
 }
 
 void Step(std::uintptr_t game, double now) noexcept {
@@ -182,8 +185,14 @@ void Step(std::uintptr_t game, double now) noexcept {
     g_hold = 0;
   }
   if (++g_hold < kHold) return;
-  if (arm == 1 || profArm == 1) {
+  if (arm == 1) {
     WriteMarker("weaponarm right already, nothing changed", arm, profArm);
+    return;
+  }
+  // The profile has saved a gun hand (the key is present; CJson::Int answers -1 for an absent key): the player's choice stands, left or right. Only a profile that
+  // has never saved one is set. SetWeaponArm is stored by SavePlayerEquipment into the profile's `weaponarm` key, so a set here is a change to the saved profile.
+  if (profArm != -1) {
+    WriteMarker("profile has a saved gun hand, nothing changed", arm, profArm);
     return;
   }
   bool ok = true;
@@ -197,6 +206,7 @@ void Step(std::uintptr_t game, double now) noexcept {
     g_f.setArm(reinterpret_cast<void*>(cs), ph & 0xffffffffull, 1);
   } else {  // the deferral the station's hand swap uses: SFunctor2<void, CS, SCompactPoolHandle, ull> {CS, &SetWeaponArm adj 0, ph, arg}
     char* const q = static_cast<char*>(g_f.queue(reinterpret_cast<void*>(gs + wt::kGamespaceQueue), reinterpret_cast<void (*)(void*, char*)>(g_f.invoke)));
+    // QueueFunctor never returns null: it traps when the queue is full (0x24acd4c), so this branch is dead code kept as a guard, not a survival of a full queue.
     if (q == nullptr) {
       Waiting("deferred queue returned no slot");
       return;
@@ -289,15 +299,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id", "");
   if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");
-  std::uint32_t have = 0;
-  bool readable = true;
-  const pinned::Word* const mismatch = pinned::FirstMismatch(image.base, netgame::kWords, sizeof(netgame::kWords) / sizeof(netgame::kWords[0]), &have, &readable);
-  if (mismatch != nullptr) {
+  const pinned::Pins lists[] = {wt::kPins, netgame::kPins, gamespace::targets::kPins};
+  pinned::Failure failure;
+  if (pinned::FirstFailure(image.base, lists, sizeof(lists) / sizeof(lists[0]), &failure)) {
     char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_weapon_arm_pinned_word",
-                        {{"vaddr", sentinel::HexString(at, mismatch->vaddr)}, {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
-                         {"want", sentinel::HexString(wantText, mismatch->word)}, {"what", mismatch->what}});
-    return Refused("pinned_word_mismatch", mismatch->what);
+                        {{"vaddr", sentinel::HexString(at, failure.vaddr)}, {"have", failure.readable ? sentinel::HexString(haveText, failure.have) : "unreadable"},
+                         {"want", sentinel::HexString(wantText, failure.want)}, {"what", failure.what}});
+    return Refused("pinned_word_mismatch", failure.what);
   }
   Fns fns{};
   const char* why = "";

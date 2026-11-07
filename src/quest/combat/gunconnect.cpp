@@ -11,6 +11,7 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/gamespace.h"
+#include "quest/combat/gamespace_targets.h"
 #include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
@@ -45,7 +46,8 @@ struct Local {
 
 struct GunCounts {
   bool ok = true;
-  std::uint32_t guns = 0, local = 0, unconnected = 0, ring = 0;
+  std::uint32_t guns = 0, local = 0, unconnected = 0;
+  std::uint64_t ring = 0;  // the game loads it as a u64 (ExclusiveUpdateConnect)
 };
 
 // The module's state. The install fills it on the thread that ran the normal step and registers the callback after, so the game thread's first
@@ -154,7 +156,7 @@ GunCounts CountGuns(std::uintptr_t cs, std::uint32_t slot) noexcept {
   GunCounts c;
   bool ok = true;
   c.guns = SafeRead<std::uint16_t>(cs + gt::kGunCount, &ok);
-  c.ring = SafeRead<std::uint32_t>(cs + gt::kConnectRing, &ok);
+  c.ring = SafeRead<std::uint64_t>(cs + gt::kConnectRing, &ok);
   const auto insts = SafeRead<std::uintptr_t>(cs + gt::kInstances, &ok);
   const auto props = SafeRead<std::uintptr_t>(SafeRead<std::uintptr_t>(cs + gt::kProperties, &ok), &ok);
   if (!ok || c.guns > kMaxGuns) {
@@ -305,16 +307,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id", "");
   if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");
-  std::uint32_t have = 0;
-  bool readable = true;
-  const pinned::Word* mismatch = pinned::FirstMismatch(image.base, gt::kWords, sizeof(gt::kWords) / sizeof(gt::kWords[0]), &have, &readable);
-  if (mismatch == nullptr) mismatch = pinned::FirstMismatch(image.base, netgame::kWords, sizeof(netgame::kWords) / sizeof(netgame::kWords[0]), &have, &readable);
-  if (mismatch != nullptr) {
+  const pinned::Pins lists[] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};
+  pinned::Failure failure;
+  if (pinned::FirstFailure(image.base, lists, sizeof(lists) / sizeof(lists[0]), &failure)) {
     char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_gunconnect_pinned_word",
-                        {{"vaddr", sentinel::HexString(at, mismatch->vaddr)}, {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
-                         {"want", sentinel::HexString(wantText, mismatch->word)}, {"what", mismatch->what}});
-    return Refused("pinned_word_mismatch", mismatch->what);
+                        {{"vaddr", sentinel::HexString(at, failure.vaddr)}, {"have", failure.readable ? sentinel::HexString(haveText, failure.have) : "unreadable"},
+                         {"want", sentinel::HexString(wantText, failure.want)}, {"what", failure.what}});
+    return Refused("pinned_word_mismatch", failure.what);
   }
   Fns fns{};
   const char* why = "";
