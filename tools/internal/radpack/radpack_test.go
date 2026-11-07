@@ -197,7 +197,8 @@ func TestAManifestWhoseCountsWrapItsSizeIsRefused(t *testing.T) {
 	binary.LittleEndian.PutUint64(plain[descChunks+0x30:], 1+1<<60)
 	if _, err := ParsePlain(plain); err == nil {
 		t.Error("a manifest whose chunk count wraps its size was read")
-	}	// 0x48 bytes of tables, and resource and file counts of 1+2^61: each times its record size, summed, wraps to 0x48.
+	}
+	// 0x48 bytes of tables, and resource and file counts of 1+2^61: each times its record size, summed, wraps to 0x48.
 	plain = make([]byte, tablesStart+resSize+fileSize)
 	binary.LittleEndian.PutUint64(plain[descRes+0x30:], 1+1<<61)
 	binary.LittleEndian.PutUint64(plain[descFiles+0x30:], 1+1<<61)
