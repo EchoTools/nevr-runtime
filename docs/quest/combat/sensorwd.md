@@ -20,7 +20,8 @@ Upstream's level answer passes when the level is unknown (`IsoCombat`, `:151`: "
 
 ## Default
 
-On. kotorvr's build turns the watchdog on with a `sensorwd.on` file (`afk_fx.cpp:7911-7916`) and gates it to combat maps by default (`afk_fx.cpp:127-137`); the plugin's `Q15T_SENSORWD` was on.
+On, as the q15t plugin's `Q15T_SENSORWD` was by default in v6.16.5 (`9f8b01a`, "wired as Q15T_SENSORWD (default ON, OFF in the test arms)", `docs/audits/2026-11-05-q15t-origin-citations.md`).
+Upstream the watchdog is opt-in: a `sensorwd.on` file turns it on (`afk_fx.cpp:7911-7916`), and it is gated to combat maps (`afk_fx.cpp:127-137`); whether a shipped upstream build carried that file is not shown here.
 **No headset run of ours has shown it acting:** the q15t sessions log the plugin's three `word swapped` lines and `sensorwd on` and nothing after, and the reference build's combat match counts
 `fxsensor: counts event tp 0 fp 0 sphere en 0 dis 0 wd off 0 back 0` (`run-quest2-sheet8`): no TriggeredPing, no sphere enable, no watchdog action. Its headset row requires the acting lines below.
 
@@ -125,7 +126,7 @@ On a combat APK built at a tag after this unit, or a development APK repacked wi
 | slots | 32 | `afk_fx.cpp:6121` |
 | entry layout | `[cs+0xd0]`, `4*(h&0xffff)`, `[cs+0x100]`, `16*idx`, `+8` model, `+4` visible, `[model+0xcc8]` name | `afk_fx.cpp:6113-6114`, `:6141-6152`; disassembly for all but `+0xcc8` (above) |
 | watchdog logic | forced / back-on / off | `afk_fx.cpp:6204-6243` (the tick), `:6246-6258` (the ping it waits for) |
-| default | ON | `afk_fx.cpp:7911-7916` (the `sensorwd.on` file), `:127-137` (the gate) |
+| default | ON here (the plugin's `Q15T_SENSORWD`, default on in v6.16.5); opt-in upstream | `afk_fx.cpp:7911-7916` (the `sensorwd.on` file that turns it on), `:127-137` (the gate) |
 
 ## Code-word pins (34, all read in the disassembly)
 
