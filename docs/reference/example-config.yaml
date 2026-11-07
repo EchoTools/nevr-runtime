@@ -305,7 +305,7 @@ combat:
   # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
   # drone: false            # DRONE. Default: true.
   # overcharge: false       # OVERCHARGE. Default: true.
-  # medigun: true           # MEDIGUN (needs overcharge and veil; a client follows its server's answer). Default: false.
+  # medigun: true           # MEDIGUN (needs overcharge and veil; a client shows it only on a server that states it, #2333). Default: false.
   # veil: false             # UMBRAL VEIL and the combat net. Default: true.
   # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
   # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.

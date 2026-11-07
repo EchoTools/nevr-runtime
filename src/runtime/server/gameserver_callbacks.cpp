@@ -12,10 +12,12 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include "core/auth_token.h"
 #include "core/auth_token_refresh.h"
+#include "runtime/combat/combat.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/lifecycle/crash_recovery.h"  // PerformGracefulShutdown
 #include "runtime/lifecycle/return_to_lobby.h"
@@ -70,6 +72,9 @@ void StoreSessionGameType(const std::string& gameType, const char* source, const
 }
 
 }  // namespace
+
+// The server states its features in the lobby settings of a new session (#2333); defined beside the relay below.
+static void StateServerFeatures(GameServerLib* self);
 
 // --- TCP Broadcaster Callbacks ---
 
@@ -153,6 +158,9 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       }
       // A new session on this server: the exit watchdog of the session that ended before it (#1756) must not fire.
       self->CancelEndedSessionWatchdog();
+
+      // #2333: the clients of this session learn what the server runs from the game's lobby settings document.
+      StateServerFeatures(self);
 
       // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
       // It is stored for every session, telemetry or not: the session's step follows it (#1785).
@@ -746,10 +754,9 @@ static_assert(nevr_game_server::kLobbySettingsAllPeers == EchoVR::Peer_AllPeers,
 // so this raises the local event the game's local handler stores, and sends the same document to every peer
 // that is connected now. Peers accepted later get it from the game (AcceptPlayersSuccessCBHost, 0x140603e20).
 // Runs from GameServerLib::Update() through WebSocketClient::ProcessReceivedMessages: the game thread.
-static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT64 size) {
-  auto& context = self->GetContext();
-  EchoVR::Broadcaster* broadcaster = context.GetBroadcaster();
-
+// The two game calls the relay and the server's own document go through (#905, #2333): the local event the game's
+// local handler stores at NetGame+0x63260, and CBroadcaster::Send to every connected peer.
+static nevr_game_server::LobbySettingsSinks LobbySettingsSinksFor(EchoVR::Broadcaster* broadcaster) {
   nevr_game_server::LobbySettingsSinks sinks;
   if (broadcaster != nullptr && EchoVR::BroadcasterReceiveLocalEvent != nullptr && EchoVR::BroadcasterSend != nullptr) {
     sinks.raiseLocalEvent = [broadcaster](void* message, uint64_t messageSize) {
@@ -764,21 +771,51 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
                                      ~0ULL, 1.0f, static_cast<EchoVR::SymbolId>(-1));
     };
   }
+  return sinks;
+}
 
-  const std::string session = context.GetSessionState().lobbySessionId;
-  const nevr_game_server::LobbySettingsReport report = nevr_game_server::RelayLobbySettings(data, size, session, sinks);
+static void LogLobbySettingsReport(const nevr_game_server::LobbySettingsReport& report) {
   const EchoVR::LogLevel level = report.level == nevr_game_server::LobbySettingsLogLevel::kWarning
                                      ? EchoVR::LogLevel::Warning
                                      : EchoVR::LogLevel::Info;
   Log(level, "%s", report.line.c_str());
+}
+
+// The game service's lobby settings document (#905). The ServerDB frame carries the TCP form of the message;
+// the dedicated server never registers the game's TCP handler (PatchEnableServer forces the local handler set),
+// so this raises the local event the game's local handler stores, and sends the same document to every peer
+// that is connected now. Peers accepted later get it from the game (AcceptPlayersSuccessCBHost, 0x140603e20).
+// The server's own key (its features, #2333) is set in the document first, so the service's document never takes it
+// away. Runs from GameServerLib::Update() through WebSocketClient::ProcessReceivedMessages: the game thread.
+static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT64 size) {
+  auto& context = self->GetContext();
+  const nevr_game_server::LobbySettingsSinks sinks = LobbySettingsSinksFor(context.GetBroadcaster());
+  const std::string session = context.GetSessionState().lobbySessionId;
+  const std::vector<std::string> features = nevr_combat::ServerFeatures();
+  const nevr_game_server::LobbySettingsReport report =
+      nevr_game_server::RelayLobbySettings(data, size, session, sinks, &features);
+  LogLobbySettingsReport(report);
   if (report.relayed) {
     nevr_game_server::LobbySettingsRecord record;
     record.present = true;
     record.wireBytes = report.wireBytes;
     record.jsonBytes = report.jsonBytes;
     record.sessionId = session;
+    record.json = report.serviceJson;
     context.RecordLobbySettings(record);
   }
+}
+
+// The server states its features to the clients of a new session (#2333): its own lobby settings document, with the
+// service's keys when the service already sent one for this session. Called once the session has started (the
+// record of the previous session's document is cleared then), on the game thread.
+static void StateServerFeatures(GameServerLib* self) {
+  auto& context = self->GetContext();
+  const nevr_game_server::LobbySettingsRecord record = context.GetLobbySettings();
+  const std::string session = context.GetSessionState().lobbySessionId;
+  const std::string serviceJson = record.present && record.sessionId == session ? record.json : std::string();
+  LogLobbySettingsReport(nevr_game_server::RaiseServerLobbySettings(nevr_combat::ServerFeatures(), serviceJson, session,
+                                                                    LobbySettingsSinksFor(context.GetBroadcaster())));
 }
 
 // How long after ServerDB's CODE_ENDED the process may stay up before it is ended (#1756). The clean path takes

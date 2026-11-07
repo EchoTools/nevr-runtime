@@ -2,6 +2,7 @@
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/compat/login_profile.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
@@ -617,6 +618,25 @@ static std::optional<nevr_lobby_frame::PartyContext> LobbyParty(nevr_social_part
                                         view.selfId};
 }
 
+// #2333: a session in another lobby begins, so what the previous server stated about itself (its EchoCombat features,
+// compat/server_features.h) no longer holds; the new server's lobby settings set it again when the game receives them.
+// A second success for the lobby the client is already in changes nothing.
+static std::mutex g_featuresLobbyMutex;
+static nevr_lobby_frame::Guid g_featuresLobby{};  // guarded by g_featuresLobbyMutex
+static void ClearServerFeaturesOnNewLobby(const nevr_lobby_frame::Guid& lobby) {
+  bool wasOpen = false;
+  {
+    std::lock_guard<std::mutex> lock(g_featuresLobbyMutex);
+    if (lobby == g_featuresLobby) return;
+    g_featuresLobby = lobby;
+    wasOpen = nevr_server_features::Client().Clear();
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.WS] server features cleared lobby=%s was_stated=%s (the EchoCombat tac mods stay hidden until this "
+      "server's lobby settings state them)",
+      nevr_lobby_frame::FormatGuidOrNone(lobby).c_str(), wasOpen ? "yes" : "no");
+}
+
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
@@ -644,6 +664,7 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
         break;
       case nevr_lobby_frame::Kind::Success:
         g_lobbyJoin.OnSuccess(state.lobby);
+        ClearServerFeaturesOnNewLobby(state.lobby);
         break;
       case nevr_lobby_frame::Kind::Failure:
         g_lobbyJoin.OnFailure(request.sent && request.kind == nevr_lobby_frame::Kind::Join);

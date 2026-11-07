@@ -33,10 +33,13 @@
 //     bumps the u32 there each time the veil is used on this machine.
 //
 // Clients say hello every 2 s; the server relays only to clients that have (so a
-// player without VeilNet never gets a packet the game would not understand), and answers
-// each hello with an 'A'. A client that has had no answer for SERVER_TIMEOUT is on a
-// server without EchoCombat: it hides the three new tac mods (UMBRAL VEIL, OVERCHARGE,
-// POINT) from the tac mod list until one comes (TacModsFor).
+// player without VeilNet never gets a packet the game would not understand).
+// nEVR port (#2333): the server no longer answers each hello with an 'A'. Whether a server
+// runs EchoCombat, and allows MEDIGUN, is the server's to state: it lists its features in
+// the lobby settings the game gives every client it accepts (runtime/compat/server_features.h),
+// and the client reads them where the game receives them (runtime/patch/lobby_settings_hook.h).
+// A client whose server states no EchoCombat hides the three new tac mods (UMBRAL VEIL,
+// OVERCHARGE, POINT) from the tac mod list (TacModsFor).
 // A nEVR plugin (nevr_plugin.h): set up from NvrPluginInitEx, taken down in
 // NvrPluginShutdown; the host says whether this is the server. Its lines go to nEVR's host
 // log, tagged plugin=VeilNet; the per-packet and per-tick lines are Debug.
@@ -66,6 +69,7 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <winsock2.h>
@@ -114,15 +118,15 @@ constexpr uint32_t MAGIC2 = 0x4c494556;         // "VEIL"
 constexpr uintptr_t TACMOD_LIST_RVA = 0x20d3430;
 constexpr size_t TACMOD_ENTRY = 0x88;
 const char *const kNewTacMods[3] = {"smoke", "buff", "point"};
-constexpr ULONGLONG SERVER_TIMEOUT = 6000;      // ms without an answer to the hello
+// nEVR port (#2333): SERVER_TIMEOUT (6 s without an answer to the hello) is gone with the answer.
 //: MEDIGUN is off unless the server turns it on: PowerBoost.ini [server] medigun=1 next to this
-//: DLL on the server. Its answer to each hello carries ANSWER_MEDIGUN when it does; a client
+//: DLL on the server (nEVR port: combat.medigun). nEVR port (#2333): the server states it as the
+//: feature echocombat_medigun in its lobby settings, not in an answer to each hello; a client
 //: shows MEDIGUN (the weapon list's last entry, fix_medigun.py appends it) only while its current
-//: server's answers say so, and PowerBoost.dll (VeilNet_MedigunAllowed) keeps it a plain COMET
+//: server states it, and PowerBoost.dll (VeilNet_MedigunAllowed) keeps it a plain COMET
 //: otherwise. The weapon list sits just before the tac mod list (gear_table order: weapons,
 //: ordnances, tac mods; each filled by +0xc4e410 from InitAndLoadGearTables).
 constexpr uintptr_t WEAPON_LIST_RVA = 0x20d3420;
-constexpr uint32_t ANSWER_MEDIGUN = 1;
 bool g_medigun_on_server = false;               // server: [server] medigun (nEVR port: combat.medigun)
 bool g_match_control = false;                   // nEVR port: combat.match_control
 bool g_quick_exit = false;                      // nEVR port: the clean exit is in place
@@ -773,8 +777,9 @@ uint32_t LoadoutMode() {
     uint32_t m = g_server ? (uint32_t)g_classic : g_rules ? g_rules[CLASSIC_SHOWN] : 0;
     return m <= LOADOUT_NEW ? m : LOADOUT_ALL;
 }
-volatile ULONGLONG g_last_answer = 0;           // client: when the server last answered a hello
-volatile uint32_t g_last_answer_flags = 0;      // ... and what it said (ANSWER_MEDIGUN)
+// nEVR port (#2333): g_last_answer and g_last_answer_flags are gone with the answer; the current server's statement
+// is nevr_server_features::Client() (server_features.h).
+bool MedigunAllowedNow();   // nEVR port (#2333): defined with the weapon list below
 
 // RULES CAPTURE TIME 0 = an instant capture. The script stores the capture time as float(T mod 60),
 // so a chosen 0 looks like "unset" (the map's own); while T is set it is made 1 ms here instead.
@@ -791,7 +796,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         Remember(s, from);
         if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
-            Send(s, from, 'A', g_medigun_on_server ? ANSWER_MEDIGUN : 0);   // "this server has EchoCombat"
+            // nEVR port (#2333): no 'A' ("this server has EchoCombat"): the server states that in its lobby settings.
             uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
             if (total) Send(s, from, 'R', total);                            // its RULES unlock / capture time
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
@@ -884,13 +889,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             LogDebug("%s %08x from %s: %srelayed to %d client(s)", What(p.type), p.id,
                 Addr(from, buf, sizeof(buf)), p.type != 'T' ? "token here, " : "", n);
         }
-    } else if (p.type == 'A') {
-        Dest d;                                          // only the current server's answer counts
-        if (ServerDest(d) && Same(d.addr, from)) {
-            g_last_answer = GetTickCount64();
-            g_last_answer_flags = p.id;
-        }
-    } else if (p.type == 'L') {
+    } else if (p.type == 'L') {   // nEVR port (#2333): an 'A' is no longer read (the server sends none)
         Dest d;
         if (ServerDest(d) && Same(d.addr, from) && p.id < (uint32_t)MAP_COUNT && g_map_target != (LONG)p.id + 1) {
             g_map_target = (LONG)p.id + 1;
@@ -944,7 +943,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             PageTexts();
         }
     } else if (p.type == 'M' && FirstTime(p.id)) {
-        if (g_last_answer_flags & ANSWER_MEDIGUN) MedigunHere(p.id);
+        if (MedigunAllowedNow()) MedigunHere(p.id);   // nEVR port (#2333): as the server states
     } else if (p.type == 'K' && FirstTime(p.id)) {          // a drone the server killed: DroneFix shuts it down
         using killed_fn = void(__cdecl *)(uint32_t);
         static killed_fn killed = nullptr;
@@ -1898,7 +1897,7 @@ int TacModsGuarded(bool server_has_it, uint64_t *now_count) {
     }
 }
 
-// MEDIGUN in the weapon list as the server allows (see ANSWER_MEDIGUN): the list's last entry,
+// MEDIGUN in the weapon list as the server allows (nEVR port #2333: its echocombat_medigun feature): the list's last entry,
 // cut off by the count as the tac mods are. While it is this player's weapon it stays (the
 // selection would point past the list's end); PowerBoost.dll keeps it a COMET meanwhile.
 uint8_t *g_weapon_entries;
@@ -1944,10 +1943,8 @@ int MedigunListGuarded(bool allowed, uint64_t *now_count) {
     }
 }
 
-bool MedigunAllowedNow() {
-    ULONGLONG now = GetTickCount64();
-    return g_last_answer && now - g_last_answer < SERVER_TIMEOUT && (g_last_answer_flags & ANSWER_MEDIGUN);
-}
+// nEVR port (#2333): as the current server states in its lobby settings (server_features.h), not its last answer.
+bool MedigunAllowedNow() { return ::nevr_server_features::Client().Current().medigun; }
 
 void MedigunListFor(bool allowed) {
     uint64_t n = 0;
@@ -2117,8 +2114,8 @@ SRWLOCK g_lists_lock = SRWLOCK_INIT;
 void UpdateGearLists() {
     if (g_server) return;
     AcquireSRWLockExclusive(&g_lists_lock);
-    ULONGLONG now = GetTickCount64();
-    bool answered = g_last_answer && now - g_last_answer < SERVER_TIMEOUT;
+    // nEVR port (#2333): the current server states EchoCombat in its lobby settings (server_features.h).
+    bool answered = ::nevr_server_features::Client().Current().echoCombat;
     if (g_rules && !answered) {                                  // no EchoCombat server: ALL, off, 1.0x
         g_rules[CLASSIC_SHOWN] = g_rules[CHASSIS_SHOWN] = 0;
         g_rules[RATE_SHOWN] = g_rules[PAUSED_SHOWN] = 0;
