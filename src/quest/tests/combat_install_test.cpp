@@ -830,9 +830,9 @@ void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
     c.set(all);
     combat::SetConfig(one);
     const combat::Outcome o = combat::InstallNormal();
-    // the other rows are not reset between cases (they refuse as already_ran or for a full tick table): only the module's own count is pinned
-    QCHECK(o.modules == 21 && o.off == 2 && o.installed + o.failed == 19);  // decals is off too: no decals.bin on the host
-    if (o.off != 2) std::fprintf(stderr, "%s off by its key: off=%zu failed=%zu\n", c.name, o.off, o.failed);
+    QCHECK(o.modules == 21 && o.off == 2 && o.installed == 3 && o.failed == 16);  // decals is off too: no decals.bin on the host
+    if (o.off != 2 || o.installed != 3 || o.failed != 16)
+      std::fprintf(stderr, "%s off by its key: installed=%zu failed=%zu off=%zu\n", c.name, o.installed, o.failed, o.off);
     const std::vector<Line> lines = Lines("combat_install");
     QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), std::string(" ") + c.name + "=off ") && Has(lines[0].text, "\"off\":2"));
     Done();
@@ -841,7 +841,7 @@ void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(all);
   const combat::Outcome o = combat::InstallNormal();
-  QCHECK(o.modules == 21 && o.off == 6 && o.installed + o.failed == 15);
+  QCHECK(o.modules == 21 && o.off == 6 && o.installed == 3 && o.failed == 12);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), "ec=off ecfx=off dronekill=off dronemuzzle=off powerboost=off") && Has(lines[0].text, "\"off\":6"));
   combat::SetConfig(nevr_quest::CombatConfig{});
@@ -925,9 +925,8 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   musicOff.music = {false, nevr_quest::Source::kFile};
   combat::SetConfig(musicOff);
   const combat::Outcome mOff = combat::InstallNormal();
-  // off by its key: counted apart, not failed (the decals are off too, for want of a decals.bin); the other rows are installed or failed (the ones
-  // this test does not reset, such as the #2187 modules, refuse as already_ran)
-  QCHECK(mOff.modules == 21 && mOff.off == 2 && mOff.installed + mOff.failed == 19);
+  // off by its key: counted apart, not failed (the decals are off too, for want of a decals.bin)
+  QCHECK(mOff.modules == 21 && mOff.off == 2 && mOff.installed == 3 && mOff.failed == 16);
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=module_not_loaded music=off_config"));
   QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2"));
   QCHECK(Has(Lines("combat_install_module").back().text, "\"module\":\"music\",\"outcome\":\"off\",\"status\":\"off_config\""));
@@ -938,7 +937,7 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   sensorOff.sensorwd = {false, nevr_quest::Source::kFile};
   combat::SetConfig(sensorOff);
   const combat::Outcome sOff = combat::InstallNormal();
-  QCHECK(sOff.modules == 21 && sOff.off == 2 && sOff.installed + sOff.failed == 19);
+  QCHECK(sOff.modules == 21 && sOff.off == 2 && sOff.installed == 3 && sOff.failed == 16);
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=off_config music=module_not_loaded"));
   QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2"));
   {
@@ -975,9 +974,10 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(impactOff);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "impactsnd=off_config") && Has(ResultsOf(Lines("combat_install")[0]), "decals=no_table"));
-  // a module off by its key is off, not failed: the phase line counts it apart (impactsnd by its key, decals for want of a decals.bin), and every
-  // other module is installed or failed (the rows this test does not reset refuse as already_ran, or for a tick table the earlier tests filled)
-  QCHECK(Has(Lines("combat_install")[0].text, "\"modules\":21") && Has(Lines("combat_install")[0].text, "\"off\":2"));
+  // a module off by its key is off, not failed: the phase line counts it apart (impactsnd by its key, decals for want of a decals.bin), and the
+  // sixteen modules that cannot install on a host without a libr15 are the failed ones
+  QCHECK(Has(Lines("combat_install")[0].text, "\"modules\":21") && Has(Lines("combat_install")[0].text, "\"off\":2") &&
+         Has(Lines("combat_install")[0].text, "\"failed\":16"));
   QCHECK(Lines("combat_impactsnd_refused").empty() && Has(Lines("combat_impactsnd_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
