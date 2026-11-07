@@ -35,6 +35,7 @@ void TheThreeWordsReadAsTheirVariants() {
   QCHECK(Is(bv::ParseStamp("q15t", 4), bv::Variant::kQ15t, bv::StampSource::kStamp));
   QCHECK(Is(bv::ParseStamp("combat", 6), bv::Variant::kCombat, bv::StampSource::kStamp));
   QCHECK(Is(bv::ParseStamp("perf-probe", 10), bv::Variant::kPerfProbe, bv::StampSource::kStamp));
+  QCHECK(Is(bv::ParseStamp("arena", 5), bv::Variant::kArena, bv::StampSource::kStamp));
 }
 
 void AnEmptyStampIsAPlainReleaseNamedByTheStamp() {
@@ -69,6 +70,7 @@ void TheNamesAreTheWordsAndNoneForNoVariant() {
   QCHECK(std::strcmp(bv::VariantName(bv::Variant::kQ15t), "q15t") == 0);
   QCHECK(std::strcmp(bv::VariantName(bv::Variant::kCombat), "combat") == 0);
   QCHECK(std::strcmp(bv::VariantName(bv::Variant::kPerfProbe), "perf-probe") == 0);
+  QCHECK(std::strcmp(bv::VariantName(bv::Variant::kArena), "arena") == 0);
   QCHECK(std::strcmp(bv::SourceName(bv::StampSource::kStamp), "stamp") == 0);
   QCHECK(std::strcmp(bv::SourceName(bv::StampSource::kAbsent), "absent") == 0);
   QCHECK(std::strcmp(bv::SourceName(bv::StampSource::kUnreadable), "unreadable") == 0);
@@ -81,6 +83,7 @@ void OnlyTheQ15tAndCombatVariantsRunFoldedCombat() {
   QCHECK(bv::RunsFoldedCombat(bv::Variant::kQ15t));
   QCHECK(bv::RunsFoldedCombat(bv::Variant::kCombat));
   QCHECK(!bv::RunsFoldedCombat(bv::Variant::kPerfProbe));
+  QCHECK(!bv::RunsFoldedCombat(bv::Variant::kArena));
 }
 
 // ---- the file read ----------------------------------------------------------------------------------------------------
@@ -104,7 +107,7 @@ void TheFileIsReadBesideTheLibrary() {
 
   QCHECK(Is(bv::ReadStamp(dir.c_str()), bv::Variant::kNone, bv::StampSource::kAbsent, "no_file"));  // no file: the stamp did not reach the library directory
 
-  for (const char* word : {"q15t", "combat", "perf-probe"}) {
+  for (const char* word : {"q15t", "combat", "perf-probe", "arena"}) {
     Write(stamp, word);
     const bv::Stamp read = bv::ReadStamp(dir.c_str());
     QCHECK(read.source == bv::StampSource::kStamp);

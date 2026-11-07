@@ -184,7 +184,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_memsys_install",
                         {{"result", "off"}, {"reason", "combat.memsys"}, {"r37", "off"}, {"r38", "off"},
                          {"consequence", "combat.memsys is false: the layout pool is the stock 512 slots and the System heap is the game's"}});
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_memsys_install",

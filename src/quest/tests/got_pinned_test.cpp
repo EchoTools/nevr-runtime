@@ -39,6 +39,7 @@
 #include "quest/combat/tablestep_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
+#include "quest/combat/sendguard_targets.h"
 #include "quest/game_login_failures.h"
 #include "quest/login/login_rewrite.h"
 #include "quest/tests/test_check.h"
@@ -744,6 +745,33 @@ int main(int argc, char** argv) {
                    pin.word);
       QCHECK(false);
     }
+  }
+  // The send guard (#2179, combat/sendguard.h): the one JUMP_SLOT of CSendEventNode::Enter resolves at its pin and alone, the symbol is
+  // defined at the address the module compares the slot with, and the ten code pins (the reads it repeats, the faulting load and the
+  // GameSpaceMT stub) are the words in the file. The second word the old plugin swapped, ELF 0x356a6b0, is Enter's unwind record: its eight
+  // bytes are an FDE's pc_begin and range, it is not a slot of this symbol, and the module has no target for it.
+  CheckTarget(r15, nevr_quest::combat::sendguard::EnterTarget(), "libr15 CSendEventNode::Enter JUMP_SLOT");
+  CheckDefinedAt(r15, nevr_quest::combat::sendguard::kEnterSymbol, nevr_quest::combat::sendguard::kEnterVaddr);
+  for (std::size_t i = 0; i < nevr_quest::combat::sendguard::kCodeCount; ++i) {
+    const pinned::PinnedCode& block = nevr_quest::combat::sendguard::kCode[i];
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
+                   static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
+  {
+    constexpr std::uint64_t kUnwindRecord = 0x356a6b0ULL;
+    const unsigned char* const record = static_cast<const unsigned char*>(r15.mem) + kUnwindRecord;
+    std::int32_t pcBegin = 0;
+    std::uint32_t range = 0;
+    std::memcpy(&pcBegin, record, sizeof(pcBegin));
+    std::memcpy(&range, record + 4, sizeof(range));
+    QCHECK(kUnwindRecord + static_cast<std::int64_t>(pcBegin) == nevr_quest::combat::sendguard::kEnterVaddr);
+    QCHECK(range == 476);  // Enter's size
+    GotTarget notASlot = nevr_quest::combat::sendguard::EnterTarget();
+    notASlot.slotVaddr = kUnwindRecord;
+    QCHECK_STATUS(ResolveSlot(r15.image, notASlot, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
   }
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);

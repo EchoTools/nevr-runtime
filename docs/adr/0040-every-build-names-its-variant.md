@@ -44,12 +44,12 @@ measurement build, ADR 0037), and a first log line and crash report that carry t
      `cmake/nevr_build_info.cmake` gives `nevr_build::kIsDev`: a version with no `-dev.` part, or a CI build of a release
      tag (rc tags included) that the CI ref names, is a release build, even when `git describe` gave it a `-dev.`
      version. The plugin-trust word keeps its meaning (N147) and is not the build kind.
-   - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`), set by the
+   - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`, `arena`), set by the
      recipe that makes the artifact. A release's variant APKs share the release's loader, so their name is stamped by the
      packaging step, where the sentinel reads it, not by the loader build.
    - On Quest the packaging step stamps the word into the APK: `just android-repack-apk` takes it as its last parameter, every
      recipe that repacks an APK passes it (empty for a plain release or a development build of the tree), refuses a word that is
-     not one of the three, and writes `lib/arm64-v8a/libnevr_build_variant.so` holding the word as its exact bytes. The sentinel
+     not one of the four, and writes `lib/arm64-v8a/libnevr_build_variant.so` holding the word as its exact bytes. The sentinel
      reads that file beside its own library before its first line (`src/quest/sentinel/build_variant.h`); a missing, unreadable or
      wrong stamp is no variant, and a second line says so.
 2. **The first log line says it.** The sentinel's first line and the PC runtime's first line carry the version, the build

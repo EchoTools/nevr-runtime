@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.meshstep, combat.instmodel, combat.shaderstep and combat.tablestep. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep and combat.tablestep. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -185,6 +185,14 @@ combat:
   # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
   # Default (absent): false.
   # force: true
+  #
+  # sendguard: Quest only. A boolean. A script send to a game space that is not loaded is dropped, not faulted (the game reads a null space
+  # and crashes without it; src/quest/combat/sendguard.h). Applies where the combat modules run, as `force` says. `false` leaves the game's own
+  # send alone. A value that is not a boolean asks for nothing, with a warning in the sentinel log that names the key. The q15t plugin's
+  # `sendguard.off` file is no longer read; one found in the files folder's q15t directory is a warning that names this key. Read once at
+  # launch; the sentinel log record `combat_config_switch` (module `sendguard`) shows the value and where it came from.
+  # Default (absent): true.
+  # sendguard: false
 
   # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
   # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
@@ -273,10 +281,10 @@ combat:
   # veil: false             # UMBRAL VEIL and the combat net. Default: true.
   # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
   # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
-  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
-  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  # clean_exit: false       # Ends the process at the engine teardown instead of running it (his quit-crash fix). Default: true.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>; a key left out takes the value his release ships
   #   buff:
-  #     self_damage: 2
+  #     self_damage: 5
   #   cone:
   #     link_window_ms: 500
 

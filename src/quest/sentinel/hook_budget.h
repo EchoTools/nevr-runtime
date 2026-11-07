@@ -43,6 +43,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/match_tags.cpp", 2, 0},
     {"combat/memsys.cpp", 2, 0},
     {"combat/meshstep.cpp", 1, 0},
+    {"combat/sendguard.cpp", 1, 0},
     {"combat/shaderstep.cpp", 1, 0},
     {"combat/tablestep.cpp", 1, 0},
     {"combat/wallfire.cpp", 1, 0},

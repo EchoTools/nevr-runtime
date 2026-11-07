@@ -24,7 +24,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, impactsnd, music, sensorwd, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, gunconnect, aibots, impactsnd, music, sensorwd, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - The static BVH and the wall-fire check are not this plugin's: the runtime owns them (`src/quest/combat/bvh.h`, `src/quest/combat/wallfire.h`). Their
   switches are the `combat:` keys `bvh`, `bvh_gate`, `bvh_touch` and `wallfire` in `config.yaml` (all on by default); no kill file switches either.

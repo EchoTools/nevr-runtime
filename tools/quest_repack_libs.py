@@ -112,8 +112,9 @@ MANIFEST_SCHEMA = 1
 VARIANT_STAMP_NAME = "libnevr_build_variant.so"
 VARIANT_ENTRY = f"{ABI_DIR}/{VARIANT_STAMP_NAME}"
 # The variant words: one for each variant or option a recipe adds. `q15t` and `combat` are the APKs that carry the q15t libraries
-# (docs/adr/0046 rule 5); `perf-probe` is the measurement build (ADR 0037). Every other word is refused; the empty word is a plain release.
-VARIANT_WORDS = ("q15t", "combat", "perf-probe")
+# (docs/adr/0046 rule 5); `perf-probe` is the measurement build (ADR 0037); `arena` is the release's APK built from the store APK with no combat
+# (#2298). Every other word is refused; the empty word is a plain release.
+VARIANT_WORDS = ("q15t", "combat", "perf-probe", "arena")
 # The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, the manifest and the stamp).
 STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME, VARIANT_STAMP_NAME)
 # The one store entry the recipe replaces on purpose: the shim takes the loader's name.

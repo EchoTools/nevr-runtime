@@ -1,1 +1,0 @@
-Each run now keeps all of its log in one file in the nevr folder, crash dumps go to one folder, and the Quest texture level is saved in config.yaml.

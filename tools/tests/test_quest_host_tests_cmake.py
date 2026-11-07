@@ -81,6 +81,7 @@ PROGRAMS = {
         "tablestep_test",
         "pfx_test",
         "pfxtev_test",
+        "sendguard_test",
         "wallfire_test",
     ),
     "data": (

@@ -30,7 +30,8 @@ void Capture(sentinel::LogLevel level, const char* line) { g_lines.push_back({le
 
 bool Has(const std::string& text, const char* needle) { return text.find(needle) != std::string::npos; }
 
-constexpr bv::Variant kVariants[] = {bv::Variant::kNone, bv::Variant::kQ15t, bv::Variant::kCombat, bv::Variant::kPerfProbe};
+constexpr bv::Variant kVariants[] = {bv::Variant::kNone, bv::Variant::kQ15t, bv::Variant::kCombat, bv::Variant::kPerfProbe,
+                                  bv::Variant::kArena};
 
 // The whole table, spelled out (not derived from the rule): variant, development build, force asked -> active, reason, force outcome.
 struct Row {
@@ -64,6 +65,11 @@ const Row kTable[] = {
     {bv::Variant::kPerfProbe, false, true, false, R::kNotACombatVariant, F::kRefused},
     {bv::Variant::kPerfProbe, true, false, false, R::kNotACombatVariant, F::kNotAsked},
     {bv::Variant::kPerfProbe, true, true, true, R::kForced, F::kHonoured},
+    // the arena APK (the store APK with the release's loader) is no combat variant either
+    {bv::Variant::kArena, false, false, false, R::kNotACombatVariant, F::kNotAsked},
+    {bv::Variant::kArena, false, true, false, R::kNotACombatVariant, F::kRefused},
+    {bv::Variant::kArena, true, false, false, R::kNotACombatVariant, F::kNotAsked},
+    {bv::Variant::kArena, true, true, true, R::kForced, F::kHonoured},
 };
 
 // The state of the process before anything has been set or reset: nothing is active and the reason is "unresolved". In production this
@@ -75,7 +81,7 @@ void NothingIsActiveAtProcessStart() {
 }
 
 void TheTableCoversEveryVariantBuildKindAndForceAnswer() {
-  QCHECK(sizeof(kTable) / sizeof(kTable[0]) == 4U * 2U * 2U);
+  QCHECK(sizeof(kTable) / sizeof(kTable[0]) == 5U * 2U * 2U);
   for (const Row& row : kTable) {
     const combat::Decision d = combat::Decide(row.variant, row.dev, row.force);
     if (d.active != row.active || d.reason != row.reason || d.force != row.outcome) {

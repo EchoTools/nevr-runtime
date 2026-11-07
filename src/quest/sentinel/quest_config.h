@@ -190,6 +190,7 @@ struct CombatConfig {
   CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
   CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
   CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
 };
 
 struct LogEvent {
