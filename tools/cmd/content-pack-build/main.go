@@ -9,7 +9,9 @@
 // added or replaced and one new package holding them (tools/internal/radpack); a script is written as
 // scripts/<16 hex>.dll. The steps are the build's list (steps below); the EchoCombat pack's steps are added to it one
 // slice at a time (#600). With no step that changes anything the build refuses: a pack that serves nothing is not made.
-// A refusal exits 1 and names what failed, and -out is not written; each run is a record in the tool's run log.
+// A refusal exits 1 and names what failed, and -out is not written: the pack is written into a new folder beside -out
+// and renamed to -out only when every file is in it, so a failed write leaves no -out. -out may not be inside -game-dir:
+// nothing of ours is written into a game folder. Each run is a record in the tool's run log.
 package main
 
 import (
@@ -201,6 +203,11 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 	if filepath.Base(out) != id {
 		return Result{}, fmt.Errorf("-out must be the pack's folder, named %s", id)
 	}
+	if inside, err := within(gameDir, out); err != nil {
+		return Result{}, err
+	} else if inside {
+		return Result{}, fmt.Errorf("-out %s is inside -game-dir %s; nothing of ours is written into a game folder", out, gameDir)
+	}
 	if _, err := os.Lstat(out); !errors.Is(err, fs.ErrNotExist) {
 		return Result{}, fmt.Errorf("%s exists; a pack is made into a new folder", out)
 	}
@@ -268,18 +275,84 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 	if err != nil {
 		return Result{}, err
 	}
-	// Written last, after every check: a refusal leaves no folder.
-	for rel, b := range files {
-		path := filepath.Join(out, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return Result{}, err
-		}
-		if err := os.WriteFile(path, b, 0o644); err != nil {
-			return Result{}, err
-		}
-	}
-	if err := os.WriteFile(filepath.Join(out, "content.json"), append(text, '\n'), 0o644); err != nil {
+	files["content.json"] = append(text, '\n')
+	// Written last, after every check, into a new folder beside -out that is renamed to -out once every file is in it: a
+	// refusal or a failed write leaves no -out.
+	if err := writeStaged(out, files); err != nil {
 		return Result{}, err
 	}
 	return res, nil
+}
+
+// writeFile writes one file of the pack; a test replaces it to fail a write.
+var writeFile = os.WriteFile
+
+func writeStaged(out string, files map[string][]byte) (err error) {
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(filepath.Dir(out), "."+filepath.Base(out)+".partial-")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			if rmErr := os.RemoveAll(stage); rmErr != nil {
+				err = fmt.Errorf("%w; the staging folder %s was not removed: %v", err, stage, rmErr)
+			}
+		}
+	}()
+	if err := os.Chmod(stage, 0o755); err != nil {
+		return err
+	}
+	rels := make([]string, 0, len(files))
+	for rel := range files {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	for _, rel := range rels {
+		path := filepath.Join(stage, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := writeFile(path, files[rel], 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", rel, err)
+		}
+	}
+	// os.Rename refuses an existing directory at -out, so a folder made there while the pack was written is kept.
+	return os.Rename(stage, out)
+}
+
+// within says whether path is gameDir or inside it, links resolved: gameDir whole, and path's nearest existing
+// ancestor, with the rest of path joined to it.
+func within(gameDir, path string) (bool, error) {
+	g, err := filepath.EvalSymlinks(gameDir)
+	if err != nil {
+		return false, fmt.Errorf("-game-dir %s: %w", gameDir, err)
+	}
+	if g, err = filepath.Abs(g); err != nil {
+		return false, err
+	}
+	p, err := filepath.Abs(path)
+	if err != nil {
+		return false, err
+	}
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = filepath.Join(r, rest)
+			break
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			break
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+	rel, err := filepath.Rel(g, p)
+	if err != nil {
+		return false, nil
+	}
+	return filepath.IsLocal(rel), nil
 }

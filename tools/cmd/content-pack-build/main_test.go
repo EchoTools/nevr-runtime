@@ -245,3 +245,101 @@ func TestThePackIdRuleIsTheRuntimes(t *testing.T) {
 		t.Error("the pack id rule here and in runtime/content/pack_rules.h differ")
 	}
 }
+
+func TestAnOutInsideTheGameFolderIsRefused(t *testing.T) {
+	f := newFixture(t)
+	link := filepath.Join(t.TempDir(), "game-link")
+	if err := os.Symlink(f.game, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{
+		filepath.Join(f.game, "content", "p"),
+		filepath.Join(f.game, "bin", "win10", "p"), // an existing folder of the game
+		filepath.Join(link, "content", "p"),        // through a link to the game folder
+		filepath.Join(f.game, "..x", "p"),          // a folder of the game whose name starts with ..
+	} {
+		code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1")
+		if code != 1 || !strings.Contains(stderr, "inside -game-dir") {
+			t.Errorf("%s: exit %d, stderr %q", out, code, stderr)
+		}
+		if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was written", out)
+		}
+	}
+	// -game-dir given as a link, -out by the real path.
+	code, _, stderr := f.run(testSteps, "-game-dir", link, "-out", filepath.Join(f.game, "content", "p"), "-id", "p", "-version", "1")
+	if code != 1 || !strings.Contains(stderr, "inside -game-dir") {
+		t.Errorf("-game-dir as a link: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Lstat(filepath.Join(f.game, "content")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("a folder was made in the game folder")
+	}
+	// A sibling whose name starts with the game folder's is not inside it.
+	out := filepath.Join(f.game+"-packs", "content", "p")
+	if code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1"); code != 0 {
+		t.Errorf("a folder beside the game folder was refused: %s", stderr)
+	}
+}
+
+func TestAFailedWriteLeavesNoOut(t *testing.T) {
+	f := newFixture(t)
+	out := f.out("p")
+	n := 0
+	writeFile = func(name string, b []byte, mode os.FileMode) error {
+		if n++; n == 2 {
+			return errors.New("disk full")
+		}
+		return os.WriteFile(name, b, mode)
+	}
+	t.Cleanup(func() { writeFile = os.WriteFile })
+	code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1")
+	if code != 1 || !strings.Contains(stderr, "disk full") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Error("a failed write left -out")
+	}
+	left, err := os.ReadDir(filepath.Dir(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("the staging folder was left: %v", left[0].Name())
+	}
+	// With the writes working, the same build writes -out whole and leaves no staging folder beside it.
+	writeFile = os.WriteFile
+	if code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if left, _ = os.ReadDir(filepath.Dir(out)); len(left) != 1 || left[0].Name() != "p" {
+		t.Errorf("beside -out: %v", left)
+	}
+	if fi, err := os.Stat(out); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("-out: %v, %v", fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "content.json")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestAFolderMadeAtOutWhileThePackIsWrittenIsNotReplaced(t *testing.T) {
+	f := newFixture(t)
+	out := f.out("p")
+	writeFile = func(name string, b []byte, mode os.FileMode) error {
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(name, b, mode)
+	}
+	t.Cleanup(func() { writeFile = os.WriteFile })
+	code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1")
+	if code != 1 || !strings.Contains(stderr, "exists") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+	if left, _ := os.ReadDir(out); len(left) != 0 {
+		t.Errorf("the folder made at -out was written into: %v", left)
+	}
+	if left, _ := os.ReadDir(filepath.Dir(out)); len(left) != 1 {
+		t.Errorf("beside -out: %v", left)
+	}
+}

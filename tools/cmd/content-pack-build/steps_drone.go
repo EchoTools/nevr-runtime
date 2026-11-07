@@ -95,6 +95,11 @@ func droneParticleRows(t *radpack.RowTable) error {
 }
 
 func droneScriptRow(t *radpack.RowTable) error {
+	for _, r := range t.Rows {
+		if radpack.U64(r, 0) == sharedScript && radpack.U64(r, keyOff) == droneActor {
+			return fmt.Errorf("the table already has the drone actor's row of script 190ed14fe6c74dd3")
+		}
+	}
 	at, src := t.Find(keyOff, droneActor), t.Find(0, sharedScript)
 	if at < 0 || src < 0 {
 		return fmt.Errorf("no drone actor row (%d) or script 190ed14fe6c74dd3 row (%d)", at, src)
