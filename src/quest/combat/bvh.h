@@ -117,7 +117,7 @@ struct Counters {
   std::uint64_t occludedBlocked;
   std::uint64_t gated;          // casts kept off the tree (the stock miss)
   std::uint64_t touch;          // touch rays answered with a miss
-  std::uint64_t stock;          // calls that went to the game's function with a combat map loaded (no tree for the object)
+  std::uint64_t stock;          // calls that went to the game's function with a combat map or the combat lobby loaded (no tree for the object)
 };
 Counters GetCounters() noexcept;
 int TreeCount() noexcept;  // entries in use in the tree table (cap 64)
