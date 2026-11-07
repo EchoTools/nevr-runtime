@@ -53,6 +53,8 @@ APK_LIBRARY_ENTRY = "lib/arm64-v8a/libq15t.so"  # where android-repack-apk puts 
 HEAD = "c0ffee" + "0" * 34
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
+ARENA_CLAIM = {"name": f"nevr-runtime-{TAG}-arena-quest.apk", "sha256": "cd" * 32, "size": 9}
+SIGNER_WITH_KIND = "Usage of put-quest-apk:\n  -apk string\n    \tthe APK\n  -kind string\n    \tquest-apk or quest-apk-arena\n"
 PUBLISHING_JOBS = ["Commit the manifest record", "Publish to R2", "A run that published nothing is red"]
 
 
@@ -84,6 +86,8 @@ class Fake:
         self.apk_entry = APK_LIBRARY_ENTRY  # the entry name the library is under in that APK
         self.writes_apk = True  # False: the recipe exits 0 and writes no APK
         self.apk_bytes: bytes | None = None  # the file the recipe writes instead of an APK
+        self.signer_usage = ""  # what `put-quest-apk -h` prints on standard error: empty is a signer without `--kind` (#2298)
+        self.arena_listed = True  # the live manifest lists the arena APK once the release is published
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -91,6 +95,7 @@ class Fake:
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
             (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
+            ("put-quest-apk", "arena_gate"), ("release-quest-arena-apk", "arena_build"), (" --listed-variant ", "arena_publish"),
             ("curl", "manifest"),
             ("auth token", "token"), (" fetch origin main", "build_signer.fetch"),
             ("rev-parse origin/main", "build_signer.rev"), (" archive ", "build_signer.archive"), ("tar -xf", "build_signer.tar"),
@@ -160,6 +165,10 @@ class Fake:
         if step == "build_slot":
             lines = self.ninja.pop(0) if len(self.ninja) > 1 else self.ninja[0]
             return completed(argv, 0 if lines else 1, "1234\n" * lines)
+        if step == "arena_gate":
+            return completed(argv, 2, "", self.signer_usage)
+        if step == "arena_publish":
+            pathlib.Path(argv[argv.index("--extra-out") + 1]).write_text(json.dumps([ARENA_CLAIM]))
         if step == "publish_apk":
             pathlib.Path(argv[argv.index("--extra-out") + 1]).write_text(
                 json.dumps([{"name": f"nevr-runtime-{TAG}-quest.apk", "sha256": "ab" * 32, "size": 7}]))
@@ -189,6 +198,8 @@ class Fake:
             artifacts.insert(0, artifact)
         artifacts[:0] = [dict(a) for a in self.extra_data]
         artifacts.extend(dict(a) for a in self.extra_data_after)
+        if published and self.arena_listed and "arena_publish" in self.steps():
+            artifacts.append({**ARENA_CLAIM, "kind": "quest-apk-arena"})
         return json.dumps({"channels": {"beta": beta}, "releases": {beta: {"version": beta, "artifacts": artifacts}}})
 
     def steps(self) -> list[str]:
@@ -311,6 +322,87 @@ class RunsInOrder(TimerCase):
         self.assertEqual(removed["argv"][-1], added["argv"][-2])
         self.assertEqual(removed["cwd"], str(self.root / "repo"))
         self.assertEqual(sorted(p.name for p in (self.root / "work").glob("*release-signer-*")), [], "the signer snapshot is gone")
+
+
+class ArenaApk(TimerCase):
+    """The arena APK (#2298): built after the main APK and claimed in the same manifest publish, once the signer takes `--kind`."""
+
+    def arena_steps(self) -> list[str]:
+        return [e["step"] for e in self.events() if e["event"] == "step_ok" and e["step"].startswith("arena")]
+
+    def test_a_signer_without_kind_skips_the_arena_and_the_run_is_the_old_run(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        skipped = [e for e in self.events() if e["event"] == "arena_skipped"]
+        self.assertEqual([e["reason"] for e in skipped], ["signer_lacks_kind"])
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"], STEPS)
+        self.assertNotIn("arena_build", fake.steps())
+        extra = next(a for a in next(c["argv"] for c in fake.calls if c["step"] == "dispatch") if a.startswith("extra_artifacts="))
+        self.assertEqual([c["name"] for c in json.loads(extra.split("=", 1)[1])], [f"nevr-runtime-{TAG}-quest.apk"])
+
+    def test_a_signer_with_kind_gets_both_claims_in_the_one_dispatch_after_the_main_apk(self) -> None:
+        fake = Fake(self.root)
+        fake.signer_usage = SIGNER_WITH_KIND
+        self.assertEqual(self.run_timer(fake), 0)
+        steps = [e["step"] for e in self.events() if e["event"] == "step_ok"]
+        self.assertEqual(steps[steps.index("publish_apk"):steps.index("dispatch") + 1],
+                         ["publish_apk", "arena_gate", "arena_build", "arena_publish", "dispatch"])
+        self.assertEqual(fake.steps().count("dispatch"), 1)
+        extra = next(a for a in next(c["argv"] for c in fake.calls if c["step"] == "dispatch") if a.startswith("extra_artifacts="))
+        self.assertEqual([c["name"] for c in json.loads(extra.split("=", 1)[1])],
+                         [f"nevr-runtime-{TAG}-quest.apk", f"nevr-runtime-{TAG}-arena-quest.apk"])
+        build = next(c for c in fake.calls if c["step"] == "arena_build")
+        self.assertEqual(build["argv"][-2:], ["release-quest-arena-apk", TAG])
+        self.assertEqual(build["argv"][:6], ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G"])
+        publish = next(c for c in fake.calls if c["step"] == "arena_publish")
+        self.assertEqual(publish["argv"][2:5], [TAG, "--listed-variant", "arena"])
+        self.assertEqual(publish["env"]["GH_TOKEN"], TOKEN)
+        self.assertTrue(publish["env"]["RELEASE_SIGNER_BIN"].endswith("/release-signer"))
+        self.assertEqual(self.names()[-1], "done")
+        self.assertEqual(list((self.root / "work").glob("extra-*.json")), [], "both claim files are removed")
+
+    def test_the_gate_reads_the_flag_not_a_word_in_the_description(self) -> None:
+        fake = Fake(self.root)
+        fake.signer_usage = "Usage of put-quest-apk:\n  -apk string\n    \tthe kind of APK, like --kind\n"
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertNotIn("arena_build", fake.steps())
+
+    def test_a_failed_arena_step_blocks_the_dispatch_with_its_own_part_and_reason(self) -> None:
+        for broken in ("arena_build", "arena_publish"):
+            with self.subTest(broken):
+                shutil.rmtree(self.root / "state", ignore_errors=True)
+                fake = Fake(self.root, fail=broken)
+                fake.signer_usage = SIGNER_WITH_KIND
+                self.assertEqual(self.run_timer(fake), 1)
+                failed = [e for e in self.events() if e["event"] == "failed"]
+                self.assertEqual([(e["step"], e["part"], e["reason"]) for e in failed], [(broken, "arena", "arena_blocks_dispatch")])
+                self.assertNotIn("dispatch", fake.steps())
+                self.assertNotIn("main_complete", self.names())
+                self.assertIn("cleanup.worktree", fake.steps())
+                self.assertEqual(list((self.root / "work").glob("extra-*.json")), [], "a claim file is not left for the retry")
+
+    def test_a_claim_the_signer_wrote_for_another_file_blocks_the_dispatch(self) -> None:
+        fake = Fake(self.root)
+        fake.signer_usage = SIGNER_WITH_KIND
+        fake.overrides["arena_publish"] = lambda argv: (
+            pathlib.Path(argv[argv.index("--extra-out") + 1]).write_text(json.dumps([{**ARENA_CLAIM, "name": "other.apk"}])),
+            completed(argv))[1]
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertNotIn("dispatch", fake.steps())
+
+    def test_the_live_manifest_must_list_the_arena_apk_with_its_kind(self) -> None:
+        fake = Fake(self.root)
+        fake.signer_usage = SIGNER_WITH_KIND
+        fake.arena_listed = False
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = [e for e in self.events() if e["event"] == "failed"]
+        self.assertEqual(failed[0]["step"], "verify_live")
+        self.assertNotIn("main_complete", self.names())
+
+    def test_a_listed_arena_apk_with_another_kind_fails_the_live_check(self) -> None:
+        with self.assertRaises(timer.StepFailure):
+            timer.Timer.check_arena_listed(
+                {"releases": {"5.17.0": {"artifacts": [{**ARENA_CLAIM, "kind": "quest-apk"}]}}}, "5.17.0", ARENA_CLAIM)
 
 
 class ConfigureBeforeTheBuild(TimerCase):

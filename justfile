@@ -684,9 +684,17 @@ release-quest-variant-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta=
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
 release-quest-combat-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk "combat" pack pack_meta libs)
 
-# The body of release-quest-apk, release-quest-variant-apk and release-quest-combat-apk. `label` is the public recipe's name, which every
+# The arena APK of a release (#2298): the store APK repacked with the release's own loader asset and NOTHING else, so it has no
+# combat: no q15t library, no plugin manifest, none of the reference build's entries. Its variant stamp is `arena`. It is written to
+# build/quest-release/<tag>/arena/nevr-runtime-<tag>-arena-quest.apk with its .sha256 beside, after tools/quest_release_base.py
+# check-arena has refused any combat entry in it. It is LISTED in the manifest as the kind `quest-apk-arena` beside the combat
+# `quest-apk`: tools/publish_quest_apk.py --listed-variant arena puts it up through the signer. It uploads nothing and never tags.
+release-quest-arena-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-arena-apk" tag store_apk "arena" "" "" "")
+
+# The body of release-quest-apk, release-quest-variant-apk, release-quest-combat-apk and release-quest-arena-apk. `label` is the public recipe's name, which every
 # message of the run carries. `variant` is empty (the release APK, which never carries a plugin) or names the variant: `q15t`
 # (written under build/quest-release/<tag>/variant) or `combat`; either one carries the q15t libraries the checkout's own build writes.
+# `arena` (written under build/quest-release/<tag>/arena) is the store APK with the loader and no plugin: it builds no q15t library.
 # `pack` and `pack_meta` are empty (every release APK) or, for a variant, a game-data pack zip and its description file.
 _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     #!/usr/bin/env bash
@@ -700,6 +708,7 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     [ -n "$variant" ] || [ -z "$pack" ] || { echo "$label: a release APK carries no game-data pack" >&2; exit 1; }
     [ -n "$pack" ] || [ -z "$pack_meta" ] || { echo "$label: pack_meta describes a pack, and no pack is given" >&2; exit 1; }
     [ -z "$libs" ] || [ -n "$variant" ] || { echo "$label: a release APK carries no script library" >&2; exit 1; }
+    [ "$variant" != arena ] || { [ -z "$pack" ] && [ -z "$libs" ]; } || { echo "$label: the arena APK carries no game-data pack and no script library" >&2; exit 1; }
     tools/release_preflight.py --tag "$tag"
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
@@ -716,6 +725,9 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     # `combat` is the release name in its own directory; any other variant gets its own name (release-quest-variant-apk).
     if [ "$variant" = combat ]; then
         out="$out/combat"
+    elif [ "$variant" = arena ]; then
+        out="$out/arena"
+        name="nevr-runtime-$tag-arena-quest.apk"
     elif [ -n "$variant" ]; then
         out="$out/variant"
         name="nevr-runtime-$tag-$variant-quest.apk"
@@ -737,7 +749,7 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     # Neither variant carries an early plugin: the heap sizes and the render-target pool are set by the sentinel's own early combat step
     # (src/quest/combat/heaps.h), before android_main reads them.
     plugin=""
-    if [ -n "$variant" ]; then
+    if [ -n "$variant" ] && [ "$variant" != arena ]; then
         echo "$label: building the q15t libraries of $tag at ${head:0:7} (just build-quest-q15t)" >&2
         just build-quest-q15t >&2
         plugin="build/quest-q15t/libq15t.so"
@@ -748,10 +760,15 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2
     fi
+    if [ "$variant" = arena ]; then
+        python3 -I tools/quest_release_base.py check-arena --apk "$out/repack/r15_nevr-sentinel_signed.apk" >&2
+    fi
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
-    if [ -n "$variant" ] && [ "$variant" != combat ]; then
+    if [ "$variant" = arena ]; then
+        echo "$label: $out/$name is $tag at ${head:0:7}, the store APK with the release's loader (sha256 $loader_sha) and no combat. It is NOT a release asset: tools/publish_quest_apk.py --listed-variant arena puts it on the release host and lists it in the manifest as quest-apk-arena." >&2
+    elif [ -n "$variant" ] && [ "$variant" != combat ]; then
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset and not in the manifest: tools/publish_quest_apk.py --variant $variant puts it on the release host." >&2
     else
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
