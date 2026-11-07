@@ -91,7 +91,7 @@ turned back on at the next TriggeredPing of the actor it was paired with (upstre
   moves; at most `kThreadLines` (24) a process, then one `combat_sensorwd_cap` Warning.
 - One mutex, `g_mu`. It is held only around short loops over plain fields (the slot table, the ping queue, the last ping), never across a `SafeRead`, a call into the game or a log line,
   and never nested. The handlers block on it (the critical sections are bounded: 32 slots, 8 pings); they do not `trylock`, because a dropped update would lose an enable and leave a
-  sphere unwatched. Tests (`sensorwd_test`): the lock is held at each of the six sites that take it (the `SetHookForTest` stages 11 to 16, checked with `LockHeldForTest`), the game's
+  sphere unwatched. Tests (`sensorwd_test`): the lock is held at six of the seven sites that take it (the `SetHookForTest` stages 11 to 16, checked with `LockHeldForTest`; the seventh, `ClearTable`, has no stage and is not checked), the game's
   function runs with the lock free and no line is written under it (each recorded call and line carries `LockHeldForTest()`; `AStuckSphereIsTurnedOffAfterSixSeconds`), and a run on
   several threads with a ticker checks that the counters add up (`TheCountersAddUpUnderThreads`).
 - The counters, the scope and the hook state are atomics. Outside the scope the handlers do nothing but call the game's function (`InScope()`, one relaxed load in arena). A refused
