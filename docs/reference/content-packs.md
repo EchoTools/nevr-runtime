@@ -69,8 +69,10 @@ package code is `tools/internal/radpack`. A pack is built on the machine that ha
 in this repository (ADR 0028). The build's step list holds the EchoCombat pack's steps as they land (#600); with no step
 that changes anything it refuses. The steps today give the DRONE the assault bullet's effects and particle rows and its
 actor the shared script row, in the bullet, particle and script tables of the five combat levels
-(`tools/cmd/content-pack-build/steps_drone.go`). It writes the pack into a new folder beside `-out` and renames it to `-out`
-when every file is in it, so a failed write leaves no `-out`, and it refuses an `-out` inside `-game-dir`, links
+(`tools/cmd/content-pack-build/steps_drone.go`), and add four weapons and three ordnances to mp_equipment's
+lists: six the game defines in mp_weapon_settings but does not list, and the translocator
+(`tools/cmd/content-pack-build/steps_equipment.go`). It writes the pack into a new folder beside `-out` and renames it
+to `-out` when every file is in it, so a failed write leaves no `-out`, and it refuses an `-out` inside `-game-dir`, links
 resolved: nothing of ours is written into a game folder.
 
 ## When a pack is refused

@@ -225,6 +225,7 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"drone bullet takes the assault bullet's effects",
 		"drone bullet gets the assault bullet's particle rows",
 		"drone actor runs script 190ed14fe6c74dd3",
+		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
 	}
 	if len(steps) != len(want) {
 		t.Fatalf("steps has %d entries, want %d: each EchoCombat step lands in its own slice with its own tests", len(steps), len(want))

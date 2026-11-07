@@ -174,6 +174,9 @@ func TestTheDroneStepsChangeTheFiveCombatLevelsAndNoOther(t *testing.T) {
 	}
 	p := &Pack{sets: map[string]*radpack.Set{Sets[0]: s}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
 	for _, st := range steps {
+		if !strings.Contains(st.Name, "drone") || strings.HasPrefix(st.Name, "equipment") {
+			continue // the five-level tables only
+		}
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
 		}
