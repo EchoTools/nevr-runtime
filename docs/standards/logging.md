@@ -124,6 +124,7 @@ for row.
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
 | `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
+| `[NEVR.SCRIPT]`       | Hooks into the game's script DLLs (`hook/script_hooks.h`, #600): `script load hooks installed` (Info, once, the two `CScriptResource` wraps) or `not installed` (Warning, with `load_bytes` and `free_bytes`); per load of a script with hooks `script hooks installed script=<hash> base=<addr> hooks=<n>` (Info), or `script hooks refused` (Warning) after one `hook not installed` Warning per row whose bytes differ (`name`, `rva`, `va`, `expected`, `actual`, Rule 6); `script hooks removed` (Info) before the game frees a hooked script; `script loaded`, `script loaded again`, `script reference freed` and `script freed` (Debug) for every other load and free, with the module `base` |
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
 | `[NEVR.PERF]`         | Frame-time probe (`diagnostics.frame_stats`): the start line and one summary line per 10 s window |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
