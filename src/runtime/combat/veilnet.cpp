@@ -2560,7 +2560,7 @@ void HookSelectionLogs() {
 //   +0xD649CE  movzx eax, r15w
 //   +0xD649D2  mov [rbp+130h], ax
 // (r12 = the component: its volumes at +100h, 50h bytes each.)
-constexpr uint32_t CAPTURE_DT_RVA = 0xD649C6, CAPTURE_SLOT = 0xC;
+constexpr uint32_t CAPTURE_DT_RVA = 0xD649C6, CAPTURE_SLOT = nevr_combat::rules::kCaptureTime;  // nEVR port (#600)
 const uint8_t kCaptureDt[19] = {0xf3, 0x0f, 0x10, 0x70, 0x3c, 0x45, 0x33, 0xff, 0x41, 0x0f, 0xb7, 0xc7,
                                 0x66, 0x89, 0x85, 0x30, 0x01, 0x00, 0x00};
 
