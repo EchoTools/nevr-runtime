@@ -19,6 +19,8 @@
 
 #include <cstdint>
 
+#include "runtime/combat/rules_state.h"
+
 namespace nevr_combat::station_cells {
 
 inline constexpr std::uint64_t kScript = 0xe0fdfda9a944e8ffULL;
@@ -30,8 +32,8 @@ inline constexpr float kFar = 100000.0F;
 
 /// The RULES mailbox in echovr.exe's .data tail, for the supported build: the .data page end (0x2105000) less 0x140,
 /// as VeilNet computes it at run time (RulesMailboxRva). The station's cell counts are at +0x14.
-inline constexpr std::uintptr_t kRulesMailboxRva = 0x2104ec0;
-inline constexpr std::uintptr_t kCellCountsOffset = 0x14;
+inline constexpr std::uintptr_t kRulesMailboxRva = rules::kMailboxRva;
+inline constexpr std::uintptr_t kCellCountsOffset = rules::kStationCells;
 
 // `mov [rsp+8],rbx; mov [rsp+0x10],rbp; mov [rsp+0x18],rsi; push rdi`
 inline constexpr std::uint8_t kCountPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,

@@ -65,6 +65,7 @@
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
+#include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -415,7 +416,7 @@ float *g_rules_total = nullptr;
 //: +12 requests, +13 the value asked for.
 constexpr uint32_t RULES_BELOW_PAGE_END = 0x140;
 constexpr uint32_t CLASSIC_SHOWN = 0x11, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
-constexpr uint32_t STATION_CELLS = 0x14;        // +14..+16: equipment station cells shown per gear type
+constexpr uint32_t STATION_CELLS = nevr_combat::rules::kStationCells;  // +14..+16: equipment station cells shown per gear type
 constexpr uint64_t CLASSIC_ITEMS = 4;           // each gear list's stock items come first
 uint8_t *g_rules = nullptr;                     // the RULES mailbox
 volatile LONG g_classic = 0;                    // server: LOADOUTS (LOADOUT_*)
@@ -525,7 +526,7 @@ volatile LONG g_paused = 0;                     // server: PAUSE state (0 / 1 / 
 volatile ULONGLONG g_resume_at = 0;             // server: when state 2 ends
 constexpr ULONGLONG RESUME_MS = 5000;
 enum : LONG { PAUSE_OFF = 0, PAUSE_ON = 1, PAUSE_RESUMING = 2 };
-constexpr uint32_t PAUSED_SHOWN = 0x2E, MATCH_LIVE = 0x2F;
+constexpr uint32_t PAUSED_SHOWN = nevr_combat::rules::kPausedShown, MATCH_LIVE = nevr_combat::rules::kMatchLive;  // nEVR port (#600)
 // +35h "PAUSE allowed" (client): set PAUSE_OK_DELAY_MS after the match went live (+2Fh). The
 // podium (fix_rules_pages.py) greys TEAM READY in stock fashion until then (DisableButton), and
 // enables it as PAUSE from then on; the label switches to PAUSE at the same moment. Setting it
@@ -2559,7 +2560,7 @@ void HookSelectionLogs() {
 //   +0xD649CE  movzx eax, r15w
 //   +0xD649D2  mov [rbp+130h], ax
 // (r12 = the component: its volumes at +100h, 50h bytes each.)
-constexpr uint32_t CAPTURE_DT_RVA = 0xD649C6, CAPTURE_SLOT = 0xC;
+constexpr uint32_t CAPTURE_DT_RVA = 0xD649C6, CAPTURE_SLOT = nevr_combat::rules::kCaptureTime;  // nEVR port (#600)
 const uint8_t kCaptureDt[19] = {0xf3, 0x0f, 0x10, 0x70, 0x3c, 0x45, 0x33, 0xff, 0x41, 0x0f, 0xb7, 0xc7,
                                 0x66, 0x89, 0x85, 0x30, 0x01, 0x00, 0x00};
 
