@@ -403,6 +403,14 @@ void TheRealStepsConsultTheGate() {
     QCHECK(lines.size() == 1U && Has(lines[0].text, "\"state\":\"skipped\""));
     QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
     QCHECK(Lines("combat_bvh_install").empty() && Lines("combat_wallfire_install").empty());
+    // the EC client, NEUTRON effects, POWER BOOST and the drone modules (#2187) neither installed nor wrote a line of their own: no install
+    // line, no words or page line, nothing under their event prefixes
+    for (const char* prefix : {"\"event\":\"combat_ec", "\"event\":\"combat_powerboost", "\"event\":\"combat_drone"}) {
+      for (const Line& l : g_lines) {
+        if (Has(l.text, prefix)) std::fprintf(stderr, "%s: %s\n", bv::VariantName(variant), l.text.c_str());
+        QCHECK(!Has(l.text, prefix));
+      }
+    }
     combat::NoteProcessEnd();
     QCHECK(Lines("combat_sendguard_stats").empty());
     Done();

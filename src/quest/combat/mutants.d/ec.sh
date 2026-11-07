@@ -88,3 +88,5 @@ runm ec_arena_reads_before_scope $E 's#^  if (!InCombatScope()) return real(fd, 
 runm ec_arena_scans_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
 # off by its key is counted off on the phase line (combat_install_test)
 runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
+# the arena APK and a plain release run no normal step, so no #2187 module writes a line (combat_install_test, TheRealStepsConsultTheGate)
+runm ec_arena_normal_runs src/quest/combat/combat_install.cpp "s#  if (!Active()) {#  if (!Active() \&\& phase == Phase::kEarly) {#" quest-host-combat combat_install_test
