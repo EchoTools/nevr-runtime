@@ -10,7 +10,7 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | File | What it holds |
 | --- | --- |
 | `combat_active.{h,cpp}` | The gate: `combat::Active()`, from the APK's variant and `combat.force` (a development build only). |
-| `combat_install.{h,cpp}` | The two install steps, `InstallEarly()` and `InstallNormal()`, the registration table they run, the `combat_install` line each writes, and the `combat_config` line. |
+| `combat_install.{h,cpp}` | The two install steps, `InstallEarly()` and `InstallNormal()`, the registration table they run, the `combat_install_module` record each module's step writes and the `combat_install` line each phase writes, and the `combat_config` line. |
 | `<module>.{h,cpp}` | One module: namespace `nevr_quest::combat::<module>`, log events `combat_<module>_*`. |
 | `<module>_targets.h` | The module's pinned slots, each checked by the module's own pinned test (`src/quest/tests/<module>_pinned_test.cpp`, run by `just test-quest-hooks-pinned`-style recipes against the store APK). |
 | `mutants.sh`, `mutants.d/<module>.sh` | The module's mutation run: `src/quest/combat/mutants.sh <module>` applies each `runm <name> <file> <sed>` line of the module's list to the checkout, builds `<module>_test` and runs it; a mutant is killed when the test fails, a mutant that does not compile is not a kill, and the file is put back after each. Not part of `just test-quest-combat`. |

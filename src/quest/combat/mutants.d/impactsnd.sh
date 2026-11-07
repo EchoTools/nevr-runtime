@@ -170,9 +170,8 @@ runm im_shutdown_thread_always $C 's/if (g_scoped.load(std::memory_order_relaxed
 runm ci_off_field_dropped      src/quest/combat/combat_install.cpp 's/ {"off", outcome.off},//' quest-host-combat combat_install_test
 runm ci_off_not_counted        src/quest/combat/combat_install.cpp 's/^    if (result.off) {$/    if (false) {/' quest-host-combat combat_install_test
 runm ci_write_row_dropped      src/quest/combat/combat_install.cpp 's/^    Module{"impactsnd_write", .*$//' quest-host-combat combat_install_test
-# the phase line names why a module is off (decals is off for want of a decals.bin as well as by its key), and the list of the shipped table fits it
+# the phase line names why a module is off (decals is off for want of a decals.bin as well as by its key)
 runm ci_off_msg_reason_dropped src/quest/combat/combat_install.cpp 's/ config key or with nothing to act on", outcome.off/ config key", outcome.off/' quest-host-combat combat_install_test
-runm ci_results_buffer_320     src/quest/combat/combat_install.cpp 's/char results\[400\];/char results[320];/' quest-host-combat combat_install_test
 # the arena APK and a plain release (#2300): the gate keeps the impact sounds and the level decals from running at all
 runm ci_arena_runs_impactsnd_decals src/quest/combat/combat_install.cpp 's/^Outcome InstallNormal() noexcept { return RunPhase(/Outcome InstallNormal() noexcept { ImpactsndNormal(); DecalsNormal(); return RunPhase(/' quest-host-combat combat_install_test
 # while a combat level's table is in scope the tick asks the levels once a second; an arena space that shares the table gets the stock ids back and the
