@@ -44,7 +44,8 @@ const (
 	// The manifest file: "ZSTD", u32 0x10, u64 decompressed length, u64 compressed length, then one zstd frame.
 	headerSize = 24
 	// Decompressed, three table descriptors of 0x40 bytes from 0x08 (resources, files, chunks; +0x08 the table's byte size,
-	// +0x28 the element count, +0x30 the capacity), then the tables from 0xc0. Chunks are the last table.
+	// +0x28 the capacity, +0x30 the count), then the tables from 0xc0. Chunks are the last table. This tool needs the main set's
+	// shape, capacity equal to count (tools/internal/radpack reads either).
 	tablesStart     = 0xc0
 	resourceDesc    = 0x08
 	fileDesc        = 0x48
@@ -127,7 +128,7 @@ func addOnePackage(manifest []byte) ([]byte, uint32, error) {
 	le := binary.LittleEndian
 	packages := le.Uint32(plain[0:])
 	chunkBytes := le.Uint64(plain[chunkDesc+0x08:])
-	chunkCount, chunkCap := le.Uint64(plain[chunkDesc+0x28:]), le.Uint64(plain[chunkDesc+0x30:])
+	chunkCap, chunkCount := le.Uint64(plain[chunkDesc+0x28:]), le.Uint64(plain[chunkDesc+0x30:])
 	if chunkBytes != chunkCount*chunkRecordSize || chunkCap != chunkCount {
 		return nil, 0, errors.New("the chunk table's descriptor is not count * 16 bytes with capacity = count")
 	}
@@ -136,8 +137,8 @@ func addOnePackage(manifest []byte) ([]byte, uint32, error) {
 	}
 	le.PutUint32(plain[0:], packages+1)
 	le.PutUint64(plain[chunkDesc+0x08:], chunkBytes+chunkRecordSize)
-	le.PutUint64(plain[chunkDesc+0x28:], chunkCount+1)
-	le.PutUint64(plain[chunkDesc+0x30:], chunkCap+1)
+	le.PutUint64(plain[chunkDesc+0x28:], chunkCap+1)
+	le.PutUint64(plain[chunkDesc+0x30:], chunkCount+1)
 	record := make([]byte, chunkRecordSize)
 	le.PutUint32(record[0:], packages)  // the new package's index
 	le.PutUint32(record[4:], addedSize) // its end: the package's size

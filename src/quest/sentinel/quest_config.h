@@ -191,6 +191,11 @@ struct CombatConfig {
   CombatSwitch decals{true, Source::kAbsent};           // `combat.decals`: the level decals of decals.bin (combat/decals.h); on, and inert without that file (upstream's fxdecal.on)
   CombatSwitch decalsFlipU{false, Source::kAbsent};     // `combat.decals_flip_u`: mirror the decals' u inside each quad
   CombatSwitch decalsFlipV{false, Source::kAbsent};     // `combat.decals_flip_v`: mirror the decals' v inside each quad
+  CombatSwitch bvh{true, Source::kAbsent};       // `combat.bvh`: the static BVH answers casts on combat maps only (combat/bvh.h)
+  CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
+  CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
+  CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
 };
 
 struct LogEvent {

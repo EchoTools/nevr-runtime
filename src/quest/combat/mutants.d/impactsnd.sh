@@ -169,4 +169,7 @@ runm im_off_counted_failed     $C 's/return {false, "off_config", true};/return 
 runm im_shutdown_thread_always $C 's/if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);/NoteThread(kRoleShutdown);/'
 runm ci_off_field_dropped      src/quest/combat/combat_install.cpp 's/ {"off", outcome.off},//' quest-host-combat combat_install_test
 runm ci_off_not_counted        src/quest/combat/combat_install.cpp 's/^    if (result.off) {$/    if (false) {/' quest-host-combat combat_install_test
-runm ci_key3_dropped           src/quest/combat/combat_install.cpp 's/{module.switchKey3, module.switchMember3}/{nullptr, nullptr}/' quest-host-combat combat_install_test
+runm ci_write_row_dropped      src/quest/combat/combat_install.cpp 's/^    Module{"impactsnd_write", .*$//' quest-host-combat combat_install_test
+# the phase line names why a module is off (decals is off for want of a decals.bin as well as by its key), and the list of the shipped table fits it
+runm ci_off_msg_reason_dropped src/quest/combat/combat_install.cpp 's/ config key or with nothing to act on", outcome.off/ config key", outcome.off/' quest-host-combat combat_install_test
+runm ci_results_buffer_320     src/quest/combat/combat_install.cpp 's/char results\[400\];/char results[320];/' quest-host-combat combat_install_test

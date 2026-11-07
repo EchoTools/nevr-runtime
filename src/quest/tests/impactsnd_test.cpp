@@ -40,6 +40,17 @@
 
 namespace impactsnd = nevr_quest::combat::impactsnd;
 
+// What a path costs, counted: every SafeRead and every level scan goes through a counter behind its test seam (safe_read.h, combat_level.h),
+// installed for the whole run at the top of main().
+static std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
+static void CountScan() { g_scans.fetch_add(1, std::memory_order_relaxed); }
+static std::uint64_t ReadCount() { return g_reads.load(std::memory_order_relaxed); }
+static std::uint64_t ScanCount() { return g_scans.load(std::memory_order_relaxed); }
+static void StartCounting() {
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  nevr_quest::combat::level::SetScanSeamForTest(&CountScan);
+}
+
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
   do {                                                  \
@@ -898,34 +909,34 @@ static void TestArenaPaysNothingByCount() {
   impactsnd::SetGameForTest(GameAddress());
   Install();
   g_load_mode = kLoadNothing;
-  const uint64_t reads0 = nevr_quest::combat::ReadCountForTest(), scans0 = nevr_quest::combat::level::ScanCountForTest();
+  const uint64_t reads0 = ReadCount(), scans0 = ScanCount();
   for (int i = 0; i < 300; ++i) impactsnd::Tick(GameAddress());
-  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
-        "300 arena frames made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
-        (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
+  CHECK(ReadCount() == reads0 && ScanCount() == scans0,
+        "300 arena frames made %llu reads and %llu scans", (unsigned long long)(ReadCount() - reads0),
+        (unsigned long long)(ScanCount() - scans0));
   for (int i = 0; i < 5; ++i) CallShutdown(1);
   CHECK(CountLines("role=shutdown") == 0, "an arena teardown noted its thread (a gettid syscall)");
-  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
-        "5 arena Shutdowns made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
-        (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
+  CHECK(ReadCount() == reads0 && ScanCount() == scans0,
+        "5 arena Shutdowns made %llu reads and %llu scans", (unsigned long long)(ReadCount() - reads0),
+        (unsigned long long)(ScanCount() - scans0));
   // one load: exactly the reads of the one scan that decides it
   std::uint64_t level = 0;
-  const uint64_t r1 = nevr_quest::combat::ReadCountForTest();
+  const uint64_t r1 = ReadCount();
   nevr_quest::combat::level::Classify(GameAddress(), true, &level, true);
-  const uint64_t readsOfOneDecision = nevr_quest::combat::ReadCountForTest() - r1;
-  const uint64_t reads1 = nevr_quest::combat::ReadCountForTest(), scans1 = nevr_quest::combat::level::ScanCountForTest();
+  const uint64_t readsOfOneDecision = ReadCount() - r1;
+  const uint64_t reads1 = ReadCount(), scans1 = ScanCount();
   CallLoader();
-  CHECK(nevr_quest::combat::level::ScanCountForTest() - scans1 == 1, "an arena load made %llu scans", (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans1));
-  CHECK(nevr_quest::combat::ReadCountForTest() - reads1 == readsOfOneDecision, "an arena load made %llu reads, its one decision costs %llu",
-        (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads1), (unsigned long long)readsOfOneDecision);
+  CHECK(ScanCount() - scans1 == 1, "an arena load made %llu scans", (unsigned long long)(ScanCount() - scans1));
+  CHECK(ReadCount() - reads1 == readsOfOneDecision, "an arena load made %llu reads, its one decision costs %llu",
+        (unsigned long long)(ReadCount() - reads1), (unsigned long long)readsOfOneDecision);
   // and after a combat level's table is live, the Shutdown that frees it reads the global once to end the scope
   LoadLevels({"mpl_combat_dyson"});
   impactsnd::SetGameForTest(GameAddress());
   g_load_mode = kLoad15;
   CallLoader();
-  const uint64_t reads2 = nevr_quest::combat::ReadCountForTest();
+  const uint64_t reads2 = ReadCount();
   CallShutdown(1);
-  CHECK(nevr_quest::combat::ReadCountForTest() > reads2 && !impactsnd::GetStats().scoped, "the Shutdown of a combat table did not end the scope by a read");
+  CHECK(ReadCount() > reads2 && !impactsnd::GetStats().scoped, "the Shutdown of a combat table did not end the scope by a read");
 }
 
 // A non-combat load reaches the handler while a combat table lives (the global stays set). The game's own caller does not do this (Initialize loads only
@@ -1623,6 +1634,7 @@ static void TestThreadLines() {
 }
 
 int main() {
+  StartCounting();
   // a hang (a lock that is never released, a joined thread that never returns) is a failure, not a stuck test run
   std::thread([] {
     for (int i = 0; i < 600; ++i) usleep(100000);

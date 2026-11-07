@@ -71,6 +71,14 @@ void HostLog(const char* module, std::uint32_t level, const char* text);
 /// GetPrivateProfileIntA / GetPrivateProfileStringA over `combat.settings.<section>.<key>` in config.yaml.
 int IniInt(const char* section, const char* key, int fallback);
 DWORD IniString(const char* section, const char* key, const char* fallback, char* out, DWORD size);
+/// How many of the keys read so far came from config.yaml, from his shipped PowerBoost.ini values (shipped_settings.h), and
+/// from the code's own literal (a key his PowerBoost.ini does not carry); each key counted once, the first time it is read.
+struct IniSourceCounts {
+  int config = 0;
+  int shipped = 0;
+  int code = 0;
+};
+IniSourceCounts IniSources();
 
 }  // namespace nevr_combat::cat
 

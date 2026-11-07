@@ -42,10 +42,6 @@ struct Loaded {
 // into the loaded table before it removes the fiber (0x17ed480, then 0x17ed4a8 to 0x17ed4b4), so this order sees a finishing gamespace in at least one
 // of them, and the other order can miss it in both. Callers that decide per frame on a level that is up (refresh_rate, pfx) leave it false and see what they always did.
 Loaded Scan(std::uintptr_t game, bool inFlight = false) noexcept;
-#ifdef NEVR_COMBAT_COUNT_READS
-// How many scans a host test built with NEVR_COMBAT_COUNT_READS has seen (the shipped build keeps no count).
-std::uint64_t ScanCountForTest() noexcept;
-#endif
 
 // What the loaded gamespaces decide: an Echo Arena level is kEchoArena and wins always; else a combat map (or, with `lobby`, the combat lobby)
 // is kCombatOrLobby; anything else, every other lobby level included, is kNone. With `inFlight`, when any gamespace is still loading the levels

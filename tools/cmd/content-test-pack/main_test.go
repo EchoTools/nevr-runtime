@@ -117,8 +117,8 @@ func TestTheManifestGainsOnePackageAndItsEndRecordAndNothingElse(t *testing.T) {
 	if got := le.Uint64(plain[chunkDesc+0x08:]); got != 5*16 {
 		t.Errorf("chunk bytes %d", got)
 	}
-	if c, cap := le.Uint64(plain[chunkDesc+0x28:]), le.Uint64(plain[chunkDesc+0x30:]); c != 5 || cap != 5 {
-		t.Errorf("chunk count %d capacity %d", c, cap)
+	if capacity, c := le.Uint64(plain[chunkDesc+0x28:]), le.Uint64(plain[chunkDesc+0x30:]); c != 5 || capacity != 5 {
+		t.Errorf("chunk count %d capacity %d", c, capacity)
 	}
 	end := plain[len(plain)-16:]
 	if le.Uint32(end[0:]) != 3 || le.Uint32(end[4:]) != addedSize || le.Uint32(end[8:]) != 0 || le.Uint32(end[12:]) != 0 {

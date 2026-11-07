@@ -60,6 +60,21 @@ Format 1 (`src/runtime/content/content_json.h`):
   a stock package.
 - A script is `scripts/<16 lowercase hex>.dll`: the `CScriptResource` of that name, replaced or added.
 
+## Building a pack
+
+`tools/cmd/content-pack-build` builds a pack from an install's own stock files: its steps read stock resources and
+scripts and say what the pack replaces or adds, and it writes the folder above (`content.json` format 1, one manifest
+per changed set over the stock one, one new package per changed set, and `scripts/<16 hex>.dll`). The manifest and
+package code is `tools/internal/radpack`. A pack is built on the machine that has the stock files, never from game bytes
+in this repository (ADR 0028). The build's step list holds the EchoCombat pack's steps as they land (#600); with no step
+that changes anything it refuses. The steps today give the DRONE the assault bullet's effects and particle rows and its
+actor the shared script row, in the bullet, particle and script tables of the five combat levels
+(`tools/cmd/content-pack-build/steps_drone.go`), and add four weapons and three ordnances to mp_equipment's
+lists: six the game defines in mp_weapon_settings but does not list, and the translocator
+(`tools/cmd/content-pack-build/steps_equipment.go`). It writes the pack into a new folder beside `-out` and renames it
+to `-out` when every file is in it, so a failed write leaves no `-out`, and it refuses an `-out` inside `-game-dir`, links
+resolved: nothing of ours is written into a game folder.
+
 ## When a pack is refused
 
 The runtime checks the pack once, at the game's first command-line pass, after the early plugin pass and before the

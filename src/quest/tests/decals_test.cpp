@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -95,6 +96,18 @@ namespace dc = nevr_quest::combat::decals;
 // ---- 1 and 2. the table and the state machine ----------------------------------------------------------------------------------
 
 namespace {
+
+// What a path costs, counted: every SafeRead and every level scan goes through a counter behind its test seam (safe_read.h, combat_level.h),
+// installed for the whole run at the top of main().
+std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
+void CountScan() { g_scans.fetch_add(1, std::memory_order_relaxed); }
+std::uint64_t ReadCount() { return g_reads.load(std::memory_order_relaxed); }
+std::uint64_t ScanCount() { return g_scans.load(std::memory_order_relaxed); }
+void StartCounting() {
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  nevr_quest::combat::level::SetScanSeamForTest(&CountScan);
+}
+
 
 constexpr uint64_t kDyson = 0x43e2da7914642604ull, kCombustion = 0x42670f2bed45703cull;
 
@@ -995,10 +1008,10 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   Sys s;
   MakeSys(&s, 0);
   UpdateSlot()(s.addr());
-  const uint64_t reads0 = nevr_quest::combat::ReadCountForTest();
+  const uint64_t reads0 = ReadCount();
   for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
-  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && dc::CountersForTest().tick_calls == 1, "no level yet: %llu reads and %llu calls in 49 updates",
-        (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0), (unsigned long long)dc::CountersForTest().tick_calls);
+  CHECK(ReadCount() == reads0 && dc::CountersForTest().tick_calls == 1, "no level yet: %llu reads and %llu calls in 49 updates",
+        (unsigned long long)(ReadCount() - reads0), (unsigned long long)dc::CountersForTest().tick_calls);
   // after the skip the space is looked at again, and a space that has become a combat map is found
   s.gs[0x58 / 8] = kDyson;
   for (int i = 0; i < 70; ++i) UpdateSlot()(s.addr());
@@ -1037,12 +1050,12 @@ void TestArenaScope(const std::string& dir) {
     Sys s;
     MakeSys(&s, EchoVR::CSymbol64Hash(name));
     UpdateSlot()(s.addr());  // the first look reads the space's level
-    const uint64_t reads0 = nevr_quest::combat::ReadCountForTest(), scans0 = nevr_quest::combat::level::ScanCountForTest();
+    const uint64_t reads0 = ReadCount(), scans0 = ScanCount();
     for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
     CHECK(E.real_updates == 50, "%s: the game's update ran %d times", name, E.real_updates);
-    CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
-          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
-          (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
+    CHECK(ReadCount() == reads0 && ScanCount() == scans0,
+          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, (unsigned long long)(ReadCount() - reads0),
+          (unsigned long long)(ScanCount() - scans0));
     CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
     CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
     // the module's lock, its clock and its state machine are reached by the first update and not by the 49 quiet ones (a few relaxed loads each)
@@ -1057,6 +1070,7 @@ void TestArenaScope(const std::string& dir) {
 }  // namespace
 
 int main() {
+  StartCounting();
   sentinel::SetLogSink(&Capture);
   char tmpl[] = "/tmp/combat-decals-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
