@@ -540,7 +540,7 @@ constexpr uint32_t WANT_PAUSE = 0x20;           // in +13: a PAUSE ask, bit 0 th
 
 // --- END MATCH (private matches) ------------------------------------------------------------
 // A client asks with F8 (its Echo window in front): 'C' WANT_END. The server, in a private match
-// only (its "[NETLOBBY] Starting session (gametype ...private...)" log line), until the game's
+// only (nEVR port (#2289): from SessionGameType(), combat/match_type.h), until the game's
 // nevt_game_over goes out (or END_GIVE_UP_MS):
 //   * blue captures the point as if a blue player stood on it (game thread, EndMatchCapture): each
 //     capture volume not owned by blue gets what the engine's capture tick writes when a capture
@@ -2939,7 +2939,7 @@ int __cdecl VeilNet_MedigunAllowed() {
 
 // nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls. The server's
 // MEDIGUN answer is combat.medigun, not PowerBoost.ini [server] medigun; the clean exit is installed only when
-// combat.clean_exit is on, where Cat installed it on every start.
+// combat.clean_exit is on (its default, as Cat installed it on every start).
 bool Start(bool is_server, bool match_control, bool medigun_server) {
     g_match_control = match_control;
     g_medigun_on_server = medigun_server;

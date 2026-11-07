@@ -1898,6 +1898,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
     gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
 
+    # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
+    add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
+    set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_shipped_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_shipped_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_shipped_settings DISCOVERY_MODE PRE_TEST)
+
     # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
     # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's
     # loader-lock probe and the real Log().
