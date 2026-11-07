@@ -18,6 +18,17 @@ using pbr::Bubble;
 constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
 constexpr float kInf = std::numeric_limits<float>::infinity();
 
+// The constants the ports read: the least marker (PC's hit boost skips anything from it up; the Quest's heal wrappers look at nothing
+// below it) and the owner's distance (closer to the aim's origin than this is the owner, never linked).
+TEST(PowerBoostRules, TheConstantsAreV200s) {
+  EXPECT_EQ(pbr::kMarkerMin, 1000000.0f);
+  EXPECT_EQ(pbr::kOwnerMinDist, 0.3f);
+  EXPECT_EQ(pbr::kConeSlackDeg, 5.0f);
+  EXPECT_EQ(pbr::kLinkMinMs, 250u);
+  EXPECT_EQ(pbr::kBubbleReuseMs, 2000u);
+  EXPECT_EQ(pbr::kUseWindowMs, 30000u);
+}
+
 // ---- Rotate and AngleTo
 
 TEST(PowerBoostRules, TheIdentityQuaternionLeavesAVector) {

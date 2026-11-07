@@ -57,6 +57,8 @@ func TestHookedHealDecodesThroughTheSharedRuleAndActsOnUnlinkFirst(t *testing.T)
 		"if (m.kind == pbr::kUse) {",
 		"g_dr_permille = m.drPermille;",
 		"g_dr_seconds = m.seconds;",
+		"AddBuff(cs, (uint16_t)index, static_cast<float>(g_dr_permille) / 1000.0f, g_dr_seconds, false, true);",
+		"1.0f - static_cast<float>(g_dr_permille) / 1000.0f, (unsigned)g_dr_seconds,",
 		"if (m.kind == pbr::kLink) {",
 		"AddBuff(cs, (uint16_t)index, static_cast<float>(m.drPermille) / 1000.0f, m.seconds, rez, false);",
 		"Real_Heal(cs, index, amount, a4, a5);")
@@ -69,6 +71,7 @@ func TestLinkStateBuildsItsMarkerThroughTheSharedRule(t *testing.T) {
 		"const pbr::UseState use{ g_used_at, g_dr_permille, g_dr_seconds, g_rez };",
 		"const unsigned left = pbr::LeftSeconds(use, now);",
 		"if (g_server) {",
+		"if (linked) AddBuff(dcs, (uint16_t)index, static_cast<float>(use.drPermille) / 1000.0f, left, use.rez, false);",
 		"const float marker = pbr::LinkMarker(use, linked, now);",
 		"if (marker == 0.0f) return;",
 		"SendDamageDealt(dcs, index, -marker, 0, 0);")
@@ -87,10 +90,28 @@ func TestConeFilterClassifiesAndDecidesThroughTheSharedRule(t *testing.T) {
 		"float range = pbr::ConeRange(radius);",
 		"if (medigun) return MediCone(",
 		"pbr::ConeDecide(g_cone_table, reinterpret_cast<uintptr_t>(bubble), reinterpret_cast<uintptr_t>(dcs),",
+		"index, radius, angle, dist, off, now0);",
+		"const bool ok = verdict.ok, send = verdict.send;",
 		"if (send) LinkState(dcs, index, ok);",
 		"return ok;")
 	if !strings.Contains(body(t, src, "BubbleLinks &BubbleFor("), "return g_cone_table.For(reinterpret_cast<uintptr_t>(bubble), now);") {
 		t.Error("BubbleFor no longer returns the shared table's entry")
+	}
+	// MEDIGUN (PC only) keeps its one target in the same table, whose dcs is an address
+	ordered(t, "MediCone", body(t, src, "int MediCone(uint8_t *bubble, float off, float dist, float range, int angle, void *dcs, uint32_t index) {"),
+		"BubbleLinks &bl = BubbleFor(bubble, now);",
+		"bool mine = bl.count && bl.linked[0].dcs == reinterpret_cast<uintptr_t>(dcs) && (bl.linked[0].index & 0xffff) == (index & 0xffff);",
+		"bl.linked[0] = { reinterpret_cast<uintptr_t>(dcs), index, true, false, 0 };")
+}
+
+func TestThePCServerHalfKeepsItsDefaultAndTheHitBoostSkipsMarkers(t *testing.T) {
+	t.Parallel()
+	src := code(t, pcPowerboost)
+	if !strings.Contains(src, "volatile unsigned g_dr_permille = 90;") {
+		t.Error("the damage reduction's default is no longer 90 permille (0.09)")
+	}
+	if !strings.Contains(body(t, src, "void __fastcall Hooked_Send("), "amount > 0 && amount < pbr::kMarkerMin && GetTickCount64() < g_boosted_until") {
+		t.Error("Hooked_Send no longer boosts only hits below the least marker")
 	}
 }
 
