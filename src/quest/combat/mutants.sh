@@ -64,7 +64,17 @@ restore() {
   fi
   current=""
 }
-cleanup() { restore; rm -rf -- "${backup:?}"; }
+# The files the run writes in $backup, each removed by its name; then the directory, which must be empty by then. Anything else found
+# there is left in place with the directory, and one line on stderr names it (#2270: no recursive removal).
+backup_files="file build.log test.log baseline.log baseline.test.log rebuild.log"
+cleanup() {
+  local f
+  restore
+  for f in $backup_files; do
+    if [ -e "$backup/$f" ]; then rm -f -- "${backup:?}/$f"; fi
+  done
+  rmdir -- "$backup" 2>/dev/null || echo "mutants.sh: $backup holds files the run did not write; left in place" >&2
+}
 trap cleanup EXIT
 survived=0
 notkill=0
