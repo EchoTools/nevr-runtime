@@ -11,8 +11,8 @@ import (
 // #2179, #2234: src/quest/combat/mutants.sh is the one mutation runner every combat module uses. These tests run the real script against a
 // fake checkout whose cmake and ctest are scripts that record their arguments, so they pin what the host tests of a module cannot: that a
 // build is for the target the list line names and nowhere else (never a whole tree, where an unrelated program that does not link fails the
-// run), that every build is capped by CMAKE_BUILD_PARALLEL_LEVEL, that a failed final rebuild keeps its log and says why, and that a run that
-// ran nothing fails.
+// run), that every build is capped by CMAKE_BUILD_PARALLEL_LEVEL, that a failed final rebuild keeps its log and says why, that a run that
+// ran nothing fails, and that a run removes its backup directory file by file and never anything it did not write (#2270).
 
 type harness struct {
 	dir   string // the fake checkout
@@ -41,6 +41,8 @@ func newHarness(t *testing.T, list string, failRebuild bool) *harness {
 	calls := filepath.Join(dir, "calls.txt")
 	// A cmake that records its arguments; the second and later builds fail when asked to (the final rebuild), printing an error line.
 	cmake := "#!/bin/sh\necho \"cmake $*\" >> " + calls + "\nif [ -f " + dir + "/buildbroken ]; then echo 'x.cpp:1:1: error: boom'; exit 1; fi\n"
+	// With a `stray` flag file, a build leaves a file the script did not write in the run's backup directory.
+	cmake += "if [ -f " + dir + "/stray ]; then for d in " + dir + "/combat-mutants.*; do [ -d \"$d\" ] && touch \"$d/stray.txt\"; done; fi\n"
 	if failRebuild {
 		cmake += "if [ -f " + dir + "/mutated-once ]; then echo 'g++ -Wall -Wextra -Werror -c unrelated.cpp'; echo 'ld: undefined reference to unrelated' >&2; echo 'x.cpp:3:1: error: expected unqualified-id'; exit 1; fi\n"
 	}
@@ -213,5 +215,77 @@ func TestARunStopsBeforeJudgingAnyMutantWhenTheUnmutatedTreeDoesNotBuild(t *test
 	}
 	if !strings.Contains(out, "the unmutated tree does not build: quest-host-combat fake_test") || !strings.Contains(out, "error: boom") {
 		t.Errorf("the baseline build failure is not named with its error:\n%s", out)
+	}
+}
+
+// backups lists the run's backup directories left in the work root (NEVR_WORK_ROOT is the fake checkout).
+func (h *harness) backups(t *testing.T) []string {
+	t.Helper()
+	found, err := filepath.Glob(filepath.Join(h.dir, "combat-mutants.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// Every way a run ends (killed, the final rebuild failed, a filter that ran nothing, a baseline that fails or does not build) leaves no
+// backup directory behind: each file the run wrote there is removed by its name, then the directory.
+func TestARunLeavesNoBackupDirectoryHoweverItEnds(t *testing.T) {
+	cases := []struct {
+		name, flag  string
+		failRebuild bool
+		args        []string
+	}{
+		{"killed", "", false, []string{"fake"}},
+		{"rebuild failed", "", true, []string{"fake"}},
+		{"nothing ran", "", false, []string{"fake", "^no_such_mutant$"}},
+		{"baseline fails", "broken", false, []string{"fake"}},
+		{"baseline does not build", "buildbroken", false, []string{"fake"}},
+	}
+	for _, tc := range cases {
+		h := newHarness(t, oneMutant, tc.failRebuild)
+		if tc.flag != "" {
+			if err := os.WriteFile(filepath.Join(h.dir, tc.flag), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, _ := h.run(t, "3", tc.args...)
+		if left := h.backups(t); len(left) != 0 {
+			t.Errorf("%s: the run left %v\n%s", tc.name, left, out)
+		}
+		if strings.Contains(out, "left in place") {
+			t.Errorf("%s: a clean run says it left files:\n%s", tc.name, out)
+		}
+	}
+}
+
+// A file in the backup directory that the run did not write is not removed: the directory stays with it, the run's own files are gone,
+// one stderr line names the directory, and the run's exit status is its own.
+func TestAFileTheRunDidNotWriteIsLeftAndNamed(t *testing.T) {
+	h := newHarness(t, oneMutant, false)
+	if err := os.WriteFile(filepath.Join(h.dir, "stray"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := h.run(t, "3", "fake")
+	if code != 0 {
+		t.Errorf("exit %d, want 0 (the run's own status)\n%s", code, out)
+	}
+	left := h.backups(t)
+	if len(left) != 1 {
+		t.Fatalf("want the one backup directory left, found %v\n%s", left, out)
+	}
+	entries, err := os.ReadDir(left[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "stray.txt" {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("want only stray.txt left in %s, found %v", left[0], names)
+	}
+	if strings.Count(out, "mutants.sh: "+left[0]+" holds files the run did not write; left in place") != 1 {
+		t.Errorf("the directory left is not named once:\n%s", out)
 	}
 }

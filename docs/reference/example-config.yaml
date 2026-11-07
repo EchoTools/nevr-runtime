@@ -257,6 +257,21 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
+  # Quest only. Booleans. The static BVH (src/quest/combat/bvh.h): the Quest's level collision tree is a stub, so no cast against the level's walls
+  # ever hits. `bvh` answers casts from the game's own static BVH on a combat map (walls block the AI's sight and bullets); every other level,
+  # an Echo Arena level included, keeps the game's own answers. Default (absent): true.
+  # bvh: false leaves the game's stubbed static BVH.
+  # bvh_gate: false lets every cast use the tree instead of only the three callers the PC answers from the level. Default (absent): true.
+  # bvh_touch: false leaves the touch-interaction ray with the game's own answer instead of a miss. Default (absent): true.
+  # wallfire refuses a gun's shot when the segment from the player to the muzzle crosses static geometry on a combat map. It needs
+  # `bvh: true` and installs nothing without it. Default (absent): true. The sentinel log lines `combat_config_switch`, `combat_bvh_install`,
+  # `combat_bvh_summary` and `combat_wallfire_install` say what was read and what was done. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch.
+  # bvh: false
+  # bvh_gate: false
+  # bvh_touch: false
+  # wallfire: false
+
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
   # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.

@@ -268,7 +268,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
       {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "meshstep", "instmodel", "shaderstep",
-                  "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "sendguard"}},
+                  "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard"}},
   });
   return kSections;
 }

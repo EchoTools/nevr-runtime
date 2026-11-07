@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/headset_gates.h"
@@ -18,6 +19,7 @@
 #include "quest/combat/sendguard.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
+#include "quest/combat/wallfire.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -48,6 +50,16 @@ ModuleResult GatesNormal() noexcept {
   switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
   return headset_gates::Install(switches);
 }
+ModuleResult BvhNormal() noexcept {
+  bvh::Switches switches;
+  switches.bvh = g_config.bvh.on;
+  switches.gate = g_config.bvhGate.on;
+  switches.touch = g_config.bvhTouch.on;
+  return bvh::Install(switches);
+}
+ModuleResult WallfireNormal() noexcept {
+  return wallfire::Install(g_config.wallfire.on);
+}
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
@@ -72,6 +84,13 @@ constexpr std::array kModules{
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
+    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
+    // the scope the tick refreshes.
+    // bvh_gate and bvh_touch are switches of bvh's with no step of their own: their rows exist so each switch is one generated `combat_config_switch` record.
+    Module{"bvh", nullptr, &BvhNormal, "combat.bvh", &nevr_quest::CombatConfig::bvh},
+    Module{"bvh_gate", nullptr, nullptr, "combat.bvh_gate", &nevr_quest::CombatConfig::bvhGate},
+    Module{"bvh_touch", nullptr, nullptr, "combat.bvh_touch", &nevr_quest::CombatConfig::bvhTouch},
+    Module{"wallfire", nullptr, &WallfireNormal, "combat.wallfire", &nevr_quest::CombatConfig::wallfire},
     // sendguard: the script-event guard, installed after the modules that hook the tick and before the decisions (#2179).
     Module{"sendguard", nullptr, &SendguardNormal, "combat.sendguard", &nevr_quest::CombatConfig::sendguard, &sendguard::NoteEnd},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.

@@ -6,7 +6,6 @@
 #include <cstring>
 
 #include "aibots.h"
-#include "bvh.h"
 #include "custctx.h"
 #include "decals.h"
 #include "droneguard.h"
@@ -31,7 +30,6 @@
 #include "shieldgamma.h"
 #include "module_switch.h"
 #include "voipdrop.h"
-#include "wallfire.h"
 #include "weapon_arm.h"
 
 #ifndef Q15T_BUILD_ID
@@ -68,12 +66,6 @@
 #endif
 #ifndef Q15T_AIBOTS
 #define Q15T_AIBOTS 0
-#endif
-#ifndef Q15T_BVH
-#define Q15T_BVH 0
-#endif
-#ifndef Q15T_WALLFIRE  // needs Q15T_BVH
-#define Q15T_WALLFIRE 0
 #endif
 #ifndef Q15T_IMPACTSND
 #define Q15T_IMPACTSND 0
@@ -169,12 +161,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_AIBOTS
     "aibots "
-#endif
-#if Q15T_BVH
-    "bvh "
-#endif
-#if Q15T_WALLFIRE
-    "wallfire "
 #endif
 #if Q15T_IMPACTSND
     "impactsnd "
@@ -292,8 +278,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_BVH) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;       // walls block line of sight, bullets and AI
-  if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
   if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
   return caps;
@@ -320,7 +304,7 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
-  // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
+  // The modules, in an order the docs fix: ecfx, powerboost's net tick and dronekill's kill feed after ec;
   // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
 #if Q15T_FXTRAIL
@@ -337,16 +321,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_PEERCLAMP
   ReportModule("peerclamp", InstallPeerClamp(base));
-#endif
-#if Q15T_BVH
-  {
-    const InstallResult r = InstallBvh(base);
-    ReportModule("bvh", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("bvh", &BvhTick, &want_tick);
-  }
-#endif
-#if Q15T_WALLFIRE
-  ReportModule("wallfire", InstallWallfire(base));  // refuses itself (bvh_not_installed) when bvh did not install
 #endif
 #if Q15T_IMPACTSND
   ReportModule("impactsnd", InstallImpactSnd(base));
