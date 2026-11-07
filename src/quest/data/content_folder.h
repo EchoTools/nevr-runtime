@@ -14,8 +14,10 @@
  *     the APK's native library directory, and the pack folder is on shared storage, mounted noexec.
  *   - A manifest the pack replaces with a `<manifest>.stock` beside it is refused (bundled_pack_placed): an APK's bundled pack
  *     (docs/adr/0029-quest-bundled-content-pack.md) has replaced that stock manifest, so it is not the one a pack is built on.
- *   - The service-only libr15 spells the media root with the afk package (quest/sentinel/path_rewrite.h); a game path in that
- *     spelling is turned into the running package's before it is looked up, as the path rewrite turns it below the game's open.
+ *   - Only the patched libr15 serves a folder pack. On the service-only libr15 (the reference build's file, libr15_attach.h,
+ *     kPinnedServiceOnly) only the service-side GOT hooks install: CSysFile::Open's slot is not one, and the data step that runs
+ *     this one is reached through the permission-wait hook, which is not one either. There no pack is served and no line is
+ *     written. Keys are the game's paths as they are: on the patched libr15 the engine's root is the one Config names.
  * Pure but for the file system: no hook, no log call (the caller's sink writes the lines).
  */
 #pragma once
@@ -24,7 +26,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "runtime/content/content_core.h"
@@ -40,8 +41,7 @@ std::string ContentDir(const std::string& media_root);
 // The shared decision's file access on POSIX (content_core.h, PackFiles).
 class PosixPackFiles final : public nevr_content::PackFiles {
  public:
-  // `running_package`: a path in the afk spelling is keyed in this package's (path_rewrite.h); "" keys paths as they are.
-  explicit PosixPackFiles(std::string running_package) : running_package_(std::move(running_package)) {}
+  PosixPackFiles() = default;
   ~PosixPackFiles() override { ReleaseAll(); }
 
   std::vector<std::string> Folders(const std::string& dir) override;
@@ -56,7 +56,6 @@ class PosixPackFiles final : public nevr_content::PackFiles {
   std::size_t HeldCount() const { return held_.size(); }
 
  private:
-  std::string running_package_;
   std::vector<int> held_;
 };
 
@@ -72,7 +71,6 @@ using HookInstaller = const char* (*)();
 struct Config {
   std::string content_dir;      // ContentDir(<media root>)
   std::string engine_root;      // the root the engine reads (data_wiring.cpp, EngineRoot): content.json's game folder
-  std::string running_package;  // PosixPackFiles
   bool data_read_already = false;  // the game's resource manager exists (pinned_targets.h, kResourceManagerPtrVaddr)
   HookInstaller install_hook = nullptr;
   LineSink log = nullptr;
@@ -94,7 +92,7 @@ nevr_content::LineLevel ServedLine(const nevr_content::Served& served, const cha
 // Forgets the served pack and closes the files it held (tests).
 void Forget();
 
-// Test support: serves `pack` (its keys as given, no file held) with `running_package` for the afk spelling.
-void ServeForTest(std::unique_ptr<nevr_content::Pack> pack, const std::string& running_package);
+// Test support: serves `pack` (its keys as given, no file held).
+void ServeForTest(std::unique_ptr<nevr_content::Pack> pack);
 
 }  // namespace nevr_quest::content

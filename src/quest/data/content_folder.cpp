@@ -11,33 +11,24 @@
 #include <memory>
 
 #include "quest/data/sha256.h"
-#include "quest/sentinel/path_rewrite.h"
 
 namespace nevr_quest::content {
 
 namespace {
 
-// The pack this process serves: the shared table, the files that hold its files open, and the package a game path's afk spelling
-// is keyed in. Published once Run has built it (and before the hook goes in); the hook only reads it.
+// The pack this process serves: the shared table and the files that hold its files open. Published once Run has built it (and
+// before the hook goes in); the hook only reads it.
 struct State {
   std::unique_ptr<nevr_content::Pack> pack;
   std::unique_ptr<PosixPackFiles> files;
-  char running_package[128] = {};
 };
 std::atomic<State*> g_state{nullptr};
 
-// The key of `path`: the afk spelling turned into the running package's (path_rewrite.h), into `out`. No allocation.
-const char* KeyOf(const char* path, const char* running_package, char (&out)[path_rewrite::kBufferSize]) noexcept {
-  return path_rewrite::Rewrite(path, running_package, out, sizeof(out));
-}
-
-// Makes `pack` the one ServedFor reads, with the files that hold it and the running package its keys are spelled in.
-void Publish(std::unique_ptr<nevr_content::Pack> pack, std::unique_ptr<PosixPackFiles> files,
-             const std::string& running_package) {
+// Makes `pack` the one ServedFor reads, with the files that hold it.
+void Publish(std::unique_ptr<nevr_content::Pack> pack, std::unique_ptr<PosixPackFiles> files) {
   auto state = std::make_unique<State>();
   state->pack = std::move(pack);
   state->files = std::move(files);
-  running_package.copy(state->running_package, std::min(running_package.size(), sizeof(state->running_package) - 1));
   Forget();
   g_state.store(state.release(), std::memory_order_release);
 }
@@ -140,10 +131,9 @@ std::string PosixPackFiles::Join(const std::string& dir, const std::string& rela
   return dir + "/" + relative;
 }
 
-std::string PosixPackFiles::Key(const std::string& path) {
-  char buf[path_rewrite::kBufferSize];
-  return KeyOf(path.c_str(), running_package_.c_str(), buf);
-}
+// The game's path as it is: the engine's root is the one content.json's game folder names (data_wiring.cpp, EngineRoot), so the
+// game opens a stock file by the very path the decision checked.
+std::string PosixPackFiles::Key(const std::string& path) { return path; }
 
 nevr_content::Decision Run(const Config& config) {
   nevr_content::CoreInputs in;
@@ -152,11 +142,11 @@ nevr_content::Decision Run(const Config& config) {
   in.data_read_already = config.data_read_already;
   in.scripts_supported = false;
   in.refuse_placed_bundle = true;
-  auto files = std::make_unique<PosixPackFiles>(config.running_package);
+  auto files = std::make_unique<PosixPackFiles>();
   std::unique_ptr<nevr_content::Pack> pack;
   nevr_content::Decision d = nevr_content::Decide(in, *files, &pack);
   if (d.outcome == nevr_content::Outcome::kServed) {
-    Publish(std::move(pack), std::move(files), config.running_package);
+    Publish(std::move(pack), std::move(files));
     const char* refused = config.install_hook != nullptr ? config.install_hook() : "no_installer";
     if (refused != nullptr) {
       Forget();
@@ -176,8 +166,7 @@ nevr_content::Decision Run(const Config& config) {
 const nevr_content::Served* ServedFor(const char* game_path, unsigned flags) noexcept {
   const State* state = g_state.load(std::memory_order_acquire);
   if (state == nullptr || game_path == nullptr || !nevr_content::IsServedRead(flags)) return nullptr;
-  char buf[path_rewrite::kBufferSize];
-  return nevr_content::FindKey(state->pack->opens, KeyOf(game_path, state->running_package, buf));
+  return nevr_content::FindKey(state->pack->opens, game_path);
 }
 
 nevr_content::LineLevel ServedLine(const nevr_content::Served& served, const char* game_path, int result, char* buf,
@@ -187,9 +176,7 @@ nevr_content::LineLevel ServedLine(const nevr_content::Served& served, const cha
   return nevr_content::FormatServed(served, id, game_path, static_cast<std::uint32_t>(result), buf, cap);
 }
 
-void ServeForTest(std::unique_ptr<nevr_content::Pack> pack, const std::string& running_package) {
-  Publish(std::move(pack), nullptr, running_package);
-}
+void ServeForTest(std::unique_ptr<nevr_content::Pack> pack) { Publish(std::move(pack), nullptr); }
 
 void Forget() {
   // Only a pack that was never handed to the hook, or a test, is forgotten: once the hook is in, the table stays for the life of

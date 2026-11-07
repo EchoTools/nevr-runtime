@@ -111,7 +111,6 @@ struct Rig {
     nevr_quest::content::Config c;
     c.content_dir = content;
     c.engine_root = root;
-    c.running_package = "com.readyatdawn.r15";
     c.data_read_already = data_read_already;
     c.install_hook = &Installer;
     c.log = &Sink;
@@ -228,29 +227,6 @@ TEST(TheGameIsHandedTheCheckedFileEvenAfterARenameOverIt) {
   CHECK_EQ(std::string(cb, 4), std::string("pack"));
   ::close(a);
   ::close(b);
-}
-
-TEST(TheAfkSpellingOfTheMediaRootIsServedAsTheRunningPackages) {
-  auto pack = std::make_unique<nevr_content::Pack>();
-  pack->id = "echocombat";
-  auto s = std::make_unique<nevr_content::Served>();
-  s->key = std::string("/sdcard/Android/media/com.readyatdawn.r15/files/") + kDataDir + "/manifests/" + kSet;
-  s->serve_path = "/proc/self/fd/7";
-  pack->opens.push_back(std::move(s));
-  nevr_quest::content::ServeForTest(std::move(pack), "com.readyatdawn.r15");
-  const std::string r15 = std::string("/sdcard/Android/media/com.readyatdawn.r15/files/") + kDataDir + "/manifests/" + kSet;
-  const std::string afk = std::string("/sdcard/Android/media/com.readyatdawn.afk/files/") + kDataDir + "/manifests/" + kSet;
-  const std::string other = std::string("/sdcard/Android/media/com.readyatdawn.afkx/files/") + kDataDir + "/manifests/" + kSet;
-  CHECK(ServedPath(r15, 1) != nullptr);
-  CHECK(ServedPath(afk, 1) != nullptr);
-  CHECK(ServedPath(other, 1) == nullptr);
-  nevr_quest::content::Forget();
-  // The stock paths are keyed the same way.
-  nevr_quest::content::PosixPackFiles files("com.readyatdawn.r15");
-  CHECK_EQ(files.Key(afk), r15);
-  CHECK_EQ(files.Key(r15), r15);
-  nevr_quest::content::PosixPackFiles plain("");
-  CHECK_EQ(plain.Key(afk), afk);
 }
 
 TEST(TwoPacksAreBothRefused) {
@@ -410,7 +386,7 @@ TEST(AServedLineNamesTheKindOfFile) {
 }
 
 TEST(PathsAreJoinedWithOneSlash) {
-  nevr_quest::content::PosixPackFiles files("");
+  nevr_quest::content::PosixPackFiles files;
   CHECK_EQ(files.Join("a", "b/c"), std::string("a/b/c"));
   CHECK_EQ(files.Join("a/", "b"), std::string("a/b"));
   CHECK_EQ(files.Join("", "b"), std::string("b"));
@@ -441,7 +417,7 @@ TEST(ARefusedPackHoldsNoFile) {
     in.content_dir = rig.content;
     in.game_dir = rig.root;
     in.refuse_placed_bundle = true;
-    nevr_quest::content::PosixPackFiles files("");
+    nevr_quest::content::PosixPackFiles files;
     std::unique_ptr<nevr_content::Pack> pack;
     const Decision d = nevr_content::Decide(in, files, &pack);
     CHECK_EQ(d.reason, std::string(reason));
@@ -458,7 +434,7 @@ TEST(AServedPackHoldsEachOfItsFiles) {
   in.content_dir = rig.content;
   in.game_dir = rig.root;
   in.refuse_placed_bundle = true;
-  nevr_quest::content::PosixPackFiles files("");
+  nevr_quest::content::PosixPackFiles files;
   std::unique_ptr<nevr_content::Pack> pack;
   const Decision d = nevr_content::Decide(in, files, &pack);
   CHECK_EQ(d.reason, std::string());

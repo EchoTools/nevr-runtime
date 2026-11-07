@@ -1316,7 +1316,7 @@ void ServeOneManifest() {
   s->serve_path = "/proc/self/fd/77";
   s->pack_file = Media("nevr/content/echocombat/manifests/48037dc70b0ecab2");
   pack->opens.push_back(std::move(s));
-  nevr_quest::content::ServeForTest(std::move(pack), "com.readyatdawn.r15");
+  nevr_quest::content::ServeForTest(std::move(pack));
 }
 
 std::vector<std::string> ContentRecords() {
@@ -1400,30 +1400,10 @@ void TheResourceManagerIsReadAtItsPinnedSlot() {
   QCHECK(cph::ResourceManagerExists(base));
 }
 
-void TheRunningPackageIsTheFirstFieldOfTheCommandLine() {
-  namespace cph = nevr_quest::content_pack_hook;
-  Scratch scratch;
-  const std::string service = scratch.Path("service");
-  WriteFile(service, std::string("com.readyatdawn.r15:nevr\0--flag\0", 32));
-  QCHECK(cph::PackageOfCmdlineFile(service.c_str()) == "com.readyatdawn.r15");
-  const std::string app = scratch.Path("app");
-  WriteFile(app, std::string("com.readyatdawn.afk\0", 20));
-  QCHECK(cph::PackageOfCmdlineFile(app.c_str()) == "com.readyatdawn.afk");
-  const std::string empty = scratch.Path("empty");
-  WriteFile(empty, "");
-  QCHECK(cph::PackageOfCmdlineFile(empty.c_str()).empty());
-  QCHECK(cph::PackageOfCmdlineFile(scratch.Path("missing").c_str()).empty());
-  const std::string binary = scratch.Path("binary");
-  WriteFile(binary, std::string("/system/bin/app_process64\0", 26));  // a path is no package
-  QCHECK(cph::PackageOfCmdlineFile(binary.c_str()).empty());
-}
-
 void TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen() {
   namespace cph = nevr_quest::content_pack_hook;
   Rig rig;  // the log sink
   const std::string stock = Media("_data/5932408047/rad15/android/manifests/48037dc70b0ecab2");
-  const std::string afk =
-      "/sdcard/Android/media/com.readyatdawn.afk/files/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2";
   long handle = 0;
   g_opened.clear();
   g_opened_flags.clear();
@@ -1434,13 +1414,13 @@ void TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen() {
   QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 0);
   QCHECK(g_opened.size() == 1 && g_opened[0] == stock);
   ServeOneManifest();
-  // A read of the served path, in either spelling of the media root: the held file, with the game's flags and handle, and the
-  // game's result as it came.
+  // A read of the served path: the held file, with the game's own flags (a non-write bit beside the read bit is passed as it came)
+  // and handle, and the game's result as it came.
   g_open_result = 0;
   QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 0);
   QCHECK(g_opened.size() == 2 && g_opened[1] == "/proc/self/fd/77" && g_opened_flags[1] == 1u && g_opened_handles[1] == &handle);
-  QCHECK(cph::HandleForTest(&FakeOpen, afk.c_str(), 1, &handle) == 0);
-  QCHECK(g_opened.size() == 3 && g_opened[2] == "/proc/self/fd/77");
+  QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 0x21u, &handle) == 0);
+  QCHECK(g_opened.size() == 3 && g_opened[2] == "/proc/self/fd/77" && g_opened_flags[2] == 0x21u && g_opened_handles[2] == &handle);
   g_open_result = 2;
   QCHECK(cph::HandleForTest(&FakeOpen, stock.c_str(), 1, &handle) == 2);
   QCHECK(g_opened.size() == 4 && g_opened[3] == "/proc/self/fd/77");
@@ -1459,7 +1439,7 @@ void TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen() {
   if (records.size() == 3) {
     QCHECK(Has(records[0], "\"msg\":\"[NEVR.CONTENT] manifest served id=echocombat") &&
            Has(records[0], "count=1") && Has(records[0], "\"level\":\"info\""));
-    QCHECK(Has(records[1], "count=2") && Has(records[1], "game_path=" + afk) && Has(records[1], "\"level\":\"debug\""));
+    QCHECK(Has(records[1], "count=2") && Has(records[1], "game_path=" + stock) && Has(records[1], "\"level\":\"debug\""));
     QCHECK(Has(records[2], "manifest open failed") && Has(records[2], "result=0x2") && Has(records[2], "\"level\":\"warn"));
   }
   nevr_quest::content::Forget();
@@ -1630,7 +1610,6 @@ int main() {
   TheOpenHookHandsAServedReadThePacksHeldFileAndPassesEveryOtherOpen();
   APackWhoseHookDoesNotGoInIsRefusedWithTheSlotAndNothingIsServed();
   TheResourceManagerIsReadAtItsPinnedSlot();
-  TheRunningPackageIsTheFirstFieldOfTheCommandLine();
   ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
   ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain();
   TheProbeIsNotReadInAShippedBuild();

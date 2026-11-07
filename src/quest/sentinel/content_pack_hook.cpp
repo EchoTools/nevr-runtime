@@ -1,15 +1,11 @@
 #include "content_pack_hook.h"
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <cstdint>
 
 #include "data_root.h"
 #include "hook_install.h"
 #include "hook_log.h"
-#include "path_rewrite.h"
 #include "quest/data/content_folder.h"
 
 namespace nevr_quest::content_pack_hook {
@@ -59,9 +55,6 @@ const char* InstallHook() {
   return sentinel::GotStatusName(status);
 }
 
-// The running package, which keys a game path in the afk spelling (path_rewrite.h).
-std::string RunningPackage() noexcept { return PackageOfCmdlineFile("/proc/self/cmdline"); }
-
 // Whether the game has created its resource manager, and so read its manifests, for the libr15 that is loaded. No libr15: false
 // (the hook cannot go in either, and says so).
 bool DataReadAlready() noexcept {
@@ -72,19 +65,6 @@ bool DataReadAlready() noexcept {
 
 }  // namespace
 
-std::string PackageOfCmdlineFile(const char* path) noexcept {
-  char cmdline[256] = {};
-  const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return std::string();
-  const ssize_t n = ::read(fd, cmdline, sizeof(cmdline) - 1);
-  ::close(fd);
-  char package[128];
-  if (n <= 0 || !path_rewrite::PackageFromCmdline(cmdline, static_cast<std::size_t>(n), package, sizeof(package))) {
-    return std::string();
-  }
-  return package;
-}
-
 bool ResourceManagerExists(std::uintptr_t image_base) noexcept {
   void* const* const manager = reinterpret_cast<void* const*>(image_base + sentinel::pinned::kResourceManagerPtrVaddr);
   return *manager != nullptr;
@@ -94,7 +74,6 @@ void RunIn(const std::string& engine_root, const std::string& content_dir) noexc
   content::Config config;
   config.content_dir = content_dir;
   config.engine_root = engine_root;
-  config.running_package = RunningPackage();
   config.data_read_already = DataReadAlready();
   config.install_hook = &InstallHook;
   config.log = &LogLine;
