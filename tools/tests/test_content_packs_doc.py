@@ -252,8 +252,9 @@ class TheQuestFolderAndOrder(unittest.TestCase):
         self.assertIn("content::ContentDir(data_root::kMediaRoot)", code(read(QUEST_HOOK)))
         media = re.search(r'kMediaRoot\s*=\s*"([^"]+)"\s*;', code(read("src/quest/sentinel/data_root.h"))).group(1)
         section = quest_section()
-        self.assertIn("`<media root>/nevr/content/<id>/`", section)
-        self.assertIn(f"`{media}`", section)
+        row = re.search(r"^\| Where a pack lives \|.*$", section, re.M)
+        self.assertIsNotNone(row, "the On Quest table has no 'Where a pack lives' row")
+        self.assertIn("| `<media root>/nevr/content/<id>/`; the media root is " + f"`{media}`", row.group(0))
         self.assertIn("`_data/5932408047/rad15/android`", section)
 
     def test_the_folder_pack_is_decided_after_the_bundled_pack_step(self):
