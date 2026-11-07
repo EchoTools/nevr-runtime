@@ -86,7 +86,7 @@ TEST(DroneMuzzleRules, TheFrameTimeIsClampedTo120To30PerSecond) {
 // The basis: Z along the shot, X horizontal ((z, 0, -x) / |..|), Y = Z x X.
 TEST(DroneMuzzleRules, AShotAlongPlusZTakesTheMuzzleOffsetAsIs) {
   const float v[3] = {0.0f, 0.0f, 10.0f};
-  float out[3];
+  float out[3] = {};
   ASSERT_TRUE(MuzzleMove(kRoot, v, 1.0f / 90.0f, out));
   const float back = 10.0f / 90.0f;  // below the cap: one frame's travel
   EXPECT_NEAR(out[0], kRoot[0] + kMuzzle[0], kTol);
@@ -96,7 +96,7 @@ TEST(DroneMuzzleRules, AShotAlongPlusZTakesTheMuzzleOffsetAsIs) {
 
 TEST(DroneMuzzleRules, AShotAlongPlusXTurnsTheOffset) {
   const float v[3] = {10.0f, 0.0f, 0.0f};  // Z = +x, X = (0, 0, -1), Y = +y
-  float out[3];
+  float out[3] = {};
   ASSERT_TRUE(MuzzleMove(kRoot, v, 1.0f / 90.0f, out));
   const float back = 10.0f / 90.0f;
   EXPECT_NEAR(out[0], kRoot[0] + kMuzzle[2] - back, kTol);
@@ -106,7 +106,7 @@ TEST(DroneMuzzleRules, AShotAlongPlusXTurnsTheOffset) {
 
 TEST(DroneMuzzleRules, AShotStraightUpTakesXAsPlusX) {
   const float v[3] = {0.0f, 10.0f, 0.0f};  // |(z, 0, -x)| is 0: X = (1, 0, 0), Y = Z x X = (0, 0, -1)
-  float out[3];
+  float out[3] = {};
   ASSERT_TRUE(MuzzleMove(kRoot, v, 1.0f / 90.0f, out));
   const float back = 10.0f / 90.0f;
   EXPECT_NEAR(out[0], kRoot[0] + kMuzzle[0], kTol);
@@ -123,7 +123,7 @@ TEST(DroneMuzzleRules, EveryAimMatchesTheYawPitchOracle) {
         for (double frame : {0.004, 1.0 / 90.0, 0.02, 0.2}) {
           float v[3];
           Velocity(yaw, pitch, speed, v);
-          float got[3];
+          float got[3] = {};
           ASSERT_TRUE(MuzzleMove(kRoot, v, static_cast<float>(frame), got));
           double want[3];
           Expected(yaw, pitch, speed, frame, want);
@@ -140,14 +140,14 @@ TEST(DroneMuzzleRules, EveryAimMatchesTheYawPitchOracle) {
 // BACK_MAX: a bullet starts a frame's travel behind the muzzle, but never more than 0.25 m.
 TEST(DroneMuzzleRules, AFastShotStartsAtMostBackMaxBehindTheMuzzle) {
   const float v[3] = {0.0f, 0.0f, 120.0f};  // 120 m/s at 30 fps is 4 m a frame
-  float out[3];
+  float out[3] = {};
   ASSERT_TRUE(MuzzleMove(kRoot, v, 1.0f / 30.0f, out));
   EXPECT_NEAR(out[2], kRoot[2] + kMuzzle[2] - kBackMax, kTol);
 }
 
 TEST(DroneMuzzleRules, TheBackOffUsesTheClampedFrameTime) {
   const float v[3] = {0.0f, 0.0f, 1.0f};  // 1 m/s: never at the cap
-  float out[3];
+  float out[3] = {};
   ASSERT_TRUE(MuzzleMove(kRoot, v, 0.5f, out));
   EXPECT_NEAR(out[2], kRoot[2] + kMuzzle[2] - 1.0f / 30.0f, kTol) << "a long frame is one 1/30 s frame back";
   ASSERT_TRUE(MuzzleMove(kRoot, v, 0.001f, out));
@@ -165,7 +165,7 @@ TEST(DroneMuzzleRules, ASmallVelocityLeavesThePose) {
     EXPECT_EQ(out[2], 9.0f);
   }
   const float v[3] = {2e-4f, 0.0f, 0.0f};
-  float out[3];
+  float out[3] = {};
   EXPECT_TRUE(MuzzleMove(kRoot, v, 1.0f / 90.0f, out)) << "2e-4 m/s is an aim";
 }
 
