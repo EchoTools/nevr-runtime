@@ -14,7 +14,7 @@
 //
 // Here the node is wrapped to mark the thread, and the slot is replaced by one that calls the engine and, inside the
 // node and for that field only, does the same two things to the qword the engine wrote. The accessor's other callers
-// in the script are untouched.
+// (4 more: 5 `call [rip+0x411A0]` in the script, the node's among them) are untouched.
 
 #include <cstdint>
 
