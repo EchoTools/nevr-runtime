@@ -85,6 +85,10 @@ set(PATCHES_SOURCES
     "hook/hook_liveness.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
+    # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
+    "content/content_json.cpp"
+    "content/content_pack.cpp"
+    "content/content_pack_install.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     "combat/dronefix.cpp"
@@ -1885,6 +1889,18 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
+
+    # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
+    # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's
+    # loader-lock probe and the real Log().
+    add_executable(test_content_pack tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp
+      host/file_digest.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp host/file_digest.cpp
+      hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_content_pack PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_content_pack PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_content_pack PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_content_pack DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)

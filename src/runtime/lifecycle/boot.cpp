@@ -1,4 +1,5 @@
 #include "runtime/combat/combat.h"
+#include "runtime/content/content_pack.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
@@ -245,6 +246,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
     LoadPlugins(PluginPhase::Early);
   }
+  // #1424: an installed content pack (<root>\content\<id>\) is checked and its manifests, packages and scripts are served
+  // from here on. Before the original call, after the early pass: InitGlobals reads the manifests and opens the packages
+  // inside that call, and the early pass's plugin-signature rewriter stays first among the load rewriters. Once per process.
+  nevr_content::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
