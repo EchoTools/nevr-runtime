@@ -140,6 +140,30 @@ TEST_F(ScriptHooks, OneRowWhoseBytesDifferRefusesTheWholeScript) {
   EXPECT_EQ(sh::LoadedModules(), 0u);
 }
 
+TEST_F(ScriptHooks, APinIsCheckedWithTheRowsAndNeverInstalled) {
+  const sh::Hook rows[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "test A"),
+                           Row(kRvaB, kPrologue, nullptr, nullptr, "pin B")};
+  sh::Register(rows, 2);
+  sh::OnLoaded(kScript, s_.base);
+  EXPECT_EQ(s_.Call(kRvaA), 11);
+  EXPECT_EQ(s_.Call(kRvaB), 1) << "nothing is installed at a pin";
+  EXPECT_EQ(Count("hooks=1 slots=0 pins=1", EchoVR::LogLevel::Info), 1);
+  sh::OnUnloading(kScript, s_.base);
+  EXPECT_EQ(s_.Call(kRvaA), 1);
+  EXPECT_EQ(Count("script hooks removed script=97d0806e6ea89130 base=", EchoVR::LogLevel::Info), 1);
+}
+
+TEST_F(ScriptHooks, APinWhoseBytesDifferRefusesTheWholeScript) {
+  const sh::Hook rows[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "test A"),
+                           Row(kRvaB, kOther, nullptr, nullptr, "pin B")};
+  sh::Register(rows, 2);
+  sh::OnLoaded(kScript, s_.base);
+  EXPECT_EQ(s_.Call(kRvaA), 1) << "the hook is not installed: the code it depends on is not the one it was written for";
+  EXPECT_EQ(Count("hook not installed script=97d0806e6ea89130 name=\"pin B\"", EchoVR::LogLevel::Warning), 1);
+  EXPECT_EQ(Count("script hooks refused script=97d0806e6ea89130", EchoVR::LogLevel::Warning), 1);
+  sh::OnUnloading(kScript, s_.base);
+}
+
 TEST_F(ScriptHooks, ARowPastTheImageIsRefusedNotRead) {
   const sh::Hook rows[] = {Row(0x1800, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "past the image")};
   sh::Register(rows, 1);

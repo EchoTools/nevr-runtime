@@ -22,6 +22,8 @@
 
 namespace nevr_script_hooks {
 
+/// A row with no detour (and no original) is a pin: its bytes are checked with the script's other rows and nothing is
+/// installed there. It pins code in the middle of a function that a hook elsewhere depends on.
 struct Hook {
   std::uint64_t script;          // the script's hash: scripts\<016llx>.dll
   std::uint32_t rva;             // the hooked function, from the DLL's base
