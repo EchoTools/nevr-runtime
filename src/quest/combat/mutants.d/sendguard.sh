@@ -96,7 +96,7 @@ runm qc_key_typo           $QC "s/kCombatSendguardKey = \"combat.sendguard\";/kC
 runm qc_not_assigned       $QC "s/  r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);/  (void)ReadCombatSwitch(cfg, kCombatSendguardKey, r);/" quest-host-shared quest_config_test
 runm qc_source_absent      $QC "s/return {on, given ? Source::kFile : Source::kAbsent};/return {on, given ? Source::kAbsent : Source::kAbsent};/" quest-host-shared quest_config_test
 runm qc_no_kind_warn       $QC "s/  if (!cfg.GetString(key) \&\& cfg.Kind(key) != nevr::NodeKind::kAbsent) {/  if (false) {/" quest-host-shared quest_config_test
-runm nc_known_key          src/core/nevr_config.cpp "s/\"gate_link_libs\", \"sendguard\"}},/\"gate_link_libs\"}},/" quest-host-shared quest_config_test
+runm nc_known_key          src/core/nevr_config.cpp "s/, \"sendguard\"\([,}]\)/\1/" quest-host-shared quest_config_test
 runm ci_row_ignores_switch  $CI "s/sendguard::Install(g_config.sendguard.on)/sendguard::Install(true)/" quest-host-combat combat_install_test
 runm ci_off_counts_heaps    src/quest/combat/heaps.cpp "s/    return {false, \"off\", true};/    return {false, \"off\", false};/" quest-host-combat combat_install_test
 runm ci_off_counts_memsys   src/quest/combat/memsys.cpp "s/    return {false, \"off\", true};/    return {false, \"off\", false};/" quest-host-combat heap_step_test
