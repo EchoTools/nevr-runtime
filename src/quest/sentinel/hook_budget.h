@@ -39,7 +39,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/decals.cpp", 2, 0},
     {"combat/dronekill.cpp", 4, 0},
     {"combat/dronemuzzle.cpp", 2, 0},
-    {"combat/ec.cpp", 7, 0},
+    {"combat/ec.cpp", 8, 0},
     {"combat/equip_refire.cpp", 6, 0},
     {"combat/headset_gates.cpp", 2, 0},
     {"combat/heaps.cpp", 4, 0},

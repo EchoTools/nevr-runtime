@@ -804,9 +804,11 @@ static void WrapperTests() {
   CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && StatsNow().answers == 1, "an A opened the gate or was not counted");
   ServerStates(true);
   CHECK(g_settings_calls == 1 && g_settings_msg != nullptr, "the game's lobby settings callback was not called");
-  CHECK(HasLine("\"event\":\"combat_ec_lobby_settings\",\"statement\":\"stated\",\"features\":\"echocombat\""), "no lobby settings record");
+  CHECK(!HasLine("combat_ec_lobby_settings") && !nevr_server_features::Client().Current().echoCombat,
+        "the document was read on the hook frame (no nlohmann on a hook's path: the EC thread reads it)");
   AdvanceMs(5);
   Step(g_now100);
+  CHECK(HasLine("\"event\":\"combat_ec_lobby_settings\",\"statement\":\"stated\",\"features\":\"echocombat\""), "no lobby settings record");
   CHECK(StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 1, "the server's statement not shown on the page");
   CHECK(HasLine("ec: the server states EchoCombat"), "no server features record");
   ServerStates(false);
@@ -815,9 +817,14 @@ static void WrapperTests() {
   CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && HasLine("ec: no EchoCombat stated by this server"),
         "a document that states nothing kept the page word");
   ServerDocument("{not json");
+  Step(g_now100);
   CHECK(HasLine("\"statement\":\"malformed\"", 2) && g_settings_calls == 3, "a malformed document not a Warning, or not forwarded");
+  ServerDocument(std::string(300 * 1024, ' '));  // over the handler's 256 KiB: not copied, read as malformed, still forwarded
+  Step(g_now100);
+  CHECK(HasLine("\"bytes\":307200") && g_settings_calls == 4, "a document over the cap not refused, or not forwarded");
   // a session in another lobby clears it (the router's success, server_features.h ClearForLobby)
   ServerStates(true);
+  Step(g_now100);
   CHECK(nevr_server_features::Client().Current().echoCombat, "setup");
   const nevr_server_features::ClientState::Lobby other = {1, 2, 3};
   bool was = false;

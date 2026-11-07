@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
@@ -253,21 +254,66 @@ void UnloadHandler(UnloadThunk::Fn real) noexcept {
   g_gear.Leave();
 }
 
-// #2333: the server states what it runs in the lobby settings it gives its clients (runtime/compat/server_features.h). The game's own
-// callback reads the message's text the same way; this reads it, sets the gate the tac-mod hide follows, and forwards the call
-// unchanged. Once per document the game receives (a session's start, a join), never per frame.
+// #2333: the server states what it runs in the lobby settings it gives its clients (runtime/compat/server_features.h). The handler only
+// keeps the message's text (the same +0x18 / +0x20 the game's callback reads) and forwards the call unchanged: the document is read with
+// nlohmann::json, which is not on a hook frame's path (tests/quest TestHookFramesCarryNoPersonality), so the EC thread reads it
+// (DrainLobbySettings). Once per document the game receives (a session's start, a join), never per frame.
+constexpr std::size_t kSettingsCap = 256 * 1024;  // the service's documents are a few KiB; a larger one is read as malformed
+pthread_mutex_t g_settingsMu = PTHREAD_MUTEX_INITIALIZER;
+char g_settingsText[kSettingsCap];  // under g_settingsMu
+std::uint64_t g_settingsSize = 0;   // under g_settingsMu: the size the message gave
+bool g_settingsBad = false;         // under g_settingsMu: no text, or more than kSettingsCap
+std::uint64_t g_settingsSeq = 0;    // under g_settingsMu: one more per message
+std::uint64_t g_settingsRead = 0;   // the EC thread's: the last message it read
+
 void LobbySettingsHandler(LobbySettingsThunk::Fn real, std::uintptr_t netGame, const void* msg) noexcept {
-  const nevr_server_features::Received r = nevr_server_features::Receive(msg, nevr_server_features::Client());
-  sentinel::LogFields(r.statement.kind == nevr_server_features::Statement::Kind::kMalformed ? LogLevel::kWarn : LogLevel::kInfo,
-                      "combat_ec_lobby_settings",
-                      {{"statement", nevr_server_features::KindName(r.statement.kind)},
-                       {"features", nevr_server_features::Joined(r.statement.features).c_str()},
-                       {"dropped", static_cast<long long>(r.statement.dropped)},
-                       {"bytes", static_cast<long long>(r.size)},
-                       {"changed", r.changed ? 1 : 0},
-                       {"msg", r.gate.echoCombat ? "the server states EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT are shown"
-                                                 : "the server states no EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT stay hidden"}});
+  const char* text = nullptr;
+  std::uint64_t size = 0;
+  if (msg != nullptr) {
+    std::memcpy(&text, static_cast<const std::uint8_t*>(msg) + nevr_server_features::kMsgTextOffset, sizeof(text));
+    std::memcpy(&size, static_cast<const std::uint8_t*>(msg) + nevr_server_features::kMsgSizeOffset, sizeof(size));
+  }
+  pthread_mutex_lock(&g_settingsMu);
+  g_settingsBad = text == nullptr || size > kSettingsCap;
+  if (!g_settingsBad) std::memcpy(g_settingsText, text, static_cast<std::size_t>(size));
+  g_settingsSize = size;
+  ++g_settingsSeq;
+  pthread_mutex_unlock(&g_settingsMu);
   real(netGame, msg);
+}
+
+// On the EC thread: the newest document the game received, read once; the gate the tac-mod hide follows set from it.
+void DrainLobbySettings() noexcept {
+  std::string text;
+  std::uint64_t size = 0;
+  bool bad = false;
+  pthread_mutex_lock(&g_settingsMu);
+  const bool fresh = g_settingsSeq != g_settingsRead;
+  if (fresh) {
+    g_settingsRead = g_settingsSeq;
+    bad = g_settingsBad;
+    size = g_settingsSize;
+    if (!bad) text.assign(g_settingsText, static_cast<std::size_t>(size));
+  }
+  pthread_mutex_unlock(&g_settingsMu);
+  if (!fresh) return;
+  nevr_server_features::Statement statement;
+  if (bad) {
+    statement.kind = nevr_server_features::Statement::Kind::kMalformed;
+  } else {
+    statement = nevr_server_features::ReadDocument(text.data(), text.size());
+  }
+  const nevr_server_features::Gate gate = nevr_server_features::GateOf(statement);
+  const bool changed = nevr_server_features::Client().Apply(gate);
+  sentinel::LogFields(statement.kind == nevr_server_features::Statement::Kind::kMalformed ? LogLevel::kWarn : LogLevel::kInfo,
+                      "combat_ec_lobby_settings",
+                      {{"statement", nevr_server_features::KindName(statement.kind)},
+                       {"features", nevr_server_features::Joined(statement.features).c_str()},
+                       {"dropped", static_cast<long long>(statement.dropped)},
+                       {"bytes", static_cast<long long>(size)},
+                       {"changed", changed ? 1 : 0},
+                       {"msg", gate.echoCombat ? "the server states EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT are shown"
+                                               : "the server states no EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT stay hidden"}});
 }
 
 NEVR_HOOK_RECORD(kRecvRecord, RecvThunk, &RecvHandler);
@@ -419,6 +465,7 @@ bool StepLine() noexcept {
 
 void* Main(void*) {
   for (;;) {
+    DrainLobbySettings();  // #2333: in scope or not, so a document read before a combat map loads is in force when it does
     const std::uint64_t now100 = Now100();
     if (RefreshScope(now100 / 10000)) {
       Step(now100);
@@ -646,6 +693,7 @@ ModuleResult Install(const Switches& switches) noexcept {
 }
 
 void Step(std::uint64_t now100) noexcept {
+  DrainLobbySettings();  // #2333
   Loop& L = g_loop;
   std::uint8_t* const page = sentinel::EcPage();
   const std::uint64_t nowMs = now100 / 10000;
@@ -855,6 +903,11 @@ void ResetForTest() noexcept {
   UnloadThunk::Reset();
   LobbySettingsThunk::Reset();
   nevr_server_features::Client().Clear();
+  pthread_mutex_lock(&g_settingsMu);
+  g_settingsSize = 0;
+  g_settingsBad = false;
+  g_settingsSeq = g_settingsRead = 0;
+  pthread_mutex_unlock(&g_settingsMu);
   {
     LockG l;
     g_st = State();
