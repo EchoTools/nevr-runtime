@@ -107,12 +107,12 @@ struct Rig {
     return dir;
   }
 
-  Decision Run(bool data_read_already = false) {
+  Decision Run(bool data_read_already = false, bool with_installer = true) {
     nevr_quest::content::Config c;
     c.content_dir = content;
     c.engine_root = root;
     c.data_read_already = data_read_already;
-    c.install_hook = &Installer;
+    c.install_hook = with_installer ? &Installer : nullptr;
     c.log = &Sink;
     return nevr_quest::content::Run(c);
   }
@@ -338,6 +338,18 @@ TEST(AHookThatDoesNotGoInRefusesThePack) {
   CHECK_EQ(d.reason, std::string("hook_failed"));
   CHECK_EQ(d.detail, std::string("CSysFile::Open slot 0x36f6450 status=slot_not_found"));
   CHECK_EQ(rig.seen.installs, 1);
+  CHECK(ServedPath(rig.Stock(std::string("manifests/") + kSet), 1) == nullptr);
+  CHECK(rig.seen.lines.size() == 1 && rig.seen.lines[0].first == LineLevel::kWarning);
+}
+
+TEST(APackWithNoHookInstallerIsRefusedAndNothingIsServed) {
+  Rig rig;
+  rig.MakePack("echocombat");
+  const Decision d = rig.Run(false, false);
+  CHECK(d.outcome == Outcome::kRefused);
+  CHECK_EQ(d.reason, std::string("hook_failed"));
+  CHECK_EQ(d.detail, std::string("CSysFile::Open slot 0x36f6450 status=no_installer"));
+  CHECK_EQ(rig.seen.installs, 0);
   CHECK(ServedPath(rig.Stock(std::string("manifests/") + kSet), 1) == nullptr);
   CHECK(rig.seen.lines.size() == 1 && rig.seen.lines[0].first == LineLevel::kWarning);
 }
