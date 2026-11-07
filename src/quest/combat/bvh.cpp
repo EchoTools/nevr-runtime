@@ -495,6 +495,17 @@ void LookAtLevels(std::uintptr_t game, double now) noexcept {
   std::uint64_t levelId = 0;
   const bool in = level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
   const bool before = detail::g_inCombatOrLobby.load(std::memory_order_relaxed);
+  const double last = g_lookedAt.load(std::memory_order_relaxed);
+  if (before && now - last > kStaleAfterSeconds) {
+    // The hooks read the look as stale for this gap and answered with the game's functions: the tick that closed the scope says so when it is back.
+    char gap[24], limit[24], lv[19];
+    std::snprintf(gap, sizeof(gap), "%.2f", now - last);
+    std::snprintf(limit, sizeof(limit), "%.2f", kStaleAfterSeconds);
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_scope_stale",
+                        {{"gap_s", gap}, {"stale_after_s", limit}, {"level", sentinel::HexString(lv, g_scopeLevel.load(std::memory_order_relaxed))},
+                         {"msg", "the combat tick stopped for longer than the scope is believed: the static BVH answered no cast in that gap, the game's "
+                                 "own functions did"}});
+  }
   g_lookedAt.store(now, std::memory_order_relaxed);  // every look ages from here, whether or not the answer changed
   if (in == before) return;
   detail::g_inCombatOrLobby.store(in, std::memory_order_relaxed);

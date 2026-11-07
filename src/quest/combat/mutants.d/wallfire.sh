@@ -80,3 +80,5 @@ runm wf_arena_scan src/quest/combat/wallfire.cpp "1s/^/#include \"quest\/combat\
 runm wf_chain_gs_plain    src/quest/combat/wallfire.cpp "s/  if (!SafeRead(gs + kGsGame, \&game, sizeof(game))) return false;/  game = *reinterpret_cast<const std::uintptr_t*>(gs + kGsGame);/"
 runm wf_chain_game_plain  src/quest/combat/wallfire.cpp "s/  if (!SafeRead(game, \&vptr, sizeof(vptr))) return false;/  if (game == 0) return false;\n  vptr = *reinterpret_cast<const std::uintptr_t*>(game);/"
 runm wf_chain_vtbl_plain  src/quest/combat/wallfire.cpp "s/  return SafeRead(vptr + kGameVtblSlot, \&fn, sizeof(fn)) \&\& fn == g_gameOccluded.load(std::memory_order_relaxed);/  if (vptr == 0) return false;\n  fn = *reinterpret_cast<const std::uintptr_t*>(vptr + kGameVtblSlot);\n  return fn == g_gameOccluded.load(std::memory_order_relaxed);/"
+# -- the arena path reads no clock (the scope it asks is bvh's)
+runm wf_scope_swap        src/quest/combat/bvh.h "s/return detail::g_inCombatOrLobby.load(std::memory_order_relaxed) \&\& LookIsFresh(); }/return LookIsFresh() \&\& detail::g_inCombatOrLobby.load(std::memory_order_relaxed); }/"

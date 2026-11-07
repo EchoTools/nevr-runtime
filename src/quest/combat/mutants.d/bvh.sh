@@ -168,3 +168,12 @@ runm bvh_build_skip_count src/quest/combat/bvh.cpp "s/^      g_skipped.fetch_add
 runm bvh_build_skip_level src/quest/combat/bvh.cpp "s/\"not a combat level\", 0, 0, 0, loading);/\"not a combat level\", 0, 0, 0, LoadingLevel{});/"
 runm bvh_build_scope_token src/quest/combat/bvh.cpp "s/kind == level::Kind::kEchoArena ? \"arena\" : \"other\"/kind == level::Kind::kEchoArena ? \"other\" : \"arena\"/"
 runm bvh_game_unstored    src/quest/combat/bvh.cpp "s/^  g_game.store(game, std::memory_order_release);//"
+# -- the arena path reads no clock; a stall that shut the scope is said when the tick is back
+runm bvh_scope_swap       src/quest/combat/bvh.h "s/return detail::g_inCombatOrLobby.load(std::memory_order_relaxed) \&\& LookIsFresh(); }/return LookIsFresh() \&\& detail::g_inCombatOrLobby.load(std::memory_order_relaxed); }/"
+runm bvh_stall_unlogged   src/quest/combat/bvh.cpp "s/^  if (before \&\& now - last > kStaleAfterSeconds) {/  if (false) {/"
+runm bvh_stall_when_shut  src/quest/combat/bvh.cpp "s/^  if (before \&\& now - last > kStaleAfterSeconds) {/  if (now - last > kStaleAfterSeconds) {/"
+runm bvh_stall_on_time    src/quest/combat/bvh.cpp "s/^  if (before \&\& now - last > kStaleAfterSeconds) {/  if (before \&\& now - last >= kStaleAfterSeconds) {/"
+runm bvh_stall_level      src/quest/combat/bvh.cpp "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_bvh_scope_stale\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_bvh_scope_stale\"/"
+runm bvh_stall_gap        src/quest/combat/bvh.cpp "s/std::snprintf(gap, sizeof(gap), \"%.2f\", now - last);/std::snprintf(gap, sizeof(gap), \"%.2f\", now);/"
+runm bvh_stall_limit      src/quest/combat/bvh.cpp "s/std::snprintf(limit, sizeof(limit), \"%.2f\", kStaleAfterSeconds);/std::snprintf(limit, sizeof(limit), \"%.2f\", 0.0);/"
+runm bvh_stall_level_id   src/quest/combat/bvh.cpp "s/sentinel::HexString(lv, g_scopeLevel.load(std::memory_order_relaxed))}/sentinel::HexString(lv, 0)}/"

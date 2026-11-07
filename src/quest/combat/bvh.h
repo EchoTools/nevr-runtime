@@ -58,6 +58,8 @@
  *   hit       {"event":"combat_bvh_first_hit",...} and {"event":"combat_bvh_first_block",...}  once each: the first answered hit and blocked segment
  *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":".."}  every 10 s a counter moved
  *   scope     {"event":"combat_bvh_scope","from":0|1,"to":0|1,"level":"0x.."}  Info, one per change of the answer
+ *   stale     {"event":"combat_bvh_scope_stale","gap_s":"..","stale_after_s":"1.00","level":"0x.."}  Warning: the tick came back after more than
+ *             kStaleAfterSeconds with the scope open, so the hooks answered with the game's functions for that gap
  *   legacy    {"event":"combat_bvh_legacy_switch","file":"..","replaced_by":".."}  Warning
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.

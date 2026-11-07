@@ -155,7 +155,11 @@ void LoadLevels(std::initializer_list<const char*> names) {
 std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
 void CountScan() { g_scans.fetch_add(1); }
 double g_now = 100.0;
-double Clock() noexcept { return g_now; }
+int g_clockReads = 0;  // every read of the bvh module's clock: the arena path reads none
+double Clock() noexcept {
+  ++g_clockReads;
+  return g_now;
+}
 void Look() {
   g_now += 1.0;
   bvh::Tick(LevelsAddress());
@@ -458,11 +462,13 @@ void WithoutACombatMapTheGamesAnswerStands() {
   g_scans = 0;
   nevr_quest::combat::SetReadCounterForTest(&g_reads);
   nevr_quest::combat::level::SetScanSeamForTest(&CountScan);
+  const int clock0 = g_clockReads;
   QCHECK(!CallQuerySite(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));  // a segment through the wall is not refused
   QCHECK(!CallQueryOther(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
   nevr_quest::combat::SetReadCounterForTest(nullptr);
   nevr_quest::combat::level::SetScanSeamForTest(nullptr);
   QCHECK(g_reads == 0 && g_scans == 0);  // the arena path reads no game memory and scans no level
+  QCHECK(g_clockReads == clock0);  // and no clock: the scope's age is asked only when the cached answer is true
   QCHECK(g_stockQuery == 2 && g_stubCalls == 0 && g_gameCalls == 0);
   QCHECK(C().atSite == 0 && C().checked == 0 && C().blocked == 0);
   LoadLevels({"mpl_lobby_b"});  // a lobby arena players use is no combat class

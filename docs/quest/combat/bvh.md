@@ -43,9 +43,19 @@ Per hook:
   data address reuses its entry; the 65th distinct tree is refused with an Error line) and store `&entry.tree` in the CBVHTree word. Refusals leave the word 0,
   so the stock miss stands, and log why (`combat_bvh_tree` `none` for no geometry, `refused` for a layout or memory doubt). Every `combat_bvh_tree` record names the
   level the scan found (`level`) and its class (`scope`: `combat`, `arena`, `other`, or `unknown` before the tick has shown the module a game, when it builds). A
-  level that is not a combat map or the combat lobby is `skipped` (Info): no scan-free page probes are paid for it (about a millisecond for a level with
-  geometry on the host), and its CBVHTree keeps the word 0. The scan reads the gamespaces still loading as well (`inFlight`), because Initialize runs while the
-  level's resources are built, before the level is in the loaded tables; this is the same source the table-step modules use.
+  level that is not a combat map or the combat lobby is `skipped` (Info): the build's page probes (about a millisecond for a level with geometry on the host)
+  are not paid for it, and its CBVHTree keeps the word 0. The scan reads the gamespaces still loading as well (`inFlight`), because Initialize runs while the
+  level's resources are built, before the level is in the loaded tables; this is the same source the table-step modules use. That the loading level is
+  already stored at gamespace `+0x58` when Initialize runs is read from the store libr15 (disassembly VAs): `CncaGameSpace::LoadLevel` (0x18e5484) stores it
+  first (`str x22, [x19, #0x58]` at 0x18e54ec, `combat_level_targets.h`), and later in the same function calls `CncaGameSpace::CreateComponentSystems`
+  (`bl 0x1050d40` at 0x18e5b6c, the thunk of 0x1900f0c; its one call site in libr15). That calls `FinalizeAfterLoad` (0x19017b4, thunk 0xfd5fe0, to
+  0x18fde70), which calls `InitializeComponentSystems` (0x18fdec8, to 0x18fdf68), which calls each init callback registered at gamespace `+0x4a0` (count
+  `ldr x8, [x0, #0x4d0]` at 0x18fdf7c, table `ldr x9, [x21, #0x4a0]` at 0x18fe0d4, the call `blr x8` at 0x18fe0f8). `CStaticRaycastCS::Initialize`
+  (0x18121a8) is registered there: its address is loaded from the GOT word 0x38046a8 (`ldr x2, [x2, #0x6a8]` at 0x174524c) and passed to
+  `CncaGameSpace::RegisterInit` (0x1905750, which appends to `+0x4a0`) at 0x1745264; and it makes the one `bl` to CBVHTree::Initialize (0x1812220, after
+  `CResourceInstance::LoadAndInit`). The gamespace is in the init-fiber table for the whole of LoadLevel (`combat_level_targets.h`: the done bit is set after
+  LoadLevel returns). Not shown: that nothing else calls the callbacks at `+0x4a0` outside LoadLevel, and the other branch of LoadLevel, where the game's
+  virtual `+0x360` replaces CreateComponentSystems (not followed; it too runs after the store). Headset row 3 checks the case that would show it wrong.
 - **Shutdown**: the game's function, then the word is cleared. A later cast finds no tree and takes the stock miss.
 - **Intersect**: while no combat map or combat lobby is loaded (section 4) the game's function answers. Else the gate (section 4); then `TreeOf(self)` reads the CBVHTree word
   and accepts it only if it is one of the table's entries (aligned, inside the table); the ray (6 floats) is copied; `Trace`, nearest hit, `t in (0, inf)` in
@@ -165,7 +175,8 @@ The gate is installed first: until it is in no cast is marked, so a tree built a
 **Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatOrLobby()` is false. The value is a relaxed atomic the combat tick refreshes
 four times a second from `combat_level.h` (`Classify` of the loaded levels with the combat lobby: a combat map or the combat lobby is loaded and no Echo Arena level
 is; an arena level that is loaded wins; a lobby arena players use is no class). The word starts false, so nothing is combat before the first look, and it fails
-closed: a look older than one second is not believed (`kStaleAfterSeconds`), so a tick that stopped leaves every hook calling the game's function. The arena path
+closed: a look older than one second is not believed (`kStaleAfterSeconds`), so a tick that stopped leaves every hook calling the game's function; when the tick
+comes back after such a gap with the scope open, it writes one Warning `combat_bvh_scope_stale` (`gap_s`, `stale_after_s`, `level`). The arena path
 of a query is one relaxed load of a false value, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope
 because the q15t plugin answered in every level; the levels left out are the Echo Arena levels and the lobbies arena players use. KNOWN-WRONG #2246: this is the
 module's own cached answer; combat_scope (F19) is the shared one and this module switches to it when it lands.
@@ -213,6 +224,9 @@ On a combat APK built at a tag after this unit (or a development APK repacked wi
 1. `combat_bvh_install` `result` `installed`, `hooks` 6, `allowed_casts` 3.
 2. At level load one `combat_bvh_tree` `built` per CBVHResource with `triangle4` and `nodes` non-zero (the sizes seen in one logged session: 36864/24633, 4096/4097, 53815/31572; the log does not name their levels, so the first headset run reads `level` and `scope` in these records).
 3. `combat_bvh_scope` `to` 1 at the combat map (and the combat lobby) and `to` 0 on leaving it; no `built` record with `scope` other than `combat`, and `skipped` records for the arena levels and the other lobbies.
+   A combat map entered from a lobby arena players use (`mpl_lobby_b`, `mpl_lobby_b2`) logs `combat_bvh_tree` `built` with `scope` `combat` and the combat map's
+   `level`: a `skipped` with `scope` `other` there means the loading level was not yet at gamespace `+0x58` when Initialize ran (section 2).
+   `combat_bvh_scope_stale` is absent, or rare and tied to a hitch (a level load); a steady stream means the tick is starved and the answers are off.
 4. The acting lines: `combat_bvh_first_hit` (`mesh` >= 0, `tri` >= 0, `t` positive, a unit `normal`) and `combat_bvh_summary` with `intersect` > 0, `intersect_hit` > 0,
    `gated_off` > 0, `stock` 0 or tiny; shots at a wall do not pass (`occluded_blocked` > 0).
 
@@ -240,7 +254,8 @@ Measured on the development host (x86-64, g++ -O2, one thread), not on a headset
 |---|---|---|
 | Intersect or Occluded, combat map, tree of 147,000 random triangles (the logged level had 36,864 Triangle4 records), with the clock reads and counters | about 2.9 us (Occluded), 2.8 us (Intersect) | 0 in all four logged windows (headset logs); upstream names the callers as bullets and the AI patrol |
 | the same two with the tree-less path (arena, or no combat map) | the game's function plus 1.0 ns (2.8 ns against 1.8 ns for the function alone) | whatever the game makes of them: not measured on a headset |
-| Touch, combat map | a counter and a return | 37 to 118 a second in the logged windows (374 and 1176 per 10 s) |
+| Touch, combat map | the scope test below, a counter and a return | 37 to 118 a second in the logged windows (374 and 1176 per 10 s) |
+| the scope test every hook makes first (`InCombatOrLobby()`): a false cached answer (arena) / a true one, which also reads CLOCK_MONOTONIC (`LookIsFresh`) | 0.24 ns / 27.6 ns (50M calls, best of 5) | once per hooked call; the 27.6 ns is paid only on a combat map or the combat lobby, and is part of the 2.8-2.9 us cast rows above |
 | one `process_vm_readv` of 24 bytes (what each argument read cost before) | 487 ns | the former code made 2 per Intersect and 3 per Occluded |
 
 Per-frame cost in an arena match: the sum over calls of about 1 ns (a relaxed load, a test and a tail call), so a thousand calls a frame at 90 Hz would be
@@ -256,7 +271,8 @@ build cost about 1.2 ms (the 36,864-record tree) to 1.7 ms (the 53,815-record tr
 and cycle limits, empty children, a node reference past the block) and `bvh_test` (the real thunks through the real manager into an image built in memory; the
 hooks called through their slots; the gate from two call sites and two threads; refusals and rollback; the 64-entry table; unreadable and half-mapped blocks;
 the switches; the legacy files; the scope: every hook calls the game's function with no combat map, with an arena level beside a combat map, with a lobby arena
-players use; the combat lobby is in scope; a stalled tick fails closed (the clock moves with no tick); a level that is not a combat level gets no tree, a loading
-combat map does; the arena paths make no read and no scan; the 10 s summary; the pinned constants).
+players use; the combat lobby is in scope; a stalled tick fails closed (the clock moves with no tick) and says so when it is back (`combat_bvh_scope_stale`, not
+for a look on time and not when the scope was shut); a level that is not a combat level gets no tree, a loading combat map does; the arena paths make no read,
+no scan and no clock read; the cached answer starts false; the 10 s summary; the pinned constants).
 Mutants: `src/quest/combat/mutants.d/bvh_core.sh` (rules of `bvh_core.h`, target `bvh_core_test`) and `src/quest/combat/mutants.d/bvh.sh` (rules of `bvh.cpp`,
 `bvh.h`, `bvh_targets.h`), run with `src/quest/combat/mutants.sh bvh` and `bvh_core`.

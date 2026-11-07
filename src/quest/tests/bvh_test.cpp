@@ -202,7 +202,11 @@ std::string LevelHex(const char* name) {
 
 // The tick's clock: one second per look, so every Tick that asks for a look gets one.
 double g_now = 100.0;
-double Clock() noexcept { return g_now; }
+int g_clockReads = 0;  // every read of the module's clock: the arena path reads none
+double Clock() noexcept {
+  ++g_clockReads;
+  return g_now;
+}
 void Look() {
   g_now += 1.0;
   bvh::Tick(GameAddress());
@@ -611,12 +615,14 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
     const int int0 = g_stockInt, occ0 = g_stockOcc, touch0 = g_stockTouch, gate0 = g_stockGate;
     void* gs = nullptr;
     StartCounting();
+    const int clock0 = g_clockReads;
     QCHECK(!CallInt(&cbvh, kDown, hit));
     QCHECK(!OccludedSlot()(&cbvh, a, out));
     QCHECK(TouchSlot()(nullptr, nullptr, nullptr, nullptr));  // StockTouch answers true: the replaced one would answer false
     QCHECK(!CallGateAllowedSite(reinterpret_cast<const void*>(0x77), kDown, hit, &gs));
     StopCounting();
     QCHECK(g_reads == 0 && g_scans == 0);  // the arena path of all four hooks reads no game memory and scans no level
+    QCHECK(g_clockReads == clock0);  // and reads no clock: the scope's age is asked only when the cached answer is true
     QCHECK(g_stockInt == int0 + 2 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1 && g_stockGate == gate0 + 1);  // the gate's own stock cast reaches Intersect too
     const bvh::Counters c = bvh::GetCounters();
     QCHECK(c.intersect == 0 && c.occluded == 0 && c.touch == 0 && c.gated == 0 && c.stock == 0);
@@ -708,8 +714,17 @@ void AStalledTickFailsClosed() {
   QCHECK(g_stockInt == int0 + 1 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1);  // the game's functions answered
   g_now += 5.0;
   QCHECK(!bvh::InCombatOrLobby());  // and it stays shut for as long as the tick is gone
-  Look();  // the tick comes back
+  QCHECK(Count(Event("combat_bvh_scope_stale")) == 0);  // nothing can say so while the tick is gone
+  Look();  // the tick comes back, 7.01 s after its last look, and says the scope was shut for that gap
   QCHECK(bvh::InCombatOrLobby() && CallInt(&cbvh, kDown, hit));
+  QCHECK(Count(Event("combat_bvh_scope_stale"), kWarn) == 1);
+  QCHECK(Count(std::string("\"gap_s\":\"7.01\",\"stale_after_s\":\"1.00\",\"level\":\"") + LevelHex("mpl_combat_dyson") + "\"") == 1);
+  Look();  // a look on time (one second): no line
+  QCHECK(Count(Event("combat_bvh_scope_stale")) == 1);
+  EnterArena();  // the scope is shut on purpose: a long gap after that closed nothing, so it is not a stall worth a line
+  g_now += 10.0;
+  Look();
+  QCHECK(Count(Event("combat_bvh_scope_stale")) == 1);
   End();
 }
 
@@ -1087,6 +1102,9 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 
 int main() {
   QCHECK(!bvh::InCombatOrLobby());  // before anything: no combat map is known, so the hooks would call the game's functions
+  // the cached answer itself starts false (not only the guarded accessor, which the stale look also shuts): the first look in a level that is not
+  // combat then changes nothing and writes no `combat_bvh_scope` line
+  QCHECK(!bvh::detail::g_inCombatOrLobby.load());
   char tmpl[] = "/tmp/combat-bvh-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
