@@ -91,6 +91,7 @@ set(PATCHES_SOURCES
     "combat/dot_script.cpp"
     "combat/orb_pause.cpp"
     "combat/script_guard.cpp"
+    "combat/shared_magazine.cpp"
     "combat/station_cells.cpp"
     "combat/team_ready.cpp"
     # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
@@ -1184,6 +1185,16 @@ if(BUILD_TESTING)
     target_include_directories(test_dot_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dot_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_dot_script DISCOVERY_MODE PRE_TEST)
+
+    # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
+    add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_shared_magazine PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_shared_magazine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
 
     # #600: the spawn orbs' PAUSE hook and slot (runtime/combat/orb_pause.h), on a fake spawn point script.
     add_executable(test_orb_pause tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
