@@ -73,6 +73,11 @@ func ParsePlain(plain []byte) (*Manifest, error) {
 	if rc != fc {
 		return nil, fmt.Errorf("manifest has %d resources and %d file records; they are parallel tables", rc, fc)
 	}
+	// Each count is bounded by the bytes there are before it is multiplied, so a corrupt count cannot wrap the sum (rc is
+	// fc, checked above).
+	if room := uint64(len(plain) - tablesStart); fc > room/fileSize || cc > room/chunkSize {
+		return nil, fmt.Errorf("manifest counts %d, %d, %d do not fit its %d bytes", rc, fc, cc, len(plain))
+	}
 	end := uint64(tablesStart) + rc*resSize + fc*fileSize + cc*chunkSize
 	if end != uint64(len(plain)) {
 		return nil, fmt.Errorf("manifest tables end at %d, the manifest at %d", end, len(plain))
