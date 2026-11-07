@@ -806,9 +806,11 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
   }
 }
 
-// The server states its features to the clients of a new session (#2333): its own lobby settings document, with the
-// service's keys when the service already sent one for this session. Called once the session has started (the
-// record of the previous session's document is cleared then), on the game thread.
+// The server states its features to the clients of a new session (#2333): its own lobby settings document. Called once
+// the session has started, on the game thread. StartSession clears the record of the last document first
+// (server_context.cpp), so here the record holds no service document and serviceJson is empty: a service document that
+// arrives during the session is merged by the relay (RelayLobbySettingsFrame sets the server's key in it). The record is
+// still read, so a call made after a service document of this session keeps that document's keys.
 static void StateServerFeatures(GameServerLib* self) {
   auto& context = self->GetContext();
   const nevr_game_server::LobbySettingsRecord record = context.GetLobbySettings();
