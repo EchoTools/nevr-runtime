@@ -278,9 +278,9 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
   }
 }
 
-// The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
-// libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
-// line with no modules.
+// The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and ten modules have a normal one (the tick,
+// the refresh-rate rule, the four table steps, the gates, sendguard, pfx and pfxtev). No libr15 is loaded in this process, so the modules that
+// hook refuse with their fixed token and each line names them; the rule and the two decisions install.
 void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();

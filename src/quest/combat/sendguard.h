@@ -39,7 +39,7 @@
  * Install. The build ID, then the code pins (sendguard_targets.h), then the JUMP_SLOT, checked against base + Enter's address (a word
  * that holds anything else, such as a word another runtime replaced, is refused and logged by GotHook with its chain). A pin that
  * differs, or a refused slot, leaves the game's calls as they are. It registers in combat::InstallNormal()'s table, at the position the
- * plugin installed it (after tablestep, before levelname).
+ * plugin installed it: in the normal phase after the headset gates and the table steps, before the pfx and pfxtev decisions.
  *
  * Frequency (ADR 0038). Enter runs once per script send-event node executed, from the game's script update. Calls per frame were not
  * measured; the module counts them (passed and dropped) and writes the counts, so a headset run gives the rate (combat_sendguard_stats,

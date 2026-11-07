@@ -67,7 +67,8 @@ All lines are in the sentinel log, one JSON object each:
 - `combat_sendguard_stats`: `passed`, `dropped`, `final`. Debug while the process runs, Info once at its end.
 - `combat_sendguard_legacy_switch`: Warning, when `sendguard.off` is found.
 - `combat_install` (the combat area's line for the normal phase) carries `sendguard=<status>` in its `results` and counts it in `installed`,
-  `failed` or `off`; `combat_config` carries the switch's value and source.
+  `failed` or `off`. The switch is reported by its own `combat_config_switch` record, `{"module":"sendguard","key":"combat.sendguard","on":0|1,
+  "source":"config|default"}`, generated from the module's table row (`Module::switchKey`), not by a field of the `combat_config` line.
 
 ## Arena cost
 
