@@ -1,6 +1,6 @@
-// Built -fno-exceptions. The three assembly entries the q15t plugin still carries (dronemuzzle's two thunks, powerboost's resolve thunk),
-// under the frame sensor's assembly-entry check (tests/quest frames_sensor_test.go). Never run. (The headset trampoline is the runtime's now:
-// src/quest/combat/headset_gates_entry.inc, checked on the sentinel itself.)
+// Built -fno-exceptions. Three assembly entries in the shapes the q15t plugin wrote them (dronemuzzle's two thunks, powerboost's resolve thunk), kept
+// as the frame sensor's regression probes (tests/quest frames_sensor_test.go). Never run. The runtime's entries are the ones checked on the sentinel itself:
+// src/quest/combat/headset_gates_entry.inc, dronemuzzle_entry.inc and powerboost_thunk.inc.
 //
 //   frames_asm_probe_real_naked        the entries as the plugin writes them: three __attribute__((naked)) functions, none with CFI:
 //                                      the sensor MUST fail them

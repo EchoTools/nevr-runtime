@@ -14,6 +14,10 @@ add_library(nevr_quest_combat STATIC
   combat_level.cpp
   combat_tick.cpp
   decals.cpp
+  dronekill.cpp
+  dronemuzzle.cpp
+  ec.cpp
+  ecfx.cpp
   equip_refire.cpp
   headset_gates.cpp
   heaps.cpp
@@ -25,6 +29,7 @@ add_library(nevr_quest_combat STATIC
   music.cpp
   pfx.cpp
   pfxtev.cpp
+  powerboost.cpp
   refresh_rate.cpp
   sendguard.cpp
   sensorwd.cpp

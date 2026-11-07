@@ -6,7 +6,7 @@
  * may do so before or after the thunk is installed.
  *
  * KNOWN-WRONG #2168: the q15t plugin still installs its own wrapper on the same slot for the modules that have not moved (its last
- * ticked module moves in F20). The plugin installs first, at the normal plugin pass, and this module installs after it (combat_install.h:
+ * ticked module moves; gunconnect, aibots and weapon_arm have not moved). The plugin installs first, at the normal plugin pass, and this module installs after it (combat_install.h:
  * the normal step runs after the pass), so the slot holds the plugin's wrapper and this thunk joins the manager's chain above it through
  * the first-handler rule: the thunk calls the plugin's wrapper, which calls the game's function and its own callbacks, and then runs the
  * combat callbacks. The reverse order is what the plugin's own install refuses (it expects the game's function in the slot,

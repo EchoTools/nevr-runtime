@@ -9,6 +9,10 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/decals.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/impactsnd.h"
@@ -18,6 +22,7 @@
 #include "quest/combat/music.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
+#include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
@@ -54,6 +59,17 @@ ModuleResult DecalsNormal() noexcept {
   switches.flipV = g_config.decalsFlipV.on;
   return decals::Install(switches);
 }
+
+ModuleResult EcNormal() noexcept {
+  ec::Switches switches;
+  switches.on = g_config.ec.on;
+  switches.words = g_config.ecWords.source == nevr_quest::Source::kFile ? g_config.ecWords.text : nullptr;
+  return ec::Install(switches);
+}
+ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
+ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
+ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -107,7 +123,15 @@ constexpr std::array kModules{
     Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
     Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
     Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
-    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
+    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
+    Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
+    Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
+    // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill},
+    Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
+    Module{"powerboost", nullptr, &PowerboostNormal},
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
     // the scope the tick refreshes.
@@ -249,6 +273,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
                         {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
   }
+  // The two keys of the EC modules and POWER BOOST that are not a boolean (#2187): the EC client's words (a text, its own `combat_ec_words` line
+  // says what was read) and POWER BOOST's stage (an integer).
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "ec"}, {"key", "combat.ec_words"}, {"on", config.ec.on ? 1 : 0}, {"source", source(config.ecWords.source)}});
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "powerboost"}, {"key", "combat.powerboost_stage"}, {"stage", config.powerboostStage.value},
+                       {"on", config.powerboostStage.value > 0 ? 1 : 0}, {"source", source(config.powerboostStage.source)}});
   // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
                       {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
