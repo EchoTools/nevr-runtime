@@ -1,5 +1,5 @@
 // Host test of the EC client (src/quest/combat/ec.cpp, ec_core.h, ec_targets.h; #2187) against a libr15 image built in memory (the relocations
-// of the five slots, the WriteLog body and its PLT stub at their pinned addresses, the tac-mod list word), the two platform libraries' images
+// of the six slots, the WriteLog body and its PLT stub at their pinned addresses, the tac-mod list word), the two platform libraries' images
 // (libpnsovr.so, libpnsrad.so: their WriteLogV slot, body and stub), a fake libc (scripted datagrams), a fake clock and a fake CR15Game (the
 // levels combat_level reads). Real GotHook, real thunks, the real handlers called THROUGH the slots as the game calls them.
 //
@@ -42,6 +42,7 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "runtime/compat/server_features.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
 namespace {
@@ -138,6 +139,29 @@ static void RealReload() {
   if (g_reload_calls == 1) reinterpret_cast<void (*)()>(*W(kPins.unloadSlot))();
 }
 static void RealUnload() { ++g_unload_calls; }
+
+// CR15NetGame::LobbySettingsCB(SMsg) stands in as this fake (#2333); the hook must forward every call to it unchanged.
+static int g_settings_calls = 0;
+static const void* g_settings_msg = nullptr;
+static void RealLobbySettings(std::uintptr_t, const void* msg) {
+  ++g_settings_calls;
+  g_settings_msg = msg;
+}
+// A lobby-settings message as the game hands it to the callback: the text at +0x18, its size at +0x20 (server_features.h).
+static void ServerDocument(const std::string& text) {
+  static std::string keep;
+  static unsigned char msg[0x40];
+  keep = text;
+  std::memset(msg, 0, sizeof msg);
+  const char* p = keep.data();
+  const std::uint64_t n = keep.size();
+  std::memcpy(msg + 0x18, &p, sizeof p);
+  std::memcpy(msg + 0x20, &n, sizeof n);
+  reinterpret_cast<void (*)(std::uintptr_t, const void*)>(*W(kPins.lobbySettingsSlot))(0x1000, msg);
+}
+static void ServerStates(bool echoCombat) {
+  ServerDocument(echoCombat ? R"({"nevr_server":{"features":["echocombat"]}})" : R"({"parties_unlocked":true})");
+}
 
 // the tac-mod list: { allocator, entries, count, capacity }, entries of 0x88 bytes, the name first
 struct List {
@@ -256,17 +280,20 @@ static void BuildPlatform(int i, unsigned bad = 0) {
   PutLogWords(img, lib, (bad & 2) != 0, false);
 }
 
-// bad: which word to corrupt (1 recv implausible, 2 send implausible, 4 writelog body, 8 writelogv slot, 16 reload, 32 unload, 64 the stub)
+// bad: which word to corrupt (1 recv implausible, 2 send implausible, 4 writelog body, 8 writelogv slot, 16 reload, 32 unload, 64 the stub,
+// 128 the lobby settings callback's GLOB_DAT word)
 static void BuildImage(unsigned bad = 0) {
   g_image.Build({{kRecvfromSymbol, kPins.recvfromSlot, false, false, 0},
                  {kSendtoSymbol, kPins.sendtoSlot, false, false, 0},
                  {kWriteLogVSymbol, kLogLib[0].slot, false, false, kLogLib[0].fn},
                  {kReloadSymbol, kPins.reloadSlot, false, false, kPins.reloadFn},
-                 {kUnloadSymbol, kPins.unloadSlot, false, false, kPins.unloadFn}});
+                 {kUnloadSymbol, kPins.unloadSlot, false, false, kPins.unloadFn},
+                 {kLobbySettingsSymbol, kPins.lobbySettingsSlot, true, false, kPins.lobbySettingsFn}});
   g_base = g_image.Base();
   g_pins = kPins;
   g_pins.reloadFn = reinterpret_cast<uintptr_t>(&RealReload) - g_base;
   g_pins.unloadFn = reinterpret_cast<uintptr_t>(&RealUnload) - g_base;
+  g_pins.lobbySettingsFn = reinterpret_cast<uintptr_t>(&RealLobbySettings) - g_base;
   g_libs[0] = kLogLib[0];
   g_libs[0].fn = reinterpret_cast<uintptr_t>(&FakeWriteLogV) - g_base;
   *W(kPins.recvfromSlot) = (bad & 1) ? 0x1234 : reinterpret_cast<uintptr_t>(&FRecv);
@@ -274,6 +301,7 @@ static void BuildImage(unsigned bad = 0) {
   *W(kLogLib[0].slot) = reinterpret_cast<uintptr_t>(&FakeWriteLogV) + ((bad & 8) ? 4 : 0);
   *W(kPins.reloadSlot) = reinterpret_cast<uintptr_t>(&RealReload) + ((bad & 16) ? 4 : 0);
   *W(kPins.unloadSlot) = reinterpret_cast<uintptr_t>(&RealUnload) + ((bad & 32) ? 4 : 0);
+  *W(kPins.lobbySettingsSlot) = reinterpret_cast<uintptr_t>(&RealLobbySettings) + ((bad & 128) ? 4 : 0);
   PutLogWords(g_image, g_libs[0], (bad & 4) != 0, (bad & 64) != 0);
   BuildList(7, true);
   *W(kPins.tacModList) = reinterpret_cast<uintptr_t>(&g_list);
@@ -288,6 +316,8 @@ static void ResetAll(unsigned bad = 0, const char* words = "types=VPTO equip hid
   g_recv_calls = 0;
   g_reload_calls = g_unload_calls = 0;
   g_v_calls = 0;
+  g_settings_calls = 0;
+  g_settings_msg = nullptr;
   g_now100 = 1000ull * 10000;
   ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
@@ -451,40 +481,27 @@ static void CoreTests() {
   st.PickServer();
   CHECK(st.best == 1, "busiest destination wins: %d", st.best);
   CHECK(st.dests[1].count == 1 && st.dests[0].count == 0, "counts restart after the pick");
-  // 'A' only from the current server
+  // #2333: an 'A' (a server of an older build) is counted and opens nothing; the server's statement is its lobby settings
   Packet a = {kMagic, 'A', {0, 0, 0}, 0, kMagic2};
-  st.Handle(page, a, 0x0a000001, 6792, 10, 1000);
-  CHECK(!st.Answered(1000) && st.answers == 0, "an A from a non-server counted");
-  st.Handle(page, a, 0x0a000002, 53, 10, 1000);
-  CHECK(st.Answered(1000) && st.answers == 1, "an A from the server not counted");
-  CHECK(st.Answered(1000 + kServerTimeoutMs - 1) && !st.Answered(1000 + kServerTimeoutMs), "answer timeout is exactly 6000 ms");
-  st.best = 0;  // moved away from the server that answered
-  CHECK(!st.Answered(1001), "an answer of a server we moved away from counts");
-  {  // same port, another address: the answer was the old server's
-    const Dest keep0 = st.dests[0];
-    st.dests[0].addr = 0x0a000009;
-    st.dests[0].port = 53;
-    st.best = 0;
-    CHECK(!st.Answered(1001), "an answer from another address counts for the new server");
-    st.dests[0] = keep0;
-  }
+  st.Handle(page, a, 10);
+  CHECK(st.answers == 1 && Load32(page + kQuestEcServer) == 0, "an A was not counted, or it wrote the page's EC-server word");
   st.best = 1;
   // dedupe and token types
   Packet t = {kMagic, 'T', {0, 0, 0}, 77, kMagic2};
-  CHECK(st.Handle(page, t, 1, 2, 5, 5) == 0 && st.tokens == 1 && Load32(page + kLocTok) == 1, "T token");
-  st.Handle(page, t, 1, 2, 6, 6);
+  CHECK(st.Handle(page, t, 5) == 0 && st.tokens == 1 && Load32(page + kLocTok) == 1, "T token");
+  st.Handle(page, t, 6);
   CHECK(st.tokens == 1, "a repeat id must not add a token");
   Packet k = {kMagic, 'K', {0, 0, 0}, 0x00030009, kMagic2};
-  CHECK(st.Handle(page, k, 1, 2, 7, 7) == 10 && st.kills == 1, "K returns index + 1 (low 16 bits)");
-  CHECK(st.Handle(page, k, 1, 2, 8, 8) == 0 && st.kills == 1, "K resend");
+  CHECK(st.Handle(page, k, 7) == 10 && st.kills == 1, "K returns index + 1 (low 16 bits)");
+  CHECK(st.Handle(page, k, 8) == 0 && st.kills == 1, "K resend");
   Packet m = {kMagic, 'M', {0, 0, 0}, 1, kMagic2};
-  st.Handle(page, m, 1, 2, 9, 9);
-  st.Handle(page, m, 1, 2, 9, 9);
+  st.Handle(page, m, 9);
+  st.Handle(page, m, 9);
   CHECK(st.medi == 2, "every M counts, resends too");
   State st1;  // step 1: T only
   st1.types = 4;
   Packet v = {kMagic, 'V', {0, 0, 0}, 500, kMagic2};
-  st1.Handle(page, v, 1, 2, 9, 9);
+  st1.Handle(page, v, 9);
   CHECK(st1.dropped == 1 && st1.tokens == 0, "a type this build does not carry is dropped");
   CHECK(!st1.Carries('V') && st1.Carries('T') && !st1.Carries('Z'), "Carries");
   // id 0 is never first (zero-filled ring)
@@ -773,30 +790,46 @@ static void WrapperTests() {
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
   CHECK(HasLine("\"handler\":\"none (dropped)\""), "a K without a handler is not reported");
-  // 'A' only from the server: sets the page word at the step
+  // #2333: the page word follows what the server states in its lobby settings; an 'A' (an older server) opens nothing
   ResetAll();
   InstallOk();
   GameTalks();
   Step(g_now100);
-  g_in.push_back(Veil('A', 0, 0x0a000009, 5));
-  g_in.push_back(Plain(10));
-  fl = sizeof from;
-  GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
-  Step(g_now100);
-  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0, "an A from a stranger counted");
-  g_in.clear();
-  g_in_next = 0;
   g_in.push_back(Veil('A', 0, Server(), SPort()));
   g_in.push_back(Plain(10));
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
   AdvanceMs(5);
   Step(g_now100);
-  CHECK(StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 1, "an A from the server not shown on the page");
-  CHECK(HasLine("ec: answer seen"), "no answer record");
-  AdvanceMs(6100);
+  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && StatsNow().answers == 1, "an A opened the gate or was not counted");
+  ServerStates(true);
+  CHECK(g_settings_calls == 1 && g_settings_msg != nullptr, "the game's lobby settings callback was not called");
+  CHECK(!HasLine("combat_ec_lobby_settings") && !nevr_server_features::Client().Current().echoCombat,
+        "the document was read on the hook frame (no nlohmann on a hook's path: the EC thread reads it)");
+  AdvanceMs(5);
   Step(g_now100);
-  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && HasLine("ec: answer lost"), "the answer did not time out on the page");
+  CHECK(HasLine("\"event\":\"combat_ec_lobby_settings\",\"statement\":\"stated\",\"features\":\"echocombat\""), "no lobby settings record");
+  CHECK(StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 1, "the server's statement not shown on the page");
+  CHECK(HasLine("ec: the server states EchoCombat"), "no server features record");
+  ServerStates(false);
+  AdvanceMs(5);
+  Step(g_now100);
+  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && HasLine("ec: no EchoCombat stated by this server"),
+        "a document that states nothing kept the page word");
+  ServerDocument("{not json");
+  Step(g_now100);
+  CHECK(HasLine("\"statement\":\"malformed\"", 2) && g_settings_calls == 3, "a malformed document not a Warning, or not forwarded");
+  ServerDocument(std::string(300 * 1024, ' '));  // over the handler's 256 KiB: not copied, read as malformed, still forwarded
+  Step(g_now100);
+  CHECK(HasLine("\"bytes\":307200") && g_settings_calls == 4, "a document over the cap not refused, or not forwarded");
+  // a session in another lobby clears it (the router's success, server_features.h ClearForLobby)
+  ServerStates(true);
+  Step(g_now100);
+  CHECK(nevr_server_features::Client().Current().echoCombat, "setup");
+  const nevr_server_features::ClientState::Lobby other = {1, 2, 3};
+  bool was = false;
+  CHECK(nevr_server_features::Client().ClearForLobby(other, &was) && was && !nevr_server_features::Client().Current().echoCombat,
+        "a new lobby did not clear the statement");
 }
 
 static void NetTickTests() {
@@ -956,7 +989,7 @@ static void StepTests() {
 }
 
 static void HideTests() {
-  // hide with the word: after the answer is lost the list is cut (once the selection is still), with an answer put back
+  // hide with the word: on a server that states no EC the list is cut (once the selection is still), and put back when one states it
   ResetAll();
   InstallOk("types=VPTO equip hide");
   GameTalks();
@@ -966,23 +999,19 @@ static void HideTests() {
   Step(g_now100);
   CHECK(g_list.count == 4, "no hide after the selection settled: %llu", (unsigned long long)g_list.count);
   CHECK(HasLine("ec: tac mods: smoke / buff / point") && HasLine("\"effect\":\"hidden\""), "no hide record");
-  // an answer: shown again
-  uint8_t buf[64];
-  sockaddr_in from{};
-  socklen_t fl = sizeof from;
-  g_in.push_back(Veil('A', 0, Server(), SPort()));
-  g_in.push_back(Plain(10));
-  GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
+  // the server states EchoCombat (#2333): shown again
+  ServerStates(true);
   AdvanceMs(300);
   Step(g_now100);
-  CHECK(g_list.count == 7 && HasLine("\"effect\":\"shown\""), "the list was not put back on an answer: %llu", (unsigned long long)g_list.count);
+  CHECK(g_list.count == 7 && HasLine("\"effect\":\"shown\""), "the list was not put back when the server stated EC: %llu", (unsigned long long)g_list.count);
   // the server has EC: one of ours selected is nothing to keep (the list is whole anyway), and is not reported as kept
   *reinterpret_cast<uint64_t*>(EcPage() + kEquipSel) = 0xe32dc7c9d4804fb5ull;
   AdvanceMs(300);
   Step(g_now100);
-  CHECK(g_list.count == 7 && !HasLine("an EC tac mod is selected"), "keep-whole was reported while the server answers");
-  // the answer is lost: hidden again; but with one of ours selected the list stays whole (keepWhole)
-  AdvanceMs(7000);
+  CHECK(g_list.count == 7 && !HasLine("an EC tac mod is selected"), "keep-whole was reported while the server states EC");
+  // the next server states nothing: hidden again; but with one of ours selected the list stays whole (keepWhole)
+  ServerStates(false);
+  AdvanceMs(300);
   Step(g_now100);
   AdvanceMs(300);
   Step(g_now100);
@@ -1081,13 +1110,16 @@ static void SelectionTests() {
 
 // ===================== install =====================
 static void InstallTests() {
-  // 1. install: all five libr15 slots hold the thunks, each reported, the words applied
+  // 1. install: all six libr15 slots hold the thunks, each reported, the words applied
   ResetAll();
   const uint64_t recv0 = *W(kPins.recvfromSlot), send0 = *W(kPins.sendtoSlot), logv0 = *W(kLogLib[0].slot);
   InstallOk();
   CHECK(*W(kPins.recvfromSlot) != recv0 && *W(kPins.sendtoSlot) != send0, "recvfrom / sendto not hooked");
   CHECK(*W(kLogLib[0].slot) != logv0, "the WriteLogV slot not hooked");
   CHECK(*W(kPins.reloadSlot) != reinterpret_cast<uintptr_t>(&RealReload) && *W(kPins.unloadSlot) != reinterpret_cast<uintptr_t>(&RealUnload), "gear gate slots not hooked");
+  CHECK(*W(kPins.lobbySettingsSlot) != reinterpret_cast<uintptr_t>(&RealLobbySettings) && HasLine("\"hook\":\"lobby_settings_cb\"", 1) &&
+            StatsNow().settingsOn,
+        "the lobby settings callback's GLOB_DAT word not hooked (#2333)");
   CHECK(HasLine("\"hook\":\"recvfrom\"", 1) && HasLine("\"hook\":\"sendto\"", 1) && HasLine("\"hook\":\"writelogv\"", 1) &&
             HasLine("\"hook\":\"reload_equipment_config\"", 1) && HasLine("\"hook\":\"unload_equipment_config\"", 1),
         "no per-hook record");
@@ -1097,6 +1129,16 @@ static void InstallTests() {
   CHECK(HasLine("\"event\":\"combat_ec_page\"") && (HasLine("\"state\":\"visible\"") || HasLine("\"state\":\"invisible\"") || HasLine("\"state\":\"other\"")), "no page line");
   CHECK(Installed() && nevr_quest::combat::tick::Count() == 1, "the scope's tick callback not registered");
   CHECK(std::string(InstallWords("").status) == "already_ran", "a second install must refuse");
+
+  // 1b. #2333: the lobby settings callback's word holds another function: partial and loud, that word untouched, the rest of the client
+  // installed, and no server's statement is read (the hide's gate stays closed)
+  ResetAll(128);
+  ModuleResult rs = InstallWords("types=VPTO equip hide");
+  CHECK(rs.installed && std::string(rs.status) == "partial" && !StatsNow().settingsOn, "a refused lobby settings word: %s", rs.status);
+  CHECK(HasLine("\"hook\":\"lobby_settings_cb\"", 3) && HasLine("\"event\":\"combat_ec_install\",\"result\":\"partial\""),
+        "a refused lobby settings word not loud");
+  CHECK(*W(kPins.lobbySettingsSlot) == reinterpret_cast<uintptr_t>(&RealLobbySettings) + 4, "a refused word was written");
+  CHECK(*W(kPins.recvfromSlot) != reinterpret_cast<uintptr_t>(&FRecv), "the net pair not hooked when only the lobby settings word was refused");
 
   // 2. recvfrom's slot holds no function: refused, loud, nothing hooked, page zero
   ResetAll(1);
