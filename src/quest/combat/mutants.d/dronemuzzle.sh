@@ -118,3 +118,5 @@ runm dm_tick_forget src/quest/combat/dronemuzzle.cpp "s/    g_last_frame_ns.stor
 # "Prove arena pays nothing, by count": a read or a scan before the shot test must be seen by the arena test
 runm dm_arena_reads_before_scope src/quest/combat/dronemuzzle.cpp "s/^  const float\* v = dronekill::ShotVelocity(\&remote);\$/  { std::uint8_t probe[4]; (void)SafeRead(reinterpret_cast<std::uintptr_t>(pose), probe, sizeof probe); }\n&/"
 runm dm_arena_scans_before_scope src/quest/combat/dronemuzzle.cpp "s/^  if (!dronekill::InCombatScope()) {\$/  { std::uint64_t lv = 0; (void)nevr_quest::combat::level::Classify(0, false, \&lv); }\n&/;1i #include \"quest\/combat\/combat_level.h\""
+# off by its key is counted off on the phase line (combat_install_test)
+runm dm_off_not_counted src/quest/combat/dronemuzzle.cpp "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

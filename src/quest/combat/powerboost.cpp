@@ -527,7 +527,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, int stage
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_install",
                         {{"result", "off"}, {"stage", 0}, {"asked_stage", stage}, {"reason", "combat.powerboost_stage"},
                          {"consequence", "combat.powerboost_stage is 0: nothing is installed; POWER BOOST markers reach the game as heals"}});
-    return {false, "off"};
+    return {false, "off", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_powerboost_install",

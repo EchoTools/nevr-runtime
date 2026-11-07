@@ -112,3 +112,5 @@ runm pb_cfg_quiet          $Q 's/" rejected reason=out_of_range (default stays)"
 # arena pays nothing, by count (the arena path of the node handler reads game memory / the heal handlers scan the levels before the scope test)
 runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, data);/  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(data) + 0x20, \&ok_); }\n  if (!Scoped()) return original(node, data);/'
 runm pb_arena_scans_before_scope $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
+# off by its key (stage 0) is counted off on the phase line (combat_install_test)
+runm pb_off_not_counted $P "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

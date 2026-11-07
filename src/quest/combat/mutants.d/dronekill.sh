@@ -106,3 +106,5 @@ runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<
 runm dk_arena_reads_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);\$/  { std::uint64_t probe = 0; SafeRead(reinterpret_cast<std::uintptr_t>(data), \&probe, sizeof probe); }\n&/"
 runm dk_arena_scans_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(cs, handle, velocity, remote);\$/  { std::uint64_t lv = 0; (void)level::Classify(0, false, \&lv); }\n&/"
 runm dk_arena_tick_scans src/quest/combat/dronekill.cpp "s/^  if (n % kScopeFrames == 0) RefreshScope(game);\$/  if (n % kScopeFrames == 0 || n % 7 == 0) RefreshScope(game);/"
+# off by its key is counted off on the phase line (combat_install_test)
+runm dk_off_not_counted src/quest/combat/dronekill.cpp "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

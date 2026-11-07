@@ -86,3 +86,5 @@ runm ec_page_publish    $P "s#RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL#RTLD_NOW | RT
 # arena pays nothing, by count (the send / receive handler reads game memory, or scans the levels, before the scope test)
 runm ec_arena_reads_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(buf), \&ok_); }\n  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#'
 runm ec_arena_scans_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
+# off by its key is counted off on the phase line (combat_install_test)
+runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

@@ -17,6 +17,8 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
@@ -25,6 +27,7 @@
 #include "quest/combat/memsys.h"
 #include "quest/combat/wallfire.h"
 #include "quest/combat/meshstep.h"
+#include "quest/combat/powerboost.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -664,6 +667,55 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Done();
 }
 
+// The five modules of #2187 switched off by their key are off, not failed: each alone, then all five. The phase line counts them in `off`
+// and nowhere else, and names each one `off`.
+void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
+  struct Case {
+    const char* name;
+    void (*set)(nevr_quest::CombatConfig&);
+  };
+  const Case cases[] = {
+      {"ec", [](nevr_quest::CombatConfig& c) { c.ec = {false, nevr_quest::Source::kFile}; }},
+      {"ecfx", [](nevr_quest::CombatConfig& c) { c.ecfx = {false, nevr_quest::Source::kFile}; }},
+      {"dronekill", [](nevr_quest::CombatConfig& c) { c.dronekill = {false, nevr_quest::Source::kFile}; }},
+      {"dronemuzzle", [](nevr_quest::CombatConfig& c) { c.dronemuzzle = {false, nevr_quest::Source::kFile}; }},
+      {"powerboost", [](nevr_quest::CombatConfig& c) { c.powerboostStage = {0, nevr_quest::Source::kFile}; }},
+  };
+  const auto reset = [] {
+    nevr_quest::combat::ec::ResetForTest();
+    nevr_quest::combat::ecfx::ResetForTest();
+    nevr_quest::combat::dronekill::ResetForTest();
+    nevr_quest::combat::dronemuzzle::ResetForTest();
+    nevr_quest::combat::powerboost::ResetForTest();
+  };
+  nevr_quest::CombatConfig all;
+  for (const Case& c : cases) {
+    reset();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig one;
+    c.set(one);
+    c.set(all);
+    combat::SetConfig(one);
+    const combat::Outcome o = combat::InstallNormal();
+    // the other rows are not reset between cases (they refuse as already_ran or for a full tick table): only the module's own count is pinned
+    QCHECK(o.modules == 17 && o.off == 1 && o.installed + o.failed == 16);
+    if (o.off != 1) std::fprintf(stderr, "%s off by its key: off=%zu failed=%zu\n", c.name, o.off, o.failed);
+    const std::vector<Line> lines = Lines("combat_install");
+    QCHECK(lines.size() == 1U && Has(lines[0].text, std::string(" ") + c.name + "=off ") && Has(lines[0].text, "\"off\":1"));
+    Done();
+  }
+  reset();
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(all);
+  const combat::Outcome o = combat::InstallNormal();
+  QCHECK(o.modules == 17 && o.off == 5 && o.installed + o.failed == 12);
+  const std::vector<Line> lines = Lines("combat_install");
+  QCHECK(lines.size() == 1U && Has(lines[0].text, "ec=off ecfx=off dronekill=off dronemuzzle=off powerboost=off") && Has(lines[0].text, "\"off\":5"));
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  reset();
+  Done();
+}
+
 // The EC client's rows read their keys from the resolved section (#2187): each off by the file's word, and the words the file gave reach the module
 // (its words line says `config` and carries the mask; no libr15 is loaded, so the module refuses after reading them).
 void TheEcRowsReadTheirKeysFromTheResolvedSection() {
@@ -802,6 +854,7 @@ int main() {
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
   TheEcRowsReadTheirKeysFromTheResolvedSection();
+  TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff();
   TheBvhRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());

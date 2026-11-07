@@ -520,7 +520,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Log
   if (!switches.on) {
     InstallLine("off", "off_config", "not_tried", "not_tried", true,
                 "combat.ec is false: EC scripts decide as on a PC without the EC network client, and the game's traffic is untouched");
-    return {false, "off"};
+    return {false, "off", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) return Refused("already_ran");
   const char* const words = switches.words != nullptr ? switches.words : kDefaultWords;

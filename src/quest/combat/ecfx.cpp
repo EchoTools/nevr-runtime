@@ -187,7 +187,7 @@ ModuleResult Install(bool on) noexcept {
                       {{"result", token},
                        {"consequence", ok ? "NEUTRON effects attach when the wall library loads; the gate opens at the first drain on a combat map"
                                           : "NEUTRON effects stay off: gate +e20 stays 0 and the wall library runs its effects in its own node"}});
-  return {ok, token};
+  return {ok, token, !on};  // off by its key: counted apart on the phase line, neither installed nor failed
 }
 
 void TickForTest(std::uint64_t now_ms) noexcept { RunTick(now_ms); }

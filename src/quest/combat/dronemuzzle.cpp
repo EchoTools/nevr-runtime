@@ -256,7 +256,7 @@ ModuleResult Install(bool on) noexcept {
     sentinel::LogFields(LogLevel::kInfo, "combat_dronemuzzle_install",
                         {{"result", "off"}, {"reason", "off_config"},
                          {"consequence", "combat.dronemuzzle is false: a drone's bullets start where the game puts them"}});
-    return {false, "off"};
+    return {false, "off", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (!dronekill::ShotActive()) {
     return {false, Refuse(Result{}, "needs_dronekill_shot", "dronekill's FireBulletLocal hook is not installed, so no drone shot is ever seen").status};

@@ -29,3 +29,5 @@ runm ecfx_switch       $F "s#  if (!on) {#  if (!on \&\& false) {#"
 runm ecfx_needs_ec     $F "s#  } else if (!ec::Installed()) {#  } else if (false) {#"
 runm ecfx_once         $F "s#  } else if (g_installed.exchange(true)) {#  } else if (false) {#"
 runm ecfx_legacy       $F "s#  if (legacy::Present(\"neutronfx.on\")) {#  if (false) {#"
+# off by its key is counted off on the phase line (combat_install_test)
+runm ecfx_off_not_counted $F "s#  return {ok, token, !on};#  return {ok, token, false};#" quest-host-combat combat_install_test

@@ -987,7 +987,7 @@ ModuleResult Install(bool on, const Words& words) noexcept {
   if (!on) {
     sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"consequence", "combat.dronekill is false: the drones keep the game's own behaviour"}});
-    return {false, "off"};
+    return {false, "off", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_installed.load(std::memory_order_acquire)) return {false, Refuse(Result{}, "already_ran", "a second step installs nothing").status};
   const sentinel::ImageLookup override = g_lookup.load(std::memory_order_acquire);
