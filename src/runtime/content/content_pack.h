@@ -18,6 +18,8 @@
 //   631547; or the CFile::Open bytes are not the ones this hook was written against.
 // - Each pack file is opened once, hashed through that handle and held open (read sharing only) for the rest of the process, so
 //   a file cannot be changed or swapped between the check and the game's read.
+// The decision, the per-file checks, the served-path table and the text of every line are content_core.h, which the Quest build
+// compiles too (#2312); this file is their Win32 file access and the PC hook's half.
 // Installed from PreprocessCommandLineHook (lifecycle/boot.cpp) after the early plugin pass and before the game's first
 // original call, inside which InitGlobals reads the manifests and opens the packages.
 #pragma once
@@ -26,20 +28,14 @@
 #include <cstdint>
 #include <string>
 
+#include "runtime/content/content_core.h"
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
 #endif
 
 namespace nevr_content {
-
-enum class Outcome {
-  kNone,     // no pack is installed
-  kServed,   // the pack is checked and its files are served
-  kRefused,  // a pack is installed and is not served; the reason says why
-};
-
-const char* OutcomeName(Outcome outcome);
 
 // What Decide is given: where the packs and the game live, and the facts about this run it cannot read itself.
 struct Inputs {
@@ -51,21 +47,10 @@ struct Inputs {
   bool data_read_already = false;    // the game has created its resource manager (and so read its manifests)
 };
 
-struct Decision {
-  Outcome outcome = Outcome::kNone;
-  std::string id;
-  std::string version;
-  std::string reason;  // a token when refused
-  std::string detail;  // what the token is about
-  std::size_t manifests = 0;
-  std::size_t packages = 0;
-  std::size_t scripts = 0;
-  std::size_t files_checked = 0;
-};
-
 #ifdef _WIN32
-// Checks the installed pack and, when it passes, makes it the one this process serves (ServeOpen, RewriteScript). Every file
-// that passed is held open for the rest of the process. Logs nothing: Install logs the decision.
+// Checks the installed pack (the shared decision, content_core.h, over Win32 file access) and, when it passes, makes it the one
+// this process serves (ServeOpen, RewriteScript). Every file that passed is held open for the rest of the process. Logs nothing:
+// Install logs the decision.
 Decision Decide(const Inputs& inputs);
 
 // The sha-256 of the whole of `file`, from its start, as 64 lowercase hex characters, read `chunk_bytes` at a time (one buffer of

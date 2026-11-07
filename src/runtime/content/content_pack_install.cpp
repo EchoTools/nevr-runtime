@@ -43,13 +43,6 @@ std::string Narrow(const std::wstring& wide) {
   return out;
 }
 
-// Text from content.json or a path, for a quoted log field: at most 300 bytes of printable ASCII; a quote or any other byte is '?'.
-std::string Printable(const std::string& text) {
-  std::string out;
-  for (const char c : text.substr(0, 300)) out += (c >= 0x20 && c <= 0x7e && c != '"') ? c : '?';
-  return out;
-}
-
 // `size` bytes as lowercase hex, no separators.
 std::string Hex(const std::uint8_t* bytes, std::size_t size) {
   static const char kHex[] = "0123456789abcdef";
@@ -118,24 +111,10 @@ void Install(std::uintptr_t game_base) {
     if (d.outcome != Outcome::kServed) Forget();
   }
 
-  const std::string dir = Narrow(in.content_dir);
-  switch (d.outcome) {
-    case Outcome::kNone:
-      Log(EchoVR::LogLevel::Info, "[NEVR.CONTENT] no content pack installed dir=%s (the game runs on its stock data)", dir.c_str());
-      break;
-    case Outcome::kServed:
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.CONTENT] content pack served id=%s version=%s manifests=%zu packages=%zu scripts=%zu files_checked=%zu dir=%s "
-          "(the game reads these files in place of its stock ones; removing the pack's folder runs the game stock)",
-          d.id.c_str(), d.version.c_str(), d.manifests, d.packages, d.scripts, d.files_checked, dir.c_str());
-      break;
-    case Outcome::kRefused:
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONTENT] content pack refused id=%s reason=%s detail=\"%s\" dir=%s (nothing of the pack is served; the game runs "
-          "on its stock data)",
-          d.id.empty() ? "none" : Printable(d.id).c_str(), d.reason.c_str(), Printable(d.detail).c_str(), dir.c_str());
-      break;
-  }
+  // The decision's one line, the same text on Quest (content_core.h, FormatDecision).
+  LineLevel level = LineLevel::kInfo;
+  const std::string line = FormatDecision(d, Narrow(in.content_dir), &level);
+  Log(level == LineLevel::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
 }
 
 }  // namespace nevr_content

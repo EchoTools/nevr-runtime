@@ -159,6 +159,7 @@ class TheScriptLoaderIsDescribedOnce(unittest.TestCase):
 INSTALL = "src/runtime/content/content_pack_install.cpp"
 SERVE = "src/runtime/content/content_pack.cpp"
 JSON = "src/runtime/content/content_json.cpp"
+CORE = "src/runtime/content/content_core.cpp"
 
 
 class TheHookThePageNames(unittest.TestCase):
@@ -195,7 +196,7 @@ class TheRefusalsThePageLists(unittest.TestCase):
         table = doc[doc.index("| `reason` |"):doc.index("Each file that passes")]
         reasons = set(re.findall(r"`([a-z_]+)`", table)) - {"reason", "content", "json"}
         self.assertGreaterEqual(len(reasons), 12, reasons)
-        sources = read(SERVE) + read(INSTALL) + read(JSON)
+        sources = read(SERVE) + read(INSTALL) + read(JSON) + read(CORE)
         for reason in sorted(reasons):
             self.assertIn(f'"{reason}"', sources, f"{DOC} lists reason {reason}, which no source writes")
 

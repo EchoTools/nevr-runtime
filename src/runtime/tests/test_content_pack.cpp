@@ -15,6 +15,7 @@
 #include "runtime/content/content_json.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/content/pack_rules.h"
+#include "runtime/tests/content_line_golden.h"
 #include "runtime/host/file_digest.h"
 
 namespace {
@@ -385,6 +386,47 @@ nlohmann::json GoodJson() {
   j["scripts"] = {"scripts/190ed14fe6c74dd3.dll"};
   j["files"] = {{"manifests/48037dc70b0ecab2", h}, {"packages/48037dc70b0ecab2_3", h}, {"scripts/190ed14fe6c74dd3.dll", h}};
   return j;
+}
+
+// #2312: the PC keeps what the shared core moved. A `.stock` file beside a stock manifest is the Quest's bundled-pack marker
+// (ADR 0029) and means nothing on PC, and a pack's scripts are served here.
+TEST_F(ContentPack, AStockMarkerBesideAManifestIsNoRefusalOnPc) {
+  WriteFileBytes(data_ + L"\\manifests\\48037dc70b0ecab2.stock", "a file named like the Quest's marker");
+  MakePack("testpack");
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason << " " << d.detail;
+  EXPECT_EQ(d.scripts, 1u);
+}
+
+// #2312: the [NEVR.CONTENT] lines are one text on both builds (content_line_golden.h; the Quest compares the same bytes in
+// src/quest/tests/content_folder_test.cpp).
+TEST(ContentLines, TheDecisionLinesAreTheSharedText) {
+  nevr_content::LineLevel level = nevr_content::LineLevel::kDebug;
+  EXPECT_EQ(nevr_content::FormatDecision(content_golden::ServedDecision(), content_golden::kDir, &level),
+            content_golden::kServed);
+  EXPECT_EQ(level, nevr_content::LineLevel::kInfo);
+  level = nevr_content::LineLevel::kDebug;
+  EXPECT_EQ(nevr_content::FormatDecision(Decision{}, content_golden::kDir, &level), content_golden::kNone);
+  EXPECT_EQ(level, nevr_content::LineLevel::kInfo);
+  EXPECT_EQ(nevr_content::FormatDecision(content_golden::RefusedDecision(), content_golden::kDir, &level),
+            content_golden::kRefused);
+  EXPECT_EQ(level, nevr_content::LineLevel::kWarning);
+}
+
+TEST(ContentLines, TheServedLinesAreTheSharedText) {
+  nevr_content::Served s;
+  content_golden::FillServedManifest(&s);
+  char buf[1024];
+  s.hits = 0;
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 0, buf, sizeof(buf)),
+            nevr_content::LineLevel::kInfo);
+  EXPECT_STREQ(buf, content_golden::kFirstServe);
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 0, buf, sizeof(buf)),
+            nevr_content::LineLevel::kDebug);
+  EXPECT_STREQ(buf, content_golden::kSecondServe);
+  EXPECT_EQ(nevr_content::FormatServed(s, "echocombat", content_golden::kGamePath, 2, buf, sizeof(buf)),
+            nevr_content::LineLevel::kWarning);
+  EXPECT_STREQ(buf, content_golden::kFailedServe);
 }
 
 TEST(ContentJson, AWellFormedDescriptorParses) {
