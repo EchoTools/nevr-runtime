@@ -82,6 +82,9 @@ class StationCellsInstalled : public ::testing::Test {
     std::memcpy(base_ + sc::kPositionRva, pos.data(), pos.size());
 
     std::memcpy(data_ + sc::kMaxIconsOffset, &kMaxIcons, sizeof kMaxIcons);
+    // max_icons is a dword (`mov 0xb0(%rcx),%edx` at 0x180016839): the dword after it is nonzero, so a wider read shows.
+    const std::uint32_t next = 0x5a5a5a5a;
+    std::memcpy(data_ + sc::kMaxIconsOffset + 4, &next, sizeof next);
     void* data = data_;
     std::memcpy(holder_ + 0x68, &data, sizeof data);
     ctx_[0] = reinterpret_cast<std::int64_t>(holder_);
@@ -124,8 +127,10 @@ TEST_F(StationCellsInstalled, AShrunkColumnLeavesNoIconBehind) {
   // Nothing published: the stock layout.
   EXPECT_EQ(RunCount(1), kStockCount);
   EXPECT_EQ(RunPosition(1, 6), std::make_pair(1.0F, 2.0F));
-  // Weapons (type 1) published at 4 cells: every cell is positioned, the ones past 4 off the canvas.
+  // Weapons (type 1) published at 4 cells: every cell is positioned, the ones past 4 off the canvas. The counts are bytes;
+  // the next one (type 2) is nonzero, so a wider read of weapons' count shows.
   counts_[1] = 4;
+  counts_[2] = 9;
   EXPECT_EQ(RunCount(1), kMaxIcons);
   EXPECT_EQ(RunPosition(1, 3), std::make_pair(1.0F, 2.0F)) << "a cell in use keeps the game's position";
   EXPECT_EQ(RunPosition(1, 4), std::make_pair(sc::kFar, sc::kFar));

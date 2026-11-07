@@ -154,7 +154,8 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_wallfire_install",
                       {{"result", "installed"}, {"reason", "ok"},
-                       {"msg", "FireGunLocal's wall query also asks the static level for the player to muzzle segment on a combat map"}});
+                       {"msg", "FireGunLocal's wall query also asks the static level for the player to muzzle segment on a combat map or in the "
+                               "combat lobby"}});
   return {true, "installed"};
 }
 

@@ -12,9 +12,9 @@ option(Q15T_VOIPDROP "voipdrop (R30): a remote voice packet that cannot be store
 option(Q15T_CUSTCTX "custctx (R31-R33): three guards on the customization renderer. Source: DEFAULT ON" ON)
 option(Q15T_GUNCONNECT "gunconnect (R17-R19): the local player's guns get Connect(local user) so they fire. Source: default ON; tick" ON)
 option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat match. Source: default ON; tick" ON)
-option(Q15T_IMPACTSND "impactsnd (R12-R15): the impact table gets its Wwise ids. Source: default ON since v6; tick" ON)
-# ec and ecfx (the EC network client and NEUTRON effects), POWER BOOST, dronekill and dronemuzzle are the runtime's: src/quest/combat/, keys combat.ec, combat.ec_words,
-# combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronemuzzle.
+# impactsnd and decals (#2183); ec and ecfx (the EC network client and NEUTRON effects), POWER BOOST, dronekill and dronemuzzle (#2187) are the
+# runtime's: src/quest/combat/, keys combat.impactsnd, combat.impactsnd_write, combat.decals, combat.decals_flip_u, combat.decals_flip_v, combat.ec,
+# combat.ec_words, combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronemuzzle.
 # TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, hudmeter): ON here.
 # Droneguard's second stage, the levelname pair and the gate options below stay OFF (not in the on-list, or they need content in the pack).
 option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY; on in the wave19a on-list" ON)
@@ -27,11 +27,6 @@ option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its
 # shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
-option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
-# decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
-# content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
-# Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
-option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dynamic-mesh quads on the bullet system's update, torn down on its Shutdown" ON)
 
 if(Q15T_DRONEGUARD_IDX AND NOT Q15T_DRONEGUARD)
   message(FATAL_ERROR "Q15T_DRONEGUARD_IDX needs Q15T_DRONEGUARD")
@@ -44,7 +39,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS IMPACTSND DRONEGUARD PEERCLAMP HUDMETER LEVELNAME MUSIC SENSORWD DECALS)
+foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS DRONEGUARD PEERCLAMP HUDMETER LEVELNAME MUSIC SENSORWD)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -72,9 +67,6 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_T26=$<BOOL:${Q15T_T26}>
   Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}>
-  Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
-  Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
-  Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}>
-  Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
+  Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA})
 target_link_options(nevr_q15t PRIVATE ${Q15T_COMMON_LINK})

@@ -8,12 +8,14 @@
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
-#include "quest/combat/ec.h"
-#include "quest/combat/ecfx.h"
+#include "quest/combat/decals.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronemuzzle.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
@@ -47,6 +49,15 @@ ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tab
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
+ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
+ModuleResult DecalsNormal() noexcept {
+  decals::Switches switches;
+  switches.on = g_config.decals.on;
+  switches.flipU = g_config.decalsFlipU.on;
+  switches.flipV = g_config.decalsFlipV.on;
+  return decals::Install(switches);
+}
+
 ModuleResult EcNormal() noexcept {
   ec::Switches switches;
   switches.on = g_config.ec.on;
@@ -54,6 +65,9 @@ ModuleResult EcNormal() noexcept {
   return ec::Install(switches);
 }
 ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
+ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
+ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -73,9 +87,6 @@ ModuleResult BvhNormal() noexcept {
 ModuleResult WallfireNormal() noexcept {
   return wallfire::Install(g_config.wallfire.on);
 }
-ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
-ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
-ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
@@ -95,9 +106,19 @@ constexpr std::array kModules{
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
     Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    // impactsnd (#2183) sits where the plugin installed it, after meshstep and before the other table steps; it acts only in combat levels (impactsnd.h).
+    // impactsnd_write, decals_flip_u and decals_flip_v are switches of their module's with no step of their own (as bvh_gate and bvh_touch below): each
+    // row exists so the switch is one generated `combat_config_switch` record.
+    Module{"impactsnd", nullptr, &ImpactsndNormal, "combat.impactsnd", &nevr_quest::CombatConfig::impactsnd},
+    Module{"impactsnd_write", nullptr, nullptr, "combat.impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite},
     Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // decals (#2183): last of the plugin's table steps; its Shutdown handler chains above impactsnd's, so impactsnd's row comes first. It acts only in combat
+    // levels (decals.h).
+    Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
+    Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
+    Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
     // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
     Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
@@ -170,8 +191,8 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     } else {
       ++outcome.failed;
     }
-    // One record per module (N17: each outcome by name): a list of every module on the phase line grows with the table and no longer fits
-    // one 768-byte sentinel line, so the phase line carries the counts and the consequence, and each module's outcome is its own record.
+    // One record per module, as its step returns (N17: each outcome by name). A list of every module on the phase line grows with the table
+    // and stops fitting one 768-byte sentinel line, so the phase line keeps the counts and the consequence, and each outcome is its own record.
     sentinel::LogFields(result.installed || result.off ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install_module",
                         {{"phase", PhaseName(phase)}, {"module", module.name}, {"outcome", outcomeName},
                          {"status", result.status != nullptr ? result.status : "unset"}});
@@ -181,8 +202,8 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    char off[64] = "";
-    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    char off[80] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key or with nothing to act on", outcome.off, outcome.off == 1 ? "its" : "their");
     std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }

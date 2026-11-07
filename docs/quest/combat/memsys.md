@@ -77,8 +77,8 @@ the source build's memsys:65-77. Verbatim from the disassembly (`instructions`, 
 `combat_memsys_hook` per row (Info installed, Error refused, Warning for a pinned word that differs, with the word's address) with `row`, `symbol`,
 `status`; `combat_memsys_install` once (`result` `installed|partial|refused|off`, `reason`, `r37`, `r38`, the consequence); `combat_memsys_pool` once, written after
 `Alloc` returned (Info `raised`, Warning `not_raised` with the words read: `stack`, `stack_cap`, `cap_read`, `count`, `readable`); `combat_memsys_witness`
-once. The per-call path logs nothing; the wrapper keeps counters (`memsys::CurrentStats()`). The sentinel's `combat_install_module` record for memsys (phase
-`early`) carries its `outcome` and `status`. No secret is logged. `src/quest/tests/memsys_test.cpp` asserts the lines.
+once. The per-call path logs nothing; the wrapper keeps counters (`memsys::CurrentStats()`). The sentinel's `combat_install_module` record for `memsys` (phase `early`)
+carries its `outcome` and `status`. No secret is logged. `src/quest/tests/memsys_test.cpp` asserts the lines.
 
 ## Prediction (written before any headset run) and falsifiers
 

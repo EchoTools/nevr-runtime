@@ -15,8 +15,10 @@
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
 #include "runtime/combat/combat_settings.h"
+#include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/script_guard.h"
+#include "runtime/combat/shared_magazine.h"
 #include "runtime/combat/station_cells.h"
 #include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
@@ -119,6 +121,14 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     }
 
     cat::InstallFaultHandler();
+
+    // A stock-script fix, like the drone follow guard: the DOT FIELD's own script plays sounds that exist and stops
+    // looking for a model it does not have (dot_script.h). It changes no gameplay value, so no group gates it.
+    dot_script::Register();
+
+    // A stock-script fix: a thrown DOT FIELD or drone no longer asks for a frisbee component it does not have
+    // (shared_magazine.h). It changes no gameplay value, so no group gates it.
+    shared_magazine::Register();
 
     // The shared cells are written by Cat's scripts and code alike: checked once against everything the runtime owns.
     const bool cells = GateWrite(reinterpret_cast<const void*>(gameBase + kCellsRva), kCellsLength,

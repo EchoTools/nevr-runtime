@@ -113,7 +113,7 @@ One aggregate line per run, `combat_heaps_install` (Info; Error when a row was r
 `game_space_mib`: slot -> pointer -> u64, read back, not the intended value), the `device` and the consequence. One `combat_heaps_row` line per row:
 Debug when swapped, Warning for a stock-word mismatch (`reader_word_not_stock`, `rodata_not_stock`), Error for a refused write (the manager's status,
 for example `original_mismatch`, `executable_mapping`), Info for a row left alone by `combat.memsys: false`. The sentinel's `combat_install_module`
-record for heaps (phase `early`) carries its `outcome` and `status`. No secret is logged. `src/quest/tests/heaps_test.cpp` asserts every line and field against the real code.
+record for `heaps` (phase `early`) carries its `outcome` and `status`. No secret is logged. `src/quest/tests/heaps_test.cpp` asserts every line and field against the real code.
 
 ## 5. Prediction (written before any headset run) and falsifiers
 
