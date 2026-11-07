@@ -397,7 +397,7 @@ void SwitchesDecideWhatIsInstalled() {
     bvh::Switches sw;
     sw.bvh = false;
     const nevr_quest::combat::ModuleResult r = bvh::Install(sw);
-    QCHECK(!r.installed && std::strcmp(r.status, "off_config") == 0 && !bvh::TreeInstalled());
+    QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && !bvh::TreeInstalled());
     QCHECK(SlotWord(g_pins.intersect.slot) == before && nevr_quest::combat::tick::Count() == 0);
     QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
     QCHECK(Count(std::string("\"level\":\"error\"")) == 0);

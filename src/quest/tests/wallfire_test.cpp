@@ -327,7 +327,7 @@ void TheSwitchAndItsLines() {
     InstallBvhAndTree();
     const std::uintptr_t before = SlotWord(g_pins.querySlot);
     const nevr_quest::combat::ModuleResult r = wf::Install(false);
-    QCHECK(!r.installed && std::strcmp(r.status, "off_config") == 0 && SlotWord(g_pins.querySlot) == before);
+    QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && SlotWord(g_pins.querySlot) == before);
     QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
     End();
   }

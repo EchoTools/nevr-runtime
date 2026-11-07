@@ -105,7 +105,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_wallfire_install",
                         {{"result", "off"}, {"reason", "off_config"},
                          {"msg", "combat.wallfire is false: shots through walls are not refused"}});
-    return {false, "off_config"};
+    return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_wallfire_install",

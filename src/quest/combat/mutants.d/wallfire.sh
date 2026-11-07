@@ -1,7 +1,8 @@
 # wallfire: each rule of src/quest/combat/wallfire.cpp, wallfire.h, wallfire_targets.h (and the module's row and key elsewhere) removed once; wallfire_test must
 # fail on every one. Run: src/quest/combat/mutants.sh wallfire. A line is `runm <name> <file> <sed> [<build dir> <test target>]`.
 runm wf_off_ignored       src/quest/combat/wallfire.cpp "s/  if (!on) {/  if (!on \&\& false) {/"
-runm wf_off_reason        src/quest/combat/wallfire.cpp "s/return {false, \"off_config\"};/return {false, \"off\"};/"
+runm wf_off_reason        src/quest/combat/wallfire.cpp "s/return {false, \"off_config\", true};/return {false, \"off\", true};/"
+runm wf_off_not_counted   src/quest/combat/wallfire.cpp "s/return {false, \"off_config\", true};/return {false, \"off_config\"};/"
 runm wf_off_line          src/quest/combat/wallfire.cpp "s/{{\"result\", \"off\"}, {\"reason\", \"off_config\"},/{{\"result\", \"skipped\"}, {\"reason\", \"off_config\"},/"
 runm wf_legacy_unchecked  src/quest/combat/wallfire.cpp "s/  if (legacy::Present(\"wallfire.off\")) {/  if (false) {/"
 runm wf_legacy_key        src/quest/combat/wallfire.cpp "s/{\"replaced_by\", \"combat.wallfire: false\"}/{\"replaced_by\", \"combat.bvh: false\"}/"

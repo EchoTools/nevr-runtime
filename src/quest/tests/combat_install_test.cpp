@@ -342,19 +342,41 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
     QCHECK(Has(lines[1].text, "3 of 12 combat modules installed in this phase; 1 off by its config key; the others keep"));
   }
   Done();
+  // bvh and wallfire switched off (#2182): both are off, not failed; the BVH's two switches of its own have no step and are not counted.
+  nevr_quest::combat::bvh::ResetForTest();
+  nevr_quest::combat::wallfire::ResetForTest();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig noBvh;
+  noBvh.bvh = {false, nevr_quest::Source::kFile};
+  noBvh.wallfire = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(noBvh);
+  const combat::Outcome off2 = combat::InstallNormal();
+  QCHECK(off2.modules == 12 && off2.installed == 3 && off2.failed == 7 && off2.off == 2);
+  const std::vector<Line> offLines = Lines("combat_install");
+  QCHECK(offLines.size() == 1U);
+  if (offLines.size() == 1U) {
+    QCHECK(Has(offLines[0].text, "bvh=off_config wallfire=off_config sendguard=module_not_loaded"));
+    QCHECK(Has(offLines[0].text, "\"off\":2") && Has(offLines[0].text, "3 of 12 combat modules installed in this phase; 2 off by their config key"));
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  Done();
 }
 
-// The real steps in a plain release: nothing installs, and the one line is the skip.
+// The real steps in a plain release and in the arena APK (#2300): nothing installs, and the one line is the skip.
 void TheRealStepsConsultTheGate() {
-  Process(bv::Variant::kNone);
-  QCHECK(!combat::InstallEarly().ran);
-  QCHECK(!combat::InstallNormal().ran);
-  const std::vector<Line> lines = Lines("combat_install");
-  QCHECK(lines.size() == 1U);
-  QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
-  combat::NoteProcessEnd();
-  QCHECK(Lines("combat_sendguard_stats").empty());
-  Done();
+  for (const bv::Variant variant : {bv::Variant::kNone, bv::Variant::kArena}) {
+    Process(variant);
+    QCHECK(!combat::InstallEarly().ran);
+    QCHECK(!combat::InstallNormal().ran);
+    const std::vector<Line> lines = Lines("combat_install");
+    QCHECK(lines.size() == 1U);
+    QCHECK(lines.size() == 1U && Has(lines[0].text, "\"state\":\"skipped\""));
+    QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
+    QCHECK(Lines("combat_bvh_install").empty() && Lines("combat_wallfire_install").empty());
+    combat::NoteProcessEnd();
+    QCHECK(Lines("combat_sendguard_stats").empty());
+    Done();
+  }
 }
 
 // A normal step that never got its moment is recorded once, with the reason; one that ran, or a process where combat is off, records nothing.

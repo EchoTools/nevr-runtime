@@ -2,7 +2,8 @@
 # The pure core is mutants.d/bvh_core.sh. Run: src/quest/combat/mutants.sh bvh. A line is `runm <name> <file> <sed> [<build dir> <test target>]`.
 # -- the switches and the install step
 runm bvh_off_ignored      src/quest/combat/bvh.cpp "s/  if (!switches.bvh) {/  if (false) {/"
-runm bvh_off_reason       src/quest/combat/bvh.cpp "s/return {false, \"off_config\"};/return {false, \"off\"};/"
+runm bvh_off_reason       src/quest/combat/bvh.cpp "s/return {false, \"off_config\", true};/return {false, \"off\", true};/"
+runm bvh_off_not_counted  src/quest/combat/bvh.cpp "s/return {false, \"off_config\", true};/return {false, \"off_config\"};/"
 runm bvh_off_line         src/quest/combat/bvh.cpp "s/{{\"result\", \"off\"}, {\"reason\", \"off_config\"}/{{\"result\", \"skipped\"}, {\"reason\", \"off_config\"}/"
 runm bvh_legacy_unchecked src/quest/combat/bvh.cpp "s/    if (!legacy::Present(l.file)) continue;/    if (false) continue;/"
 runm bvh_legacy_key       src/quest/combat/bvh.cpp "s/{\"bvhgate.off\", \"combat.bvh_gate: false\"}/{\"bvhgate.off\", \"combat.bvh: false\"}/"

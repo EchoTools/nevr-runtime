@@ -370,7 +370,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},
                          {"msg", "combat.bvh is false: the game keeps its stubbed static BVH and no cast is answered from the level"}});
-    return {false, "off_config"};
+    return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_install",
