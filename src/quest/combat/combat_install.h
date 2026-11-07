@@ -19,7 +19,7 @@
  * itself (`combat_<module>_*`).
  *
  * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
- *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":1,
+ *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe|arena","active":1,
  *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
  * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes

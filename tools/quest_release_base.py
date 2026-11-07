@@ -14,6 +14,10 @@ WHAT.
         APK with its package renamed to com.readyatdawn.r15 and the launcher label "Echo VR" (quest_apk_rename_package.py,
         the `just quest-reference-base` step), and refuses unless BASE.apk holds every REFERENCE_ENTRIES name.
 
+    quest_release_base.py check-arena --apk ARENA.apk
+        Refuses unless ARENA.apk (the store APK repacked with the release's loader, #2298) holds none of REFERENCE_ENTRIES, no
+        q15t library and no plugin manifest, and its variant stamp is exactly `arena`.
+
     quest_release_base.py check-release --apk RELEASE.apk --base BASE.apk
         Refuses unless BASE.apk holds every REFERENCE_ENTRIES name and RELEASE.apk holds every entry name of BASE.apk
         outside META-INF/ (the repack replaces and adds entries; it never drops one). A refusal names every missing entry.
@@ -44,6 +48,10 @@ REFERENCE_APK_SHA256 = "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f392
 REFERENCE_ENTRIES = ("assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so")
 
 LABEL = "Echo VR"
+
+# What an arena APK must not carry besides REFERENCE_ENTRIES (#2298): the q15t library and the manifest that lists packaged plugins.
+ARENA_FORBIDDEN_ENTRIES = ("lib/arm64-v8a/libq15t.so", "lib/arm64-v8a/libnevr_plugin_manifest.so")
+ARENA_STAMP_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"
 
 
 class Refused(Exception):
@@ -114,6 +122,23 @@ def check_release(apk: Path, base: Path) -> dict:
             "base_entries": len(_outside_meta_inf(base_names)), "release_entries": len(release_names)}
 
 
+def check_arena(apk: Path) -> dict:
+    """The arena APK carries no combat (#2298): none of the reference build's entries, no q15t library, no plugin manifest, and the
+    variant stamp `arena` (the exact bytes). A refusal names every offending entry."""
+    try:
+        with zipfile.ZipFile(apk) as z:
+            names = {n for n in z.namelist() if not n.endswith("/")}
+            stamp = z.read(ARENA_STAMP_ENTRY) if ARENA_STAMP_ENTRY in names else None
+    except (OSError, zipfile.BadZipFile) as error:
+        raise Refused("unreadable_apk", apk=str(apk), error=type(error).__name__) from error
+    combat = sorted(n for n in names if n in REFERENCE_ENTRIES or n in ARENA_FORBIDDEN_ENTRIES)
+    if combat:
+        raise Refused("arena_has_combat_entries", apk=str(apk), entries=combat)
+    if stamp != b"arena":
+        raise Refused("arena_stamp_wrong", apk=str(apk), stamp="absent" if stamp is None else stamp.decode("ascii", "replace")[:32])
+    return {"event": "arena_has_no_combat", "apk": str(apk), "entries": len(names)}
+
+
 def _emit(stream, record: dict) -> None:
     stream.write(json.dumps({"tag": TAG, **record}, sort_keys=True) + "\n")
 
@@ -124,6 +149,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("prepare")
     p.add_argument("--apk", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
+    a = sub.add_parser("check-arena")
+    a.add_argument("--apk", type=Path, required=True)
     c = sub.add_parser("check-release")
     c.add_argument("--apk", type=Path, required=True)
     c.add_argument("--base", type=Path, required=True)
@@ -131,6 +158,8 @@ def main(argv=None) -> int:
     try:
         if args.command == "prepare":
             record = prepare(args.apk, args.out)
+        elif args.command == "check-arena":
+            record = check_arena(args.apk)
         else:
             record = check_release(args.apk, args.base)
     except Refused as refusal:
