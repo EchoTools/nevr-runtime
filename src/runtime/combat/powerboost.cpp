@@ -84,6 +84,7 @@
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
+#include "runtime/patch/powerboost_rules.h"  // nEVR port: the cone and link rules, shared with the Quest (#2339)
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -128,13 +129,9 @@ uint64_t *g_player_symbol = nullptr;
 constexpr uintptr_t SEND_RVA = 0xcc0670;
 constexpr uint8_t SEND_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x60, 0x33, 0xc0 };
 
-constexpr float MARKER_BASE = 1000000.0f;
-constexpr float MARKER_END = 2000000.0f;
-constexpr float LINK_BASE = 2000000.0f;   // link marker: the client's "I linked this one" (same encoding)
-constexpr float LINK_END = 3000000.0f;
-constexpr float REZ_FLAG = 2000000.0f;    // use / link marker + this: the buff carries a rez
-constexpr float UNLINK_BASE = 6000000.0f; // unlink marker: "this one left my cone", its buff ends
-constexpr float UNLINK_END = 7000000.0f;
+// nEVR port: the markers (use, link, unlink, the rez flag), their decode, the cone and the link marker are
+// runtime/patch/powerboost_rules.h, which the Quest's port calls too (#2339).
+namespace pbr = ::nevr_powerboost;
 
 using heal_fn = void(__fastcall *)(void *cs, uint32_t index, float amount, uint64_t a4, uint64_t a5);
 using damage_fn = void(__fastcall *)(void *cs, uint32_t index, float damage, void *info, uint64_t a5, uint64_t a6);
@@ -164,7 +161,7 @@ using object_fn = uint8_t *(__fastcall *)(void *handle);
 handle_fn OwnerHandle = nullptr;
 object_fn OwnerObject = nullptr;
 
-volatile float g_dr = 0.09f;               // from the latest marker
+volatile unsigned g_dr_permille = 90;     // from the latest marker: dr 0.09 (nEVR port: the integer, #2339)
 volatile unsigned g_dr_seconds = 10;
 volatile bool g_rez = false;              // the latest marker's buff carries a rez
 unsigned g_rez_grace_ms = 1500;           // PowerBoost.ini [rez] grace_ms (no longer used: no grace after a save)
@@ -386,26 +383,19 @@ void EndBuff(void *cs, uint16_t index) {
 
 void AddSelfDamage(void *cs, uint32_t index, unsigned seconds);
 
-// A marker's kind: 1 = use, 2 = link, 0 = a real heal; rez and the encoded value.
-int Marker(float amount, bool *rez, unsigned *v) {
-    *rez = amount >= MARKER_BASE + REZ_FLAG;
-    if (*rez) amount -= REZ_FLAG;
-    int kind = amount >= MARKER_BASE && amount < MARKER_END ? 1 : amount >= LINK_BASE && amount < LINK_END ? 2 : 0;
-    if (kind) *v = (unsigned)(amount - (kind == 1 ? MARKER_BASE : LINK_BASE) + 0.5f);
-    return kind;
-}
-
+// nEVR port: a marker's kind (use, link, unlink, or a real heal), rez and the encoded value are pbr::Decode
+// (runtime/patch/powerboost_rules.h, #2339): his Marker, with the unlink band tested first as here, and a rounded
+// value held inside its band.
 void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4, uint64_t a5) {
-    if (amount >= UNLINK_BASE && amount < UNLINK_END) {
+    const pbr::Marker m = pbr::Decode(amount);
+    if (m.kind == pbr::kUnlink) {
         if (g_server) EndBuff(cs, (uint16_t)index);  // a client's link to this damageable broke
         return;
     }
-    bool rez;
-    unsigned v;
-    int kind = Marker(amount, &rez, &v);
-    if (kind == 1) {
-        g_dr = (v / 1000) / 1000.0f;              // what the link hands out (see ConeFilter)
-        g_dr_seconds = v % 1000;
+    const bool rez = m.rez != 0;
+    if (m.kind == pbr::kUse) {
+        g_dr_permille = m.drPermille;             // what the link hands out (see ConeFilter)
+        g_dr_seconds = m.seconds;
         g_rez = rez;
         if (!g_server) {                          // used here: hand it to the server
             g_used_at = GetTickCount64();
@@ -419,18 +409,18 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
         g_last_use = GetTickCount64();
         // the user: the damage boost and the damage reduction, but no cheat death (that is
         // for the teammates it links)
-        AddBuff(cs, (uint16_t)index, g_dr, g_dr_seconds, false, true);
+        AddBuff(cs, (uint16_t)index, static_cast<float>(g_dr_permille) / 1000.0f, g_dr_seconds, false, true);
         AcquireSRWLockExclusive(&g_lock);
         AddBoost(cs, index, g_dr_seconds, t_in_apply ? t_shooter : ~0ull);
         ReleaseSRWLockExclusive(&g_lock);
         AddSelfDamage(cs, index, g_dr_seconds);
         Log("POWER BOOST used by %p/%u: links give x%.3f damage for %u s%s", cs, index & 0xffff,
-            1.0f - g_dr, (unsigned)g_dr_seconds, rez ? " and cheat death" : "");
+            1.0f - static_cast<float>(g_dr_permille) / 1000.0f, (unsigned)g_dr_seconds, rez ? " and cheat death" : "");
         return;                                   // a marker, not a heal
     }
-    if (kind == 2) {
+    if (m.kind == pbr::kLink) {
         if (g_server) {                           // a client linked this damageable
-            AddBuff(cs, (uint16_t)index, (v / 1000) / 1000.0f, v % 1000, rez, false);   // no damage boost
+            AddBuff(cs, (uint16_t)index, static_cast<float>(m.drPermille) / 1000.0f, m.seconds, rez, false);   // no damage boost
         }
         return;
     }
@@ -536,21 +526,10 @@ void __fastcall Hooked_Damage(void *cs, uint32_t index, float damage, void *info
     Real_Damage(cs, index, damage, info, a5, a6);
 }
 
-// q (x, y, z, w) applied to v.
-void Rotate(const float *q, const float *v, float *out) {
-    float t[3] = { 2 * (q[1] * v[2] - q[2] * v[1]), 2 * (q[2] * v[0] - q[0] * v[2]), 2 * (q[0] * v[1] - q[1] * v[0]) };
-    out[0] = v[0] + q[3] * t[0] + (q[1] * t[2] - q[2] * t[1]);
-    out[1] = v[1] + q[3] * t[1] + (q[2] * t[0] - q[0] * t[2]);
-    out[2] = v[2] + q[3] * t[2] + (q[0] * t[1] - q[1] * t[0]);
-}
-
-float AngleTo(const float *q, const float *axis, const float *d, float dist) {
-    float f[3];
-    Rotate(q, axis, f);
-    float len = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
-    float c = (f[0] * d[0] + f[1] * d[1] + f[2] * d[2]) / (len * dist);
-    return acosf(c < -1 ? -1 : c > 1 ? 1 : c) * 57.29578f;
-}
+// q (x, y, z, w) applied to v, and the degrees between an axis turned by q and a direction (nEVR port: the shared
+// rules, runtime/patch/powerboost_rules.h, #2339).
+using pbr::Rotate;
+using pbr::AngleTo;
 
 // A link to (dcs, index) made (linked) or broken. The bubble's targeting only runs on
 // clients, so the client that used POWER BOOST (it sent a marker within the last 30 s)
@@ -560,20 +539,18 @@ float AngleTo(const float *q, const float *axis, const float *d, float dist) {
 // linked. Other clients see the same link and stay quiet.
 void LinkState(void *dcs, uint32_t index, bool linked) {
     ULONGLONG now = GetTickCount64();
-    unsigned left = g_dr_seconds;
-    if (g_used_at && now - g_used_at < g_dr_seconds * 1000ull)
-        left = (unsigned)((g_dr_seconds * 1000ull - (now - g_used_at) + 999) / 1000);
-    if (left < 1) left = 1;
+    // nEVR port: the seconds left and the marker are the shared rules (pbr::LeftSeconds, pbr::LinkMarker, #2339)
+    const pbr::UseState use{ g_used_at, g_dr_permille, g_dr_seconds, g_rez };
+    const unsigned left = pbr::LeftSeconds(use, now);
     if (!g_server && dcs == g_self_cs && (index & 0xffff) == g_self_index)   // someone linked us
         g_boosted_until = linked ? now + left * 1000ull : now;
     if (g_server) {
-        if (linked) AddBuff(dcs, (uint16_t)index, g_dr, left, g_rez, false);   // no damage boost
+        if (linked) AddBuff(dcs, (uint16_t)index, static_cast<float>(use.drPermille) / 1000.0f, left, use.rez, false);   // no damage boost
         else EndBuff(dcs, (uint16_t)index);
         return;
     }
-    if (g_used_at == 0 || now - g_used_at > 30000) return;
-    float marker = linked ? LINK_BASE + (float)((unsigned)(g_dr * 1000.0f + 0.5f) * 1000 + left) + (g_rez ? REZ_FLAG : 0.0f)
-                          : UNLINK_BASE;
+    const float marker = pbr::LinkMarker(use, linked, now);
+    if (marker == 0.0f) return;                   // no use of ours within the last 30 s
     Log("%s %p/%u -> server (marker %.0f)", linked ? "link to" : "unlink from", dcs, index & 0xffff, marker);
     SendDamageDealt(dcs, index, -marker, 0, 0);
 }
@@ -656,7 +633,7 @@ void SelfDamageTick(ULONGLONG now) {
 // This client's hits on their way to the server: boosted, they deal x(1 + damage_bonus).
 // Negative amounts are markers / heals, passed through untouched.
 void __fastcall Hooked_Send(void *cs, uint32_t index, float amount, uint8_t type, uint64_t info) {
-    if (g_damage_bonus > 0 && amount > 0 && amount < MARKER_BASE && GetTickCount64() < g_boosted_until) {
+    if (g_damage_bonus > 0 && amount > 0 && amount < pbr::kMarkerMin && GetTickCount64() < g_boosted_until) {
         static volatile LONG logged = 0;
         if (InterlockedIncrement(&logged) <= 50)
             LogDebug("boosted hit on %p/%u: %.2f -> %.2f", cs, index & 0xffff, amount, amount * (1.0f + g_damage_bonus));
@@ -679,27 +656,13 @@ void __fastcall Hooked_Send(void *cs, uint32_t index, float amount, uint8_t type
 // the tether anyway), and the server hears of a change at most every
 // LINK_MIN_MS per teammate (the latest state, once that time is up).
 unsigned g_link_window_ms = 500;                  // PowerBoost.ini [cone] link_window_ms (no longer used)
-constexpr float CONE_SLACK_DEG = 5.0f;
-constexpr ULONGLONG LINK_MIN_MS = 250;
-struct BubbleLinks {
-    uint8_t *bubble;
-    ULONGLONG first, last;
-    int count;
-    struct { void *dcs; uint32_t index; bool inside, sent; ULONGLONG sent_at; } linked[8];   // sent: what the server has
-};
-BubbleLinks g_bubbles[8];
+// nEVR port: CONE_SLACK_DEG, LINK_MIN_MS, the bubble table (8 bubbles of 8 targets; a bubble record unseen for 2 s is a
+// new bubble) and the decision are the shared rules (pbr::ConeTable, pbr::ConeDecide, #2339). MediCone uses the same table.
+using pbr::BubbleLinks;
+pbr::ConeTable g_cone_table;
 
 BubbleLinks &BubbleFor(uint8_t *bubble, ULONGLONG now) {
-    BubbleLinks *oldest = &g_bubbles[0];
-    for (BubbleLinks &b : g_bubbles) {
-        // a bubble record unseen for 2 s is a new bubble (records are reused)
-        if (b.bubble == bubble && now - b.last < 2000) { b.last = now; return b; }
-        if (b.last < oldest->last) oldest = &b;
-    }
-    *oldest = {};
-    oldest->bubble = bubble;
-    oldest->first = oldest->last = now;
-    return *oldest;
+    return g_cone_table.For(reinterpret_cast<uintptr_t>(bubble), now);
 }
 
 int MediCone(uint8_t *bubble, float off, float dist, float range, int angle, void *dcs, uint32_t index);
@@ -713,9 +676,12 @@ bool g_aim_gun = false;                   // OVERCHARGE aims with the gun hand (
 
 int __fastcall ConeFilter(uint8_t *bubble, const float *target, void *dcs, uint32_t index) {
     float radius = *(float *)(bubble + 0x38);
-    int angle = (int)((radius - floorf(radius)) * 100000.0f + 0.5f);
-    bool medigun = angle > 500 && angle <= 590;           // MEDIGUN's bubble (fix_medigun.CONE_TAG)
-    if (!medigun && (angle < 1 || angle > 180)) return 1; // not POWER BOOST's bubble
+    // nEVR port: the angle and the bands are the shared rules (pbr::ConeAngle, pbr::BubbleOf, #2339); a radius that is
+    // not finite names no bubble
+    const int angle = pbr::ConeAngle(radius);
+    const pbr::Bubble kind = pbr::BubbleOf(angle);
+    bool medigun = kind == pbr::Bubble::kMedigun;         // MEDIGUN's bubble (fix_medigun.CONE_TAG)
+    if (kind == pbr::Bubble::kNeither) return 1;          // not POWER BOOST's bubble
     uint8_t handle[64] = {};
     void *h = OwnerHandle(*(void **)bubble, handle, *(uint32_t *)(bubble + 8));
     uint8_t *owner = h ? OwnerObject(h) : nullptr;
@@ -737,7 +703,7 @@ int __fastcall ConeFilter(uint8_t *bubble, const float *target, void *dcs, uint3
     }
     float d[3] = { target[0] - pos[0], target[1] - pos[1], target[2] - pos[2] };
     float dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-    if (dist < 0.3f) return 0;                            // the owner: never self-linked
+    if (dist < pbr::kOwnerMinDist) return 0;              // the owner: never self-linked
     float off = AngleTo(q, axis, d, dist);
     if (medigun) {
         static ULONGLONG told;
@@ -757,29 +723,14 @@ int __fastcall ConeFilter(uint8_t *bubble, const float *target, void *dcs, uint3
                 a[0], a[1], a[2], a[3], a[4], a[5], hl[0], hl[1], hl[2]);
         }
     }
-    float range = floorf(radius);
+    float range = pbr::ConeRange(radius);
     if (medigun) return MediCone(bubble, off, dist, range, angle - 500, dcs, index);
     ULONGLONG now0 = GetTickCount64();
-    BubbleLinks &bl = BubbleFor(bubble, now0);
-    int picked = -1;
-    for (int i = 0; i < bl.count; ++i)
-        if (bl.linked[i].dcs == dcs && (bl.linked[i].index & 0xffff) == (index & 0xffff)) picked = i;
-    bool was = picked >= 0 && bl.linked[picked].inside;   // linked: the cone is a little wider to leave
-    bool ok = off <= (float)angle + (was ? CONE_SLACK_DEG : 0.0f) && dist <= range;
-    if (picked >= 0) {                                    // one of the bubble's targets: follows the cone
-        bl.linked[picked].inside = ok;
-    } else if (ok && bl.count < 8) {                     // a new teammate in the cone
-        picked = bl.count++;
-        bl.linked[picked] = { dcs, index, true, false, 0 };
-    } else {
-        ok = false;
-    }
-    bool send = false;
-    if (picked >= 0 && bl.linked[picked].sent != ok && now0 - bl.linked[picked].sent_at >= LINK_MIN_MS) {
-        bl.linked[picked].sent = ok;
-        bl.linked[picked].sent_at = now0;
-        send = true;
-    }
+    // nEVR port: the decision is the shared rule (#2339): a linked target leaves only 5 degrees past the angle, the
+    // range is the whole metres, 8 targets a bubble, a change sent at most every 250 ms (the latest state)
+    const pbr::ConeVerdict verdict = pbr::ConeDecide(g_cone_table, reinterpret_cast<uintptr_t>(bubble), reinterpret_cast<uintptr_t>(dcs),
+                                                     index, radius, angle, dist, off, now0);
+    const bool ok = verdict.ok, send = verdict.send;
 
     static ULONGLONG last;                                // diagnostics, twice a second
     ULONGLONG now = GetTickCount64();
@@ -1216,13 +1167,13 @@ int MediCone(uint8_t *bubble, float off, float dist, float range, int angle, voi
     ReleaseSRWLockShared(&g_medi_lock);
     if (key < 0 || !OwnerOn((uint16_t)key, now)) return 0;
     BubbleLinks &bl = BubbleFor(bubble, now);
-    bool mine = bl.count && bl.linked[0].dcs == dcs && (bl.linked[0].index & 0xffff) == (index & 0xffff);
+    bool mine = bl.count && bl.linked[0].dcs == reinterpret_cast<uintptr_t>(dcs) && (bl.linked[0].index & 0xffff) == (index & 0xffff);
     bool ok;
     if (mine) {                                            // the one it heals: kept a little past the cone
         ok = off <= angle + g_medi.slack && dist <= range;
         if (!ok) bl.count = 0;                             // gone: the next teammate in the cone can link
     } else if (!bl.count && off <= angle && dist <= range) {
-        bl.linked[0] = { dcs, index, true, false, 0 };
+        bl.linked[0] = { reinterpret_cast<uintptr_t>(dcs), index, true, false, 0 };   // nEVR port: the shared table's dcs is an address
         bl.count = 1;
         ok = true;
     } else {

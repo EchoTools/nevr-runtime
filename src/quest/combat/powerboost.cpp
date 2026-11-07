@@ -21,6 +21,7 @@
 #include "quest/combat/thread_word.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/patch/powerboost_rules.h"
 
 // The two words the entry reads, its continuation and the entry itself (powerboost_thunk.inc, callback_thunk.h rule 7). Global scope,
 // C names, hidden. The call-site word is stored (release) before the slot changes and never again while the entry is in; the next word is
@@ -37,7 +38,8 @@ namespace nevr_quest::combat::powerboost {
 
 namespace {
 
-using namespace pbcore;
+using namespace pbcore;                // the link line's filter (Quest only)
+using namespace ::nevr_powerboost;     // the decode, the cone and the link markers, shared with PC (runtime/patch/powerboost_rules.h, #2339)
 namespace pinned = sentinel::pinned;
 
 constexpr std::uintptr_t kDataAmount = 0x20;      // SR15NetDamageableHealNodeData: float amount, then u32 user at +0x24
@@ -367,7 +369,9 @@ const std::uint8_t* ConeAt(const PhTarget* target, const std::uint8_t* frame, st
   if (ok) radius = SafeRead<float>(radiusAt, &ok);
   if (!ok) return body;
   const int angle = ConeAngle(radius);
-  if (angle < 1 || angle > 180) return body;  // not POWER BOOST's bubble
+  // not POWER BOOST's bubble: neither (a radius that is not finite, Repair Matrix's whole one), or MEDIGUN's band, which is PC's (the Quest
+  // has no MEDIGUN and leaves such a bubble to the game's own radius check)
+  if (BubbleOf(angle) != Bubble::kPowerBoost) return body;
   const std::uintptr_t record = radiusAt - kRecRadius;
   const auto physics = SafeRead<std::uintptr_t>(record, &ok);
   const auto handle = SafeRead<std::uint32_t>(record + kRecHandle, &ok);
