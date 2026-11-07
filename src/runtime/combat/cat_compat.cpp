@@ -241,9 +241,18 @@ std::mutex g_iniLock;
 std::map<std::string, std::string> g_shipped;  // "section.key" -> his value
 std::map<std::string, bool> g_sourceLogged;    // "section.key" -> its source line was written
 
+IniSourceCounts g_counts;  // keys by source, each key counted once (logging.md Rule 11: combat.cpp logs them at Info)
+
 void LogSourceOnce(const std::string& name, const char* source, const char* value) {
   std::lock_guard<std::mutex> lock(g_iniLock);
   if (!g_sourceLogged.emplace(name, true).second) return;
+  if (source[0] == 'c' && source[1] == 'o' && source[2] == 'n') {
+    ++g_counts.config;
+  } else if (source[0] == 's') {
+    ++g_counts.shipped;
+  } else {
+    ++g_counts.code;
+  }
   Log(EchoVR::LogLevel::Debug, "[NEVR.COMBAT] setting %s=%s source=%s", name.c_str(), value != nullptr ? value : "(code)", source);
 }
 
@@ -277,6 +286,11 @@ int IniInt(const char* section, const char* key, int fallback) {
   char* end = nullptr;
   const long n = std::strtol(v, &end, 10);  // GetPrivateProfileInt reads the leading digits, as strtol does
   return end == v ? fallback : static_cast<int>(n);
+}
+
+IniSourceCounts IniSources() {
+  std::lock_guard<std::mutex> lock(g_iniLock);
+  return g_counts;
 }
 
 DWORD IniString(const char* section, const char* key, const char* fallback, char* out, DWORD size) {

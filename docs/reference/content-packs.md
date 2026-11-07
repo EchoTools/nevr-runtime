@@ -60,6 +60,15 @@ Format 1 (`src/runtime/content/content_json.h`):
   a stock package.
 - A script is `scripts/<16 lowercase hex>.dll`: the `CScriptResource` of that name, replaced or added.
 
+## Building a pack
+
+`tools/cmd/content-pack-build` builds a pack from an install's own stock files: its steps read stock resources and
+scripts and say what the pack replaces or adds, and it writes the folder above (`content.json` format 1, one manifest
+per changed set over the stock one, one new package per changed set, and `scripts/<16 hex>.dll`). The manifest and
+package code is `tools/internal/radpack`. A pack is built on the machine that has the stock files, never from game bytes
+in this repository (ADR 0028). The build's step list holds the EchoCombat pack's steps as they land (#600); with no step
+that changes anything it refuses.
+
 ## When a pack is refused
 
 The runtime checks the pack once, at the game's first command-line pass, after the early plugin pass and before the

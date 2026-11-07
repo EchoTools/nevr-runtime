@@ -143,6 +143,15 @@ void Install(std::uintptr_t gameBase, bool isServer) {
                                                : "slot_setter_filter_not_installed");
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
+    // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
+    // source lines are Debug (cat_compat.cpp).
+    if (overcharge) {
+      const cat::IniSourceCounts sources = cat::IniSources();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] PowerBoost settings read config_yaml=%d shipped=%d code=%d (a key config.yaml leaves out takes the "
+          "value his release ships; code is a key his PowerBoost.ini does not carry)",
+          sources.config, sources.shipped, sources.code);
+    }
     LogGroup(spec(Group::kOvercharge), at(Group::kOvercharge), overcharge,
              !cells ? cellsRefused : "heal_damage_hooks_not_installed");
     LogGroup(spec(Group::kMedigun), at(Group::kMedigun), overcharge && veil,
