@@ -14,7 +14,7 @@
 // dword (`mov edx, dword [rip]`, 8b 15, at 0x1F2DC), into a qword it compares in full (`cmp [rsp+0x28], rax` at 0x1F2FF).
 // The condition is wrapped to mark the thread, and the slot is replaced by one that calls the engine and, while the
 // condition runs and for that field only, records the qword type it read; after the condition returns, a recorded dot
-// or drone makes the result false. The accessor's other callers (20 more call sites in the script) are untouched. The
+// or drone makes the result false. The accessor's other callers (19 more: 20 `call [rip+0x2BD60]` in the script, the condition's among them) are untouched. The
 // symbols are compared whole: his patch compared their low 16 bits, which are distinct among the seven ordnance types.
 
 #include <cstdint>
