@@ -233,7 +233,7 @@ ModuleResult InstallAt(bool configOn, sentinel::ImageLookup lookup, const target
   WarnLegacyKillFile();
   if (!configOn) {
     LogInstall(sentinel::LogLevel::kInfo, "off", "off_config", "none", "combat.music is false: the game's music is untouched");
-    return {false, "off_config"};
+    return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   const auto refuse = [](const char* reason, const char* status) noexcept -> ModuleResult {
     LogInstall(sentinel::LogLevel::kError, "refused", reason, status, kRefusedMsg);

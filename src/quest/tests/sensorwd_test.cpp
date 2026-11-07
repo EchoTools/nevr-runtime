@@ -723,7 +723,7 @@ void ARefusedInstallChangesNothing() {
   {
     Begin();
     const auto r = sw::InstallAt(true, [](const char*, sentinel::ElfImage*) { return false; }, g_pins);
-    QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
+    QCHECK(!r.installed && !r.off && std::strcmp(r.status, "module_not_loaded") == 0);  // a refusal is a failure, never off
     End();
   }
   {
@@ -747,7 +747,7 @@ void TheSwitchAndTheLegacyKillFile() {
   Begin();
   Build();
   const auto off = sw::InstallAt(false, &Lookup, g_pins);
-  QCHECK(!off.installed && std::strcmp(off.status, "off_config") == 0 && AllStock() && tick::Count() == 0U);
+  QCHECK(!off.installed && off.off && std::strcmp(off.status, "off_config") == 0 && AllStock() && tick::Count() == 0U);  // off is its own answer
   const std::vector<Line> lines = Lines("combat_sensorwd_install");
   QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo && Has(lines[0].text, "\"state\":\"off\"") && Has(lines[0].text, "\"reason\":\"off_config\""));
   End();

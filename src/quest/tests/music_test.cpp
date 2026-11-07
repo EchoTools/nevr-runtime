@@ -510,7 +510,7 @@ void ARefusedInstallChangesNothing() {
     Begin();
     Build();
     const auto r = mu::InstallAt(true, [](const char*, sentinel::ElfImage*) { return false; }, g_pins);
-    QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
+    QCHECK(!r.installed && !r.off && std::strcmp(r.status, "module_not_loaded") == 0);  // a refusal is a failure, never off
     QCHECK(Slot() == &FakePost && tick::Count() == 0U);
     QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"module_not_loaded\"") && Lines("combat_music_install")[0].level == sentinel::LogLevel::kError);
     End();
@@ -568,7 +568,7 @@ void TheSwitchAndTheLegacyKillFile() {
   Begin();
   Build();
   const auto off = mu::InstallAt(false, &Lookup, g_pins);
-  QCHECK(!off.installed && std::strcmp(off.status, "off_config") == 0);
+  QCHECK(!off.installed && off.off && std::strcmp(off.status, "off_config") == 0);  // off is its own answer: not installed, not failed
   QCHECK(Slot() == &FakePost && tick::Count() == 0U);
   const std::vector<Line> lines = Lines("combat_music_install");
   QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo && Has(lines[0].text, "\"state\":\"off\"") && Has(lines[0].text, "\"reason\":\"off_config\""));

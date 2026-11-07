@@ -24,6 +24,8 @@ runm sd_target_event_wrong_expected $T "s/base + pins.eventFn);/base + pins.even
 runm sd_pins_ignored    $S "s/  if (FirstPinMismatch(reinterpret_cast<const unsigned char\*>(image.base)) != nullptr) return refuse(\"pin_mismatch\", \"none\", \"none\", \"none\");/  (void)FirstPinMismatch;/"
 # the install: all three or none
 runm sd_off_installs    $S "s/  if (!configOn) {/  if (!configOn \&\& pins.enabledSlot == 0) {/"
+runm sd_off_not_off     $S "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
+runm sd_refusal_is_off  $S "s/    return {false, reason};/    return {false, reason, true};/"
 runm sd_undo_event_after_enabled $S "s/^    Undo(2);\$/    (void)0;/"
 runm sd_undo_enabled_after_disabled $S "s/^    Undo(0);\$/    (void)0;/"
 runm sd_undo_after_full_tick $S "s/^      Undo(1);\$/      (void)0;/"

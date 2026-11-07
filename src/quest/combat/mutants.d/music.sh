@@ -25,7 +25,9 @@ runm mu_pins_ignored    $S "s/  if (FirstPinMismatch(reinterpret_cast<const unsi
 runm mu_pin_loop_early  $S "s/    if (found != pin.word) return \"post_sound_event_code\";/    if (found != pin.word \&\& \&pin != \&tgt::kWords[tgt::kWordCount - 1]) return \"post_sound_event_code\";/"
 # the install: the switch, the tick, the build
 runm mu_off_installs    $S "s/  if (!configOn) {/  if (!configOn \&\& pins.slotVaddr == 0) {/"
-runm mu_off_reason      $S "s/return {false, \"off_config\"};/return {false, \"off\"};/"
+runm mu_off_reason      $S "s/return {false, \"off_config\", true};/return {false, \"off\", true};/"
+runm mu_off_not_off     $S "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
+runm mu_refusal_is_off  $S "s/    return {false, reason};/    return {false, reason, true};/"
 runm mu_no_tick         $S "s/    if (!tick::Add(\&Tick)) return refuse(\"tick_table_full\", \"none\");/    g_tickRegistered.store(true);/"
 runm mu_no_build_check  $S "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return refuse(\"build_id_mismatch\", \"none\");//"
 runm mu_legacy_not_said $S "s/  if (!legacy::Present(\"music.off\")) return;/  return;/"

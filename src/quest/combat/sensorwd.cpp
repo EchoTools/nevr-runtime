@@ -466,7 +466,7 @@ ModuleResult InstallAt(bool configOn, sentinel::ImageLookup lookup, const target
   if (!configOn) {
     LogInstall(sentinel::LogLevel::kInfo, "off", "off_config", "none", "none", "none",
                "combat.sensorwd is false: the game's scanner sphere is untouched");
-    return {false, "off_config"};
+    return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   const auto refuse = [](const char* reason, const char* enabled, const char* disabled, const char* event) noexcept -> ModuleResult {
     LogInstall(sentinel::LogLevel::kError, "refused", reason, enabled, disabled, event, kRefusedMsg);

@@ -697,23 +697,30 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   nevr_quest::CombatConfig musicOff;
   musicOff.music = {false, nevr_quest::Source::kFile};
   combat::SetConfig(musicOff);
-  combat::InstallNormal();
+  const combat::Outcome mOff = combat::InstallNormal();
+  QCHECK(mOff.modules == 14 && mOff.off == 1 && mOff.failed == 10 && mOff.installed == 3);  // off by its key: counted apart, not failed
   QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=module_not_loaded music=off_config"));
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":1"));
   QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig sensorOff;
   sensorOff.sensorwd = {false, nevr_quest::Source::kFile};
   combat::SetConfig(sensorOff);
-  combat::InstallNormal();
+  const combat::Outcome sOff = combat::InstallNormal();
+  QCHECK(sOff.modules == 14 && sOff.off == 1 && sOff.failed == 10 && sOff.installed == 3);
   QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=off_config music=module_not_loaded"));
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":1"));
   QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"off_config\""));
   Done();
-  // A plain release installs neither and writes neither line.
-  Process(bv::Variant::kNone);
-  combat::InstallNormal();
-  QCHECK(Lines("combat_music_install").empty() && Lines("combat_sensorwd_install").empty());
-  Done();
+  // A plain release and the arena APK (#2300, combat does not run there) install neither and write neither line, on by default or not.
+  for (const bv::Variant variant : {bv::Variant::kNone, bv::Variant::kArena}) {
+    Process(variant);
+    combat::SetConfig(nevr_quest::CombatConfig{});
+    QCHECK(!combat::InstallNormal().ran);
+    QCHECK(Lines("combat_music_install").empty() && Lines("combat_sensorwd_install").empty());
+    Done();
+  }
 }
 
 }  // namespace
