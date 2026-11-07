@@ -8,10 +8,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdarg>
+#include <cstdio>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "core/logging.h"
 #include "runtime/content/content_json.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/content/pack_rules.h"
@@ -396,6 +400,61 @@ TEST_F(ContentPack, AStockMarkerBesideAManifestIsNoRefusalOnPc) {
   const Decision d = Decide(In());
   EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason << " " << d.detail;
   EXPECT_EQ(d.scripts, 1u);
+}
+
+// #2312: the Windows file access the shared core reads through. A file beside the pack's folder is no pack, and a missing pack
+// file's refusal carries the system's error (2: ERROR_FILE_NOT_FOUND).
+TEST_F(ContentPack, AFileBesideThePackFolderIsNoPack) {
+  WriteFileBytes(content_ + L"\\readme.txt", "not a pack");
+  MakePack("testpack");
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason << " " << d.detail;
+  EXPECT_EQ(d.id, "testpack");
+}
+
+TEST_F(ContentPack, AMissingPackFileNamesItsSystemError) {
+  const std::wstring dir = MakePack("testpack");
+  ASSERT_TRUE(DeleteFileW((dir + L"\\scripts\\190ed14fe6c74dd3.dll").c_str()));
+  const Decision d = Decide(In());
+  EXPECT_EQ(d.reason, "file_missing");
+  EXPECT_EQ(d.detail, "scripts/190ed14fe6c74dd3.dll error=2");
+}
+
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_logged;
+
+VOID RecordLog(EchoVR::LogLevel level, UINT64, const CHAR* format, va_list args) {
+  char buf[4096];
+  vsnprintf(buf, sizeof(buf), format, args);
+  g_logged.emplace_back(level, buf);
+}
+
+// #2312: each served file is logged through Log() at the shared line's level: the first serve Info, a repeat Debug, an open the
+// game failed Warning (content_core.h, FormatServed).
+TEST_F(ContentPack, AServedFileIsLoggedAtItsLevel) {
+  MakePack("testpack");
+  ASSERT_EQ(Decide(In()).outcome, Outcome::kServed);
+  EchoVR::WriteLogFunc* const saved = EchoVR::WriteLog;
+  EchoVR::WriteLog = &RecordLog;
+  g_logged.clear();
+  const nevr_content::CFileOpenFn opened = [](const char*, std::uint32_t, HANDLE* out) -> std::uint64_t {
+    *out = nullptr;
+    return 0;
+  };
+  const nevr_content::CFileOpenFn failed = [](const char*, std::uint32_t, HANDLE* out) -> std::uint64_t {
+    *out = nullptr;
+    return 2;
+  };
+  HANDLE h = nullptr;
+  const std::string manifest = GamePath(data_ + L"\\manifests\\48037dc70b0ecab2");
+  nevr_content::OpenThrough(opened, manifest.c_str(), 1, &h);
+  nevr_content::OpenThrough(opened, manifest.c_str(), 1, &h);
+  nevr_content::OpenThrough(failed, manifest.c_str(), 1, &h);
+  EchoVR::WriteLog = saved;
+  ASSERT_EQ(g_logged.size(), 3u);
+  EXPECT_EQ(g_logged[0].first, EchoVR::LogLevel::Info);
+  EXPECT_EQ(g_logged[0].second.rfind("[NEVR.CONTENT] manifest served id=testpack ", 0), 0u) << g_logged[0].second;
+  EXPECT_EQ(g_logged[1].first, EchoVR::LogLevel::Debug);
+  EXPECT_EQ(g_logged[2].first, EchoVR::LogLevel::Warning);
 }
 
 // #2312: the [NEVR.CONTENT] lines are one text on both builds (content_line_golden.h; the Quest compares the same bytes in
