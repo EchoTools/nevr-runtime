@@ -122,10 +122,11 @@ Two parts act in every level, on purpose: the WriteLogV handler stores a selecte
 menu must reach the combat lobby) and writes its capped `combat_ec_sel` line, and the gear gate takes its mutex around ReloadEquipmentConfig /
 UnloadEquipmentConfig (an event, not a frame) so a rebuild that began before the scope changed is never read half-built.
 
-The q15t plugin acted in every level: in an arena lobby it picked the busiest sendto destination and sent it the hello every 2 s. That is gone.
-A difference a player can see: the plugin, like kotorvr's q15t-upstream (which pauses only while an Echo Arena level is loaded), also ran the EC client in the
-lobbies arena players use, and there `hide` cut the tac-mod list (smoke, buff and point) on a server without EC. Here those lobbies are out of scope, so the
-list is not cut in them; it is cut in the combat lobby and on a combat map.
+Outside a combat map and the combat lobby, ec sends no datagram and takes no lock on the socket calls. It also keeps its own scope narrower than
+kotorvr's q15t-upstream, which pauses its EC client only while an Echo Arena level is loaded. In the lobbies arena players use (`mpl_lobby_b`, `_b2`,
+`_b2_lowspec`, `_b_arena`, `_b_social`) the EC client does not run, so `hide` does not cut the tac-mod list (smoke, buff and point) there, as it does in the
+combat lobby and on a combat map (on a server without EC). Which lobby a Quest combat player chooses a loadout in is not established; the headset row below
+has a line for it.
 `combat_scope` (#2246) will replace the cache; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
 the PR body (ADR 0038).
 
@@ -164,10 +165,15 @@ match with EC on the server, `combat_ec_server` and `combat_ec_answer` `seen` (`
 script's `RE33_EC_BASE_MISSING`), no `combat_ec_answer` `seen` on an EC server, or any EC datagram (`combat_ec_used`, a hello) while
 `in_scope` is 0.
 
+Lobby row: in a shared lobby (`mpl_lobby_b`, `_b2`, `_b_social`, `_b_arena`) `combat_ec_scope` `in_scope:0`, no `combat_ec_used` and no hello; and, on a
+combat player's return to the lobby they choose a loadout in, whether the tac-mod list is whole there (it is expected whole in a shared lobby and cut in
+`mpl_lobby_b_combat` on a server without EC). **Falsified by** a datagram with `in_scope:0`, or a tac-mod list cut in a shared lobby. If the combat player's
+loadout lobby is a shared one, the scope is narrower than upstream where it shows; widen it only on that evidence.
+
 The page's visibility to the script libraries is not shown by `state`: `PublishEcPage` asks from inside the sentinel, whose own local group may find the
 export whether or not the `RTLD_GLOBAL` promotion took. The cheap on-device probe: from the publish step call bionic's `__loader_dlsym(RTLD_DEFAULT,
 "re33_ec_page", <an address inside a loaded script library>)` (the caller address a script's own `dlsym` passes) and log the result next to `state`; the
-row is met when it returns the page. Not built yet.
+row is met when it returns the page. Not built yet (#PAGE-PROBE-ISSUE).
 
 ## Not built here
 
