@@ -1296,7 +1296,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"bvh", &nevr_quest::CombatConfig::bvh, true},
                       {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
                       {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
-                      {"wallfire", &nevr_quest::CombatConfig::wallfire, true}};
+                      {"wallfire", &nevr_quest::CombatConfig::wallfire, true},
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as the q15t plugin's Q15T_MUSIC and Q15T_SENSORWD were in v6.16.5 (music is also on by default upstream, afk_music.cpp:1).
+                      {"music", &nevr_quest::CombatConfig::music, true},
+                      {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

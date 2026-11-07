@@ -68,6 +68,10 @@ bool IsEchoArenaLevel(std::uint64_t level) noexcept;
 // What the loaded levels of `game` decide; `level` gets the deciding level's CSymbol64 (0 when none).
 Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level, bool inFlight = false) noexcept;
 
+// How many times Scan has run in this process (every Classify and CombatMapLoaded is one scan), so a host test can show that a path asks the level at most as
+// often as it should ("arena pays nothing, by count", docs/adr/0046). One relaxed add per scan.
+std::uint64_t ScanCalls() noexcept;
+
 // Test seam: called once between the two reads of Scan(inFlight) (after the init-fiber table, before the loaded tables), so a test can make a gamespace
 // finish between them. nullptr (production) calls nothing.
 void SetScanSeamForTest(void (*seam)()) noexcept;
