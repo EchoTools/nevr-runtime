@@ -16,7 +16,10 @@ checks read the sources the page relies on:
 
 #2312, the Quest twin: the page's "On Quest" table names the hook's function, slot, stub, call sites and resource-manager
 pointer that src/quest/sentinel/pinned_targets.h pins, the folder content_folder.h reads, the step order data_wiring.cpp runs,
-and the Quest's refusal tokens; and the Quest compiles the runtime's shared decision instead of a copy of it (#1598).
+and the Quest's refusal tokens; and the Quest compiles the runtime's shared decision instead of a copy of it (#1598). The
+page says which libr15 serves a folder pack (the patched one: neither the hook's slot nor the permission-wait hook that
+reaches the data step is a service-side target), keys no other spelling of the media root, and says the rename safety is
+shown on the host only; ADR 0029 carries the #2312 note as an amendment.
 """
 
 import pathlib
@@ -287,6 +290,42 @@ class TheQuestSharesTheDecision(unittest.TestCase):
         table = doc[doc.index("| `reason` |"):doc.index("Each file that passes")]
         for token in ("scripts_unsupported", "bundled_pack_placed"):
             self.assertIn(f"| `{token}` | Quest only:", table)
+
+
+
+ADR_0029 = "docs/adr/0029-quest-bundled-content-pack.md"
+
+
+class WhichQuestBuildServesAPack(unittest.TestCase):
+    def test_the_slot_and_the_data_steps_hook_are_not_service_side_and_the_page_says_so(self):
+        pinned = code(read(PINNED))
+        for target in ("LibR15CSysFileOpen", "LibR15RequestPermissions", "LibR15CheckPermission"):
+            body = re.search(target + r"\(\)\s*\{(.*?)\n\}", pinned, re.S)
+            self.assertIsNotNone(body, target)
+            self.assertNotIn("ServiceSide()", body.group(1),
+                             f"{target} is service-side now: the page's 'Which builds' row and content_folder.h must change")
+        self.assertIn("sentinel::pinned::LibR15RequestPermissions(), sentinel::pinned::LibR15CheckPermission()",
+                      code(read("src/quest/sentinel/permission_wait_hook.cpp")))
+        row = re.search(r"^\| Which builds \|.*$", quest_section(), re.M)
+        self.assertIsNotNone(row, "the On Quest table has no 'Which builds' row")
+        self.assertIn("the patched libr15 only", row.group(0))
+        self.assertIn("no folder pack is served there and no `[NEVR.CONTENT]` line is written", row.group(0))
+
+    def test_no_other_spelling_of_the_media_root_is_keyed(self):
+        self.assertNotIn("com.readyatdawn.afk", read(DOC))
+        folder = code(read(QUEST_FOLDER))
+        self.assertNotIn("path_rewrite", folder)
+        self.assertRegex(folder, r"std::string PosixPackFiles::Key\(const std::string& path\) \{ return path; \}")
+
+    def test_the_rename_safety_is_said_to_be_shown_on_the_host_only(self):
+        self.assertIn("(shown on the host's file systems; not yet on the headset's shared storage)", quest_section())
+
+    def test_adr_0029_carries_the_folder_pack_as_an_amendment(self):
+        adr = read(ADR_0029)
+        self.assertIn("\n## Amendment (#2312): a pack installed as a folder\n", adr)
+        amendment = adr[adr.index("## Amendment (#2312)"):]
+        self.assertIn("runtime step (section 3)", amendment)
+        self.assertNotIn("item 5", amendment)
 
 
 if __name__ == "__main__":
