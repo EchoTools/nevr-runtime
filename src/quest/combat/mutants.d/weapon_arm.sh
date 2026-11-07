@@ -3,8 +3,7 @@
 runm wa_no_hold src/quest/combat/weapon_arm.cpp 's/if (++g_hold < kHold) return;/++g_hold;/'
 runm wa_hold_2 src/quest/combat/weapon_arm.cpp 's/kHold = 3,/kHold = 2,/'
 runm wa_no_marker_check src/quest/combat/weapon_arm.cpp 's/if (access(g_marker, F_OK) == 0) {/if (false) {/'
-runm wa_ignore_right src/quest/combat/weapon_arm.cpp 's/if (arm == 1 || profArm == 1) {/if (false) {/'
-runm wa_ignore_profile src/quest/combat/weapon_arm.cpp 's/if (arm == 1 || profArm == 1) {/if (arm == 1) {/'
+runm wa_ignore_right src/quest/combat/weapon_arm.cpp 's/  if (arm == 1) {/  if (false) {/'
 runm wa_queue_arg src/quest/combat/weapon_arm.cpp 's/\*reinterpret_cast<std::uint64_t\*>(q + 0x20) = 1;/*reinterpret_cast<std::uint64_t*>(q + 0x20) = 0;/'
 runm wa_queue_method src/quest/combat/weapon_arm.cpp 's/\*reinterpret_cast<void\*\*>(q + 0x08) = reinterpret_cast<void\*>(g_f.setArm);/\*reinterpret_cast<void**>(q + 0x08) = nullptr;/'
 runm wa_queue_handle src/quest/combat/weapon_arm.cpp 's/\*reinterpret_cast<std::uint32_t\*>(q + 0x18) = static_cast<std::uint32_t>(ph);/\*reinterpret_cast<std::uint32_t*>(q + 0x18) = 0;/'
@@ -26,7 +25,6 @@ runm wa_off_ignored src/quest/combat/weapon_arm.cpp 's/  if (!on) {/  if (!on \&
 runm wa_off_not_off src/quest/combat/weapon_arm.cpp 's/return {false, "off_config", true};/return {false, "off_config", false};/'
 runm wa_legacy_unwarned src/quest/combat/weapon_arm.cpp 's/if (!legacy::Present("t26arm.off")) return;/return;/'
 runm wa_no_build_id src/quest/combat/weapon_arm.cpp 's/if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");//'
-runm wa_no_word_check src/quest/combat/weapon_arm.cpp 's/  if (mismatch != nullptr) {/  if (false) {/'
 runm wa_export_elsewhere_ok src/quest/combat/weapon_arm.cpp 's/if (!Resolve(image.base, symbols, \&fns, \&why)) return/if (false \&\& !Resolve(image.base, symbols, \&fns, \&why)) return/'
 runm wa_name_mismatch_ok src/quest/combat/weapon_arm.cpp 's/if (p != nullptr \&\& reinterpret_cast<std::uintptr_t>(p) != base + pin.vaddr) {/if (false) {/'
 runm wa_tick_unregistered src/quest/combat/weapon_arm.cpp 's/if (!tick::Add(\&Tick)) return Refused("tick_table_full", "");/tick::Add(\&Tick);/'
@@ -36,10 +34,6 @@ runm wa_addr_getarm src/quest/combat/weapon_arm_targets.h 's/0x217d100ULL/0x217d
 runm wa_addr_queue src/quest/combat/weapon_arm_targets.h 's/0x24acce4ULL/0x24acce8ULL/'
 runm wa_vptr src/quest/combat/weapon_arm_targets.h 's/kEquipCsVtableVaddr = 0x36981f0ULL/kEquipCsVtableVaddr = 0x36981f8ULL/'
 runm wa_key src/quest/combat/weapon_arm_targets.h 's/kEquipCsKey = 0xca14940c84b03f6eULL/kEquipCsKey = 0xca14940c84b03f6fULL/'
-runm wa_gs_direct_off src/quest/combat/weapon_arm_targets.h 's/kGamespaceDirect = 0x368/kGamespaceDirect = 0x370/'
-runm wa_gs_queue_off src/quest/combat/weapon_arm_targets.h 's/kGamespaceQueue = 0x170/kGamespaceQueue = 0x178/'
-runm wa_cs_slot_off src/quest/combat/weapon_arm_targets.h 's/kCsSlot = 0x130/kCsSlot = 0x132/'
-runm wa_cs_gen_off src/quest/combat/weapon_arm_targets.h 's/kCsGenerations = 0xc8/kCsGenerations = 0xd0/'
 # By count (the arena test counts SafeRead calls and level scans): a read, or a scan, before the scope test, and a scan before the marker is looked at.
 W=src/quest/combat/weapon_arm.cpp
 runm wa_read_before_scope $W 's/^  if (!InScope(game)) {$/  { gamespace::CompSys pre[1]; (void)gamespace::FindComponentSystems(game, wt::kEquipCsKey, g_base + wt::kEquipCsVptrVaddr, pre, 1); }\n  if (!InScope(game)) {/'
@@ -51,3 +45,7 @@ runm wa_saved_hand_ignored $W 's/  if (profArm != -1) {/  if (false) {/'
 runm wa_saved_one_is_set $W 's/  if (profArm != -1) {/  if (profArm == 0) {/'
 runm wa_pins_unchecked $W 's/const pinned::Pins lists\[\] = {wt::kPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {netgame::kPins, gamespace::targets::kPins};/'
 runm wa_gamespace_pins_unchecked $W 's/const pinned::Pins lists\[\] = {wt::kPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {wt::kPins, netgame::kPins};/'
+
+runm wa_no_pin_check src/quest/combat/weapon_arm.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
+# Not listed: the offsets of weapon_arm_targets.h (the gamespace link, the direct flag, the queue, the slot, the generation table) are tied to their pinned words by
+# static_assert, so a bent constant does not compile (the compiler is the check; mutants.sh counts that as no kill). got_pinned_test checks the words against the store libr15.

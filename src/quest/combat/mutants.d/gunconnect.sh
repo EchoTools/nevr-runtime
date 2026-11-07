@@ -43,8 +43,6 @@ runm gc_off_ignored src/quest/combat/gunconnect.cpp 's/  if (!on) {/  if (!on \&
 runm gc_off_not_off src/quest/combat/gunconnect.cpp 's/return {false, "off_config", true};/return {false, "off_config", false};/'
 runm gc_legacy_unwarned src/quest/combat/gunconnect.cpp 's/if (!legacy::Present("gunconnect.off")) return;/return;/'
 runm gc_no_build_id src/quest/combat/gunconnect.cpp 's/if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");//'
-runm gc_no_word_check src/quest/combat/gunconnect.cpp 's/  if (mismatch != nullptr) {/  if (false) {/'
-runm gc_net_words_unchecked src/quest/combat/gunconnect.cpp 's/if (mismatch == nullptr) mismatch = pinned::FirstMismatch(image.base, netgame::kWords.*$//'
 runm gc_name_mismatch_ok src/quest/combat/gunconnect.cpp 's/if (p != nullptr \&\& reinterpret_cast<std::uintptr_t>(p) != want) {/if (false) {/'
 runm gc_export_elsewhere_ok src/quest/combat/gunconnect.cpp 's/if (!Resolve(image.base, symbols, \&fns, \&why)) return/if (false \&\& !Resolve(image.base, symbols, \&fns, \&why)) return/'
 runm gc_tick_unregistered src/quest/combat/gunconnect.cpp 's/if (!tick::Add(\&Tick)) return Refused("tick_table_full", "");/tick::Add(\&Tick);/'
@@ -83,3 +81,5 @@ runm gc_scan_before_scope $G 's/^  if (!InScope(game)) {$/  (void)level::Scan(ga
 runm gc_pins_connect_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, netgame::kPins, gamespace::targets::kPins};/'
 runm gc_pins_gamespace_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, gt::kConnectPins, netgame::kPins};/'
 runm gc_ring_u32 $G 's/c.ring = SafeRead<std::uint64_t>(cs + gt::kConnectRing, \&ok);/c.ring = SafeRead<std::uint32_t>(cs + gt::kConnectRing, \&ok);/'
+
+runm gc_no_pin_check src/quest/combat/gunconnect.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'

@@ -9,7 +9,7 @@ runm ai_no_called_count src/quest/combat/aibots.cpp 's/^  g_calledCount = count;
 runm ai_no_backpointer src/quest/combat/aibots.cpp 's/inGame = back == game \&\& state == at::kInGame;/inGame = (back == game || back != game) \&\& state == at::kInGame;/'
 runm ai_no_state src/quest/combat/aibots.cpp 's/inGame = back == game \&\& state == at::kInGame;/inGame = back == game \&\& (state == at::kInGame || state != at::kInGame);/'
 runm ai_null_net_in_game src/quest/combat/aibots.cpp 's/  if (net != 0) {/  if (true) {/'
-runm ai_no_combat_flag src/quest/combat/aibots.cpp 's/combat == 0 ||/(combat | 1) == 0 ||/'
+runm ai_no_combat_flag src/quest/combat/aibots.cpp 's/if (!ok || combat == 0) return;/if (!ok || (combat | 1) == 0) return;/'
 runm ai_off_ignored src/quest/combat/aibots.cpp 's/g_scenario < 0) return;/g_scenario < -5) return;/'
 runm ai_no_rearm_flag src/quest/combat/aibots.cpp 's/^    g_called = false;$//'
 runm ai_no_rearm_count src/quest/combat/aibots.cpp 's/^    g_lastCount = -1;$//'
@@ -54,8 +54,6 @@ runm ai_no_word_check src/quest/combat/aibots.cpp 's/first != at::kEnableFirstWo
 runm ai_legacy_in_dev src/quest/combat/aibots.cpp 's/  if (devBuild || !legacy::Present("aibots.req")) return;/  if ((devBuild \&\& false) || !legacy::Present("aibots.req")) return;/'
 runm ai_legacy_unwarned src/quest/combat/aibots.cpp 's/  if (devBuild || !legacy::Present("aibots.req")) return;/  if (devBuild || !legacy::Present("aibots.req") || true) return;/'
 runm ai_no_build_id src/quest/combat/aibots.cpp 's/if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");//'
-runm ai_no_word_table src/quest/combat/aibots.cpp 's/  if (mismatch != nullptr) {/  if (false) {/'
-runm ai_net_words_unchecked src/quest/combat/aibots.cpp 's/if (mismatch == nullptr) mismatch = pinned::FirstMismatch(image.base, netgame::kWords.*$//'
 runm ai_export_elsewhere_ok src/quest/combat/aibots.cpp 's/if (!Resolve(image.base, symbols, \&fns, \&why)) return/if (false \&\& !Resolve(image.base, symbols, \&fns, \&why)) return/'
 runm ai_tick_unregistered src/quest/combat/aibots.cpp 's/if (!tick::Add(\&Tick)) return Refused("tick_table_full", "");/tick::Add(\&Tick);/'
 runm ai_quiet_refusal src/quest/combat/aibots.cpp 's/sentinel::LogLevel::kError, "combat_aibots_install"/sentinel::LogLevel::kInfo, "combat_aibots_install"/'
@@ -71,3 +69,5 @@ runm ai_extra_read_every_look $A 's/^void Look(std::uintptr_t game, double now) 
 # An arena match writes no idle line, however long it lasts.
 runm ai_arena_idle $A 's/  if (!ok || combat == 0) return;/  if (!ok) return;/'
 runm ai_pins_unchecked $A 's/const pinned::Pins lists\[\] = {at::kPins, netgame::kPins};/const pinned::Pins lists[] = {netgame::kPins};/'
+
+runm ai_no_pin_check src/quest/combat/aibots.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
