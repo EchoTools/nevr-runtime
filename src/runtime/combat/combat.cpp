@@ -17,6 +17,7 @@
 #include "runtime/combat/combat_settings.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/script_guard.h"
+#include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
@@ -146,6 +147,10 @@ void Install(std::uintptr_t gameBase, bool isServer) {
              : !veil              ? "combat_net_not_started"
              : !veilnet::EventDispatchHooked() ? "event_dispatch_not_hooked"
                                                : "slot_setter_filter_not_installed");
+
+    // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
+    // game-mode script, installed when it loads (team_ready.h). It needs nothing of VeilNet's.
+    if (at(Group::kMatchControl).on) team_ready::Register();
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
     // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
