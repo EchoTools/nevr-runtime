@@ -1884,6 +1884,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
 
+    # test_dronemuzzle_rules.cpp (#2337, header-only patch/dronemuzzle_rules.h; the Quest host test compiles the same header).
+    add_executable(test_dronemuzzle_rules tests/test_dronemuzzle_rules.cpp)
+    set_source_files_properties(tests/test_dronemuzzle_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_dronemuzzle_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dronemuzzle_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_dronemuzzle_rules DISCOVERY_MODE PRE_TEST)
+
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
     set_source_files_properties(tests/test_splash_skip.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

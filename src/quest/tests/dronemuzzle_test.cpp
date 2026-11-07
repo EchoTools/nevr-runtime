@@ -27,11 +27,11 @@
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronemuzzle.h"
-#include "quest/combat/dronemuzzle_core.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "runtime/patch/dronemuzzle_rules.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
 namespace {
@@ -48,6 +48,7 @@ std::uint64_t g_scanBase = 0;
 }  // namespace
 
 using namespace nevr_quest::combat::dronemuzzle;
+namespace dm = nevr_dronemuzzle;  // the shared muzzle rule (#2337); the PC GTest is runtime/tests/test_dronemuzzle_rules.cpp
 namespace dk = nevr_quest::combat::dronekill;
 using sentinel::GotStatus;
 
