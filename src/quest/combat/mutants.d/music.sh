@@ -31,8 +31,8 @@ runm mu_no_build_check  $S "s/  if (std::strcmp(id, sentinel::pinned::LibR15Patc
 runm mu_legacy_not_said $S "s/  if (!legacy::Present(\"music.off\")) return;/  return;/"
 # the scope: where a Play acts
 runm mu_play_unscoped   $S "s/    inCombatMap = InCombatMapNow();/    inCombatMap = InCombatMapNow() || true;/"
-runm mu_scope_lobby     $S "s/  return level::Classify(game, \/\*lobby=\*\/false, \&levelId) == level::Kind::kCombatOrLobby;/  return level::Classify(game, \/*lobby=*\/true, \&levelId) == level::Kind::kCombatOrLobby;/"
-runm mu_scope_arena_wins $S "s/  return level::Classify(game, \/\*lobby=\*\/false, \&levelId) == level::Kind::kCombatOrLobby;/  return level::Classify(game, \/*lobby=*\/false, \&levelId) != level::Kind::kNone;/"
+runm mu_scope_lobby     $S "s/  return level::Classify(game, \/\*lobby=\*\/false, \&levelId, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby;/  return level::Classify(game, \/*lobby=*\/true, \&levelId, \/*inFlight=*\/true) == level::Kind::kCombatOrLobby;/"
+runm mu_scope_arena_wins $S "s/  return level::Classify(game, \/\*lobby=\*\/false, \&levelId, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby;/  return level::Classify(game, \/*lobby=*\/false, \&levelId, \/*inFlight=*\/true) != level::Kind::kNone;/"
 runm mu_unknown_game_acts $S "s/  if (game == 0) return false;  \/\/ no frame has run yet: the level is unknown, so the Play goes through untouched/  if (game == 0) return true;/"
 runm mu_game_not_published $S "s/  if (g_game.load(std::memory_order_relaxed) != game) g_game.store(game, std::memory_order_release);//"
 # the Stops before the Play
