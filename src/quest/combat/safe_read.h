@@ -13,15 +13,15 @@
 
 namespace nevr_quest::combat {
 
-// How many reads have been asked of SafeRead in this process, so a host test can show that a path reads nothing ("arena pays nothing, by count", docs/adr/0046).
-// One relaxed add per read, next to a system call.
-inline std::atomic<std::uint64_t> g_safeReadCalls{0};
-inline std::uint64_t SafeReadCalls() noexcept { return g_safeReadCalls.load(std::memory_order_relaxed); }
+// Test seam: when a counter is set, every read adds one to it, so a test can assert that a path made none (an arena path pays nothing). Unset in production:
+// the cost of a read is one relaxed load of a null pointer.
+inline std::atomic<std::atomic<std::uint64_t>*> g_readCounter{nullptr};
+inline void SetReadCounterForTest(std::atomic<std::uint64_t>* counter) noexcept { g_readCounter.store(counter, std::memory_order_relaxed); }
 
 // Copies `length` bytes at `address` into `out`. False when any byte could not be read (nothing is promised about `out` then), for a
 // zero or implausible address, and for a range that wraps.
 inline bool SafeRead(std::uintptr_t address, void* out, std::size_t length) noexcept {
-  g_safeReadCalls.fetch_add(1, std::memory_order_relaxed);
+  if (std::atomic<std::uint64_t>* const counter = g_readCounter.load(std::memory_order_relaxed)) counter->fetch_add(1, std::memory_order_relaxed);
   if (length == 0) return true;
   if (address < 0x10000 || address > 0x0000ffffffffffffULL - length) return false;
   iovec local{out, length};

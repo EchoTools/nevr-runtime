@@ -39,6 +39,10 @@
 
 namespace {
 
+// Every SafeRead of the process counts here (safe_read.h's test seam, set first thing in main), so a test can show a path read nothing.
+std::atomic<std::uint64_t> g_safeReads{0};
+std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
+
 namespace sw = nevr_quest::combat::sensorwd;
 namespace tgt = nevr_quest::combat::sensorwd::targets;
 namespace tick = nevr_quest::combat::tick;
@@ -604,11 +608,11 @@ void OutsideACombatMapEveryHandlerIsAPassThrough() {
     const std::uint64_t h = Make(0, true);
     std::uint64_t reads = 0, scans = 0;  // what the three handlers asked of the game and of the level, over the whole stream (a frame's own look is not counted)
     for (int i = 0; i < 20; ++i) {
-      const std::uint64_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
+      const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
       Ping(0x11, 0x22);
       EnabledWord()(Cs(0), h);
       DisabledWord()(Cs(0), h);
-      reads += nevr_quest::combat::SafeReadCalls() - reads0;
+      reads += SafeReadCalls() - reads0;
       scans += nevr_quest::combat::level::ScanCalls() - scans0;
       g_nowMs += 700;
       Frame();
@@ -632,9 +636,9 @@ void InACombatMapTheSphereCheckReads() {
   QCHECK(InstallOn().installed);
   Combat();
   const std::uint64_t h = Make(0, true);
-  const std::uint64_t reads0 = nevr_quest::combat::SafeReadCalls();
+  const std::uint64_t reads0 = SafeReadCalls();
   EnabledWord()(Cs(0), h);
-  QCHECK(nevr_quest::combat::SafeReadCalls() - reads0 >= 5);
+  QCHECK(SafeReadCalls() - reads0 >= 5);
   End();
 }
 
@@ -881,6 +885,7 @@ void TheCostOnAnArenaPath() {
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   TheConstantsArePinned();
   TheInstallTakesTheThreeWordsAndWritesOneLine();
   EveryHandlerPassesEveryRegisterAndTheResultOn();

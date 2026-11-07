@@ -16,6 +16,7 @@
 
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -41,6 +42,11 @@ namespace mu = nevr_quest::combat::music;
 namespace tgt = nevr_quest::combat::music::targets;
 namespace tick = nevr_quest::combat::tick;
 namespace pinned = sentinel::pinned;
+
+// Every SafeRead of the process counts here (safe_read.h's test seam, set first thing in main), so a test can show a path read nothing.
+std::atomic<std::uint64_t> g_safeReads{0};
+std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
+
 using combat_test::Image;
 using EchoVR::CSymbol64Hash;
 
@@ -675,7 +681,7 @@ void ArenaPaysNothingByCount() {
   LoadLevels({"mpl_arena_a"});
   Frame();
   sentinel::SetLogSink(nullptr);
-  const auto counts = [] { return std::make_pair(nevr_quest::combat::SafeReadCalls(), nevr_quest::combat::level::ScanCalls()); };
+  const auto counts = [] { return std::make_pair(SafeReadCalls(), nevr_quest::combat::level::ScanCalls()); };
   const auto before = counts();
   for (std::uint32_t i = 0; i < 2000; ++i) Post(0x12345678U + i * 7919U, i);  // none of them is in the bank
   const auto afterOthers = counts();
@@ -784,6 +790,7 @@ void TheCostOfAPostOutsideTheBank() {
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   TheBankIsTwentyFourIdsOfThreeKinds();
   ThePinsAreTheReadelfAndDisassemblyPins();
   TheInstallTakesTheSlotAndWritesOneLine();

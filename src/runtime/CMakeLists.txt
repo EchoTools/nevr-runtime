@@ -83,8 +83,13 @@ set(PATCHES_SOURCES
     "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    # #600: hooks into the game's script DLLs, installed as each loads (runtime/hook/script_hooks.h).
+    "hook/script_hooks.cpp"
+    "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
+    "combat/script_guard.cpp"
+    "combat/team_ready.cpp"
     # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
     "content/content_json.cpp"
     "content/content_pack.cpp"
@@ -1149,6 +1154,34 @@ if(BUILD_TESTING)
     target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
 
+    # #600: the script guards (runtime/combat/script_guard.h) through the script hook table, on a fake heal script.
+    add_executable(test_script_guard tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_guard PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_guard PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_guard DISCOVERY_MODE PRE_TEST)
+    # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
+    add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_team_ready PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_team_ready PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_team_ready PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_team_ready DISCOVERY_MODE PRE_TEST)
+
+    # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
+    add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_hooks PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_hooks PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_hooks PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_hooks DISCOVERY_MODE PRE_TEST)
+
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
       patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp)
@@ -1889,6 +1922,21 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
+
+    # #2289: the combat module's match type, from the stored session game type (runtime/combat/match_type.h). Links the real store.
+    add_executable(test_combat_match_type tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp)
+    set_source_files_properties(tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_match_type PRIVATE NEVR_ARENA_ROUND_TIME_TESTING)
+    target_include_directories(test_combat_match_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
+
+    # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
+    add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
+    set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_shipped_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_shipped_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_shipped_settings DISCOVERY_MODE PRE_TEST)
 
     # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
     # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's

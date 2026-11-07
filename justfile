@@ -684,9 +684,17 @@ release-quest-variant-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta=
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
 release-quest-combat-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk "combat" pack pack_meta libs)
 
-# The body of release-quest-apk, release-quest-variant-apk and release-quest-combat-apk. `label` is the public recipe's name, which every
+# The arena APK of a release (#2298): the store APK repacked with the release's own loader asset and NOTHING else, so it has no
+# combat: no q15t library, no plugin manifest, none of the reference build's entries. Its variant stamp is `arena`. It is written to
+# build/quest-release/<tag>/arena/nevr-runtime-<tag>-arena-quest.apk with its .sha256 beside, after tools/quest_release_base.py
+# check-arena has refused any combat entry in it. It is LISTED in the manifest as the kind `quest-apk-arena` beside the combat
+# `quest-apk`: tools/publish_quest_apk.py --listed-variant arena puts it up through the signer. It uploads nothing and never tags.
+release-quest-arena-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-arena-apk" tag store_apk "arena" "" "" "")
+
+# The body of release-quest-apk, release-quest-variant-apk, release-quest-combat-apk and release-quest-arena-apk. `label` is the public recipe's name, which every
 # message of the run carries. `variant` is empty (the release APK, which never carries a plugin) or names the variant: `q15t`
 # (written under build/quest-release/<tag>/variant) or `combat`; either one carries the q15t libraries the checkout's own build writes.
+# `arena` (written under build/quest-release/<tag>/arena) is the store APK with the loader and no plugin: it builds no q15t library.
 # `pack` and `pack_meta` are empty (every release APK) or, for a variant, a game-data pack zip and its description file.
 _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     #!/usr/bin/env bash
@@ -700,6 +708,7 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     [ -n "$variant" ] || [ -z "$pack" ] || { echo "$label: a release APK carries no game-data pack" >&2; exit 1; }
     [ -n "$pack" ] || [ -z "$pack_meta" ] || { echo "$label: pack_meta describes a pack, and no pack is given" >&2; exit 1; }
     [ -z "$libs" ] || [ -n "$variant" ] || { echo "$label: a release APK carries no script library" >&2; exit 1; }
+    [ "$variant" != arena ] || { [ -z "$pack" ] && [ -z "$libs" ]; } || { echo "$label: the arena APK carries no game-data pack and no script library" >&2; exit 1; }
     tools/release_preflight.py --tag "$tag"
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
@@ -716,6 +725,9 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     # `combat` is the release name in its own directory; any other variant gets its own name (release-quest-variant-apk).
     if [ "$variant" = combat ]; then
         out="$out/combat"
+    elif [ "$variant" = arena ]; then
+        out="$out/arena"
+        name="nevr-runtime-$tag-arena-quest.apk"
     elif [ -n "$variant" ]; then
         out="$out/variant"
         name="nevr-runtime-$tag-$variant-quest.apk"
@@ -737,7 +749,7 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     # Neither variant carries an early plugin: the heap sizes and the render-target pool are set by the sentinel's own early combat step
     # (src/quest/combat/heaps.h), before android_main reads them.
     plugin=""
-    if [ -n "$variant" ]; then
+    if [ -n "$variant" ] && [ "$variant" != arena ]; then
         echo "$label: building the q15t libraries of $tag at ${head:0:7} (just build-quest-q15t)" >&2
         just build-quest-q15t >&2
         plugin="build/quest-q15t/libq15t.so"
@@ -748,10 +760,15 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2
     fi
+    if [ "$variant" = arena ]; then
+        python3 -I tools/quest_release_base.py check-arena --apk "$out/repack/r15_nevr-sentinel_signed.apk" >&2
+    fi
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
-    if [ -n "$variant" ] && [ "$variant" != combat ]; then
+    if [ "$variant" = arena ]; then
+        echo "$label: $out/$name is $tag at ${head:0:7}, the store APK with the release's loader (sha256 $loader_sha) and no combat. It is NOT a release asset: tools/publish_quest_apk.py --listed-variant arena puts it on the release host and lists it in the manifest as quest-apk-arena." >&2
+    elif [ -n "$variant" ] && [ "$variant" != combat ]; then
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset and not in the manifest: tools/publish_quest_apk.py --variant $variant puts it on the release host." >&2
     else
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
@@ -920,7 +937,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips test_combat_write_gate test_combat_settings test_content_pack
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_script_hooks --target test_script_guard --target test_team_ready --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips test_combat_write_gate test_combat_settings test_content_pack test_combat_match_type test_combat_shipped_settings
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -979,6 +996,18 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_content_pack.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_combat_match_type.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_combat_shipped_settings.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1217,7 +1246,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_log_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_render_config test_render_config_hook test_server_team_size test_server_bots test_deadlock_monitor test_arena_rules_hook test_server_bots test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_log_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_render_config test_render_config_hook test_script_hooks test_script_guard test_team_ready test_server_team_size test_server_bots test_deadlock_monitor test_arena_rules_hook test_server_bots test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
