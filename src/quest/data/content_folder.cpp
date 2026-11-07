@@ -31,6 +31,17 @@ const char* KeyOf(const char* path, const char* running_package, char (&out)[pat
   return path_rewrite::Rewrite(path, running_package, out, sizeof(out));
 }
 
+// Makes `pack` the one ServedFor reads, with the files that hold it and the running package its keys are spelled in.
+void Publish(std::unique_ptr<nevr_content::Pack> pack, std::unique_ptr<PosixPackFiles> files,
+             const std::string& running_package) {
+  auto state = std::make_unique<State>();
+  state->pack = std::move(pack);
+  state->files = std::move(files);
+  running_package.copy(state->running_package, std::min(running_package.size(), sizeof(state->running_package) - 1));
+  Forget();
+  g_state.store(state.release(), std::memory_order_release);
+}
+
 }  // namespace
 
 std::string ContentDir(const std::string& media_root) { return media_root + "/" + kContentSubdir; }
@@ -145,13 +156,7 @@ nevr_content::Decision Run(const Config& config) {
   std::unique_ptr<nevr_content::Pack> pack;
   nevr_content::Decision d = nevr_content::Decide(in, *files, &pack);
   if (d.outcome == nevr_content::Outcome::kServed) {
-    auto state = std::make_unique<State>();
-    state->pack = std::move(pack);
-    state->files = std::move(files);
-    const std::size_t n = std::min(config.running_package.size(), sizeof(state->running_package) - 1);
-    config.running_package.copy(state->running_package, n);
-    Forget();
-    g_state.store(state.release(), std::memory_order_release);
+    Publish(std::move(pack), std::move(files), config.running_package);
     const char* refused = config.install_hook != nullptr ? config.install_hook() : "no_installer";
     if (refused != nullptr) {
       Forget();
@@ -183,11 +188,7 @@ nevr_content::LineLevel ServedLine(const nevr_content::Served& served, const cha
 }
 
 void ServeForTest(std::unique_ptr<nevr_content::Pack> pack, const std::string& running_package) {
-  auto state = std::make_unique<State>();
-  state->pack = std::move(pack);
-  running_package.copy(state->running_package, std::min(running_package.size(), sizeof(state->running_package) - 1));
-  Forget();
-  g_state.store(state.release(), std::memory_order_release);
+  Publish(std::move(pack), nullptr, running_package);
 }
 
 void Forget() {
