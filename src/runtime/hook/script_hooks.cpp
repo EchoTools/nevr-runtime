@@ -47,9 +47,16 @@ bool InGameImage(const void* p) {
 
 void PutBack(Module& m) {
   for (const Swapped& s : m.swapped) {
-    // Only our own value is replaced: a slot the script or the engine rewrote since keeps what it holds.
-    InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(s.at), s.original, s.row->replacement);
-    *s.row->module = nullptr;
+    // Only our own value is replaced: a slot the script or the engine rewrote since keeps what it holds, and says so.
+    void* const found =
+        InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(s.at), s.original, s.row->replacement);
+    if (found != s.row->replacement) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.SCRIPT] slot not put back name=\"%s\" va=%p found=%p ours=%p (something rewrote the slot after this "
+          "table replaced it; it keeps what it holds)",
+          s.row->name, static_cast<void*>(s.at), found, s.row->replacement);
+    }
+    s.row->module->store(nullptr);
   }
   m.swapped.clear();
 }
@@ -177,7 +184,7 @@ void OnLoaded(std::uint64_t script, void* base) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.SCRIPT] script hooks refused script=%016llx base=%p rows=%zu failed=\"%s\" (the hooks this load had "
           "installed are removed; the script runs stock)",
-          static_cast<unsigned long long>(script), base, rows.size(), h->name);
+          static_cast<unsigned long long>(script), base, rows.size() + slots.size(), h->name);
       return;
     }
     m.targets.push_back(target);
@@ -186,7 +193,7 @@ void OnLoaded(std::uint64_t script, void* base) {
     auto* at = reinterpret_cast<void**>(static_cast<std::uint8_t*>(base) + s->rva);
     void* engine = *at;
     *s->original = engine;
-    *s->module = base;
+    s->module->store(base);
     InterlockedExchangePointer(reinterpret_cast<void* volatile*>(at), s->replacement);
     m.swapped.push_back(Swapped{at, engine, s});
   }

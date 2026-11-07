@@ -16,6 +16,7 @@
 // (logging.md Rule 6), so a script is hooked as written or runs stock, never half hooked. A module the game loads twice
 // (two resources of one script share the DLL) is hooked once and unhooked when the last of them is freed.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -40,7 +41,7 @@ struct Slot {
   std::uint32_t rva;    // the slot, from the DLL's base
   void* replacement;
   void** original;      // set to the engine's function on each install
-  void** module;        // set to the script's base while the slot is replaced, null otherwise
+  std::atomic<void*>* module;  // the script's base while the slot is replaced, null otherwise (read by the replacement)
   const char* name;
 };
 

@@ -17,40 +17,46 @@ ValueFn g_red_value = nullptr;
 ShouldExecuteFn g_blue_should = nullptr;
 ShouldExecuteFn g_red_should = nullptr;
 void* g_accessor = nullptr;      // the engine's function the slot held
-void* g_module = nullptr;        // the script's base while the slot is replaced
+std::atomic<void*> g_module{nullptr};  // the script's base while the slot is replaced
 std::atomic_bool g_registered{false};
 
 thread_local int t_should_execute = 0;  // how deep this thread is inside a team-ready shouldexecute
 
+// Marks this thread as inside a team-ready shouldexecute for its lifetime.
+struct ShouldExecuteScope {
+  ShouldExecuteScope() { ++t_should_execute; }
+  ~ShouldExecuteScope() { --t_should_execute; }
+  ShouldExecuteScope(const ShouldExecuteScope&) = delete;
+  ShouldExecuteScope& operator=(const ShouldExecuteScope&) = delete;
+};
+
 bool ValueTrue(void*) { return true; }
 
 std::uint64_t BlueShouldExecute(void* ctx) {
-  ++t_should_execute;
-  const std::uint64_t r = g_blue_should(ctx);
-  --t_should_execute;
-  return r;
+  const ShouldExecuteScope scope;
+  return g_blue_should(ctx);
 }
 
 std::uint64_t RedShouldExecute(void* ctx) {
-  ++t_should_execute;
-  const std::uint64_t r = g_red_should(ctx);
-  --t_should_execute;
-  return r;
+  const ShouldExecuteScope scope;
+  return g_red_should(ctx);
 }
 
 std::uint64_t Accessor(void* ctx, std::uint64_t field, void* out) {
-  void* module = g_module;
-  std::uint64_t demo = 0;
+  void* module = g_module.load();
+  std::uint32_t demo = 0;
   if (module != nullptr) std::memcpy(&demo, static_cast<std::uint8_t*>(module) + kDemoFieldIdRva, sizeof demo);
   return ReadField(reinterpret_cast<AccessorFn>(g_accessor), demo, t_should_execute > 0, ctx, field, out);
 }
 
 }  // namespace
 
-std::uint64_t ReadField(AccessorFn engine, std::uint64_t demo_field, bool in_should_execute, void* ctx,
+std::uint64_t ReadField(AccessorFn engine, std::uint32_t demo_field, bool in_should_execute, void* ctx,
                         std::uint64_t field, void* out) {
   const std::uint64_t r = engine(ctx, field, out);
-  if (in_should_execute && field == demo_field && out != nullptr) *static_cast<std::uint8_t*>(out) = 0;
+  if (in_should_execute && static_cast<std::uint32_t>(field) == demo_field && out != nullptr) {
+    *static_cast<std::uint8_t*>(out) = 0;
+  }
   return r;
 }
 
@@ -84,7 +90,7 @@ void Register() {
 void ResetForTest() {
   g_registered = false;
   g_accessor = nullptr;
-  g_module = nullptr;
+  g_module.store(nullptr);
 }
 #endif
 

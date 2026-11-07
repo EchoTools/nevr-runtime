@@ -33,7 +33,9 @@ namespace {
 namespace tr = nevr_combat::team_ready;
 namespace sh = nevr_script_hooks;
 
-constexpr std::uint64_t kDemoField = 0x1234;
+constexpr std::uint32_t kDemoField = 0x1234;
+// The script binds the next dword (0x3396c) as another field: nonzero, so a read of 8 bytes at 0x33968 is not the id.
+constexpr std::uint32_t kNextField = 0x5678;
 constexpr std::uint32_t kOtherCallerRva = 0x30000;
 constexpr std::size_t kImage = 0x34000;
 
@@ -70,7 +72,7 @@ std::vector<std::uint8_t> CallThroughSlot(std::uint32_t at_rva, std::uint8_t fra
   Emit(v, {0x48, 0x83, 0xec, frame});        // sub rsp, frame
   Emit(v, {0x4c, 0x8d, 0x44, 0x24, 0x28});   // lea r8, [rsp+0x28]
   Emit(v, {0xc6, 0x44, 0x24, 0x28, 0x00});   // mov byte [rsp+0x28], 0
-  Emit(v, {0x48, 0x8b, 0x15});               // mov rdx, [rip+field id]
+  Emit(v, {0x8b, 0x15});                     // mov edx, dword [rip+field id], as the script loads it
   Rel32(v, at_rva, tr::kDemoFieldIdRva);
   Emit(v, {0x31, 0xc9});                     // xor ecx, ecx
   Emit(v, {0xff, 0x15});                     // call [rip+slot]
@@ -111,6 +113,7 @@ class TeamReady : public ::testing::Test {
     void* engine = reinterpret_cast<void*>(&EngineAccessor);
     std::memcpy(base_ + tr::kAccessorSlotRva, &engine, sizeof engine);
     std::memcpy(base_ + tr::kDemoFieldIdRva, &kDemoField, sizeof kDemoField);
+    std::memcpy(base_ + tr::kDemoFieldIdRva + 4, &kNextField, sizeof kNextField);
   }
   void TearDown() override {
     for (std::uint32_t rva : {tr::kBlueValueRva, tr::kRedValueRva, tr::kBlueShouldExecuteRva, tr::kRedShouldExecuteRva}) {
@@ -138,6 +141,14 @@ TEST(TeamReadyField, TheEngineIsAskedWithTheCallersArguments) {
   EXPECT_EQ(g_engine_calls, 1);
   EXPECT_EQ(g_engine_ctx, &ctx);
   EXPECT_EQ(g_engine_field, 0x77u);
+}
+
+TEST(TeamReadyField, TheFieldIdIsItsLowDword) {
+  // A 32-bit parameter leaves the register's upper half unspecified: the id is compared on the low dword only.
+  std::uint8_t out = 1;
+  const std::uint64_t field = (std::uint64_t{0xdeadbeef} << 32) | kDemoField;
+  tr::ReadField(&EngineAccessor, kDemoField, true, nullptr, field, &out);
+  EXPECT_EQ(out, 0);
 }
 
 TEST(TeamReadyField, ADemoSenderReadsAsNotADemoOnlyInsideAShouldExecute) {
@@ -201,6 +212,17 @@ TEST_F(TeamReady, ASlotRewrittenSinceTheInstallKeepsWhatItHolds) {
   std::memcpy(base_ + tr::kAccessorSlotRva, &other, sizeof other);
   sh::OnUnloading(tr::kScript, base_);
   EXPECT_EQ(Slot(), other) << "only the replacement this table wrote is put back";
+  EXPECT_EQ(Count("slot not put back name=\"team ready: field accessor"), 1) << "and it says so";
+}
+
+TEST_F(TeamReady, ADetourThatFailsRefusesTheScriptAndCountsItsSlotsToo) {
+  static void* s_taken = nullptr;
+  ASSERT_EQ(MH_CreateHook(base_ + tr::kRedValueRva, reinterpret_cast<void*>(&EngineAccessor), &s_taken), MH_OK);
+  tr::Register();
+  sh::OnLoaded(tr::kScript, base_);
+  EXPECT_EQ(Count("script hooks refused script=6fa8cc9cd721a563"), 1);
+  EXPECT_EQ(Count("rows=5 failed="), 1) << "four detours and one slot";
+  EXPECT_EQ(Slot(), reinterpret_cast<void*>(&EngineAccessor)) << "no slot is replaced in a refused script";
 }
 
 TEST_F(TeamReady, AnotherScriptKeepsItsSlot) {
@@ -213,17 +235,17 @@ TEST_F(TeamReady, AnotherScriptKeepsItsSlot) {
 
 TEST_F(TeamReady, AScriptWithOnlySlotRowsGetsThemReplaced) {
   static void* s_original = nullptr;
-  static void* s_module = nullptr;
+  static std::atomic<void*> s_module{nullptr};
   const sh::Slot slot = {0x4242, tr::kAccessorSlotRva, reinterpret_cast<void*>(&CaptureLog), &s_original, &s_module, "only a slot"};
   sh::Register(&slot, 1);
   sh::OnLoaded(0x4242, base_);
   EXPECT_EQ(Slot(), reinterpret_cast<void*>(&CaptureLog));
   EXPECT_EQ(s_original, reinterpret_cast<void*>(&EngineAccessor));
-  EXPECT_EQ(s_module, base_);
+  EXPECT_EQ(s_module.load(), base_);
   EXPECT_EQ(sh::HookedModules(), 1u) << "a module with only a slot replaced is a hooked module";
   sh::OnUnloading(0x4242, base_);
   EXPECT_EQ(Slot(), reinterpret_cast<void*>(&EngineAccessor));
-  EXPECT_EQ(s_module, nullptr);
+  EXPECT_EQ(s_module.load(), nullptr);
   EXPECT_EQ(Count("script hooks removed script=0000000000004242 base="), 1);
 }
 

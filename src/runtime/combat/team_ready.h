@@ -35,8 +35,10 @@ inline constexpr std::uint8_t kShouldExecutePrologue[] = {0x48, 0x89, 0x5c, 0x24
 using AccessorFn = std::uint64_t (*)(void* ctx, std::uint64_t field, void* out);
 
 /// What the replaced accessor does around the engine's: inside a shouldexecute and for the demo field, the value read is
-/// "not a demo" (0). Exposed for tests.
-std::uint64_t ReadField(AccessorFn engine, std::uint64_t demo_field, bool in_should_execute, void* ctx,
+/// "not a demo" (0). The field id is a dword: the script loads it with `mov edx, dword [rip+0x33968]` (8b 15, at
+/// 0x25989 and 0x2b3a9) and binds the next dword, 0x3396c, as another field; so it is compared with the low dword of
+/// `field`. Exposed for tests.
+std::uint64_t ReadField(AccessorFn engine, std::uint32_t demo_field, bool in_should_execute, void* ctx,
                         std::uint64_t field, void* out);
 
 /// Registers the rows with the script hook table. Once.
