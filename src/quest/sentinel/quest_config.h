@@ -196,8 +196,8 @@ struct CombatConfig {
   CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
   CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
   CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
-  CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on, as upstream's shipped build has it
-  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as upstream's shipped build has it
+  CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on by default upstream, afk_music.cpp:1
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the q15t plugin's Q15T_SENSORWD was in v6.16.5
 };
 
 struct LogEvent {
