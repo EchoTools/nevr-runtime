@@ -18,6 +18,7 @@
 #include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/orb_pause.h"
+#include "runtime/combat/point_rate.h"
 #include "runtime/combat/rules_state.h"
 #include "runtime/combat/script_guard.h"
 #include "runtime/combat/shared_magazine.h"
@@ -169,8 +170,10 @@ void Install(std::uintptr_t gameBase, bool isServer) {
 
     // PAUSE gives the players the pre-match spawn orbs, and the orbs say when the match is live (orb_pause.h): both go
     // through the RULES mailbox VeilNet's match control keeps, so they register with it.
+    // POINT RATE and PAUSE also set how fast a capture point's points rise (point_rate.h), from the same mailbox.
     if (veilnet::MatchControlStarted()) {
       orb_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      point_rate::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
