@@ -33,7 +33,7 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed
   (it reads the game's LoadLevelName slot).
 - Combat music and the scanner-sphere watchdog are not this plugin's either: the runtime owns them (`src/quest/combat/music.h`, `src/quest/combat/sensorwd.h`), switched by the
-  `combat:` keys `music` and `sensorwd` (both off by default) in `config.yaml`; no kill file switches either.
+  `combat:` keys `music` and `sensorwd` (both on by default) in `config.yaml`; no kill file switches either.
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
