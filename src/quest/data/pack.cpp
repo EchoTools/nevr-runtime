@@ -16,6 +16,7 @@
 
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
+#include "runtime/content/pack_rules.h"
 
 namespace nevr_quest::data {
 
@@ -25,23 +26,8 @@ constexpr std::size_t kIoBuffer = 256 * 1024;
 
 std::string Mib(std::uint64_t bytes) { return std::to_string((bytes + (1024u * 1024u) - 1) / (1024u * 1024u)); }
 
-bool IsHex64(const std::string& text) {
-  if (text.size() != 64) return false;
-  return std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
-}
-
-bool IsPlainChar(char c) {
-  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_' || c == '-';
-}
-
-bool IsId(const std::string& text) {
-  if (text.empty() || text.size() > 64) return false;
-  const char first = text.front();
-  if (!((first >= 'a' && first <= 'z') || (first >= '0' && first <= '9'))) return false;
-  return std::all_of(text.begin(), text.end(), [](char c) {
-    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-  });
-}
+// The id, hex and file-name rules are the ones the PC serving checks too (runtime/content/pack_rules.h).
+bool IsHex64(const std::string& text) { return nevr_content::IsLowerHex(text, 64); }
 
 // X.Y.Z, each part 1 to 9 digits.
 bool IsVersion(const std::string& text) {
@@ -108,8 +94,7 @@ bool IsPackPath(const std::string& path) {
   const std::string dir = path.substr(0, slash);
   const std::string name = path.substr(slash + 1);
   if (dir != kManifestsDir && dir != kPackagesDir) return false;
-  if (name.empty() || name.size() > 64 || name.front() == '.') return false;
-  if (!std::all_of(name.begin(), name.end(), IsPlainChar)) return false;
+  if (!nevr_content::IsPlainName(name)) return false;
   // Names the step writes for itself are not names a pack may carry.
   return !EndsWith(name, kPackTmpSuffix) && !EndsWith(name, kStockBackupSuffix) && !EndsWith(name, kOwnerSuffix);
 }
@@ -347,7 +332,7 @@ bool ParsePackJson(const std::string& text, PackInfo* out, std::string* reason) 
   if (schema == doc.end() || !schema->is_number_integer() || schema->get<long long>() != 1) return Refuse(reason, "bad_schema");
   PackInfo info;
   const std::string* id = StringField(doc, "id");
-  if (id == nullptr || !IsId(*id)) return Refuse(reason, "bad_id");
+  if (id == nullptr || !nevr_content::IsPackId(*id)) return Refuse(reason, "bad_id");
   const std::string* version = StringField(doc, "version");
   if (version == nullptr || !IsVersion(*version)) return Refuse(reason, "bad_version");
   const std::string* stock = StringField(doc, "stock_data_version");
