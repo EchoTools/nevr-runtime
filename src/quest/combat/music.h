@@ -2,7 +2,7 @@
  *
  * What the game does. Two Wwise music trees of the combat bank start with a script Play (capture maps `2f22c384`, payload maps `b1b06cfb`); the only
  * Stop of either is posted from the script's return-to-lobby listener. A way out of a match that does not raise that event leaves the old instance
- * playing, and the next match's Play starts a second one on top of it (a tester heard the music twice, 2026-10-28).
+ * playing, and the next match's Play starts a second one on top of it.
  *
  * What this does. A thunk on libr15's JUMP_SLOT for CWwiseEngine::PostSoundEvent (music_targets.h). For one of the two music Play events, while a
  * combat map is loaded, it first posts BOTH music Stop events on the same game object (and on the previous Play's object when that differs) through
