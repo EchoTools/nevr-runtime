@@ -13,6 +13,7 @@
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/game_image_guard.h"
+#include "runtime/lifecycle/readable_memory.h"
 
 namespace nevr_content {
 
@@ -46,6 +47,17 @@ std::string Narrow(const std::wstring& wide) {
 std::string Printable(const std::string& text) {
   std::string out;
   for (const char c : text.substr(0, 300)) out += (c >= 0x20 && c <= 0x7e && c != '"') ? c : '?';
+  return out;
+}
+
+// `size` bytes as lowercase hex, no separators.
+std::string Hex(const std::uint8_t* bytes, std::size_t size) {
+  static const char kHex[] = "0123456789abcdef";
+  std::string out;
+  for (std::size_t i = 0; i < size; ++i) {
+    out += kHex[bytes[i] >> 4];
+    out += kHex[bytes[i] & 15];
+  }
   return out;
 }
 
@@ -86,6 +98,15 @@ void Install(std::uintptr_t game_base) {
   if (d.outcome == Outcome::kServed) {
     void* target = nevr::ResolveVA_Checked(game_base, kCFileOpenVa);
     if (target == nullptr || !nevr::ValidatePrologue(target, kCFileOpenPrologue, sizeof(kCFileOpenPrologue))) {
+      // logging.md Rule 6: a hook not installed names its address, the bytes it expected and the bytes it found.
+      const std::string actual = target != nullptr && nevr_crash_recovery::IsReadableMemory(target, sizeof(kCFileOpenPrologue))
+                                     ? Hex(static_cast<const std::uint8_t*>(target), sizeof(kCFileOpenPrologue))
+                                     : std::string("unreadable");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.CONTENT] hook not installed name=\"CFile::Open (content pack)\" va=0x%llx expected=%s actual=%s (the game "
+          "build is not the one this hook was written against, so no pack is served)",
+          static_cast<unsigned long long>(kCFileOpenVa), Hex(kCFileOpenPrologue, sizeof(kCFileOpenPrologue)).c_str(),
+          actual.c_str());
       d = Refuse(d, "hook_target_changed", "CFile::Open va=0x1400e15e0 is not the bytes this hook was written against");
     } else {
       g_cfileOpen = reinterpret_cast<CFileOpenFn>(target);

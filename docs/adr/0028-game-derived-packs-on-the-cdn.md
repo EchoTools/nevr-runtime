@@ -5,11 +5,13 @@ read_via: cat docs/adr/0028-game-derived-packs-on-the-cdn.md
 audience: all
 ---
 
-# ADR 0028: game-derived content packs live on the CDN and in the signed manifest, never on a release page; they ship off
+# ADR 0028: game-derived content packs live on the CDN and in the signed manifest, never on a release page; the runtime serves one once it is installed
 
-Status: proposed. Tracking issue: #1585 (the installer's fetch and placement, and what it does not yet cover). Builds on ADR 0012 (the nevr root), ADR 0019 decision 8 (a plugin carries no game-derived bytes)
-and ADR 0023 (the manifest chain and its artifact kinds). Nothing in this record is built when it is written; "What is not known" lists
-what no measurement covers.
+Status: proposed. Tracking issues: #1585 (the installer's fetch and placement, and what it does not yet cover) and #1424 (the runtime
+serves an installed pack). Builds on ADR 0012 (the nevr root), ADR 0019 decision 8 (a plugin carries no game-derived bytes) and ADR 0023
+(the manifest chain and its artifact kinds). Decision 5 is built: the runtime's serving (`src/runtime/content/content_pack.h`). Decisions
+1 to 4 (the manifest kind, the release rules, the private build job, the plugin workflow) are not built by this repository's code;
+"What is not known" lists what no measurement covers.
 
 ## Requirement
 
@@ -61,8 +63,8 @@ A mod that changes the game's data (EchoCombat's gear is the first) reaches play
 
 - The pack plugins' logs. The runtime itself reads a pack from `<root>\content\<id>` (`src/runtime/content/content_pack.h`), the
   folder `content\` that `src/core/nevr_root.h` (`kContent`) and ADR 0012 name, and logs its decision and each file it serves to the
-  run log under `<root>\logs` (`[NEVR.CONTENT]`). EchoCombat's three plugins write `<exe dir>\plugin_logs\<name>` (EchoCombat's plugin/nevr_plugin.h,
-  function `EchoCombatLogPath`), not the house convention: a plugin writes no log file of its own and logs through the host's
+  run log under `<root>\logs` (`[NEVR.CONTENT]`). EchoCombat's three plugins write a log folder `plugin_logs\<name>` beside the game's
+  exe, not the house convention: a plugin writes no log file of its own and logs through the host's
   `ctx->log` into the run log under `<root>\logs` (`docs/standards/logging.md`, Rule 15). No `plugin_logs` folder is added to the root.
   The standing rule (AGENTS.md, "The game folder") allows nothing of ours in the game folder but `BugSplat64.dll`, so the three
   EchoCombat logs are a defect against it until those plugins move to `ctx->log`.

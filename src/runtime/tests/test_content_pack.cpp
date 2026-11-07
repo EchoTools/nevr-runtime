@@ -245,6 +245,37 @@ TEST_F(ContentPack, APackFileIsHeldSoItCannotBeChangedAfterTheCheck) {
   if (w != INVALID_HANDLE_VALUE) CloseHandle(w);
 }
 
+// A pack file is hashed a chunk at a time through one fixed buffer, never read whole into memory: the digest is the same at any
+// chunk size, from the start of the file wherever its pointer is, and for no bytes at all.
+TEST_F(ContentPack, AFileIsHashedInChunksToTheSameDigest) {
+  std::string bytes(100003, '\0');
+  for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>((i * 131 + 7) & 0xff);
+  const std::wstring path = base_ + L"\\chunked.bin";
+  WriteFileBytes(path, bytes);
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(h, INVALID_HANDLE_VALUE);
+  const std::string whole = Sha(bytes);
+  ASSERT_EQ(whole.size(), 64u);
+  for (const std::size_t chunk : {std::size_t{1}, std::size_t{7}, std::size_t{4096}, std::size_t{100003},
+                                  nevr_content::kDigestChunkBytes}) {
+    EXPECT_EQ(nevr_content::StreamSha256(h, chunk), whole) << chunk;
+  }
+  LARGE_INTEGER middle;
+  middle.QuadPart = 500;
+  ASSERT_TRUE(SetFilePointerEx(h, middle, nullptr, FILE_BEGIN));
+  EXPECT_EQ(nevr_content::StreamSha256(h, 7), whole);  // from the start, not from where the pointer was
+  EXPECT_EQ(nevr_content::StreamSha256(h, 0), "");     // no buffer, no digest
+  CloseHandle(h);
+  EXPECT_EQ(nevr_content::StreamSha256(INVALID_HANDLE_VALUE, 7), "");
+
+  const std::wstring empty = base_ + L"\\empty.bin";
+  WriteFileBytes(empty, "");
+  HANDLE e = CreateFileW(empty.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(e, INVALID_HANDLE_VALUE);
+  EXPECT_EQ(nevr_content::StreamSha256(e, 7), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  CloseHandle(e);
+}
+
 TEST_F(ContentPack, TwoPacksAreBothRefused) {
   MakePack("alpha");
   MakePack("beta");

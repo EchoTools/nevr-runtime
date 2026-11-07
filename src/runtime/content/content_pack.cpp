@@ -2,6 +2,7 @@
 
 #include <winsock2.h>
 #include <windows.h>
+#include <wincrypt.h>
 
 #include <algorithm>
 #include <atomic>
@@ -13,7 +14,6 @@
 #include "core/logging.h"
 #include "runtime/content/content_json.h"
 #include "runtime/hook/dll_load_hook.h"
-#include "runtime/host/file_digest.h"
 
 namespace nevr_content {
 
@@ -96,12 +96,7 @@ HANDLE OpenHeld(const std::wstring& path) {
   return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
-// The file's sha-256 through `file`, or "" when it does not read.
-std::string DigestOf(HANDLE file) {
-  std::vector<unsigned char> bytes;
-  if (!nevr_host::ReadWholeFile(file, &bytes)) return std::string();
-  return nevr_host::Sha256Hex(bytes);
-}
+std::string DigestOf(HANDLE file) { return StreamSha256(file, kDigestChunkBytes); }
 
 std::string DigestOfPath(const std::wstring& path) {
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
@@ -180,6 +175,44 @@ const Served* FindOpen(const char* game_path, std::uint32_t flags) {
 }
 
 }  // namespace
+
+std::string StreamSha256(HANDLE file, std::size_t chunk_bytes) {
+  if (file == INVALID_HANDLE_VALUE || chunk_bytes == 0 || chunk_bytes > 0x7fffffff) return std::string();
+  LARGE_INTEGER start{};
+  if (!SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) return std::string();
+  HCRYPTPROV provider = 0;
+  if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) return std::string();
+  std::string hex;
+  HCRYPTHASH hash = 0;
+  if (CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash)) {
+    std::vector<unsigned char> buffer(chunk_bytes);  // one chunk, whatever the file's size
+    bool ok = true;
+    for (;;) {
+      DWORD got = 0;
+      if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &got, nullptr)) {
+        ok = false;
+        break;
+      }
+      if (got == 0) break;  // end of file
+      if (!CryptHashData(hash, buffer.data(), got, 0)) {
+        ok = false;
+        break;
+      }
+    }
+    BYTE digest[32];
+    DWORD length = sizeof(digest);
+    if (ok && CryptGetHashParam(hash, HP_HASHVAL, digest, &length, 0) && length == sizeof(digest)) {
+      static const char kHex[] = "0123456789abcdef";
+      for (const BYTE b : digest) {
+        hex += kHex[b >> 4];
+        hex += kHex[b & 15];
+      }
+    }
+    CryptDestroyHash(hash);
+  }
+  CryptReleaseContext(provider, 0);
+  return hex;
+}
 
 const char* OutcomeName(Outcome outcome) {
   switch (outcome) {

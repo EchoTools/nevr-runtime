@@ -22,6 +22,7 @@
 // original call, inside which InitGlobals reads the manifests and opens the packages.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -66,6 +67,12 @@ struct Decision {
 // Checks the installed pack and, when it passes, makes it the one this process serves (ServeOpen, RewriteScript). Every file
 // that passed is held open for the rest of the process. Logs nothing: Install logs the decision.
 Decision Decide(const Inputs& inputs);
+
+// The sha-256 of the whole of `file`, from its start, as 64 lowercase hex characters, read `chunk_bytes` at a time (one buffer of
+// that size, whatever the file's size); "" when the file does not read. A pack file is hashed this way through the handle that is
+// then held, kDigestChunkBytes at a time.
+inline constexpr std::size_t kDigestChunkBytes = 1u << 20;
+std::string StreamSha256(HANDLE file, std::size_t chunk_bytes);
 
 // The pack's file for an open of `game_path` (UTF-8, as the game passes it to CFile::Open) with the game's `flags`, as UTF-8 in
 // `pack_path`. False for any open the pack does not serve: a path it does not replace, or flags other than a read.
