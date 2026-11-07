@@ -87,8 +87,11 @@ set(PATCHES_SOURCES
     "hook/script_hooks.cpp"
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/capture_scores.cpp"
+    "combat/capture_time.cpp"
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/orb_pause.cpp"
     "combat/script_guard.cpp"
     "combat/shared_magazine.cpp"
     "combat/station_cells.cpp"
@@ -1194,6 +1197,33 @@ if(BUILD_TESTING)
     target_include_directories(test_shared_magazine PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
+
+    # #600: the spawn orbs' PAUSE hook and slot (runtime/combat/orb_pause.h), on a fake spawn point script.
+    add_executable(test_orb_pause tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_orb_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_orb_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_orb_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_orb_pause DISCOVERY_MODE PRE_TEST)
+
+    # #600: the RULES page's starting scores on the capture points (runtime/combat/capture_scores.h), on two fake scripts.
+    add_executable(test_capture_scores tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_capture_scores PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_capture_scores PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_capture_scores PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_capture_scores DISCOVERY_MODE PRE_TEST)
+
+    # #600: the RULES page's time rows in Combat (runtime/combat/capture_time.h), on a fake game-mode script.
+    add_executable(test_capture_time tests/test_capture_time.cpp combat/capture_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_capture_time.cpp combat/capture_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_capture_time PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_capture_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_capture_time PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_capture_time DISCOVERY_MODE PRE_TEST)
 
     # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
     add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)

@@ -173,7 +173,12 @@ void OnLoaded(std::uint64_t script, void* base) {
     return;
   }
 
+  std::size_t pins = 0;
   for (const Hook* h : rows) {
+    if (h->detour == nullptr) {  // a pin: its bytes were checked above; nothing is installed there
+      ++pins;
+      continue;
+    }
     void* target = static_cast<std::uint8_t*>(base) + h->rva;
     *h->original = target;
     if (!PatchDetour(h->original, h->detour, h->name)) {
@@ -200,8 +205,9 @@ void OnLoaded(std::uint64_t script, void* base) {
   const std::size_t n = m.targets.size();
   const std::size_t k = m.swapped.size();
   g_modules.emplace(base, m);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SCRIPT] script hooks installed script=%016llx base=%p hooks=%zu slots=%zu",
-      static_cast<unsigned long long>(script), base, n, k);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.SCRIPT] script hooks installed script=%016llx base=%p hooks=%zu slots=%zu pins=%zu",
+      static_cast<unsigned long long>(script), base, n, k, pins);
 }
 
 void OnUnloading(std::uint64_t script, void* base) {
@@ -233,6 +239,14 @@ void OnUnloading(std::uint64_t script, void* base) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.SCRIPT] script freed script=%016llx base=%p hooks=0",
         static_cast<unsigned long long>(script), base);
   }
+}
+
+void* LoadedBase(std::uint64_t script) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  for (const auto& [base, m] : g_modules) {
+    if (m.script == script) return base;
+  }
+  return nullptr;
 }
 
 std::size_t LoadedModules() {
