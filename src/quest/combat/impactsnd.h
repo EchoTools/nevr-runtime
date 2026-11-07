@@ -22,12 +22,17 @@
  *     in an arena match the handler is a lock, a per-thread depth word and the call (once per level unload).
  *   - the tick: one atomic load of the game, one of the scope flag, and a return, per frame, until a table that a combat level loaded is live. When the
  *     load handler could not be hooked (`combat_impactsnd_hook` Error) nothing marks a load, so the tick asks the levels itself once a second.
- * A table is "ours" from the load that decided combat until the game frees it (the global reads 0 after Shutdown).
+ *   - while a combat level's table is live, the tick asks the levels once a second (one `Classify`) whether a combat level is still loaded. The game
+ *     makes one table for the first bullet system and frees it with the last, and runs no load for a game space that starts while a combat one lives
+ *     (CncaGame::UpdateGameSpaceInit adds a finished space to the loaded table and removes none), so an Echo Arena space can share it. When the answer is
+ *     no, every id this module put into the table (and its whizzby table, when the rebuilt loader filled them) is the stock id 1 again, one
+ *     `combat_impactsnd_unscoped` record says so, and the tick stops polling: that level plays what stock plays. Rows, keys and count are not changed.
+ * A table is "ours" from the load that decided combat until the game frees it (the global reads 0 after Shutdown) or no combat level is loaded any more.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
  *
  * Frequency (ADR 0038). LoadSoundSettings: once per game-space load (CR15NetBulletCS::Initialize). Shutdown: once per bullet system teardown. The
- * tick callback: once per rendered frame; a poll (four a second) only while the scope flag is set. Arena cost, per call and per frame, is in the
+ * tick callback: once per rendered frame; a poll (four a second) and the level ask (once a second) only while the scope flag is set. Arena cost, per call and per frame, is in the
  * module doc ("Arena cost") with the measured host numbers.
  *
  * Origin. The reference build's `impactsnd` (the source build's impactsnd v1..v6; rows R12..R16, docs/audits/2026-11-05-q15t-origin-citations.md lists
@@ -45,6 +50,8 @@
  *   rebuilt   {"event":"combat_impactsnd_rebuilt","table":"0x..","rows":<n>,"json_result":<n>}
  *   ids       {"event":"combat_impactsnd_ids","when":"..","table":"0x..","rows":<n>,"known":<n>,"rewrote":<n>,"right":<n>,"left":<n>,"found_ids":".."}
  *   table     {"event":"combat_impactsnd_table","map":"set|null","rows":<n>,"after_s":"..","default_symbol":"0x..","word_patch":".."}
+ *   unscoped  {"event":"combat_impactsnd_unscoped","scope":"other_level|no_game","table":"0x..","rows_stock":<n>,"whizzby_stock":<n>,
+ *              "mode":"written|read_only|no_table","msg":".."}   Info, once per scope that ends this way (capped with the scope lines)
  *   notes     combat_impactsnd_no_table, _row_pass_skipped, _unsorted_wait, _unsorted_foreign_keys, _shutdown_returned, _thread, _log_cap
  * and the manager's own `got_hook` line for each slot.
  *
@@ -90,14 +97,17 @@ struct Stats {
   std::uint32_t rowsLeft = 0;      // known rows that needed a write and did not get one (read only, or a lost race)
   std::uint32_t skipped = 0;       // row passes that wrote nothing because the table lock was busy or the table had changed
   std::uint32_t shutdowns = 0;     // CR15NetBulletCS::Shutdown calls seen by the handler
+  std::uint32_t rechecks = 0;      // the once-a-second asks, while a table is in scope, whether a combat level is still loaded
+  std::uint32_t unscoped = 0;      // scopes ended because no combat level was loaded any more (the stock ids put back)
+  std::uint32_t rowsRestored = 0;  // ids set back to the stock id when a scope ended that way
 };
 Stats GetStats() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 
 // A clock (seconds); a hook called at stage 1 (between a table read and the re-read before the rows are written), stage 2 (after a row store, before
-// its read-back, table lock held) and stage 4 (in a row pass, after the table was validated and before the lock is taken); a reset of every piece of
-// state, the hooks and the thunks'.
+// its read-back, table lock held), stage 4 (in a row pass, after the table was validated and before the lock is taken) and stage 5 (when a scope ends,
+// after the table was read and before the lock is taken); a reset of every piece of state, the hooks and the thunks'.
 void SetClockForTest(double (*clock)()) noexcept;
 // The CR15Game the load handler asks the levels of, as the tick would hand it (0: none seen); and whether a table a combat level loaded is live, for
 // the tests of the tick's watch, which start from "a combat level loaded a table".

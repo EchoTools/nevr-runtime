@@ -964,6 +964,145 @@ static void TestAnArenaLoadEndsTheScopeOfAnEarlierCombatLoad() {
         impactsnd::GetStats().polls - polls0, CountRight());
 }
 
+// An arena space that starts while a combat one lives shares the combat level's table: the game makes it for the first bullet system and frees it with the
+// last, and runs no load for the second (docs/quest/combat/impactsnd.md, "Scope and arena cost"). The tick asks the levels once a second while the table is in
+// scope; within that second of the arena level appearing every row this module wrote holds the stock id again, one record says so, and the tick stops polling.
+static void TestAnArenaSpaceBesideACombatTableGetsTheStockIds() {
+  Fresh();
+  Install();
+  CallLoader();  // the combat load: the stock loader's 15 rows, repaired after the load
+  CHECK(impactsnd::GetStats().scoped && AllRight(), "the combat load was not repaired");
+  Polls(8);  // two seconds of the combat match: still in scope, still repaired
+  CHECK(impactsnd::GetStats().scoped && AllRight() && impactsnd::GetStats().unscoped == 0, "the combat match lost its scope");
+  const std::vector<Row> before = Snap();
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});  // the arena space starts; no load runs, the table stays
+  g_rows[3].id = 0x777;                              // a row whose id is not one of ours: never touched
+  Polls(4);                                          // one second
+  CHECK(!impactsnd::GetStats().scoped, "the scope outlived the combat level's place: an arena level is loaded");
+  size_t stock = 0;
+  for (size_t i = 0; i < g_n; ++i) stock += g_rows[i].id == kStock;
+  CHECK(stock == 14 && g_rows[3].id == 0x777 && KeysAndPadsIntact(before) && g_n == 15 && MapCount() == 15,
+        "after the arena space started: %zu of 15 rows hold the stock id, the foreign id %x", stock, g_rows[3].id);
+  CHECK(CountLines("\"event\":\"combat_impactsnd_unscoped\"", 1) == 1 && HasLine("\"rows_stock\":14,\"whizzby_stock\":0,\"mode\":\"written\""),
+        "no one record of the scope's end");
+  CHECK(impactsnd::GetStats().unscoped == 1 && impactsnd::GetStats().rowsRestored == 14, "stats: unscoped %u, restored %u", impactsnd::GetStats().unscoped,
+        impactsnd::GetStats().rowsRestored);
+  // the tick stops: no poll, no read and no scan in 40 more frames of the arena match
+  const uint32_t polls0 = impactsnd::GetStats().polls;
+  const uint64_t reads0 = ReadCount(), scans0 = ScanCount();
+  Polls(40);
+  CHECK(impactsnd::GetStats().polls == polls0 && ReadCount() == reads0 && ScanCount() == scans0, "the tick went on after the scope ended: %u polls, %llu reads, %llu scans",
+        impactsnd::GetStats().polls - polls0, (unsigned long long)(ReadCount() - reads0), (unsigned long long)(ScanCount() - scans0));
+  CHECK(stock == 14 && CountRight() == 0, "a poll wrote an id again");
+  // the combat space leaves first and no level of combat's is loaded: the same end (the other Scope)
+  Fresh();
+  Install();
+  CallLoader();
+  Poll();
+  LoadLevels({"mpl_lobby_b2"});
+  Polls(4);
+  CHECK(!impactsnd::GetStats().scoped && CountRight() == 0 && HasLine("scope=other_level"), "the scope outlived every combat level");
+}
+
+// The same with a table the rebuilt loader filled: every id in it is ours, the whizzby rows' too, so every row gets the stock id.
+static void TestAnArenaSpaceBesideARebuiltTableGetsTheStockIds() {
+  SetupRebuild();
+  Install();
+  PublishBig();
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped && RowsOf(reinterpret_cast<uintptr_t>(g_bigMap) + 0x40).size() == 4, "the rebuilt load");
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_b"});
+  Polls(4);
+  bool stock = true;
+  for (const auto& row : RowsOf(reinterpret_cast<uintptr_t>(g_bigMap))) stock = stock && row.second == kStock;
+  for (const auto& row : RowsOf(reinterpret_cast<uintptr_t>(g_bigMap) + 0x40)) stock = stock && row.second == kStock;
+  CHECK(stock && RowsOf(reinterpret_cast<uintptr_t>(g_bigMap)).size() == 15 && !impactsnd::GetStats().scoped, "a rebuilt table kept an id of ours");
+  CHECK(HasLine("\"rows_stock\":15,\"whizzby_stock\":4,\"mode\":\"written\""), "the record does not count the 15 rows and the 4 whizzby rows");
+}
+
+// The table lock is held (a Shutdown runs): the tick does not wait; the stock ids go back on the frame after it is free, and only then does the scope end.
+static void TestTheStockIdsWaitForTheTableLock() {
+  Fresh();
+  Install();
+  CallLoader();
+  Poll();
+  g_shut_mode = kShutHold;
+  std::thread b([] { CallShutdown(0x55); });
+  for (int i = 0; i < 400 && !g_in_shutdown; ++i) usleep(2000);
+  CHECK(g_in_shutdown, "the holding Shutdown never started");
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  const auto t0 = std::chrono::steady_clock::now();
+  Polls(4);
+  const long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(ms < 150 && AllRight() && impactsnd::GetStats().scoped, "with the lock held: waited %ld ms, or wrote, or ended the scope", ms);
+  g_hold_release = true;
+  b.join();
+  g_shut_mode = kShutFree;
+  Poll();
+  CHECK(!impactsnd::GetStats().scoped && CountRight() == 0, "the stock ids did not go back once the lock was free (%zu right)", CountRight());
+}
+
+// The table changes between the read and the lock (a row was added under us): nothing is written to it on that frame; the next frame reads it again.
+static int g_unscopeHooks = 0;
+static void HkUnscope(int stage) {
+  if (stage == 5 && g_unscopeHooks++ == 0) MapCount() = 14;
+}
+static void TestTheStockIdsWaitForAStableTable() {
+  Fresh();
+  Install();
+  CallLoader();
+  Poll();
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  g_unscopeHooks = 0;
+  g_now = 101.0;  // the second's ask is due
+  impactsnd::SetHookForTest(&HkUnscope);
+  impactsnd::Tick(GameAddress());
+  CHECK(g_unscopeHooks == 1 && AllRight() && impactsnd::GetStats().scoped, "a table that changed under the read got the stock ids, or the scope ended");
+  impactsnd::Tick(GameAddress());
+  impactsnd::SetHookForTest(nullptr);
+  size_t stock = 0;
+  for (size_t i = 0; i < 14; ++i) stock += g_rows[i].id == kStock;
+  CHECK(!impactsnd::GetStats().scoped && stock == 14 && g_rows[14].id != kStock, "the next frame did not put the stock ids into the 14 rows it read (%zu)", stock);
+}
+
+// With the write switch off nothing of ours is in the table: the scope ends and nothing is written.
+static void TestAReadOnlyScopeEndsWithoutAWrite() {
+  Fresh();
+  Install(false);
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped && CountRight() == 0, "read-only: written");
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  Polls(4);
+  CHECK(!impactsnd::GetStats().scoped && HasLine("\"rows_stock\":0,\"whizzby_stock\":0,\"mode\":\"read_only\""), "read-only: the scope did not end, or wrote");
+}
+
+// What the once-a-second ask costs, by count: in a combat match exactly one scan a second (10 in 10 s of frames); in an arena match none (the ask runs only
+// while a combat level's table is in scope).
+static void TestTheRecheckIsOneScanASecond() {
+  Fresh();
+  Install();
+  CallLoader();
+  const uint64_t scans0 = ScanCount();
+  const uint32_t rechecks0 = impactsnd::GetStats().rechecks;
+  for (int i = 0; i < 400; ++i) {  // 10 s of frames at 40 Hz
+    impactsnd::Tick(GameAddress());
+    g_now += 0.025;
+  }
+  CHECK(ScanCount() - scans0 == 10 && impactsnd::GetStats().rechecks - rechecks0 == 10, "10 s of a combat match: %llu scans, %u rechecks (want 10)",
+        (unsigned long long)(ScanCount() - scans0), impactsnd::GetStats().rechecks - rechecks0);
+  CHECK(impactsnd::GetStats().scoped && AllRight(), "the combat match lost its ids");
+  Fresh();
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  const uint64_t scans1 = ScanCount();
+  for (int i = 0; i < 400; ++i) {
+    impactsnd::Tick(GameAddress());
+    g_now += 0.025;
+  }
+  CHECK(ScanCount() == scans1 && impactsnd::GetStats().rechecks == 0, "10 s of an arena match: %llu scans", (unsigned long long)(ScanCount() - scans1));
+}
+
 // The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
 static void TestScopeFollowsTheTable() {
   Fresh();
@@ -1689,6 +1828,12 @@ int main() {
   TestShutdownPassThrough();
   TestBetweenValidationAndLock();
   TestLockBusy();
+  TestAnArenaSpaceBesideACombatTableGetsTheStockIds();
+  TestAnArenaSpaceBesideARebuiltTableGetsTheStockIds();
+  TestTheStockIdsWaitForTheTableLock();
+  TestTheStockIdsWaitForAStableTable();
+  TestAReadOnlyScopeEndsWithoutAWrite();
+  TestTheRecheckIsOneScanASecond();
   TestShutdownNested();
   TestShutdownDepthIsPerThread();
   TestThreadLines();

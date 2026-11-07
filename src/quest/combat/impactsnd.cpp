@@ -52,6 +52,7 @@ constexpr char kJsonFile[] = "/json/r14/config|mp_sound_settings.json";
 
 constexpr double kWaitS = 600.0;   // the count line is logged after this long even with no table
 constexpr double kPollS = 0.25;    // the tick reads the table at most this often
+constexpr double kRecheckS = 1.0;  // while a table is in scope, the tick asks the levels again this often (an arena space can start beside a combat one)
 constexpr double kSettleS = 2.0;   // the count is logged once it is non-zero for this long
 constexpr std::uint64_t kRowCount = 15;   // 5 guns x 3 members (the PC table)
 constexpr std::uint64_t kPlayerRows = 5;  // what the stock loader builds on the Quest (only the first member of each gun)
@@ -100,7 +101,9 @@ std::atomic<bool> g_rebuild{false};        // the load handler runs the rebuilt 
 std::atomic<std::uintptr_t> g_game{0};     // the CR15Game the tick last saw: what the load handler asks the levels of
 std::atomic<bool> g_scoped{false};         // a table that a combat level loaded is live: the tick polls it
 bool g_loadHooked = false;                 // the load handler is in: it marks a load. Without it the tick asks the levels itself, once a second
-double g_nextScope = 0;                    // that second
+double g_nextScope = 0;                    // that second; and, while a table is in scope, the next time the tick asks whether a combat level is still loaded
+std::atomic<bool> g_unscoping{false};      // no combat level is loaded any more: the stock id goes back into the table, then the scope ends
+std::atomic<std::uintptr_t> g_rebuiltMap{0};  // the table the rebuilt loader filled: every row of it, the whizzby rows too, holds an id of ours
 std::atomic<std::uintptr_t> g_unsDone{0};  // the unsorted table already written (once per table): handler and tick
 std::atomic<unsigned> g_noteLines{0};
 std::atomic<unsigned> g_writeLines{0};
@@ -108,6 +111,7 @@ std::atomic<unsigned> g_threadLines{0};
 std::atomic<unsigned> g_scopeLines{0};
 std::atomic<bool> g_roLogged{false};
 std::atomic<std::uint32_t> g_polls{0}, g_loads{0}, g_scopedLoads{0}, g_passes{0}, g_rowsWritten{0}, g_rowsLeft{0}, g_skipped{0}, g_shutdowns{0};
+std::atomic<std::uint32_t> g_rechecks{0}, g_unscoped{0}, g_rowsRestored{0};
 std::atomic<long> g_tid[3] = {{0}, {0}, {0}};  // the last thread seen in each role (tick, loader, shutdown)
 double (*g_clock)() = nullptr;
 void (*g_hook)(int) = nullptr;
@@ -461,6 +465,8 @@ Scope DecideScope() noexcept {
   return level::Classify(game, /*lobby=*/true, &level, /*inFlight=*/true) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOtherLevel;
 }
 
+Scope g_unscopeWhy = Scope::kOtherLevel;  // what the recheck that ended the scope saw (tick thread only)
+
 void NoteScope(Scope scope, const char* loader) noexcept {
   if (!Budget(&g_scopeLines, kScopeLines, "scope")) return;
   sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_scope",
@@ -483,6 +489,8 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
     // (disassembly 0x22217b8..0x22217bc, 0x2221840, 0x2221844), after the last Shutdown freed the old one (0x22227f8). The clear is the fail-closed answer
     // for a load that reaches this handler another way while a combat table lives.
     g_scoped.store(false, std::memory_order_release);
+    g_unscoping.store(false, std::memory_order_release);
+    g_rebuiltMap.store(0, std::memory_order_release);
     const std::uint64_t r = original();
     NoteScope(scope, "game");
     return r;
@@ -498,6 +506,8 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
                           {{"table", sentinel::HexString(d, r.map)}, {"rows", r.rows}, {"json_result", r.rc}, {"loader", "reconstructed"}});
     }
     AfterLoad();
+    g_rebuiltMap.store(r.map, std::memory_order_release);
+    g_unscoping.store(false, std::memory_order_release);
     g_scoped.store(true, std::memory_order_release);
     return static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.rc));
   }
@@ -505,6 +515,8 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
   NoteThread(kRoleLoader);
   NoteScope(scope, "stock");
   AfterLoad();
+  g_rebuiltMap.store(0, std::memory_order_release);
+  g_unscoping.store(false, std::memory_order_release);
   g_scoped.store(true, std::memory_order_release);
   return r;
 }
@@ -527,7 +539,11 @@ std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcep
   if (outer && g_scoped.load(std::memory_order_acquire)) {  // no table of a combat level: no read (an arena match makes none)
     std::uintptr_t map = 0;
     SafeRead(g_base + kSoundSettingsVa, &map, sizeof map);
-    if (map == 0) g_scoped.store(false, std::memory_order_release);
+    if (map == 0) {  // the table is gone: nothing is left to put back
+      g_scoped.store(false, std::memory_order_release);
+      g_unscoping.store(false, std::memory_order_release);
+      g_rebuiltMap.store(0, std::memory_order_release);
+    }
     if (Budget(&g_noteLines, kNoteLines, "notes")) {
       char m[19];
       sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_shutdown_returned", {{"table_global_now", sentinel::HexString(m, map)}});
@@ -610,6 +626,67 @@ void IdsTick(double now) noexcept {
   if (!ReadTable(&map2, &data2, &count2, &flags2) || map2 != map || data2 != data || count2 != count || (flags2 & 1) != 0)
     return;  // changed under us: the next polls decide again
   RowPass(map, data, count, "tick/sorted");
+}
+
+// The stock id back into one table's rows (data, count): every row when `all` (a table the rebuilt loader filled, where every id is ours), else the rows
+// that hold one of kIds' ids (the ones this module wrote). Keys, order, count and pads are never touched: the game's hit code reads the table without our
+// lock, so a row is changed only by one aligned u32 store. The caller holds the table lock and validated the table.
+unsigned StockIds(std::uintptr_t data, std::uint64_t count, bool all) noexcept {
+  unsigned put = 0;
+  for (std::uint64_t i = 0; i < count; ++i) {
+    std::uint32_t id = 0;
+    if (!SafeRead(data + 16 * i + 8, &id, sizeof id) || id == kStockId || (!all && !KnownId(id))) continue;
+    __atomic_store_n(reinterpret_cast<std::uint32_t*>(data + 16 * i + 8), kStockId, __ATOMIC_RELEASE);
+    ++put;
+  }
+  return put;
+}
+
+// No combat level is loaded any more while a table of one is still live: the game made the table for the first bullet system and frees it with the last
+// (docs/quest/combat/impactsnd.md, "Scope and arena cost"), so a game space that starts while a combat one lives, an Echo Arena level among them, shares
+// it. The rows this module wrote get the stock id back, so every hit plays what the stock table plays (id 1), and the scope ends: the tick stops polling.
+// The table keeps its rows and count (no row is added, removed or moved). A busy lock (a Shutdown is running) or a table that changed is tried again on
+// the next frame. Returns whether the scope ended.
+bool Unscope(Scope why) noexcept {
+  std::uintptr_t map = 0, data = 0;
+  std::uint64_t count = 0;
+  std::uint32_t flags = 0;
+  unsigned rows = 0, whizzby = 0;
+  const bool table = ReadTable(&map, &data, &count, &flags) && count != 0 && count <= kRowMax;
+  const bool writes = g_write && g_writersOk.load(std::memory_order_acquire);  // read-only: no id of ours was ever written
+  if (table && writes) {
+    Hook(5);
+    if (pthread_mutex_trylock(&g_tableMu) != 0) return false;
+    std::uintptr_t m2 = 0, d2 = 0;
+    std::uint64_t c2 = 0;
+    if (!SafeRead(g_base + kSoundSettingsVa, &m2, sizeof m2) || m2 != map || !SafeRead(m2, &d2, sizeof d2) || d2 != data ||
+        !SafeRead(m2 + kMapCount, &c2, sizeof c2) || c2 != count) {
+      pthread_mutex_unlock(&g_tableMu);
+      return false;
+    }
+    const bool rebuilt = map == g_rebuiltMap.load(std::memory_order_acquire);
+    rows = StockIds(data, count, rebuilt);
+    std::uintptr_t wData = 0;
+    std::uint64_t wCount = 0;
+    if (rebuilt && SafeRead(map + kWhizzbyOff, &wData, sizeof wData) && wData != 0 && (wData & 7) == 0 &&
+        SafeRead(map + kWhizzbyOff + kMapCount, &wCount, sizeof wCount) && wCount <= kRowMax)
+      whizzby = StockIds(wData, wCount, true);
+    pthread_mutex_unlock(&g_tableMu);
+  }
+  g_scoped.store(false, std::memory_order_release);  // the scope ends: the tick stops polling
+  g_unscoping.store(false, std::memory_order_release);
+  g_rebuiltMap.store(0, std::memory_order_release);
+  g_unscoped.fetch_add(1, std::memory_order_relaxed);
+  g_rowsRestored.fetch_add(rows + whizzby, std::memory_order_relaxed);
+  if (Budget(&g_scopeLines, kScopeLines, "scope")) {
+    char t[19];
+    sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_unscoped",
+                        {{"scope", why == Scope::kOtherLevel ? "other_level" : "no_game"}, {"table", sentinel::HexString(t, table ? data : 0)},
+                         {"rows_stock", rows}, {"whizzby_stock", whizzby}, {"mode", !table ? "no_table" : writes ? "written" : "read_only"},
+                         {"msg", "no combat level is loaded any more: every id this module put into the shared impact table is the stock id again, "
+                                 "so the level now loaded plays what stock plays, and the tick stops polling the table"}});
+  }
+  return true;
 }
 
 ModuleResult InstallHandlers(sentinel::ImageLookup lookup, std::uintptr_t base) noexcept {
@@ -711,12 +788,27 @@ void Tick(std::uintptr_t game) noexcept {
   if (!g_loadHooked && !g_scoped.load(std::memory_order_acquire)) {  // no load handler to mark a combat level's table: ask the levels, once a second
     const double at = Now();
     if (at >= g_nextScope) {
-      g_nextScope = at + 1.0;
+      g_nextScope = at + kRecheckS;
       if (DecideScope() == Scope::kCombat) g_scoped.store(true, std::memory_order_release);
     }
   }
   if (!g_scoped.load(std::memory_order_acquire)) return;  // an arena match, or no table of a combat level: one load per frame
   const double now = Now();
+  // While a combat level's table is live, once a second: is a combat level still loaded? An arena space that starts while a combat one lives shares the
+  // table (no load runs for it), so the answer is asked of the levels, not of the loads. When it is no, the stock ids go back and the scope ends (fail closed).
+  if (!g_unscoping.load(std::memory_order_acquire) && now >= g_nextScope) {
+    g_nextScope = now + kRecheckS;
+    g_rechecks.fetch_add(1, std::memory_order_relaxed);
+    const Scope scope = DecideScope();
+    if (scope != Scope::kCombat) {
+      g_unscopeWhy = scope;
+      g_unscoping.store(true, std::memory_order_release);
+    }
+  }
+  if (g_unscoping.load(std::memory_order_acquire)) {
+    Unscope(g_unscopeWhy);  // a busy lock: the next frame tries again
+    return;
+  }
   if (now < g_next) return;
   g_next = now + kPollS;
   g_polls.fetch_add(1, std::memory_order_relaxed);
@@ -760,6 +852,9 @@ Stats GetStats() noexcept {
   s.rowsLeft = g_rowsLeft.load();
   s.skipped = g_skipped.load();
   s.shutdowns = g_shutdowns.load();
+  s.rechecks = g_rechecks.load();
+  s.unscoped = g_unscoped.load();
+  s.rowsRestored = g_rowsRestored.load();
   return s;
 }
 
@@ -786,6 +881,12 @@ void ResetForTest() noexcept {
   g_scoped.store(false);
   g_loadHooked = false;
   g_nextScope = 0;
+  g_unscoping.store(false);
+  g_rebuiltMap.store(0);
+  g_unscopeWhy = Scope::kOtherLevel;
+  g_rechecks.store(0);
+  g_unscoped.store(0);
+  g_rowsRestored.store(0);
   g_unsDone.store(0);
   g_noteLines.store(0);
   g_writeLines.store(0);

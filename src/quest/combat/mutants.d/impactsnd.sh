@@ -175,3 +175,17 @@ runm ci_off_msg_reason_dropped src/quest/combat/combat_install.cpp 's/ config ke
 runm ci_results_buffer_320     src/quest/combat/combat_install.cpp 's/char results\[400\];/char results[320];/' quest-host-combat combat_install_test
 # the arena APK and a plain release (#2300): the gate keeps the impact sounds and the level decals from running at all
 runm ci_arena_runs_impactsnd_decals src/quest/combat/combat_install.cpp 's/^Outcome InstallNormal() noexcept { return RunPhase(/Outcome InstallNormal() noexcept { ImpactsndNormal(); DecalsNormal(); return RunPhase(/' quest-host-combat combat_install_test
+# while a combat level's table is in scope the tick asks the levels once a second; an arena space that shares the table gets the stock ids back and the
+# tick stops (no recheck is the tree before the fix)
+runm im_no_recheck              $C 's/^  if (!g_unscoping.load(std::memory_order_acquire) \&\& now >= g_nextScope) {$/  if (false \&\& now >= g_nextScope) {/'
+runm im_recheck_every_frame     $C 's/^    g_nextScope = now + kRecheckS;$/    g_nextScope = now;/'
+runm im_recheck_combat_only     $C 's/^    if (scope != Scope::kCombat) {$/    if (scope == Scope::kNoGame) {/'
+runm im_unscope_keeps_ids       $C 's/^    __atomic_store_n(reinterpret_cast<std::uint32_t\*>(data + 16 \* i + 8), kStockId, __ATOMIC_RELEASE);$//'
+runm im_unscope_foreign_ids     $C 's/id == kStockId || (!all \&\& !KnownId(id))) continue;/id == kStockId || (!all \&\& false)) continue;/'
+runm im_unscope_whizzby_kept    $C 's/^      whizzby = StockIds(wData, wCount, true);$/      whizzby = 0;/'
+runm im_unscope_not_rebuilt     $C 's/^    const bool rebuilt = map == g_rebuiltMap.load(std::memory_order_acquire);$/    const bool rebuilt = false;/'
+runm im_unscope_keeps_polling   $C 's/^  g_scoped.store(false, std::memory_order_release);  \/\/ the scope ends: the tick stops polling$//'
+runm im_unscope_busy_gives_up   $C 's/^    if (pthread_mutex_trylock(\&g_tableMu) != 0) return false;$/    if (pthread_mutex_trylock(\&g_tableMu) != 0) { g_scoped.store(false); g_unscoping.store(false); return true; }/'
+runm im_unscope_unchecked_table $C 's/^        !SafeRead(m2 + kMapCount, \&c2, sizeof c2) || c2 != count) {$/        !SafeRead(m2 + kMapCount, \&c2, sizeof c2) || false) {/'
+runm im_unscope_no_record       $C 's/^    sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_unscoped",$/    if (false) sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_unscoped",/'
+runm im_unscope_read_only_writes $C 's/^  const bool writes = g_write \&\& g_writersOk.load(std::memory_order_acquire);.*$/  const bool writes = true;/'

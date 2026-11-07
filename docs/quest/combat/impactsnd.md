@@ -282,14 +282,16 @@ names it), or `rows` neither 15 nor 5.
 ## Scope and arena cost
 
 Arena and combat run on the same APK, and the bullet system, its impact table and these two game functions exist in an arena match too. The module acts only
-where a combat level is loaded (`combat_level.h` `Classify`, the combat lobby on: an Echo Arena level that is loaded wins, and the lobbies arena players use
-are no class):
+while a combat map (`mpl_combat_dyson`, `_combustion`, `_fission`, `_gauss`) or the combat lobby (`mpl_lobby_b_combat`) is loaded or loading and no Echo Arena
+level is (`combat_level.h` `Classify` with the combat lobby on and the in-flight table read: an Echo Arena level wins, and the lobby levels arena players
+use, `mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena`, `_b_social`, are no class):
 
 | Where | What the module does |
 |---|---|
 | `LoadSoundSettings` in a combat map or the combat lobby | the rebuilt loader, or the stock loader and the after-load pass; marks the scope |
 | `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else, and the scope flag is cleared (fail closed: through the game's one caller it is already clear, see below); one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
-| a game space that loads while a combat match is played (any level) | nothing: no `LoadSoundSettings` runs while a bullet system lives (below), so the scope and the poll go on until the last bullet system's `Shutdown` frees the table |
+| a game space that loads while a combat match is played (any level) | no `LoadSoundSettings` runs while a bullet system lives (below), so the load handler sees nothing; the tick's once-a-second ask does (next row) |
+| the tick, a combat table live, once a second | asks the levels (one `Classify`): when no combat level is loaded any more (an Echo Arena level is loaded or loading, or none of combat's is), every id the module put into the table is the stock id 1 again, one `combat_impactsnd_unscoped` record says so, and the scope ends: the tick stops polling |
 | `Shutdown`, any level | takes the table lock around the game's function; the scope ends when the game has cleared the global |
 | the tick, no table of a combat level live | one atomic load of the game and one of the scope flag, per frame |
 | the tick, a combat table live | the poll, four times a second |
@@ -297,7 +299,9 @@ are no class):
 Cost in an arena match, per ADR 0038: a load is one `Classify` (two table reads of the game, each `process_vm_readv`) once per game-space load, then the game's own
 loader; a Shutdown is one uncontended mutex lock and unlock and two pthread-key accesses, once per bullet system teardown; the tick callback is two relaxed/acquire
 loads and a branch, once per rendered frame, no system call and no clock read. When the load handler could not be hooked the tick asks the levels itself once a
-second (a degraded mode that the `combat_impactsnd_hook` Error names). The host numbers, and the command that measures them, are in the pull request that moved the module.
+second (a degraded mode that the `combat_impactsnd_hook` Error names). While a combat level's table is live the tick asks the levels once a second too (one
+`Classify` with the in-flight read): in a combat match that is 1 scan a second; when an arena space starts beside the combat one, the first ask after it ends
+the scope, and from then on the arena frame is the two loads and the branch above. The host numbers, and the command that measures them, are in the pull request that moved the module.
 
 One table for every bullet system. The game makes and loads the table only for the first bullet system and frees it only with the last (disassembly VA, ELF
 = VA - 0x100000):
@@ -310,10 +314,17 @@ One table for every bullet system. The game makes and loads the table only for t
 - `LoadSoundSettings` has one call, from the thunk at `0x10459b0` (`0x10459bc`), whose one caller is `Initialize` (`0x2221844`); its other references are
   the JUMP_SLOT and the two unread `data` words above.
 
-So the stock loader always runs on a new, empty table, never on one a combat load rebuilt, and it cannot add its 5 stock rows to the 15. When an arena
-game space's bullet system starts while a combat map's still lives, no load runs: the module sees none, the scope stays on, the arena system uses the 15
-rebuilt rows (as stock, it would use the stock 5), and the tick keeps polling that table 4 times a second and writes nothing while every id is right
-(`NeedsWrite`). The scope ends when the last `Shutdown` frees the table (the handler reads the global 0). The handler's clear on a non-combat load is
+So the stock loader always runs on a new, empty table, never on one a combat load rebuilt, and it cannot add its 5 stock rows to the 15. A game space can
+start while a combat one lives: `CncaGame::UpdateGameSpaceInit` (`0x18ecc7c`) inserts a game space whose init finished into the loaded table at
+`CncaGame+0x1f88` (`CTable::Insert`, keyed by the space's level) and removes none; teardown is the separate queue `UpdateGameSpaceShutdown` (`0x18eca3c`).
+When that space is an Echo Arena level, its bullet system shares the combat level's table and no load runs. The tick's once-a-second ask then sees the arena
+level (it wins in `Classify`), puts the stock id 1 back into every row whose id is one of the 15 Wwise ids (every row, and every row of the whizzby table at
+`+0x40`, when the rebuilt loader filled the table), logs `combat_impactsnd_unscoped` and ends the scope, so a hit in the arena space finds id 1, the id every row of the
+stock table holds, and plays no combat sound. The table keeps its count and keys: the game's hit code reads it without the module's lock, so the
+module changes a row only by one aligned 4-byte store, never adds, removes or moves one; the 10 rows the stock loader would not have built stay, each with
+id 1. The combat space keeps the stock ids for the rest of its match (fail closed: the scope does not come back while the table lives). A busy table lock (a
+`Shutdown` running) or a table that changed between the read and the lock is tried again on the next frame. With `combat.impactsnd_write` false nothing of
+the module's is in the table and the scope just ends. Otherwise the scope ends when the last `Shutdown` frees the table (the handler reads the global 0). The handler's clear on a non-combat load is
 therefore reached through `Initialize` only when no table survives; a load reaching it through another path (the unread `data` words) while a combat
 table lives would stop the poll of that table until the next combat load, and the ids already written stay. Whether two bullet systems are ever alive at
 once on a headset is unverified.
