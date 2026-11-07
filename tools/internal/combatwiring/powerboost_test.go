@@ -54,6 +54,7 @@ func TestHookedHealDecodesThroughTheSharedRuleAndActsOnUnlinkFirst(t *testing.T)
 		"if (m.kind == pbr::kUnlink) {",
 		"if (g_server) EndBuff(cs, (uint16_t)index);",
 		"return;",
+		"const bool rez = m.rez != 0;",
 		"if (m.kind == pbr::kUse) {",
 		"g_dr_permille = m.drPermille;",
 		"g_dr_seconds = m.seconds;",
