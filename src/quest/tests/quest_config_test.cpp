@@ -1162,7 +1162,13 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
     const char* name;
     nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
   };
-  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps}, {"memsys", &nevr_quest::CombatConfig::memsys}};
+  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
+                      {"memsys", &nevr_quest::CombatConfig::memsys},
+                      // the resource table steps (#2177)
+                      {"meshstep", &nevr_quest::CombatConfig::meshstep},
+                      {"instmodel", &nevr_quest::CombatConfig::instmodel},
+                      {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
     const std::string full = std::string("combat.") + key.name;
@@ -1187,8 +1193,11 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
       CHECK(!r.config.combat.force.on);  // no other key moved
       const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
       CHECK(other);  // the other module's switch is its own
+      for (const Key& each : keys) {
+        if (each.member != key.member) CHECK((r.config.combat.*each.member).on);  // and no other key moved
+      }
     }
-    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
+    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: the default, and the key is named
       const LoadResult r = Load(Full(), section + value + "\n");
       CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
       CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
@@ -1269,6 +1278,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
                       {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // the headset gates' four keys (#2180, combat/headset_gates.h): the same rule, each on by default
+                      {"gate_perm", &nevr_quest::CombatConfig::gatePerm, true},
+                      {"gate_bots", &nevr_quest::CombatConfig::gateBots, true},
+                      {"gate_link", &nevr_quest::CombatConfig::gateLink, true},
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
                       {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
@@ -1310,6 +1323,47 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   }
 }
 
+// combat.gate_link_libs (#2180): a text. Absent, or a value that is not a string: no text and not from the file (the module's 21 libraries stand).
+// A string, an empty one included, is the file's word, kept whole and never logged; one that does not fit the buffer keeps the default with a Warning
+// that names the key and not the text.
+void CombatGateLinkLibsIsATextThatTheFileGivesWhole() {
+  const std::string key = "combat.gate_link_libs";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.gateLinkLibs.source != Source::kFile && r.config.combat.gateLinkLibs.text[0] == '\0');
+  }
+  const struct {
+    const char* yaml;
+    const char* want;
+  } given[] = {{"combat:\n  gate_link_libs: all\n", "all"},
+               {"combat:\n  gate_link_libs: \"none\"\n", "none"},
+               {"combat:\n  gate_link_libs: \"0e4384a5 1703a89b\"\n", "0e4384a5 1703a89b"},
+               {"combat:\n  gate_link_libs: \"lib555db38933fef859.so,libf808c072bb49da47.so\"\n", "lib555db38933fef859.so,libf808c072bb49da47.so"},
+               {"combat:\n  gate_link_libs: \"\"\n", ""}};
+  for (const auto& g : given) {
+    const LoadResult r = Load(Full(), g.yaml);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && r.config.combat.gateLinkLibs.source == Source::kFile);
+    CHECK(std::string(r.config.combat.gateLinkLibs.text) == g.want);
+  }
+  {  // a value that is not a string keeps the default, with a Warning that names the key
+    for (const char* value : {"[a, b]", "{a: 1}"}) {
+      const LoadResult r = Load(Full(), std::string("combat:\n  gate_link_libs: ") + value + "\n");
+      CHECK(!r.fileRejected && r.config.combat.gateLinkLibs.source != Source::kFile && r.config.combat.gateLinkLibs.text[0] == '\0');
+      CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_a_string", LogLevel::kWarn));
+    }
+  }
+  {  // the longest text that fits, and one byte more
+    const std::string fits(nevr_quest::kCombatTextMax - 1, 'a');
+    const LoadResult ok = Load(Full(), "combat:\n  gate_link_libs: " + fits + "\n");
+    CHECK(ok.config.combat.gateLinkLibs.source == Source::kFile && std::string(ok.config.combat.gateLinkLibs.text) == fits);
+    const LoadResult longer = Load(Full(), "combat:\n  gate_link_libs: " + fits + "a\n");
+    CHECK(longer.config.combat.gateLinkLibs.source != Source::kFile && longer.config.combat.gateLinkLibs.text[0] == '\0');
+    CHECK(EventsWithAreAtLevel(longer, "config file key=" + key + " rejected reason=too_long", LogLevel::kWarn));
+    CHECK(!EventsContain(longer, "aaaa"));
+  }
+}
+
 int main() {
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
@@ -1336,6 +1390,7 @@ int main() {
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
   CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
   CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
+  CombatGateLinkLibsIsATextThatTheFileGivesWhole();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

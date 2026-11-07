@@ -33,21 +33,21 @@ TEST(CombatSettings, TheDefaultsAreTheNineGroupTable) {
   EXPECT_TRUE(s.On(Group::kVeil));
   EXPECT_TRUE(s.On(Group::kMatchControl));
   EXPECT_TRUE(s.On(Group::kBalance));
-  EXPECT_FALSE(s.On(Group::kCleanExit));
+  EXPECT_TRUE(s.On(Group::kCleanExit));
   for (const auto& g : s.groups) EXPECT_EQ(g.source, Source::kDefault);
 }
 
 TEST(CombatSettings, ConfigTurnsAGroupOnOrOff) {
-  const nevr_combat::Settings s = Read({{"medigun", "true"}, {"drone", "off"}, {"clean_exit", "YES"}});
+  const nevr_combat::Settings s = Read({{"medigun", "true"}, {"drone", "off"}, {"clean_exit", "NO"}});
   EXPECT_TRUE(s.On(Group::kMedigun));
   EXPECT_FALSE(s.On(Group::kDrone));
-  EXPECT_TRUE(s.On(Group::kCleanExit));
+  EXPECT_FALSE(s.On(Group::kCleanExit));
   EXPECT_EQ(s.groups[static_cast<std::size_t>(Group::kMedigun)].source, Source::kConfig);
 }
 
 TEST(CombatSettings, AnUnrecognisedValueKeepsTheDefaultAndSaysSo) {
   const nevr_combat::Settings s = Read({{"clean_exit", "maybe"}, {"veil", ""}});
-  EXPECT_FALSE(s.On(Group::kCleanExit));
+  EXPECT_TRUE(s.On(Group::kCleanExit));
   EXPECT_TRUE(s.On(Group::kVeil));
   EXPECT_EQ(s.groups[static_cast<std::size_t>(Group::kCleanExit)].source, Source::kUnrecognised);
   EXPECT_EQ(s.groups[static_cast<std::size_t>(Group::kVeil)].source, Source::kUnrecognised);

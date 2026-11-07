@@ -94,62 +94,6 @@ int main() {
   if (g_fail == 0) std::printf("wiring_test (bvh only): all checks pass (one tick registered, game tick installed)\n");
   return g_fail == 0 ? 0 : 1;
 }
-#elif defined(WIRING_GATE_LINK_ONLY)
-// only the headset caller-range gates on (Q15T_GATE_LINK, and Q15T_GATE_BOTS when EXPECT_BOTS): InitEx must install the one
-// CVR::HeadsetType wrapper with the pinned ranges and the link answer (kind 4); a gate that is off gets an empty range.
-#include "headset_gates.h"
-#include "module_switch.h"
-extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
-extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
-extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDisplayRefreshRate(void*, float) { return 0; }
-static void GLog(const char*, uint32_t, const char*, const NevrLogField*, uint32_t) {}
-int main() {
-  const size_t kImage = 0x3a00000;
-  void* p = mmap(nullptr, kImage, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-  if (p == MAP_FAILED) std::abort();
-  const uintptr_t base = reinterpret_cast<uintptr_t>(p);
-  auto* w = static_cast<uintptr_t*>(p);
-  w[2] = reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels);
-  w[3] = reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate);
-  w[4] = reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame);
-  *reinterpret_cast<uintptr_t*>(base + 0x36f9fd8) = base + 0x1a6f164;  // the CVR::HeadsetType slot holds the pinned function
-  mprotect(p, kImage, PROT_READ);
-  NevrGameContext ctx{};
-  ctx.base_addr = base;
-  ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NevrGameContext);
-  ctx.plugin_id = "q15t";
-  ctx.log = &GLog;
-  ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
-#ifdef WIRING_LEVELNAME_OFF
-  // levelname.off in the data directory: the bot-body gate must follow levelname off (combat_gates.h, needs_levelname)
-  char dir[] = "/tmp/q15t_wiring_ln_XXXXXX";
-  if (mkdtemp(dir) == nullptr) std::abort();
-  if (FILE* f = std::fopen((std::string(dir) + "/levelname.off").c_str(), "w")) std::fclose(f);
-  q15t::SetModuleSwitchDirForTest(dir);
-#endif
-  CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
-  CHECK(*reinterpret_cast<uintptr_t*>(base + 0x36f9fd8) != base + 0x1a6f164, "the CVR::HeadsetType slot was not swapped");
-  const q15t::HeadsetGateRanges r = q15t::GetHeadsetGateRangesForTest();
-  CHECK(r.link_lo == base + 0x202ba74 && r.link_hi == base + 0x202bac8, "link range %llx..%llx, want the Bind (ELF 0x202ba74..0x202bac8)",
-        (unsigned long long)(r.link_lo - base), (unsigned long long)(r.link_hi - base));
-  CHECK(r.link_answer == 4, "link answer %d: want the link kind (4), a kind the Bind has a case for and not the Quest kind (3)", r.link_answer);
-#if defined(EXPECT_BOTS) && !defined(WIRING_LEVELNAME_OFF)
-  CHECK(r.bots_lo == base + 0x124dd38 && r.bots_hi == base + 0x124e004, "bots range %llx..%llx", (unsigned long long)(r.bots_lo - base),
-        (unsigned long long)(r.bots_hi - base));
-#else
-  CHECK(r.bots_lo == r.bots_hi, "bots gate is off: its range must be empty, got %llx..%llx", (unsigned long long)(r.bots_lo - base),
-        (unsigned long long)(r.bots_hi - base));
-#endif
-  if (g_fail == 0) std::printf("wiring_test (gate link%s): all checks pass\n",
-#ifdef EXPECT_BOTS
-                               " + bots"
-#else
-                               " only"
-#endif
-  );
-  return g_fail == 0 ? 0 : 1;
-}
 #elif defined(WIRING_CAPS_ONLY)
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}  // host_overrides.h names it
 int main() {

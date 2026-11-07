@@ -42,7 +42,7 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
 
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
-# X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
+# <next>-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
 # The version and the commit are NOT defined for the tree: a definition on every compile command rebuilds every
 # translation unit, and every precompiled header, for each new commit or uncommitted edit. The few files that read

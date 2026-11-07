@@ -29,6 +29,7 @@ NEVR_ROOT_RELATIVE = pathlib.Path("echovr/.wineprefix/drive_c/users") / getpass.
 LOCATIONS = {
     "local": pathlib.Path("echovr/_local/.credentials.json"),
     "local-backup": pathlib.Path("echovr/_local/.credentials.json.prod-bak"),
+    "local-bak": pathlib.Path("echovr/_local/.credentials.json.bak"),
     "nevr-root": NEVR_ROOT_RELATIVE / ".credentials.json",
 }
 SCRIPTS = ("launch-client.sh", "launch-server.sh", "verify-server.sh")
@@ -175,26 +176,32 @@ class CopyCredentialsGuardTest(unittest.TestCase):
         self.assertIn("acquire_game_run_lock needs GAME_ROOT", result.stderr)
         self.assertFalse(self.lock.exists())
 
-    def test_the_find_lines_of_the_recipe_in_agents_md_list_then_remove_every_sign_in_file(self):
-        # The "Make it safe" step of AGENTS.md, run as written on a fake copy: the files are listed, removed, and the
-        # last listing is empty. The lines are read from the document, so a command that stops working fails here.
-        text = (REPO / "AGENTS.md").read_text()
-        lines = [ln.strip() for ln in text.splitlines()
-                 if ln.strip().startswith("find <copy>/echovr -name '.credentials.json*'")]
-        self.assertEqual(len(lines), 3, lines)
+    def recipe_block(self) -> str:
+        # The fenced block under "**Make it safe.**" in AGENTS.md, with the indent of the document removed.
+        lines = (REPO / "AGENTS.md").read_text().splitlines()
+        start = next(i for i, ln in enumerate(lines) if "**Make it safe.**" in ln)
+        opening = next(i for i in range(start, len(lines)) if lines[i].strip() == "```sh")
+        closing = next(i for i in range(opening + 1, len(lines)) if lines[i].strip() == "```")
+        return "\n".join(ln.strip() for ln in lines[opening + 1:closing])
+
+    def test_the_make_it_safe_block_lists_moves_and_removes_every_sign_in_file(self):
+        # The "Make it safe" block of AGENTS.md, run as written on a fake copy, removal included: every sign-in file
+        # is listed, moved into the holding directory, and the block's own last line removes that directory. The
+        # end state is checked, not a comment: no sign-in file anywhere in the copy, the holding directory gone.
+        # Two sign-in files share a name (`.credentials.json` in _local and in the nevr root), so the move must keep
+        # each file's own path, or one stays in the copy.
+        block = self.recipe_block()
         planted = [self.plant(where) for where in LOCATIONS]
-        (self.game_root / "echovr/_local/keep.json").write_text("{}")
-        outputs = []
-        for line in lines:
-            done = subprocess.run(["bash", "-c", line.replace("<copy>", str(self.game_root))], capture_output=True,
-                                  text=True, timeout=30)
-            self.assertEqual(done.returncode, 0, done.stderr)
-            outputs.append(sorted(done.stdout.splitlines()))
-        self.assertEqual(outputs[0], sorted(str(path) for path in planted))
-        self.assertEqual(outputs[1], [])
-        self.assertEqual(outputs[2], [])
-        self.assertTrue(all(not path.exists() for path in planted))
-        self.assertTrue((self.game_root / "echovr/_local/keep.json").exists(), "an unrelated file was removed")
+        keep = self.game_root / "echovr/_local/keep.json"
+        keep.write_text("{}")
+        done = subprocess.run(["bash", "-c", block.replace("<copy>", str(self.game_root))], cwd=self.tmp,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(sorted(done.stdout.splitlines()), sorted(str(path) for path in planted),
+                         "the listing does not name every sign-in file " + done.stderr)
+        self.assertFalse((self.game_root / "to-delete").exists(), "the block did not remove its holding directory")
+        self.assertEqual(list(self.game_root.rglob(".credentials.json*")), [],
+                         "a sign-in file is still in the copy " + done.stderr)
+        self.assertTrue(keep.exists(), "an unrelated file was removed")
 
     def test_every_script_that_finds_the_install_goes_through_the_one_guard(self):
         # A launcher added later that sources the shared helper must take the run lock, which carries the guard.

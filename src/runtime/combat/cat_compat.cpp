@@ -1,9 +1,15 @@
 #include "runtime/combat/cat_compat.h"
 
 #include <cstdlib>
+#include <map>
+#include <mutex>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "core/logging.h"
+#include "runtime/combat/balance_values.h"
+#include "runtime/combat/shipped_settings.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/service_config.h"
@@ -227,10 +233,50 @@ void HostLog(const char* module, std::uint32_t level, const char* text) {
 // --- PowerBoost.ini -> config.yaml -------------------------------------------------------------------------------
 
 namespace {
+// #600: a key config.yaml leaves out takes the value his release writes into PowerBoost.ini from his settings
+// (shipped_settings.h), and the caller's literal only for a key his PowerBoost.ini does not carry. A shipped value is
+// decided once and kept, so the pointer a caller gets stays valid. Each key's source is one Debug line, the first time the
+// key is read (MEDIGUN re-reads its offsets once a second).
+std::mutex g_iniLock;
+std::map<std::string, std::string> g_shipped;  // "section.key" -> his value
+std::map<std::string, bool> g_sourceLogged;    // "section.key" -> its source line was written
+
+IniSourceCounts g_counts;  // keys by source, each key counted once (logging.md Rule 11: combat.cpp logs them at Info)
+
+void LogSourceOnce(const std::string& name, const char* source, const char* value) {
+  std::lock_guard<std::mutex> lock(g_iniLock);
+  if (!g_sourceLogged.emplace(name, true).second) return;
+  if (source[0] == 'c' && source[1] == 'o' && source[2] == 'n') {
+    ++g_counts.config;
+  } else if (source[0] == 's') {
+    ++g_counts.shipped;
+  } else {
+    ++g_counts.code;
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.COMBAT] setting %s=%s source=%s", name.c_str(), value != nullptr ? value : "(code)", source);
+}
+
 const char* IniValue(const char* section, const char* key) {
   if (section == nullptr || key == nullptr) return nullptr;
-  const std::string path = std::string("settings.") + section + "." + key;
-  return NevrCfgCombatValue(path.c_str());
+  const std::string name = std::string(section) + "." + key;
+  if (const char* v = NevrCfgCombatValue(("settings." + name).c_str())) {
+    LogSourceOnce(name, "config.yaml", v);
+    return v;
+  }
+  const char* shipped_value = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_iniLock);
+    auto it = g_shipped.find(name);
+    if (it == g_shipped.end()) {
+      static const nlohmann::json settings = nlohmann::json::parse(nevr_combat::balance::kCatWeaponSettings, nullptr, false);
+      if (const std::optional<std::string> shipped = nevr_combat::ShippedSetting(settings, section, key)) {
+        it = g_shipped.emplace(name, *shipped).first;
+      }
+    }
+    if (it != g_shipped.end()) shipped_value = it->second.c_str();
+  }
+  LogSourceOnce(name, shipped_value != nullptr ? "shipped" : "code (not in his PowerBoost.ini)", shipped_value);
+  return shipped_value;
 }
 }  // namespace
 
@@ -240,6 +286,11 @@ int IniInt(const char* section, const char* key, int fallback) {
   char* end = nullptr;
   const long n = std::strtol(v, &end, 10);  // GetPrivateProfileInt reads the leading digits, as strtol does
   return end == v ? fallback : static_cast<int>(n);
+}
+
+IniSourceCounts IniSources() {
+  std::lock_guard<std::mutex> lock(g_iniLock);
+  return g_counts;
 }
 
 DWORD IniString(const char* section, const char* key, const char* fallback, char* out, DWORD size) {

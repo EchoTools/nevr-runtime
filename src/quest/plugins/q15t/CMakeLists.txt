@@ -3,15 +3,6 @@
 # release or package-dev APK; the variant and combat recipes package it (src/quest/plugins/q15t/README.md). Paths are relative to this file.
 set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
-# The 21 script libraries whose headset-type expression decides a combat entry on a Quest: the 20 of the combat menu (the combat
-# buttons, FIND COMBAT, the combat mode card, the level select pages, the "combat allowed" prefab) and the lobby script
-# (libf808c072bb49da47.so), whose two LoadLevel branch nodes read the expression's quest output to pick the lobby wing that is
-# loaded (a Quest gets the arena wing only; the Link answer takes the combat wing's pin). The menu gate answers only these. Every
-# other script that binds the expression (47 libraries in all) gets the real answer. Comma separated file names.
-set(Q15T_LINK_GATE_LIBS "lib555db38933fef859.so,lib1da85b18cbad6297.so,lib4e984de06cafe2ab.so,lib2d5ebd0e1895f269.so,libcab86dd5921bafc7.so,lib5e311be23be97835.so,libbad7ce9b6c6df2cb.so,libf36316e246f2ca21.so,lib8325751e75df5860.so,lib18000621255c6ea5.so,lib1f28bd4fa7d724fb.so,lib3ded824fccc2bf6d.so,lib5ddc3dcdad4a3ed5.so,lib8515ab072bc095a8.so,libb56c58de2b68fc61.so,libb7882b9d804f86c1.so,libb8bd659eb6ed3927.so,libbc170a382fda5499.so,libd280bb8333ad45ed.so,libfb4ad3853db57943.so,libf808c072bb49da47.so" CACHE STRING "Menu gate: the script libraries (file names, comma separated; 'all'; 'none') whose headset-type expression is told no kind of headset. A gate_libs.txt in the plugin data directory overrides it")
-option(Q15T_GATE_PERM "Gameplay (G1): the party-permissions expression stops refusing combat to a Quest headset. Source combat build: on. Kill file gate_perm.off" ON)
-option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
-option(Q15T_GATE_BOTS "Gameplay (G6): the bot-body chooser stops picking the arena bot for a Quest headset. Installed only with levelname (the combat bot body is in the full global_mp). Source combat build: on. Kill file gate_bots.off" ON)
 option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once per user id (plugin behaviour)" ON)
 
 # ---- Gameplay and fix modules (src/<m>.{h,cpp}; docs/quest/q15t/modules/<m>.md). Defaults are each doc's own, i.e. the source build's. ----
@@ -19,7 +10,6 @@ option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once
 option(Q15T_FXTRAIL "fxtrail (R29): a bullet whose trail effect has no instance ends its trail. Source: ON by default" ON)
 option(Q15T_VOIPDROP "voipdrop (R30): a remote voice packet that cannot be stored is dropped. Source: DEFAULT ON" ON)
 option(Q15T_CUSTCTX "custctx (R31-R33): three guards on the customization renderer. Source: DEFAULT ON" ON)
-option(Q15T_MESHSTEP "meshstep (#1555): CGMeshListResource tables grow by step 1 (reconstructed constructor, GOT word). Kill file meshstep.off" ON)
 option(Q15T_GUNCONNECT "gunconnect (R17-R19): the local player's guns get Connect(local user) so they fire. Source: default ON; tick" ON)
 option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat match. Source: default ON; tick" ON)
 option(Q15T_BVH "bvh (R20-R25): a real static raycast tree for CBVHTree. Source: on by default (kill file bvh.off); tick" ON)
@@ -45,18 +35,11 @@ set_property(CACHE Q15T_POWERBOOST PROPERTY STRINGS 0 1 2 3)
 option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on; on in the wave19a on-list" ON)
 option(Q15T_MUSIC "music (T-48): the combat music is stopped when a match ends or a new one starts, so instances do not stack. Source: default ON; tick" ON)
 option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after its enable is turned off again. Source: default ON (on-list); tick" ON)
-# shaderstep (issue #1553): the CGShaderSetResource table growth step is 1, set when the factory constructs the object. Off: shaderstep.off.
-option(Q15T_SHADERSTEP "shaderstep (#1553): CGShaderSetResource table growth step 32 -> 1 in the factory constructor (vtable wrapper, no code write)" ON)
 option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its plain name, so the full-size global_mp in the pack loads. Source combat build: on. Kill file levelname.off" ON)
-option(Q15T_INSTMODEL "instmodel (disassembly 0x1a078dc): CGInstancedModelResource's constructor with the growth step of its CTableXT members at 1, not 32 (the word row this replaces: a code write). Source: default ON; no tick" ON)
 # shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
 option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
-# tablestep (issue #1552): the shader-set resource table's growth step 32 -> 1 (CFactory<CGShaderSetResource>::CreateInstance, disassembly
-# libr15 0x1a0707c, a wrapper on its three data slots). Source: the shipped variant's word row (extra_rows: 0) is not in the APK, so
-# this is the plugin's own. Off file: tablestep.off in the plugin data directory.
-option(Q15T_TABLESTEP "tablestep (#1552): shader-set table growth step 32 -> 1 by a wrapper on CreateInstance's data slots. Source: ON" ON)
 # sendguard: CSendEventNode::Enter (disassembly libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
 # reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
 option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
@@ -90,8 +73,8 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS)
+set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
+foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD DECALS)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -103,14 +86,8 @@ endif()
 if(Q15T_SHIELDGAMMA GREATER 0)
   list(APPEND Q15T_SOURCES src/shieldgamma.cpp)
 endif()
-if(Q15T_TABLESTEP)
-  list(APPEND Q15T_SOURCES src/tablestep.cpp)
-endif()
 if(Q15T_SENDGUARD)
   list(APPEND Q15T_SOURCES src/sendguard.cpp)
-endif()
-if(Q15T_SHADERSTEP)
-  list(APPEND Q15T_SOURCES src/shaderstep.cpp)
 endif()
 if(Q15T_LEVELNAME)
   list(APPEND Q15T_SOURCES src/boosterpool.cpp)  # the levelname companion: same option, same feature
@@ -128,17 +105,15 @@ target_link_libraries(nevr_q15t PRIVATE nevr::plugin_sdk dl)
 target_compile_options(nevr_q15t PRIVATE ${Q15T_COMMON_OPTIONS})
 target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
-  "Q15T_LINK_GATE_LIBS=\"${Q15T_LINK_GATE_LIBS}\""
-  Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
   Q15T_T26=$<BOOL:${Q15T_T26}>
-  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
+  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
+  Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()

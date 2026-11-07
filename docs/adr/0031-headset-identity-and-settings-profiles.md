@@ -14,7 +14,7 @@ ADR 0032 (fixes test the condition, not the headset) and ADR 0033 (controllers).
 
 The game itself knows two Quest answers. libr15 labels VrApi system property 0 value `0x140` as "Quest 2" and any other
 value "quest" (`docs/adr/0022-render-config-log.md`, the headset row), and its script gates compare `CVR::HeadsetType()`
-with 3, the Quest kind (`src/quest/plugins/q15t/src/headset_gates.h`).
+with 3, the Quest kind (`src/quest/combat/headset_gates.h`).
 
 The tree picks per-headset values in several places, each from its own signal:
 

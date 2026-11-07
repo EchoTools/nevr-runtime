@@ -13,7 +13,7 @@
 //   UMBRAL VEIL + net     combat.veil            on
 //   match control         combat.match_control   on (needs combat.veil: it rides the combat net)
 //   balance values        combat.balance         on
-//   clean exit            combat.clean_exit      off (the TerminateProcess stub is never written while off)
+//   clean exit            combat.clean_exit      on, as his loader always applies it (the TerminateProcess stub is never written while off)
 //   unfinished / unsafe   (none)                 never: party guns, payload speed, a client's own damage bonus, CombatBots
 
 #include <array>
@@ -39,7 +39,7 @@ inline constexpr std::array<GroupSpec, kGroupCount> kGroups = {{
     {Group::kVeil, "veil", "UMBRAL VEIL and the combat net", true},
     {Group::kMatchControl, "match_control", "match control terminals", true},
     {Group::kBalance, "balance", "balance values", true},
-    {Group::kCleanExit, "clean_exit", "clean exit", false},
+    {Group::kCleanExit, "clean_exit", "clean exit", true},
 }};
 
 /// Never on, whatever the config says, and why (logged once each at install).
