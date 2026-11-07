@@ -47,6 +47,7 @@
 #include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/lobby_full_backoff.h"
 #include "runtime/patch/queued_join_log.h"
+#include "runtime/combat/gear_trace.h"
 #include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
@@ -407,6 +408,9 @@ static VOID InitializeAfterGameImageGuard() {
   // [NEVR.MATCH]: what the client did with a lobby session success and what became of a join the game queued (#2163,
   // queued_join_log.h).
   nevr_queued_join_log::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // [NEVR.COMBAT] gear: whether a server's balance settings outlive its session (measure only, gear_trace.h).
+  nevr_gear_trace::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // The runtime version on the menu's versions panel (menu_version_label.h).
   nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));

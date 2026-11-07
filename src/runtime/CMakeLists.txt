@@ -100,6 +100,8 @@ set(PATCHES_SOURCES
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     "combat/dronefix.cpp"
+    # Measurement build (gear carry-over): [NEVR.COMBAT] gear records, log-only hooks (combat/gear_trace_rules.h).
+    "combat/gear_trace.cpp"
     "combat/powerboost.cpp"
     "combat/veilnet.cpp"
     "hook/export_trace_thunk.cpp"
@@ -1822,6 +1824,17 @@ if(BUILD_TESTING)
     target_include_directories(test_queued_join_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
+
+    # test_gear_trace.cpp (gear carry-over measurement): the [NEVR.COMBAT] gear rules, and the four hooks under MinHook
+    # against a fake game image.
+    add_executable(test_gear_trace tests/test_gear_trace.cpp combat/gear_trace.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_gear_trace.cpp combat/gear_trace.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_gear_trace PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_gear_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gear_trace PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_gear_trace DISCOVERY_MODE PRE_TEST)
 
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
