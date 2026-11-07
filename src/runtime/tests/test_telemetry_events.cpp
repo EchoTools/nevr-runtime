@@ -516,6 +516,25 @@ TEST(TelemetryEvents, ATeamSwitchCarriesTheNewAndPreviousRole) {
   EXPECT_EQ(Count(frames[0], EchoEvent::kPlayerJoined), 0);
 }
 
+TEST(TelemetryEvents, ASocialLobbysPlayerJoinsAsASocialParticipant) {
+  const auto frames = DetectOver({Empty(), WithPlayer(6, 3, 0x1234, "social_six")});
+  ASSERT_NE(First(frames[0], EchoEvent::kPlayerJoined), nullptr);
+  const auto& j = First(frames[0], EchoEvent::kPlayerJoined)->player_joined();
+  EXPECT_EQ(j.slot(), 6);
+  EXPECT_EQ(j.role(), telemetry::v2::ROLE_SOCIAL_PARTICIPANT);
+  EXPECT_EQ(j.account_number(), 0x1234u);
+}
+
+TEST(TelemetryEvents, ALobbyPlayerWhoJoinsBlueSwitchesFromSocialToBlue) {
+  const auto frames = DetectOver({WithPlayer(6, 3, 0x1234, "x"), WithPlayer(6, 0, 0x1234, "x")});
+  ASSERT_NE(First(frames[0], EchoEvent::kPlayerSwitchedTeam), nullptr);
+  const auto& sw = First(frames[0], EchoEvent::kPlayerSwitchedTeam)->player_switched_team();
+  EXPECT_EQ(sw.player_slot(), 6);
+  EXPECT_EQ(sw.new_role(), telemetry::v2::ROLE_BLUE_TEAM);
+  EXPECT_EQ(sw.prev_role(), telemetry::v2::ROLE_SOCIAL_PARTICIPANT);
+  EXPECT_EQ(Count(frames[0], EchoEvent::kPlayerJoined), 0);
+}
+
 TEST(TelemetryEvents, AStatRiseIsSentOnTheGameSlotWithItsTotal) {
   TelemetrySnapshot a = WithPlayer(13, 0, 1, "x");
   TelemetrySnapshot b = a;

@@ -57,8 +57,9 @@ inline int DiscHolderSlot(const TelemetrySnapshot& snap) {
 
 // PlayerState.flags as telemetry v2 packs it (`echo_arena.proto` at the pin, `PlayerState.flags`): bit 0
 // stunned, bit 1 invulnerable, bit 2 blocking, bit 3 possession, bit 4 is_emote_playing, bits 5-6 the team
-// index (0 blue, 1 orange, 2 spectator), bits 7-31 reserved and zero. The team is the entrant word's bits
-// 10-12 (PlayerInfo::teamIndex), never the word itself; a team past 2 is not a player's and sets no bit.
+// index (0 blue, 1 orange, 2 spectator; 3 a social lobby's player, which the pin does not name yet:
+// nevr-proto#21), bits 7-31 reserved and zero. The team is the entrant word's bits 10-12
+// (PlayerInfo::teamIndex), never the word itself; a team past 3 is not a player's and sets no bit.
 // `possession` is whether this player holds the disc (DiscHolderSlot).
 constexpr uint32_t kPlayerFlagStunned = 1u << 0;
 constexpr uint32_t kPlayerFlagInvulnerable = 1u << 1;

@@ -50,7 +50,7 @@ struct TelemetrySnapshot {
   // entrantWord and teamIndex come from the net-game entrant, entrantIndex is that entrant's index (the pose read
   // finds its entity from it); displayName from the game's GetUserName for that entrant; accountId and ping
   // from the lobby entrant at the same slot (telemetry_player_read.h). present: a
-  // player (team 0 to 2) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
+  // player (team 0 to 3) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
   // an entry in the lobby's entrant table.
   // handleGeneration is the slot's handle-table generation (the player's handle is { slot, generation });
   // jerseyNumber, level and packetLossRatio as /session reads them (telemetry_player_read.h).
@@ -62,7 +62,7 @@ struct TelemetrySnapshot {
     uint64_t accountId;
     char displayName[36];
     uint16_t ping;
-    uint16_t teamIndex;  // 0 blue, 1 orange, 2 spectator
+    uint16_t teamIndex;  // 0 blue, 1 orange, 2 spectator, 3 social lobby
     uint16_t jerseyNumber;
     uint32_t level;
     float packetLossRatio;
@@ -135,12 +135,18 @@ constexpr uint64_t PLAYER_FLAGS_OFFSET = 0x00;  // the entrant word
 constexpr uint64_t PLAYER_COUNT_OFFSET = 0xE2;
 constexpr uint16_t PLAYER_ARRAY_CAPACITY = 16;
 // The entrant word: game slot in bits 0-4 (0x14015649b `and edx, 0x1f`), team in bits 10-12
-// (0x140156441 `shr ax, 0xa`, 0x140156445 `and ax, 7`). /session skips a team above 2 (0x140156452
-// `cmp r14w, 2; ja`): 0 blue, 1 orange, 2 spectator; the server's own entrant is team 4.
+// (0x140156441 `shr ax, 0xa`, 0x140156445 `and ax, 7`). 0 blue, 1 orange, 2 spectator, 3 a social lobby's
+// players, and the server's own entrant is team 4. ServerAssignTeam (0x1401ab730) puts an entrant that asks
+// for any team (5) on team 3 when the lobby type is social_2.0, social_2.0_private or social_2.0_npe
+// (0x1401ab823-0x1401ab874); in any other lobby a request for 3 keeps the entrant's team (0x1401ab7be-0x1401ab7cc),
+// and a team id is below 5 (0x1401ab7df). /session skips a team above 2 (0x140156452 `cmp r14w, 2; ja`), but
+// /session answers nothing in a social lobby (0x140163da5 calls 0x140181d20, true for those three types: -6),
+// while /player_bones (0x140165d60) lists every entrant. The stream sends teams 0-3.
 constexpr uint16_t ENTRANT_SLOT_MASK = 0x1F;
 constexpr uint16_t ENTRANT_TEAM_SHIFT = 10;
 constexpr uint16_t ENTRANT_TEAM_MASK = 0x7;
-constexpr uint16_t ENTRANT_TEAM_LAST_PLAYER = 2;
+constexpr uint16_t ENTRANT_TEAM_SOCIAL = 3;
+constexpr uint16_t ENTRANT_TEAM_LAST_PLAYER = ENTRANT_TEAM_SOCIAL;
 
 // The net game's handle table: 16 entries { u16 entrant index, u16 generation } at CR15NetGame + 0x138,
 // indexed by game slot. The /session writer turns an entrant's slot into a handle and reads the entrant the

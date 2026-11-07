@@ -314,7 +314,8 @@ TEST(TelemetryFrame, EachPlayerCarriesItsPossessionTimeAndPacketLoss) {
 
 // PlayerState.flags as the pin packs it (telemetry/v2/echo_arena.proto, PlayerState.flags; #2269): bit 0
 // stunned, 1 invulnerable, 2 blocking, 3 possession, 4 is_emote_playing, bits 5-6 the team index (0 blue,
-// 1 orange, 2 spectator), bits 7-31 reserved. Written out here, not taken from telemetry_frame.h.
+// 1 orange, 2 spectator, and 3 a social lobby's players: nevr-proto#21), bits 7-31 reserved. Written out here,
+// not taken from telemetry_frame.h.
 constexpr uint32_t kStunned = 0x01;
 constexpr uint32_t kInvulnerable = 0x02;
 constexpr uint32_t kBlocking = 0x04;
@@ -322,6 +323,7 @@ constexpr uint32_t kPossession = 0x08;
 constexpr uint32_t kEmote = 0x10;
 constexpr uint32_t kTeamOrange = 0x20;
 constexpr uint32_t kTeamSpectator = 0x40;
+constexpr uint32_t kTeamSocial = 0x60;
 
 TelemetrySnapshot::PlayerInfo Info(uint16_t team) {
   TelemetrySnapshot::PlayerInfo pi{};
@@ -335,6 +337,7 @@ TEST(TelemetryPlayerFlags, TheTeamIsInBitsFiveAndSix) {
   EXPECT_EQ(PackPlayerFlags(Info(0), false), 0u);
   EXPECT_EQ(PackPlayerFlags(Info(1), false), kTeamOrange);
   EXPECT_EQ(PackPlayerFlags(Info(2), false), kTeamSpectator);
+  EXPECT_EQ(PackPlayerFlags(Info(3), false), kTeamSocial);
 }
 
 TEST(TelemetryPlayerFlags, EachStateHasTheBitThePinGivesIt) {
@@ -360,7 +363,9 @@ TEST(TelemetryPlayerFlags, NothingIsSetAboveBitSix) {
   pi.stunned = pi.invulnerable = pi.blocking = pi.emotePlaying = true;
   pi.entrantWord = 0xFFFF;  // the entrant word is not the flags, whatever it holds
   EXPECT_EQ(PackPlayerFlags(pi, true), 0x5Fu);
-  for (uint16_t team = 3; team <= 7; team++) {  // not a player's team: no team bits
+  pi.teamIndex = 3;
+  EXPECT_EQ(PackPlayerFlags(pi, true), 0x7Fu);
+  for (uint16_t team = 4; team <= 7; team++) {  // not a player's team: no team bits
     EXPECT_EQ(PackPlayerFlags(Info(team), false), 0u) << "team " << team;
   }
 }

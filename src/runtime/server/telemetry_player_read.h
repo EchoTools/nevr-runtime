@@ -32,7 +32,8 @@ inline uint16_t EntrantTeam(uint16_t word) {
 }
 
 // The stream's role for a player's team (EntrantTeam): 0 blue, 1 orange, 2 spectator, as /session names
-// them (0x14015645d-0x140156488). The roster, joins and team switches all map through this.
+// them (0x14015645d-0x140156488), and 3 a social lobby's player (ENTRANT_TEAM_SOCIAL). The roster, joins and
+// team switches all map through this.
 inline telemetry::v2::Role RoleFromTeam(uint16_t team) {
   switch (team) {
     case 0:
@@ -41,6 +42,8 @@ inline telemetry::v2::Role RoleFromTeam(uint16_t team) {
       return telemetry::v2::ROLE_ORANGE_TEAM;
     case 2:
       return telemetry::v2::ROLE_SPECTATOR;
+    case nevr_game_offsets::ENTRANT_TEAM_SOCIAL:
+      return telemetry::v2::ROLE_SOCIAL_PARTICIPANT;
     default:
       return telemetry::v2::ROLE_UNSPECIFIED;
   }
@@ -146,11 +149,11 @@ inline uint16_t HandleTableEntrant(const uint8_t* netGame, uint8_t slot) {
   return entrant;
 }
 
-// What ReadPlayers left out: entrants of a team above 2 (the server's own entrant is team 4), as /session
-// does; and players it could not send: a slot at or past kMaxSlots, an entrant its slot's handle-table entry
-// does not name (an empty entry, or one that names another entrant: a stale or second record of that slot),
-// and a slot with no entry in the lobby's entrant table (no account id or name). The handle table names one
-// entrant per slot, so no two entrants are read into one slot.
+// What ReadPlayers left out: entrants of a team above 3 (the server's own entrant is team 4); and players it
+// could not send: a slot at or past kMaxSlots, an entrant its slot's handle-table entry does not name (an empty
+// entry, or one that names another entrant: a stale or second record of that slot), and a slot with no entry in
+// the lobby's entrant table (no account id or name). The handle table names one entrant per slot, so no two
+// entrants are read into one slot.
 struct PlayerReadResult {
   uint16_t notPlayers = 0;
   uint16_t slotOutOfRange = 0;

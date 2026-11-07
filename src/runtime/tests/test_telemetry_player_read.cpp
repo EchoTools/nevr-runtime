@@ -4,7 +4,8 @@
 // /session writer reads it. The offsets and strides below are written out from the disassembly, not taken
 // from nevr_game_offsets, so a wrong constant in the shipped header fails here:
 //   - net-game entrants at +0x178, stride 0x250, count u16 at +0xE2; the first word holds the game slot in
-//     bits 0-4 and the team in bits 10-12; a team above 2 is not a player;
+//     bits 0-4 and the team in bits 10-12; teams 0-3 are players (3 is a social lobby's, ServerAssignTeam
+//     0x1401ab865-0x1401ab874), a team above 3 is not;
 //   - the handle table at +0x138: 16 entries { u16 entrant, u16 generation } by game slot; an entrant is read
 //     only when its slot's entry names it, and an entry whose entrant or generation is 0xffff names none;
 //   - each stat { u32 type, value, u32 count } at netGame + slot * 0x4D08 + off; type 5 is value / count;
@@ -163,7 +164,7 @@ TEST(TelemetryRole, ATeamMapsToItsRoleAndAnythingElseToNone) {
   EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(0), telemetry::v2::ROLE_BLUE_TEAM);
   EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(1), telemetry::v2::ROLE_ORANGE_TEAM);
   EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(2), telemetry::v2::ROLE_SPECTATOR);
-  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(3), telemetry::v2::ROLE_UNSPECIFIED);
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(3), telemetry::v2::ROLE_SOCIAL_PARTICIPANT);
   EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(4), telemetry::v2::ROLE_UNSPECIFIED);
 }
 
@@ -244,17 +245,37 @@ TEST(TelemetryPlayerRead, EachSlotKeepsTheIndexOfTheEntrantItWasReadFrom) {
   EXPECT_EQ(snap.playerInfo[9].entrantIndex, 2);
 }
 
-TEST(TelemetryPlayerRead, AnEntrantOfATeamAboveTwoIsNotAPlayer) {
+TEST(TelemetryPlayerRead, AnEntrantOfATeamAboveThreeIsNotAPlayer) {
   NetGame ng;
-  ng.SetEntrants({Word(0, 4), Word(4, 2), Word(6, 3)});
+  ng.SetEntrants({Word(0, 4), Word(4, 2), Word(6, 5), Word(7, 7)});
   nevr_telemetry_player::PlayerReadResult result;
   const TelemetrySnapshot snap = Read(ng, &result);
   EXPECT_FALSE(snap.playerInfo[0].present);
   EXPECT_FALSE(snap.playerInfo[6].present);
+  EXPECT_FALSE(snap.playerInfo[7].present);
   EXPECT_TRUE(snap.playerInfo[4].present);
   EXPECT_EQ(snap.playerCount, 1);
-  EXPECT_EQ(result.notPlayers, 2);
+  EXPECT_EQ(result.notPlayers, 3);
   EXPECT_EQ(result.slotOutOfRange, 0);
+}
+
+// A social lobby's players are on team 3 (the game puts an entrant that asks for any team there in social_2.0,
+// social_2.0_private and social_2.0_npe): they are read like any player, with their entrant index for the pose
+// and state reads.
+TEST(TelemetryPlayerRead, ASocialLobbysPlayerOnTeamThreeIsRead) {
+  NetGame ng;
+  ng.SetEntrants({Word(0, 4), Word(3, 3), Word(8, 3), Word(5, 0)});
+  nevr_telemetry_player::PlayerReadResult result;
+  const TelemetrySnapshot snap = Read(ng, &result);
+  ASSERT_TRUE(snap.playerInfo[3].present);
+  ASSERT_TRUE(snap.playerInfo[8].present);
+  EXPECT_TRUE(snap.playerInfo[5].present);
+  EXPECT_EQ(snap.playerInfo[3].teamIndex, 3);
+  EXPECT_EQ(snap.playerInfo[8].teamIndex, 3);
+  EXPECT_EQ(snap.playerInfo[3].entrantIndex, 1);
+  EXPECT_EQ(snap.playerInfo[8].entrantIndex, 2);
+  EXPECT_EQ(snap.playerCount, 3);
+  EXPECT_EQ(result.notPlayers, 1);  // the team-4 entrant
 }
 
 TEST(TelemetryPlayerRead, ASlotPastTheSnapshotIsCountedAndLeftOut) {
