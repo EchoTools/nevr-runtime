@@ -31,9 +31,23 @@ struct Hook {
   const char* name;              // for the log and HookGuard
 };
 
+/// A pointer slot in the script's own data that the engine fills during setup_bindings (an engine callback the script
+/// calls through, `call [rip+slot]`): replaced after the load, so the script calls `replacement`, which can call the
+/// engine's function through `*original`. Checked with the script's detour rows: the slot must hold a pointer into the
+/// game executable, else the whole script is refused. Put back before the game frees the script.
+struct Slot {
+  std::uint64_t script;
+  std::uint32_t rva;    // the slot, from the DLL's base
+  void* replacement;
+  void** original;      // set to the engine's function on each install
+  void** module;        // set to the script's base while the slot is replaced, null otherwise
+  const char* name;
+};
+
 /// Adds rows to the table. Called at boot, before the game loads its first script; a row added after a script is
 /// loaded applies from that script's next load.
 void Register(const Hook* rows, std::size_t count);
+void Register(const Slot* slots, std::size_t count);
 
 /// The game loaded script `script` at `base` (setup_bindings has run). Installs the script's rows, once per module.
 void OnLoaded(std::uint64_t script, void* base);

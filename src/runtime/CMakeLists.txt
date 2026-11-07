@@ -88,6 +88,7 @@ set(PATCHES_SOURCES
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
+    "combat/team_ready.cpp"
     # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
     "content/content_json.cpp"
     "content/content_pack.cpp"
@@ -1151,6 +1152,15 @@ if(BUILD_TESTING)
     target_include_directories(test_gpu_score PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
+
+    # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
+    add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_team_ready PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_team_ready PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_team_ready PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_team_ready DISCOVERY_MODE PRE_TEST)
 
     # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
     add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
