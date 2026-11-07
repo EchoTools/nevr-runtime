@@ -8,14 +8,20 @@ ELF vaddr = disassembly VA - 0x100000.
 
 ## Provenance
 
-In kotorvr's (Ducky's) q15t-upstream: `runtime/native/afkxr/afk_fx.cpp` at c5a67e8 (the constants `:6115-6120`, the sphere test, the enable, disable and event hooks, the tick `:6204-6250`) at the
-same addresses. It came into this tree with the q15t plugin import (#1591) and moved here from `src/quest/plugins/q15t/src/sensorwd.{h,cpp}`. What is ours: the manager install of the three
-words (the plugin swapped them itself), the 34 code-word pins, the ring of waiting pings, the sweep, the log budgets, and the scope in this form (upstream gates the same hooks to combat maps, `afk_fx.cpp:127-137`, `kIsoSns`).
+Every line cited here is kotorvr's (Ducky's) q15t-upstream at `c5a67e8`, `runtime/native/afkxr/afk_fx.cpp` (read with `git -C <q15t-upstream> show c5a67e8:runtime/native/afkxr/afk_fx.cpp`):
+the comment that names the sphere, the pings and the vtable words `:6108-6114`, the constants `:6115-6121`, the slot `:6125-6130`, the sphere test `SnsIsSphere` `:6141-6152`, the
+enable and disable hooks `:6162-6201`, the tick `SnsTick` `:6204-6243`, the event hook from `:6244`, and the gate to combat maps (below). It came into this tree with the q15t plugin import
+(#1591) and moved here from `src/quest/plugins/q15t/src/sensorwd.{h,cpp}`. What is ours: the manager install of the three words (the plugin swapped them itself), the 34 code-word pins,
+the ring of waiting pings, the sweep, the log budgets, and the scope in this form.
+
+The gate to combat maps is two places in upstream: the policy for five features of the file, sensorwd among them, at `:127-137` (the `kIsoSns` gate at `:136`), and `SnsOpen` at
+`:6137-6140`, which applies it to the sensor hooks (the enable, disable and event hooks call the game's function and nothing else outside a combat map; the tick does nothing).
+Upstream's level answer passes when the level is unknown (`IsoCombat`, `:151`: "unknown: true (the old behaviour)"); ours shuts (no look, or a look older than 1 s, is out of scope).
 
 ## Default
 
-On. `UPSTREAM-DEFAULTS.md`, row `sensorwd`: upstream's shipped build lists `sensorwd.on` (recipe `on_files`) and level-gates it by default (`afk_fx.cpp:129-137`); the plugin's `Q15T_SENSORWD` was on.
-**No headset run of ours has shown it acting:** the q15t sessions log its three `word swapped` lines and `sensorwd on` and nothing after, and the reference build's combat match counts
+On. kotorvr's build turns the watchdog on with a `sensorwd.on` file (`afk_fx.cpp:7911-7916`) and gates it to combat maps by default (`afk_fx.cpp:127-137`); the plugin's `Q15T_SENSORWD` was on.
+**No headset run of ours has shown it acting:** the q15t sessions log the plugin's three `word swapped` lines and `sensorwd on` and nothing after, and the reference build's combat match counts
 `fxsensor: counts event tp 0 fp 0 sphere en 0 dis 0 wd off 0 back 0` (`run-quest2-sheet8`): no TriggeredPing, no sphere enable, no watchdog action. Its headset row requires the acting lines below.
 
 ## Can it act in arena?
@@ -28,7 +34,7 @@ Yes, by construction, so it is scoped. Evidence:
   that script and its Quest build). The script name says combat, but `mp_combat_ability_repair_matrix` and the other `mp_combat_ability_*` scripts are the game's ability system, and the engine's
   `THREAT_SCANNER` enum string is in `echovr.exe` and `libr15.so` both. Every script library is registered at startup in an arena session (`script_load` for `lib0e1975416e8dcf7a.so` in
   `run-quest2-sheet7`, an arena lobby session). Whether an arena match gives a player the ability, and so a sphere, is **not** shown by the binaries or by any log here.
-- kotorvr found the plugin's sphere hooks live in every level, Echo Arena included, and gated them to combat maps (`afk_fx.cpp:127-137`, "ARENA-ISO1 T-143": "sensorwd and olnoteam in a combat map").
+- kotorvr found the sphere hooks live in every level, Echo Arena included, and gated them to combat maps (`afk_fx.cpp:127-137`, "ARENA-ISO1 T-143": "sensorwd and olnoteam in a combat map"; applied by `SnsOpen`, `:6137-6140`).
 
 KNOWN-WRONG #2186: the scope's own 250 ms look is a second level answer next to `combat_scope` (F19, PR #2246); when that is on main, `InScope()` reads it, and the table clear on leaving a combat map moves into this module's tick (`combat_scope` has no change callback).
 
@@ -40,7 +46,7 @@ every handler is a pass-through unless the last look found a combat map and no E
 1. Behaviour. Outside the scope each handler calls the game's function with the same arguments and does nothing else: no read of game memory, no lock, no counter of its own, no line. The tick
    empties the table when the scope ends. `sensorwd_test` `OutsideACombatMapEveryHandlerIsAPassThrough` runs 20 rounds of ping, enable, disable and frame on seven level states (an arena level,
    the low-spec arena level, the tutorial, an arena lobby, the combat lobby, no level, a combat map beside an arena level): the game sees exactly its own 60 calls, every counter is zero, and no
-   line is written. `AStaleOrMissingAnswerPassesEverythingThrough` shows no look and a look older than a second pass through. `LeavingTheScopeEmptiesTheTable` shows the table emptied. `OutsideACombatMapEveryHandlerIsAPassThrough` also counts what the three handlers ask: zero `SafeReadCalls()` and zero `level::ScanCalls()` over the stream (the sphere check is five reads; `InACombatMapTheSphereCheckReads` shows a combat map does read, so zero is the scope's doing).
+   line is written. `AStaleOrMissingAnswerPassesEverythingThrough` shows no look and a look older than a second pass through. `LeavingTheScopeEmptiesTheTable` shows the table emptied. `OutsideACombatMapEveryHandlerIsAPassThrough` also counts what the three handlers ask: zero reads (`safe_read.h`'s `SetReadCounterForTest` counter) and zero `level::ScanCalls()` over the stream (the sphere check is five reads; `InACombatMapTheSphereCheckReads` shows a combat map does read, so zero is the scope's doing).
 2. Cost (ADR 0038), host microbenchmark, x86-64 -O2 (`sensorwd_test` built by hand at -O2; the combat group builds at -O0; best of 7; machine load ~15; NOT a Quest number): on an Echo Arena
    level `OnComponentEnabled` through the thunk costs +3.1 ns over a direct call of 0.3 ns, `SendComponentEventGlobal` +3.4 ns; the tick callback is 3.7 ns a frame between looks, plus a
    real `clock_gettime` of 23 ns, and a frame that looks at the levels (every 250 ms, one gamespace) is 3.3 us. The plugin paid up to five `process_vm_readv` reads on every model enable in every level.
@@ -49,53 +55,52 @@ every handler is a pass-through unless the last look found a combat map and no E
 
 ## What it is
 
-T-07 `sensorwd.on` (no R-id was assigned in `R1_functions.md`). The threat-scanner sensor sphere is a start-disabled `CModelCR` record
-`ac2d3f9f080ba45f` on every player actor; the game's `TriggeredPing` (`delegate_TriggeredPing`, `fd8cf56544b904a3`) enables it and `FinishedPing`
-(`delegate_FinishedPing`, `7cc621b8bf3248c5`, +4.0 s) disables it, but on the Quest a sphere stayed drawn for minutes (kotorvr's echoquest-combat W17 log,
-kotorvr's echoquest-combat fx:5581-5587, "the wipe band that never ends"). The source build times each sphere enable and turns a sphere that is still on 6 s after its
-enable off on the game thread; a sphere it turned off comes back at the next TriggeredPing of its own actor. Only that half is ported. The
-`fxsensor.on` log-only probe (event/model lines, 1 s counts thread) is **not built** (see below).
+T-07 `sensorwd.on` upstream. The threat-scanner sensor sphere is a start-disabled `CModelCR` record `ac2d3f9f080ba45f` on every player actor; the game's `TriggeredPing`
+(`delegate_TriggeredPing`, `fd8cf56544b904a3`) enables it and `FinishedPing` (`delegate_FinishedPing`, `7cc621b8bf3248c5`, +4.0 s) disables it, but on the Quest a sphere stayed drawn
+for minutes (upstream's W17 log, `afk_fx.cpp:6110-6111`: "the wipe band that never ends"). The watchdog times each sphere enable and turns a sphere that is still on 6 s after its enable
+off on the game thread; a sphere it turned off comes back at the next TriggeredPing of its own actor. Upstream's `fxsensor.on` log-only probe (event and model lines, a 1 s counts line)
+is not part of this module.
 
 ## What it does
 
-State: 32 sphere slots `{cs, h, actor pair, enable time, enabled, forced}` (kotorvr's echoquest-combat fx:5594-5604), up to 8 TriggeredPing actor pairs waiting for the tick,
-the last ping `(a, b, time)`. All under one `pthread_mutex_t` (constant-initialised POD, no constructor).
+State (`sensorwd.cpp`): `kSlots` (32) sphere slots `{cs, h, actor pair, enable time, enabled, forced}` (upstream's slot, `afk_fx.cpp:6121`, `:6125-6130`), up to `kPings` (8)
+TriggeredPing actor pairs waiting for the tick, and the last ping `(a, b, time)`. All under one `pthread_mutex_t` `g_mu` (constant-initialised, no constructor). Every handler's first
+statement is `InScope()` (below); outside the scope it calls the game's function and returns.
 
-- **Enable wrapper** (`OnComponentEnabled`): if `IsSphere(cs, h)` (five SafeReads, name `== ac2d3f9f080ba45f`): find or take a slot, stamp the
-  time, mark enabled, clear `forced`; the slot's actor pair is the last TriggeredPing's if that ping was `<= 250 ms` ago (`kSnsPairMs`,
-  kotorvr's echoquest-combat fx:5592) and the slot has no pair yet. Then the stock function runs.
-- **Disable wrapper** (`OnComponentDisabled`): a tracked sphere is marked not enabled and not forced. Then the stock function.
-- **Event wrapper** (`SendComponentEventGlobal`): `TriggeredPing` records the actor pair as the last ping and queues it for the tick (pairs
-  `(0,0)` are not queued); `FinishedPing` is counted. Everything else costs two compares. Then the stock function.
-- **Tick** (`SensorWdTick`, game thread, every frame): under the lock, a *forced* sphere whose actor pair is queued is marked enabled with a new
-  time (action: "on"); an *enabled* sphere with `now - enable_time >= 6000 ms` (`kWdMs`, kotorvr's echoquest-combat fx:5593) is marked forced (action: "off"); the queue is
-  emptied. Outside the lock each action re-checks `IsSphere` and then calls **the stock function itself** (`OnComponentDisabled` / `OnComponentEnabled`
-  at `base + 0x15b12a8 / 0x15b127c`, `(cs, h, 0 x6)`), not through the vtable word, so the wrappers do not see the module's own calls
-  (kotorvr's echoquest-combat fx:5695-5699). Every 5 s it also re-reads every tracked sphere and drops the ones that no longer read as the sphere.
+- **Enable handler** (`OnEnabled`, `OnComponentEnabled`): if `IsSphere(cs, h)` (five `SafeRead`s, the record id at `[model+0xcc8]` equal to `ac2d3f9f080ba45f`): find or take a slot,
+  stamp the time, mark it enabled and not forced; the slot takes the last TriggeredPing's actor pair when that ping was at most 250 ms ago (`kPairMs`, upstream `afk_fx.cpp:6119`) and the
+  slot has no pair yet. Then the game's function runs, and then the handler writes its lines.
+- **Disable handler** (`OnDisabled`, `OnComponentDisabled`): a tracked sphere is marked not enabled and not forced. Then the game's function.
+- **Event handler** (`OnEvent`, `SendComponentEventGlobal`): `TriggeredPing` records the actor pair as the last ping and queues it for the tick (a `(0, 0)` pair is not queued; a ping
+  with `kPings` already waiting is counted as lost); `FinishedPing` is counted. Any other event is two compares. Then the game's function.
+- **Tick** (`Tick` / `OnTick`, registered with the combat tick, `combat_tick.h`, once per frame on the game thread): every `kLookEveryMs` (250 ms) it looks at the loaded levels (`Look`); a
+  change of the answer writes `combat_sensorwd_scope`, and leaving the scope empties the table. In the scope, under the lock, a *forced* sphere whose actor pair is queued is marked enabled
+  with a new time (action: back on), an *enabled* sphere with `now - enable time >= kWatchdogMs` (6000 ms, upstream `kWdMs`, `afk_fx.cpp:6120`) is marked forced (action: off), and the
+  queue is emptied. Outside the lock each action re-checks `IsSphere` (a sphere that no longer reads as one is dropped and counted stale) and then calls **the game's own function**
+  (`OnComponentDisabled` or `OnComponentEnabled`, the thunk's `Original()`), not through the vtable word, so the handlers do not see the module's own calls (upstream does the same,
+  `afk_fx.cpp:6228-6232`). Every 5 s (`kSweepMs`) it re-reads every tracked sphere and drops the ones that no longer read as the sphere.
 
-The component stays "enabled" to the game's script after the tick turned the sphere off, so the script's own next `EnableModel(on)` would be a
-no-op; that is why a forced sphere is turned back on at the next TriggeredPing of the actor it was paired with (source comment,
-a source-build script docstring).
+The component stays "enabled" to the game's script after the tick turned the sphere off, so the script's own next `EnableModel(on)` would be a no-op; that is why a forced sphere is
+turned back on at the next TriggeredPing of the actor it was paired with (upstream's slot comment, `afk_fx.cpp:6129`).
 
 ## Threads and locks
 
-- **Enable / Disable wrappers**: whatever thread the engine calls `EnableModel` on (not known; logged, see below). **Event wrapper**: whatever thread sends
-  the event. **Tick**: the game thread (`game_tick.h`: the wrapper on `CncaGame::ExclusiveUpdateGame`, called once per frame by `Render`).
-  Each role logs one `sensorwd thread` line (INFO, `role=`, `tid=` from `gettid`, and the last tid seen in each role) the first time it is seen on a thread
-  and again when it moves; at most 24 lines per process (then one WARNING "log cap reached").
-- One mutex `g_mu`. It is held only around short loops over plain fields (slot table, ping queue, last ping), **never** across a `SafeRead`, a call into
-  the game, or a `Log` call, and never nested. The hooks block on it (the critical sections are bounded: 32 slots, 8 pings), they do not `trylock`:
-  a dropped state update would lose an enable and leave a sphere unwatched. Tests: the state lock is held at the six sites that take it and
-  free after every public call (`TestLockDiscipline`, via the `Hook(11..16)` seams and `SensorWdLockHeldForTest`); no game call and no `Log` call
-  happens under it (`g_lock_in_real`, `g_log_under_lock` probes in every single-threaded test); a 4-thread run with a ticker checks the counters add up.
-- Counters and the stock-function pointers are atomics. `g_on` gates the wrappers: a rolled-back install leaves inert wrappers that only pass calls on
-  (tested: the wrappers captured during a failed install are called afterwards).
+- **Enable, disable and event handlers**: whatever thread the engine calls them on (not known; logged, see below). **Tick**: the game thread (the combat tick, `combat_tick.h`).
+  Each role writes one `combat_sensorwd_thread` line (Info, `role`, `tid` from `gettid`, and the last tid seen in each role) the first time it is seen on a thread and again when it
+  moves; at most `kThreadLines` (24) a process, then one `combat_sensorwd_cap` Warning.
+- One mutex, `g_mu`. It is held only around short loops over plain fields (the slot table, the ping queue, the last ping), never across a `SafeRead`, a call into the game or a log line,
+  and never nested. The handlers block on it (the critical sections are bounded: 32 slots, 8 pings); they do not `trylock`, because a dropped update would lose an enable and leave a
+  sphere unwatched. Tests (`sensorwd_test`): the lock is held at each of the six sites that take it (the `SetHookForTest` stages 11 to 16, checked with `LockHeldForTest`), the game's
+  function runs with the lock free and no line is written under it (each recorded call and line carries `LockHeldForTest()`; `AStuckSphereIsTurnedOffAfterSixSeconds`), and a run on
+  several threads with a ticker checks that the counters add up (`TheCountersAddUpUnderThreads`).
+- The counters, the scope and the hook state are atomics. Outside the scope the handlers do nothing but call the game's function (`InScope()`, one relaxed load in arena). A refused
+  install puts back every word it made (`Undo`) and disarms the thunk, and a disarmed thunk passes every call through (`ARefusedInstallChangesNothing`).
 
 ## Hooks
 
 Three hooks through the manager, each a typed thunk and none a code write: `CModelCS::OnComponentEnabled` and `OnComponentDisabled` (ABS64 vtable words `0x36495c8` and `0x36495d0`, each
-one of the two ABS64 words in the file that name its function, so each target pins its word) and `CncaGameSpace::SendComponentEventGlobal` (JUMP_SLOT `0x36fcae8`). The install is all three or none: the event word first, then enabled, then
-disabled, then the tick; a word that does not hold the game's function, or a full tick table, puts back what was done (`ARefusedInstallChangesNothing`). The registers: the functions take integers
+one of the two ABS64 words in the file that name its function, so each target pins its word) and `CncaGameSpace::SendComponentEventGlobal` (JUMP_SLOT `0x36fcae8`). The install is all three or none: after the build id and the 34 code words, the event word first,
+then enabled, then disabled, then the tick; a word that does not hold the game's function, or a full tick table, puts back what was done (`Undo`; `ARefusedInstallChangesNothing`). The registers: the functions take integers
 in `x0..x4` only (no stack argument, no float, no `x8` result pointer; the bodies end in a tail call), so each thunk is typed with exactly those and hands the result back whole.
 
 ## Lines
@@ -110,25 +115,24 @@ On a combat APK built at a tag after this unit, or a development APK repacked wi
 `"state":"on"` and three `ok` statuses, `combat_sensorwd_scope` `from 0 to 1`, then `combat_sensorwd_first` for `ping` and `sphere_enable`, and `combat_sensorwd_thread` lines naming the roles' threads;
 `combat_sensorwd_off` only in a match where a sphere sticks. In an arena match on the same APK: none of these after the install line. Without a scanner used in the match the row is not met.
 
-## Evidence for the behaviour and the constants (kotorvr's echoquest-combat)
+## Evidence for the behaviour and the constants (q15t-upstream `c5a67e8`)
 
 | constant / rule | value | source |
 |---|---|---|
-| sphere record, TriggeredPing, FinishedPing | `ac2d3f9f080ba45f`, `fd8cf56544b904a3`, `7cc621b8bf3248c5` | kotorvr's echoquest-combat fx:5588-5589; the two event ids are `CSymbol64Hash("delegate_TriggeredPing")` / `("delegate_FinishedPing")` (checked in `TestConstants`) |
-| stuck after | 6000 ms (FinishedPing comes at 4.0 s) | kotorvr's echoquest-combat fx:5593 |
-| pairing window | 250 ms | kotorvr's echoquest-combat fx:5592 |
-| slots | 32 | kotorvr's echoquest-combat fx:5594 |
-| entry layout | `[cs+0xd0]`, `4*(h&0xffff)`, `[cs+0x100]`, `16*idx`, `+8` model, `+4` visible, `[model+0xcc8]` name | kotorvr's echoquest-combat fx:5586-5587, `5610-5620`; disassembly for all but `+0xcc8` (above) |
-| watchdog logic | forced / back-on / off | kotorvr's echoquest-combat fx:5672-5710 |
-| default | ON | `sensorwd.on` in the shipped on-list (kotorvr's echoquest-combat on-list) |
+| sphere record, TriggeredPing, FinishedPing | `ac2d3f9f080ba45f`, `fd8cf56544b904a3`, `7cc621b8bf3248c5` | `afk_fx.cpp:6115-6116`; the two event ids are `CSymbol64Hash("delegate_TriggeredPing")` / `("delegate_FinishedPing")` (checked in `TheConstantsArePinned`) |
+| stuck after | 6000 ms (FinishedPing comes at 4.0 s) | `afk_fx.cpp:6120` |
+| pairing window | 250 ms | `afk_fx.cpp:6119` |
+| slots | 32 | `afk_fx.cpp:6121` |
+| entry layout | `[cs+0xd0]`, `4*(h&0xffff)`, `[cs+0x100]`, `16*idx`, `+8` model, `+4` visible, `[model+0xcc8]` name | `afk_fx.cpp:6113-6114`, `:6141-6152`; disassembly for all but `+0xcc8` (above) |
+| watchdog logic | forced / back-on / off | `afk_fx.cpp:6204-6243` (the tick), `:6246-6258` (the ping it waits for) |
+| default | ON | `afk_fx.cpp:7911-7916` (the `sensorwd.on` file), `:127-137` (the gate) |
 
 ## Code-word pins (34, all read in the disassembly)
 
 `kWords` in `src/quest/combat/sensorwd_targets.h`: 11 words of `OnComponentEnabled` (`0x15b127c..0x15b12a4`), 11 of `OnComponentDisabled`
 (`0x15b12a8..0x15b12d0`), the first 12 of `SendComponentEventGlobal` (`0x180735c..0x1807388`). The source pins none; these are an addition, the code the
-wrappers' reads and argument handling were derived from. Checked with `CheckWordPins` (SafeRead at `base + vaddr`) before any word is swapped. A
-pin that fails refuses the module with one ERROR line `sensorwd refused: code word pin mismatch, nothing changed pin=0x<ELF vaddr> found=0x<word or
-unreadable> expected=0x<word>`. Verification against the disassembly: a query whose VALUES are generated from the header table (a source-build scratch query, not in this tree):
+handlers' reads and argument handling were derived from. `FirstPinMismatch` reads each word at `base + vaddr` after the build id is checked and before any
+word is touched; a pin that differs refuses the module: one Error `combat_sensorwd_install` with `"state":"refused"`, `"reason":"pin_mismatch"`, and nothing changed. Verification against the disassembly: a query whose VALUES are generated from the header table (a source-build scratch query, not in this tree):
 
 ```
 verdict | count
@@ -136,9 +140,9 @@ MATCH | 34
 ```
 (no `NOT_SHOWN`, no `MISMATCH`). The words that are `bl`/`br`-relative (`0x180737c`) are position independent in the pinned binary.
 
-After the pins, the three words are read: each must equal `base + its stock function` (`vtable_word_not_stock` / `event_slot_not_stock`, ERROR with
-`pin=<slot ELF vaddr> found=<word> expected=<base + fn>`). Nothing is written until all three read right. A swap that fails after another succeeded
-(a word changed in between, a page that became executable) puts the earlier ones back (WARNING per word; ERROR if it cannot) and leaves the module off.
+After the pins, each of the three words is installed by the manager (`InstallThunk`), which takes a word only while it holds the game's function; a word it refuses ends the install
+with `"reason":"hook"` and the manager's status for each word (`enabled`, `disabled`, `event_slot`). The words already taken are put back first (`Undo`), so the module is all three
+words or none, and a word that cannot be put back keeps a disarmed thunk, which passes every call to the game's function.
 
 ## Falsifiers
 
