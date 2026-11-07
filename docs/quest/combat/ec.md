@@ -173,7 +173,7 @@ loadout lobby is a shared one, the scope is narrower than upstream where it show
 The page's visibility to the script libraries is not shown by `state`: `PublishEcPage` asks from inside the sentinel, whose own local group may find the
 export whether or not the `RTLD_GLOBAL` promotion took. The cheap on-device probe: from the publish step call bionic's `__loader_dlsym(RTLD_DEFAULT,
 "re33_ec_page", <an address inside a loaded script library>)` (the caller address a script's own `dlsym` passes) and log the result next to `state`; the
-row is met when it returns the page. Not built yet (#PAGE-PROBE-ISSUE).
+row is met when it returns the page. Not built yet (#2313).
 
 ## Not built here
 
