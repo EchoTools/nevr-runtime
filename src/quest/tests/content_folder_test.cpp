@@ -450,6 +450,23 @@ TEST(ARefusedPackHoldsNoFile) {
   }
 }
 
+// A served pack keeps each checked file open (its manifest and its package) until it is released.
+TEST(AServedPackHoldsEachOfItsFiles) {
+  Rig rig;
+  rig.MakePack("echocombat");
+  nevr_content::CoreInputs in;
+  in.content_dir = rig.content;
+  in.game_dir = rig.root;
+  in.refuse_placed_bundle = true;
+  nevr_quest::content::PosixPackFiles files("");
+  std::unique_ptr<nevr_content::Pack> pack;
+  const Decision d = nevr_content::Decide(in, files, &pack);
+  CHECK_EQ(d.reason, std::string());
+  CHECK_EQ(files.HeldCount(), std::size_t{2});
+  files.ReleaseAll();
+  CHECK_EQ(files.HeldCount(), std::size_t{0});
+}
+
 TEST(AFileIsHashedInChunksToTheSameDigestWithoutMovingItsOffset) {
   Scratch scratch;
   std::string bytes;

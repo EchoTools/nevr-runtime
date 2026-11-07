@@ -1369,7 +1369,9 @@ void APackWhoseHookDoesNotGoInIsRefusedWithTheSlotAndNothingIsServed() {
   const std::vector<std::string> records = ContentRecords();
   QCHECK(records.size() == 1);
   if (!records.empty()) {
-    QCHECK(Has(records[0], "content pack refused id=hostpack reason=hook_failed detail=\\\"CSysFile::Open slot 0x36f6450 status="));
+    // No libr15 is loaded in the host test: the GOT's own status names why the hook did not go in.
+    QCHECK(Has(records[0], "content pack refused id=hostpack reason=hook_failed "
+                           "detail=\\\"CSysFile::Open slot 0x36f6450 status=module_not_loaded\\\""));
     QCHECK(Has(records[0], "\"level\":\"warn\""));
   }
   const std::string stock = root + "/" + kManifestRel;
