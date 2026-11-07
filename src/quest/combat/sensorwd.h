@@ -12,8 +12,8 @@
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
  *
- * Switch. `combat.sensorwd` in config.yaml, true unless the file says false (kotorvr's shipped build lists `sensorwd.on` and gates it to combat maps: seat-brief
- * UPSTREAM-DEFAULTS row `sensorwd`, `afk_fx.cpp:129-137`; the plugin's `Q15T_SENSORWD` was on). No headset session of ours has yet shown it acting (the reference build's
+ * Switch. `combat.sensorwd` in config.yaml, true unless the file says false (kotorvr's build turns it on with a `sensorwd.on` file, `afk_fx.cpp:7911-7916`, and
+ * gates it to combat maps by default, `afk_fx.cpp:127-137`; the plugin's `Q15T_SENSORWD` was on). No headset session of ours has yet shown it acting (the reference build's
  * combat match counts no sphere enable, no TriggeredPing and no watchdog action), so its headset row requires `combat_sensorwd_first`
  * (docs/quest/combat/sensorwd.md). The plugin's kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).
  *

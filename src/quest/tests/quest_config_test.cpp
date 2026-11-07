@@ -1297,7 +1297,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
                       {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
                       {"wallfire", &nevr_quest::CombatConfig::wallfire, true},
-                      // Combat music and the scanner-sphere watchdog (#2184): on, as upstream's shipped build has them (UPSTREAM-DEFAULTS rows music, sensorwd).
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as upstream's shipped build has them (afk_music.cpp:1; afk_fx.cpp:7911-7916 with the gate at :127-137).
                       {"music", &nevr_quest::CombatConfig::music, true},
                       {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said

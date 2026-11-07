@@ -11,8 +11,8 @@
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
  *
- * Switch. `combat.music` in config.yaml, true unless the file says false (kotorvr's shipped build has it on: seat-brief UPSTREAM-DEFAULTS row `music`, `afk_music.cpp:49`;
- * the q15t plugin's `Q15T_MUSIC` was on). No headset session of ours has yet shown it acting (the q15t sessions reach no combat map), so its headset row requires
+ * Switch. `combat.music` in config.yaml, true unless the file says false (kotorvr's build has it on by default, `afk_music.cpp:1`, with `music.off` as its off
+ * switch, `afk_music.cpp:31`; the q15t plugin's `Q15T_MUSIC` was on). No headset session of ours has yet shown it acting (the q15t sessions reach no combat map), so its headset row requires
  * `combat_music_first` and `combat_music_play` (docs/quest/combat/music.md). The plugin's kill file `music.off` is no longer read: one found in the plugin's data
  * directory is a Warning (`combat_music_legacy_switch`).
  *
