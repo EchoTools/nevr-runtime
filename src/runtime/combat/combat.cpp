@@ -17,6 +17,8 @@
 #include "runtime/combat/combat_settings.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/script_guard.h"
+#include "runtime/combat/station_cells.h"
+#include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
@@ -139,6 +141,12 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     // The script guards read the tac mod VeilNet records from the player's profile update (equip_cell.h): with VeilNet off
     // nothing records it, so no guard would ever act.
     if (veil) script_guard::Register(reinterpret_cast<volatile std::uint64_t*>(gameBase + kEquipCellRva), isServer);
+    // The equipment station's grids follow the cell counts VeilNet publishes for LOADOUTS (station_cells.h); with VeilNet
+    // off none is published and the station keeps its stock layout.
+    if (veil) {
+      station_cells::Register(reinterpret_cast<const volatile std::uint8_t*>(gameBase + station_cells::kRulesMailboxRva +
+                                                                             station_cells::kCellCountsOffset));
+    }
     LogGroup(spec(Group::kVeil), at(Group::kVeil), veil, !cells ? cellsRefused : "sendto_recvfrom_hooks_not_installed");
     LogGroup(spec(Group::kMatchControl), at(Group::kMatchControl), veilnet::MatchControlStarted(),
              !at(Group::kVeil).on ? "needs_combat.veil"
@@ -146,6 +154,10 @@ void Install(std::uintptr_t gameBase, bool isServer) {
              : !veil              ? "combat_net_not_started"
              : !veilnet::EventDispatchHooked() ? "event_dispatch_not_hooked"
                                                : "slot_setter_filter_not_installed");
+
+    // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
+    // game-mode script, installed when it loads (team_ready.h). It needs nothing of VeilNet's.
+    if (at(Group::kMatchControl).on) team_ready::Register();
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
     // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
