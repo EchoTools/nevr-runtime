@@ -140,11 +140,12 @@ own data. What differs:
 | The function hooked | `CFile::Open`, echovr.exe `0x1400e15e0`, detoured | `NRadEngine::CSysFile::Open(const char* path, unsigned flags, long* handle)`, libr15 `0xf85538`, through libr15's GOT slot `0x36f6450` (no code page is written, N151) |
 | Who opens through it | AddPackage and `CFileStream` | AddPackage (`bl` at `0x2540f38` and `0x2540fe0`) and `CFile::Open`'s tail call (`b` at `0x11e8978`), which every manifest read takes; all three branch to the PLT stub `0xf3dad0` (`kCSysFileOpenContentSites`, `src/quest/sentinel/pinned_targets.h`) |
 | A read | flags 1: bit 0 set and none of `0x2`, `0x4`, `0x8`, `0x10` (`nevr_content::IsServedRead`) | the same rule |
-| The file handed to the game | the pack's file by path, held open with read sharing only | the held descriptor reopened through `/proc/self/fd/<n>`: the file that was hashed, even after a rename over its path, with an offset of its own |
-| A path's spelling | any case, `/` or `\`, the `\\?\` prefix | the `com.readyatdawn.afk` media root counts as the running package's (`src/quest/sentinel/path_rewrite.h`) |
+| The file handed to the game | the pack's file by path, held open with read sharing only | the held descriptor reopened through `/proc/self/fd/<n>`: the file that was hashed, even after a rename over its path, with an offset of its own (shown on the host's file systems; not yet on the headset's shared storage) |
+| A path's spelling | any case, `/` or `\`, the `\\?\` prefix | the game's path as it is: the engine reads below the media root the data step names, the root a pack's files are checked against |
 | Scripts | served | the pack is refused whole (`scripts_unsupported`) |
 | Too late | the game's resource manager exists | the same, read at libr15 `0x376ed60` (written at `0x2aa89bc`) |
 | Refusals of its own | `hook_target_changed` | `bundled_pack_placed`; `hook_failed` names the slot and the GOT status |
+| Which builds | every runtime build | the patched libr15 only. On the service-only libr15 (the reference build's file, `src/quest/sentinel/libr15_attach.h`) only the service-side hooks install; neither this slot nor the permission-wait hook that reaches the data step is one. So no folder pack is served there and no `[NEVR.CONTENT]` line is written |
 
 The game's function returns 0 for an open that succeeded (AddPackage tests it with `cbnz w0` at `0x2540f3c`), as on PC, so a
 served open it fails is the same Warning. A Quest pack is made like a PC one; `tools/cmd/content-test-pack -platform android`
