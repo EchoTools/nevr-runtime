@@ -210,3 +210,23 @@ func TestFindSkipsAnOffsetPastTheRow(t *testing.T) {
 		t.Errorf("Find at +8 is %d, want 0", i)
 	}
 }
+
+func TestTablesWithRowsTooShortForTheKeyAreRefused(t *testing.T) {
+	for _, size := range []int{0, 8} {
+		var rows [][]byte
+		if size > 0 {
+			rows = append(rows, row(size, nil))
+		}
+		b := table(size, nil, rows...)
+		if size == 0 { // a count of 1 with rows of no bytes: the header ParseRowTable accepts
+			binary.LittleEndian.PutUint64(b[0x28:], 1)
+			binary.LittleEndian.PutUint64(b[0x30:], 1)
+		}
+		if err := droneParticleRows(parse(t, b)); err == nil {
+			t.Errorf("particle step: rows of %d bytes were read", size)
+		}
+		if err := droneScriptRow(parse(t, b)); err == nil {
+			t.Errorf("script step: rows of %d bytes were read", size)
+		}
+	}
+}

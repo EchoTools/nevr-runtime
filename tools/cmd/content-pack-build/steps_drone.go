@@ -75,6 +75,9 @@ func droneBulletEffects(t *radpack.RowTable) error {
 }
 
 func droneParticleRows(t *radpack.RowTable) error {
+	if t.Size < keyOff+8 {
+		return fmt.Errorf("particle rows of %d bytes end before the bullet id at +%#x", t.Size, keyOff)
+	}
 	if t.Find(keyOff, droneBullet) >= 0 {
 		return fmt.Errorf("the table already has a drone bullet row")
 	}
@@ -95,6 +98,9 @@ func droneParticleRows(t *radpack.RowTable) error {
 }
 
 func droneScriptRow(t *radpack.RowTable) error {
+	if t.Size < keyOff+8 {
+		return fmt.Errorf("script rows of %d bytes end before the actor id at +%#x", t.Size, keyOff)
+	}
 	for _, r := range t.Rows {
 		if radpack.U64(r, 0) == sharedScript && radpack.U64(r, keyOff) == droneActor {
 			return fmt.Errorf("the table already has the drone actor's row of script 190ed14fe6c74dd3")
