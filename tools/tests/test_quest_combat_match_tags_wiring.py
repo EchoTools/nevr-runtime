@@ -49,7 +49,7 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         self.assertIsNotNone(options)
         for flag in ("-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fvisibility=hidden"):
             self.assertIn(flag, options.group(1))
-        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook)", cmake)
+        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk)", cmake)
 
     def test_the_quest_project_adds_the_combat_directory_after_the_sentinel(self):
         cmake = read("src/quest/CMakeLists.txt")

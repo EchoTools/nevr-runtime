@@ -22,7 +22,8 @@
  *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe|arena","active":1,
  *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"results":"<name>=<status> ...",
  *    "results_truncated":0,"msg":"..."}
- * `modules` = `installed` + `failed` + `off`: a module switched off by its key is counted in `off` and nowhere else.
+ * `modules` = `installed` + `failed` + `off`: a module switched off by its key, or with nothing to act on (decals without a decals.bin), is counted
+ * in `off` and nowhere else.
  * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
  * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
@@ -51,8 +52,8 @@ enum class Phase { kEarly, kNormal };
 const char* PhaseName(Phase phase) noexcept;  // "early", "normal"
 
 // What one module's install function answers: whether it installed, and a fixed token for the line (never a value).
-// `off` is a module that is switched off by its `combat:` key: nothing was installed and nothing is wrong, so it is neither installed nor
-// failed (`installed` is false) and the phase line counts it apart.
+// `off` is a module that is switched off by its `combat:` key, or has nothing to act on (decals without a decals.bin): nothing was installed and
+// nothing is wrong, so it is neither installed nor failed (`installed` is false) and the phase line counts it apart.
 struct ModuleResult {
   bool installed;
   const char* status;
@@ -80,7 +81,7 @@ struct Outcome {
   std::size_t modules = 0;    // the modules that have a step in this phase
   std::size_t installed = 0;
   std::size_t failed = 0;
-  std::size_t off = 0;        // switched off by their `combat:` key: not installed, not failed
+  std::size_t off = 0;        // switched off by their `combat:` key, or with nothing to act on: not installed, not failed
 };
 
 // The shipped registration table (the host test reads it to pin each module's row).
