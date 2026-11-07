@@ -10,7 +10,7 @@ import (
 // and src/quest/tests/frames_asm_probe_real.cpp. Each of the first seven is an entry that is wrong in one way the entry text
 // check must see, behind an FDE under the personality-free "zR" CIE (so the frame walk passes it: only the text check can fail
 // it). x30_in_x19 is a correct entry that keeps x30 in a callee-saved register. The real_* executables hold the q15t plugin's
-// four entries (two dronemuzzle thunks, powerboost's resolve thunk, the headset trampoline) in three forms.
+// three entries (two dronemuzzle thunks, powerboost's resolve thunk) in three forms.
 
 // asmProbeText runs the entry check on a linked probe and returns what it reports, with the frame walk's violations.
 func asmProbeText(t *testing.T, variant string) (errs []string, violations []string, a builtArtifact) {
@@ -91,14 +91,14 @@ func TestFramesAsmProbesCorrectEntriesPass(t *testing.T) {
 
 var q15tEntryRes = []*regexp.Regexp{
 	regexp.MustCompile(`^q15t_dm_tp_thunk$`), regexp.MustCompile(`^q15t_dm_fire_thunk$`),
-	regexp.MustCompile(`^q15t_pb_resolve_thunk$`), regexp.MustCompile(`^q15t_headset_tramp$`),
+	regexp.MustCompile(`^q15t_pb_resolve_thunk$`),
 }
 
-// The plugin's four entries as top-level asm() with CFI and ldar loads pass the walk, the record check and the text check.
+// The plugin's three entries as top-level asm() with CFI and ldar loads pass the walk, the record check and the text check.
 func TestFramesAsmProbeRealMovedEntriesPass(t *testing.T) {
 	errs, violations, a := asmProbeText(t, "real_moved")
-	if len(a.records) != 4 {
-		t.Fatalf("frames_asm_probe_real_moved: want the four q15t records, got %v", a.records)
+	if len(a.records) != 3 {
+		t.Fatalf("frames_asm_probe_real_moved: want the three q15t records, got %v", a.records)
 	}
 	if got := recordEntryErrors(a.graph.names, map[uint64]bool{}, a.recordEntries, q15tEntryRes); len(got) != 0 {
 		t.Errorf("frames_asm_probe_real_moved: record errors %v", got)
@@ -108,7 +108,7 @@ func TestFramesAsmProbeRealMovedEntriesPass(t *testing.T) {
 	}
 }
 
-// #2216: powerboost's two words read with a plain ldr fail, and so does the br through one of them; the other three entries do not.
+// #2216: powerboost's two words read with a plain ldr fail, and so does the br through one of them; the other two entries do not.
 func TestFramesAsmProbeRealPowerboostPlainLoadFails(t *testing.T) {
 	errs, violations, _ := asmProbeText(t, "real_moved_pbldr")
 	if len(violations) != 0 {
@@ -125,10 +125,9 @@ func TestFramesAsmProbeRealPowerboostPlainLoadFails(t *testing.T) {
 	}
 }
 
-// The entries as the plugin writes them: the three naked functions get an FDE whose one row is CFA=sp, which the text check
-// fails; the trampoline is a top-level block with no CFI, so it has no FDE and the walk fails it.
+// The entries as the plugin writes them: the three naked functions get an FDE whose one row is CFA=sp, which the text check fails.
 func TestFramesAsmProbeRealNakedEntriesFail(t *testing.T) {
-	errs, violations, _ := asmProbeText(t, "real_naked")
+	errs, _, _ := asmProbeText(t, "real_naked")
 	got := strings.Join(errs, "\n")
 	for _, name := range []string{"q15t_dm_tp_thunk", "q15t_dm_fire_thunk", "q15t_pb_resolve_thunk"} {
 		found := false
@@ -138,8 +137,5 @@ func TestFramesAsmProbeRealNakedEntriesFail(t *testing.T) {
 		if !found {
 			t.Errorf("frames_asm_probe_real_naked: %s must fail the text check on its CFA, got:\n%s", name, got)
 		}
-	}
-	if !strings.Contains(strings.Join(violations, "\n"), "q15t_headset_tramp at ") || !strings.Contains(strings.Join(violations, "\n"), "has no FDE") {
-		t.Errorf("frames_asm_probe_real_naked: the trampoline with no CFI must fail the walk, got %v", violations)
 	}
 }

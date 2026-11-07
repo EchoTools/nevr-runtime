@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys and the three combat.refresh_rate keys. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.meshstep, combat.instmodel, combat.shaderstep and combat.tablestep. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -211,6 +211,32 @@ combat:
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
 
+  # Quest only. Booleans. The resource table-step modules (src/quest/combat/meshstep.h, instmodel.h, shaderstep.h, tablestep.h): the tables of the
+  # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the q15t and combat APKs;
+  # in an Echo Arena level, in the lobbies arena players use and before the game is known the resources are the game's own. `false` leaves the game's
+  # step of 32 for that resource class even in a combat match. A value that is not a boolean is ignored with a warning in the sentinel log that names
+  # the key. Read once at launch; the sentinel log records `combat_config_switch`, `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install`
+  # and `combat_tablestep_install` report each. Default (absent): true.
+  # meshstep: false
+  # instmodel: false
+  # shaderstep: false
+  # tablestep: false
+
+  # The three headset gates of the combat modules (src/quest/combat/headset_gates.h): the game branches on "this is a Quest headset" in three places that
+  # a Quest running combat has to skip. Quest only; they run where the combat modules run (see `force`). Booleans, read once at launch; a value that
+  # is not a boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_gates_install`, `combat_gates_answered`, `combat_gates_scoped_out` and `combat_gates_headset_bind` say what was read and what each gate did.
+  # gate_perm: false leaves the game's rule that a party member on a Quest may not use combat. Default (absent): true.
+  # gate_perm: false
+  # gate_bots: false leaves the game's rule that a Quest gets the arena bot. The gate acts only while a combat map or the combat lobby is loaded, and only
+  # where the full-size global_mp is in use (the combat bot exists only there; the gate checks the game's LoadLevelName slot). Default (absent): true.
+  # gate_bots: false
+  # gate_link: false leaves the combat menus telling the player this is a Quest (which locks the combat cards). Default (absent): true.
+  # gate_link: false
+  # gate_link_libs: which script libraries the menu gate answers: `all`, `none`, or file names (or fragments of them) separated by commas or spaces,
+  # at most 639 characters. A library that is not named gets the game's own answer. Default (absent): the 21 libraries of the combat entries.
+  # gate_link_libs: "none"
+
   # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
   # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
   # game today; the sentinel log line `combat_pfx_install` says what was read. `false` keeps the gate shut. A value that is not a boolean keeps the
@@ -232,10 +258,10 @@ combat:
   # veil: false             # UMBRAL VEIL and the combat net. Default: true.
   # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
   # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
-  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
-  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  # clean_exit: false       # Ends the process at the engine teardown instead of running it (his quit-crash fix). Default: true.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>; a key left out takes the value his release ships
   #   buff:
-  #     self_damage: 2
+  #     self_damage: 5
   #   cone:
   #     link_window_ms: 500
 

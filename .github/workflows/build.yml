@@ -9,7 +9,7 @@ name: Build
 #
 # A release is a plain semver tag vX.Y.Z plus GitHub's pre-release flag. The version is exactly the tag
 # (cmake/set_project_version_from_git.cmake): a CI build exactly on the tag stamps X.Y.Z, any other build
-# stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
+# stamps <next>-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), and seals it (seal): the Windows
 # zip, attested and published with the Quest library (the .tar.zst archives stay a workflow artifact; the

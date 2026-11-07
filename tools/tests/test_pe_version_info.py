@@ -371,8 +371,15 @@ class VersionTextTest(unittest.TestCase):
         self.assertEqual(vi.numeric_version("5.5.1-dev.0+abcdef0"), (5, 5, 0, 0))
         self.assertEqual(vi.numeric_version("5.5.2-dev.12+" + COMMIT), (5, 5, 1, 12))
 
+    def test_numeric_version_of_a_development_build_of_a_minor_or_major_release(self):
+        # 6.17.0-dev.N leads to 6.17.0 (#2267): it sorts above every 6.16.x.0 and below 6.17.0.0.
+        self.assertEqual(vi.numeric_version("6.17.0-dev.4+" + COMMIT), (6, 16, 65535, 4))
+        self.assertEqual(vi.numeric_version("7.0.0-dev.4+" + COMMIT), (6, 65535, 65535, 4))
+        self.assertLess(vi.numeric_version("6.16.5"), vi.numeric_version("6.17.0-dev.4+" + COMMIT))
+        self.assertLess(vi.numeric_version("6.17.0-dev.4+" + COMMIT), vi.numeric_version("6.17.0"))
+
     def test_numeric_version_refuses_what_is_not_a_version(self):
-        for text in ("", "5.5", "5.5.1.0", "v5.5.1", "5.5.1-dev", "5.5.1-dev.3", "5.5.1-dev.3+xyz", "5.05.1", "5.5.0-dev.1+abcdef0",
+        for text in ("", "5.5", "5.5.1.0", "v5.5.1", "5.5.1-dev", "5.5.1-dev.3", "5.5.1-dev.3+xyz", "5.05.1", "0.0.0-dev.1+abcdef0",
                      "70000.0.0", "5.5.2-dev.70000+abcdef0"):
             with self.subTest(text=text):
                 with self.assertRaises(vi.PeVersionError):

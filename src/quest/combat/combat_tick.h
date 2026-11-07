@@ -51,6 +51,11 @@ ModuleResult InstallNormal() noexcept;
 // The install on the libr15 the lookup finds (the host test supplies an image built in memory).
 bool InstallAt(sentinel::ImageLookup lookup) noexcept;
 
+// The CR15Game the tick last verified (its first word is the pinned vptr), or 0 before the first verified frame. A module that acts on the game
+// outside a frame (a resource constructor on a loading thread) reads the game's levels through it. Never cleared once set: a re-check of the
+// same object does not make it vanish for a loading thread; combat_level.h's reads fail closed on an object that is gone.
+std::uintptr_t Game() noexcept;
+
 // How many frames the handler has run.
 std::uint32_t Calls() noexcept;
 // How many times the handler read the object's vptr: once for the object that passed, again when the pointer changes and every 256 frames, and

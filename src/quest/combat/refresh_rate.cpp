@@ -16,6 +16,7 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/legacy_switch.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
@@ -75,28 +76,6 @@ bool ReadDeviceIsQuest2() noexcept {
 #endif
 }
 
-std::atomic<bool> g_legacyDirSet{false};
-char g_legacyDir[300] = "";  // tests only (SetLegacyDirForTest)
-
-// The plugin's data directory: /sdcard/Android/data/<package>/files/q15t, the package from /proc/self/cmdline (the plugin's own rule), or the
-// test's. False when none can be named.
-bool LegacyDir(char* out, std::size_t n) noexcept {
-  if (g_legacyDirSet.load(std::memory_order_acquire)) {
-    std::snprintf(out, n, "%s", g_legacyDir);
-    return true;
-  }
-  char cmd[256] = {};
-  std::FILE* f = std::fopen("/proc/self/cmdline", "re");
-  if (f == nullptr) return false;
-  const std::size_t got = std::fread(cmd, 1, sizeof(cmd) - 1, f);
-  std::fclose(f);
-  cmd[got] = '\0';
-  if (char* colon = std::strchr(cmd, ':')) *colon = '\0';
-  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return false;
-  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", cmd);
-  return true;
-}
-
 // The plugin's kill files are not read: a file there turns nothing off (docs/adr/0046 C2). One found is a Warning that names the `combat:` key
 // that replaces it, so an operator who relied on it learns why the rule is running.
 void WarnLegacyKillFiles() noexcept {
@@ -107,15 +86,11 @@ void WarnLegacyKillFiles() noexcept {
   static constexpr Legacy kLegacy[] = {{"hzlevel.off", "combat.refresh_rate: false"},
                                        {"hzlobby90.off", "combat.refresh_rate_lobby: false (the default)"},
                                        {"hz72q2.off", "combat.refresh_rate_quest2_72: false"}};
-  char dir[300] = {};
-  if (!LegacyDir(dir, sizeof(dir))) return;
-  for (const Legacy& legacy : kLegacy) {
-    char path[400];
-    std::snprintf(path, sizeof(path), "%s/%s", dir, legacy.file);
-    if (access(path, F_OK) != 0) continue;
+  for (const Legacy& entry : kLegacy) {
+    if (!legacy::Present(entry.file)) continue;
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_legacy_switch",
-                        {{"file", legacy.file},
-                         {"replaced_by", legacy.key},
+                        {{"file", entry.file},
+                         {"replaced_by", entry.key},
                          {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
   }
 }
@@ -278,10 +253,7 @@ Stats CurrentStats() noexcept {
 }
 
 void SetAskForTest(AskFn fn) noexcept { g_ask.store(fn, std::memory_order_release); }
-void SetLegacyDirForTest(const char* dir) noexcept {
-  std::snprintf(g_legacyDir, sizeof(g_legacyDir), "%s", dir != nullptr ? dir : "");
-  g_legacyDirSet.store(dir != nullptr && dir[0] != '\0', std::memory_order_release);
-}
+void SetLegacyDirForTest(const char* dir) noexcept { legacy::SetDirectoryForTest(dir); }
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 void SetQuest2ForTest(int quest2) noexcept { g_quest2Override.store(quest2, std::memory_order_relaxed); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }
