@@ -783,7 +783,7 @@ int main() {
     CHECK(pb::ConeAtForTest(&tb, g_frame, dcs) == g_body_b, "an angle above 180 was filtered");
     // MEDIGUN's band (501..590) is PC's: the Quest leaves that bubble to the game, as it does a radius that is not finite (#2339)
     const float medi = 15.0f + 545.0f / 100000.0f, nanRadius = std::nanf("");
-    SetPos(g_body_b, 110, 100, 100);  // 90 degrees off
+    SetPos(g_body_b, 100, 100, 130);  // 30 m ahead: past floor(radius) = 15 m, so a cone would reject it
     std::memcpy(g_rec + 0x38, &medi, 4);
     CHECK(pb::ConeAtForTest(&tb, g_frame, dcs) == g_body_b, "a MEDIGUN-band bubble was filtered");
     std::memcpy(g_rec + 0x38, &nanRadius, 4);

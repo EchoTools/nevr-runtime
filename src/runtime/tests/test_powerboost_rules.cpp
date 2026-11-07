@@ -52,6 +52,48 @@ TEST(PowerBoostRules, AQuarterTurnAboutYTakesPlusZToPlusX) {
   EXPECT_NEAR(out[2], 0.0f, 1e-6f);
 }
 
+// A third of a turn about (1, 1, 1) takes x to y, y to z and z to x; every quaternion matches its rotation matrix.
+TEST(PowerBoostRules, EveryTurnMatchesTheRotationMatrix) {
+  const float third[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+  const float x[3] = {1, 0, 0}, y[3] = {0, 1, 0}, z[3] = {0, 0, 1};
+  float out[3] = {};
+  pbr::Rotate(third, x, out);
+  EXPECT_NEAR(out[0], 0.0f, 1e-6f);
+  EXPECT_NEAR(out[1], 1.0f, 1e-6f);
+  EXPECT_NEAR(out[2], 0.0f, 1e-6f);
+  pbr::Rotate(third, y, out);
+  EXPECT_NEAR(out[0], 0.0f, 1e-6f);
+  EXPECT_NEAR(out[1], 0.0f, 1e-6f);
+  EXPECT_NEAR(out[2], 1.0f, 1e-6f);
+  pbr::Rotate(third, z, out);
+  EXPECT_NEAR(out[0], 1.0f, 1e-6f);
+  EXPECT_NEAR(out[1], 0.0f, 1e-6f);
+  EXPECT_NEAR(out[2], 0.0f, 1e-6f);
+  const float qs[][4] = {{0.1f, 0.7f, -0.3f, 0.6f}, {-0.5f, 0.2f, 0.4f, 0.74f}, {0.9f, -0.1f, 0.2f, 0.37f}};
+  const float v[3] = {0.3f, -1.2f, 2.5f};
+  for (const auto& raw : qs) {
+    double n = 0;
+    for (const float r : raw) n += static_cast<double>(r) * r;
+    n = std::sqrt(n);
+    float q[4];
+    for (int i = 0; i < 4; ++i) q[i] = static_cast<float>(raw[i] / n);
+    const double a = q[0], b = q[1], c = q[2], w = q[3];
+    const double m[3][3] = {{1 - 2 * (b * b + c * c), 2 * (a * b - c * w), 2 * (a * c + b * w)},
+                            {2 * (a * b + c * w), 1 - 2 * (a * a + c * c), 2 * (b * c - a * w)},
+                            {2 * (a * c - b * w), 2 * (b * c + a * w), 1 - 2 * (a * a + b * b)}};
+    pbr::Rotate(q, v, out);
+    for (int i = 0; i < 3; ++i) EXPECT_NEAR(out[i], m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2], 1e-5) << i;
+  }
+}
+
+// The axis need not be a unit vector: AngleTo divides its length out.
+TEST(PowerBoostRules, TheAxisLengthIsDividedOut) {
+  const float q[4] = {0, 0, 0, 1};
+  const float axis[3] = {0, 0, 2};
+  const float at60[3] = {4.0f * std::sin(1.0471976f), 0, 4.0f * std::cos(1.0471976f)};
+  EXPECT_NEAR(pbr::AngleTo(q, axis, at60, 4.0f), 60.0f, 1e-3f);
+}
+
 TEST(PowerBoostRules, TheAngleIsZeroOnTheAxis180OnItsOppositeAnd90Across) {
   const float q[4] = {0, 0, 0, 1};
   const float axis[3] = {0, 0, 1};
@@ -186,6 +228,14 @@ TEST(PowerBoostRules, ABubbleUnseenFor2000MsIsANewBubble) {
   EXPECT_EQ(t.For(kBubble, 5000).first, 4999u) << "the new bubble starts at the call that renewed it";
 }
 
+TEST(PowerBoostRules, EachSightingRenewsTheBubble) {
+  pbr::ConeTable t;
+  pbr::ConeDecide(t, kBubble, kDcs, 3, 15.0f, 60, 10.0f, 0.0f, 1000);
+  EXPECT_TRUE(pbr::ConeDecide(t, kBubble, kDcs, 3, 15.0f, 60, 10.0f, 62.0f, 2500).ok);
+  EXPECT_TRUE(pbr::ConeDecide(t, kBubble, kDcs, 3, 15.0f, 60, 10.0f, 62.0f, 4000).ok)
+      << "seen 1500 ms ago, 3000 ms after it was made: the same bubble";
+}
+
 TEST(PowerBoostRules, TheOldestOfEightBubblesIsReplaced) {
   pbr::ConeTable t;
   for (int i = 0; i < 8; ++i) pbr::ConeDecide(t, kBubble + i, kDcs, 3, 15.0f, 60, 10.0f, 0.0f, 1000 + i);
@@ -300,6 +350,8 @@ TEST(PowerBoostRules, TheDecodeTableOfTheQuestHostTest) {
   for (const Row& c : rows) ExpectDecode(c);
   ExpectDecode({-kInf, 0, 0, 0, 0, 0});
   ExpectDecode({1020010.0f, 1, 0, 20010, 20, 10});
+  ExpectDecode({2000000.0f, 2, 0, 0, 0, 0});
+  ExpectDecode({4000000.0f, 2, 1, 0, 0, 0});
   ExpectDecode({2999999.0f, 2, 0, 999999, 999, 999});
   ExpectDecode({3000000.0f, 1, 1, 0, 0, 0});
   ExpectDecode({4999999.0f, 2, 1, 999999, 999, 999});
