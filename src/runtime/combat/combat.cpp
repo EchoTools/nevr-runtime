@@ -148,7 +148,7 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     LogGroup(spec(Group::kMedigun), at(Group::kMedigun), overcharge && veil,
              !at(Group::kOvercharge).on ? "needs_combat.overcharge" : !veil ? "needs_combat.veil" : "overcharge_not_started");
 
-    // Off unless asked: the TerminateProcess stub is never written while combat.clean_exit is off.
+    // On by default, as his loader applies it on every start; the TerminateProcess stub is never written while combat.clean_exit is off.
     const bool cleanExit = at(Group::kCleanExit).on && veilnet::StartCleanExit();
     LogGroup(spec(Group::kCleanExit), at(Group::kCleanExit), cleanExit, "teardown_call_not_patched (see the line above)");
 

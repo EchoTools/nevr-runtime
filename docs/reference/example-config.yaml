@@ -258,10 +258,10 @@ combat:
   # veil: false             # UMBRAL VEIL and the combat net. Default: true.
   # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
   # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
-  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
-  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  # clean_exit: false       # Ends the process at the engine teardown instead of running it (his quit-crash fix). Default: true.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>; a key left out takes the value his release ships
   #   buff:
-  #     self_damage: 2
+  #     self_damage: 5
   #   cone:
   #     link_window_ms: 500
 
