@@ -517,6 +517,8 @@ void RateText(uint8_t) { PageTexts(); }
 //: still, the server raises the game's own cease fire, each client sends its player back to the
 //: war room (nevt_force_respawn) and the orbs read pre_match (tools/fix_orb_pause.py, which also
 //: keeps +2F = the match is live: spawn_access past pre_match).
+// nEVR port (#600): here the orbs' pre_match and +2F are runtime/combat/orb_pause.h, hooks on the spawn point script,
+// not a patched file.
 //: +2E is a state: 0 running, 1 paused, 2 resuming. UNPAUSE does not resume at once: the server
 //: goes to 2 for RESUME_MS (the announcer counts 5..1 on every client, the orbs are the round's
 //: again so players spawn back in, but cease fire and the point / capture freezes hold), then 0.
