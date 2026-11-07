@@ -373,6 +373,8 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\"");
+    const std::vector<Line> records = Lines("combat_install_module");
+    QCHECK(records.size() == 19U && Has(records[0].text, "\"phase\":\"early\"") && Has(records[2].text, "\"phase\":\"normal\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(ResultsOf(lines[1]) ==
                std::string("\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
