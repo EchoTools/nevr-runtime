@@ -1,6 +1,8 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
-# success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions).
+# success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions), and so
+# AddModuleTick's `*want_tick = true`: every module that still calls it (dronekill, dronemuzzle, powerboost, weapon_arm) calls it from
+# such a branch only, now that impactsnd and sensorwd have left the plugin.
 for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
@@ -18,7 +20,7 @@ runm wiring wire_reason_blank      src/plugin.cpp "s/const char\* reason = r.rea
 runm wiring wire_name_blank        src/plugin.cpp "s/{\"module\", module},/{\"module\", \"\"},/"
 runm wiring wire_status_hidden     src/plugin.cpp "s/{\"status\", off ? \"off\" : StatusName(r.status)},/{\"status\", \"\"},/"
 runm wiring wire_modules_unlisted  src/plugin.cpp "s/{\"modules\", kCompiledModules}};/{\"modules\", \"\"}};/"
-runm wiring wire_tick_not_wanted   src/plugin.cpp "s/    \*want_tick = true;\$/    (void)want_tick;/"
+runm wiring wire_tick_not_wanted   src/plugin.cpp "s/  if (registered) \*want_tick = true;/  (void)want_tick;/"
 runm wiring wire_tick_count_hidden src/plugin.cpp "s/{\"registered\", GameTickCount()}/{\"registered\", 0}/"
 runm wiring wire_drop_fxtrail      src/plugin.cpp "s/^  ReportModule(\"fxtrail\", InstallFxTrail(base));//"
 runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\", InstallVoipDrop(base));//"
@@ -33,7 +35,7 @@ runm wiring wire_drop_powerboost   src/plugin.cpp "s/const InstallResult r = Ins
 runm wiring wire_drop_hudmeter     src/plugin.cpp "s/^  ReportModule(\"hudmeter\", InstallHudmeter(base));//"
 runm wiring wire_drop_shieldgamma  src/plugin.cpp "s/^  ReportModule(\"shieldgamma\", InstallShieldGamma.*//"
 runm wiring wire_shield_bits       src/plugin.cpp "s/(Q15T_SHIELDGAMMA \& 1) != 0, (Q15T_SHIELDGAMMA \& 2) != 0/(Q15T_SHIELDGAMMA \& 2) != 0, (Q15T_SHIELDGAMMA \& 1) != 0/"
-runm wiring wire_drop_levelname    src/plugin.cpp "s/^  ReportModule(\"levelname\", InstallLevelName(base));//"
+runm wiring wire_drop_levelname    src/plugin.cpp "s/^    ReportModule(\"levelname\", InstallLevelName(base));//"
 runm wiring wire_drop_gc_tick      src/plugin.cpp "s/^  ReportModuleTick(\"gunconnect\", AddGameTick(\&GunConnectTick), \&want_tick);//"
 runm wiring wire_drop_ai_tick      src/plugin.cpp "s/^  ReportModuleTick(\"aibots\", AddGameTick(\&AiBotsTick), \&want_tick);//"
 runm wiring wire_tick_early        src/plugin.cpp "s/^  if (want_tick) {\$/  if (false) {/"
