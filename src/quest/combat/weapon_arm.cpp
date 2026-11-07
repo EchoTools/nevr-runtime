@@ -71,7 +71,7 @@ void Waiting(const char* why) noexcept {  // one line per distinct reason while 
   if (std::strcmp(why, g_why) == 0) return;
   std::snprintf(g_why, sizeof(g_why), "%s", why);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_waiting",
-                      {{"why", why}, {"msg", "the gun hand of a new profile is not set yet; nothing is called until the game has what it needs"}});
+                      {{"why", why}, {"msg", "the gun hand of a profile is not set yet; nothing is called until the game has what it needs"}});
 }
 
 void WriteMarker(const char* outcome, std::uint32_t arm, long long profArm) noexcept {
@@ -221,14 +221,14 @@ void Step(std::uintptr_t game, double now) noexcept {
   g_setAt = now;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_set",
                       {{"route", direct != 0 ? "direct" : "deferred"}, {"id_tail", Tail(g_id)}, {"arm", arm}, {"profile_weaponarm", profArm},
-                       {"msg", "weaponarm -> 1 (one-shot): a new profile starts with the gun in the right hand"}});
+                       {"msg", "weaponarm -> 1 (one-shot): the profile's gun goes to the right hand"}});
 }
 
 ModuleResult Refused(const char* reason, const char* detail) noexcept {
   g_installed.store(false, std::memory_order_release);
   sentinel::LogFields(sentinel::LogLevel::kError, "combat_weapon_arm_install",
                       {{"result", "refused"}, {"reason", reason}, {"detail", detail},
-                       {"msg", "the gun hand of a new profile is not set: the game keeps what the profile holds"}});
+                       {"msg", "the gun hand of a profile is not set: the game keeps what the profile holds"}});
   return {false, reason};
 }
 
@@ -291,7 +291,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
     g_installed.store(false, std::memory_order_release);
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.weapon_arm"},
-                         {"msg", "combat.weapon_arm is false: a new profile keeps the gun hand the game gives it"}});
+                         {"msg", "combat.weapon_arm is false: a profile keeps the gun hand the game gives it"}});
     return {false, "off_config", true};
   }
   sentinel::ElfImage image;

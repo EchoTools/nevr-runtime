@@ -7,7 +7,7 @@
  *   - else the profile has never saved a gun hand: SetWeaponArm(cs, handle, 1) once (direct when [gs+0x368] is set, else through the gamespace's deferred
  *     method queue), and the marker once GetWeaponArm reads 1 (within 10 s, else no marker: the next launch retries).
  * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile. A missing marker alone
- * (after a reinstall, or a move between the store and the combat APK, which clears the app's external files directory) does not set anything: the profile's own
+ * (after a reinstall, or a move between the store and the combat APK; Android clears the app's external files directory on an uninstall, inferred, not measured) does not set anything: the profile's own
  * `weaponarm` decides.
  *
  * Player state (ADR 0046 rule 4). The marker directory is `/sdcard/Android/data/<package>/files/q15t`, where the plugin's markers already are; it is

@@ -191,7 +191,7 @@ struct CombatConfig {
   CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)
   CombatSwitch aibots;        // `combat.aibots`: EnableScenario once the bots of a combat match are in game (combat/aibots.h)
   CombatText aibotsScenario;  // `combat.aibots_scenario`: 0-6 or a name or off; unset: RandomAttack
-  CombatSwitch weaponArm;     // `combat.weapon_arm`: a new profile starts with the gun in the right hand (combat/weapon_arm.h)
+  CombatSwitch weaponArm;     // `combat.weapon_arm`: a profile that has never saved a gun hand starts with the gun in the right hand (combat/weapon_arm.h; which profiles is open, see the PR)
 };
 
 struct LogEvent {

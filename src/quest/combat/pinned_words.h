@@ -34,14 +34,14 @@ struct Symbol {
   std::uint64_t vaddr;
 };
 
-// The immediate of an unsigned-offset load or store, in bytes: `ldr x, [x, #imm]` (scale 8), `ldr w, [x, #imm]` (4), `ldrh w, [x, #imm]` (2),
+// The immediate of an unsigned-offset load or store, in bytes (the field is the same for the `str` and the sign-extending `ldrsh` forms, so these names serve their stores too): `ldr x, [x, #imm]` (scale 8), `ldr w, [x, #imm]` (4), `ldrh w, [x, #imm]` (2),
 // `ldr q, [x, #imm]` (16), `ldrb`/`strb` (1). Bits 10-21 of the word, times the access size.
 constexpr std::uintptr_t LdrXOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 8; }
 constexpr std::uintptr_t LdrWOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 4; }
 constexpr std::uintptr_t LdrhOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 2; }
 constexpr std::uintptr_t LdrQOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 16; }
 constexpr std::uintptr_t LdrbOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff); }
-// `stur q, [x, #imm]`: the signed 9-bit offset in bits 12-20.
+// `stur q, [x, #imm]`: the 9-bit offset in bits 12-20, read as unsigned (not sign-extended: right for the small positive offsets pinned here, wrong for a negative one).
 constexpr std::uintptr_t SturOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 12) & 0x1ff); }
 // `add x, x, #imm` and `mov w, #imm`.
 constexpr std::uintptr_t AddImmediate(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff); }

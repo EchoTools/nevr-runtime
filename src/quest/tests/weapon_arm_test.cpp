@@ -212,7 +212,7 @@ void Pass() {
   g_now += 1.0;
 }
 
-void TheGunOnTheLeft() {  // 1. a new profile with the gun on the left, direct call: held for 3 passes, set once, marker once the arm reads 1
+void TheGunOnTheLeft() {  // 1. a profile that has never saved a hand, with the gun on the left, direct call: held for 3 passes, set once, marker once the arm reads 1
   Reset(1, 0, -1);
   Pass();
   Pass();

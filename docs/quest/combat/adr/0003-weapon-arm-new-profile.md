@@ -36,12 +36,17 @@ combat map is loaded and no Echo Arena level is.
 
 ## Evidence
 
-`src/quest/tests/weapon_arm_test.cpp`: the hold of 3 passes; the direct and the deferred route with the functor's bytes; the already-right and profile-right paths; a marker from an earlier launch
+`src/quest/tests/weapon_arm_test.cpp`: the hold of 3 passes; the direct and the deferred route with the functor's bytes; the already-right path, a saved hand of 0 and of 1 (with and without a marker) and the never-saved control; a marker from an earlier launch
 (whatever its text, never rewritten); the give-up after 10 s; an invalid component; a wrong vptr, key or gamespace link; no netgame; a data directory that cannot be written; one pass per launch;
 the switch; the kill file warning; the scope; the install on an image. `src/quest/combat/mutants.d/weapon_arm.sh` kills its mutants.
 
-## Prediction (not run on a headset)
+## Prediction (not run on a headset; open until the rule is settled)
 
-On a profile with no marker whose gun is on the left: `combat_weapon_arm_install`, then within about 10 s of the equipment component existing in a combat level `combat_weapon_arm_set` and
-`combat_weapon_arm_done` (`weaponarm now 1`), and a file `t26arm.<id>`. Falsifier: `set` without `done` and a `gave_up` Warning; or no `set` after the component exists. The second launch logs
-`marker: present` and changes nothing. A profile already on the right gets the marker and no `set`. No crash and no change to frame timing.
+The rule for which profile is set is an open choice of the owner (see the PR): the rule above (a profile is set only when its `weaponarm` key is absent), or the reference build's (set when
+`weaponarm` reads 0 and the component reads left). The community service sends `weaponarm` for every profile (nakama's client profile has the key without `omitempty`), so under the rule above
+this module sets nothing there. The prediction below holds for the reference build's rule and for a source of profiles that omits the key.
+
+On a profile with no marker whose gun is on the left and that the rule selects: `combat_weapon_arm_install`, then within about 10 s of the equipment component existing in a combat map
+`combat_weapon_arm_set` and `combat_weapon_arm_done` (`weaponarm now 1`), and a file `t26arm.<id>`. Falsifier: `set` without `done` and a `gave_up` Warning; or no `set` after the component
+exists. The second launch logs `marker: present` and changes nothing. A profile already on the right gets the marker and no `set`; one the rule leaves alone gets the marker and no `set`
+(`outcome: profile has a saved gun hand, nothing changed`). No crash and no change to frame timing.
