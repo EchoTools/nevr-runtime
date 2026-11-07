@@ -13,7 +13,7 @@
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
  *
  * Switch. `combat.sensorwd` in config.yaml, true unless the file says false: the q15t plugin's `Q15T_SENSORWD` was on by default in v6.16.5
- * (docs/audits/2026-11-05-q15t-origin-citations.md, `9f8b01a`). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
+ * (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50: `option(Q15T_SENSORWD "... default ON ..." ON)`). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
  * and gated to combat maps (`afk_fx.cpp:127-137`). No headset session of ours has yet shown it acting (the reference build's
  * combat match counts no sphere enable, no TriggeredPing and no watchdog action), so its headset row requires `combat_sensorwd_first`
  * (docs/quest/combat/sensorwd.md). The plugin's kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).

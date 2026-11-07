@@ -20,7 +20,7 @@ Upstream's level answer passes when the level is unknown (`IsoCombat`, `:151`: "
 
 ## Default
 
-On, as the q15t plugin's `Q15T_SENSORWD` was by default in v6.16.5 (`9f8b01a`, "wired as Q15T_SENSORWD (default ON, OFF in the test arms)", `docs/audits/2026-11-05-q15t-origin-citations.md`).
+On, as the q15t plugin's `Q15T_SENSORWD` was by default in v6.16.5 (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50: `option(Q15T_SENSORWD "sensorwd (T-07): ... Source: default ON (on-list); tick" ON)`).
 Upstream the watchdog is opt-in: a `sensorwd.on` file turns it on (`afk_fx.cpp:7911-7916`), and it is gated to combat maps (`afk_fx.cpp:127-137`); whether a shipped upstream build carried that file is not shown here.
 **No headset run of ours has shown it acting:** the q15t sessions log the plugin's three `word swapped` lines and `sensorwd on` and nothing after, and the reference build's combat match counts
 `fxsensor: counts event tp 0 fp 0 sphere en 0 dis 0 wd off 0 back 0` (`run-quest2-sheet8`): no TriggeredPing, no sphere enable, no watchdog action. Its headset row requires the acting lines below.
