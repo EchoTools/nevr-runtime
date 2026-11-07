@@ -18,6 +18,7 @@
 #include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/script_guard.h"
+#include "runtime/combat/station_cells.h"
 #include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/lifecycle/game_image_guard.h"
@@ -145,6 +146,12 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     // The script guards read the tac mod VeilNet records from the player's profile update (equip_cell.h): with VeilNet off
     // nothing records it, so no guard would ever act.
     if (veil) script_guard::Register(reinterpret_cast<volatile std::uint64_t*>(gameBase + kEquipCellRva), isServer);
+    // The equipment station's grids follow the cell counts VeilNet publishes for LOADOUTS (station_cells.h); with VeilNet
+    // off none is published and the station keeps its stock layout.
+    if (veil) {
+      station_cells::Register(reinterpret_cast<const volatile std::uint8_t*>(gameBase + station_cells::kRulesMailboxRva +
+                                                                             station_cells::kCellCountsOffset));
+    }
     LogGroup(spec(Group::kVeil), at(Group::kVeil), veil, !cells ? cellsRefused : "sendto_recvfrom_hooks_not_installed");
     LogGroup(spec(Group::kMatchControl), at(Group::kMatchControl), veilnet::MatchControlStarted(),
              !at(Group::kVeil).on ? "needs_combat.veil"
