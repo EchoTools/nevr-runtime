@@ -317,6 +317,18 @@ class WhichQuestBuildServesAPack(unittest.TestCase):
         self.assertNotIn("path_rewrite", folder)
         self.assertRegex(folder, r"std::string PosixPackFiles::Key\(const std::string& path\) \{ return path; \}")
 
+    def test_the_keys_root_is_the_engine_root_the_data_step_names(self):
+        wiring = code(read(WIRING))
+        body = wiring[wiring.index("EngineRootChoice EngineRoot() {"):]
+        body = body[:body.index("\n}")]
+        for root in ("obb_skip::CurrentRoot()", "obb_skip::DataRootRedirect()", "data_root::kLegacyRoot"):
+            self.assertIn(root, body, f"EngineRoot() no longer picks {root}: the page's 'A path's spelling' row must change")
+        row = re.search(r"^\| A path's spelling \|.*$", quest_section(), re.M)
+        self.assertIsNotNone(row, "the On Quest table has no 'A path's spelling' row")
+        self.assertIn("the root the data step names (`engine_root`: the media root, the OBB-skip root or the legacy root)",
+                      row.group(0))
+        self.assertIn("the pack's own folder stays under the media root", row.group(0))
+
     def test_the_rename_safety_is_said_to_be_shown_on_the_host_only(self):
         self.assertIn("(shown on the host's file systems; not yet on the headset's shared storage)", quest_section())
 
