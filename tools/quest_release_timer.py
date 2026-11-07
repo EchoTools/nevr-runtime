@@ -17,6 +17,9 @@ Given the published release's tag, this tool finishes the release:
   build_slot       waits while two or more ninja processes run
   build_apk        `just release-quest-apk` in the shared build slice
   publish_apk      tools/publish_quest_apk.py: R2, fetched back, and the manifest claim
+  arena_*          the arena APK (the store APK with the loader, no combat), listed as the kind quest-apk-arena in the same
+                   manifest publish: arena_gate (the signer takes `--kind`, else `arena_skipped`), arena_build, arena_publish.
+                   A failure from the gate on blocks the dispatch (`part` arena, `reason` arena_blocks_dispatch)
   dispatch, watch  the beta manifest publish, live, in the release-signer repository
   check_jobs       the jobs that publish all succeeded (a green run with a skipped job is a failure)
   verify_live      `verify-manifest --live` lists the tag on beta, and the manifest it verified lists the carried game data
@@ -114,6 +117,12 @@ NDK_FILES = ("build/cmake/android.toolchain.cmake", "toolchains/llvm/prebuilt/li
 VCPKG_FILE = "scripts/buildsystems/vcpkg.cmake"
 PUBLIC_DEFAULTS = "config/public-defaults.env"  # in the checkout the timer runs from: `just worktree-setup` copies it into the tag's worktree
 VARIANT = "q15t"
+# The arena APK (#2298): the store APK with the release's loader and no combat, listed in the manifest as the kind quest-apk-arena. It goes
+# into the same manifest publish as the main APK, so a failure of its steps before the dispatch blocks the dispatch (a tag is published once).
+ARENA = "arena"
+ARENA_KIND = "quest-apk-arena"
+ARENA_BLOCKS = "arena_blocks_dispatch"
+SIGNER_KIND_FLAG = re.compile(r"^[ \t]+--?kind\b", re.MULTILINE)  # in `put-quest-apk -h`; Go's flag package prints one dash
 VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries: the one q15t plugin library
 APK_LIBRARY_DIR = "lib/arm64-v8a/"  # where android-repack-apk puts a plugin library in the APK
 # The marker the build puts in libq15t.so (src/quest/plugins/q15t/src/plugin.cpp, read back by `just build-quest-q15t`): the libr15 build ID.
@@ -143,9 +152,10 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 
 class StepFailure(Failure):
-    def __init__(self, step: str, message: str) -> None:
+    def __init__(self, step: str, message: str, reason: str = "") -> None:
         super().__init__(message)
         self.step = step
+        self.reason = reason  # a token for the person cutting the release, when the step has one (the arena steps)
 
 
 class Refusal(StepFailure):
@@ -420,16 +430,17 @@ class Timer:
         tarball = self.work / f"release-signer-{tag}.tar"
         extra_file = self.work / f"extra-{tag}.json"
         worktree = self.work / tag
+        arena_file = self.work / f"extra-arena-{tag}.json"
         made = {"worktree": False}
         try:
-            self._release_steps(tag, version, worktree, signer_dir, tarball, extra_file, made)
+            self._release_steps(tag, version, worktree, signer_dir, tarball, extra_file, made, arena_file)
         except Exception:  # a StepFailure, or anything a step did not expect: what this run made is removed either way
-            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False)
+            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False, arena_file=arena_file)
             raise
-        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True)
+        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True, arena_file=arena_file)
 
     def _release_steps(self, tag: str, version: str, worktree: pathlib.Path, signer_dir: pathlib.Path,
-                       tarball: pathlib.Path, extra_file: pathlib.Path, made: dict) -> None:
+                       tarball: pathlib.Path, extra_file: pathlib.Path, made: dict, arena_file: pathlib.Path) -> None:
         self.work.mkdir(parents=True, exist_ok=True)
         readme = self.work / "README.md"
         if not readme.exists():
@@ -468,11 +479,11 @@ class Timer:
                        "RELEASE_SIGNER_DIR": str(signer_dir), "GH_BIN": self.gh}
         self.cmd("publish_apk", ["python3", "tools/publish_quest_apk.py", tag, "--extra-out", str(extra_file)],
                  worktree, publish_env)
-        try:
-            claim = json.dumps(json.loads(extra_file.read_text(encoding="utf-8")), separators=(",", ":"))
-        except (OSError, ValueError) as error:
-            raise StepFailure("publish_apk", f"the manifest claim {extra_file.name} is unreadable: {error}") from error
+        claims = self.read_claims("publish_apk", extra_file)
         self.ok("publish_apk")
+
+        arena_claims = self.arena_steps(tag, worktree, build_env, binary, signer_dir, publish_env, arena_file)
+        claim = json.dumps([*claims, *arena_claims], separators=(",", ":"))
 
         dispatched = self.cmd("dispatch", [self.gh, "workflow", "run", "sign-manifest.yml", "-R", SIGNER_SLUG, "--ref",
                                            "main", "-f", "action=publish", "-f", f"tag={tag}", "-f", "channel=beta",
@@ -494,9 +505,77 @@ class Timer:
         if survived != {"name": carried["name"], "size": carried["size"]}:
             raise StepFailure("verify_live", f"the carried game data {carried['name']} ({carried['size']} bytes) is "
                                              f"{'missing from' if survived is None else 'changed in'} the {version} release: {survived}")
-        self.ok("verify_live", beta=listed, game_data=carried["name"])
+        for wanted in arena_claims:
+            self.check_arena_listed(self.live_manifest(after, "verify_live"), version, wanted)
+        self.ok("verify_live", beta=listed, game_data=carried["name"], arena=[c["name"] for c in arena_claims])
         self.mark_main_complete(tag)
         self.finish_variant(tag, worktree, made, build_env)
+
+    @staticmethod
+    def read_claims(step: str, path: pathlib.Path) -> list[dict]:
+        """The signer's claim file: a JSON array of extra_artifacts entries."""
+        try:
+            claims = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise StepFailure(step, f"the manifest claim {path.name} is unreadable: {error}") from error
+        if not isinstance(claims, list) or not all(isinstance(c, dict) for c in claims):
+            raise StepFailure(step, f"the manifest claim {path.name} is not a list of claims")
+        return claims
+
+    def signer_lists_arena(self, binary: pathlib.Path, signer_dir: pathlib.Path) -> bool:
+        """Whether the signer built from its main takes `--kind` on put-quest-apk (its usage text says so). The signer's usage text is
+        read here and never logged."""
+        step = "arena_gate"
+        result = self.cmd(step, [str(binary), "put-quest-apk", "-h"], signer_dir, ok_codes=(0, 1, 2))
+        return bool(SIGNER_KIND_FLAG.search(f"{result.stderr or ''}\n{result.stdout or ''}"))
+
+    def arena_steps(self, tag: str, worktree: pathlib.Path, build_env: dict, binary: pathlib.Path, signer_dir: pathlib.Path,
+                    publish_env: dict, arena_file: pathlib.Path) -> list[dict]:
+        """The arena APK, built and put up after the main APK; its claim joins the main one in the one manifest publish. Returns the
+        claims (none while the signer lacks `--kind`: recorded as `arena_skipped`, and the run is today's flow). From the gate on, a
+        failure is recorded with part `arena` and the reason `arena_blocks_dispatch`: nothing is dispatched, and a run after the fix
+        goes on (a tag is published once, so publishing without arena would lose it for good)."""
+        try:
+            lists_arena = self.signer_lists_arena(binary, signer_dir)
+        except StepFailure as failure:
+            raise StepFailure(failure.step, f"{failure}; the manifest was not published, so the release is not listed until a later run",
+                              ARENA_BLOCKS) from failure
+        if not lists_arena:
+            self.log.event("arena_skipped", reason="signer_lacks_kind", kind=ARENA_KIND)
+            return []
+        self.ok("arena_gate", kind=ARENA_KIND)
+        self.part = ARENA
+        slice_command = ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G"]
+        try:
+            self.cmd("arena_build", [*slice_command, "just", "release-quest-arena-apk", tag], worktree, build_env, quiet=True)
+            self.ok("arena_build", apk=f"nevr-runtime-{tag}-{ARENA}-quest.apk")
+            self.cmd("arena_publish", ["python3", "tools/publish_quest_apk.py", tag, "--listed-variant", ARENA, "--extra-out",
+                                       str(arena_file)], worktree, publish_env)
+            claims = self.read_claims("arena_publish", arena_file)
+        except StepFailure as failure:
+            raise StepFailure(failure.step, f"{failure}; the manifest was not published, so the release is not listed until a "
+                                            "later run (a tag is published once, and publishing without arena would lose it)",
+                              ARENA_BLOCKS) from failure
+        finally:
+            self.part = "main"
+        wanted = [c for c in claims if c.get("name") == f"nevr-runtime-{tag}-{ARENA}-quest.apk"]
+        if len(wanted) != 1:
+            raise StepFailure("arena_publish", f"the signer's claim lists {len(wanted)} entries for the arena APK, not one", ARENA_BLOCKS)
+        self.ok("arena_publish", apk=wanted[0]["name"])
+        return wanted
+
+    @staticmethod
+    def check_arena_listed(manifest: dict, version: str, wanted: dict) -> None:
+        """The release the manifest lists carries the arena artifact as the kind quest-apk-arena, with the claimed name, size and sha256."""
+        step = "verify_live"
+        found = [a for a in manifest.get("releases", {}).get(version, {}).get("artifacts", []) if a.get("name") == wanted.get("name")]
+        if len(found) != 1:
+            raise StepFailure(step, f"the {version} release lists {len(found)} entries named {wanted.get('name')}, not one")
+        have = found[0]
+        if (have.get("kind"), have.get("size"), have.get("sha256")) != (ARENA_KIND, wanted.get("size"), wanted.get("sha256")):
+            raise StepFailure(step, f"{wanted.get('name')} is listed as kind {have.get('kind')}, size {have.get('size')}, "
+                                    f"sha256 {have.get('sha256')}; the claim was kind {ARENA_KIND}, size {wanted.get('size')}, "
+                                    f"sha256 {wanted.get('sha256')}")
 
     def mark_main_complete(self, tag: str) -> None:
         """The main release is published, listed and verified live: from here a failure is the variant's, and a later run
@@ -702,7 +781,7 @@ class Timer:
             self.log.event("variant_library", **record)
 
     def cleanup(self, worktree: pathlib.Path | None, signer_dir: pathlib.Path, tarball: pathlib.Path,
-                extra_file: pathlib.Path, raising: bool) -> None:
+                extra_file: pathlib.Path, raising: bool, arena_file: pathlib.Path | None = None) -> None:
         """Remove exactly what this run made. A failed removal is logged either way; it fails the run only when the
         release itself succeeded, so it never hides the failure that came first."""
         problems = []
@@ -715,6 +794,8 @@ class Timer:
                 shutil.rmtree(signer_dir)
             tarball.unlink(missing_ok=True)
             extra_file.unlink(missing_ok=True)
+            if arena_file is not None:
+                arena_file.unlink(missing_ok=True)
         except OSError as error:
             problems.append(f"cannot remove scratch: {error.strerror}")
         if problems:
@@ -787,12 +868,12 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     except Refusal as refusal:
         sys.stderr.write(f"quest-release-timer: {refusal.step}: {refusal}\n")
         if log is not None:
-            _record(log, "refused", refusal.step, str(refusal), part_of(timer))
+            _record(log, "refused", refusal.step, str(refusal), part_of(timer), refusal.reason)
         return 1
     except StepFailure as failure:
         sys.stderr.write(f"quest-release-timer: {failure.step}: {failure}\n")
         if log is not None:
-            _record(log, "failed", failure.step, str(failure), part_of(timer))
+            _record(log, "failed", failure.step, str(failure), ARENA if failure.reason == ARENA_BLOCKS else part_of(timer), failure.reason)
         return 1
     except Failure as failure:
         sys.stderr.write(f"quest-release-timer: {failure}\n")
@@ -848,9 +929,9 @@ def counted_failures(history: list[dict]) -> list[dict]:
     return [e for e in history_since_reset(history) if e.get("event") == "failed" and e.get("part") != "draft"]
 
 
-def _record(log: Log, event: str, step: str, error: str, part: str = "main") -> None:
+def _record(log: Log, event: str, step: str, error: str, part: str = "main", reason: str = "") -> None:
     try:
-        log.event(event, step=step, error=error, part=part)
+        log.event(event, step=step, error=error, part=part, **({"reason": reason} if reason else {}))
     except Failure as log_failure:
         sys.stderr.write(f"quest-release-timer: {log_failure}\n")
 

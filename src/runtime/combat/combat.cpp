@@ -15,6 +15,8 @@
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
 #include "runtime/combat/combat_settings.h"
+#include "runtime/combat/equip_cell.h"
+#include "runtime/combat/script_guard.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
@@ -134,6 +136,9 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     const bool veilWanted = at(Group::kVeil).on && cells;
     const bool match = at(Group::kMatchControl).on && veilWanted;
     const bool veil = veilWanted && veilnet::Start(isServer, match, at(Group::kMedigun).on);
+    // The script guards read the tac mod VeilNet records from the player's profile update (equip_cell.h): with VeilNet off
+    // nothing records it, so no guard would ever act.
+    if (veil) script_guard::Register(reinterpret_cast<volatile std::uint64_t*>(gameBase + kEquipCellRva), isServer);
     LogGroup(spec(Group::kVeil), at(Group::kVeil), veil, !cells ? cellsRefused : "sendto_recvfrom_hooks_not_installed");
     LogGroup(spec(Group::kMatchControl), at(Group::kMatchControl), veilnet::MatchControlStarted(),
              !at(Group::kVeil).on ? "needs_combat.veil"

@@ -1,0 +1,1 @@
+On the Quest combat build, walls block shots and line of sight on combat maps and in the combat lobby only; arena levels and the lobbies arena players use keep the game's own behaviour.
