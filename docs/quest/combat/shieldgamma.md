@@ -1,7 +1,7 @@
 # Module `shieldgamma` (row R58): the shield colour and the tube-window mirror
 
 Files: `src/quest/combat/shieldgamma.{h,cpp}`, `src/quest/combat/shieldgamma_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the level answer the handler
-reads), `src/quest/tests/shieldgamma_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants/shieldgamma.sh`. The module is a normal combat step,
+reads), `src/quest/tests/shieldgamma_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/shieldgamma.sh`. The module is a normal combat step,
 registered after `hudmeter` (`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no other. Switches in `config.yaml`:
 `combat.shieldgamma_tube_mirror` (default true) and `combat.shieldgamma_gamma` (default false, a test switch in the reference build). Both false installs nothing and logs
 `combat_shieldgamma_install` with `reason: off_config`. No file in the app's files directory turns either part on or off.
@@ -40,13 +40,12 @@ comes out yellow-orange instead of red-orange.
 Update is a generic script node, called every update while a duration runs, and arena's scripts call it too, on the same APK. The handler tests `scope::SeenCombatOrLobby()` first
 (`combat_scope.h`: a combat map or the combat lobby was loaded at the last look and no Echo Arena level was, the look made four times a second by the game-thread tick). Outside a combat level it calls the
 game's function once with the same arguments and does nothing else: no read of the data, no write, no second call, no counter, no line. `shieldgamma_test` pins that with both
-switches on, the ring colour write that is mirrored in combat, in each arena level, the lobbies arena players use, a combat-to-arena transition and before the first look.
+switches on, the ring colour write that is mirrored in combat, and by count zero reads of the game's memory and zero `level::ScanCalls()`, in each arena level, the lobbies arena players use, a combat-to-arena transition and before the first look.
 
 The combat body is a separate `noinline` function, `ActInCombat`, that first asks `scope::LookIsFresh()`: when the tick has stopped for more than a second, a true answer is not
 believed and the call passes through (pinned by `TheModuleFollowsTheLevelBothWays`). The plugin copy this replaces read 0x58 bytes with `process_vm_readv` on every call in every
 level. In an arena match the module now costs the call through the thunk and, in the handler, eight instructions with no frame, no stack canary and no call (NDK r26d clang -O2,
-`llvm-objdump -d`): `adrp x8; mov x3, x0; ldr w8, [x8]; tbnz w8, #2; and w8, w8, #3; cbz w8; mov x0, x1; mov x1, x2; br x3`; in combat it costs what the plugin cost plus a clock read. How often Update runs per frame is not measured (no headset run); the arena cost per call is measured on the host (see the pull request
-that moved the module).
+`llvm-objdump -d`): `adrp x8; mov x3, x0; ldr w8, [x8]; tbnz w8, #2; and w8, w8, #3; cbz w8; mov x0, x1; mov x1, x2; br x3`; in combat it costs what the plugin cost plus a clock read. How often Update runs per frame is not measured (no headset run); `shieldgamma_test` prints the cost per call on the host (the game's function, through the hook in an arena level, and in a combat level for a call that is not the shield's).
 
 ## Lines (sentinel log)
 

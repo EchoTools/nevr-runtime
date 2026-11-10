@@ -11,6 +11,8 @@
 
 #include "quest/combat/shieldgamma.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -18,9 +20,11 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/safe_read.h"
 #include "quest/combat/shieldgamma_targets.h"
 #include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -62,7 +66,10 @@ struct Call {
 };
 std::vector<Call> g_calls;
 bool g_reads = true;
+bool g_record = true;  // false: the cost loop, which must not grow a vector
+std::atomic<std::uint64_t> g_safeReads{0};  // every SafeRead the module makes (safe_read.h's test counter)
 std::uint64_t FakeUpdate(void* node, const void* data) {
+  if (!g_record) return 0x71;
   Call c{node, data, {}};
   if (g_reads) std::memcpy(c.bytes, data, sizeof c.bytes);
   g_calls.push_back(c);
@@ -351,6 +358,7 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
     QCHECK(!scope::InCombatOrLobby());
     g_calls.clear();
     Data d = MakeData(kMat, kRing, 1, 0.941f, 0.466f, 0.054f, 0.25f, 0);  // the write both parts act on in combat
+    const std::uint64_t reads0 = g_safeReads.load(), scans0 = nevr_quest::combat::level::ScanCalls();
     const std::uint64_t r = update(node, &d);
     QCHECK(g_calls.size() == 1 && g_calls[0].node == node && g_calls[0].data == &d && r == 0x71);
     float seen[4];
@@ -361,6 +369,8 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
     g_reads = false;
     QCHECK(update(node, nullptr) == 0x71 && g_calls.size() == 1 && g_calls[0].data == nullptr);
     g_reads = true;
+    // ARENA PAYS NOTHING, BY COUNT: none of these calls read the game's memory or asked which level is loaded (docs/adr/0046).
+    QCHECK(g_safeReads.load() == reads0 && nevr_quest::combat::level::ScanCalls() == scans0);
     const sg::Stats stats = sg::CurrentStats();
     QCHECK(stats.decoded == 0 && stats.mirrored == 0 && stats.unreadable == 0);
     QCHECK(g_lines.empty());
@@ -430,9 +440,57 @@ void ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite() {
   End();
 }
 
+// The cost of the hook on the host, measured and printed (the claim "an arena match pays a load, a test and a tail call" is reproducible from the commit): the
+// game's function called directly, through the slot in an arena level, and through the slot in a combat level with a call that is not the module's (a material
+// that is not the shield's: the data read and the game's function).
+void TheArenaPathCostIsMeasured() {
+  Begin();
+  QCHECK(sg::InstallAt(&Lookup, true, true).installed);
+  void* node = reinterpret_cast<void*>(0x6000);
+  const UpdateFn update = Slot();
+  Data d = MakeData(kMat + 1, kRing, 1, 0.5f, 0.5f, 0.5f, 0.5f, 0);  // another material: guarded, not acted on
+  g_record = false;
+  constexpr int kCalls = 2000000;
+  const auto best = [&](auto&& call) {
+    double best = 1e18;
+    for (int rep = 0; rep < 7; ++rep) {
+      const auto start = std::chrono::steady_clock::now();
+      volatile std::uint64_t sink = 0;
+      for (int i = 0; i < kCalls; ++i) sink = sink + call();
+      const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kCalls;
+      if (ns < best) best = ns;
+    }
+    return best;
+  };
+  const UpdateFn direct = &FakeUpdate;
+  const double ref = best([&] { return direct(node, &d); });
+  Levels({"mpl_arena_a"});
+  QCHECK(!scope::SeenCombatOrLobby());
+  const std::uint64_t scans0 = nevr_quest::combat::level::ScanCalls();
+  const double arena = best([&] { return update(node, &d); });
+  QCHECK(nevr_quest::combat::level::ScanCalls() == scans0);  // the cost loop asked no level either
+  EnterCombat();
+  QCHECK(scope::InCombatOrLobby());
+  constexpr int kCombatCalls = 20000;
+  double combat = 1e18;
+  for (int rep = 0; rep < 7; ++rep) {
+    const auto start = std::chrono::steady_clock::now();
+    volatile std::uint64_t sink = 0;
+    for (int i = 0; i < kCombatCalls; ++i) sink = sink + update(node, &d);
+    const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kCombatCalls;
+    if (ns < combat) combat = ns;
+  }
+  g_record = true;
+  std::printf("shieldgamma_test: cost on the host: the game's function %.1f ns, through the hook in an arena level %.1f ns (+%.1f ns), a combat level call that is not "
+              "the shield's (the data read and the game's function) %.1f ns; %d and %d calls, best of 7\n",
+              ref, arena, arena - ref, combat, kCalls, kCombatCalls);
+  End();
+}
+
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   ThePinsAreTheReadelfAndDisassemblyPins();
   TheModuleActsInACombatLevelAsThePluginDid();
   BothSwitchesOffInstallNothing();
@@ -440,6 +498,8 @@ int main() {
   OutsideACombatLevelTheCallPassesThroughUntouched();
   TheModuleFollowsTheLevelBothWays();
   ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite();
+  TheArenaPathCostIsMeasured();
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   if (quest_test::Failures() == 0) std::printf("shieldgamma_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

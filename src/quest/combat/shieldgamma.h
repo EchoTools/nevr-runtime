@@ -57,8 +57,8 @@
 
 namespace nevr_quest::combat::shieldgamma {
 
-// The module's normal step, with its two switches: enrols the combat level answer (combat_scope.h), then installs the thunk and writes the
-// install line. Both false installs nothing.
+// The module's normal step, with its two switches: refuses (`scope_not_live`) when the combat level answer cannot change (combat_scope.h `Live()`),
+// else installs the thunk and writes the install line. Both false installs nothing.
 ModuleResult Install(bool gamma, bool tubeMirror) noexcept;
 // The same on the libr15 the lookup finds (the host test supplies an image built in memory).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool gamma, bool tubeMirror) noexcept;

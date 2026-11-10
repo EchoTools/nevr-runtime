@@ -1,7 +1,7 @@
 # Module `hudmeter` (row R57): the wrist HUD's weapon-slot heat fill
 
 Files: `src/quest/combat/hudmeter.{h,cpp}`, `src/quest/combat/hudmeter_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the level
-answer the handler reads), `src/quest/tests/hudmeter_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants/hudmeter.sh`. The module
+answer the handler reads), `src/quest/tests/hudmeter_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/hudmeter.sh`. The module
 is a normal combat step, registered after `refresh_rate` (`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no
 other. Switch: `combat.hudmeter` (default true) in `config.yaml`; false installs nothing and logs `combat_hudmeter_install` with `reason: off_config`.
 No file in the app's files directory turns it on or off.
@@ -36,14 +36,14 @@ the authored full size 86 x 88 for that one call.
 Enter is a generic script node and arena's scripts call it too, on the same APK. The handler tests `scope::SeenCombatOrLobby()` first (`combat_scope.h`: a combat
 map or the combat lobby `mpl_lobby_b_combat` was loaded at the last look and no Echo Arena level was, the look made four times a second by the game-thread tick). Outside a combat level it calls the
 game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no line. `hudmeter_test` pins that with data
-pointers nobody could read, a 0 x 0 write that stays 0 x 0, and zero counters, in each arena level, the lobbies arena players use, a combat-to-arena transition and
+pointers nobody could read, a 0 x 0 write that stays 0 x 0, zero counters, and by count zero reads of the game's memory and zero `level::ScanCalls()`, in each arena level, the lobbies arena players use, a combat-to-arena transition and
 before the first look. The combat body is a separate `noinline` function, `ActInCombat`, that first asks `scope::LookIsFresh()`: when the tick has stopped for more than
 a second, a true answer is not believed and the call passes through (pinned by `TheModuleFollowsTheLevelBothWays`).
 
 The plugin copy this replaces read the first 0x40 bytes of the data with `process_vm_readv` on every call, in every level. In an arena match the module now costs
 the call through the thunk and, in the handler, eight instructions with no frame, no stack canary and no call (NDK r26d clang -O2, `llvm-objdump -d`):
 `adrp x8; mov x3, x0; ldr w8, [x8]; tbnz w8, #2; and w8, w8, #3; cbz w8; mov x0, x1; mov x1, x2; br x3`; in combat it costs what the plugin cost plus a clock read. How often Enter runs per frame is not measured (no headset run);
-the arena cost per call is measured on the host (see the pull request that moved the module).
+`hudmeter_test` prints the cost per call on the host (the game's function, through the hook in an arena level, and in a combat level for a call that is not the write).
 
 ## Mechanism
 

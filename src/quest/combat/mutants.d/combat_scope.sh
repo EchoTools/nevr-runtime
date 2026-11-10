@@ -8,9 +8,9 @@ I=src/quest/combat/combat_install.cpp
 # the look: spaced, from the lobby-inclusive scan, bits as the scan reports them
 runm sc_look_every_call     $C "s/^  if (now < g_nextLookMs.load(std::memory_order_relaxed)) return;\$//"
 runm sc_spacing             $H "s/kLookEveryMs = 250/kLookEveryMs = 2500/"
-runm sc_map_bit_dropped     $C "s/(loaded.combatMap ? kBitCombatMap : 0U) | //"
-runm sc_lobby_bit_dropped   $C "s/(loaded.combatLobby ? kBitCombatLobby : 0U) | //"
-runm sc_arena_bit_dropped   $C "s/ | (loaded.echoArena ? kBitEchoArena : 0U);/;/"
+runm sc_map_bit_dropped     $C "s/(loaded.combatMap ? kBitCombatMap : 0U)/0U/"
+runm sc_lobby_bit_dropped   $C "s/(loaded.combatLobby ? kBitCombatLobby : 0U)/0U/"
+runm sc_arena_bit_dropped   $C "s/(loaded.echoArena ? kBitEchoArena : 0U)/0U/"
 # the two answers, derived in one place
 runm sc_arena_not_winning   $H "s/return (bits \\& kBitEchoArena) == 0 \\&\\& (bits \\& (kBitCombatMap | kBitCombatLobby)) != 0;/return (bits \\& (kBitCombatMap | kBitCombatLobby)) != 0;/"
 runm sc_map_arena_not_winning $H "s/(kBitCombatMap | kBitEchoArena)) == kBitCombatMap;/kBitCombatMap) == kBitCombatMap;/"
@@ -28,7 +28,7 @@ runm sc_map_skips_fresh     $H "s/return SeenCombatMap() \\&\\& LookIsFresh();/r
 runm sc_no_change_gate      $C "s/^  if (CombatOrLobby(bits) == CombatOrLobby(before) \\&\\& CombatMap(bits) == CombatMap(before)) return;\$//"
 runm sc_change_ignores_map  $C "s/ \\&\\& CombatMap(bits) == CombatMap(before)) return;/) return;/"
 runm sc_change_swapped      $C "s/{\"from\", CombatOrLobby(before) ? 1 : 0}, {\"to\", in ? 1 : 0}/{\"from\", in ? 1 : 0}, {\"to\", CombatOrLobby(before) ? 1 : 0}/"
-runm sc_change_level_zero    $C "s/{\"level\", sentinel::HexString(levelText, levelId)}/{\"level\", sentinel::HexString(levelText, 0)}/"
+runm sc_change_level_zero    $C "s/{\"level\", sentinel::HexString(levelText, levelId)}/{\"level\", sentinel::HexString(levelText, levelId \\& 0)}/"
 runm sc_change_level_arena_last $C "s/loaded.echoArena ? loaded.echoArenaLevel : (loaded.combatMap ? loaded.combatMapLevel : loaded.combatLobbyLevel)/loaded.combatMap ? loaded.combatMapLevel : (loaded.combatLobby ? loaded.combatLobbyLevel : loaded.echoArenaLevel)/"
 # the row: registers once, only with the tick installed, and says so
 runm sc_row_twice           $C "s/^  if (g_registered.load(std::memory_order_acquire)) return {true, \"installed\"};\$//"

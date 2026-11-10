@@ -55,8 +55,8 @@
 
 namespace nevr_quest::combat::hudmeter {
 
-// The module's normal step, with its switch (combat_install.cpp reads it from the configuration): enrols the combat level answer
-// (combat_scope.h), then installs the thunk on the loaded libr15 and writes the install line.
+// The module's normal step, with its switch (combat_install.cpp reads it from the configuration): refuses (`scope_not_live`) when the combat level answer cannot change
+// (combat_scope.h `Live()`: the scope row did not register or the tick is not installed), else installs the thunk on the loaded libr15; writes the install line.
 ModuleResult Install(bool on) noexcept;
 // The same on the libr15 the lookup finds (the host test supplies an image built in memory).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept;

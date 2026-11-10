@@ -247,6 +247,48 @@ void AChangeIsOneInfoLineWithItsValueAndNoChangeIsNoLine() {
   End();
 }
 
+// The change line names the level that decided the answer: the arena level when one is loaded with a combat level (arena wins), else the combat map, else
+// the combat lobby; checked by value, so a line that carries a constant or the wrong class's level fails.
+void TheChangeLineNamesTheLevelThatDecided() {
+  Begin();
+  const auto idOf = [](const char* name) {
+    char want[48];
+    std::snprintf(want, sizeof(want), "\"level\":\"0x%016llx\"", static_cast<unsigned long long>(EchoVR::CSymbol64Hash(name)));
+    return std::string(want);
+  };
+  LookAt({"mpl_combat_gauss"});
+  LookAt({"mpl_combat_gauss", "mpl_arena_a"});  // combat to arena, both loaded: the line names the arena level
+  std::vector<Line> change = Lines("combat_scope_change");
+  QCHECK(change.size() == 2U);
+  if (change.size() == 2U) {
+    QCHECK(Has(change[0].text, idOf("mpl_combat_gauss")) && Has(change[1].text, idOf("mpl_arena_a")));
+    QCHECK(Has(change[1].text, "\"from\":1,\"to\":0"));
+  }
+  LookAt({"mpl_lobby_b_combat", "mpl_lobby_b"});  // the combat lobby with an arena lobby beside it: the combat lobby's level
+  change = Lines("combat_scope_change");
+  QCHECK(change.size() == 3U && (change.size() < 3U || Has(change[2].text, idOf("mpl_lobby_b_combat"))));
+  LookAt({"mpl_lobby_b_combat", "mpl_combat_dyson"});  // the map and the lobby together: the map's level
+  change = Lines("combat_scope_change");
+  QCHECK(change.size() == 4U && (change.size() < 4U || (Has(change[3].text, idOf("mpl_combat_dyson")) && Has(change[3].text, "\"map\":1"))));
+  End();
+}
+
+// The answer is live only while the tick is: after the row registered the refresh, a tick that goes away (its install is forgotten) makes Live() false, so
+// a module that asks it refuses; and a tick install on an image that does not hold the slot fails and leaves Installed() false.
+void LiveFollowsTheTickAndTheTickInstallIsHonest() {
+  Begin();
+  QCHECK(tick::Installed() && scope::InstallNormal().installed && scope::Live());
+  tick::ResetForTest();
+  QCHECK(!tick::Installed() && !scope::Live());
+  End();
+  Begin(/*tickInstalled=*/false);
+  g_image.Drop();
+  QCHECK(!tick::InstallAt(&Lookup) && !tick::Installed());  // no libr15: nothing was installed, and nothing says it was
+  const nevr_quest::combat::ModuleResult r = scope::InstallNormal();
+  QCHECK(!r.installed && std::strcmp(r.status, "tick_not_installed") == 0 && !scope::Live());
+  End();
+}
+
 void TheRowRegistersTheRefreshOnceAndSaysSo() {
   Begin();
   QCHECK(tick::Count() == 0 && !scope::Live());
@@ -299,7 +341,9 @@ int main() {
   ATrueAnswerOlderThanTheStalenessLimitIsFalse();
   AFalseAnswerStaysFalseWhateverTheTime();
   AChangeIsOneInfoLineWithItsValueAndNoChangeIsNoLine();
+  TheChangeLineNamesTheLevelThatDecided();
   TheRowRegistersTheRefreshOnceAndSaysSo();
+  LiveFollowsTheTickAndTheTickInstallIsHonest();
   ATickThatIsNotInstalledRegistersNothing();
   AFullTickTableRefusesAndTheAnswerStaysFalse();
   if (quest_test::Failures() == 0) std::printf("combat_scope_test: all checks passed\n");

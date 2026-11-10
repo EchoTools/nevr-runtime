@@ -13,16 +13,20 @@
 
 #include <sys/mman.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/hudmeter_targets.h"
+#include "quest/combat/safe_read.h"
 #include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -53,6 +57,8 @@ int Count(const char* event, const char* needle = "", int level = -1) {
 }
 constexpr int kInfo = static_cast<int>(sentinel::LogLevel::kInfo);
 constexpr int kError = static_cast<int>(sentinel::LogLevel::kError);
+
+std::atomic<std::uint64_t> g_safeReads{0};  // every SafeRead the module makes (safe_read.h's test counter)
 
 constexpr std::uint64_t kComp = hud::kLobbyComponent, kItem = hud::kItem;
 
@@ -334,6 +340,7 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
     QCHECK(!scope::InCombatOrLobby());
     Data d = MakeData(kComp, kItem, 1, 0.0f, 0.0f);  // the write the module fixes in combat
     g_realCalls = 0;
+    const std::uint64_t reads0 = g_safeReads.load(), scans0 = nevr_quest::combat::level::ScanCalls();
     const std::uint64_t r = enter(node, &d);
     QCHECK(g_realCalls == 1 && r == 0x1234 && g_realNode == node && g_realData == &d);
     QCHECK(g_realSize[0] == 0.0f && g_realSize[1] == 0.0f);  // not made 86 x 88
@@ -343,6 +350,8 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
     QCHECK(enter(node, nullptr) == 0x1234 && g_realData == nullptr);
     QCHECK(enter(node, reinterpret_cast<const void*>(0x1000)) == 0x1234 && g_realData == reinterpret_cast<const void*>(0x1000));
     g_fakeReads = true;
+    // ARENA PAYS NOTHING, BY COUNT: none of these calls read the game's memory or asked which level is loaded (docs/adr/0046).
+    QCHECK(g_safeReads.load() == reads0 && nevr_quest::combat::level::ScanCalls() == scans0);
     const hud::Stats stats = hud::CurrentStats();
     QCHECK(stats.callsGuarded == 0 && stats.fullWrites == 0 && stats.unreadable == 0);
     QCHECK(g_lines.empty());
@@ -425,9 +434,55 @@ void ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite() {
   End();
 }
 
+// The cost of the hook on the host, measured and printed (the claim "an arena match pays a load, a test and a tail call" is reproducible from the commit):
+// the game's function called directly, through the slot in an arena level (the thunk and the handler's test), and through the slot in a combat level with a call that
+// is not the module's write (the data read and the game's function).
+void TheArenaPathCostIsMeasured() {
+  Begin();
+  QCHECK(hud::InstallAt(&Lookup, true).installed);
+  void* node = reinterpret_cast<void*>(0x5000);
+  const EnterFn enter = Slot();
+  Data d = MakeData(kComp, kItem, 1, 0.5f, 0.5f);  // a non-zero size: the guarded item, not the 0 x 0 write
+  constexpr int kCalls = 2000000;
+  const auto best = [&](auto&& call) {
+    double best = 1e18;
+    for (int rep = 0; rep < 7; ++rep) {
+      const auto start = std::chrono::steady_clock::now();
+      volatile std::uint64_t sink = 0;
+      for (int i = 0; i < kCalls; ++i) sink = sink + call();
+      const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kCalls;
+      if (ns < best) best = ns;
+    }
+    return best;
+  };
+  const EnterFn direct = &FakeEnter;
+  const double ref = best([&] { return direct(node, &d); });
+  Levels({"mpl_arena_a"});
+  QCHECK(!scope::SeenCombatOrLobby());
+  const std::uint64_t scans0 = nevr_quest::combat::level::ScanCalls();
+  const double arena = best([&] { return enter(node, &d); });
+  QCHECK(nevr_quest::combat::level::ScanCalls() == scans0);  // the cost loop asked no level either
+  EnterCombat();
+  QCHECK(scope::InCombatOrLobby());
+  constexpr int kCombatCalls = 20000;
+  double combat = 1e18;
+  for (int rep = 0; rep < 7; ++rep) {
+    const auto start = std::chrono::steady_clock::now();
+    volatile std::uint64_t sink = 0;
+    for (int i = 0; i < kCombatCalls; ++i) sink = sink + enter(node, &d);
+    const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kCombatCalls;
+    if (ns < combat) combat = ns;
+  }
+  std::printf("hudmeter_test: cost on the host: the game's function %.1f ns, through the hook in an arena level %.1f ns (+%.1f ns), a combat level call that is not "
+              "the module's write (the data read and the game's function) %.1f ns; %d and %d calls, best of 7\n",
+              ref, arena, arena - ref, combat, kCalls, kCombatCalls);
+  End();
+}
+
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   ThePinsAreTheReadelfAndDisassemblyPins();
   TheModuleActsInACombatLevelAsThePluginDid();
   AForeignSlotWordIsRefusedAndLeftAlone();
@@ -435,6 +490,8 @@ int main() {
   TheModuleFollowsTheLevelBothWays();
   TheSwitchOffInstallsNothing();
   ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite();
+  TheArenaPathCostIsMeasured();
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   if (quest_test::Failures() == 0) std::printf("hudmeter_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }
