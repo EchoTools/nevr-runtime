@@ -1,4 +1,5 @@
-// Host test of NEUTRON effects (src/quest/combat/ecfx.cpp, ecfx_core.h; #2187): the queue rules, and attach / tick / gate against a stand-in
+// Host test of NEUTRON effects (src/quest/combat/ecfx.cpp, ecfx_core.h, and the drain rules they share with PC, src/runtime/patch/ecfx_rules.h;
+// #2187, #2349): the queue rules, and attach / tick / gate against a stand-in
 // wall library that is really loaded (soname libac4e9374a146d3a4.so, src/quest/tests/ecfx_wall_stub.cpp). Moved from the q15t plugin's ecfx_test:
 // the assertions are the same; the lines are sentinel records (`combat_ecfx_*`), and the switch is `combat.ecfx` (the plugin's neutronfx.on is
 // warned about and changes nothing), with the refusal when ec is not installed.
@@ -73,111 +74,153 @@ static Entries Ents() {
   return e;
 }
 
+// One drain of the shared rules (runtime/patch/ecfx_rules.h, #2349) with the entries known: each entry the drain runs is recorded in out,
+// in the order run, and g_held says whether every slot was still claimed while its entry ran (the drain frees it after it returned, Q-1).
+static bool g_held = true;
+static int PlanInto(Drain& d, const Entries& e, uint64_t now, Run* out, Counts* c) {
+  Env env;
+  env.entries = &e;
+  env.wallOf = &WallFake;
+  int k = 0;
+  return d.Plan(g_q, env, now, [&](const Run& r) {
+    g_held = g_held && g_q[2 * r.slot] == r.ctx && g_q[2 * r.slot + 1] != 0;
+    out[k++] = r;
+  }, c);
+}
+
 static void RuleTests() {
   Run run[kSlots];
   Counts c;
   Drain d;
   std::memset(g_q, 0, sizeof g_q);
-  CHECK(d.Plan(g_q, Ents(), 1000, &WallFake, run, &c) == 0, "empty queue");
+  CHECK(PlanInto(d, Ents(), 1000, run, &c) == 0, "empty queue");
 
   // lowest kind first, one entry per ctx; the other slot of that ctx stays for the next drain
   Put(0, 0x100, kE1 | 1);
   Put(1, 0x100, kE0 | 0);
   c = Counts();
-  int n = d.Plan(g_q, Ents(), 1010, &WallFake, run, &c);
+  int n = PlanInto(d, Ents(), 1010, run, &c);
   CHECK(n == 1 && run[0].kind == kCharge && run[0].slot == 1 && run[0].fn == kE0 && run[0].ctx == 0x100 && c.run == 1, "lowest kind first: n %d kind %d", n, n ? run[0].kind : -1);
-  CHECK(g_q[0] == 0x100 && g_q[1] == (kE1 | 1) && g_q[2] == 0x100, "planned runs must not be freed by the planner (Q-1)");
-  Free(g_q, run[0].slot);
-  CHECK(g_q[2] == 0 && g_q[3] == 0, "Free clears word and ctx");
+  CHECK(g_held, "a slot must still be claimed while its entry runs (Q-1)");
+  CHECK(g_q[0] == 0x100 && g_q[1] == (kE1 | 1) && g_q[2] == 0 && g_q[3] == 0, "the run slot is freed after its entry returned, the other kept");
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1020, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1020, run, &c);
   CHECK(n == 1 && run[0].kind == kBurst, "the other kind of that ctx runs on the next drain");
-  Free(g_q, run[0].slot);
+  CHECK(g_q[0] == 0 && g_q[1] == 0, "the drain frees the slot it ran");
 
   // two ctxs: both run in one drain
   Put(0, 0x100, kE0);
   Put(1, 0x200, kE0);
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1030, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1030, run, &c);
   CHECK(n == 2, "one entry per ctx: %d", n);
-  Free(g_q, 0);
-  Free(g_q, 1);
+  CHECK(g_q[0] == 0 && g_q[1] == 0 && g_q[2] == 0 && g_q[3] == 0, "the drain frees the slot it ran");
 
   // BOOM: freed, never run, counted
   Put(0, 0x100, kE2 | 2);
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1040, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1040, run, &c);
   CHECK(n == 0 && c.boom == 1 && g_q[0] == 0 && g_q[1] == 0, "boom must be freed and not run");
   // an entry that is not the lib's exact one for its kind: refused and freed
   Put(0, 0x100, 0x20000 | 0);
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1050, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1050, run, &c);
   CHECK(n == 0 && c.refused == 1 && g_q[0] == 0, "a foreign entry address must be refused");
   Put(0, 0x100, kE1 | 0);  // right address, wrong kind
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1060, &WallFake, run, &c) == 0 && c.refused == 1, "an entry of another kind must be refused");
+  CHECK(PlanInto(d, Ents(), 1060, run, &c) == 0 && c.refused == 1, "an entry of another kind must be refused");
   Put(0, 0x100, kE0 | 4);  // flag bits above the kind
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1070, &WallFake, run, &c) == 0 && c.refused == 1, "bits 2-3 of the word must be zero");
+  CHECK(PlanInto(d, Ents(), 1070, run, &c) == 0 && c.refused == 1, "bits 2-3 of the word must be zero");
   Entries none;
   Put(0, 0x100, kE0);
   c = Counts();
-  CHECK(d.Plan(g_q, none, 1080, &WallFake, run, &c) == 0 && c.refused == 1, "an unknown entry (0) is never run");
+  CHECK(PlanInto(d, none, 1080, run, &c) == 0 && c.refused == 1, "an unknown entry (0) is never run");
   Put(0, 0x100, 7);  // fn == 0 after the mask
   c = Counts();
-  CHECK(d.Plan(g_q, none, 1090, &WallFake, run, &c) == 0 && c.refused == 1, "no function pointer");
+  CHECK(PlanInto(d, none, 1090, run, &c) == 0 && c.refused == 1, "no function pointer");
   Put(0, 0x100, 3);  // fn == 0, kind sound, clean flag bits, and the entry for that kind unknown (0): equal, still refused
   c = Counts();
-  CHECK(d.Plan(g_q, none, 1095, &WallFake, run, &c) == 0 && c.refused == 1 && c.sound == 0, "a null function pointer must be refused");
+  CHECK(PlanInto(d, none, 1095, run, &c) == 0 && c.refused == 1 && c.sound == 0, "a null function pointer must be refused");
 
   // in flight: ctx set, word not yet: left alone
   Put(0, 0x100, 0);
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1100, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1100, run, &c);
   CHECK(n == 0 && c.inflight == 1 && g_q[0] == 0x100, "an in-flight slot must be left alone");
   g_q[1] = kE0;  // the lib completes it
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1110, &WallFake, run, &c) == 1, "a completed slot runs");
-  Free(g_q, 0);
+  CHECK(PlanInto(d, Ents(), 1110, run, &c) == 1, "a completed slot runs");
+  CHECK(g_q[0] == 0 && g_q[1] == 0, "the drain frees the slot it ran");
 
   // a slot of the same ctx that is still in flight (word 0) is not a candidate for "lowest kind"
   Put(0, 0x100, kE1 | 1);
   Put(1, 0x100, 0);
   c = Counts();
-  n = d.Plan(g_q, Ents(), 1115, &WallFake, run, &c);
+  n = PlanInto(d, Ents(), 1115, run, &c);
   CHECK(n == 1 && run[0].kind == kBurst && run[0].slot == 0 && c.refused == 0, "an in-flight slot of the same ctx was chosen: n %d kind %d slot %d", n, n ? run[0].kind : -1, n ? run[0].slot : -1);
-  Free(g_q, 0);
+  CHECK(g_q[0] == 0 && g_q[1] == 0, "the drain frees the slot it ran");
   Free(g_q, 1);
 
   // sound: unreadable wall refused; once per wall per 3 s; 8 walls remembered, the oldest replaced
   Put(0, 0x40, kE3 | 3);
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1120, &WallFake, run, &c) == 0 && c.sound == 1 && g_q[0] == 0, "a sound with an unreadable wall must be refused");
+  CHECK(PlanInto(d, Ents(), 1120, run, &c) == 0 && c.sound == 1 && g_q[0] == 0, "a sound with an unreadable wall must be refused");
   Put(0, 0x100, kE3 | 3);
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1130, &WallFake, run, &c) == 1 && run[0].kind == kSound, "first sound runs");
-  Free(g_q, 0);
+  CHECK(PlanInto(d, Ents(), 1130, run, &c) == 1 && run[0].kind == kSound, "first sound runs");
+  CHECK(g_q[0] == 0 && g_q[1] == 0, "the drain frees the slot it ran");
   Put(0, 0x100, kE3 | 3);
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1140, &WallFake, run, &c) == 0 && c.sound == 1, "a repeated sound within 3 s must be refused");
+  CHECK(PlanInto(d, Ents(), 1140, run, &c) == 0 && c.sound == 1, "a repeated sound within 3 s must be refused");
   for (uint64_t t = 1140 + 400; t < 1130 + 3000 - 1; t += 400) {  // idle drains: a gap over 500 ms would make the queue stale
     c = Counts();
-    d.Plan(g_q, Ents(), t, &WallFake, run, &c);
+    PlanInto(d, Ents(), t, run, &c);
   }
   c = Counts();
-  d.Plan(g_q, Ents(), 1130 + 3000 - 2, &WallFake, run, &c);
+  PlanInto(d, Ents(), 1130 + 3000 - 2, run, &c);
   Put(0, 0x100, kE3 | 3);
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1130 + 3000 - 1, &WallFake, run, &c) == 0 && c.sound == 1, "a sound 2999 ms after the last must be refused");
+  CHECK(PlanInto(d, Ents(), 1130 + 3000 - 1, run, &c) == 0 && c.sound == 1, "a sound 2999 ms after the last must be refused");
   Put(0, 0x100, kE3 | 3);
   c = Counts();
-  CHECK(d.Plan(g_q, Ents(), 1130 + 3000, &WallFake, run, &c) == 1, "a sound runs again after exactly 3000 ms");
-  Free(g_q, 0);
+  CHECK(PlanInto(d, Ents(), 1130 + 3000, run, &c) == 1, "a sound runs again after exactly 3000 ms");
+  CHECK(g_q[0] == 0 && g_q[1] == 0, "the drain frees the slot it ran");
   Sounds s;
   for (uint64_t w = 1; w <= 8; ++w) s.Again(w, 100 + w);
   CHECK(!s.Again(9, 200), "ninth wall is new");
   CHECK(!s.Again(1, 201), "the oldest wall was forgotten (replaced by the ninth)");
   CHECK(s.Again(9, 202), "the ninth is remembered");
+
+  CHECK(!Sounds().Again(0, 1000), "an empty remembered slot matches no wall (#2349 D4)");
+
+  // EC's order (#2349 D5): an entry runs as the drain reaches its slot, so an effect a running entry queues into a later slot, for a node
+  // not yet run, runs this drain; one queued into a slot already passed, or for a node that already ran, waits for the next drain
+  {
+    std::memset(g_q, 0, sizeof g_q);
+    Drain d5;
+    Env env;
+    const Entries ents = Ents();
+    env.entries = &ents;
+    env.wallOf = &WallFake;
+    int queued = 0;
+    uint64_t order[kSlots] = {};
+    int k = 0;
+    Put(1, 0x100, kE0);
+    c = Counts();
+    n = d5.Plan(g_q, env, 9000, [&](const Run& r) {
+      order[k++] = r.ctx;
+      if (r.ctx != 0x100 || queued++) return;
+      Put(3, 0x200, kE1 | 1);  // a later slot, another node
+      Put(0, 0x300, kE0);      // a slot already passed
+      Put(4, 0x100, kE1 | 1);  // a node that already ran
+    }, &c);
+    CHECK(n == 2 && order[1] == 0x200 && g_q[6] == 0 && g_q[0] == 0x300 && g_q[8] == 0x100, "an effect queued during the drain: n %d", n);
+    c = Counts();
+    k = 0;
+    CHECK(d5.Plan(g_q, env, 9010, [&](const Run& r) { order[k++] = r.ctx; }, &c) == 2, "the waiting effects run on the next drain");
+    std::memset(g_q, 0, sizeof g_q);
+  }
 
   // stale: more than 500 ms since the last drain frees every complete slot, runs nothing
   Drain d2;
@@ -185,21 +228,19 @@ static void RuleTests() {
   Put(1, 0x200, kE1 | 1);
   Put(2, 0x300, 0);  // in flight: stays
   c = Counts();
-  n = d2.Plan(g_q, Ents(), 5000, &WallFake, run, &c);  // first drain: not stale (no last)
+  n = PlanInto(d2, Ents(), 5000, run, &c);  // first drain: not stale (no last)
   CHECK(n == 2 && c.stale == 0, "the first drain is never stale: n %d stale %d", n, c.stale);
-  Free(g_q, 0);
-  Free(g_q, 1);
+  CHECK(g_q[0] == 0 && g_q[1] == 0 && g_q[2] == 0 && g_q[3] == 0, "the drain frees the slot it ran");
   Put(0, 0x100, kE0);
   Put(1, 0x200, kE1 | 1);
   c = Counts();
-  n = d2.Plan(g_q, Ents(), 5000 + 500, &WallFake, run, &c);
+  n = PlanInto(d2, Ents(), 5000 + 500, run, &c);
   CHECK(n == 2, "exactly 500 ms is not stale: %d", n);
-  Free(g_q, 0);
-  Free(g_q, 1);
+  CHECK(g_q[0] == 0 && g_q[1] == 0 && g_q[2] == 0 && g_q[3] == 0, "the drain frees the slot it ran");
   Put(0, 0x100, kE0);
   Put(1, 0x200, kE1 | 1);
   c = Counts();
-  n = d2.Plan(g_q, Ents(), 5000 + 500 + 500 + 1, &WallFake, run, &c);
+  n = PlanInto(d2, Ents(), 5000 + 500 + 500 + 1, run, &c);
   CHECK(n == 0 && c.stale == 2 && g_q[0] == 0 && g_q[2] == 0 && g_q[4] == 0x300, "a stale queue must be freed unrun, in-flight left: n %d stale %d", n, c.stale);
   std::memset(g_q, 0, sizeof g_q);
 }

@@ -72,24 +72,25 @@ std::uint64_t* Queue() noexcept { return reinterpret_cast<std::uint64_t*>(sentin
 void TickOnce(std::uint64_t now) noexcept {
   if (g_lastMs && now - g_lastMs < kEveryMs) return;
   g_lastMs = now;
-  Run run[kSlots];
   Counts c;
-  const int n = g_drain.Plan(Queue(), g_entries, now, &WallOf, run, &c);
-  for (int i = 0; i < n; ++i) {
-    if (Named(run[i].fn, run[i].kind)) {
-      reinterpret_cast<EntryFn>(run[i].fn)(reinterpret_cast<void*>(run[i].ctx));  // the entry checks tp itself
+  Env env;
+  env.entries = &g_entries;  // the exact-entry check is on: the entries are the wall library's, from dlsym (#2349 D1)
+  env.wallOf = &WallOf;
+  // Each entry runs as the drain reaches its slot, and the drain frees the slot after it returned (#2349 D5, Q-1)
+  g_drain.Plan(Queue(), env, now, [](const Run& r) {
+    if (Named(r.fn, r.kind)) {
+      reinterpret_cast<EntryFn>(r.fn)(reinterpret_cast<void*>(r.ctx));  // the entry checks tp itself
       if (g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap) {
         char tp[19];
-        sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_ran", {{"kind", kKindName[run[i].kind]}, {"tp", sentinel::HexString(tp, run[i].ctx)}});
+        sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_ran", {{"kind", kKindName[r.kind]}, {"tp", sentinel::HexString(tp, r.ctx)}});
       }
     } else if (g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap) {
       char entry[19];
       sentinel::LogFields(LogLevel::kWarn, "combat_ecfx_ran",
-                          {{"kind", kKindName[run[i].kind]}, {"entry", sentinel::HexString(entry, run[i].fn)}, {"status", "not_run"},
+                          {{"kind", kKindName[r.kind]}, {"entry", sentinel::HexString(entry, r.fn)}, {"status", "not_run"},
                            {"msg", "the queued entry is no longer the wall library's: the effect is not run"}});
     }
-    Free(Queue(), run[i].slot);  // Q-1: after the entry returned
-  }
+  }, &c);
   if ((c.boom || c.sound || c.refused || c.stale) && g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap)
     sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_drain",
                         {{"boom_freed", c.boom}, {"sound_repeats", c.sound}, {"refused", c.refused}, {"stale_freed", c.stale}});

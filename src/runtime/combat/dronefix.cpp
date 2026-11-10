@@ -43,12 +43,14 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include "runtime/patch/dronemuzzle_rules.h"  // nEVR port: the muzzle rule, shared with the Quest (#2337)
+#include "runtime/patch/ecfx_rules.h"  // nEVR port: NEUTRON's effects drain, shared with the Quest (#2349)
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdarg.h>
+#include <atomic>  // nEVR port: the NEUTRON refusal line's count
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
 namespace nevr_combat::dronefix {  // nEVR port: one namespace per file
@@ -394,25 +396,16 @@ void SpawnDeathFx(void *ctx) {
 // sound; the stun explosion is left to the server), one sound per wall (both its nodes may
 // queue one), the node's own state kept round each, as for the drone's explosion.
 constexpr uintptr_t FX_QUEUE_RVA = 0x2104DA0;                    // veil_fx.FX_QUEUE_RVA
-constexpr int FX_QUEUE_LEN = 6;
 constexpr uintptr_t FX_DEFER_RVA = 0x2104E20;                    // veil_fx.FX_DEFER_RVA
-constexpr int FX_BOOM = 2, FX_SOUND = 3;
-struct WallFx { void *volatile ctx; volatile uintptr_t stub; };
-struct WallSound { uintptr_t wall; ULONGLONG at; };
-WallSound g_wall_sounds[8];
+// nEVR port: the queue's length and kinds, SoundAgain and the drain's rules are runtime/patch/ecfx_rules.h, the one
+// definition the Quest's ecfx.cpp uses too (#2349). The drain runs each entry as it reaches its slot, as EC's WallFxDue does.
+namespace fx = nevr_ecfx;
+fx::Drain g_wall_drain;                                          // the follow update only
 
-uintptr_t WallOf(void *ctx) {                                     // the wall's script data: [[ctx]+68h]
-    EC_TRY { return *(uintptr_t *)(*(uint8_t **)ctx + 0x68); } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { return 0; }
-}
-
-bool SoundAgain(uintptr_t wall, ULONGLONG now) {                 // this wall's sound already played
-    WallSound *oldest = &g_wall_sounds[0];
-    for (auto &w : g_wall_sounds) {
-        if (w.wall == wall && now - w.at < 3000) return true;
-        if (w.at < oldest->at) oldest = &w;
-    }
-    *oldest = { wall, now };
-    return false;
+uint64_t WallOf(uint64_t ctx) {                                   // the wall's script data: [[ctx]+68h]; 0 = unreadable
+    EC_TRY {
+        return *reinterpret_cast<const uint64_t *>(*reinterpret_cast<uint8_t *const *>(ctx) + 0x68);
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 void RunWallFx(void *ctx, uintptr_t stub) {
@@ -428,40 +421,28 @@ void RunWallFx(void *ctx, uintptr_t stub) {
     }
 }
 
+// nEVR port: the drain is fx::Drain::Plan with no exact-entry check (PC resolves no entry address, as EC did not, #2349 D1).
+// A word with no entry or a stray flag bit, or a sound whose wall could not be read, is freed and not run (D2, D3; EC ran
+// each inside __try); the first 16 such drains are logged, so a wall content that writes them is seen, not hidden.
+std::atomic<unsigned> g_wall_refusals{0};
+
 void WallFxDue() {
     if (g_is_server) return;
-    auto q = (WallFx *)((uint8_t *)GetModuleHandleW(nullptr) + FX_QUEUE_RVA);
-    void *ran[FX_QUEUE_LEN];
-    int nran = 0;
-    ULONGLONG now = GetTickCount64();
-    static ULONGLONG last = 0;
-    bool stale = last && now - last > 500;                        // not run for a while: those walls may be gone
-    last = now;
-    if (stale) {
-        for (int i = 0; i < FX_QUEUE_LEN; ++i)
-            if (q[i].ctx && q[i].stub) { q[i].stub = 0; InterlockedExchangePointer(&q[i].ctx, nullptr); }
-        return;
-    }
-    for (int i = 0; i < FX_QUEUE_LEN; ++i) {
-        void *ctx = q[i].ctx;
-        uintptr_t st = q[i].stub;
-        if (!ctx || !st) continue;                                // free, or still being written
-        bool done = false;
-        for (int k = 0; k < nran; ++k) done |= ran[k] == ctx;
-        if (done) continue;
-        int best = i;                                             // this node's lowest kind first
-        for (int j = i + 1; j < FX_QUEUE_LEN; ++j)
-            if (q[j].ctx == ctx && q[j].stub && (q[j].stub & 3) < (q[best].stub & 3)) best = j;
-        st = q[best].stub;
-        ran[nran++] = ctx;
-        int kind = (int)(st & 3);
-        // The stun explosion is the server's alone: its explosion is the one that stuns (with
-        // none there, nobody was). Activated here too, a client it stunned crashed -- only
-        // the team the NEUTRON's owner wasn't on ever did.
-        bool run = kind == FX_BOOM ? false : kind != FX_SOUND || !SoundAgain(WallOf(ctx), now);
-        if (run) RunWallFx(ctx, st & ~(uintptr_t)0xF);
-        q[best].stub = 0;
-        InterlockedExchangePointer(&q[best].ctx, nullptr);
+    auto q = reinterpret_cast<uint64_t *>(reinterpret_cast<uint8_t *>(GetModuleHandleW(nullptr)) + FX_QUEUE_RVA);
+    fx::Env env;
+    env.wallOf = &WallOf;
+    fx::Counts c;
+    // The stun explosion is the server's alone: its explosion is the one that stuns (with
+    // none there, nobody was). Activated here too, a client it stunned crashed -- only
+    // the team the NEUTRON's owner wasn't on ever did. (nEVR port: fx::Drain frees it unrun.)
+    g_wall_drain.Plan(q, env, GetTickCount64(), [](const fx::Run &r) {
+        RunWallFx(reinterpret_cast<void *>(r.ctx), static_cast<uintptr_t>(r.fn));
+    }, &c);
+    if (c.refused || c.nowall) {
+        const unsigned line = g_wall_refusals.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (line <= 16)
+            LogWarning("NEUTRON effects freed and not run in one drain: refused=%d (no entry or a stray flag bit) nowall=%d (a sound whose wall could not be read) line=%u of at most 16 (the wall content wrote a word its defer stub never writes, or the wall is gone)",
+                       c.refused, c.nowall, line);
     }
 }
 
