@@ -3306,8 +3306,9 @@ TEST_F(PluginResourceSetTest, WithNoResolverHookNoSetIsMountedAndTheLineNamesThe
                                      "resource sets mount failed reason=out_of_memory served=false"));
 }
 
-// A plugin id comes from config.yaml and an asset's label from the plugin: every line that names one writes it as
-// printable ASCII, any other byte (and a quote) as '?'.
+// A plugin id comes from config.yaml: every line that names one writes it as printable ASCII, any other byte (and a
+// quote) as '?'. An asset's label outside the label rule is refused before any line carries it (#2225); one inside it
+// meets the set's key claim next.
 TEST_F(PluginResourceSetTest, EveryLineWritesAnOddPluginIdOrAssetLabelPrintable) {
   const char* const kOddId = "odd\x01\"id";
   const std::string shown = "odd??id";
@@ -3328,17 +3329,20 @@ TEST_F(PluginResourceSetTest, EveryLineWritesAnOddPluginIdOrAssetLabelPrintable)
     EXPECT_TRUE(TestLogContains(line)) << line << "\n" << TestLogLinesWith("NEVR.RESOURCE");
   }
 
-  // The asset lines: a refusal (the set holds the key) and a deregistration.
+  // The asset lines: an odd label is refused by the label rule and only its length is written; a label inside the rule
+  // whose key the set holds is refused by the key claim.
   CHAR* const base = EchoVR::g_GameBaseAddress;
   EchoVR::g_GameBaseAddress = nullptr;
   static const unsigned char assetBytes[16] = {};
   EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshLogicalType, kFixtureMesh, assetBytes, 16, "a\x01\"label"),
+            nevr::assets::RegisterStatus::BadArgument);
+  EXPECT_TRUE(TestLogContains("register refused status=1 reason=bad_label label_bytes=8")) << TestLogLinesWith("NEVR.ASSET");
+  EXPECT_FALSE(TestLogContains("a\x01")) << "the label's bytes never reach a line";
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshLogicalType, kFixtureMesh, assetBytes, 16, "plain_label"),
             nevr::assets::RegisterStatus::Duplicate);
-  EXPECT_TRUE(TestLogContains("register refused label=a??label")) << TestLogLinesWith("NEVR.ASSET");
-  ASSERT_EQ(nevr::assets::Global().Register(0x7777ULL, 0x8888ULL, assetBytes, 16, "a\x01\"label"),
-            nevr::assets::RegisterStatus::Ok);
-  nevr::assets::DeregisterPluginAssets(assetBytes, assetBytes + 16);
-  EXPECT_TRUE(TestLogContains("deregistered label=a??label")) << TestLogLinesWith("NEVR.ASSET");
+  EXPECT_TRUE(TestLogContains("register refused label=plain_label type=0x1111111111111111 name=0x2222222222222222 "
+                              "bytes=16 reason=duplicate (a plugin's resource set holds this key)"))
+      << TestLogLinesWith("NEVR.ASSET");
   EchoVR::g_GameBaseAddress = base;
   UnloadPlugins();
   nevr_resource_sets::ResetForTest();
