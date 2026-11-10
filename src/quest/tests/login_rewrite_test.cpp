@@ -76,7 +76,7 @@ class FakeJson final : public nevr_quest_login::JsonAccess {
   }
 
   // One path segment: `name` is an object member, `name[3]` is the member `name`'s fourth array element (the form the
-  // game's own writer uses, libpnsovr ToJson 0x4310c0, and the one the login's `nevr_plugins` members take).
+  // game's own writer uses, libpnsovr NRadEngine::CTcpMarkovChain::ToJson 0x3310c0, and the one the login's `nevr_plugins` members take).
   static nlohmann::json& Member(nlohmann::json& node, const std::string& part) {
     const std::size_t open = part.find('[');
     if (open == std::string::npos) return node[part];

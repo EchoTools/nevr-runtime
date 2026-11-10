@@ -173,7 +173,7 @@ only `early: true` entries (N146, `AGENTS.md:191`).
   Quest sends the same array from the same builder, so neither platform is left behind. The report is one object per plan
   entry, with the record's reason token as `error`, and an entry still waiting for its moment reads `pending`. CJson has no
   array setter the login uses, so each member is written as an indexed path (`nevr_plugins[0]|name`), the form the game's own
-  writer uses (libpnsovr `ToJson`, `0x4310c0`). That the live CJson builds the array from those paths is a prediction not yet
+  writer uses (libpnsovr `NRadEngine::CTcpMarkovChain::ToJson`, `0x3310c0`). That the live CJson builds the array from those paths is a prediction not yet
   seen on a headset; the members are written after the identity and never at its cost: a refusal restores them, the login goes out
   without `nevr_plugins` (the service reads an absent key as an empty report), and the `quest_login` record says
   `plugins_written=0` and names the refused key.
