@@ -92,6 +92,7 @@
 #include <math.h>
 #include <intrin.h>
 #include <stdarg.h>
+#include <atomic>
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
 namespace nevr_combat::powerboost {  // nEVR port: one namespace per file
@@ -384,8 +385,8 @@ void EndBuff(void *cs, uint16_t index) {
 void AddSelfDamage(void *cs, uint32_t index, unsigned seconds);
 
 // nEVR port: a marker's kind (use, link, unlink, or a real heal), rez and the encoded value are pbr::Decode
-// (runtime/patch/powerboost_rules.h, #2339): his Marker, with the unlink band tested first as here, and a rounded
-// value held inside its band.
+// (runtime/patch/powerboost_rules.h, #2339): his Marker, with the unlink band tested first as here. A use or link whose
+// rounded value leaves its band is declined: logged, never a buff and never a heal.
 void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4, uint64_t a5) {
     const pbr::Marker m = pbr::Decode(amount);
     if (m.kind == pbr::kUnlink) {
@@ -393,6 +394,12 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
         return;
     }
     const bool rez = m.rez != 0;
+    if (m.kind == pbr::kDeclined) {
+        static std::atomic<int> declined{0};
+        if (declined.fetch_add(1, std::memory_order_relaxed) < 32)
+            LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
+        return;
+    }
     if (m.kind == pbr::kUse) {
         g_dr_permille = m.drPermille;             // what the link hands out (see ConeFilter)
         g_dr_seconds = m.seconds;

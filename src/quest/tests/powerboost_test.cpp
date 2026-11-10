@@ -350,7 +350,8 @@ int main() {
         {999999.0f, 0, 0, 0, 0, 0},          {5000000.0f, 0, 0, 0, 0, 0},   {5999999.0f, 0, 0, 0, 0, 0},
         {7000000.0f, 0, 0, 0, 0, 0},         {1e9f, 0, 0, 0, 0, 0},         {-1250030.0f, 0, 0, 0, 0, 0},
         {std::nanf(""), 0, 0, 0, 0, 0},      {INFINITY, 0, 0, 0, 0, 0},     {1000000.0f, 1, 0, 0, 0, 0},
-        {1020009.75f, 1, 0, 20010, 20, 10},  {3020009.75f, 1, 1, 20010, 20, 10}, {1999999.75f, 1, 0, 999999, 999, 999},
+        {1020009.75f, 1, 0, 20010, 20, 10},  {3020009.75f, 1, 1, 20010, 20, 10}, {1999999.75f, 4, 0, 0, 0, 0},
+        {1999999.25f, 1, 0, 999999, 999, 999}, {3999999.75f, 4, 1, 0, 0, 0}, {6999999.5f, 3, 0, 1000000, 0, 0},
     };
     for (const float bad : {std::nanf(""), INFINITY, -INFINITY}) {  // a radius that is not finite carries no angle (#2339)
       volatile float r = bad;
@@ -595,6 +596,19 @@ int main() {
     HealSlot()(cs, 1, 5500000.0f, 1);
     HealSlot()(cs, 1, 7500000.0f, 1);
     CHECK(g_heals.size() == 2, "non-marker amounts swallowed");
+    // an amount that rounds out of its band is declined: not a heal, not held, not sent, and the swallow line says so
+    g_heals.clear();
+    g_lines.clear();
+    g_node_heals = true;
+    NodeData dd = Data(1999999.75f, 5);
+    NodeSlot()(node, dd.b);
+    g_node_heals = false;
+    HealSlot()(cs, 0x10001, 2999999.75f, 5);
+    QueuedSlot()(cs, 0x10001, 1999999.75f, 5);
+    CHECK(g_heals.empty() && g_sends.empty(), "a declined amount reached Heal or was sent: %zu heals %zu sends", g_heals.size(), g_sends.size());
+    CHECK(EventsWith("marker", "\"kind\":4,") == 1 && EventsWith("swallow", "\"kind\":4,") >= 2, "declined lines: %zu", g_lines.size());
+    QueuedSlot()(cs, 1, 1.0f, 1);
+    CHECK(g_sends.empty() && g_heals.size() == 1, "a declined amount was held and sent");
   }
   // the node mark is per thread: a marker relayed by the server on another thread while this thread is inside the node's Enter is not the
   // node's own heal. It is swallowed as a relayed one ("heal", nothing held), and the node's own direct heal on this thread is still held.

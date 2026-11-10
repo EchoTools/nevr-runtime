@@ -13,12 +13,12 @@
 // c14c3e0a through the reference build's `runtime/native/afkxr/afk_powerboost_core.h` (kotorvr's q15t-upstream). Rule for rule: the decode
 // EC 381-393, Rotate and AngleTo EC 531-544, LeftSeconds EC 554-557, LinkMarker EC 565-567, the slack and the send interval EC 673-674,
 // the bubble table EC 681-687, the angle and the bands EC 707-709, the owner's 0.3 m EC 731, the cone decision EC 751-769.
-// Where the ports differed, one form now holds on both (#2339):
-//   - The decode is EC's: the rez flag is subtracted, then the value past the band's base is rounded (`+ 0.5f`). The Quest truncated, so a
-//     fractional amount (1,020,009.75) gave it v 20,009 where EC and PC give 20,010. The script's heal node writes whole amounts, on which
-//     the two forms agree.
-//   - A rounded value is held inside its band (999,999). EC's rounding takes 1,999,999.75 to v 1,000,000: dr 1.0 for 0 s, which re-encodes
-//     as a link marker in the rez band. Only a fractional amount gets there; a guard against bad input holds on both builds.
+// Both builds hold these forms (#2339):
+//   - The decode is EC's: the rez flag is subtracted, then the value past the band's base is rounded (`+ 0.5f`), so 1,020,009.75 is
+//     v 20,010. The script's heal node writes whole amounts, on which rounding and truncating agree.
+//   - A use or link amount whose rounding carries it out of its band (1,999,999.75 gives v 1,000,000) is declined (kDeclined): no buff, no
+//     boost, no self-damage and no link, and it is not passed on as a heal. That is EC's effective outcome (dr 1.0 for 0 s does nothing),
+//     stated as a decision. An unlink amount needs no v; it is never declined.
 //   - dr_permille is kept as the integer it is. EC keeps `(v / 1000) / 1000.0f` and re-encodes `(unsigned)(dr * 1000.0f + 0.5f)`; for every
 //     dr_permille a decode can give (0..999) that returns the same integer (the PC GTest checks all 1000), so the link marker is EC's.
 //   - A radius that is not finite names no bubble. EC converts `(r - floorf(r)) * 100000` to int with no check, which for a NaN or an
@@ -27,7 +27,8 @@
 // such a bubble to the game's own radius check), anything else neither.
 //
 // A NaN direction, distance or quaternion fails closed: AngleTo's clamp passes a NaN cosine through to acosf, so the angle is NaN, and
-// `off <= angle + slack` and `dist <= range` are both false: the target is outside the cone and takes no new link.
+// `off <= angle + slack` and `dist <= range` are both false: the target is outside the cone and takes no new link. The NaN and non-finite
+// guards in this header assume IEEE 754 floating point: building it with -ffast-math or -ffinite-math-only removes them.
 #include <math.h>
 #include <stdint.h>
 
@@ -45,21 +46,19 @@ constexpr float kUseBase = 1000000.0f, kUseEnd = 2000000.0f;
 constexpr float kLinkBase = 2000000.0f, kLinkEnd = 3000000.0f;
 constexpr float kRezFlag = 2000000.0f;
 constexpr float kUnlinkBase = 6000000.0f, kUnlinkEnd = 7000000.0f;
-constexpr uint32_t kValueMax = 999999;     // the largest v a band holds
+constexpr uint32_t kValueMax = 999999;     // the largest v a use or link band holds
 
-enum MarkerKind : int { kHeal = 0, kUse = 1, kLink = 2, kUnlink = 3 };
+// kDeclined: a use or link amount whose rounded value is outside its band (see Decode). It is not a heal and carries no buff.
+enum MarkerKind : int { kHeal = 0, kUse = 1, kLink = 2, kUnlink = 3, kDeclined = 4 };
 
 struct Marker { int kind; int rez; uint32_t v, drPermille, seconds; };
 
-// What is past a band's base, rounded and held inside the band. `past` is in [0, 1e6) (the band compares run first), so the conversion is
-// always in range.
-inline uint32_t BandValue(float past) {
-    const uint32_t v = static_cast<uint32_t>(past + 0.5f);
-    return v > kValueMax ? kValueMax : v;
-}
+// What is past a band's base, rounded. `past` is in [0, 1e6) (the band compares run first), so the conversion is always in range; the
+// result is at most 1,000,000.
+inline uint32_t BandValue(float past) { return static_cast<uint32_t>(past + 0.5f); }
 
 // The compares run before any conversion: a NaN fails every one, so no out-of-range float is converted. rez is 0 unless the kind is use
-// or link.
+// or link. A use or link whose rounded v exceeds kValueMax is kDeclined (rez kept, v, dr and seconds 0).
 inline Marker Decode(float amount) {
     Marker m{ kHeal, 0, 0, 0, 0 };
     if (amount >= kUnlinkBase && amount < kUnlinkEnd) {
@@ -73,9 +72,14 @@ inline Marker Decode(float amount) {
     else if (a >= kLinkBase && a < kLinkEnd) m.kind = kLink;
     else return m;
     m.rez = rez ? 1 : 0;
-    m.v = BandValue(a - (m.kind == kUse ? kUseBase : kLinkBase));
-    m.drPermille = m.v / 1000u;
-    m.seconds = m.v % 1000u;
+    const uint32_t v = BandValue(a - (m.kind == kUse ? kUseBase : kLinkBase));
+    if (v > kValueMax) {
+        m.kind = kDeclined;
+        return m;
+    }
+    m.v = v;
+    m.drPermille = v / 1000u;
+    m.seconds = v % 1000u;
     return m;
 }
 

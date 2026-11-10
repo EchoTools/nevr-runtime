@@ -3,7 +3,7 @@
 // calls too (#2339). Nothing here calls the game. Tested by src/quest/tests/powerboost_test.cpp.
 //
 // Origin (docs/audits/2026-11-05-q15t-origin-citations.md rows 255-272): the reference build's runtime/native/afkxr/afk_powerboost_core.h
-// (at 1357409), whose rules moved to runtime/patch/powerboost_rules.h.
+// (at 1357409), the link line filter of which is this file.
 #pragma once
 #include <stdint.h>
 

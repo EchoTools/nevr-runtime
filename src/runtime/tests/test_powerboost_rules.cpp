@@ -357,7 +357,7 @@ TEST(PowerBoostRules, TheDecodeTableOfTheQuestHostTest) {
   ExpectDecode({4999999.0f, 2, 1, 999999, 999, 999});
 }
 
-// v2.0.0's decode rounds what is past the base (+ 0.5f); the Quest truncated.
+// The decode rounds what is past the base (+ 0.5f), as v2.0.0 does.
 TEST(PowerBoostRules, AFractionalAmountIsRounded) {
   ExpectDecode({1020009.75f, 1, 0, 20010, 20, 10});
   ExpectDecode({3020009.75f, 1, 1, 20010, 20, 10});
@@ -365,15 +365,22 @@ TEST(PowerBoostRules, AFractionalAmountIsRounded) {
   ExpectDecode({2000045.5f, 2, 0, 46, 0, 46});
 }
 
-// The rounding carry (#2339): an amount that rounds to the top of its band keeps v inside the band (999,999), where v2.0.0 gives
-// v 1,000,000: dr 1.0 for 0 s.
-TEST(PowerBoostRules, AnAmountThatRoundsToTheTopOfItsBandStaysInIt) {
-  ExpectDecode({1999999.5f, 1, 0, 999999, 999, 999});
-  ExpectDecode({1999999.75f, 1, 0, 999999, 999, 999});
-  ExpectDecode({2999999.75f, 2, 0, 999999, 999, 999});
-  ExpectDecode({3999999.75f, 1, 1, 999999, 999, 999});
-  ExpectDecode({4999999.5f, 2, 1, 999999, 999, 999});
-  ExpectDecode({6999999.5f, 3, 0, 999999, 0, 0});
+// An amount whose rounding carries it out of its band (1,999,999.75 rounds to v 1,000,000: dr 1.0 for 0 s) is declined: kDeclined, no
+// buff data. The rez flag is kept. An amount that rounds to the band's top (999,999) is still a marker.
+TEST(PowerBoostRules, AnAmountThatRoundsOutOfItsBandIsDeclined) {
+  ExpectDecode({1999999.75f, pbr::kDeclined, 0, 0, 0, 0});
+  ExpectDecode({1999999.5f, pbr::kDeclined, 0, 0, 0, 0});
+  ExpectDecode({2999999.75f, pbr::kDeclined, 0, 0, 0, 0});
+  ExpectDecode({3999999.75f, pbr::kDeclined, 1, 0, 0, 0});
+  ExpectDecode({4999999.5f, pbr::kDeclined, 1, 0, 0, 0});
+  ExpectDecode({1999999.25f, pbr::kUse, 0, 999999, 999, 999});
+  ExpectDecode({2999999.0f, pbr::kLink, 0, 999999, 999, 999});
+}
+
+// An unlink needs no v: the amount is in its band, so the buff ends, whatever it rounds to.
+TEST(PowerBoostRules, AnUnlinkIsNeverDeclined) {
+  ExpectDecode({6999999.5f, pbr::kUnlink, 0, 1000000, 0, 0});
+  ExpectDecode({6999999.0f, pbr::kUnlink, 0, 999999, 0, 0});
 }
 
 }  // namespace

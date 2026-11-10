@@ -142,11 +142,18 @@ void MarkerLine(float amount, const char* where, long long index, std::uint32_t 
   g_markers.fetch_add(1, std::memory_order_relaxed);
   if (!Take(g_markerLines, kMarkerCap, "marker")) return;
   const Marker m = Decode(amount);
-  if (!m.kind) {
+  if (m.kind == kHeal) {
     const Num a(static_cast<double>(amount));
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
                         {{"kind", 0}, {"amount", a.text}, {"where", where}, {"index", index}, {"user", user}, {"tid", Tid()},
                          {"msg", "the amount is not a marker; passed on to the game as a heal"}});
+    return;
+  }
+  if (m.kind == kDeclined) {
+    const Num a(static_cast<double>(amount));
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
+                        {{"kind", m.kind}, {"rez", m.rez}, {"amount", a.text}, {"where", where}, {"index", index}, {"user", user}, {"tid", Tid()},
+                         {"msg", "the amount rounds out of its marker band; declined: no buff, not passed on as a heal"}});
     return;
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
@@ -204,9 +211,9 @@ __attribute__((noinline)) void NodeAct(NodeThunk::Fn original, void* node, const
 __attribute__((noinline)) void HealAct(HealThunk::Fn original, void* cs, std::uint64_t handle, float amount, std::uint64_t user) noexcept {
   if (g_swallow.load(std::memory_order_acquire) && amount >= kMarkerMin) {  // stage 2: a marker never reaches Heal; this path never sends
     const Marker m = Decode(amount);
-    if (m.kind) {
+    if (m.kind != kHeal) {
       const bool inNode = g_tInNode.Get() != 0;
-      if (inNode && m.kind == 1) {  // the node's direct path: held for the next queued heal
+      if (inNode && m.kind == kUse) {  // the node's direct path: held for the next queued heal
         Lock();
         const bool replaced = g_held.cs != nullptr;
         g_held = Held{cs, handle, NowMs(), amount};
@@ -251,12 +258,12 @@ __attribute__((noinline)) void QueuedHealAct(QueuedHealThunk::Fn original, void*
     }
   }
   const Marker m = Decode(amount);
-  if (!m.kind) {
+  if (m.kind == kHeal) {
     original(cs, handle, amount, user);
     return;
   }
   g_swallowed.fetch_add(1, std::memory_order_relaxed);
-  if (m.kind == 1) {
+  if (m.kind == kUse) {
     Send(cs, handle, amount, "queued node heal");
   } else {
     SwallowLine(m, "queued heal", handle, "nothing sent (the server owns the buffs)");
