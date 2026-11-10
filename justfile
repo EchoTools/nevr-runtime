@@ -1891,7 +1891,9 @@ test-quest-q15t module="":
     jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     cd src/quest/tests/q15t
     ctest_args=()
-    ctest_ndk_args=()
+    # No module of the plugin has an arm64 object check any more (each moved into src/quest/combat, whose checks are check/<module>.sh), so the
+    # arm64 set can be empty: that is not an error. tools/tests/test_q15t_host_tests_cmake.py pins which objects are registered.
+    ctest_ndk_args=(--no-tests=ignore)
     if [ -n "$module" ]; then
       ctest_args=(-L "^${module}$")
       ctest_ndk_args=(-L "^${module}$" --no-tests=ignore)
