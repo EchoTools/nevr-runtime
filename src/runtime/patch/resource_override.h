@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #ifdef NEVR_TEST_HOOKS
 void TestHook_InitResourceOverrides(void (*original)(void*));
@@ -47,6 +48,12 @@ void InstallResourceOverride();
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);
+
+/// The label of the first fixed (non-transform) entry that would serve a load an entry keyed by the on-disk type
+/// `on_disk_type` serves, for `name_hash`; empty when there is none. An entry of that same type competes, and so does
+/// one keyed by a logical type whose buffer-0 on-disk type it is, and one of type 0, which names buffer 0 of every type
+/// (from an on-disk type alone the buffer cannot be told, so a type-0 entry is taken to compete).
+std::string FirstFixedOverrideLabelFor(uint64_t on_disk_type, uint64_t name_hash);
 
 /// What a transform returns for a resource: `original` and `original_size` are the buffer the game delivered, and a
 /// transform that wants to serve other bytes sets `*out` and `*out_size` and returns true. The bytes it returns

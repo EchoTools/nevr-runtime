@@ -22,6 +22,7 @@
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
 #include "runtime/lifecycle/cli.h"
@@ -475,6 +476,53 @@ TEST_F(CachedOverrides, ACachedFileIsDeliveredForItsTypeAndNameAndLogged) {
   EXPECT_TRUE(TestLogContains("orig_bytes=10 new_bytes=3000"));
   EXPECT_TRUE(TestLogContains("cache init dir="));
   EXPECT_TRUE(TestLogContains("entries=1 loaded=1 refused=0 missing=0"));
+}
+
+// What a level plugin needs (#2161): a fixed override replaces its resource on every load, so a level that loads again
+// gets the override again. KNOWN-WRONG #2343 a fixed entry is skipped once applied (resource_override.cpp,
+// Hook_AsyncIOCallback) until a plugin calls NEVR_ResetResourceOverrides, so the second and third loads get the game's
+// own bytes. Disabled until #2343 lands; run it with --gtest_also_run_disabled_tests to see the state.
+TEST_F(CachedOverrides, DISABLED_AFixedOverrideReplacesItsResourceOnEveryLoad) {
+  const std::vector<std::uint8_t> image = Image(300, 5);
+  RegisterResourceOverride(kSplashType, kSplashName, image.data(), image.size(), "every_load");
+  char original[10] = {};
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
+    ExpectGameCopy(image.data(), image.size());
+  }
+}
+
+bool NeverServes(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
+
+// #2161: which earlier entry takes a resource set override's place at the mount. The set's override is keyed by an
+// on-disk type; a CGTextureResource is read as buffer 0 by Make(<logical>, "Win10") and buffer 1 by
+// Make(<logical>, "Win10GPU") (resource_buffer_key.h).
+TEST_F(CachedOverrides, TheFirstFixedEntryForAnOnDiskKeyIsFoundByEveryTypeThatNamesItsBuffer) {
+  using nevr_resource_key::OnDiskType;
+  using nevr_resource_key::kTextureResourceType;
+  const std::uint64_t descriptor = OnDiskType(kTextureResourceType, 0);
+  const std::uint64_t payload = OnDiskType(kTextureResourceType, 1);
+  static const std::uint8_t kBytes[4] = {1, 2, 3, 4};
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "") << "an empty registry";
+
+  RegisterResourceOverride(descriptor, 0x10, kBytes, 4, "same_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "same_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x11), "") << "another name";
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x10), "") << "the other buffer's type";
+
+  RegisterResourceOverride(kTextureResourceType, 0x20, kBytes, 4, "logical");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x20), "logical") << "the logical type names buffer 0";
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x20), "") << "and only buffer 0";
+
+  RegisterResourceOverride(0, 0x30, kBytes, 4, "any_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x30), "any_type") << "type 0 is taken to compete";
+
+  ASSERT_TRUE(RegisterResourceTransform(descriptor, 0x40, &NeverServes, nullptr, "a_transform"));
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x40), "") << "a transform is not a fixed entry";
+
+  RegisterResourceOverride(descriptor, 0x10, kBytes, 4, "second");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "same_type") << "the first of two";
 }
 
 TEST_F(CachedOverrides, ACachedFileForAnotherResourceIsNotDeliveredForThisOne) {

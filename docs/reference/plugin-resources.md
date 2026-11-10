@@ -123,11 +123,19 @@ still governs a set's records: a record never carries a stock name, the game's m
 override cannot be a record.
 
 Two sets cannot override one key: the second set is refused whole (`collides`, naming the key and the first set's
-plugin). An override of the same key from outside the sets that is registered before the mount, from the CDN cache or a plugin's
-own `NEVR_RegisterResourceOverride`, wins: the override registry serves a load from the first entry for its key
-(`src/runtime/patch/resource_override.cpp`). The set's override is still registered and counted in the mount line's
-`overrides=`, and at shutdown it is logged `override passed over ... an earlier override of the same resource served its
-loads`. The runtime registers a mounted set's overrides itself, at the mount, with the
+plugin). An earlier fixed override of the same resource wins. If one is registered before the mount, from the CDN cache or a
+plugin's own `NEVR_RegisterResourceOverride`, the mount does not register the set's override. It counts the override in
+`overrides_skipped=` and writes one Warning naming the key and the earlier entry's label (`resource set override
+skipped`). An earlier entry competes when it is keyed by the same on-disk type, by the logical type whose buffer-0
+on-disk type that is, or by type 0, which names buffer 0 of every type. Since the buffer of a type-0 entry cannot be
+told from an on-disk type alone, a type-0 entry is always taken to compete (`FirstFixedOverrideLabelFor`,
+`src/runtime/patch/resource_override.h`). An override registered after the mount follows the set's.
+
+KNOWN-WRONG #2343: every fixed override, a set's included, replaces its resource on one load per process. The override
+registry skips an entry once it has applied it, until a plugin calls `NEVR_ResetResourceOverrides`, and the runtime never
+calls that itself. A level loaded a second time in one process gets the game's own bytes for an overridden resource.
+`CachedOverrides.DISABLED_AFixedOverrideReplacesItsResourceOnEveryLoad` in `src/runtime/tests/test_resource_override.cpp`
+states what a level plugin needs. It is disabled until #2343 lands. The runtime registers a mounted set's overrides itself, at the mount, with the
 override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold
 replaces nothing and is counted as unmatched. An override is keyed by on-disk type: buffer 0 for a `Win10` type, at any
 size; buffer 1 for a `Win10GPU` type, served only when it is no larger than the game's. Overrides apply where the game
@@ -153,7 +161,7 @@ inside the host), `resource sets dropped` (Info, an init that failed), `resource
 (Info, once), `resource sets still not mounted ... first_request_seen=<bool> game_thread_seen=<bool>` (Warning, a
 minute after the plugin pass), `resource sets not mounted ... plugins=<ids> reason=no_resolver_hook` (Warning),
 `resource set refused at mount` (Warning), `resource set mounted ... levels=<n> level_names=<list> overrides=<n>
-overrides_unmatched=<n>` and `resource sets mounted ... waited_ms=<n> duration_ms=<n>` (Info), `resource sets mount
+overrides_unmatched=<n> overrides_skipped=<n>`, `resource set override skipped ... key=<key> owner="<label>"` (Warning) and `resource sets mounted ... waited_ms=<n> duration_ms=<n>` (Info), `resource sets mount
 failed reason=<reason> served=<bool>` (Error), `resource set reads ... served=<n> window_ms=<n>` (Info, at most once
 per 10 s, for a window in which the game read from a set), `resource set read summary skipped` (Warning, once) and
 `resource set keys answered by the game's manifest count=<n> first=<key> plugin=<id>` (Warning, once). No line is

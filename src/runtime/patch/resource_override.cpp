@@ -759,6 +759,19 @@ void InstallResourceOverride() {
         registered, overridesFailed);
 }
 
+std::string FirstFixedOverrideLabelFor(uint64_t on_disk_type, uint64_t name_hash) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    if (!g_overrides) return {};
+    for (const auto& ovr : *g_overrides) {
+        if (ovr->transform || ovr->name_hash != name_hash) continue;
+        if (ovr->type_hash == on_disk_type || ovr->type_hash == 0 ||
+            nevr_resource_key::OnDiskType(ovr->type_hash, 0) == on_disk_type) {
+            return ovr->label;
+        }
+    }
+    return {};
+}
+
 void ResetResourceOverrides() {
     uint64_t count = 0;
     {

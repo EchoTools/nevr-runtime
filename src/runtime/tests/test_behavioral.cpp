@@ -3011,8 +3011,37 @@ TEST_F(PluginResourceSetTest, AMountedSetsOverrideIsRegisteredOnlyWhenTheGameHas
   Plan();
   LoadPlugins();
   Mount();
-  EXPECT_TRUE(TestLogContains("level_names=0x0123456789abcdef overrides=1 overrides_unmatched=0"));
+  EXPECT_TRUE(TestLogContains("level_names=0x0123456789abcdef overrides=1 overrides_unmatched=0 overrides_skipped=0"));
   EXPECT_EQ(ShutdownResourceOverride().registered, 1u);
+}
+
+// A fixed override of the same key registered before the mount (the CDN cache, a plugin's own
+// NEVR_RegisterResourceOverride) keeps it: the mount does not register the set's override, counts it as skipped and
+// names the key and the earlier entry's label.
+TEST_F(PluginResourceSetTest, AnEarlierOverrideOfTheSameKeyKeepsItAndTheSetsIsSkippedAtTheMount) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  static const unsigned char kEarlier[4] = {1, 2, 3, 4};
+  RegisterResourceOverride(kFixtureOverrideType, kFixtureOverrideName, kEarlier, sizeof(kEarlier), "cache_entry");
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("level_names=0x0123456789abcdef overrides=0 overrides_unmatched=0 overrides_skipped=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.RESOURCE] resource set override skipped plugin=levels label=\"fixture levels\" "
+                                     "key=0x5555555555555555:0x6666666666666666 owner=\"cache_entry\""));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 1u) << "only the earlier entry";
+}
+
+// An entry of another key, or a transform of this key, does not take the set's override's place.
+TEST_F(PluginResourceSetTest, AnEarlierOverrideOfAnotherKeyDoesNotSkipTheSetsOverride) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  static const unsigned char kOther[4] = {1, 2, 3, 4};
+  RegisterResourceOverride(kFixtureOverrideType, kFixtureOverrideName + 1, kOther, sizeof(kOther), "other_name");
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("overrides=1 overrides_unmatched=0 overrides_skipped=0"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
 }
 
 TEST_F(PluginResourceSetTest, AnInitThatFailsDropsTheSetItRegisteredAndItsOverride) {

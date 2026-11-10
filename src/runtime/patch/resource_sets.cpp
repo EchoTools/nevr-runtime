@@ -442,9 +442,22 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
     // A set's overrides replace resources the game has; one whose key the game does not hold would replace nothing.
     std::uint32_t registered = 0;
     std::uint32_t unmatched = 0;
+    std::uint32_t skipped = 0;
     for (const OverrideRef& o : set->overrides) {
       if (!StockHasNow(o.type, o.name)) {
         ++unmatched;
+        continue;
+      }
+      // An earlier fixed entry for the key (the CDN cache, a plugin's own NEVR_RegisterResourceOverride) serves its
+      // loads, so the set's would never be the one chosen: it is not registered, and the line says whose wins.
+      const std::string owner = FirstFixedOverrideLabelFor(o.type, o.name);
+      if (!owner.empty()) {
+        ++skipped;
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] resource set override skipped plugin=%s label=\"%s\" key=%s owner=\"%s\" (an earlier "
+            "override of this resource serves it, so this set's bytes are not used)",
+            Printable(set->plugin.c_str()).c_str(), set->label.c_str(), KeyText(o.type, o.name).c_str(),
+            Printable(owner.c_str()).c_str());
         continue;
       }
       RegisterResourceOverride(o.type, o.name, o.data, o.size, set->label.c_str());
@@ -452,10 +465,10 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
     }
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] resource set mounted plugin=%s label=\"%s\" records=%zu levels=%zu level_names=%s "
-        "overrides=%u overrides_unmatched=%u",
+        "overrides=%u overrides_unmatched=%u overrides_skipped=%u",
         Printable(set->plugin.c_str()).c_str(), set->label.c_str(), set->records.size(), set->levels.size(),
         LevelList(*set).c_str(),
-        registered, unmatched);
+        registered, unmatched, skipped);
   }
   Log(EchoVR::LogLevel::Info,
       "[NEVR.RESOURCE] resource sets mounted sets=%zu refused=%zu records=%zu levels=%zu chunk_base=0x%08x "
