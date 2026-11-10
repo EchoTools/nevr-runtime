@@ -1900,7 +1900,7 @@ test-quest-q15t module="":
     # An empty arm64 set passes only when no module asks for one: no mod/*.cmake calls q15t_arm64_object. When one does and ctest still finds nothing
     # (the NDK configure left Q15T_ARM64 off, or the registration is inside a branch that was not taken), that is an error, not an empty set.
     ctest_ndk_args=()
-    if ! grep -qE '^[[:space:]]*q15t_arm64_object\(' mod/*.cmake; then
+    if ! grep -qE '^[[:space:]]*q15t_arm64_object[[:space:]]*\(' mod/*.cmake; then
       ctest_ndk_args=(--no-tests=ignore)
     fi
     if [ -n "$module" ]; then

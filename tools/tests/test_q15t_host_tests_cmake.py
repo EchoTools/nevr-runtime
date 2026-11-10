@@ -241,9 +241,23 @@ class NdkChecksAreRegistered(unittest.TestCase):
     def test_a_static_initializer_test_per_checked_module(self):
         found = set()
         for path in (Q15T / "mod").glob("*.cmake"):
-            for call in re.findall(r"q15t_arm64_object\(([^)]*)\)", path.read_text(encoding="utf-8")):
+            for call in re.findall(r"q15t_arm64_object\s*\(([^)]*)\)", path.read_text(encoding="utf-8")):
                 found.update(call.split())
         self.assertEqual(found, set(ARM64_OBJECTS))
+
+    def test_the_recipes_guard_sees_every_spelling_of_the_call(self):
+        # test-quest-q15t lets an empty arm64 set pass only when no mod/*.cmake calls q15t_arm64_object; CMake allows a space before the parenthesis, and a
+        # call inside an if() block is indented. The guard's grep pattern is the one in the justfile.
+        recipe = (ROOT / "justfile").read_text(encoding="utf-8")
+        found = re.search(r"grep -qE '([^']*q15t_arm64_object[^']*)' mod/\*\.cmake", recipe)
+        self.assertIsNotNone(found, "the recipe has no grep for q15t_arm64_object calls")
+        pattern = re.compile(found.group(1).replace("[[:space:]]", r"\s"))
+        for line in ("q15t_arm64_object(fxtrail)", "q15t_arm64_object (fxtrail)", "  q15t_arm64_object(fxtrail)", "\tq15t_arm64_object \t(fxtrail)"):
+            with self.subTest(line=line):
+                self.assertTrue(pattern.search(line))
+        for line in ("# q15t_arm64_object(fxtrail)", "function(q15t_arm64_object)", "set(x q15t_arm64_object(a))"):
+            with self.subTest(line=line):
+                self.assertFalse(pattern.search(line))
 
     def test_an_emulated_tls_test_per_arm64_object(self):
         # q15t_arm64_object registers it beside the static-initializer test, so every object listed above has one
