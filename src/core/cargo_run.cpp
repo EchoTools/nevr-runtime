@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <utility>
 
 namespace nevr_cargo {
 
@@ -45,14 +46,16 @@ std::string ChunkBaseText(const Mounted& m) {
   return buf;
 }
 
-void SayMounted(Env& env, const char* source, const Mounted& m) {
+// `ms` is the mount's own time: it hashes every blob it names again, and the boot mount runs in the library's constructor.
+void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms) {
   env.Event(EventLevel::kInfo, "cargo_mounted",
             {{"source", source},
              {"labels", m.labels.size()},
              {"names", m.names},
              {"records", m.records},
              {"chunk_base", ChunkBaseText(m)},
-             {"refused", m.refused}});
+             {"refused", m.refused},
+             {"ms", ms}});
 }
 
 struct Downloaded {
@@ -161,8 +164,10 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish) {
     env.Event(EventLevel::kWarn, "cargo_index", {{"result", IndexStatusName(status)}, {"consequence", "no cargo texture is served until a fetch rewrites it"}});
     return false;
   }
+  const std::uint64_t mountStarted = env.NowMs();
   std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, config.dir, index, config.policy)));
-  if (mounted->shadow || mounted->refused != 0) SayMounted(env, "boot", *mounted);
+  const std::uint64_t mountMs = env.NowMs() - mountStarted;
+  if (mounted->shadow || mounted->refused != 0) SayMounted(env, "boot", *mounted, mountMs);
   if (!mounted->shadow) return false;
   publish(std::move(mounted));
   return true;
@@ -347,12 +352,16 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     for (const PlanItem& item : pl.items) next.entries.push_back(ToIndexEntry(item.entry));
   }
   if (oldStatus == IndexStatus::kOk) {
+    // A kept entry whose (type, name) a label written fresh now holds goes: the name moved, and the shadow refuses a key seen
+    // twice, which would drop every label at the mount and keep it dropped on every launch after.
+    std::set<std::pair<std::uint64_t, std::uint64_t>> fresh;
+    for (const IndexEntry& e : next.entries) fresh.insert({e.type, e.name});
     for (const IndexEntry& e : old.entries) {
       bool inManifest = false;
       for (const std::string& l : manifest.labels) {
         if (l == e.label) inManifest = true;
       }
-      if (replaced.count(e.label) == 0 && inManifest) next.entries.push_back(e);
+      if (replaced.count(e.label) == 0 && inManifest && fresh.count({e.type, e.name}) == 0) next.entries.push_back(e);
     }
   }
   Normalize(&next);
@@ -369,8 +378,10 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
 
   // Step 6: mount what the index names, when it changed or a blob was stored.
   if (indexOk && (!same || result.fetched != 0)) {
+    const std::uint64_t mountStarted = env.NowMs();
     std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, config.dir, next, config.policy)));
-    if (mounted->shadow || mounted->refused != 0) SayMounted(env, "fetch", *mounted);
+    const std::uint64_t mountMs = env.NowMs() - mountStarted;
+    if (mounted->shadow || mounted->refused != 0) SayMounted(env, "fetch", *mounted, mountMs);
     if (mounted->shadow) {
       publish(std::move(mounted));
       result.published = true;

@@ -203,6 +203,13 @@ void TheSecondLaunchMountsFromTheCacheAndRequestsNoBlob() {
   QCHECK(nc::MountFromCache(second.env, second.config, second.publish));
   QCHECK(second.published.size() == 1 && second.published[0]->shadow != nullptr);
   QCHECK(second.env.EventOrder() == "cargo_mounted" && FakeEnv::Value(second.env.events[0], "source") == "boot");
+  // The boot mount runs in the library's constructor and hashes every blob: the line says how long it took. The fake clock
+  // moves 3 ms per read, so a mount that read the clock before and after reports a multiple of 3 above 0.
+  {
+    const std::string ms = second.env.events.empty() ? "" : FakeEnv::Value(second.env.events[0], "ms");
+    const bool number = !ms.empty() && ms.find_first_not_of("0123456789") == std::string::npos;
+    QCHECK(number && ms != "0" && std::stoull(ms) % 3 == 0);
+  }
   QCHECK(second.env.requests.empty());  // the boot half touches no network
   const nc::RunResult r = second.Run();
   QCHECK(r.fetched == 0 && r.cached == 2 && r.failed == 0 && !r.published);
@@ -354,6 +361,61 @@ void AFailedLabelKeepsWhatTheOldIndexSaid() {
   QCHECK(IndexIsHonest(w.env));
 }
 
+// A name that moves to another label while its old label fails: the failed label keeps its old entries, but not one whose
+// (type, name) a label written fresh now holds, so the index never names a key twice and the shadow, which refuses a key seen
+// twice, still mounts. Run 1: lobby_posters = {P}, second = {0x11}. Run 2: P moves to second, and lobby_posters' only
+// entry is a new name whose blob 404s.
+void ANameMovedToAnotherLabelWhileItsOldLabelFailsIsIndexedOnceAndMounts() {
+  constexpr const char* kOther = "0x0000000000000011";
+  const std::string otherDesc = Bytes(40, 'e');
+  const std::string otherPix = Bytes(2000, 'f');
+  World first;
+  first.config.policy.overrides["second"] = nc::LabelState::kOn;
+  json doc1 = first.Doc();
+  doc1["labels"]["second"] = {{"entries", {EntryJson(kDescType, kOther, otherDesc, 248, 248),
+                                           EntryJson(kPixType, kOther, otherPix, 8388608, 8388608)}}};
+  first.ServeManifest(doc1);
+  first.ServeBlob(otherDesc);
+  first.ServeBlob(otherPix);
+  QCHECK(first.Run().published);
+
+  World w(first.env.fs_);
+  w.config.policy.overrides["second"] = nc::LabelState::kOn;
+  const std::string lostPix = Bytes(2100, 'q');
+  json doc2 = w.Doc();
+  doc2["labels"]["lobby_posters"]["entries"] = json::array({EntryJson(kPixType, "0x0000000000000022", lostPix, 8388608, 8388608)});
+  doc2["labels"]["second"] = {{"entries", {EntryJson(kDescType, kPoster, w.desc, 248, 248),
+                                           EntryJson(kPixType, kPoster, w.pix, 8388608, 8388608),
+                                           EntryJson(kDescType, kOther, otherDesc, 248, 248),
+                                           EntryJson(kPixType, kOther, otherPix, 8388608, 8388608)}}};
+  w.ServeManifest(doc2);
+  w.ServeBlob(otherDesc);
+  w.ServeBlob(otherPix);
+  w.env.server[w.BlobUrl(lostPix)] = Response{404, "", std::string::npos, ""};
+  const nc::RunResult r = w.Run();
+  QCHECK(r.failed == 1);
+  nc::Index index;
+  QCHECK(nc::ReadIndex(w.env, "/cache", &index) == nc::IndexStatus::kOk);
+  QCHECK(index.entries.size() == 4);  // second's four; lobby_posters' old P entries are dropped, P being second's now
+  for (const nc::IndexEntry& e : index.entries) QCHECK(e.label == "second");
+  const auto mounts = w.env.EventsNamed("cargo_mounted");
+  QCHECK(!mounts.empty() && FakeEnv::Value(mounts.back(), "records") == "4" && FakeEnv::Value(mounts.back(), "refused") == "0");
+  QCHECK(!mounts.empty() && FakeEnv::Value(mounts.back(), "source") == "fetch" && FakeEnv::Value(mounts.back(), "ms") != "0" &&
+         FakeEnv::Value(mounts.back(), "ms") != "<absent>");  // the fetch mount says its time too
+  QCHECK(r.published && !w.published.empty() && w.published.back()->shadow != nullptr);
+  nevr_shadow::Found found;
+  if (!w.published.empty() && w.published.back()->shadow) {
+    QCHECK(w.published.back()->shadow->Find(0x489bb35d53ca50e9ULL, kPosterName, &found));
+  }
+
+  // And the next launch, offline, mounts the same index.
+  World third(first.env.fs_);
+  third.config.policy.overrides["second"] = nc::LabelState::kOn;
+  QCHECK(nc::MountFromCache(third.env, third.config, third.publish));
+  const auto boot = third.env.EventsNamed("cargo_mounted");
+  QCHECK(boot.size() == 1 && FakeEnv::Value(boot[0], "records") == "4");
+}
+
 void ALabelThatIsOffMakesNoBlobRequest() {
   World w;
   w.config.policy.overrides["lobby_posters"] = nc::LabelState::kOff;
@@ -452,6 +514,7 @@ int main() {
   ARequiredLabelsFailureIsAnError();
   ARunAfterAFailureFetchesOnlyWhatIsMissing();
   AFailedLabelKeepsWhatTheOldIndexSaid();
+  ANameMovedToAnotherLabelWhileItsOldLabelFailsIsIndexedOnceAndMounts();
   ALabelThatIsOffMakesNoBlobRequest();
   AnUnlistedLabelIsOffEvenWhenTheManifestListsIt();
   AShutdownBetweenBlobsEndsTheRunWithoutAnIndex();
