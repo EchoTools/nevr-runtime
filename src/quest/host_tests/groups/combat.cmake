@@ -154,7 +154,7 @@ nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_c
 # development build only, the Echo Arena scope, the install on an image and the host cost of a look.
 nevr_ht_test(aibots_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
-# The new-profile gun hand (#2185; moved from the q15t plugin's weapon_arm, T-26): the plugin test's sections, a marker the plugin wrote that stops the
+# The gun hand default (#2185; moved from the q15t plugin's weapon_arm, T-26): the plugin test's sections, a marker the plugin wrote that stops the
 # module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image.
 nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/weapon_arm_test.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp src/quest/combat/combat_level.cpp

@@ -263,9 +263,9 @@ combat:
   # aibots_scenario: which scenario `aibots` starts: a number 0-6 or one of patrol, randomattack, weaponattack, spike, aithrowtest, aionevone, aibdebugarena;
   # `off` turns the bots off. A word that is none of these keeps RandomAttack, with a warning that does not name it. Default (absent): randomattack.
   # aibots_scenario: randomattack
-  # weapon_arm: false leaves the gun hand as the game has it. Otherwise a profile that has never saved a gun hand (its `weaponarm` is absent) gets the gun in the
-  # right hand, once per profile, the first time it is in a combat map; a profile that has saved a hand, left or right, is left alone. The game saves the hand
-  # into the profile, so this changes the saved profile. The profile's marker file stays under `files/q15t` of the app's external files directory. Default
+  # weapon_arm: false leaves the gun hand as the game has it. Otherwise a profile whose `weaponarm` is not 1 (0 or absent) gets the gun in the
+  # right hand, the first time it is in a combat map, once per missing marker; a left-handed player's gun moves to the right again after a reinstall, cleared app data
+  # or a switch between the store and the combat build. The game saves the hand into the profile, so this changes the saved profile. The profile's marker file stays under `files/q15t` of the app's external files directory. Default
   # (absent): true.
   # weapon_arm: false
 

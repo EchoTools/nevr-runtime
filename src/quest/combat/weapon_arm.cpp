@@ -71,7 +71,7 @@ void Waiting(const char* why) noexcept {  // one line per distinct reason while 
   if (std::strcmp(why, g_why) == 0) return;
   std::snprintf(g_why, sizeof(g_why), "%s", why);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_waiting",
-                      {{"why", why}, {"msg", "the gun hand of a profile is not set yet; nothing is called until the game has what it needs"}});
+                      {{"why", why}, {"msg", "the gun hand is not set yet; nothing is called until the game has what it needs"}});
 }
 
 void WriteMarker(const char* outcome, std::uint32_t arm, long long profArm) noexcept {
@@ -131,7 +131,7 @@ void Step(std::uintptr_t game, double now) noexcept {
     g_hold = 0;
     if (access(g_marker, F_OK) == 0) {
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_done",
-                          {{"outcome", "marker present: profile never touched"}, {"marker", "present"}, {"id_tail", Tail(g_id)}, {"arm", -1},
+                          {{"outcome", "marker present: nothing changed"}, {"marker", "present"}, {"id_tail", Tail(g_id)}, {"arm", -1},
                            {"profile_weaponarm", -1}});
       g_done.store(true, std::memory_order_release);
       return;
@@ -189,10 +189,13 @@ void Step(std::uintptr_t game, double now) noexcept {
     WriteMarker("weaponarm right already, nothing changed", arm, profArm);
     return;
   }
-  // The profile has saved a gun hand (the key is present; CJson::Int answers -1 for an absent key): the player's choice stands, left or right. Only a profile that
-  // has never saved one is set. SetWeaponArm is stored by SavePlayerEquipment into the profile's `weaponarm` key, so a set here is a change to the saved profile.
-  if (profArm != -1) {
-    WriteMarker("profile has a saved gun hand, nothing changed", arm, profArm);
+  // The rule is the reference build's (T-26): a profile whose `weaponarm` is 1 (right) gets the marker only; every other profile, `weaponarm` 0 and an absent key
+  // alike (CJson::Int answers -1 for an absent key), is set to the right hand once per missing marker. The service sends `weaponarm` for every profile and an
+  // account that never chose reads 0, so "never chose" and "chose left" are the same value here: a left-handed player's gun is moved to the right once per missing
+  // marker (a reinstall, cleared app data, a switch between the store and combat builds). SetWeaponArm is stored by SavePlayerEquipment into the profile's
+  // `weaponarm` key, so a set here is a change to the saved profile.
+  if (profArm == 1) {
+    WriteMarker("profile weaponarm is 1, nothing changed", arm, profArm);
     return;
   }
   bool ok = true;
@@ -221,14 +224,14 @@ void Step(std::uintptr_t game, double now) noexcept {
   g_setAt = now;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_set",
                       {{"route", direct != 0 ? "direct" : "deferred"}, {"id_tail", Tail(g_id)}, {"arm", arm}, {"profile_weaponarm", profArm},
-                       {"msg", "weaponarm -> 1 (one-shot): the profile's gun goes to the right hand"}});
+                       {"msg", "weaponarm -> 1 (one-shot): the profile does not hold the right hand (weaponarm 0 or absent), so the gun goes to the right hand"}});
 }
 
 ModuleResult Refused(const char* reason, const char* detail) noexcept {
   g_installed.store(false, std::memory_order_release);
   sentinel::LogFields(sentinel::LogLevel::kError, "combat_weapon_arm_install",
                       {{"result", "refused"}, {"reason", reason}, {"detail", detail},
-                       {"msg", "the gun hand of a profile is not set: the game keeps what the profile holds"}});
+                       {"msg", "the gun hand is not set by the runtime: the game keeps what the profile holds"}});
   return {false, reason};
 }
 
@@ -281,7 +284,7 @@ ModuleResult InstallResolved(std::uintptr_t base, const Fns& fns) noexcept {
   g_installed.store(true, std::memory_order_release);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"named", fns.named},
-                       {"msg", "a profile with no marker gets the gun in the right hand once, in a combat level; it installs no hook"}});
+                       {"msg", "a profile with no marker whose weaponarm is not 1 gets the gun in the right hand once, in a combat level; it installs no hook"}});
   return {true, "installed"};
 }
 
@@ -291,7 +294,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
     g_installed.store(false, std::memory_order_release);
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_weapon_arm_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.weapon_arm"},
-                         {"msg", "combat.weapon_arm is false: a profile keeps the gun hand the game gives it"}});
+                         {"msg", "combat.weapon_arm is false: the gun hand stays as the game gives it"}});
     return {false, "off_config", true};
   }
   sentinel::ElfImage image;

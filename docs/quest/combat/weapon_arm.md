@@ -1,4 +1,4 @@
-# Module `weapon_arm` (a profile that has never saved a gun hand starts with the gun in the right hand)
+# Module `weapon_arm` (a profile whose `weaponarm` is not 1 gets the gun in the right hand, once per marker)
 
 Files: `src/quest/combat/weapon_arm.{h,cpp}`, `weapon_arm_targets.h`, `gamespace.{h,cpp}`, `netgame_targets.h`, `src/quest/tests/weapon_arm_test.cpp`,
 `src/quest/combat/mutants.d/weapon_arm.sh`. A normal combat step: the `q15t` and `combat` APKs only. Switch in `config.yaml`: `combat.weapon_arm`, on unless the file says false. The decision
@@ -16,17 +16,23 @@ letters, digits, `-` and `_` become `_`) in `/sdcard/Android/data/<package>/file
 combat map (below), the local equipment component system is found in the gamespace tables and held for 3 passes. Then:
 
 - `GetWeaponArm == 1`: the gun is on the right already; the marker is written and nothing is set.
-- the profile has a saved `weaponarm` (the key is present, 0 or 1; `CJson::Int` answers -1 for an absent key): the marker is written and nothing is set. The player's own choice stands, a left-handed player's included.
-- otherwise the profile has never saved a gun hand: `SetWeaponArm(cs, handle, 1)` is called once (directly when `gs+0x368` is set, else through the gamespace's deferred method queue at `gs+0x170`, with the functor layout of the
+- the profile's `weaponarm` is 1 (`CJson::Int` answers -1 for an absent key): the marker is written and nothing is set.
+- otherwise (`weaponarm` 0, or no such key): `SetWeaponArm(cs, handle, 1)` is called once (directly when `gs+0x368` is set, else through the gamespace's deferred method queue at `gs+0x170`, with the functor layout of the
   game's own SetWeaponArm script node), and the marker is written once `GetWeaponArm` reads 1. After 10 s without that: one Warning and no marker; the next launch retries.
 
 **What the set changes.** `SetWeaponArm` stores the arm into the equipment component, and the game's `SavePlayerEquipment` writes that field into the profile under the key `weaponarm`. So a set is a change to the saved
 profile, persistent from then on. Whether the profile's server copy changes is not established (the profile upload was not traced).
 
-**A missing marker.** The marker alone does not arm anything. The marker directory is under the app's external files directory, which Android clears when the app is uninstalled (inferred, not measured), and the
-combat APK is signed with another key than the store APK, so a move between them is an uninstall. After it every profile has no marker again; the module then reads the profile's own `weaponarm`, so a left-handed player keeps the
-left hand and only a profile that has never saved one is set. A marker that cannot be written is an Error (without it the module reads the profile again on the next launch and does the same). A data directory that cannot be written is a
+**A missing marker.** The marker directory is under the app's external files directory, which Android clears when the app is uninstalled (inferred, not measured), and the
+combat APK is signed with another key than the store APK, so a move between them is an uninstall. After it every profile has no marker again, and the module acts on it as on a first launch. A marker that cannot be written is an Error (without it the set repeats on the next launch). A data directory that cannot be written is a
 waiting line and no set.
+
+## Defaults
+
+The gun goes to the right hand because the reference build starts a new profile with the gun on the right, and the community service cannot say whether a player chose the left: it sends `weaponarm` for every profile (nakama's client profile
+has the key without `omitempty`) and an account that never chose reads 0 (inferred; no captured profile yet), the same value as a player who chose left. So the module treats 0 and an absent key alike.
+The cost is stated plainly: **a left-handed player's gun is moved to the right hand once for every missing marker**, that is after a reinstall, after clearing the app's data, and after a switch between the store build and
+the combat build. They have to switch it back to the left in the menu. A profile whose `weaponarm` is already 1 is not touched. `combat.weapon_arm: false` turns the module off.
 
 ## Player state
 
@@ -39,7 +45,7 @@ is a Warning.
 The module goes on only while a combat map is loaded and no Echo Arena level is (`combat_level.h`, `Classify` without the lobby), and only for a profile with no marker. The combat lobby is not in scope: its script is shared with the arena
 lobby (`headset_gates.md`), and it is not established that an arena player never has `mpl_lobby_b_combat` loaded. In an arena match, in every lobby and in a transition that still holds an arena level the module does not look for the equipment
 system, does not set the hand, does not write the marker and writes no line. So it cannot change what an arena player sees or the game computes, and it never touches the profile of a player who only plays arena. Where it differs from the
-plugin: the plugin set the hand wherever it first found the equipment system and for any profile without a marker; the module waits for the first combat map and leaves a profile that has a saved gun hand. A profile that only ever plays arena is looked at
+plugin: the plugin set the hand wherever it first found the equipment system and for any profile without a marker; the module waits for the first combat map. A profile that only ever plays arena is looked at
 once a second (the profile and the level scan) and is never touched.
 
 ## Cost (ADR 0038)
@@ -61,8 +67,8 @@ The equipment key (the record of `R14NetPlayerEquipment`, 8 bytes at 0x2bb0318, 
 
 ## Headset row
 
-On a profile with no marker that has never saved a gun hand (no `weaponarm` in the profile) and whose gun is on the left, on a combat APK: `combat_weapon_arm_install` with `result: installed`; within about 10 s of the equipment component existing in a combat level,
+On a profile with no marker whose `weaponarm` is 0 (what a new account on the community service shows, inferred) or absent, and whose gun is on the left, on a combat APK: `combat_weapon_arm_install` with `result: installed`; within about 10 s of the equipment component existing in a combat level,
 one `combat_weapon_arm_set` (`route` direct or deferred), then `combat_weapon_arm_done` with `outcome: weaponarm now 1`, and a file `t26arm.<id>` appears; in the match the gun is in the right hand.
-Second launch: `combat_weapon_arm_done` with `marker: present`, nothing changed, also after the player set the gun left in the menu. A profile with a marker (the plugin's) gets `marker: present` and no
-`set`; a profile with a saved `weaponarm` gets `done` with `outcome: profile has a saved gun hand, nothing changed` and no `set`. Falsifiers: `set` without `done` and a `gave_up` Warning (the call did not take, most likely the deferred queue layout); no `set` after the component exists (`waiting` says which gate); any
+Second launch: `combat_weapon_arm_done` with `marker: present` (`outcome: marker present: nothing changed`), nothing changed, also after the player set the gun left in the menu. A profile with a marker (the plugin's) gets `marker: present` and no
+`set`; a profile whose `weaponarm` is 1 gets `done` with `outcome: profile weaponarm is 1, nothing changed` and no `set`. Falsifiers: `set` without `done` and a `gave_up` Warning (the call did not take, most likely the deferred queue layout); no `set` after the component exists (`waiting` says which gate); any
 `set` or marker from an arena match. This row has not been run: the headset logs that held the plugin's copy show `done` with `weaponarm right already, nothing changed` and later `marker present`, never a `set`.

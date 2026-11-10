@@ -488,7 +488,7 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
-// The pins of gun connect, practice AI bots and the new-profile gun hand (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
+// The pins of gun connect, practice AI bots and the gun hand default (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
 // net game step they share, netgame_targets.h) against the real libr15: every function and object the modules call or read is defined at its pinned
 // address (the vtables the gun and equipment systems carry as their first word included), and every pinned code word is the one in the file.
 void CheckRealGunsAndBots(const LoadedElf& elf) {

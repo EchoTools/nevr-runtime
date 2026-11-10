@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// #2185: gun connect, practice AI bots and the new-profile gun hand are the runtime's. The host tests (gunconnect_test, aibots_test, weapon_arm_test,
+// #2185: gun connect, practice AI bots and the gun hand default are the runtime's. The host tests (gunconnect_test, aibots_test, weapon_arm_test,
 // combat_install_test, quest_config_test) drive the behaviour; these pin what they cannot see: that the three install no hook and write no page (so the
 // hook budget has no row and N151 holds), where they sit in the table, that their keys are read, known, logged and documented and default on, that the
 // plugin's twins and its option are gone, and that the plugin's marker directory is the one the module uses (player state, ADR 0046 rule 4).

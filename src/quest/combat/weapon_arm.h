@@ -1,14 +1,14 @@
-/* A profile that has never saved a gun hand starts with the gun on the right hand, once per user id (#2185, docs/adr/0046; docs/quest/combat/adr/0003-weapon-arm-new-profile.md).
+/* A profile whose `weaponarm` is not 1 gets the gun on the right hand, once per user id (#2185, docs/adr/0046; docs/quest/combat/adr/0003-weapon-arm-new-profile.md).
  * Runs on the game-thread tick (combat_tick.h), 1 Hz until done. The profile id is CR15NetGame::ClientProfile()'s "xplatformid"; a marker file
  * `t26arm.<id>` in the player's data directory means this profile was handled before and nothing is done. Otherwise, in a combat map, the local equipment
- * component system is found in the gamespace tables (gamespace.h), held for 3 passes, and
- *   - GetWeaponArm == 1: the marker only (the gun is on the right already);
- *   - the profile has a saved `weaponarm` (the key is present, 0 or 1): the marker only. The player's own choice stands, a left-handed player's included;
- *   - else the profile has never saved a gun hand: SetWeaponArm(cs, handle, 1) once (direct when [gs+0x368] is set, else through the gamespace's deferred
+ * component system is found in the gamespace tables (gamespace.h), held for 3 passes, and (the reference build's rule, T-26)
+ *   - GetWeaponArm == 1, or the profile's `weaponarm` == 1: the marker only (the gun is on the right already);
+ *   - else (`weaponarm` 0, or no such key): SetWeaponArm(cs, handle, 1) once (direct when [gs+0x368] is set, else through the gamespace's deferred
  *     method queue), and the marker once GetWeaponArm reads 1 (within 10 s, else no marker: the next launch retries).
- * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile. A missing marker alone
- * (after a reinstall, or a move between the store and the combat APK; Android clears the app's external files directory on an uninstall, inferred, not measured) does not set anything: the profile's own
- * `weaponarm` decides.
+ * The community service sends `weaponarm` for every profile and an account that never chose reads 0, so "never chose" and "chose left" are the same value and
+ * both are set. The cost: a left-handed player's gun is moved to the right once per missing marker (a reinstall, cleared app data, or a move between the store
+ * and the combat APK; Android clears the app's external files directory on an uninstall, inferred, not measured), and the player switches it back.
+ * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile.
  *
  * Player state (ADR 0046 rule 4). The marker directory is `/sdcard/Android/data/<package>/files/q15t`, where the plugin's markers already are; it is
  * state, not a switch, and renaming it would make every profile look unhandled. A marker the plugin wrote stops this module from touching that

@@ -25,7 +25,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
 - On: fxtrail, voipdrop, custctx, bvh, wallfire, impactsnd, music, sensorwd, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
-- Gun connect, the practice AI bots and the new-profile gun hand are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
+- Gun connect, the practice AI bots and the gun hand default are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
   `weapon_arm.h`). Their switches are the `combat:` keys `gunconnect`, `aibots`, `aibots_scenario` and `weapon_arm` in `config.yaml`, each on by default; no kill file
   or data file switches any of them. The marker files of the gun hand stay in this plugin's data directory, `files/q15t` (player state).
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them

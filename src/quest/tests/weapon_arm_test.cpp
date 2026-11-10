@@ -1,5 +1,5 @@
-// Host test of the new-profile gun hand (src/quest/combat/weapon_arm.cpp, #2185, T-26; moved from the q15t plugin's weapon_arm) against a fake CR15Game laid
-// out as the game's gamespace tables and a fake equipment component system. Real SafeRead, real files, a fake clock; the nine engine calls are fakes.
+// Host test of the gun hand (src/quest/combat/weapon_arm.cpp, #2185, T-26; moved from the q15t plugin's weapon_arm): a profile whose weaponarm is not 1 is set to
+// the right hand once per marker. It runs against a fake CR15Game laid out as the game's gamespace tables and a fake equipment component system. Real SafeRead, real files, a fake clock; the nine engine calls are fakes.
 //
 // Moved: sections 1 to 13 are the plugin test's sections with the same assertions (the hold of 3 passes, the direct and the deferred route with the functor's
 // bytes, an already-right gun and a profile that holds the right hand, a marker from an earlier launch, the give-up after 10 s, an invalid component, the
@@ -212,7 +212,7 @@ void Pass() {
   g_now += 1.0;
 }
 
-void TheGunOnTheLeft() {  // 1. a profile that has never saved a hand, with the gun on the left, direct call: held for 3 passes, set once, marker once the arm reads 1
+void TheGunOnTheLeft() {  // 1. a profile with no weaponarm key and the gun on the left, direct call: held for 3 passes, set once, marker once the arm reads 1
   Reset(1, 0, -1);
   Pass();
   Pass();
@@ -255,7 +255,7 @@ void AlreadyRight() {  // 3, 4
   Pass();
   CHECK(g_setCalls == 0 && g_queueCalls == 0, "set although already right");
   CHECK(FileExists("t26arm.OVR-ORG-1234567890") && ReadFile("t26arm.OVR-ORG-1234567890").find("already") != std::string::npos, "no marker for an already-right profile");
-  Reset(1, 0, 1);  // the profile saved weaponarm 1 (arm reads 0): the player's own choice stands
+  Reset(1, 0, 1);  // the profile holds weaponarm 1 (arm reads 0): the marker only
   Pass();
   Pass();
   Pass();
@@ -275,28 +275,42 @@ void AMarkerThatCannotBeWrittenIsLoud() {  // the set is made, then the director
   CHECK(wa::Phase() == 2, "not done");
 }
 
-// A profile that has saved a gun hand keeps it: the key is present (0 or 1), so the module writes the marker and sets nothing. A missing marker alone (a reinstall)
-// arms nothing for such a profile, and a profile that has never saved one is still set.
-void ASavedGunHandIsKeptWithOrWithoutAMarker() {
-  for (const long long saved : {0LL, 1LL}) {
-    Reset(1, 0, saved);  // the component reads left; the profile holds `weaponarm` saved
-    for (int i = 0; i < 4; ++i) Pass();
-    CHECK(g_setCalls == 0 && g_queueCalls == 0, "profile weaponarm %lld was overwritten", saved);
-    CHECK(FileExists("t26arm.OVR-ORG-1234567890") && HasLine("combat_weapon_arm_done", "\"outcome\":\"profile has a saved gun hand, nothing changed\"", kInfo), "no marker for a saved hand");
-    // the marker is gone (a reinstall): the next launch reads the profile again and still sets nothing
-    ClearDir();
-    wa::ResetForTest();
-    wa::SetClockForTest(&Clock);
-    wa::SetLegacyDirForTest(g_dir.c_str());
-    nevr_quest::combat::tick::ResetForTest();
-    QCHECK(wa::InstallResolved(kBase, Fns()).installed);
-    for (int i = 0; i < 6; ++i) Pass();
-    CHECK(g_setCalls == 0 && g_queueCalls == 0, "a missing marker set the hand of a profile that holds weaponarm %lld", saved);
-  }
-  // the control: a profile with no saved hand is set, marker or not
+// The rule for which profile is set (B4): a profile whose `weaponarm` is 1 gets the marker only; every other profile, `weaponarm` 0 and no key alike, is set
+// to the right hand. The community service sends `weaponarm` for every profile and a new account reads 0, so "never chose" and "chose left" are one value.
+void AProfileThatIsNotRightIsSetAndOneThatIsRightIsNot() {
+  // weaponarm 0 (the value a new account reads on the service), no marker: set, and the set is logged
+  Reset(1, 0, 0);
+  for (int i = 0; i < 3; ++i) Pass();
+  CHECK(g_setCalls == 1 && g_setValue == 1, "a profile with weaponarm 0 was not set: calls %d", g_setCalls);
+  CHECK(HasLine("combat_weapon_arm_set", "\"route\":\"direct\"") && Count("combat_weapon_arm_set", "") == 1, "no combat_weapon_arm_set for weaponarm 0");
+  g_arm = 1;
+  Pass();
+  CHECK(FileExists("t26arm.OVR-ORG-1234567890"), "no marker after the set of a weaponarm 0 profile");
+  // weaponarm 1 (the profile holds the right hand while the component reads left): the marker only
+  Reset(1, 0, 1);
+  for (int i = 0; i < 4; ++i) Pass();
+  CHECK(g_setCalls == 0 && g_queueCalls == 0, "a profile with weaponarm 1 was set");
+  CHECK(Count("combat_weapon_arm_set", "") == 0, "a set record for weaponarm 1");
+  CHECK(FileExists("t26arm.OVR-ORG-1234567890") && HasLine("combat_weapon_arm_done", "\"outcome\":\"profile weaponarm is 1, nothing changed\"", kInfo), "no marker for weaponarm 1");
+  // no key at all: set
   Reset(1, 0, -1);
   for (int i = 0; i < 3; ++i) Pass();
-  CHECK(g_setCalls == 1, "a profile that never saved a hand was not set");
+  CHECK(g_setCalls == 1, "a profile with no weaponarm key was not set");
+  // weaponarm 0 with the deferred route: queued, not called
+  Reset(0, 0, 0);
+  for (int i = 0; i < 3; ++i) Pass();
+  CHECK(g_setCalls == 0 && g_queueCalls == 1, "weaponarm 0 on the deferred route: direct %d queue %d", g_setCalls, g_queueCalls);
+  // the marker is gone (a reinstall) for a profile of 1: the next launch writes the marker again and sets nothing
+  Reset(1, 0, 1);
+  for (int i = 0; i < 4; ++i) Pass();
+  ClearDir();
+  wa::ResetForTest();
+  wa::SetClockForTest(&Clock);
+  wa::SetLegacyDirForTest(g_dir.c_str());
+  nevr_quest::combat::tick::ResetForTest();
+  QCHECK(wa::InstallResolved(kBase, Fns()).installed);
+  for (int i = 0; i < 6; ++i) Pass();
+  CHECK(g_setCalls == 0 && g_queueCalls == 0 && FileExists("t26arm.OVR-ORG-1234567890"), "a missing marker set the hand of a profile that holds weaponarm 1");
 }
 
 void AMarkerFromAnEarlierLaunch() {  // 5
@@ -306,7 +320,7 @@ void AMarkerFromAnEarlierLaunch() {  // 5
   std::fclose(m);
   for (int i = 0; i < 6; ++i) Pass();
   CHECK(g_setCalls == 0, "set although the marker exists");
-  CHECK(HasLine("combat_weapon_arm_done", "\"outcome\":\"marker present: profile never touched\",\"marker\":\"present\""), "no marker-present record");
+  CHECK(HasLine("combat_weapon_arm_done", "\"outcome\":\"marker present: nothing changed\",\"marker\":\"present\""), "no marker-present record");
 }
 
 void GivingUp() {  // 6. the arm never reads 1 after the set: gives up after 10 s, no marker
@@ -616,7 +630,7 @@ int main() {
   TheDeferredRoute();
   AlreadyRight();
   AMarkerThatCannotBeWrittenIsLoud();
-  ASavedGunHandIsKeptWithOrWithoutAMarker();
+  AProfileThatIsNotRightIsSetAndOneThatIsRightIsNot();
   AMarkerFromAnEarlierLaunch();
   GivingUp();
   AnInvalidComponent();

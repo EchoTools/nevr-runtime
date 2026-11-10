@@ -1285,7 +1285,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
                       {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
-                      // Gun connect, practice AI bots and the new-profile gun hand (#2185): on unless the file says false.
+                      // Gun connect, practice AI bots and the gun hand default (#2185): on unless the file says false.
                       {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},
                       {"aibots", &nevr_quest::CombatConfig::aibots, true},
                       {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true}};
