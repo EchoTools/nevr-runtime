@@ -335,27 +335,41 @@ void AStaleGapIsOneWarningWhenTheTickIsBack() {
 // The real clock: milliseconds of CLOCK_MONOTONIC. The look spacing and the staleness limit are in that unit, so a conversion that drops the seconds, the
 // factor or the nanosecond divisor changes how often the game is looked at and when an answer goes stale; the fake clock of the other tests cannot see it.
 void TheRealClockIsInMilliseconds() {
+  using Steady = std::chrono::steady_clock;  // CLOCK_MONOTONIC, the clock the module reads
+  const auto ms = [](Steady::time_point from, Steady::time_point to) { return std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count(); };
   Begin();
   scope::SetClockForTest(nullptr);
   g_model.Only({"mpl_combat_dyson"});
+  const auto beforeFirst = Steady::now();
   scope::Refresh(g_model.Address());
+  const auto afterFirst = Steady::now();
   QCHECK(scope::Looks() == 1 && scope::InCombatOrLobby());
+  // The assertions are made against the time that really passed, so a thread held off by a loaded machine cannot fail them: the first look was taken between
+  // beforeFirst and afterFirst, so the gap to it is at least (start of the next call - afterFirst) and at most (end of it - beforeFirst). Only a bound that
+  // the measured gap proves is asserted; on an unloaded machine both are (about 100 ms and about 300 ms).
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  auto from = Steady::now();
   scope::Refresh(g_model.Address());
-  QCHECK(scope::Looks() == 1);  // 100 ms: before the 250 ms spacing
+  auto to = Steady::now();
+  if (ms(beforeFirst, to) < scope::kLookEveryMs) QCHECK(scope::Looks() == 1);        // 100 ms: before the 250 ms spacing
+  if (ms(afterFirst, from) >= scope::kLookEveryMs) QCHECK(scope::Looks() == 2);      // held off past the spacing: a look
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const std::uint32_t looksBefore = scope::Looks();
+  from = Steady::now();
   scope::Refresh(g_model.Address());
-  QCHECK(scope::Looks() == 2 && scope::InCombatOrLobby());  // about 300 ms: a look, and a fresh answer
+  const std::uint32_t wantAtLeast = looksBefore == 1 ? 2 : looksBefore;  // about 300 ms since the first look: it has been looked at again by now
+  QCHECK(scope::Looks() >= wantAtLeast && scope::InCombatOrLobby());     // and a fresh answer
+  const std::uint32_t looks = scope::Looks();
   std::this_thread::sleep_for(std::chrono::milliseconds(1100));
   QCHECK(!scope::InCombatOrLobby() && !scope::InCombatMap());  // about 1.1 s without a look: stale
   scope::Refresh(g_model.Address());
-  QCHECK(scope::Looks() == 3 && scope::InCombatOrLobby());
+  QCHECK(scope::Looks() == looks + 1 && scope::InCombatOrLobby());  // more than 1.1 s since the last look: a look, whatever the load
   const std::vector<Line> stale = Lines("combat_scope_stale");
   QCHECK(stale.size() == 1U);
   if (stale.size() == 1U) {  // the gap the record carries is the real gap, in ms
     const std::size_t at = stale[0].text.find("\"gap_ms\":");
     const long gap = at == std::string::npos ? 0 : std::strtol(stale[0].text.c_str() + at + 9, nullptr, 10);
-    QCHECK(gap >= 1100 && gap < 5000);
+    QCHECK(gap >= 1099 && gap <= ms(from, Steady::now()) + 1);  // +1: each reading is truncated to whole ms on its own  // at least what was slept, at most what really passed since before the last look
   }
   End();
 }

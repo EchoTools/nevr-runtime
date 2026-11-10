@@ -19,9 +19,11 @@
  * left to change it; the staleness test is made when a caller reads a true answer, so the path of an arena match (a word with no combat bit) never
  * reads the clock.
  *
- * Who owns the refresh. The combat install table has a `scope` row after the `tick` row (combat_install.cpp): `InstallNormal()` registers `Refresh`
- * with the tick (combat_tick.h) once, in the combat variants only. A module that reads the answer does not enrol it; it asks `Live()` from its install
- * function and refuses (`scope_not_live`) when the answer cannot change: the table row did not register, or the tick itself is not installed.
+ * Who owns the refresh. The combat install table has a `scope` row after the `tick` row (combat_install.cpp): its step, `ScopeNormal()`, calls
+ * `InstallNormal()`, which registers `Refresh` with the tick (combat_tick.h) once, in the combat variants only, and only while a reader of the answer is on:
+ * with every reader's switch off the row is `off_config` and no look is made in any level. The readers are listed in `ScopeNormal()`; a module that moves in
+ * and reads the answer adds its switch to that list. A module that reads the answer does not enrol it; it asks `Live()` from its install function and
+ * refuses (`scope_not_live`) when the answer cannot change: the table row did not register, or the tick itself is not installed.
  *
  * Frequency (ADR 0038). `Refresh` runs once per rendered frame on the game thread, after the game's frame update: it reads the monotonic clock (a vDSO
  * call, no system call) and compares it with the next look. Every kLookEveryMs it looks: two tables, up to 64 gamespaces each, a handful of

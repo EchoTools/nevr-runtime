@@ -53,6 +53,6 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    level, calls the game's function with the same arguments and does nothing else: no read of the game's data, no write, no counter, no line. The handler is
    that test and a tail call to the game's function or to a `[[gnu::noinline]]` body for the combat case, so it has no frame (check the arm64 object with
    `llvm-objdump -d`); the body starts with `scope::LookIsFresh()`, because a true answer older than `kStaleAfterMs` is not believed (the tick stopped).
-   The refresh is registered by the `scope` row of the install table, after the `tick` row; a module does not register it, it asks `scope::Live()` from its
+   The refresh is registered by the `scope` row of the install table, after the `tick` row, and only while a reader is on (`ScopeNormal()` in `combat_install.cpp` lists the readers' switches: a module that reads the scope adds its switch there); a module does not register it, it asks `scope::Live()` from its
    install function, before it hooks anything, and refuses (`scope_not_live`) when the answer cannot change. The module's host test pins the arena path with data
    pointers nobody could read and by count (`SetReadCounterForTest`, `level::ScanCalls()`: zero reads and zero scans), and prints its cost. Arena and combat run on the same APK, so `combat::Active()` does not do this.
