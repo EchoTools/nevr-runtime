@@ -751,11 +751,15 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   // every reader of the scope is off: the scope's row is off too, so arena pays no look for nothing (and it is off, not failed)
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "scope=off_config"));
   QCHECK(Lines("combat_scope_install").empty());
+  bool scopeRecordIsOff = false;
+  for (const Line& r : Lines("combat_install_module")) scopeRecordIsOff = scopeRecordIsOff || Has(r.text, "\"module\":\"scope\",\"outcome\":\"off\",\"status\":\"off_config\"");
+  QCHECK(scopeRecordIsOff);  // off is counted apart: neither installed nor failed
   QCHECK(Has(Lines("combat_hudmeter_install")[0].text, "\"reason\":\"off_config\""));
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig gammaOnly;
+  gammaOnly.hudmeter = {false, nevr_quest::Source::kFile};  // the gamma alone is a reader
   gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
   gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
   combat::SetConfig(gammaOnly);

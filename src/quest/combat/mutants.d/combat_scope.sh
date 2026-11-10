@@ -18,8 +18,8 @@ runm sc_map_includes_lobby  $H "s/return (detail::g_bits.load(std::memory_order_
 runm sc_lobby_not_counted   $H "s/(bits \\& (kBitCombatMap | kBitCombatLobby)) != 0;/(bits \\& kBitCombatMap) != 0;/"
 runm sc_starts_open         $H "s/g_bits{0}/g_bits{kBitCombatMap}/"
 # staleness: a true answer older than kStaleAfterMs is false
-runm sc_never_stale         $C "s/<= kStaleAfterMs; }/<= kStaleAfterMs || true; }/"
-runm sc_stale_by_one        $C "s/<= kStaleAfterMs; }/< kStaleAfterMs; }/"
+runm sc_never_stale         $C "s/relaxed) <= kStaleAfterMs;/relaxed) <= kStaleAfterMs || true;/"
+runm sc_stale_by_one        $C "s/relaxed) <= kStaleAfterMs;/relaxed) < kStaleAfterMs;/"
 runm sc_stale_limit         $H "s/kStaleAfterMs = 1000/kStaleAfterMs = 100000/"
 runm sc_look_time_unstamped $C "s/^  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);.*\$//"
 runm sc_answers_skip_fresh  $H "s/return SeenCombatOrLobby() \\&\\& LookIsFresh();/return SeenCombatOrLobby();/"
@@ -41,7 +41,7 @@ runm sc_live_without_row    $C "s/return g_registered.load(std::memory_order_acq
 runm tick_installed_never   $T "s/^  g_installed.store(ok, std::memory_order_release);\$//" quest-host-combat combat_scope_test
 runm tick_installed_always  $T "s/^  g_installed.store(ok, std::memory_order_release);\$/  g_installed.store(true, std::memory_order_release);/" quest-host-combat combat_scope_test
 # the install table: the row sits after the tick and before every reader
-runm table_scope_row_gone   $I "s/^    Module{\"scope\", nullptr, \\&ScopeNormal},\$//" quest-host-combat combat_install_test
+runm table_scope_registers_nothing $I "s/^  return scope::InstallNormal();\$/  return {true, \"installed\"};/" quest-host-combat combat_install_test
 # the real clock, in milliseconds (the fake clock of the other tests cannot see its conversion)
 runm sc_clock_no_seconds_factor $C "s/static_cast<std::int64_t>(ts.tv_sec) \\* 1000 + /static_cast<std::int64_t>(ts.tv_sec) + /"
 runm sc_clock_seconds_divided   $C "s/static_cast<std::int64_t>(ts.tv_sec) \\* 1000 + /static_cast<std::int64_t>(ts.tv_sec) \\/ 1000 + /"
@@ -58,7 +58,7 @@ runm sc_stale_level_zero        $C "s/HexString(levelText, g_lastLevel.load(std:
 runm sc_stale_level_unstored    $C "s/^  g_lastLevel.store(levelId, std::memory_order_relaxed);\$//"
 runm sc_stale_every_look        $C "s/^  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);\$/  if (now - last <= kStaleAfterMs) detail::g_lookedAtMs.store(now, std::memory_order_relaxed);/"
 # the row is on only while a reader of the scope is on
-runm sc_row_ignores_readers     $I "s/  if (!anyReader) return {false, \"off_config\", \\/\\*off=\\*\\/true};//" quest-host-combat combat_install_test
+runm sc_row_ignores_readers     $I "s/  if (!anyReader) return/  if (false \\&\\& !anyReader) return/" quest-host-combat combat_install_test
 runm sc_row_off_is_failed       $I "s/return {false, \"off_config\", \\/\\*off=\\*\\/true};/return {false, \"off_config\", \\/\\*off=\\*\\/false};/" quest-host-combat combat_install_test
 runm sc_row_hudmeter_not_reader $I "s/const bool anyReader = g_config.hudmeter.on || /const bool anyReader = /" quest-host-combat combat_install_test
 runm sc_row_gamma_not_reader    $I "s/ || g_config.shieldgammaGamma.on || / || /" quest-host-combat combat_install_test
