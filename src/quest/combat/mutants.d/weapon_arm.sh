@@ -9,6 +9,8 @@ runm wa_queue_method src/quest/combat/weapon_arm.cpp 's/\*reinterpret_cast<void\
 runm wa_queue_handle src/quest/combat/weapon_arm.cpp 's/\*reinterpret_cast<std::uint32_t\*>(q + 0x18) = static_cast<std::uint32_t>(ph);/\*reinterpret_cast<std::uint32_t*>(q + 0x18) = 0;/'
 runm wa_always_direct src/quest/combat/weapon_arm.cpp 's/  if (direct != 0) {/  if (true) {/'
 runm wa_no_giveup src/quest/combat/weapon_arm.cpp 's/if (now - g_setAt > kVerifyS) {/if (false) {/'
+runm wa_giveup_keeps_trying src/quest/combat/weapon_arm.cpp '/combat_weapon_arm_gave_up/,/^    }$/{s/g_done.store(true, std::memory_order_release);/g_state.store(0);/}'
+runm wa_giveup_not_done src/quest/combat/weapon_arm.cpp '/combat_weapon_arm_gave_up/,/^    }$/{/g_done.store(true, std::memory_order_release);/d}'
 runm wa_verify_short src/quest/combat/weapon_arm.cpp 's/kVerifyS = 10.0/kVerifyS = 2.0/'
 runm wa_marker_early src/quest/combat/weapon_arm.cpp 's/    if (arm == 1) {/    if (true) {/'
 runm wa_no_valid src/quest/combat/weapon_arm.cpp 's/if (ok \&\& g_f.isValid(reinterpret_cast<void\*>(found\[i\].cs), h)) {/if (ok) {/'

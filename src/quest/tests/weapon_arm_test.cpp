@@ -336,6 +336,13 @@ void GivingUp() {  // 6. the arm never reads 1 after the set: gives up after 10 
   for (int i = 0; i < 12; ++i) Pass();
   CHECK(!FileExists("t26arm.OVR-ORG-1234567890"), "marker written without the arm reading 1");
   CHECK(HasLine("combat_weapon_arm_gave_up", "", kWarn), "no WARNING when the set did not take");
+  // a failed set stops for the rest of the launch: more passes, with the arm still left, set nothing again and say nothing again
+  CHECK(wa::Phase() == 2, "not done after the give-up: phase %d", wa::Phase());
+  for (int i = 0; i < 30; ++i) Pass();
+  CHECK(wa::Phase() == 2, "the give-up did not stay done: phase %d", wa::Phase());
+  CHECK(g_setCalls == 1 && g_queueCalls == 0, "retried after the give-up: %d sets, %d queued", g_setCalls, g_queueCalls);
+  CHECK(Count("combat_weapon_arm_gave_up", "") == 1, "%d give-up records, want exactly 1", Count("combat_weapon_arm_gave_up", ""));
+  CHECK(!FileExists("t26arm.OVR-ORG-1234567890"), "a marker appeared after the give-up");
   // not before 10 s: an arm that reads 1 eight passes after the set still gets its marker
   Reset(1, 0, -1);
   for (int i = 0; i < 3; ++i) Pass();
