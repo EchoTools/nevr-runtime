@@ -158,6 +158,8 @@ set(PATCHES_SOURCES
     "patch/lobby_full_backoff.cpp"
     # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
     "patch/queued_join_log.cpp"
+    # #2333: the current server's features, read from the lobby settings the client receives (compat/server_features.h).
+    "patch/lobby_settings_hook.cpp"
     # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
     "patch/deadlock_monitor.cpp"
     "patch/noovr_arglookup.cpp"
@@ -1822,6 +1824,24 @@ if(BUILD_TESTING)
     target_include_directories(test_queued_join_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
+
+    # test_server_features.cpp (#2333, header-only compat/server_features.h): the statement a server makes and a client reads.
+    add_executable(test_server_features tests/test_server_features.cpp)
+    set_source_files_properties(tests/test_server_features.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_features PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_features DISCOVERY_MODE PRE_TEST)
+
+    # test_lobby_settings_hook.cpp (#2333): the LobbySettingsCB hook under MinHook against a fake game image.
+    add_executable(test_lobby_settings_hook tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_lobby_settings_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_lobby_settings_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_lobby_settings_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_lobby_settings_hook DISCOVERY_MODE PRE_TEST)
 
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)

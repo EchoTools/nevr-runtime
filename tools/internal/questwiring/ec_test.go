@@ -68,8 +68,8 @@ func TestEcHooksOnlyThroughThunksAndTheManager(t *testing.T) {
 			t.Errorf("ec / ecfx must install only through InstallThunk; they name %s", forbidden)
 		}
 	}
-	if n := len(regexp.MustCompile(`NEVR_HOOK_RECORD\(`).FindAllString(code, -1)); n != 7 {
-		t.Errorf("want seven hook records (recvfrom, sendto, three WriteLogV, Reload, Unload), got %d", n)
+	if n := len(regexp.MustCompile(`NEVR_HOOK_RECORD\(`).FindAllString(code, -1)); n != 8 {
+		t.Errorf("want eight hook records (recvfrom, sendto, three WriteLogV, Reload, Unload, LobbySettingsCB #2333), got %d", n)
 	}
 }
 

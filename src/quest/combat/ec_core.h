@@ -31,14 +31,13 @@ constexpr std::uint32_t kOcUse = 0xca4, kOcTok = 0xca8, kVeilTok = 0xcc0, kPoint
 constexpr std::uint32_t kVeilUse = 0xf00, kPointUse = 0xf80;
 // the drone block: +18 u32 = node steps the 221a prelude saw
 constexpr std::uint32_t kDroneBlock = 0xd60, kDroneSteps = 0x18;
-// QUEST-ONLY word: u32, 1 while the CURRENT server answered the EC network within kServerTimeoutMs, else 0
+// QUEST-ONLY word: u32, 1 while the CURRENT server states EchoCombat in its lobby settings (#2333, runtime/compat/server_features.h), else 0
 constexpr std::uint32_t kQuestEcServer = 0x040;
 // the EQUIP block: +00 u64 = the selected tac mod's symbol (0 = none known), +10 u32 = guarded nodes skipped, +14 server flag
 // (never set by a client), +20 u32 = the controller's re-run counter
 constexpr std::uint32_t kEquipSel = 0xe80, kEquipSkips = 0xe90, kEquipReruns = 0xea0;
 constexpr std::uint64_t kTokenLife = 15000000;                  // 1.5 s in 100 ns
 constexpr std::uint32_t kMagic = 0x4c564345, kMagic2 = 0x4c494556;  // "ECVL" / "VEIL"
-constexpr std::uint64_t kServerTimeoutMs = 6000;
 
 struct Packet {  // 16 bytes, little-endian on both sides
   std::uint32_t magic;
@@ -80,9 +79,6 @@ struct State {
   unsigned seenNext = 0;
   Dest dests[16] = {};
   int best = -1;
-  std::uint64_t lastAnswerMs = 0;
-  std::uint32_t answerAddr = 0;  // who sent that 'A' (network order, as Dest)
-  std::uint16_t answerPort = 0;
   std::uint32_t types = 0;  // bit k of "VPTO": this build carries that type
   std::uint64_t dropped = 0, tokens = 0, kills = 0, answers = 0, medi = 0;
 
@@ -118,29 +114,18 @@ struct State {
     if (b >= 0) best = b;
     for (int i = 0; i < 16; ++i) dests[i].count = i == best ? 1 : 0;
   }
-  // The CURRENT server answered within the timeout: an answer of a server we have moved away from does not count.
-  bool Answered(std::uint64_t nowMs) const {
-    return best >= 0 && lastAnswerMs && nowMs - lastAnswerMs < kServerTimeoutMs && dests[best].addr == answerAddr &&
-           dests[best].port == answerPort;
-  }
   bool Server(Dest* out) const {
     if (best < 0) return false;
     *out = dests[best];
     return true;
   }
-  // the client branch, for a datagram that is ours (16 bytes, both magics, a known type). The sender rule is
-  // upstream's: 'A' counts only from the current server; 'K' and the carried types are taken from any sender.
+  // the client branch, for a datagram that is ours (16 bytes, both magics, a known type). 'K' and the carried types are taken from any
+  // sender. #2333: an 'A' (a server of an older build answering the hello) is consumed and counted, and opens nothing: whether the
+  // server runs EchoCombat is what its lobby settings state.
   // Returns the drone index + 1 for a first-time 'K', else 0.
-  std::uint32_t Handle(std::uint8_t* page, const Packet& p, std::uint32_t addr, std::uint16_t port, std::uint64_t now100,
-                       std::uint64_t nowMs) {
+  std::uint32_t Handle(std::uint8_t* page, const Packet& p, std::uint64_t now100) {
     if (p.type == 'A') {
-      Dest d;
-      if (Server(&d) && d.addr == addr && d.port == port) {
-        lastAnswerMs = nowMs;
-        answerAddr = addr;
-        answerPort = port;
-        ++answers;
-      }
+      ++answers;
     } else if (p.type == 'K' && FirstTime(p.id)) {
       ++kills;
       return (p.id & 0xffff) + 1;

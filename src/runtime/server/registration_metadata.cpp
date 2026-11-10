@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "core/logging.h"
+#include "runtime/combat/combat.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"
@@ -78,16 +80,22 @@ void FillRegistrationMetadata(RegistrationParams& params) {
           rejectedRegions, rejectedGuilds);
     }
 
+    // #2333: what this server runs, which the service matches finds and joins against (its match label's features).
+    std::vector<std::string> features = nevr_combat::ServerFeatures();
+
     params.installedLevels = std::move(levels.levels);
     params.regions = std::move(regions);
     params.guilds = std::move(guilds);
+    params.features = std::move(features);
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu plugin_levels=%zu regions=%zu guilds=%zu",
+        "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu plugin_levels=%zu regions=%zu guilds=%zu "
+        "features=%s",
         params.installedLevels.size(), levels.manifestsRead, levels.pluginLevels, params.regions.size(),
-        params.guilds.size());
+        params.guilds.size(), nevr_server_features::Joined(params.features).c_str());
   } catch (const std::exception& error) {
     Log(EchoVR::LogLevel::Error,
-        "[NEVR.GAMESERVER] registration metadata failed (%s); registering without installed levels, regions or guilds",
+        "[NEVR.GAMESERVER] registration metadata failed (%s); registering without installed levels, regions, guilds or "
+        "features",
         error.what());
   }
 }

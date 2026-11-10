@@ -8,6 +8,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/logging.h"
 #include "runtime/combat/balance_merge.h"
@@ -22,6 +23,7 @@
 #include "runtime/combat/station_cells.h"
 #include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/resource_override.h"
@@ -52,6 +54,9 @@ void LogGroup(const GroupSpec& spec, const Setting& wanted, bool started, const 
 }
 
 // --- balance -----------------------------------------------------------------------------------------------------
+
+std::mutex g_featuresLock;
+std::vector<std::string> g_serverFeatures;  // guarded by g_featuresLock; set once by Install
 
 std::mutex g_balanceLock;
 std::deque<std::string> g_balanceBuffers;  // every buffer served stays valid for the process (the game keeps reading it)
@@ -197,7 +202,24 @@ void Install(std::uintptr_t gameBase, bool isServer) {
         isServer ? "true" : "false", enabled, OnOff(guard && drone), OnOff(overcharge),
         OnOff(overcharge && veil && at(Group::kMedigun).on), OnOff(veil), OnOff(veilnet::MatchControlStarted()),
         OnOff(cleanExit));
+
+    // #2333: the features a server states to its clients, from what actually started (server_features.h).
+    std::vector<std::string> features =
+        nevr_server_features::CombatFeatures(veil, at(Group::kMedigun).on, overcharge);
+    if (isServer) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] server features features=%s (the registration and the lobby settings carry them, so a client "
+          "shows the EchoCombat tac mods%s only on a server that states them)",
+          nevr_server_features::Joined(features).c_str(), features.size() > 1 ? " and MEDIGUN" : "");
+    }
+    std::lock_guard<std::mutex> lock(g_featuresLock);
+    g_serverFeatures = std::move(features);
   });
+}
+
+std::vector<std::string> ServerFeatures() {
+  std::lock_guard<std::mutex> lock(g_featuresLock);
+  return g_serverFeatures;
 }
 
 }  // namespace nevr_combat
