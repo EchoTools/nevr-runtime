@@ -5,10 +5,12 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <mutex>
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -80,7 +82,6 @@ using UserProviderIdFn = std::uint64_t* (*)(std::uint64_t* out, std::uint64_t us
 using Symbol64Fn = std::uint64_t* (*)(std::uint64_t* out, std::uint64_t value);
 
 using BooleanFn = std::uint32_t (*)(void* json, const char* path, std::uint32_t defaultValue, std::uint32_t logMissing);
-using DispatchEventFn = void (*)(void* netGame, std::uint64_t eventId);
 
 BooleanFn g_originalBoolean = nullptr;
 InviteHandlerFn g_originalInviteHandler = nullptr;
@@ -93,6 +94,8 @@ SocialInviteFn g_originalSocialInvite = nullptr;
 UserProviderIdFn g_userProviderId = nullptr;
 Symbol64Fn g_symbol64 = nullptr;
 DispatchEventFn g_originalDispatch = nullptr;
+std::atomic<bool> g_dispatchTrace{false};           // Install ran: the session-event trace is on
+std::atomic<DispatchObserver> g_dispatchObserver{nullptr};
 std::atomic<std::uint32_t> g_gateForced{0};
 std::atomic<std::uint32_t> g_events{0};
 
@@ -109,6 +112,11 @@ std::uint32_t BooleanHook(void* json, const char* path, std::uint32_t defaultVal
 // Every event the game sends its session. The party-invite errors are the ones that explain a
 // click that never reaches the facade, so they log at Warning; everything else is capped.
 void DispatchEventHook(void* netGame, std::uint64_t eventId) {
+  if (const DispatchObserver observer = g_dispatchObserver.load(std::memory_order_acquire)) observer(netGame, eventId);
+  if (!g_dispatchTrace.load(std::memory_order_acquire)) {
+    g_originalDispatch(netGame, eventId);
+    return;
+  }
   const std::uint32_t count = g_events.fetch_add(1, std::memory_order_relaxed) + 1;
   const char* name = EchoVR::LookupSymbolName(eventId);
   const bool inviteError = eventId == kErrorFirstMatchNotCompleted || eventId == kErrorOffline ||
@@ -227,15 +235,36 @@ void InstallChecked(std::uintptr_t gameBase, std::uint64_t va, const std::array<
   PatchDetour(&original, detour, name);
 }
 
+// The one detour on DispatchEventToSession, made once whichever caller asks first (Install or InstallDispatchObserver).
+bool EnsureDispatchHook(std::uintptr_t gameBase) {
+  static std::once_flag once;
+  std::call_once(once, [gameBase] {
+    InstallChecked(gameBase, kDispatchEventVA, kDispatchPrologue, g_originalDispatch,
+                   reinterpret_cast<PVOID>(&DispatchEventHook), "DispatchEventToSession");
+  });
+  return g_originalDispatch != nullptr && nevr_hook_guard::IsOurDetour(reinterpret_cast<const void*>(
+                                              nevr::ResolveVA_Checked(gameBase, kDispatchEventVA)));
+}
+
 }  // namespace
+
+DispatchEventFn InstallDispatchObserver(std::uintptr_t gameBase, DispatchObserver observer) {
+  if (observer == nullptr) {  // removing the observer installs nothing
+    g_dispatchObserver.store(nullptr, std::memory_order_release);
+    return g_originalDispatch;
+  }
+  if (!EnsureDispatchHook(gameBase)) return nullptr;
+  g_dispatchObserver.store(observer, std::memory_order_release);
+  return g_originalDispatch;
+}
 
 bool InviteHandlerTraced() { return g_originalInviteHandler != nullptr; }
 
 void Install(std::uintptr_t gameBase) {
   InstallChecked(gameBase, kBooleanVA, kBooleanPrologue, g_originalBoolean, reinterpret_cast<PVOID>(&BooleanHook),
                  "CJson_Boolean");
-  InstallChecked(gameBase, kDispatchEventVA, kDispatchPrologue, g_originalDispatch,
-                 reinterpret_cast<PVOID>(&DispatchEventHook), "DispatchEventToSession");
+  g_dispatchTrace.store(true, std::memory_order_release);
+  EnsureDispatchHook(gameBase);
   // Called, not hooked: validated before the invite-handler trace may use them.
   void* userProviderId = nevr::ResolveVA_Checked(gameBase, kUserProviderIdVA);
   void* symbol64 = nevr::ResolveVA_Checked(gameBase, kSymbol64VA);

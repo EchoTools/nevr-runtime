@@ -64,6 +64,11 @@ int NevrPlanBuild(NevrSession *s, const char *version, const char *observed_json
  *          "reason", "files": [{"path", "size", "sha256"}]}. Nothing is published unless every file passed its checks. */
 int NevrPcStage(NevrSession *s, const char *root_dir, const char *current_json, char **out_json);
 
+/* Self-update: the runtime refused the release staged by NevrPcStage (its Authenticode check failed). Records `version` with its
+ * `runtime_sha256` (64 lowercase hex) and a lowercase `reason` word; the next NevrPcStage answers {"action": "none", "reason": "discarded"}
+ * for that release and fetches nothing. A rebuilt release under the same version has other bytes and is staged again. */
+int NevrPcDiscard(NevrSession *s, const char *root_dir, const char *version, const char *runtime_sha256, const char *reason);
+
 /* Ends the run: state is "installed", "unchanged", "restored" or "needs-user". */
 int NevrRunEnd(NevrSession *s, const char *state, const char *reason);
 

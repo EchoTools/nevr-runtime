@@ -675,8 +675,8 @@ class BuildVariantStampTest(unittest.TestCase):
         (self.stage / "lib" / "arm64-v8a").mkdir(parents=True)
         self.stamp = self.stage / "lib" / "arm64-v8a" / "libnevr_build_variant.so"
 
-    def test_the_words_are_the_three_the_adr_names(self):
-        self.assertEqual(libs.VARIANT_WORDS, ("q15t", "combat", "perf-probe"))
+    def test_the_words_are_the_ones_the_adr_names_and_the_arena_apk(self):
+        self.assertEqual(libs.VARIANT_WORDS, ("q15t", "combat", "perf-probe", "arena"))
         self.assertEqual(libs.VARIANT_ENTRY, "lib/arm64-v8a/libnevr_build_variant.so")
 
     def test_each_word_is_written_as_exactly_its_bytes(self):
@@ -691,12 +691,12 @@ class BuildVariantStampTest(unittest.TestCase):
         self.assertEqual(self.stamp.read_bytes(), b"")
 
     def test_any_other_word_is_refused_by_name_and_writes_nothing(self):
-        for word in ("bogus", "Q15T", "Combat", " combat", "combat\n", "q15t ", "perf_probe", "combat\0", "release", "dev"):
+        for word in ("bogus", "Q15T", "Combat", " combat", "combat\n", "q15t ", "perf_probe", "combat\0", "release", "dev", "Arena", "arena ", "arena\n"):
             with self.subTest(word=word):
                 problems = libs.write_build_variant(self.stage, word)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("is not a variant word", problems[0])
-                self.assertIn("q15t, combat, perf-probe", problems[0])
+                self.assertIn("q15t, combat, perf-probe, arena", problems[0])
                 self.assertFalse(self.stamp.exists())
 
     def test_the_command_line_refuses_an_unknown_word_with_exit_one(self):
@@ -711,7 +711,7 @@ class BuildVariantStampTest(unittest.TestCase):
                 self.assertFalse(self.stamp.exists())
 
     def test_the_command_line_accepts_the_words_and_the_empty_word(self):
-        for word in ("", "q15t", "combat", "perf-probe"):
+        for word in ("", "q15t", "combat", "perf-probe", "arena"):
             with self.subTest(word=word):
                 result = subprocess.run(
                     [sys.executable, "-I", str(REPO / "tools" / "quest_repack_libs.py"), "write-build-variant",
@@ -1034,6 +1034,9 @@ class RepackNamesItsVariantTest(RepackFixture):
 
     def test_perf_probe_is_in_the_signed_apk_stored(self):
         self.assertEqual(self.signed_stamp("perf-probe"), b"perf-probe")
+
+    def test_arena_is_in_the_signed_apk_stored(self):
+        self.assertEqual(self.signed_stamp("arena"), b"arena")
 
     def test_an_empty_word_gives_a_plain_release_stamp(self):
         self.assertEqual(self.signed_stamp(""), b"")

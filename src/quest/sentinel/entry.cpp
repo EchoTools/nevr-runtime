@@ -47,6 +47,7 @@
 #include "render_config.h"
 #include "texture_menu_hook.h"
 #include "texture_quality_hook.h"
+#include "vk_alloc_check.h"
 #include "vk_free_guard.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
@@ -201,6 +202,9 @@ bool InstallVkExtWindowHook() noexcept {
     // Libr15's array of free GPU ranges has no bound check (#1759): a free that would overflow it leaks the range instead. Its
     // vk_free_guard_install line says whether it went in; a refused install leaves the game's Free as it is.
     nevr_quest::vk_free_guard::Install();
+    // Libr15's Allocate does not read vkAllocateMemory's result (#2262): an allocation reported as made with no memory is refused,
+    // so CreateDeviceResource never binds it. Its vk_alloc_check_install line says whether it went in.
+    nevr_quest::vk_alloc_check::Install();
     return nevr_quest::vk_window::Install();
 }
 
@@ -282,6 +286,7 @@ bool CombatActive() noexcept { return nevr_quest::combat::Active(); }
 bool InstallCombatEarly() noexcept { return nevr_quest::combat::InstallEarly().ran; }
 bool InstallCombatNormal() noexcept { return nevr_quest::combat::InstallNormal().ran; }
 void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::NoteNormalNotStarted(reason); }
+void NoteCombatProcessEnd() noexcept { nevr_quest::combat::NoteProcessEnd(); }
 void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {
   nevr_quest::combat::SetConfig(config);  // the modules' switches, read by the install steps that follow
   nevr_quest::combat::LogConfig(config);

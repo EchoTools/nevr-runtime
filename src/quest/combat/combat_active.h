@@ -17,7 +17,7 @@
  * match_tags.h (name tags on by default, #2090) and equip_refire.h (the equipment change event sent again, #2121) install on every launch.
  *
  * Lines (sentinel log), one per process:
- *   {"event":"combat_active","variant":"none|q15t|combat|perf-probe","kind":"dev|release","active":1|0,
+ *   {"event":"combat_active","variant":"none|q15t|combat|perf-probe|arena","kind":"dev|release","active":1|0,
  *    "reason":"variant|forced|not_a_combat_variant","force":"not_asked|honoured|redundant|refused","msg":"<what follows>"}
  * Warning when `force` is `refused` (a release build was asked to force combat on), Info otherwise.
  *
@@ -70,6 +70,9 @@ build_variant::Variant RecordedVariant() noexcept;
 
 // True when the folded combat modules run in this process. False until Resolve has been called.
 bool Active() noexcept;
+// True when Resolve was told this is a development build (`nevr_build::kIsDev`). False until Resolve has been called. A module that offers a
+// development-only aid (aibots' request file) asks here, so no module reads the build kind for itself.
+bool DevBuild() noexcept;
 // Why Active() is what it is; kUnresolved until Resolve has been called.
 Reason ActiveReason() noexcept;
 

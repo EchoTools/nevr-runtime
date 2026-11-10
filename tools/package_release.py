@@ -28,7 +28,7 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       record are separate NUL-bounded strings, so each is matched whole.
   package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
-      the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
+      the full gate for a local development build (its version is <next>-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
       release.
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 /// HookGuard — runtime detection of a second detour on an address we already own.
@@ -54,6 +55,20 @@ int Retire(const void* target);
 
 /// How many addresses are currently recorded (live records: a retired record is not counted).
 int RecordedCount();
+
+/// A range the runtime already owns, as FindOverlap reports it.
+struct Overlap {
+  std::uintptr_t start;
+  std::size_t length;
+  const char* name;  // the hook's or the writer's name
+  const char* kind;  // "hook": a recorded detour (its first 16 bytes); "write": a range ProcessMemcpy wrote
+};
+
+/// Whether [start, start + length) overlaps anything this runtime hooked or wrote: a live HookGuard record (the
+/// detour's first 16 bytes, which cover MinHook's 5- and 14-byte jumps) or a range ProcessMemcpy recorded
+/// (write_ranges.h). The first overlap found is copied to `*hit`. A writer that must not land on our hooks asks this
+/// before it writes, and refuses the write when it is true.
+bool FindOverlap(const void* start, std::size_t length, Overlap* hit);
 
 /// How many Record() calls found the table full: detours nothing is guarding.
 int DroppedCount();

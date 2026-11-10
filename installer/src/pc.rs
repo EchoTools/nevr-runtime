@@ -634,7 +634,7 @@ fn uninstall_apply(l: &Layout, obs: &Observed, log: &Log, seam: &Seam, undo: &mu
             undo.push(Undo::Relocate { what: "runtime_set_aside", from: to.clone(), to: runtime.clone() });
             restored("runtime_set_aside", &to, &runtime.display().to_string())?;
         } else {
-            kept("runtime", &runtime, "not a NEVR runtime (no NEVR-BUILD identity text or nevr-runtime/1.0 user agent), so install did not put it there")?;
+            kept("runtime", &runtime, "not a NEVR runtime (it carries neither the build identity literal nor the nevr-runtime/1.0 user agent), so install did not put it there")?;
         }
     }
 

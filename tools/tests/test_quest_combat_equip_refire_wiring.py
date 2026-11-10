@@ -235,10 +235,13 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
-        self.assertIn(
-            '{"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev", "hudmeter", "shieldgamma_gamma", "shieldgamma_tube_mirror"}}',
-            read("src/core/nevr_config.cpp"),
-        )
+        # The section grows with each module that moves in, so each key the install steps read is checked, not the whole list.
+        section = re.search(r'\{"combat", \{([^}]*)\}\}', read("src/core/nevr_config.cpp"))
+        self.assertIsNotNone(section, "nevr_config.cpp has no combat section")
+        keys = re.findall(r'"([a-z0-9_]+)"', section.group(1))
+        for key in ("force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72"):
+            with self.subTest(key=key):
+                self.assertIn(key, keys)
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")
 
 

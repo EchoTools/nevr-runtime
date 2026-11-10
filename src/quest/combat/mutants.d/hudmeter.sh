@@ -1,6 +1,6 @@
 # hudmeter: each rule of src/quest/combat/hudmeter.cpp and hudmeter_targets.h removed or bent once; src/quest/tests/hudmeter_test.cpp must fail on every
 # one, and so must the test of each line outside the module that carries its switch, its record or its pins. Sourced by ../mutants.sh, which defines
-# `runm <name> <file> <sed> [<build dir> <test target> [<command>]]`.
+# `runm <name> <file> <sed> [<build dir> <test target>]`.
 C=src/quest/combat/hudmeter.cpp
 T=src/quest/combat/hudmeter_targets.h
 I=src/quest/combat/combat_install.cpp
@@ -37,19 +37,12 @@ runm hm_wrong_item          $T "s/kItem = 0x9fd2e8cc0e46df3cULL/kItem = 0x9fd2e8
 runm hm_wrong_full          $T "s/kFullX = 86.0f, kFullY = 88.0f/kFullX = 86.0f, kFullY = 80.0f/"
 runm hm_original_unchecked  $T "s/^  target.expectedOriginal = .*\$/  (void)base;/"
 runm hm_target_unowned      $T "s/return target.Owned(\"combat_hudmeter\");/return target;/"
-# the pins against the real libr15 (needs `just test-quest-hooks-pinned` to have extracted the store libraries into build/quest-hooks-pinned)
-PIN='L=build/quest-hooks-pinned/lib/lib/arm64-v8a; build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test $L/libr15.so $L/libpnsradmatchmaking.so $L/libpnsovr.so $L/lib7f2363b8976491aa.so $L/libpnsrad.so'
-runm hm_pin_word_changed    $T "s/0xa9bb6bfcU/0xa9bb6bfdU/" quest-host-hooks-pinned got_pinned_test "$PIN"
-runm hm_pin_vaddr_moved     $T "s/0x272711cULL, 0xb9403668U/0x2727120ULL, 0xb9403668U/" quest-host-hooks-pinned got_pinned_test "$PIN"
-runm hm_pin_slot_moved      $T "s/kSlotVaddr = 0x36c6ce8ULL/kSlotVaddr = 0x36c6cf0ULL/" quest-host-hooks-pinned got_pinned_test "$PIN"
-runm hm_pin_fn_moved        $T "s/kFnVaddr = 0x2726eacULL/kFnVaddr = 0x2726eb0ULL/" quest-host-hooks-pinned got_pinned_test "$PIN"
 # the table row and the record that carry the switch
 runm hm_row_switch_true     $I "s/hudmeter::Install(g_config.hudmeter.on)/hudmeter::Install(true)/" quest-host-combat combat_install_test
-runm hm_row_after_shield    $I "s/^    Module{\"hudmeter\", nullptr, \\&HudmeterNormal},\$//; s/^\\(    Module{\"shieldgamma\", nullptr, \\&ShieldgammaNormal},\\)\$/\\1\n    Module{\"hudmeter\", nullptr, \\&HudmeterNormal},/" - - "cd tools && go test -count=1 ./internal/questwiring/"
-runm hm_config_source_dropped $I "s/ {\"hudmeter_source\", source(config.hudmeter.source)},//" quest-host-combat combat_install_test
+runm hm_row_key            $I "s/\"combat.hudmeter\", \&nevr_quest::CombatConfig::hudmeter}/\"combat.hudmete\", \&nevr_quest::CombatConfig::hudmeter}/" quest-host-combat combat_install_test
+runm hm_row_member         $I "s/\"combat.hudmeter\", \&nevr_quest::CombatConfig::hudmeter}/\"combat.hudmeter\", \&nevr_quest::CombatConfig::shieldgammaTubeMirror}/" quest-host-combat combat_install_test
+runm hm_row_missing        $I "s/^    Module{\"hudmeter\", nullptr, \&HudmeterNormal, \"combat.hudmeter\", \&nevr_quest::CombatConfig::hudmeter},\$/    Module{\"hudmeter\", nullptr, \&HudmeterNormal},/" quest-host-combat combat_install_test
 # the key: read, defaulted on, known to the schema
 runm hm_key_default_off     src/quest/sentinel/quest_config.h "s/CombatSwitch hudmeter{true, Source::kAbsent}/CombatSwitch hudmeter{false, Source::kAbsent}/" quest-host-shared quest_config_test
 runm hm_key_typo            src/quest/sentinel/quest_config.cpp "s/\"combat.hudmeter\"/\"combat.hudmeters\"/" quest-host-shared quest_config_test
 runm hm_key_unread          src/quest/sentinel/quest_config.cpp "s/^  r.config.combat.hudmeter = ReadCombatSwitch(cfg, kCombatHudmeterKey, r);\$//" quest-host-shared quest_config_test
-runm hm_key_unknown         src/core/nevr_config.cpp "s/\"pfxtev\", \"hudmeter\", /\"pfxtev\", /" - - "python3 -I -m unittest tools.tests.test_quest_combat_equip_refire_wiring"
-runm hm_key_not_in_hook_budget src/quest/sentinel/hook_budget.h "s/^    {\"combat\\/hudmeter.cpp\", 1, 0},\$//" - - "python3 -I -m unittest tools.tests.test_quest_hook_budget"

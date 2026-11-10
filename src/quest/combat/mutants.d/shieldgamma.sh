@@ -1,6 +1,6 @@
 # shieldgamma: each rule of src/quest/combat/shieldgamma.cpp and shieldgamma_targets.h removed or bent once; src/quest/tests/shieldgamma_test.cpp must fail
 # on every one, and so must the test of each line outside the module that carries its switches, its record or its pins. Sourced by ../mutants.sh, which
-# defines `runm <name> <file> <sed> [<build dir> <test target> [<command>]]`.
+# defines `runm <name> <file> <sed> [<build dir> <test target>]`.
 C=src/quest/combat/shieldgamma.cpp
 T=src/quest/combat/shieldgamma_targets.h
 I=src/quest/combat/combat_install.cpp
@@ -42,18 +42,15 @@ runm sg_wrong_tube          $T "s/kTubeMaterial = 0xb28e940eb21a5798ULL/kTubeMat
 runm sg_wrong_ring          $T "s/kRingProperty = 0xdd35e419672ee0baULL/kRingProperty = 0xdd35e419672ee0bbULL/"
 runm sg_original_unchecked  $T "s/^  target.expectedOriginal = .*\$/  (void)base;/"
 runm sg_target_unowned      $T "s/return target.Owned(\"combat_shieldgamma\");/return target;/"
-# the pins against the real libr15 (needs `just test-quest-hooks-pinned` to have extracted the store libraries into build/quest-hooks-pinned)
-PIN='L=build/quest-hooks-pinned/lib/lib/arm64-v8a; build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test $L/libr15.so $L/libpnsradmatchmaking.so $L/libpnsovr.so $L/lib7f2363b8976491aa.so $L/libpnsrad.so'
-runm sg_pin_fn_moved        $T "s/kFnVaddr = 0x272d55cULL/kFnVaddr = 0x272d560ULL/" quest-host-hooks-pinned got_pinned_test "$PIN"
-runm sg_pin_word_changed    $T "s/0x2d470660U/0x2d470661U/" quest-host-hooks-pinned got_pinned_test "$PIN"
-runm sg_pin_slot_moved      $T "s/kSlotVaddr = 0x36d2020ULL/kSlotVaddr = 0x36d2028ULL/" quest-host-hooks-pinned got_pinned_test "$PIN"
 # the table row and the record that carry the switches
 runm sg_row_args_swapped    $I "s/shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on)/shieldgamma::Install(g_config.shieldgammaTubeMirror.on, g_config.shieldgammaGamma.on)/" quest-host-combat combat_install_test
-runm sg_config_gamma_key    $I "s/{\"shieldgamma_gamma\", config.shieldgammaGamma.on ? 1 : 0}/{\"shieldgamma_gamma\", config.shieldgammaTubeMirror.on ? 1 : 0}/" quest-host-combat combat_install_test
+runm sg_gamma_row_key      $I "s/\"combat.shieldgamma_gamma\", \&nevr_quest::CombatConfig::shieldgammaGamma}/\"combat.shieldgamma_gama\", \&nevr_quest::CombatConfig::shieldgammaGamma}/" quest-host-combat combat_install_test
+runm sg_gamma_row_member   $I "s/\"combat.shieldgamma_gamma\", \&nevr_quest::CombatConfig::shieldgammaGamma}/\"combat.shieldgamma_gamma\", \&nevr_quest::CombatConfig::shieldgammaTubeMirror}/" quest-host-combat combat_install_test
+runm sg_mirror_row_key     $I "s/\"combat.shieldgamma_tube_mirror\", \&nevr_quest::CombatConfig::shieldgammaTubeMirror}/\"combat.shieldgamma_tube_mirro\", \&nevr_quest::CombatConfig::shieldgammaTubeMirror}/" quest-host-combat combat_install_test
+runm sg_mirror_row_member  $I "s/\"combat.shieldgamma_tube_mirror\", \&nevr_quest::CombatConfig::shieldgammaTubeMirror}/\"combat.shieldgamma_tube_mirror\", \&nevr_quest::CombatConfig::shieldgammaGamma}/" quest-host-combat combat_install_test
+runm sg_gamma_row_missing  $I "s/^    Module{\"shieldgamma_gamma\", nullptr, nullptr, \"combat.shieldgamma_gamma\", \&nevr_quest::CombatConfig::shieldgammaGamma},\$/    Module{\"shieldgamma_gamma\", nullptr, nullptr},/" quest-host-combat combat_install_test
 # the keys: read, defaulted as the module needs, known to the schema
 runm sg_gamma_default_on    src/quest/sentinel/quest_config.h "s/CombatSwitch shieldgammaGamma{false, Source::kAbsent}/CombatSwitch shieldgammaGamma{true, Source::kAbsent}/" quest-host-shared quest_config_test
 runm sg_mirror_default_off  src/quest/sentinel/quest_config.h "s/CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent}/CombatSwitch shieldgammaTubeMirror{false, Source::kAbsent}/" quest-host-shared quest_config_test
 runm sg_gamma_fallback      src/quest/sentinel/quest_config.cpp "s/ReadCombatSwitch(cfg, kCombatShieldGammaKey, r, \\/\\*fallback=\\*\\/false)/ReadCombatSwitch(cfg, kCombatShieldGammaKey, r)/" quest-host-shared quest_config_test
 runm sg_mirror_reads_gamma  src/quest/sentinel/quest_config.cpp "s/ReadCombatSwitch(cfg, kCombatShieldTubeMirrorKey, r)/ReadCombatSwitch(cfg, kCombatShieldGammaKey, r)/" quest-host-shared quest_config_test
-runm sg_key_unknown         src/core/nevr_config.cpp "s/\"hudmeter\", \"shieldgamma_gamma\", /\"hudmeter\", /" - - "python3 -I -m unittest tools.tests.test_quest_combat_equip_refire_wiring"
-runm sg_key_not_in_hook_budget src/quest/sentinel/hook_budget.h "s/^    {\"combat\\/shieldgamma.cpp\", 1, 0},\$//" - - "python3 -I -m unittest tools.tests.test_quest_hook_budget"

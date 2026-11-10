@@ -12,7 +12,7 @@ set(NEVR_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 add_library(nevr_quest_session_router STATIC
   "${NEVR_SRC_ROOT}/runtime/compat/session_router.cpp")
 target_include_directories(nevr_quest_session_router PUBLIC "${NEVR_SRC_ROOT}")
-target_link_libraries(nevr_quest_session_router PUBLIC nevr_quest_evr_codec)
+target_link_libraries(nevr_quest_session_router PUBLIC nevr_quest_evr_codec nlohmann_json::nlohmann_json)  # runtime/compat/server_features.h (#2333)
 target_compile_options(nevr_quest_session_router PRIVATE -Wall -Wextra -Werror)
 
 add_library(nevr_quest_net STATIC

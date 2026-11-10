@@ -85,8 +85,18 @@ func TestTheRowsInstallAfterTheRefreshRateInThePluginsOrder(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
 	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"scope", nullptr, &scope::InstallNormal}`)
 	before(t, table, `Module{"scope", nullptr, &scope::InstallNormal}`, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`)
-	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"hudmeter", nullptr, &HudmeterNormal}`)
-	before(t, table, `Module{"hudmeter", nullptr, &HudmeterNormal}`, `Module{"shieldgamma", nullptr, &ShieldgammaNormal}`)
+	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"hudmeter", nullptr, &HudmeterNormal`)
+	before(t, table, `Module{"hudmeter", nullptr, &HudmeterNormal`, `Module{"shieldgamma", nullptr, &ShieldgammaNormal}`)
+	// the three switches are generated records of their own (`combat_config_switch`), each read from its member
+	for _, row := range []string{
+		`Module{"hudmeter", nullptr, &HudmeterNormal, "combat.hudmeter", &nevr_quest::CombatConfig::hudmeter}`,
+		`Module{"shieldgamma_gamma", nullptr, nullptr, "combat.shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma}`,
+		`Module{"shieldgamma_tube_mirror", nullptr, nullptr, "combat.shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror}`,
+	} {
+		if !strings.Contains(table, row) {
+			t.Errorf("the table has no row %s", row)
+		}
+	}
 	for _, want := range []string{
 		"hudmeter::Install(g_config.hudmeter.on)",
 		"shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on)",
@@ -145,7 +155,7 @@ func TestThePluginHoldsNeitherSlotAndNoLongerBuildsEitherModule(t *testing.T) {
 				t.Errorf("%s is still the plugin's", p)
 			}
 		}
-		for _, p := range []string{"docs/quest/combat/" + n + ".md", "src/quest/combat/mutants/" + n + ".sh", "src/quest/tests/" + n + "_test.cpp"} {
+		for _, p := range []string{"docs/quest/combat/" + n + ".md", "src/quest/combat/mutants.d/" + n + ".sh", "src/quest/tests/" + n + "_test.cpp"} {
 			if !exists(t, p) {
 				t.Errorf("%s is missing", p)
 			}
@@ -168,7 +178,7 @@ func TestThePluginHoldsNeitherSlotAndNoLongerBuildsEitherModule(t *testing.T) {
 		}
 	}
 	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt") + read(t, "src/quest/tests/q15t/mod/wiring.cmake")
-	for _, bad := range []string{"HUDMETER", "SHIELDGAMMA", "hudmeter", "shieldgamma"} {
+	for _, bad := range []string{"Q15T_HUDMETER", "Q15T_SHIELDGAMMA", "src/hudmeter", "src/shieldgamma", " hudmeter ", " shieldgamma ", "(HUDMETER", "SHIELDGAMMA="} {
 		if strings.Contains(cmake, bad) {
 			t.Errorf("the plugin's CMake or its wiring test still names %s", bad)
 		}

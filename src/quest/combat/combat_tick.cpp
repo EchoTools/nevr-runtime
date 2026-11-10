@@ -28,6 +28,7 @@ constexpr std::uint32_t kRecheckFrames = 256;
 std::atomic<std::uint32_t> g_sinceCheck{0};
 std::atomic<std::uintptr_t> g_verified{0};
 std::atomic<std::uint32_t> g_vptrReads{0};
+std::atomic<std::uintptr_t> g_game{0};  // the last object that passed the vptr check (Game())
 std::atomic<std::uintptr_t> g_vptr{0};  // the value CR15Game's first word holds in this process: libr15's base + the pinned vaddr
 
 void RunCallbacks(std::uintptr_t object) noexcept {
@@ -66,6 +67,7 @@ void OnTick(Thunk::Fn original, void* game) noexcept {
     return;
   }
   g_verified.store(object, std::memory_order_relaxed);
+  g_game.store(object, std::memory_order_release);
   RunCallbacks(object);
 }
 
@@ -87,7 +89,7 @@ std::size_t Count() noexcept { return g_count.load(std::memory_order_acquire); }
 
 namespace {
 
-// KNOWN-WRONG #2168: the q15t plugin installs its own wrapper on this slot until its last ticked module moves (F20); this install joins
+// KNOWN-WRONG #2168: the q15t plugin installs its own wrapper on this slot until its last ticked module moves (gunconnect, aibots and weapon_arm are still its); this install joins
 // it through the manager's first-handler rule (combat_tick.h).
 sentinel::GotStatus InstallStatusAt(sentinel::ImageLookup lookup) noexcept {
   Thunk::Arm(kTickHook);
@@ -120,6 +122,7 @@ ModuleResult InstallNormal() noexcept {
 }
 
 bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }
+std::uintptr_t Game() noexcept { return g_game.load(std::memory_order_acquire); }
 
 std::uint32_t Calls() noexcept { return g_calls.load(std::memory_order_relaxed); }
 
@@ -134,6 +137,7 @@ void ResetForTest() noexcept {
   g_calls.store(0, std::memory_order_relaxed);
   g_objectMisses.store(0, std::memory_order_relaxed);
   g_vptr.store(0, std::memory_order_relaxed);
+  g_game.store(0, std::memory_order_relaxed);
   g_verified.store(0, std::memory_order_relaxed);
   g_sinceCheck.store(0, std::memory_order_relaxed);
   g_vptrReads.store(0, std::memory_order_relaxed);

@@ -136,13 +136,13 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
                  const char* name) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, va);
   if (!nevr::ValidatePrologue(target, prologue.data(), prologue.size())) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] warn; %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
                            static_cast<unsigned long long>(va));
     return;
   }
   original = reinterpret_cast<Fn>(target);
   if (PatchDetour(&original, detour, name))
-    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] info; %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
 }
 
 std::string HexBytes(const void* address, std::size_t count) {

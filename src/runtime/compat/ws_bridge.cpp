@@ -2,6 +2,7 @@
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/compat/login_profile.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
@@ -617,6 +618,16 @@ static std::optional<nevr_lobby_frame::PartyContext> LobbyParty(nevr_social_part
                                         view.selfId};
 }
 
+// #2333: a session in another lobby begins, so what the previous server stated about itself (its EchoCombat features,
+// compat/server_features.h) no longer holds; the new server's lobby settings set it again when the game receives them.
+// A second success for the lobby the client is already in changes nothing.
+static void ClearServerFeaturesOnNewLobby(const nevr_lobby_frame::Guid& lobby) {
+  bool wasOpen = false;
+  if (!nevr_server_features::Client().ClearForLobby(lobby, &wasOpen)) return;
+  Log(EchoVR::LogLevel::Info, "%s",
+      nevr_server_features::FormatCleared(nevr_lobby_frame::FormatGuidOrNone(lobby), wasOpen).c_str());
+}
+
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
@@ -644,6 +655,7 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
         break;
       case nevr_lobby_frame::Kind::Success:
         g_lobbyJoin.OnSuccess(state.lobby);
+        ClearServerFeaturesOnNewLobby(state.lobby);
         break;
       case nevr_lobby_frame::Kind::Failure:
         g_lobbyJoin.OnFailure(request.sent && request.kind == nevr_lobby_frame::Kind::Join);
@@ -736,7 +748,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
           Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu",
               static_cast<unsigned long long>(replyFor), displayName.size());
         } else {
-          Log(EchoVR::LogLevel::Info,
+          Log(EchoVR::LogLevel::Warning,
               "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
               static_cast<unsigned long long>(replyFor), static_cast<size_t>(len));
         }
@@ -1446,7 +1458,7 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
     std::lock_guard<std::mutex> lk(g_pairsMutex);
     if (!PairRegisteredLocked(pair)) return;
     remote = pair->remoteWs;
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
         g_remoteUri);
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1673,7 +1685,7 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // middle/trailing/sole position correctly; see its own tests.
   if (role == nevr_socket_role::Role::Matchmaker) {
     remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   }
@@ -2493,7 +2505,7 @@ void InstallWebSocketBridge() {
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s)", connIdx,
                 ConnLabel(connIdx));
             const std::string remoteDiagnostic =
-                nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+                nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
@@ -2559,7 +2571,7 @@ void InstallWebSocketBridge() {
   g_bridgeEnabled = true;
 
   const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 

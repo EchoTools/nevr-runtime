@@ -151,6 +151,34 @@ NevrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginVie
   return ctx;
 }
 
+std::vector<PluginManifestEntry> Loader::Report() const {
+  std::vector<PluginManifestEntry> report;
+  report.reserve(entries_.size());
+  for (const PlanEntry& entry : entries_) {
+    PluginManifestEntry out;
+    out.name = entry.item.name;
+    out.file = entry.item.file;
+    out.enabled = entry.outcome != Outcome::kDisabled;
+    out.required = entry.item.required;
+    out.loaded = !entry.pending && entry.outcome == Outcome::kLoaded;
+    if (out.loaded) {
+      for (const LoadedPlugin& plugin : loaded_) {
+        if (plugin.entryName != entry.item.name) continue;
+        out.version_major = plugin.info.version_major;
+        out.version_minor = plugin.info.version_minor;
+        out.version_patch = plugin.info.version_patch;
+        out.api_version = plugin.info.api_version;
+        out.capabilities = plugin.info.capabilities;
+        break;
+      }
+    } else if (out.enabled) {
+      out.error = entry.pending ? "pending" : entry.reasonToken;
+    }
+    report.push_back(std::move(out));
+  }
+  return report;
+}
+
 void Loader::RefreshMainLevel() {
   if (contexts_.empty()) return;  // no plugin holds a context yet: nothing to keep current, and no read of the game
   const MainLevel level = platform_.CurrentMainLevel();
@@ -244,6 +272,7 @@ void Loader::Load(PlanEntry& entry) {
     LoadedPlugin plugin;
     plugin.name = info.name != nullptr ? info.name : "";
     plugin.description = info.description != nullptr ? info.description : "";
+    plugin.entryName = entry.item.name;
     plugin.info.version_major = info.version_major;
     plugin.info.version_minor = info.version_minor;
     plugin.info.version_patch = info.version_patch;

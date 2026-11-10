@@ -6,7 +6,7 @@
  * may do so before or after the thunk is installed.
  *
  * KNOWN-WRONG #2168: the q15t plugin still installs its own wrapper on the same slot for the modules that have not moved (its last
- * ticked module moves in F20). The plugin installs first, at the normal plugin pass, and this module installs after it (combat_install.h:
+ * ticked module moves; gunconnect, aibots and weapon_arm have not moved). The plugin installs first, at the normal plugin pass, and this module installs after it (combat_install.h:
  * the normal step runs after the pass), so the slot holds the plugin's wrapper and this thunk joins the manager's chain above it through
  * the first-handler rule: the thunk calls the plugin's wrapper, which calls the game's function and its own callbacks, and then runs the
  * combat callbacks. The reverse order is what the plugin's own install refuses (it expects the game's function in the slot,
@@ -54,6 +54,11 @@ bool InstallAt(sentinel::ImageLookup lookup) noexcept;
 // Whether the thunk is on the game's slot: the install returned ok and nothing since forgot it. A module whose callback only the tick runs
 // (combat_scope.h) asks it before it relies on the callback.
 bool Installed() noexcept;
+// The CR15Game the tick last verified (its first word is the pinned vptr), or 0 before the first verified frame. A module that acts on the game
+// outside a frame (a resource constructor on a loading thread) reads the game's levels through it. Never cleared once set: a re-check of the
+// same object does not make it vanish for a loading thread; combat_level.h's reads fail closed on an object that is gone.
+std::uintptr_t Game() noexcept;
+
 // How many frames the handler has run.
 std::uint32_t Calls() noexcept;
 // How many times the handler read the object's vptr: once for the object that passed, again when the pointer changes and every 256 frames, and

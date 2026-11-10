@@ -433,7 +433,7 @@ fn file_base_with_query(d: &Path, rel: &str, bytes: &[u8]) -> String {
 }
 
 #[test]
-fn an_apk_fetched_from_a_base_with_a_query_is_logged_without_it() {
+fn an_apk_fetched_from_a_base_with_a_query_is_logged_with_it() {
     let d = tempfile::tempdir().unwrap();
     let apk = b"quest-apk-bytes".to_vec();
     let art = apk_art(&apk);
@@ -445,11 +445,11 @@ fn an_apk_fetched_from_a_base_with_a_query_is_logged_without_it() {
     let text = std::fs::read_to_string(d.path().join("l.jsonl")).unwrap();
     let fetched = records(&d.path().join("l.jsonl")).into_iter().find(|r| r["event"] == "artifact_fetch" && r["kind"] == "quest-apk").expect("the APK fetch is logged");
     assert_eq!(fetched["ok"], true, "the success line is the one under test: {fetched}");
-    assert!(!text.contains("tok-9f3ab1"), "the base's query was written down: {text}");
+    assert!(text.contains("base?token=tok-9f3ab1"), "the base's query is missing from the log: {text}");
 }
 
 #[test]
-fn game_data_fetched_from_a_base_with_a_query_is_logged_without_it() {
+fn game_data_fetched_from_a_base_with_a_query_is_logged_with_it() {
     let d = tempfile::tempdir().unwrap();
     let mut buf = std::io::Cursor::new(Vec::new());
     {
@@ -472,5 +472,5 @@ fn game_data_fetched_from_a_base_with_a_query_is_logged_without_it() {
     let text = std::fs::read_to_string(d.path().join("l.jsonl")).unwrap();
     let fetched = records(&d.path().join("l.jsonl")).into_iter().find(|r| r["event"] == "artifact_fetch" && r["kind"] == "game-data").expect("the game-data fetch is logged");
     assert_eq!(fetched["ok"], true, "the success line is the one under test: {fetched}");
-    assert!(!text.contains("tok-9f3ab1"), "the base's query was written down: {text}");
+    assert!(text.contains("base?token=tok-9f3ab1"), "the base's query is missing from the log: {text}");
 }

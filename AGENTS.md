@@ -253,7 +253,7 @@ that each Kind and rank is true.
 | N82 | source | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | rank 3: `tools/verify_hook_invariants.py` |
 | N87 | run | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | rank 2: `src/runtime/tests/test_crash_recovery.cpp` (`ConsoleCtrlPolicy`: when the handler defers); rank 3: `tools/tests/test_runtime_lifecycle_invariants.py`; unchecked: the re-arm in a run under Wine |
 | N125 | source | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; the host owns the one hook on the game's main wrapper, the runtime hands the host `RuntimeGameMain` as its `game_main`, and its `initialize` calls `ArmGameMain` (HookGuard records the host's hook from the bytes the host wrote). | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/runtime_entry.cpp` | rank 3: verify |
-| N146 | run | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, by `PatchEnableServer` in the deferred bootstrap after the first original call, never before that call (written before it, the check sets the spectator flow, in which the game begins multiplayer a second time, after the state machine's begin). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); rank 3: `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); unchecked: the boot-state limit, the image base |
+| N146 | run | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The second exception is the content pack (#1424): right after the early pass, still before the original call, `nevr_content::Install` checks an installed pack and hooks `CFile::Open`, so the game's manifest reads and package opens inside that call get the pack's files; it reads files and touches no graphics state (`docs/reference/content-packs.md`). The third exception is the script hooks (#600): right after the content pack, still before the original call, `nevr_script_resource_hook::Install` checks the bytes of `CScriptResource::Load` and of its free (vslot 6) and wraps both, so the scripts the global level loads inside that call get their hooks as they load and lose them before they are freed (`src/runtime/hook/script_hooks.h`); it reads the game's code bytes and touches no graphics state. The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, by `PatchEnableServer` in the deferred bootstrap after the first original call, never before that call (written before it, the check sets the spectator flow, in which the game begins multiplayer a second time, after the state machine's begin). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/content/content_pack_install.cpp`, `src/runtime/hook/script_resource_hook.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch), `src/runtime/tests/test_script_hooks.cpp` (the script wraps hook and unhook around the game's Load and free); rank 3: `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return), `tools/tests/test_content_packs_doc.py` (the content pack's install sits between the early pass and the original call); unchecked: the boot-state limit, the image base |
 | N13 | run | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: a manual run (noted in `src/runtime/tests/test_xpid_patch.cpp`) |
 
 #### Server, bridge and login
@@ -385,8 +385,6 @@ Every branch an agent creates has a documented deletion point from the moment it
 
 ## Build Commands
 
-Heavy recipes (`verify`, the full builds and full test suites; the list is in `tools/tests/test_heavy_guard.py`) do not run from a Claude session: run the one test you changed instead.
-
 ```sh
 just                    # Show available recipes
 just configure          # Configure CMake only
@@ -406,8 +404,6 @@ just generate-certs     # Generate CA hierarchy for code signing
 ```
 
 ### Quest APK
-
-Run these from your own shell. `tools/heavy_guard.py` refuses them inside a Claude Code session.
 
 Set these in the shell, never as arguments (a passphrase on the command line shows in `ps`):
 
@@ -454,7 +450,7 @@ gh release edit v<x.y.z> --draft=false            # 5. publish, only after the d
 ```
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
-stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
+stamps `<next>-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
 packaging path (the sealed Windows zip, attested, and the Quest library; the release body (a header, a player line and one line per file, no hash) is written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` (the host) and `nevr-runtime.dll` (the runtime) each carry one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit; the two literals are equal, and only the runtime carries the plugin-trust literal and the embedded defaults.
@@ -547,6 +543,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
 | `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` only (and the test harnesses); `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
+| `src/runtime/content/` | pack_rules, content_json, content_pack | serving an installed content pack's files to the game (the rules header is shared with `src/quest/data/pack.cpp`) |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
 | `src/runtime/scenario/` | scenario_control (test builds only), scenario_protocol | lets a test drive the running game; compiled in only by the `mingw-scenario` preset, never shipped |
@@ -717,8 +714,13 @@ your seat name, for example `claude-main` or `codex`.
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
 - **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
   files the repo's own tools write at the work root stay where they are. When you are done,
-  delete the scripts, copies and build output you created, outright, not into the user's trash.
-  A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
+  delete what you created, not into the user's trash, in one of two ways: move each finished item, by its exact
+  path, into one holding directory (`<work root>/<seat>/to-delete/`), list it, then remove that directory with
+  `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
+  script (`set -eu`, no globs), read it back, check each path is yours under the work root, then run it. Never
+  another recursive removal (`rm -r`, `-R`, `-rf`, `-fr`, `find ... -delete`), including a chained last step: a
+  rerun removes whatever the path names then (#2270). Never delete a directory another agent may still be working
+  in. A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
 - **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
   (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
   creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the PR
@@ -734,7 +736,7 @@ your seat name, for example `claude-main` or `codex`.
   `origin/main` by ancestry or `git cherry`, or is on a remote; any run log you need is moved out
   of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
   worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
-  `rm -rf` of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
+  a recursive removal of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
   origin once merged) and update the ledger row.
   **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
   `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
@@ -862,16 +864,16 @@ your seat name, for example `claude-main` or `codex`.
     with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
     prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
     (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
-  - **Make it safe.** Remove what a run must not start with, list every sign-in file, then list every link that
+  - **Make it safe.** Move out what a run must not start with, list every sign-in file, then list every link that
     leaves the copy:
     ```sh
-    rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
-    if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
-    for d in <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then find "$d" -mindepth 1 -delete; fi; done
+    mkdir -p <copy>/to-delete   # move every path this block names into it; the last line removes that directory (Scratch is per agent)
+    mv <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json <copy>/to-delete/
+    for d in <copy>/echovr/bin/win10/plugins <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then mv "$d" "<copy>/to-delete/$(echo "$d" | tr / _)"; fi; done
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
-    find <copy>/echovr -name '.credentials.json*' ! -type d -delete
-    find <copy>/echovr -name '.credentials.json*' ! -type d -print
+    find <copy>/echovr -name '.credentials.json*' ! -type d -exec sh -c 'd=$1; shift; for f; do mv -- "$f" "$d/$(printf %s "$f" | tr / _)"; done' sh <copy>/to-delete {} +
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
+    rm -r -- <copy>/to-delete
     ```
     The first `find` lists the sign-in files: those in `_local` (with their `.bak` and `.prod-bak` backups) and the
     nevr root cache in the Wine prefix (`.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/`). The last
@@ -1297,44 +1299,6 @@ All dependencies declared in one file at the project root:
 - The OpenXR loader is a system dependency or vendored, not from vcpkg.
 - Oculus SDK headers are replicated from the target binary — not a
   vcpkg dependency.
-
----
-
-## Justfile
-
-Every project MUST have a `justfile` with at minimum:
-
-```makefile
-default_preset := if os() == "linux" { "mingw-release" } else { "release" }
-preset := env("PRESET", default_preset)
-
-default:
-    @just --list
-
-configure: _vcpkg-mingw
-    @cmake --preset {{ preset }}
-
-build: configure
-    @cmake --build --preset {{ preset }}
-
-verbose-build: configure
-    cmake --build --preset {{ preset }}
-
-dist: build
-    @cmake --build --preset {{ preset }} --target dist
-
-clean:
-    rm -rf build/ dist/
-
-_vcpkg-mingw:
-    #!/usr/bin/env bash
-    if [[ "{{ preset }}" == mingw-* ]]; then
-        cd "$VCPKG_ROOT"
-        ./vcpkg install --triplet=x64-mingw-static \
-            --x-manifest-root="{{ justfile_directory() }}" \
-            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
-    fi
-```
 
 ---
 

@@ -796,7 +796,7 @@ TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsRe
 }
 
 // #394: a 4-character dashless code (nakama server/evr_device_auth.go) goes through the whole PC flow as
-// issued: the browser URL, the dialog, the masked log.
+// issued: the browser URL, the dialog, the log (which carries the full code: a server's host reads it there).
 TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
   FakeDeviceAuthFlow fake;
   fake.code = "K7RX";
@@ -807,10 +807,11 @@ TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
   EXPECT_EQ(fake.browser_url, "https://echovrce.com/device?code=K7RX");
   ASSERT_EQ(fake.issued.size(), 1U);
   EXPECT_EQ(fake.issued[0].first, "K7RX");
-  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "<4 chars masked>"));
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
+                     "browser open requested url=https://echovrce.com/device?code=K7RX open_result=33"));
   for (const auto& [level, message] : fake.logs) {
     (void)level;
-    EXPECT_EQ(message.find("K7RX"), std::string::npos) << message;
+    EXPECT_EQ(message.find("masked"), std::string::npos) << message;
   }
   const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/device", "K7RX");
   EXPECT_EQ(shown.code, "K7RX");
@@ -833,16 +834,16 @@ TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
 
 // The wait used to be silent while the server answered "pending": a loop that polls and is told pending
 // could not be told from one that does not run (#397).
-TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndAMaskedBody) {
+TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndTheBody) {
   FakeDeviceAuthFlow fake;
   nevr_token_auth::DevicePollResponse pending =
       nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
   pending.http_code = 200;
-  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}", fake.code);
+  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}");
   nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
   expired.http_code = 200;
   expired.body_prefix = "{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}";
-  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix, fake.code);
+  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix);
   fake.poll_sequence = {pending, pending, expired};
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
@@ -852,11 +853,7 @@ TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndAMaskedBody) {
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #2 http=200 status=pending"));
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
                      "poll #3 http=200 status=expired server_status=\"expired\" "
-                     "body=\"{\"status\":\"expired\",\"code\":\"<code>\"}\""));
-  for (const auto& [level, message] : fake.logs) {
-    (void)level;
-    EXPECT_EQ(message.find(fake.code), std::string::npos) << message;
-  }
+                     "body=\"{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}\""));
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status"));
 }
 
@@ -874,6 +871,37 @@ TEST(DeviceAuthFlow, AnUnknownStatusIsAWarningAndStillPending) {
   EXPECT_TRUE(nevr_token_auth::IsKnownPollStatus("verified"));
   EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus(""));
   EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus("weird"));
+}
+
+// A server with auth.password signs in with it; its log line says so, and the module's readiness line does not
+// call that "n/a" (#2241).
+TEST(DeviceAuthFlow, ServerPasswordSignInLineSaysWhatTheServerDoes) {
+  EXPECT_EQ(nevr_token_auth::ServerPasswordSignInLine(),
+            "[NEVR.AUTH] server signs in with auth.password from config.yaml; no device code needed");
+  EXPECT_EQ(nevr_token_auth::TokenAuthReadinessLine(true, false, true, false),
+            "[NEVR.MODULE] token_auth initialized mode=server auth=password");
+  EXPECT_EQ(nevr_token_auth::TokenAuthReadinessLine(false, true, false, true),
+            "[NEVR.MODULE] token_auth initialized mode=client auth=ok");
+  EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, false, true, false), "password");
+  EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, false, false, false), "n/a");
+  EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, true, false, true), "ok");
+  EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(false, true, false, false), "failed");
+  EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(false, true, false, true), "ok");
+}
+
+// The flow's own guard names the caller that reaches it (one that builds its own ops), not "server mode".
+TEST(DeviceAuthFlow, TheServerGuardNamesTheCallerThatReachesIt) {
+  FakeDeviceAuthFlow fake;
+  auto ops = fake.Ops();
+  ops.server_sign_in = false;
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), ops);
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.poll_calls, 0);
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
+                     "[NEVR.AUTH] device flow not run: it was called in server mode without server sign-in "
+                     "enabled in its operations (a caller that builds its own operations; the server start-up "
+                     "never does)"));
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Info, "Server mode disables"));
 }
 
 // A caller's own pending (an outage it waits out) is not the server's answer: no warning per poll.
@@ -911,20 +939,18 @@ TEST(DeviceAuthFlow, ATransportFailureIsLoggedAsHttpNoneNotSilence) {
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status")) << "an error is not an unknown status";
 }
 
-TEST(PollBodyPrefix, MasksTheCodeCapsTheLengthAndNeverEchoesTokens) {
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}", "SECRET-1"),
-            "{\"code\":\"<code>\",\"status\":\"x\"}");
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz").size(), 120U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz", 10).size(), 10U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01", ""), "a.b.");
+// #2244: the poll body is logged as the server sent it, the code and any tokens included. Control characters become '.'
+// so one body is one line; the cap is the log line's own.
+TEST(PollBodyPrefix, IsTheBodyAsSentCappedAtTheLineLength) {
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}"),
+            "{\"code\":\"SECRET-1\",\"status\":\"x\"}");
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(5000, 'a')).size(), 1024U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), 10).size(), 10U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01"), "a.b.");
   const std::string verified =
       "{\"status\":\"verified\",\"access_token\":\"eyJhbGciOiJIUzI1NiJ9.payload.sig\",\"refresh_token\":\"r\"}";
-  const std::string described = nevr_token_auth::PollBodyPrefix(verified, "SECRET-1");
-  EXPECT_EQ(described.find("eyJ"), std::string::npos);
-  EXPECT_EQ(described.find("access_token"), std::string::npos);
-  EXPECT_NE(described.find(std::to_string(verified.size())), std::string::npos);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}", "").find("legacy-secret"),
-            std::string::npos);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(verified), verified);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}"), "{\"token\":\"legacy-secret\"}");
 }
 
 TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo) {
@@ -947,10 +973,8 @@ TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo
         return entry.first == EchoVR::LogLevel::Error &&
                entry.second.find("stopped because the browser could not be opened") != std::string::npos;
       }));
-      for (const auto& [level, message] : fake.logs) {
-        (void)level;
-        EXPECT_EQ(message.find(fake.code), std::string::npos);
-      }
+      EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "browser open requested url=" + fake.browser_url))
+          << "the line carries the full URL, code included";
     }
     EXPECT_EQ(fake.save_calls, 0);
   }
@@ -1082,7 +1106,7 @@ TEST(DeviceAuthFlow, DeadlineStartsAfterTheNonemptyDeviceCodeResponse) {
   EXPECT_EQ(fake.save_calls, 1);
 }
 
-TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
+TEST(DeviceAuthFlow, DeviceCodeIsLoggedInFullOnTheBrowserLineOnlyAndReachesBrowserAndUi) {
   FakeDeviceAuthFlow uiFailure;
   uiFailure.browser_result = 32;
   uiFailure.ui_result = 0;
@@ -1110,7 +1134,12 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
   for (const auto* fake : {&uiFailure, &polling}) {
     ASSERT_FALSE(fake->logs.empty());
     for (const auto& [level, message] : fake->logs) {
-      EXPECT_EQ(message.find(fake->code), std::string::npos) << "device code leaked to a persistent log";
+      // The code appears in the log once, on the browser line, in full; no other line carries it.
+      if (message.find("browser open requested url=") == std::string::npos) {
+        EXPECT_EQ(message.find(fake->code), std::string::npos) << message;
+      } else {
+        EXPECT_NE(message.find("?code=" + fake->code + " open_result="), std::string::npos) << message;
+      }
       sawInfo = sawInfo || level == EchoVR::LogLevel::Info;
       sawDebug = sawDebug || level == EchoVR::LogLevel::Debug;
       sawWarning = sawWarning || level == EchoVR::LogLevel::Warning;

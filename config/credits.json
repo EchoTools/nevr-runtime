@@ -56,7 +56,7 @@
       "section": "projects",
       "headings": ["code-contributions", "testers"],
       "link": "https://github.com/marshmallow-mia",
-      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. [NvrContentOverlay](https://github.com/marshmallow-mia/NvrContentOverlay), the plugin that serves a content pack's game data in place of the stock files. Tested nevr-runtime in #nevr-runtime-testing.",
+      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. [NvrContentOverlay](https://github.com/marshmallow-mia/NvrContentOverlay), the plugin that serves a content pack's game data in place of the stock files. The runtime's own content-pack serving (#1424) is reconstructed from its design. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/marshmallow-mia/Echo-VR-Installer",
         "https://github.com/marshmallow-mia/EchoVR_Launcher",
@@ -116,11 +116,12 @@
       "section": "projects",
       "headings": ["code-contributions"],
       "link": "https://github.com/heisthecat31/EchoCombat",
-      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.",
+      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The DroneFix, PowerBoost and VeilNet plugins of he_is_the_cat are built into the PC runtime's combat module nearly as written, with the balance values of he_is_the_cat (#2242). The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.",
       "sources": [
         "https://github.com/heisthecat31/EchoCombat",
         "named by the project owner",
-        "#2121"
+        "#2121",
+        "#2242"
       ]
     },
     {

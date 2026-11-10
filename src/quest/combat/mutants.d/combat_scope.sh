@@ -1,6 +1,6 @@
 # combat_scope: each rule of src/quest/combat/combat_scope.{h,cpp} removed or bent once; src/quest/tests/combat_scope_test.cpp must fail on every one,
 # and so must the install table's and the tick's tests for the lines that touch them. Sourced by ../mutants.sh, which defines
-# `runm <name> <file> <sed> [<build dir> <test target> [<command>]]`.
+# `runm <name> <file> <sed> [<build dir> <test target>]`.
 C=src/quest/combat/combat_scope.cpp
 H=src/quest/combat/combat_scope.h
 T=src/quest/combat/combat_tick.cpp
