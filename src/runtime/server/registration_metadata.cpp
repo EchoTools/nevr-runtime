@@ -11,9 +11,8 @@
 
 #include "core/logging.h"
 #include "runtime/lifecycle/service_config.h"
-#include "runtime/patch/asset_registry.h"
-#include "runtime/patch/resource_sets.h"
 #include "runtime/server/installed_levels.h"
+#include "runtime/server/registered_levels.h"
 
 namespace nevr_game_server {
 namespace {
@@ -58,13 +57,7 @@ void FillRegistrationMetadata(RegistrationParams& params) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] level manifest reader failed: %s", problem.c_str());
     }
 
-    std::vector<std::pair<uint64_t, uint64_t>> registered;
-    for (const nevr::assets::Asset& asset : nevr::assets::Global().Snapshot()) {
-      registered.emplace_back(asset.type, asset.name);
-    }
-    // #2161: the levels of the mounted resource sets, each of whose archive resolved at the mount.
-    for (const uint64_t level : nevr_resource_sets::MountedLevelNames()) registered.emplace_back(kLevelRootType, level);
-    AddRegisteredLevels(registered, &levels);
+    AddRegisteredLevels(RegisteredLevelKeys(), &levels);
     if (levels.levels.empty()) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] level manifests: 0 levels from %zu manifest(s) read",
           levels.manifestsRead);

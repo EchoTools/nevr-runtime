@@ -114,7 +114,8 @@ reason=<reason> detail="..."`.
 ## Overrides
 
 A set's overrides replace resources the game already has. Precedence is the game's manifests first, then resource
-sets, so they cannot be records. The runtime registers a mounted set's overrides itself, at the mount, with the
+sets (ADR 0045, decision 2: cargo, then stock, then plugin packages; the PC has no cargo set yet), so they cannot be
+records. The runtime registers a mounted set's overrides itself, at the mount, with the
 override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold
 replaces nothing and is counted as unmatched. An override is keyed by on-disk type: buffer 0 for a `Win10` type, at any
 size; buffer 1 for a `Win10GPU` type, served only when it is no larger than the game's. Overrides apply where the game
@@ -124,7 +125,8 @@ streamed texture mip are read on other paths and are not replaced.
 ## What the game service sees
 
 - A dedicated server lists every level of a mounted set in a registration made after the mount, in its
-  `installed_levels` (`src/runtime/server/registration_metadata.cpp`), beside the levels of the game's own manifests.
+  `installed_levels` (`src/runtime/server/registered_levels.cpp`, read by `registration_metadata.cpp`), beside the
+  levels of the game's own manifests, and counts them in `plugin_levels`. A set refused at the mount adds none.
 - A game client reports the mounted sets at a login made after the mount, beside `nevr_plugins`. The key is absent when
   there are none:
 

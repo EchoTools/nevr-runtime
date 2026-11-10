@@ -316,6 +316,8 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/patch/resource_buffer_key.h"  // #2161: the fixture's on-disk record types
 #include "runtime/patch/resource_override.h"  // #2161: a mounted set's overrides
 #include "runtime/patch/resource_sets.h"  // #2161
+#include "runtime/server/installed_levels.h"   // #2161
+#include "runtime/server/registered_levels.h"  // #2161
 #include <set>
 #include "core/resource_shadow.h"
 #include <zstd.h>
@@ -2970,6 +2972,38 @@ TEST_F(PluginResourceSetTest, ASetThatHoldsAKeyTheGameHasIsRefusedAtTheMountAndS
   EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
   EXPECT_TRUE(nevr_resource_sets::MountedLevelNames().empty());
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "a refused set's override is never registered";
+}
+
+// #2161: a server's installed_levels lists a mounted set's level, counted as a plugin level, through the same key list
+// and merge FillRegistrationMetadata uses; a set refused at the mount, or not yet mounted, adds nothing.
+TEST_F(PluginResourceSetTest, AMountedSetsLevelIsInInstalledLevelsAndARefusedOrUnmountedOneIsNot) {
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  nevr_game_server::InstalledLevels before;
+  before.levels = {0x10ULL};
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &before);
+  EXPECT_EQ(before.levels, std::vector<uint64_t>{0x10ULL}) << "registered, not yet mounted";
+  EXPECT_EQ(before.pluginLevels, 0u);
+
+  Mount();
+  nevr_game_server::InstalledLevels after;
+  after.levels = {0x10ULL};
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &after);
+  EXPECT_EQ(after.levels, (std::vector<uint64_t>{0x10ULL, kFixtureLevel}));
+  EXPECT_EQ(after.pluginLevels, 1u);
+}
+
+TEST_F(PluginResourceSetTest, ASetRefusedAtTheMountAddsNoLevelToInstalledLevels) {
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});
+  Plan();
+  LoadPlugins();
+  Mount();
+  ASSERT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "reason=stock_key"));
+  nevr_game_server::InstalledLevels levels;
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &levels);
+  EXPECT_TRUE(levels.levels.empty());
+  EXPECT_EQ(levels.pluginLevels, 0u);
 }
 
 TEST_F(PluginResourceSetTest, AMountedSetsOverrideIsRegisteredOnlyWhenTheGameHasItsKey) {

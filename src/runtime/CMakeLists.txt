@@ -159,6 +159,7 @@ set(PATCHES_SOURCES
     "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
     "server/registration_metadata.cpp"
+    "server/registered_levels.cpp"
     "server/installed_levels.cpp"
     "server/telemetry_game_type.cpp"
     "server/game_type_table.h"
@@ -1889,6 +1890,9 @@ if(BUILD_TESTING)
       patch/resource_sets.cpp
       patch/resource_set_registry.cpp
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      # #2161: a mounted set's levels reach installed_levels through the production key list and merge.
+      server/registered_levels.cpp
+      server/installed_levels.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
