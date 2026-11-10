@@ -177,6 +177,7 @@ void TheModuleActsInACombatLevelAsThePluginDid() {
   QCHECK(ir.installed && std::strcmp(ir.status, "installed") == 0 && Hooked());
   QCHECK(Count("combat_shieldgamma_install", "\"result\":\"installed\"", kInfo) == 1);
   QCHECK(Count("combat_shieldgamma_install", "\"gamma\":1,\"tube_mirror\":0") == 1);
+  QCHECK(Count("got_hook", "\"owner\":\"combat_shieldgamma\"") >= 1);  // the manager's line names who installed the hook (what a refusal on a shared slot shows)
   EnterCombat();
   UpdateFn update = Slot();
   Data d = MakeData(kMat, kOtherProp, 1, 0.941f, 0.466f, 0.054f, 0.25f, 0);

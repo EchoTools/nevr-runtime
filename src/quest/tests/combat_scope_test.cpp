@@ -330,8 +330,10 @@ void AFullTickTableRefusesAndTheAnswerStaysFalse() {
 }  // namespace
 
 int main() {
-  // The process starts with no combat level: the answer's own initial value, before any reset the tests make.
+  // The process starts with no combat level: the answer's own initial value, before any reset the tests make. The unchecked views the arena path reads
+  // are false too (a word that started with a combat bit would be believed by them: the staleness test is made only on the combat path).
   QCHECK(!scope::InCombatOrLobby() && !scope::InCombatMap() && scope::Looks() == 0 && !scope::Live());
+  QCHECK(!scope::SeenCombatOrLobby() && !scope::SeenCombatMap());
   QCHECK(scope::kLookEveryMs == 250 && scope::kStaleAfterMs == 1000);  // four looks a second; a second without one is a stopped tick
   FailsClosedUntilTheFirstLook();
   TheTwoAnswersDifferExactlyAtTheCombatLobby();

@@ -183,6 +183,7 @@ void TheModuleActsInACombatLevelAsThePluginDid() {
   QCHECK(Hooked());
   QCHECK(Count("combat_hudmeter_install", "\"result\":\"installed\"", kInfo) == 1);
   QCHECK(tick::Count() == 1);  // the scope row registered the refresh, the module did not add one
+  QCHECK(Count("got_hook", "\"owner\":\"combat_hudmeter\"") >= 1);  // the manager's line names who installed the hook (what a refusal on a shared slot shows)
   EnterCombat();
   QCHECK(scope::InCombatOrLobby());
   const EnterFn enter = Slot();
