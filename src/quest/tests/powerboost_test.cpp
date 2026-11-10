@@ -606,7 +606,7 @@ int main() {
     HealSlot()(cs, 0x10001, 2999999.75f, 5);
     QueuedSlot()(cs, 0x10001, 1999999.75f, 5);
     CHECK(g_heals.empty() && g_sends.empty(), "a declined amount reached Heal or was sent: %zu heals %zu sends", g_heals.size(), g_sends.size());
-    CHECK(EventsWith("marker", "\"kind\":4,") == 1 && EventsWith("swallow", "\"kind\":4,") >= 2, "declined lines: %zu", g_lines.size());
+    CHECK(Count({Ev("marker").c_str(), "\"kind\":4,", "\"amount\":"}) == 1 && EventsWith("swallow", "\"kind\":4,") >= 2, "declined lines: %zu", g_lines.size());
     QueuedSlot()(cs, 1, 1.0f, 1);
     CHECK(g_sends.empty() && g_heals.size() == 1, "a declined amount was held and sent");
   }
