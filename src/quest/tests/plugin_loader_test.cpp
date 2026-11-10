@@ -639,6 +639,34 @@ TEST(LoaderEndsEveryEntryWithExactlyOneRecord) {
   CHECK(env.platform.Record("dup")->outcome == Outcome::kRefused);
 }
 
+// The login's `nevr_plugins` report is the loader's own state, one entry per plan entry (runtime/ext/plugin_manifest.h is the
+// PCVR shape): pending before its moment, loaded with the plugin's version after, the record's reason token for a refusal.
+TEST(LoaderReportsEveryEntryInThePcShapeForTheLogin) {
+  Env env;
+  env.loader->Plan({Item("ok", "libfx_ok.so"), Item("off", "liboff.so", false, false), Item("out", "sub/libx.so")});
+  std::vector<PluginManifestEntry> report = env.loader->Report();
+  CHECK_EQ(report.size(), std::size_t{3});
+  CHECK(report[0].enabled && !report[0].loaded);
+  CHECK_EQ(report[0].error, std::string("pending"));  // planned, its moment not come
+  CHECK(!report[1].enabled);
+  CHECK_EQ(report[1].error, std::string(""));         // a disabled entry carries no error
+  CHECK(report[2].enabled && !report[2].loaded);
+  CHECK_EQ(report[2].error, std::string(reason::kFileOutsideDirectory));
+  env.loader->RunPhase(PluginPhase::Normal);
+  report = env.loader->Report();
+  CHECK_EQ(report[0].name, std::string("ok"));
+  CHECK_EQ(report[0].file, std::string("libfx_ok.so"));
+  CHECK(report[0].loaded);
+  CHECK_EQ(report[0].error, std::string(""));
+  CHECK_EQ(report[0].version_major, 1u);  // the fixture's NevrPluginGetInfo is 1.2.3
+  CHECK_EQ(report[0].version_minor, 2u);
+  CHECK_EQ(report[0].version_patch, 3u);
+  // The shared serializer turns it into the array the service reads.
+  const std::string json = BuildPluginManifest(report);
+  CHECK(json.find("\"ver\":\"1.2.3\"") != std::string::npos);
+  CHECK(json.find("\"error\":\"file_outside_directory\"") != std::string::npos);
+}
+
 TEST(LoaderWritesTheSettledEntriesAtPlanTimeAndLoadsNothing) {
   Env env;
   env.loader->Plan({Item("off", "liboff.so", false, false), Item("out", "sub/libx.so"), Item("ok", "libfx_ok.so")});
