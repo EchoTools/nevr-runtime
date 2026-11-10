@@ -606,9 +606,21 @@ int main() {
     HealSlot()(cs, 0x10001, 2999999.75f, 5);
     QueuedSlot()(cs, 0x10001, 1999999.75f, 5);
     CHECK(g_heals.empty() && g_sends.empty(), "a declined amount reached Heal or was sent: %zu heals %zu sends", g_heals.size(), g_sends.size());
-    CHECK(Count({Ev("marker").c_str(), "\"kind\":4,", "\"amount\":"}) == 1 && EventsWith("swallow", "\"kind\":4,") >= 2, "declined lines: %zu", g_lines.size());
+    CHECK(Count({Ev("marker").c_str(), "\"kind\":4,", "\"amount\":", "\"passed_on\":0,"}) == 1 && EventsWith("swallow", "\"kind\":4,") >= 2,
+          "declined lines: %zu", g_lines.size());
+    CHECK(EventsWith("swallow", "\"where\":\"queued heal\"") == 1 && Count({Ev("swallow").c_str(), "\"where\":\"queued heal\"", "declined: its value rounds out of its band"}) == 1,
+          "the queued decline has no reason of its own");
+    CHECK(Count({Ev("swallow").c_str(), "\"where\":\"queued heal\"", "the server owns the buffs"}) == 0, "the queued decline took the link reason");
     QueuedSlot()(cs, 1, 1.0f, 1);
     CHECK(g_sends.empty() && g_heals.size() == 1, "a declined amount was held and sent");
+    // stage 1 (swallow off) swallows no marker: the game's Heal takes the declined amount as a heal, and the line says so
+    pb::SwallowForTest(false);
+    g_heals.clear();
+    g_lines.clear();
+    HealSlot()(cs, 0x10001, 1999999.75f, 5);
+    CHECK(g_heals.size() == 1 && Count({Ev("marker").c_str(), "\"kind\":4,", "\"passed_on\":1,"}) == 1 && Count({Ev("marker").c_str(), "\"passed_on\":0,"}) == 0,
+          "stage 1: the declined amount's line does not say it reached Heal: %zu heals %zu lines", g_heals.size(), g_lines.size());
+    pb::SwallowForTest(true);
   }
   // the node mark is per thread: a marker relayed by the server on another thread while this thread is inside the node's Enter is not the
   // node's own heal. It is swallowed as a relayed one ("heal", nothing held), and the node's own direct heal on this thread is still held.

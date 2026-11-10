@@ -16,9 +16,12 @@
 // Both builds hold these forms (#2339):
 //   - The decode is EC's: the rez flag is subtracted, then the value past the band's base is rounded (`+ 0.5f`), so 1,020,009.75 is
 //     v 20,010. The script's heal node writes whole amounts, on which rounding and truncating agree.
-//   - A use or link amount whose rounding carries it out of its band (1,999,999.75 gives v 1,000,000) is declined (kDeclined): no buff, no
-//     boost, no self-damage and no link, and it is not passed on as a heal. That is EC's effective outcome (dr 1.0 for 0 s does nothing),
-//     stated as a decision. An unlink amount needs no v; it is never declined.
+//   - A use or link amount whose rounding carries it out of its band (1,999,999.75 gives v 1,000,000) is malformed, and is declined
+//     (kDeclined): no buff, no boost, no self-damage and no link, it is not passed on as a heal (the Quest's read-only stage 1 swallows no marker), and a use already running is left alone.
+//     EC's decode gives it dr 1.0 for 0 s, and that is not a no-op: the server's AddBuff, AddBoost and AddSelfDamage each take it as
+//     "until now", which ends the user's running buff, boost and OVERCHARGE cost; the client's g_boosted_until is set to now; and LinkState
+//     takes left = 1, so the client sends a link marker the server reads as a use (3,000,001), which gives the linked teammates 1 s of x0
+//     damage, a 1 s boost and 1 s of self-damage. An unlink amount needs no v; it is never declined.
 //   - dr_permille is kept as the integer it is. EC keeps `(v / 1000) / 1000.0f` and re-encodes `(unsigned)(dr * 1000.0f + 0.5f)`; for every
 //     dr_permille a decode can give (0..999) that returns the same integer (the PC GTest checks all 1000), so the link marker is EC's.
 //   - A radius that is not finite names no bubble. EC converts `(r - floorf(r)) * 100000` to int with no check, which for a NaN or an

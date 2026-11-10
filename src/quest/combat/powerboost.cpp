@@ -150,10 +150,14 @@ void MarkerLine(float amount, const char* where, long long index, std::uint32_t 
     return;
   }
   if (m.kind == kDeclined) {
+    // stage 1 (swallow off) swallows no marker: the game's Heal takes this amount as a heal. From stage 2 on it never reaches Heal.
+    const bool passedOn = !g_swallow.load(std::memory_order_acquire);
     const Num a(static_cast<double>(amount));
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
                         {{"kind", m.kind}, {"rez", m.rez}, {"amount", a.text}, {"where", where}, {"index", index}, {"user", user}, {"tid", Tid()},
-                         {"msg", "the amount rounds out of its marker band; declined: no buff, not passed on as a heal"}});
+                         {"passed_on", passedOn ? 1 : 0},
+                         {"msg", passedOn ? "the amount rounds out of its marker band: no buff, and the game's Heal takes it as a heal (stage 1 swallows no marker)"
+                                           : "the amount rounds out of its marker band; declined: no buff, not passed on as a heal"}});
     return;
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
@@ -266,7 +270,8 @@ __attribute__((noinline)) void QueuedHealAct(QueuedHealThunk::Fn original, void*
   if (m.kind == kUse) {
     Send(cs, handle, amount, "queued node heal");
   } else {
-    SwallowLine(m, "queued heal", handle, "nothing sent (the server owns the buffs)");
+    SwallowLine(m, "queued heal", handle,
+                m.kind == kDeclined ? "declined: its value rounds out of its band; nothing sent, not a heal" : "nothing sent (the server owns the buffs)");
   }
 }
 

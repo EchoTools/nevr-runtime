@@ -395,9 +395,14 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
     }
     const bool rez = m.rez != 0;
     if (m.kind == pbr::kDeclined) {
-        static std::atomic<int> declined{0};
-        if (declined.fetch_add(1, std::memory_order_relaxed) < 32)
+        // The first 32 are each written; after that one Warning at every power of two says how many there have been, and the lines
+        // between are counted, not logged.
+        static std::atomic<unsigned> declined{0};
+        const unsigned n = declined.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32)
             LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
+        else if ((n & (n - 1)) == 0)
+            LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
         return;
     }
     if (m.kind == pbr::kUse) {
