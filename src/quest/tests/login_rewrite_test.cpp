@@ -71,8 +71,16 @@ class FakeJson final : public nevr_quest_login::JsonAccess {
   void Clear(const char* path) override {
     const std::string key = path;
     for (auto it = values.begin(); it != values.end();) {
-      it = (it->first == key || it->first.rfind(key + "|", 0) == 0) ? values.erase(it) : std::next(it);
+      it = (it->first == key || it->first.rfind(key + "|", 0) == 0 || it->first.rfind(key + "[", 0) == 0) ? values.erase(it) : std::next(it);
     }
+  }
+
+  // One path segment: `name` is an object member, `name[3]` is the member `name`'s fourth array element (the form the
+  // game's own writer uses, libpnsovr ToJson 0x4310c0, and the one the login's `nevr_plugins` members take).
+  static nlohmann::json& Member(nlohmann::json& node, const std::string& part) {
+    const std::size_t open = part.find('[');
+    if (open == std::string::npos) return node[part];
+    return node[part.substr(0, open)][static_cast<std::size_t>(std::stoul(part.substr(open + 1)))];
   }
 
   nlohmann::json ToJson() const {
@@ -84,18 +92,18 @@ class FakeJson final : public nevr_quest_login::JsonAccess {
         const std::size_t bar = path.find('|', start);
         const std::string part = path.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
         if (bar != std::string::npos) {
-          node = &(*node)[part];
+          node = &Member(*node, part);
           start = bar + 1;
           continue;
         }
         switch (value.type) {
-          case JsonType::String: (*node)[part] = value.text; break;
-          case JsonType::Int: (*node)[part] = value.number; break;
-          case JsonType::Boolean: (*node)[part] = value.number != 0; break;
-          case JsonType::Real: (*node)[part] = value.real; break;
-          case JsonType::Null: (*node)[part] = nullptr; break;
-          case JsonType::Array: (*node)[part] = nlohmann::json::array(); break;
-          default: (*node)[part] = nlohmann::json::object(); break;
+          case JsonType::String: Member(*node, part) = value.text; break;
+          case JsonType::Int: Member(*node, part) = value.number; break;
+          case JsonType::Boolean: Member(*node, part) = value.number != 0; break;
+          case JsonType::Real: Member(*node, part) = value.real; break;
+          case JsonType::Null: Member(*node, part) = nullptr; break;
+          case JsonType::Array: Member(*node, part) = nlohmann::json::array(); break;
+          default: Member(*node, part) = nlohmann::json::object(); break;
         }
         break;
       }
@@ -116,7 +124,14 @@ class FakeJson final : public nevr_quest_login::JsonAccess {
     }
     // Parents become objects; a parent that is not an object blocks the write.
     for (std::size_t bar = key.find('|'); bar != std::string::npos; bar = key.find('|', bar + 1)) {
-      Value& parent = values[key.substr(0, bar)];
+      const std::string prefix = key.substr(0, bar);
+      // `name[i]` lives in the array `name`, which the writer creates with its first element.
+      const std::size_t open = prefix.find('[');
+      if (open != std::string::npos) {
+        Value& array = values[prefix.substr(0, open)];
+        if (array.type == JsonType::Absent) array.type = JsonType::Array;
+      }
+      Value& parent = values[prefix];
       if (parent.type == JsonType::Absent) parent.type = JsonType::Object;
       if (parent.type != JsonType::Object && nested_write_replaces_parent) {
         parent = Value();
@@ -211,6 +226,30 @@ nevr_quest_login::Identity MakeIdentity() {
   return id;
 }
 
+// What the Quest loader reported at login: one loaded plugin, one that failed, one disabled (the three shapes of the PCVR
+// report, runtime/ext/plugin_manifest.h).
+std::vector<PluginManifestEntry> SamplePluginReport() {
+  PluginManifestEntry loaded;
+  loaded.name = "nevr_noop";
+  loaded.file = "libnevr_noop.so";
+  loaded.loaded = true;
+  loaded.version_major = 1;
+  loaded.version_minor = 2;
+  loaded.version_patch = 3;
+  loaded.api_version = 7;
+  loaded.capabilities = 5;
+  PluginManifestEntry failed;
+  failed.name = "q15t";
+  failed.file = "libq15t.so";
+  failed.required = true;
+  failed.error = "build_id_unsupported";
+  PluginManifestEntry off;
+  off.name = "off";
+  off.file = "liboff.so";
+  off.enabled = false;
+  return {loaded, failed, off};
+}
+
 nevr_quest_login::BuildInfo MakeBuild() {
   nevr_quest_login::BuildInfo build;
   build.project_version = "1.2.3";
@@ -270,8 +309,8 @@ void TestComposeFailsClosed() {
   QCHECK(c.fields.empty());
 }
 
-// The composed fields are the PCVR builder's output for the same inputs, minus the empty
-// plugin array (CJson has no setter for it) and with no password value: the server reads the
+// The composed fields are the PCVR builder's output for the same inputs, the plugin report included (written as
+// indexed members `nevr_plugins[i]|key`), and with no password value: the server reads the
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
 void TestComposedProfileMatchesPcvrBuilder() {
   nevr_quest_login::Identity id = MakeIdentity();
@@ -279,13 +318,17 @@ void TestComposedProfileMatchesPcvrBuilder() {
   nevr_quest_login::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
-  const nevr_quest_login::Composition c = nevr_quest_login::Compose(id, game, MakeBuild());
+  nevr_quest_login::BuildInfo build = MakeBuild();
+  build.plugin_report = &SamplePluginReport;
+  nevr_quest_login::Composition c = nevr_quest_login::Compose(id, game, build);
   QCHECK(c.status == nevr_quest_login::ComposeStatus::Ok);
-  QCHECK(c.skipped.size() == 1 && c.skipped[0] == "nevr_plugins");
+  QCHECK(c.skipped.empty());  // the plugin array is written as indexed members now, not skipped
 
   FakeJson json;
   std::string failed;
   QCHECK(nevr_quest_login::ApplyFieldsAtomically(c.fields, json, failed));
+  QCHECK(!c.plugin_fields.empty());
+  QCHECK(nevr_quest_login::ApplyFieldsAtomically(c.plugin_fields, json, failed));
 
   nevr_login_profile::LoginProfileInputs pc;
   pc.account_id = id.account_id;
@@ -298,8 +341,9 @@ void TestComposedProfileMatchesPcvrBuilder() {
   pc.git_describe = "v1.2.3-4-gabc123";
   pc.build_type = "Release";
   pc.social_level = nevr_social_party::kSocialLevel;  // what the PCVR login declares (ws_bridge.cpp)
+  pc.plugins = nlohmann::json::parse(BuildPluginManifest(SamplePluginReport()));  // the PCVR login's own serializer
   nlohmann::json expected = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(pc));
-  expected.erase("nevr_plugins");
+  QCHECK(expected.at("nevr_plugins").size() == 3);
   QCHECK(json.ToJson() == expected);
   QCHECK(At(expected, "accountid") == kNevrAccount);
   QCHECK(At(expected, "access_token") == "NEVR-TOKEN-SECRET");
@@ -373,6 +417,55 @@ void TestSerialRelay() {
   QCHECK(serial_of("") == "unknown");                         // nothing to relay
   QCHECK(serial_of("bad serial") == "unknown");               // a space is not a serial
   QCHECK(serial_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "ABCDEFGHIJKLMNOPQRSTUVWX");  // 24-byte buffer
+}
+
+// The login carries the loader's report as `nevr_plugins`, in the PCVR shape. A game that refuses the indexed members must
+// not cost the login: it goes out Rewritten without the key, and the record says the plugins were not written.
+void TestRewriteCarriesTheLoadersPluginReport() {
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    nevr_quest_login::BuildInfo build = MakeBuild();
+    build.plugin_report = &SamplePluginReport;
+    g_log.clear();
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, build, &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+    const nlohmann::json doc = json.ToJson();
+    QCHECK(doc.contains("nevr_plugins"));
+    QCHECK(doc.at("nevr_plugins") == nlohmann::json::parse(BuildPluginManifest(SamplePluginReport())));
+    QCHECK(g_log.size() == 1);
+    QCHECK(g_log[0].find("plugin_fields=") != std::string::npos);
+    QCHECK(g_log[0].find("plugins_written=1") != std::string::npos);
+  }
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    json.refuse_path = "nevr_plugins[1]|error";  // the game drops one member of the report
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    nevr_quest_login::BuildInfo build = MakeBuild();
+    build.plugin_report = &SamplePluginReport;
+    g_log.clear();
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, build, &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+    const nlohmann::json doc = json.ToJson();
+    QCHECK(At(doc, "access_token") == "NEVR-TOKEN-SECRET");  // the identity is in
+    QCHECK(!doc.contains("nevr_plugins"));                    // nothing of the report is left behind
+    QCHECK(g_log.size() == 1);
+    QCHECK(g_log[0].find("plugins_written=0") != std::string::npos);
+    QCHECK(g_log[0].find("plugins_refused_path=nevr_plugins[1]|error") != std::string::npos);
+  }
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+    QCHECK(!json.ToJson().contains("nevr_plugins"));  // no loader report: an absent key, which the service reads as empty
+  }
 }
 
 void TestRewriteCarriesNevrIdentityToTheWire() {
@@ -1492,6 +1585,7 @@ int main() {
   TestSerialRelay();
   TestSocialLevelFollowsTheIdentitySource();
   TestRewriteCarriesNevrIdentityToTheWire();
+  TestRewriteCarriesTheLoadersPluginReport();
   TestClientClassKeysAreNeverOverwritten();
   TestAccountIdThatDoesNotReachTheWireIsRejected();
   TestPlatformMustAlreadyBeOvrOrg();

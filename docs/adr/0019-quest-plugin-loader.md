@@ -23,7 +23,8 @@ The Quest build has no plugin host:
   `DT_NEEDED` dependency of the game's library (`src/quest/sentinel/entry.cpp:149-158`). Nothing in `src/quest`
   references an `NevrPlugin*` export, a plugin path, or a plugin file (see Evidence).
 - The config parser already accepts `plugins:` with the same keys as PC (`src/core/nevr_config.cpp:242-285`), but no
-  Quest code acts on the list. The Quest login rewrite drops the `nevr_plugins` key (`src/quest/tests/login_rewrite_test.cpp:282`).
+  Quest code acts on the list beyond the loader. The Quest login carries the loader's records as `nevr_plugins`, in the PC's
+  shape (`Loader::Report` in `src/quest/plugin/plugin_loader.cpp`, serialized by the shared `BuildPluginManifest`).
 - The only in-process hook backend on Quest is the GOT import hook (`src/quest/sentinel/got_hook.h:4-13`). It cannot
   reach a direct call, an inlined call or a vtable call. An inline backend is explicitly deferred until an ADR proves
   it (ADR 0003, "Binary and hook discovery gate").
@@ -168,8 +169,14 @@ only `early: true` entries (N146, `AGENTS.md:191`).
 - **A separate Quest operator manifest.** Rejected: a second source of truth for the operator's configuration, and the PC
   list is already the documented one (`docs/reference/example-config.yaml:431`). The packaging manifest above is build
   output: the repack writes it from the staged bytes, and no operator edits it, so it does not compete with `plugins:`.
-- **Send the plugin list to login (adopted, Q5).** The PC loader reports `nevr_plugins` at login (`src/runtime/compat/login_profile.cpp:46`).
-  Quest does the same; the login field is service-visible, so the decision is recorded in section 13 (Q5).
+- **Send the plugin list to login (adopted).** The PC loader reports `nevr_plugins` at login (`src/runtime/compat/login_profile.cpp`).
+  Quest sends the same array from the same builder, so neither platform is left behind. The report is one object per plan
+  entry, with the record's reason token as `error`, and an entry still waiting for its moment reads `pending`. CJson has no
+  array setter the login uses, so each member is written as an indexed path (`nevr_plugins[0]|name`), the form the game's own
+  writer uses (libpnsovr `ToJson`, `0x4310c0`). That the live CJson builds the array from those paths is a prediction not yet
+  seen on a headset; the members are written after the identity and never at its cost: a refusal restores them, the login goes out
+  without `nevr_plugins` (the service reads an absent key as an empty report), and the `quest_login` record says
+  `plugins_written=0` and names the refused key.
 
 **`early` on Quest.** The key stays so one config file works on every platform. On Quest it means "init at moment (a)".
 If P10 fails (a `dlopen` from the constructor does not complete), `early` entries are refused with reason
@@ -525,8 +532,6 @@ Any change to the PC loader or the ADR 0010 gate. The design of any game-data ge
 - **Q4.** Plugin init at moment (b) runs on the game's load path. Accept it with P8's bound, or require a deferred thread
   and a readiness signal?
   **Decision:** accept moment (b) with P8's bound for v1. A deferred thread is a later change if P8 fails.
-- **Q5.** Does Quest report plugins to login (`nevr_plugins`)? That is a service-visible change.
-  **Decision:** yes. Quest reports plugins to login the same way PC does, so neither platform is left behind.
 - **Q6.** Does the run's log rotate or truncate? Does its file sink report its own write failures?
   **Decision:** the sentinel log rotates and reports its own write failures. Both hold in the tree today
   (`src/quest/sentinel/sentinel_log.cpp:119`, `:286`), so no issue is needed. The failure rule it follows is
@@ -604,4 +609,4 @@ line moves, the symbol named beside it is the anchor.
   `:491-493` (ABI header is a breaking change), `:812` (review by a non-author), `:885-905` (documentation and public prose), `:984` (binary patches require prologue validation).
 - Absence checks (run over `src/quest`, `src/core`, `src/extension`): no match for `FindPattern|ScanPattern|SigScan|FindSignature|PatternScan|ScanForBytes|BytePattern`,
   `process_vm_readv`, `dladdr`, or `nativeLibraryDir`. The only `dl_iterate_phdr` uses are `src/quest/sentinel/got_hook.cpp:143` and `:407`, and
-  `src/quest/social/social_install.h:50`. `src/quest/tests/login_rewrite_test.cpp:282` drops `nevr_plugins` from the Quest login.
+  `src/quest/social/social_install.h:50`. `src/quest/login/login_rewrite.cpp` (`FlattenPlugins`) writes `nevr_plugins` into the Quest login.

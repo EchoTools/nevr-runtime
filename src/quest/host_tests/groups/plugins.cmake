@@ -58,7 +58,7 @@ set(_loader_srcs src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_p
     src/quest/patch/libr15_patch_identity.cpp)
 nevr_ht_obj(o_plugins_loader GROUP plugins ${_pc} PTHREAD SRC ${_loader_srcs})
 nevr_ht_test(plugin_loader_test GROUP plugins ${_pc} PTHREAD DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/plugins" DEPENDS ${_plugin_fixtures}
-  OBJS o_plugins_loader ${_loader_noexc} SRC src/quest/tests/plugin_loader_test.cpp)
+  OBJS o_plugins_loader ${_loader_noexc} SRC src/runtime/ext/plugin_manifest.cpp src/quest/tests/plugin_loader_test.cpp)
 nevr_ht_test(packaged_plugins_test GROUP plugins ${_pc} PTHREAD TIMEOUT 120 ARGS src/quest/tests/fixtures
   SRC src/quest/tests/packaged_plugins_test.cpp src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp
       src/runtime/ext/plugin_load_plan.cpp)
