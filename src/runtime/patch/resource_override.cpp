@@ -66,12 +66,15 @@ struct ResourceOverride {
     uint64_t size;
     bool owned;             /* true if data was allocated and should be freed */
     std::string label;      /* for logging; owned: a caller's buffer may be gone by the time the game loads the resource (#703) */
-    bool applied;           /* set to true after first replacement */
+    bool served = false;    /* a load was given this entry's bytes: read by the shutdown report only, never by the
+                               selection, so a fixed entry serves every load of its key (#2343) */
     uint32_t in_flight;     /* game callbacks still using this replacement */
     ResourceTransformFn transform = nullptr;  /* set: answers every load of the resource instead of one replacement */
     void* user = nullptr;
     bool matched = false;     /* a game load matched this entry's key and buffer, served or not */
     bool passed_over = false; /* a load matched it and an earlier fixed replacement of the key served that load */
+    bool behind_refused = false; /* a load matched it, an earlier fixed replacement was chosen, and that one was not
+                                    served (its copy or in-place write was refused) */
 };
 
 static std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> g_overrides;
@@ -234,7 +237,7 @@ static void OfferTransforms(const std::vector<std::shared_ptr<ResourceOverride>>
         CallbackLease lease(t);
         if (!ApplyTransform(*t, cbd, type_hash, name_hash)) continue;
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
-        t->applied = true;
+        t->served = true;
         return;
     }
 }
@@ -242,6 +245,7 @@ static void OfferTransforms(const std::vector<std::shared_ptr<ResourceOverride>>
 static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     std::shared_ptr<ResourceOverride> selected;
     std::vector<std::shared_ptr<ResourceOverride>> transforms;  /* matching transforms, in registration order */
+    std::vector<std::shared_ptr<ResourceOverride>> laterFixed;  /* later fixed entries of the key, behind `selected` */
     AsyncIOCallback_fn original;
     uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
     uint32_t buf_index = 0;
@@ -259,12 +263,20 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
-                /* The first fixed replacement that matches serves the load. A fixed replacement outranks every transform
-                 * of the same key whatever the registration order (#1479), so transforms are offered only when none
-                 * matches. Every match is recorded, so a shutdown can tell an entry passed over from one never requested. */
+                /* The first fixed replacement that matches serves the load, on every load of the key: a level that
+                 * loads again gets the replacement again, and a later entry of the same key stays passed over (#2343).
+                 * A fixed replacement outranks every transform of the same key whatever the registration order (#1479),
+                 * so transforms are offered only when none matches. Every match is recorded, so a shutdown can tell an
+                 * entry passed over from one never requested.
+                 * KNOWN-WRONG #2345: the cost of every load. A buffer-0 replacement points the block at a copy in
+                 * the game's heap and leaves the reader's own buffer alone (game_buffer.h: the reader may own it), so
+                 * one buffer of orig_bytes stays allocated for each load served, a level loaded N times leaving N of
+                 * them per overridden buffer-0 resource. Serving one load per entry would cap that at one per entry,
+                 * and the override would not survive a reload; transforms (OfferTransforms) already pay it on every
+                 * load. A buffer-1 payload is written in place and leaves none. Test:
+                 * EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone. */
                 std::shared_ptr<ResourceOverride> fixedHit;
                 for (auto& ovr : *g_overrides) {
-                    if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
                     if (!nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, buf_index)) continue;
                     if (ovr->transform && buf_index != 0) continue;  /* a transform is offered buffer 0 only */
@@ -275,7 +287,7 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                     } else if (!fixedHit) {
                         fixedHit = ovr;
                     } else {
-                        ovr->passed_over = true;
+                        laterFixed.push_back(ovr);  /* passed over only if `selected` is served (below) */
                     }
                 }
                 if (fixedHit) {
@@ -286,7 +298,6 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                         displacedTransform = transforms.front()->label;
                         displacingOverride = fixedHit->label;
                     }
-                    selected->applied = true;
                     ++selected->in_flight;
                     g_total_hits++;
                 }
@@ -309,10 +320,16 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                                                name_hash, orig_size)
                          : GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
                                          selected->label.c_str(), type_hash, name_hash))) {
-        /* Not applied: the game keeps its own buffer, and the replacement is offered again on the next load. */
+        /* Not served: the game keeps its own buffer for this load; the next load is offered the replacement as
+         * every load is. The later entries of the key were not passed over by an override that served. */
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
-        selected->applied = false;
+        for (const auto& later : laterFixed) later->behind_refused = true;
     } else if (selected) {
+        {
+            std::lock_guard<std::mutex> lock(g_overrides_mutex);
+            selected->served = true;
+            for (const auto& later : laterFixed) later->passed_over = true;
+        }
         // Resolve both hashes to human names the same way registration does.
         char typeBuf[128], nameBuf[128];
         const char* typeName = EchoVR::LookupSymbolName(type_hash);
@@ -802,22 +819,18 @@ void InstallResourceOverride() {
 }
 
 void ResetResourceOverrides() {
-    uint64_t count = 0;
+    uint64_t fixed = 0;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return;
-        for (auto& ovr : *g_overrides) {
-            if (ovr->applied) {
-                ovr->applied = false;
-                count++;
-            }
+        for (const auto& ovr : *g_overrides) {
+            if (!ovr->transform) ++fixed;
         }
     }
-    if (count > 0) {
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] Reset %llu override(s) for re-application",
-            static_cast<unsigned long long>(count));
-    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] reset requested fixed_overrides=%llu - nothing to re-arm: a fixed override serves every load "
+        "of its resource",
+        static_cast<unsigned long long>(fixed));
 }
 
 void SetResourceOverrideFatalLineSink(void (*sink)(const char* line)) {
@@ -835,7 +848,7 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
         report.hook_installed = g_orig != nullptr;
         for (const auto& ovr : *g_overrides) {
             if (report.hook_installed && ovr->owned) ++owned_buffers_process_lifetime;
-            if (ovr->applied) continue;
+            if (ovr->served) continue;
             // A transform answers only the loads its resource makes, and a level's transform is expected to see none
             // (a session that never loads the level), so it is counted and kept at Debug, never a Warning.
             if (ovr->transform) {
@@ -852,6 +865,12 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.RESOURCE] override passed over label=%s name=0x%016llx — an earlier override of the same "
                     "resource served its loads",
+                    ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
+            } else if (ovr->behind_refused) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.RESOURCE] override not served label=%s name=0x%016llx - an earlier override of the same "
+                    "resource was chosen for each load it matched, and that override was not served (the refusal is "
+                    "logged where it happened)",
                     ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
             } else if (ovr->matched) {
                 Log(EchoVR::LogLevel::Warning,

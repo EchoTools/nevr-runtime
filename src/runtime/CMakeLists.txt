@@ -83,8 +83,16 @@ set(PATCHES_SOURCES
     "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    # #600: hooks into the game's script DLLs, installed as each loads (runtime/hook/script_hooks.h).
+    "hook/script_hooks.cpp"
+    "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
+    "combat/dot_script.cpp"
+    "combat/script_guard.cpp"
+    "combat/shared_magazine.cpp"
+    "combat/station_cells.cpp"
+    "combat/team_ready.cpp"
     # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
     "content/content_json.cpp"
     "content/content_pack.cpp"
@@ -150,6 +158,8 @@ set(PATCHES_SOURCES
     "patch/lobby_full_backoff.cpp"
     # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
     "patch/queued_join_log.cpp"
+    # #2333: the current server's features, read from the lobby settings the client receives (compat/server_features.h).
+    "patch/lobby_settings_hook.cpp"
     # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
     "patch/deadlock_monitor.cpp"
     "patch/noovr_arglookup.cpp"
@@ -1149,6 +1159,63 @@ if(BUILD_TESTING)
     target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
 
+    # #600: the script guards (runtime/combat/script_guard.h) through the script hook table, on a fake heal script.
+    add_executable(test_script_guard tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_guard PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_guard PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_guard DISCOVERY_MODE PRE_TEST)
+    # #600: the equipment station's grid hooks (runtime/combat/station_cells.h), on a fake station script.
+    add_executable(test_station_cells tests/test_station_cells.cpp combat/station_cells.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_station_cells.cpp combat/station_cells.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_station_cells PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_station_cells PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_station_cells PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_station_cells DISCOVERY_MODE PRE_TEST)
+
+    # #600: the DOT FIELD script's sound and scene-set hooks (runtime/combat/dot_script.h), on a fake DOT script.
+    add_executable(test_dot_script tests/test_dot_script.cpp combat/dot_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_dot_script.cpp combat/dot_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_dot_script PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_dot_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dot_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_dot_script DISCOVERY_MODE PRE_TEST)
+
+    # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
+    add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_shared_magazine PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_shared_magazine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
+
+    # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
+    add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_team_ready PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_team_ready PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_team_ready PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_team_ready DISCOVERY_MODE PRE_TEST)
+
+    # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
+    add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_hooks PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_hooks PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_hooks PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_hooks DISCOVERY_MODE PRE_TEST)
+
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
       patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp)
@@ -1758,6 +1825,24 @@ if(BUILD_TESTING)
     target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
 
+    # test_server_features.cpp (#2333, header-only compat/server_features.h): the statement a server makes and a client reads.
+    add_executable(test_server_features tests/test_server_features.cpp)
+    set_source_files_properties(tests/test_server_features.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_features PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_features DISCOVERY_MODE PRE_TEST)
+
+    # test_lobby_settings_hook.cpp (#2333): the LobbySettingsCB hook under MinHook against a fake game image.
+    add_executable(test_lobby_settings_hook tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_lobby_settings_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_lobby_settings_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_lobby_settings_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_lobby_settings_hook DISCOVERY_MODE PRE_TEST)
+
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
     target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1798,6 +1883,13 @@ if(BUILD_TESTING)
     target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
+
+    # test_dronemuzzle_rules.cpp (#2337, header-only patch/dronemuzzle_rules.h; the Quest host test compiles the same header).
+    add_executable(test_dronemuzzle_rules tests/test_dronemuzzle_rules.cpp)
+    set_source_files_properties(tests/test_dronemuzzle_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_dronemuzzle_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dronemuzzle_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_dronemuzzle_rules DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
@@ -1889,6 +1981,21 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
+
+    # #2289: the combat module's match type, from the stored session game type (runtime/combat/match_type.h). Links the real store.
+    add_executable(test_combat_match_type tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp)
+    set_source_files_properties(tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_match_type PRIVATE NEVR_ARENA_ROUND_TIME_TESTING)
+    target_include_directories(test_combat_match_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
+
+    # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
+    add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
+    set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_shipped_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_shipped_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_shipped_settings DISCOVERY_MODE PRE_TEST)
 
     # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
     # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's

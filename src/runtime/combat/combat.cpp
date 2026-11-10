@@ -8,6 +8,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/logging.h"
 #include "runtime/combat/balance_merge.h"
@@ -15,7 +16,14 @@
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
 #include "runtime/combat/combat_settings.h"
+#include "runtime/combat/dot_script.h"
+#include "runtime/combat/equip_cell.h"
+#include "runtime/combat/script_guard.h"
+#include "runtime/combat/shared_magazine.h"
+#include "runtime/combat/station_cells.h"
+#include "runtime/combat/team_ready.h"
 #include "runtime/combat/write_gate.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/resource_override.h"
@@ -46,6 +54,9 @@ void LogGroup(const GroupSpec& spec, const Setting& wanted, bool started, const 
 }
 
 // --- balance -----------------------------------------------------------------------------------------------------
+
+std::mutex g_featuresLock;
+std::vector<std::string> g_serverFeatures;  // guarded by g_featuresLock; set once by Install
 
 std::mutex g_balanceLock;
 std::deque<std::string> g_balanceBuffers;  // every buffer served stays valid for the process (the game keeps reading it)
@@ -116,6 +127,14 @@ void Install(std::uintptr_t gameBase, bool isServer) {
 
     cat::InstallFaultHandler();
 
+    // A stock-script fix, like the drone follow guard: the DOT FIELD's own script plays sounds that exist and stops
+    // looking for a model it does not have (dot_script.h). It changes no gameplay value, so no group gates it.
+    dot_script::Register();
+
+    // A stock-script fix: a thrown DOT FIELD or drone no longer asks for a frisbee component it does not have
+    // (shared_magazine.h). It changes no gameplay value, so no group gates it.
+    shared_magazine::Register();
+
     // The shared cells are written by Cat's scripts and code alike: checked once against everything the runtime owns.
     const bool cells = GateWrite(reinterpret_cast<const void*>(gameBase + kCellsRva), kCellsLength,
                                  "EchoCombat .data-tail cells (tokens, counters, FX queue, RULES mailbox)");
@@ -134,6 +153,15 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     const bool veilWanted = at(Group::kVeil).on && cells;
     const bool match = at(Group::kMatchControl).on && veilWanted;
     const bool veil = veilWanted && veilnet::Start(isServer, match, at(Group::kMedigun).on);
+    // The script guards read the tac mod VeilNet records from the player's profile update (equip_cell.h): with VeilNet off
+    // nothing records it, so no guard would ever act.
+    if (veil) script_guard::Register(reinterpret_cast<volatile std::uint64_t*>(gameBase + kEquipCellRva), isServer);
+    // The equipment station's grids follow the cell counts VeilNet publishes for LOADOUTS (station_cells.h); with VeilNet
+    // off none is published and the station keeps its stock layout.
+    if (veil) {
+      station_cells::Register(reinterpret_cast<const volatile std::uint8_t*>(gameBase + station_cells::kRulesMailboxRva +
+                                                                             station_cells::kCellCountsOffset));
+    }
     LogGroup(spec(Group::kVeil), at(Group::kVeil), veil, !cells ? cellsRefused : "sendto_recvfrom_hooks_not_installed");
     LogGroup(spec(Group::kMatchControl), at(Group::kMatchControl), veilnet::MatchControlStarted(),
              !at(Group::kVeil).on ? "needs_combat.veil"
@@ -142,13 +170,26 @@ void Install(std::uintptr_t gameBase, bool isServer) {
              : !veilnet::EventDispatchHooked() ? "event_dispatch_not_hooked"
                                                : "slot_setter_filter_not_installed");
 
+    // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
+    // game-mode script, installed when it loads (team_ready.h). It needs nothing of VeilNet's.
+    if (at(Group::kMatchControl).on) team_ready::Register();
+
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
+    // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
+    // source lines are Debug (cat_compat.cpp).
+    if (overcharge) {
+      const cat::IniSourceCounts sources = cat::IniSources();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] PowerBoost settings read config_yaml=%d shipped=%d code=%d (a key config.yaml leaves out takes the "
+          "value his release ships; code is a key his PowerBoost.ini does not carry)",
+          sources.config, sources.shipped, sources.code);
+    }
     LogGroup(spec(Group::kOvercharge), at(Group::kOvercharge), overcharge,
              !cells ? cellsRefused : "heal_damage_hooks_not_installed");
     LogGroup(spec(Group::kMedigun), at(Group::kMedigun), overcharge && veil,
              !at(Group::kOvercharge).on ? "needs_combat.overcharge" : !veil ? "needs_combat.veil" : "overcharge_not_started");
 
-    // Off unless asked: the TerminateProcess stub is never written while combat.clean_exit is off.
+    // On by default, as his loader applies it on every start; the TerminateProcess stub is never written while combat.clean_exit is off.
     const bool cleanExit = at(Group::kCleanExit).on && veilnet::StartCleanExit();
     LogGroup(spec(Group::kCleanExit), at(Group::kCleanExit), cleanExit, "teardown_call_not_patched (see the line above)");
 
@@ -161,7 +202,24 @@ void Install(std::uintptr_t gameBase, bool isServer) {
         isServer ? "true" : "false", enabled, OnOff(guard && drone), OnOff(overcharge),
         OnOff(overcharge && veil && at(Group::kMedigun).on), OnOff(veil), OnOff(veilnet::MatchControlStarted()),
         OnOff(cleanExit));
+
+    // #2333: the features a server states to its clients, from what actually started (server_features.h).
+    std::vector<std::string> features =
+        nevr_server_features::CombatFeatures(veil, at(Group::kMedigun).on, overcharge);
+    if (isServer) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] server features features=%s (the registration and the lobby settings carry them, so a client "
+          "shows the EchoCombat tac mods%s only on a server that states them)",
+          nevr_server_features::Joined(features).c_str(), features.size() > 1 ? " and MEDIGUN" : "");
+    }
+    std::lock_guard<std::mutex> lock(g_featuresLock);
+    g_serverFeatures = std::move(features);
   });
+}
+
+std::vector<std::string> ServerFeatures() {
+  std::lock_guard<std::mutex> lock(g_featuresLock);
+  return g_serverFeatures;
 }
 
 }  // namespace nevr_combat

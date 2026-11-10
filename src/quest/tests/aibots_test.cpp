@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +38,9 @@
 #include "quest/tests/test_check.h"
 
 namespace {
+// Reads made through SafeRead: safe_read.h's test seam adds one to this counter for each (set in main).
+std::atomic<std::uint64_t> g_safeReads{0};
+std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
 
 namespace ai = nevr_quest::combat::aibots;
 namespace at = nevr_quest::combat::aibots::targets;
@@ -529,19 +533,19 @@ void AnArenaMatchIsFourReadsALookAndNoScan() {
     SetLevels({CSymbol64Hash(name)});
     Put<std::uint8_t>(g_net, 0x6341b, 0);
     SetCount(0);
-    const std::uint32_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
+    const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
     Run(30);  // well past the 10 s the idle line waits for
     const std::uint32_t looks = ai::CurrentStats().looks;
     CHECK(looks >= 115 && g_calls.empty() && !HasLine("combat_aibots_idle"), "%s: %u looks, %zu calls, an idle line %d", name, looks, g_calls.size(), HasLine("combat_aibots_idle") ? 1 : 0);
-    CHECK(nevr_quest::combat::level::ScanCalls() == scans0, "%s: %u level scans in an arena match", name, nevr_quest::combat::level::ScanCalls() - scans0);
-    CHECK(nevr_quest::combat::SafeReadCalls() - reads0 == looks * 4, "%s: %u reads for %u looks, wanted 4 each", name, nevr_quest::combat::SafeReadCalls() - reads0, looks);
+    CHECK(nevr_quest::combat::level::ScanCalls() == scans0, "%s: %llu level scans in an arena match", name, static_cast<unsigned long long>(nevr_quest::combat::level::ScanCalls() - scans0));
+    CHECK(SafeReadCalls() - reads0 == looks * 4, "%s: %llu reads for %u looks, wanted 4 each", name, static_cast<unsigned long long>(SafeReadCalls() - reads0), looks);
   }
   // No net game at all (between matches): one read a look.
   Reset();
   g_game[0x8510 / 8] = 0;
-  const std::uint32_t reads1 = nevr_quest::combat::SafeReadCalls();
+  const std::uint64_t reads1 = SafeReadCalls();
   Run(4);
-  CHECK(nevr_quest::combat::SafeReadCalls() - reads1 == ai::CurrentStats().looks, "no net game: %u reads for %u looks", nevr_quest::combat::SafeReadCalls() - reads1, ai::CurrentStats().looks);
+  CHECK(SafeReadCalls() - reads1 == ai::CurrentStats().looks, "no net game: %llu reads for %u looks", static_cast<unsigned long long>(SafeReadCalls() - reads1), ai::CurrentStats().looks);
 }
 
 void TheInstallOnAnImage() {  // 16
@@ -618,6 +622,7 @@ void TheCostOfALook() {  // 17: printed, not asserted (a host number; the module
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   char tmpl[] = "/tmp/combat-ai-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;

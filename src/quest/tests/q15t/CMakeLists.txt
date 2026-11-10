@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)  # -std=c++17, as every test was built before
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)  # no source is a module; ccache refuses a compile that carries the scan flags
-# The Android toolchain file adds -lm -latomic as standard libraries; pb_thunk_qemu is linked -nostdlib and has no libc to ask them of.
+# The Android toolchain file adds -lm -latomic as standard libraries; a freestanding check program is linked -nostdlib and has no libc to ask them of.
 set(CMAKE_CXX_STANDARD_LIBRARIES "")
 
 # Where the plugin's sources and the SDK headers are. The mutation run points the first at a scratch copy of src/.

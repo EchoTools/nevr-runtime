@@ -1154,8 +1154,8 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
-// combat.heaps and combat.memsys (#2175, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
-// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. The two are
+// combat.heaps, combat.memsys and combat.sendguard (#2175, #2179, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
+// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. Each is
 // independent, and a file rejected as a whole contributes nothing.
 void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
   struct Key {
@@ -1168,7 +1168,8 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
                       {"meshstep", &nevr_quest::CombatConfig::meshstep},
                       {"instmodel", &nevr_quest::CombatConfig::instmodel},
                       {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
-                      {"tablestep", &nevr_quest::CombatConfig::tablestep}};
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep},
+                      {"sendguard", &nevr_quest::CombatConfig::sendguard}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
     const std::string full = std::string("combat.") + key.name;
@@ -1288,7 +1289,27 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // Gun connect, practice AI bots and the gun hand default (#2185): on unless the file says false.
                       {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},
                       {"aibots", &nevr_quest::CombatConfig::aibots, true},
-                      {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true}};
+                      {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true},
+                      // The impact sounds and the level decals (#2183). decals is on by default (upstream's fxdecal.on) and inert without decals.bin; its two flips are off.
+                      {"impactsnd", &nevr_quest::CombatConfig::impactsnd, true},
+                      {"impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite, true},
+                      {"decals", &nevr_quest::CombatConfig::decals, true},
+                      {"decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU, false},
+                      {"decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV, false},
+                      // The static BVH and the wall-fire check (#2182): all four are on by default, as q15t-upstream has them.
+                      {"bvh", &nevr_quest::CombatConfig::bvh, true},
+                      {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
+                      {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
+                      {"wallfire", &nevr_quest::CombatConfig::wallfire, true},
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as the q15t plugin's Q15T_MUSIC and Q15T_SENSORWD were in v6.16.5 (music is also on by default upstream, afk_music.cpp:1).
+                      {"music", &nevr_quest::CombatConfig::music, true},
+                      {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true},
+                      // The EC client and its NEUTRON effects (#2187): on unless the file says false.
+                      {"ec", &nevr_quest::CombatConfig::ec, true},
+                      {"ecfx", &nevr_quest::CombatConfig::ecfx, true},
+                      // The drone modules (#2187): on unless the file says false.
+                      {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
+                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
@@ -1324,6 +1345,24 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
       const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + (k.defaultOn ? "false" : "true") + "\nnot_a_section: 1\n");
       CHECK(r.fileRejected && (r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
     }
+  }
+}
+
+// combat.ec_words (#2187): a text. Absent, or a value that is not a string: no text and not from the file (the module's
+// `types=VPTO equip hide` stands); a string is taken as it is, an empty one included.
+void CombatEcWordsIsATextThatTheFileGivesWhole() {
+  {
+    const LoadResult r = Load(Full(), "combat:\n  ec: true\n");
+    CHECK(r.config.combat.ecWords.source != Source::kFile && r.config.combat.ecWords.text[0] == '\0');
+  }
+  for (const char* words : {"types=VPTO equip hide", "types=T noequip", ""}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  ec_words: \"") + words + "\"\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && r.config.combat.ecWords.source == Source::kFile);
+    CHECK(std::string(r.config.combat.ecWords.text) == words);
+  }
+  for (const char* value : {"[a]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  ec_words: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.ecWords.source != Source::kFile && r.config.combat.ecWords.text[0] == '\0');
   }
 }
 
@@ -1389,7 +1428,34 @@ void CombatAibotsScenarioIsATextThatTheFileGivesWhole() {
   }
 }
 
+// combat.powerboost_stage (#2187): an integer 0..3. Absent: 3 (swallow and cone), not from the file. An integer in the range: that stage, from the
+// file. A value that is not an integer, or one outside 0..3, keeps 3 with a Warning that names the key.
+void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
+  const std::string key = "combat.powerboost_stage";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+  }
+  for (int stage = 0; stage <= 3; ++stage) {
+    const LoadResult r = Load(Full(), "combat:\n  powerboost_stage: " + std::to_string(stage) + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == stage && r.config.combat.powerboostStage.source == Source::kFile);
+  }
+  for (const char* value : {"4", "-1", "99"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=out_of_range", LogLevel::kWarn));
+  }
+  for (const char* value : {"two", "2.5", "true", "[1, 2]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
+  }
+}
+
 int main() {
+  CombatPowerboostStageIsAnIntegerFromZeroToThree();
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();
@@ -1417,6 +1483,7 @@ int main() {
   CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
   CombatGateLinkLibsIsATextThatTheFileGivesWhole();
   CombatAibotsScenarioIsATextThatTheFileGivesWhole();
+  CombatEcWordsIsATextThatTheFileGivesWhole();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

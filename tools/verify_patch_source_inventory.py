@@ -53,6 +53,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/pnsrad_enabler.cpp",
     "patch/provider_name_redirect.cpp",
     "patch/queued_join_log.cpp",
+    "patch/lobby_settings_hook.cpp",
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",

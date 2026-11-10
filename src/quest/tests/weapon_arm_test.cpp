@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +40,9 @@
 #include "quest/tests/test_check.h"
 
 namespace {
+// Reads made through SafeRead: safe_read.h's test seam adds one to this counter for each (set in main).
+std::atomic<std::uint64_t> g_safeReads{0};
+std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
 
 namespace wa = nevr_quest::combat::weapon_arm;
 using EchoVR::CSymbol64Hash;
@@ -414,7 +418,7 @@ void ASecondLogin() {  // 13. a finished module stays finished within the launch
 
 void AMarkerThePluginWroteStopsTheModule() {  // 14
   // The plugin's marker: the same name in the same directory, with whatever text the plugin wrote.
-  const std::uint32_t scans0 = nevr_quest::combat::level::ScanCalls(), reads0 = nevr_quest::combat::SafeReadCalls();
+  const std::uint64_t scans0 = nevr_quest::combat::level::ScanCalls(), reads0 = SafeReadCalls();
   for (const char* text : {"weaponarm 1 profile -1 weaponarm now 1\n", "weaponarm 1 profile 1 weaponarm right already, nothing changed\n", "old\n", ""}) {
     Reset(1, 0, -1);
     std::FILE* m = std::fopen((g_dir + "/t26arm.OVR-ORG-1234567890").c_str(), "w");
@@ -424,7 +428,7 @@ void AMarkerThePluginWroteStopsTheModule() {  // 14
     CHECK(g_setCalls == 0 && g_queueCalls == 0 && wa::Phase() == 2, "a plugin marker (%zu bytes) did not stop the module", std::strlen(text));
     CHECK(ReadFile("t26arm.OVR-ORG-1234567890") == text, "the module rewrote a plugin marker");
     CHECK(wa::CurrentStats().scopedOut == 0, "a profile with a marker scanned the levels");
-    CHECK(nevr_quest::combat::level::ScanCalls() == scans0 && nevr_quest::combat::SafeReadCalls() == reads0, "a profile with a marker scanned or read the game");
+    CHECK(nevr_quest::combat::level::ScanCalls() == scans0 && SafeReadCalls() == reads0, "a profile with a marker scanned or read the game");
   }
   // The module's own marker is the plugin's file name: the directory is files/q15t, the name t26arm.<id> with the id's odd characters made '_'.
   Reset(1, 1, -1);
@@ -480,9 +484,9 @@ void TheKillFileIsNotReadAndWarns() {  // 16
 
 // The reads a level scan makes on this fake game (measured, not assumed), so a path that must read nothing but its scope test can be counted exactly.
 std::uint32_t ReadsPerScan(std::uintptr_t game) {
-  const std::uint32_t before = nevr_quest::combat::SafeReadCalls();
+  const std::uint64_t before = SafeReadCalls();
   nevr_quest::combat::level::Scan(game);
-  return nevr_quest::combat::SafeReadCalls() - before;
+  return SafeReadCalls() - before;
 }
 
 void ArenaAndOtherLevelsAreLeftAlone() {  // 17
@@ -492,13 +496,13 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
   for (const char* name : quiet) {
     Reset(1, 0, -1, name);
     const std::uint32_t perScan = ReadsPerScan(reinterpret_cast<std::uintptr_t>(g_game));
-    const std::uint32_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
+    const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
     for (int i = 0; i < 12; ++i) Pass();
     CHECK(g_setCalls == 0 && g_queueCalls == 0 && wa::Phase() == 0, "%s: set %d queued %d phase %d", name, g_setCalls, g_queueCalls, wa::Phase());
     // By count: each pass makes one scan and nothing else reads (no equipment search, no component read).
-    const std::uint32_t scans = nevr_quest::combat::level::ScanCalls() - scans0, reads = nevr_quest::combat::SafeReadCalls() - reads0;
-    CHECK(scans == wa::CurrentStats().passes && scans >= 11, "%s: %u scans for %u passes", name, scans, wa::CurrentStats().passes);
-    CHECK(reads == scans * perScan, "%s: %u reads for %u scans of %u reads each", name, reads, scans, perScan);
+    const std::uint64_t scans = nevr_quest::combat::level::ScanCalls() - scans0, reads = SafeReadCalls() - reads0;
+    CHECK(scans == wa::CurrentStats().passes && scans >= 11, "%s: %llu scans for %u passes", name, static_cast<unsigned long long>(scans), wa::CurrentStats().passes);
+    CHECK(reads == scans * perScan, "%s: %llu reads for %llu scans of %u reads each", name, static_cast<unsigned long long>(reads), static_cast<unsigned long long>(scans), perScan);
     CHECK(!FileExists("t26arm.OVR-ORG-1234567890"), "%s: a marker was written", name);
     CHECK(Lines("combat_weapon_arm_waiting").empty() && Lines("combat_weapon_arm_set").empty() && Count("combat_weapon_arm_install") == 1, "%s: the module wrote a line", name);
     CHECK(wa::CurrentStats().scopedOut >= 11, "%s: scoped out %u", name, wa::CurrentStats().scopedOut);
@@ -622,6 +626,7 @@ void TheCostInArena() {  // 19: printed (a host number; the module's header says
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   char tmpl[] = "/tmp/combat-wa-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;

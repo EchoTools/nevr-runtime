@@ -16,6 +16,7 @@
 #include <dirent.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +40,9 @@
 #include "quest/tests/test_check.h"
 
 namespace {
+// Reads made through SafeRead: safe_read.h's test seam adds one to this counter for each (set in main).
+std::atomic<std::uint64_t> g_safeReads{0};
+std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
 
 namespace gc = nevr_quest::combat::gunconnect;
 namespace gt = nevr_quest::combat::gunconnect::targets;
@@ -516,9 +520,9 @@ void TheKillFileIsNotReadAndWarns() {  // 16
 
 // The reads a level scan makes on this fake game (measured, not assumed), so a path that must read nothing but its scope test can be counted exactly.
 std::uint32_t ReadsPerScan(std::uintptr_t game) {
-  const std::uint32_t before = nevr_quest::combat::SafeReadCalls();
+  const std::uint64_t before = SafeReadCalls();
   nevr_quest::combat::level::Scan(game);
-  return nevr_quest::combat::SafeReadCalls() - before;
+  return SafeReadCalls() - before;
 }
 
 void ArenaAndOtherLevelsAreLeftAlone() {  // 17
@@ -527,14 +531,14 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
   for (const char* name : quiet) {
     Reset(1, name);
     const std::uint32_t perScan = ReadsPerScan(reinterpret_cast<std::uintptr_t>(g_game));
-    const std::uint32_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
+    const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
     Run(10);
     CHECK(g_connects.empty() && g_hasTagCalls == 0 && g_userActorCalls == 0, "%s: Connect %zu, HasTag %d, UserActor %d", name, g_connects.size(), g_hasTagCalls,
           g_userActorCalls);
     // By count: each pass makes one scan and nothing else reads (no member, no gun system, no table of its own).
-    const std::uint32_t scans = nevr_quest::combat::level::ScanCalls() - scans0, reads = nevr_quest::combat::SafeReadCalls() - reads0;
-    CHECK(scans == gc::CurrentStats().passes && scans >= 9, "%s: %u scans for %u passes", name, scans, gc::CurrentStats().passes);
-    CHECK(reads == scans * perScan, "%s: %u reads for %u scans of %u reads each", name, reads, scans, perScan);
+    const std::uint64_t scans = nevr_quest::combat::level::ScanCalls() - scans0, reads = SafeReadCalls() - reads0;
+    CHECK(scans == gc::CurrentStats().passes && scans >= 9, "%s: %llu scans for %u passes", name, static_cast<unsigned long long>(scans), gc::CurrentStats().passes);
+    CHECK(reads == scans * perScan, "%s: %llu reads for %llu scans of %u reads each", name, static_cast<unsigned long long>(reads), static_cast<unsigned long long>(scans), perScan);
     CHECK(Lines("combat_gunconnect_gun_cs").empty() && Lines("combat_gunconnect_waiting").empty() && Count("combat_gunconnect_install") == 1,
           "%s: the module wrote a line", name);
     CHECK(gc::CurrentStats().scopedOut >= 9 && gc::CurrentStats().passes >= 9, "%s: passes %u scoped out %u", name, gc::CurrentStats().passes,
@@ -656,6 +660,7 @@ void TheCostInArena() {  // 19: printed, not asserted (a host number; the module
 }  // namespace
 
 int main() {
+  nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
   char tmpl[] = "/tmp/combat-gc-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;

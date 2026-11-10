@@ -7,29 +7,41 @@
 # warnings-as-errors flags its siblings use. The sentinel links this target; --exclude-libs keeps it out of the export set.
 add_library(nevr_quest_combat STATIC
   aibots.cpp
+  bvh.cpp
   combat_active.cpp
   combat_install.cpp
   combat_level.cpp
   combat_tick.cpp
   combat_level.cpp
   combat_tick.cpp
+  decals.cpp
+  dronekill.cpp
+  dronemuzzle.cpp
+  ec.cpp
+  ecfx.cpp
   equip_refire.cpp
   gamespace.cpp
   gunconnect.cpp
   headset_gates.cpp
   heaps.cpp
+  impactsnd.cpp
   instmodel.cpp
   match_tags.cpp
   memsys.cpp
   meshstep.cpp
+  music.cpp
   pfx.cpp
   pfxtev.cpp
+  powerboost.cpp
   refresh_rate.cpp
+  sendguard.cpp
+  sensorwd.cpp
   shaderstep.cpp
   table_step.cpp
   tablestep.cpp
+  wallfire.cpp
   weapon_arm.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
-target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook)
+target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk nlohmann_json::nlohmann_json)  # nlohmann: runtime/compat/server_features.h (#2333)

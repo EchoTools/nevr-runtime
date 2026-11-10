@@ -33,10 +33,14 @@
 //     bumps the u32 there each time the veil is used on this machine.
 //
 // Clients say hello every 2 s; the server relays only to clients that have (so a
-// player without VeilNet never gets a packet the game would not understand), and answers
-// each hello with an 'A'. A client that has had no answer for SERVER_TIMEOUT is on a
-// server without EchoCombat: it hides the three new tac mods (UMBRAL VEIL, OVERCHARGE,
-// POINT) from the tac mod list until one comes (TacModsFor).
+// player without VeilNet never gets a packet the game would not understand).
+// nEVR port (#2333): a client of this build no longer reads the server's 'A' answer to each hello
+// (the server still sends it, for clients of older builds). Whether a server runs EchoCombat, and
+// allows MEDIGUN, is the server's to state: it lists its features in
+// the lobby settings the game gives every client it accepts (runtime/compat/server_features.h),
+// and the client reads them where the game receives them (runtime/patch/lobby_settings_hook.h).
+// A client whose server states no EchoCombat hides the three new tac mods (UMBRAL VEIL,
+// OVERCHARGE, POINT) from the tac mod list (TacModsFor).
 // A nEVR plugin (nevr_plugin.h): set up from NvrPluginInitEx, taken down in
 // NvrPluginShutdown; the host says whether this is the server. Its lines go to nEVR's host
 // log, tagged plugin=VeilNet; the per-packet and per-tick lines are Debug.
@@ -64,6 +68,10 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
+#include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
+#include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -99,7 +107,7 @@ constexpr uintptr_t LOC_TOKEN_RVA = 0x2104d20;
 constexpr uintptr_t LOC_COUNTER_RVA = 0x2104d40;
 constexpr uintptr_t OC_TOKEN_RVA = 0x2104ca8;
 constexpr uintptr_t OC_COUNTER_RVA = 0x2104ca4;
-constexpr uintptr_t EQUIP_RVA = 0x2104e80;          // tools/equip_guard.py: +00 equipped, +08 writer, +10 skips
+constexpr uintptr_t EQUIP_RVA = nevr_combat::kEquipCellRva;  // nEVR port (#600), equip_cell.h: +00 equipped, +08 writer, +10 skips
 constexpr uintptr_t POINT_FIRED_RVA = 0x2104d44;    // POINTs whose stun went off here
 constexpr ULONGLONG TOKEN_LIFE = 15000000;      // 1.5 s, in 100 ns
 constexpr uint32_t MAGIC = 0x4c564345;          // "ECVL"
@@ -111,15 +119,17 @@ constexpr uint32_t MAGIC2 = 0x4c494556;         // "VEIL"
 constexpr uintptr_t TACMOD_LIST_RVA = 0x20d3430;
 constexpr size_t TACMOD_ENTRY = 0x88;
 const char *const kNewTacMods[3] = {"smoke", "buff", "point"};
-constexpr ULONGLONG SERVER_TIMEOUT = 6000;      // ms without an answer to the hello
+// nEVR port (#2333): SERVER_TIMEOUT (6 s without an answer to the hello) is gone: a client of this build reads no answer.
 //: MEDIGUN is off unless the server turns it on: PowerBoost.ini [server] medigun=1 next to this
-//: DLL on the server. Its answer to each hello carries ANSWER_MEDIGUN when it does; a client
+//: DLL on the server (nEVR port: combat.medigun). nEVR port (#2333): the server states it as the
+//: feature echocombat_medigun in its lobby settings, not in an answer to each hello; a client
 //: shows MEDIGUN (the weapon list's last entry, fix_medigun.py appends it) only while its current
-//: server's answers say so, and PowerBoost.dll (VeilNet_MedigunAllowed) keeps it a plain COMET
+//: server states it, and PowerBoost.dll (VeilNet_MedigunAllowed) keeps it a plain COMET
 //: otherwise. The weapon list sits just before the tac mod list (gear_table order: weapons,
 //: ordnances, tac mods; each filled by +0xc4e410 from InitAndLoadGearTables).
 constexpr uintptr_t WEAPON_LIST_RVA = 0x20d3420;
-constexpr uint32_t ANSWER_MEDIGUN = 1;
+// nEVR port (#2333): the old ANSWER_MEDIGUN bit of the 'A' a server still sends for clients of older builds.
+constexpr uint32_t kAnswerMedigun = 1;
 bool g_medigun_on_server = false;               // server: [server] medigun (nEVR port: combat.medigun)
 bool g_match_control = false;                   // nEVR port: combat.match_control
 bool g_quick_exit = false;                      // nEVR port: the clean exit is in place
@@ -538,7 +548,7 @@ constexpr uint32_t WANT_PAUSE = 0x20;           // in +13: a PAUSE ask, bit 0 th
 
 // --- END MATCH (private matches) ------------------------------------------------------------
 // A client asks with F8 (its Echo window in front): 'C' WANT_END. The server, in a private match
-// only (its "[NETLOBBY] Starting session (gametype ...private...)" log line), until the game's
+// only (nEVR port (#2289): from SessionGameType(), combat/match_type.h), until the game's
 // nevt_game_over goes out (or END_GIVE_UP_MS):
 //   * blue captures the point as if a blue player stood on it (game thread, EndMatchCapture): each
 //     capture volume not owned by blue gets what the engine's capture tick writes when a capture
@@ -558,7 +568,18 @@ constexpr uint64_t SYM_CAPTUREPOINT = 0xeedeff1586bd8846ull;     // "capturepoin
 constexpr ULONGLONG END_EVERY_MS = 300, END_GIVE_UP_MS = 180000, END_RESCAN_MS = 2000;
 constexpr float END_POINTS = 9999.0f;
 constexpr float END_TOTAL = 60.0f;               // unlock 1 s, capture 0 (instant)
-volatile LONG g_private_match = -1;             // server: -1 unknown, 0 / 1 from the session log
+// nEVR port (#2289): the match type comes from the session game type the runtime stores (combat/match_type.h), not from
+// the game's session log line, which echovr.exe logs and this module does not watch. The last privacy logged, so each
+// change is one line: -1 none logged yet, else a MatchPrivacy value.
+volatile LONG g_privacy_logged = -1;
+nevr_combat::MatchPrivacy SessionPrivacy() {
+    const std::optional<std::string> type = nevr_arena_round_time::SessionGameType();
+    const nevr_combat::MatchPrivacy privacy = nevr_combat::PrivacyOf(type);
+    if (InterlockedExchange(&g_privacy_logged, (LONG)privacy) != (LONG)privacy)
+        Log("session game type %s: %s (MAP SWITCH and END MATCH %s)", type ? type->c_str() : "none",
+            nevr_combat::PrivacyText(privacy), privacy == nevr_combat::MatchPrivacy::kPrivate ? "allowed" : "refused");
+    return privacy;
+}
 volatile ULONGLONG g_end_until = 0, g_end_next = 0, g_end_scanned = 0;
 volatile LONG g_end_written = 0;                 // times the points were written
 uint8_t *g_end_point = nullptr;                  // the point script's data (cached)
@@ -759,8 +780,9 @@ uint32_t LoadoutMode() {
     uint32_t m = g_server ? (uint32_t)g_classic : g_rules ? g_rules[CLASSIC_SHOWN] : 0;
     return m <= LOADOUT_NEW ? m : LOADOUT_ALL;
 }
-volatile ULONGLONG g_last_answer = 0;           // client: when the server last answered a hello
-volatile uint32_t g_last_answer_flags = 0;      // ... and what it said (ANSWER_MEDIGUN)
+// nEVR port (#2333): g_last_answer and g_last_answer_flags are gone with the answer; the current server's statement
+// is nevr_server_features::Client() (server_features.h).
+bool MedigunAllowedNow();   // nEVR port (#2333): defined with the weapon list below
 
 // RULES CAPTURE TIME 0 = an instant capture. The script stores the capture time as float(T mod 60),
 // so a chosen 0 looks like "unset" (the map's own); while T is set it is made 1 ms here instead.
@@ -777,7 +799,11 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         Remember(s, from);
         if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
-            Send(s, from, 'A', g_medigun_on_server ? ANSWER_MEDIGUN : 0);   // "this server has EchoCombat"
+            // nEVR port (#2333): the 'A' ("this server has EchoCombat") stays for clients of older builds only: the Quest combat
+            // APK players have (Ducky's base, r15 61700999, EchoQuestCombat) shows the three tac mods only after one. A client of this
+            // build reads no 'A' and follows the server's lobby settings (server_features.h). It reaches a client once the sendto /
+            // recvfrom hooks see the game's datagrams (#2334), and goes when no 6.17.0-era client remains.
+            Send(s, from, 'A', g_medigun_on_server ? kAnswerMedigun : 0);
             uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
             if (total) Send(s, from, 'R', total);                            // its RULES unlock / capture time
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
@@ -821,18 +847,19 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
         if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
             int k = (int)(p.id & 0xF);
-            if (g_private_match != 1) {
+            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
+            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
                 Log("MAP SWITCH to %s asked by %s: refused (%s)", kMapNames[k], Addr(from, buf, sizeof(buf)),
-                    g_private_match == 0 ? "not a private match" : "match type unknown");
+                    nevr_combat::PrivacyText(privacy));
             } else if (!g_map_want && !g_map_announce && !g_map_leaving) {
                 g_map_want = k + 1;
                 Log("MAP SWITCH to %s asked by %s", kMapNames[k], Addr(from, buf, sizeof(buf)));
             }
         }
         if (p.type == 'C' && p.id == WANT_END) {                             // F8: END MATCH
-            if (g_private_match != 1) {
-                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)),
-                    g_private_match == 0 ? "not a private match" : "match type unknown");
+            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
+            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
+                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
             } else if (!g_end_until) {
                 ULONGLONG now = GetTickCount64();
                 g_end_written = 0;
@@ -869,13 +896,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             LogDebug("%s %08x from %s: %srelayed to %d client(s)", What(p.type), p.id,
                 Addr(from, buf, sizeof(buf)), p.type != 'T' ? "token here, " : "", n);
         }
-    } else if (p.type == 'A') {
-        Dest d;                                          // only the current server's answer counts
-        if (ServerDest(d) && Same(d.addr, from)) {
-            g_last_answer = GetTickCount64();
-            g_last_answer_flags = p.id;
-        }
-    } else if (p.type == 'L') {
+    } else if (p.type == 'L') {   // nEVR port (#2333): an 'A' is no longer read (the server sends none)
         Dest d;
         if (ServerDest(d) && Same(d.addr, from) && p.id < (uint32_t)MAP_COUNT && g_map_target != (LONG)p.id + 1) {
             g_map_target = (LONG)p.id + 1;
@@ -929,7 +950,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             PageTexts();
         }
     } else if (p.type == 'M' && FirstTime(p.id)) {
-        if (g_last_answer_flags & ANSWER_MEDIGUN) MedigunHere(p.id);
+        if (MedigunAllowedNow()) MedigunHere(p.id);   // nEVR port (#2333): as the server states
     } else if (p.type == 'K' && FirstTime(p.id)) {          // a drone the server killed: DroneFix shuts it down
         using killed_fn = void(__cdecl *)(uint32_t);
         static killed_fn killed = nullptr;
@@ -1883,7 +1904,7 @@ int TacModsGuarded(bool server_has_it, uint64_t *now_count) {
     }
 }
 
-// MEDIGUN in the weapon list as the server allows (see ANSWER_MEDIGUN): the list's last entry,
+// MEDIGUN in the weapon list as the server allows (nEVR port #2333: its echocombat_medigun feature): the list's last entry,
 // cut off by the count as the tac mods are. While it is this player's weapon it stays (the
 // selection would point past the list's end); PowerBoost.dll keeps it a COMET meanwhile.
 uint8_t *g_weapon_entries;
@@ -1929,10 +1950,8 @@ int MedigunListGuarded(bool allowed, uint64_t *now_count) {
     }
 }
 
-bool MedigunAllowedNow() {
-    ULONGLONG now = GetTickCount64();
-    return g_last_answer && now - g_last_answer < SERVER_TIMEOUT && (g_last_answer_flags & ANSWER_MEDIGUN);
-}
+// nEVR port (#2333): as the current server states in its lobby settings (server_features.h), not its last answer.
+bool MedigunAllowedNow() { return ::nevr_server_features::Client().Current().medigun; }
 
 void MedigunListFor(bool allowed) {
     uint64_t n = 0;
@@ -2102,8 +2121,8 @@ SRWLOCK g_lists_lock = SRWLOCK_INIT;
 void UpdateGearLists() {
     if (g_server) return;
     AcquireSRWLockExclusive(&g_lists_lock);
-    ULONGLONG now = GetTickCount64();
-    bool answered = g_last_answer && now - g_last_answer < SERVER_TIMEOUT;
+    // nEVR port (#2333): the current server states EchoCombat in its lobby settings (server_features.h).
+    bool answered = ::nevr_server_features::Client().Current().echoCombat;
     if (g_rules && !answered) {                                  // no EchoCombat server: ALL, off, 1.0x
         g_rules[CLASSIC_SHOWN] = g_rules[CHASSIS_SHOWN] = 0;
         g_rules[RATE_SHOWN] = g_rules[PAUSED_SHOWN] = 0;
@@ -2301,7 +2320,12 @@ DWORD WINAPI Tick(LPVOID) {
     ULONGLONG next_hello = 0, next_pick = 0, next_hook = 0, next_tacmods = 0;
     uint8_t seen_classic_requests = g_rules ? g_rules[CLASSIC_REQUESTS] : 0;
     bool f8_was = false;
+    ULONGLONG next_privacy = 0;                          // nEVR port (#2289)
     while (!g_stop) {
+        if (g_server && GetTickCount64() >= next_privacy) {   // nEVR port (#2289): once a second, so the match type's
+            next_privacy = GetTickCount64() + 1000;              // change line shows as a session starts or ends
+            SessionPrivacy();
+        }
         Sleep(10);                                       // (5 ms: 200 wakeups a second, for checks that need far fewer)
         if (g_server && g_end_until) EndMatchStep();     // server: F8 END MATCH
 #ifdef ECHOCOMBAT_LOG
@@ -2440,19 +2464,9 @@ uint64_t AbilitySymbol(const char *name, size_t n) {
     return 0;
 }
 
-constexpr char kSessionFmt[] = "[NETLOBBY] Starting session (gametype ";
+// nEVR port (#2289): his reader of the game's session line ("[NETLOBBY] Starting session (gametype ") is gone. echovr.exe
+// logs that line and this module does not watch echovr.exe's logger, so it never ran; SessionPrivacy() reads the type.
 void SawLog(const char *fmt, va_list args) {
-    if (fmt && g_server && !strncmp(fmt, kSessionFmt, sizeof(kSessionFmt) - 1)) {
-        va_list copy = args;
-        const char *gametype = va_arg(copy, const char *);
-        EC_TRY {
-            g_private_match = gametype && strstr(gametype, "private") ? 1 : 0;
-            Log("session gametype %s: %s match", gametype ? gametype : "?", g_private_match ? "private" : "public");
-        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            g_private_match = -1;
-        }
-        return;
-    }
     if (!fmt || strcmp(fmt, kProfileFmt) != 0) return;
     va_list copy = args;
     const char *json = va_arg(copy, const char *);
@@ -2930,7 +2944,7 @@ int __cdecl VeilNet_MedigunAllowed() {
 
 // nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls. The server's
 // MEDIGUN answer is combat.medigun, not PowerBoost.ini [server] medigun; the clean exit is installed only when
-// combat.clean_exit is on, where Cat installed it on every start.
+// combat.clean_exit is on (its default, as Cat installed it on every start).
 bool Start(bool is_server, bool match_control, bool medigun_server) {
     g_match_control = match_control;
     g_medigun_on_server = medigun_server;

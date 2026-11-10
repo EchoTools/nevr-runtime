@@ -88,7 +88,7 @@ std::size_t Count() noexcept { return g_count.load(std::memory_order_acquire); }
 
 namespace {
 
-// KNOWN-WRONG #2168: the q15t plugin installs its own wrapper on this slot until its last ticked module moves (F20); this install joins
+// KNOWN-WRONG #2168: the q15t plugin installs its own wrapper on this slot until its last ticked module moves (gunconnect, aibots and weapon_arm are still its); this install joins
 // it through the manager's first-handler rule (combat_tick.h).
 sentinel::GotStatus InstallStatusAt(sentinel::ImageLookup lookup) noexcept {
   Thunk::Arm(kTickHook);

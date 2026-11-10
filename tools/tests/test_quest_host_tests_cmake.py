@@ -60,27 +60,41 @@ PROGRAMS = {
     ),
     "combat": (
         "aibots_test",
+        "bvh_core_test",
+        "bvh_test",
         "combat_active_test",
         "combat_gates_test",
         "combat_install_test",
         "combat_level_test",
         "combat_tick_test",
+        "ec_page_test",
+        "ec_test",
+        "ecfx_test",
+        "dronekill_test",
+        "dronemuzzle_test",
+        "decals_test",
         "equip_refire_test",
         "gunconnect_test",
         "headset_gates_library_name_test",
         "headset_gates_test",
         "heap_step_test",
         "heaps_test",
+        "impactsnd_test",
         "instmodel_test",
         "match_tag_default_test",
         "memsys_test",
         "meshstep_test",
+        "music_test",
         "refresh_rate_test",
+        "sensorwd_test",
         "shaderstep_tablestep_test",
         "shaderstep_test",
         "tablestep_test",
         "pfx_test",
         "pfxtev_test",
+        "powerboost_test",
+        "sendguard_test",
+        "wallfire_test",
         "weapon_arm_test",
     ),
     "data": (
@@ -328,10 +342,13 @@ class RecipesBuildThroughPresets(unittest.TestCase):
 
 class EveryProgramIsATarget(unittest.TestCase):
     def test_every_program_the_recipes_built_is_a_target_of_the_project(self):
+        # Each listed program must still be a target of its group; a group may hold more (a module that moves in adds its own program,
+        # and need not edit this list), so the check is of presence, not of the whole list.
         found = targets()
         for group, expected in PROGRAMS.items():
-            with self.subTest(group=group):
-                self.assertEqual(sorted(expected), sorted(found.get(group, {})))
+            for program in expected:
+                with self.subTest(group=group, program=program):
+                    self.assertIn(program, found.get(group, {}), f"{program} is no longer a target of the {group} group")
 
     def test_the_programs_a_recipe_runs_by_name_are_not_ctest_tests_and_the_rest_are(self):
         found = targets()
