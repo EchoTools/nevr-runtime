@@ -1,6 +1,8 @@
 # POWER BOOST, the client half (rows R51..R56)
 
-Files: `src/quest/combat/powerboost.{h,cpp}`, `src/quest/combat/powerboost_core.h`, `src/quest/combat/powerboost_targets.h`,
+Files: `src/quest/combat/powerboost.{h,cpp}`, `src/runtime/patch/powerboost_rules.h` (the marker decode, the cone and the link markers,
+shared with PC's `src/runtime/combat/powerboost.cpp` and tested on PC by `src/runtime/tests/test_powerboost_rules.cpp`),
+`src/quest/combat/powerboost_core.h` (the link line's filter), `src/quest/combat/powerboost_targets.h`,
 `src/quest/combat/powerboost_thunk.inc`, `src/quest/combat/thread_word.h`, `src/quest/combat/check/powerboost.sh` and
 `powerboost_thunk.want`, `src/quest/combat/mutants.d/powerboost.sh`, `src/quest/tests/powerboost_test.cpp`, `src/quest/tests/pb_thunk_qemu.cpp`.
 
@@ -57,6 +59,15 @@ acquire load) and returns the body or the stand-in. The entry stays the newest h
 the register and requires `ldar` or `ldapr`, checks that the sentinel's object carries the same text, and runs `pb_thunk_qemu` under
 `qemu-aarch64`: an ordinary call reaches the next function with x0, x1, x2, x30 and the callee-saved registers intact; the armed call reaches the
 continuation with the target, the caller's sp and x24; a return address one instruction off is an ordinary call.
+
+## The rules
+
+`powerboost_rules.h` holds the rules both ports run, from EchoCombat v2.0.0's `plugin/powerboost.cpp`. A marker's value is what is past its
+band's base, rounded (`+ 0.5f`), so 1,020,009.75 decodes to dr 20, 10 s. A use or link amount whose rounding carries it out of its band (1,999,999.75 gives
+v 1,000,000) is malformed and is declined: no buff, no link, never sent to the game's Heal once markers are swallowed (stage 2; the read-only stage 1 swallows none), and a use already running is left alone (EchoCombat's decode would end that
+use, and its link marker for the linked teammates is misread as a use that ends their one second of immunity). The script's heal node writes whole amounts, which decode the same with or without the rounding. The angle in a bubble's
+radius names POWER BOOST's bubble at 1..180 degrees and MEDIGUN's at 501..590; the Quest has no MEDIGUN and leaves that bubble, and any other, to the
+game's own radius check, as it does a radius that is not finite.
 
 ## Arena
 

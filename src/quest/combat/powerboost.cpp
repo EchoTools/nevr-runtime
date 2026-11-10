@@ -21,6 +21,7 @@
 #include "quest/combat/thread_word.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/patch/powerboost_rules.h"
 
 // The two words the entry reads, its continuation and the entry itself (powerboost_thunk.inc, callback_thunk.h rule 7). Global scope,
 // C names, hidden. The call-site word is stored (release) before the slot changes and never again while the entry is in; the next word is
@@ -37,7 +38,8 @@ namespace nevr_quest::combat::powerboost {
 
 namespace {
 
-using namespace pbcore;
+using namespace pbcore;                // the link line's filter (Quest only)
+using namespace ::nevr_powerboost;     // the decode, the cone and the link markers, shared with PC (runtime/patch/powerboost_rules.h, #2339)
 namespace pinned = sentinel::pinned;
 
 constexpr std::uintptr_t kDataAmount = 0x20;      // SR15NetDamageableHealNodeData: float amount, then u32 user at +0x24
@@ -140,11 +142,22 @@ void MarkerLine(float amount, const char* where, long long index, std::uint32_t 
   g_markers.fetch_add(1, std::memory_order_relaxed);
   if (!Take(g_markerLines, kMarkerCap, "marker")) return;
   const Marker m = Decode(amount);
-  if (!m.kind) {
+  if (m.kind == kHeal) {
     const Num a(static_cast<double>(amount));
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
                         {{"kind", 0}, {"amount", a.text}, {"where", where}, {"index", index}, {"user", user}, {"tid", Tid()},
                          {"msg", "the amount is not a marker; passed on to the game as a heal"}});
+    return;
+  }
+  if (m.kind == kDeclined) {
+    // stage 1 (swallow off) swallows no marker: the game's Heal takes this amount as a heal. From stage 2 on it never reaches Heal.
+    const bool passedOn = !g_swallow.load(std::memory_order_acquire);
+    const Num a(static_cast<double>(amount));
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
+                        {{"kind", m.kind}, {"rez", m.rez}, {"amount", a.text}, {"where", where}, {"index", index}, {"user", user}, {"tid", Tid()},
+                         {"passed_on", passedOn ? 1 : 0},
+                         {"msg", passedOn ? "the amount rounds out of its marker band: no buff, and the game's Heal takes it as a heal (stage 1 swallows no marker)"
+                                           : "the amount rounds out of its marker band; declined: no buff, not passed on as a heal"}});
     return;
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_marker",
@@ -202,9 +215,9 @@ __attribute__((noinline)) void NodeAct(NodeThunk::Fn original, void* node, const
 __attribute__((noinline)) void HealAct(HealThunk::Fn original, void* cs, std::uint64_t handle, float amount, std::uint64_t user) noexcept {
   if (g_swallow.load(std::memory_order_acquire) && amount >= kMarkerMin) {  // stage 2: a marker never reaches Heal; this path never sends
     const Marker m = Decode(amount);
-    if (m.kind) {
+    if (m.kind != kHeal) {
       const bool inNode = g_tInNode.Get() != 0;
-      if (inNode && m.kind == 1) {  // the node's direct path: held for the next queued heal
+      if (inNode && m.kind == kUse) {  // the node's direct path: held for the next queued heal
         Lock();
         const bool replaced = g_held.cs != nullptr;
         g_held = Held{cs, handle, NowMs(), amount};
@@ -249,15 +262,16 @@ __attribute__((noinline)) void QueuedHealAct(QueuedHealThunk::Fn original, void*
     }
   }
   const Marker m = Decode(amount);
-  if (!m.kind) {
+  if (m.kind == kHeal) {
     original(cs, handle, amount, user);
     return;
   }
   g_swallowed.fetch_add(1, std::memory_order_relaxed);
-  if (m.kind == 1) {
+  if (m.kind == kUse) {
     Send(cs, handle, amount, "queued node heal");
   } else {
-    SwallowLine(m, "queued heal", handle, "nothing sent (the server owns the buffs)");
+    SwallowLine(m, "queued heal", handle,
+                m.kind == kDeclined ? "declined: its value rounds out of its band; nothing sent, not a heal" : "nothing sent (the server owns the buffs)");
   }
 }
 
@@ -367,7 +381,9 @@ const std::uint8_t* ConeAt(const PhTarget* target, const std::uint8_t* frame, st
   if (ok) radius = SafeRead<float>(radiusAt, &ok);
   if (!ok) return body;
   const int angle = ConeAngle(radius);
-  if (angle < 1 || angle > 180) return body;  // not POWER BOOST's bubble
+  // not POWER BOOST's bubble: neither (a radius that is not finite, Repair Matrix's whole one), or MEDIGUN's band, which is PC's (the Quest
+  // has no MEDIGUN and leaves such a bubble to the game's own radius check)
+  if (BubbleOf(angle) != Bubble::kPowerBoost) return body;
   const std::uintptr_t record = radiusAt - kRecRadius;
   const auto physics = SafeRead<std::uintptr_t>(record, &ok);
   const auto handle = SafeRead<std::uint32_t>(record + kRecHandle, &ok);
