@@ -34,7 +34,7 @@
  * Not measured on a headset; weapon_arm_test prints the host cost of the arena pass.
  *
  * Origin. The reference build's T-26 in kotorvr's echoquest-combat repository (commit c5a67e8): runtime/native/afkxr/afk_gunconnect.cpp:58-64 (the
- * header), :496-598 (the pass), which the q15t plugin reconstructed (`weapon_arm.cpp`); this file moves that reconstruction into the runtime.
+ * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the q15t plugin reconstructed (`weapon_arm.cpp`); this file moves that reconstruction into the runtime.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_weapon_arm_install","result":"installed|off|refused","reason":"..","msg":".."}

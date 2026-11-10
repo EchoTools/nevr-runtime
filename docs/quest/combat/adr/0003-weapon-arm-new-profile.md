@@ -2,7 +2,7 @@
 
 ## Decision
 
-A profile whose `weaponarm` is not 1 gets its gun on the right hand, once per user id and missing marker, by the reference build's rule (T-26, `afk_gunconnect.cpp:58-64,615-662`). It is combat behaviour of the
+A profile whose `weaponarm` is not 1 gets its gun on the right hand, once per user id and missing marker, by the reference build's rule (T-26, `afk_gunconnect.cpp:58-64,581-660` (the rule at :641)). It is combat behaviour of the
 runtime (`src/quest/combat/weapon_arm.h`, docs/quest/combat/weapon_arm.md), on by default (`combat.weapon_arm`), and not an A/B arm. It runs on the combat game tick and writes no code word.
 
 It writes player state: the game's `SavePlayerEquipment` stores the arm into the profile's `weaponarm` key, so the set persists. The community service sends `weaponarm` for every profile (nakama's client
@@ -22,8 +22,7 @@ passes, and then:
 
 ## Why the marker directory is not renamed
 
-The markers are the player's state, not a switch (docs/adr/0046 rule 4). Every existing profile has its marker under `files/q15t`; a module that looked elsewhere would find none. With the profile read
-first would repeat the 3-pass hold, the set and the marker write for every profile, so the directory stays.
+The markers are the player's state, not a switch (docs/adr/0046 rule 4). Every existing profile has its marker under `files/q15t`; a module that looked elsewhere would find none. If the directory moved, every existing profile would have no marker and would go through the 3-pass hold, the set and the marker write again, so the directory stays.
 
 ## A missing marker
 

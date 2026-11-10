@@ -1,7 +1,7 @@
 // Walks CR15Game's two gamespace tables (build 4987566) for component systems. Game thread only; every read is a
 // SafeRead, so a stale or half-built table is a skipped entry, never a fault. (The reference build's gunconnect FindCs.)
 //
-// KNOWN-WRONG #2168: powerboost is the one module left that reads this; the runtime's copy is src/quest/combat/gamespace.h, and this file goes when powerboost moves (F20, #2187).
+// KNOWN-WRONG #2168: unused: no module of the plugin reads this (the last readers moved into the runtime). It is removed when the fold ends.
 #pragma once
 
 #include <cstdint>

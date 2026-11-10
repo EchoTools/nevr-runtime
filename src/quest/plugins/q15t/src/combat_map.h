@@ -1,8 +1,7 @@
 // Whether one of the game's gamespaces holds a combat map.
 //
-// KNOWN-WRONG #2168: the level list below is a second copy of the one the runtime keeps (src/quest/combat/combat_level.h, which owns the refresh rate and
-// replaced this plugin's rule, #2172). No module of the plugin reads it any longer: music and aibots, its last readers, moved into the runtime; this file goes
-// with the plugin's gamespace lookup when the fold ends.
+// KNOWN-WRONG #2168: unused: no module of the plugin reads this (the last readers moved into the runtime). It is removed when the fold ends. Its level list is a
+// second copy of the one the runtime keeps (src/quest/combat/combat_level.h).
 #pragma once
 
 #include <cstdint>

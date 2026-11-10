@@ -203,6 +203,7 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   // levelname and its companion boosterpool: built in, less the kill file `levelname.off` (the runtime's headset gates read `combat.levelname`
   // for the same fact: the bot-body gate needs the full-size global_mp that levelname loads).
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
+  // KNOWN-WRONG #2168: unused: no module of the plugin registers a game tick, so want_tick stays false and the tick below is never installed. It is removed when the fold ends.
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
   // The modules, in an order the docs fix (bvh, wallfire, impactsnd, decals, ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).

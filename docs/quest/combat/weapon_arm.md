@@ -6,7 +6,7 @@ record is `docs/quest/combat/adr/0003-weapon-arm-new-profile.md`.
 
 ## Origin
 
-kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_gunconnect.cpp`: the T-26 header :58-64 and the pass :496-598 (the equipment system key 0xca14940c84b03f6e
+kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_gunconnect.cpp`: the T-26 header :58-64, the state and helpers :496-579 and `T26()` at :581-660, whose profile rule is the line at :641 (the equipment system key 0xca14940c84b03f6e
 and vptr `0x3698200` are at :497-498). The q15t plugin reconstructed it (`weapon_arm.cpp`); this module is that reconstruction moved into the runtime, so the commits that move it credit kotorvr.
 
 ## Behaviour

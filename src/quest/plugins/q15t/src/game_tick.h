@@ -1,3 +1,4 @@
+// KNOWN-WRONG #2168: unused: no module of the plugin registers a game tick (the last three moved into the runtime). It is removed when the fold ends.
 // A game-thread tick: a GOT wrapper on CncaGame::ExclusiveUpdateGame, called once per frame by CncaGame::Render on the
 // game thread with x0 = the CR15Game. The wrapper calls the original first, checks the object's vptr, then runs the
 // registered callbacks. Data-page hook only (the import's JUMP_SLOT).

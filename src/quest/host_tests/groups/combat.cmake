@@ -170,7 +170,7 @@ nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
   SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)
 
 # Gun connect (#2185, docs/adr/0046; moved from the q15t plugin's gunconnect): the plugin test's fourteen sections with the same assertions against a fake
-# CR15Game, then the switch (off by default, nothing registered), the plugin's kill file not read and warned about, the scope (no Echo Arena level, lobby
+# CR15Game, then the switch (on by default; off registers nothing), the plugin's kill file not read and warned about, the scope (no Echo Arena level, lobby
 # or transition ever reaches the game's functions), the install on a libr15 image built in memory (build id, every pinned word, a name that resolves
 # elsewhere, a full tick table) and the host cost of a pass in an arena level. got_pinned_test resolves the symbols and words in the real libr15.
 nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
