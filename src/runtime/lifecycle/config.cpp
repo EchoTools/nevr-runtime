@@ -419,18 +419,18 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
   int source = 2;  // 0 primary, 1 loginservice_host fallback, 2 none (use default)
   const char* host = NevrCfgServiceHost(serviceKey, &source);
   if (source == 0) {
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.PATCH] Service override [" + std::string(serviceKey) + "]: ", host ? host : "");
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
   if (source == 1) {
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.PATCH] Service fallback [" + std::string(serviceKey) + " → loginservice_host]: ", host ? host : "");
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
       "[NEVR.PATCH] Service default [" + std::string(serviceKey) + "]: ", defaultUrl ? defaultUrl : "");
   Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(defaultUrl);
@@ -455,7 +455,7 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.PATCH] auto-relay [" + std::string(serviceKey) + "] through bridge: ",
       url ? url : "", " -> ", relayUrl);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
@@ -528,7 +528,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
 
     if (uri != originalUri) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] HTTP(S) connection redirected: ", originalUri ? originalUri : "", " → ", uri ? uri : "");
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
@@ -544,7 +544,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
         [] { return NevrCfgGetFlat("nevr_http_uri"); },
         [](const char* url, const char* httpTarget) { return NevrCfgRedirect(url, httpTarget, 0, 0); }));
     if (uri != configured) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] HTTP(S) connection redirected: ", gameUri, " → ", uri);
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
@@ -609,7 +609,7 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
       });
   if (chosen == result) return result;
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", chosen);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(chosen);
@@ -648,7 +648,7 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
       nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, keyName);
   if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride) {
     if (overrideInput.redirectsArmed) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
           overrideOutcome.value ? overrideOutcome.value : "");
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());

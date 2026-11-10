@@ -42,7 +42,9 @@
 #include "runtime/lifecycle/config.h"          // LogServerStepReadBack
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
@@ -82,6 +84,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // #1139, ADR 0022: the render_config line. A no-op until Install ran on a client; then one evaluation a second.
     // No new dispatcher, thread or Tick* site (N86): it runs inside this function like the calls around it.
     nevr_render_config_hook::Poll(nowUs);
+    // #1200, ADR 0024 section 6: the swapped release is confirmed started once this dispatcher has run for 10 s. Here it is one atomic
+    // compare; the confirmation itself runs on its own thread. Not new per-frame work of its own: no thread, dispatcher or Tick* site (N86).
+    nevr_update::OnFrame(nowUs);
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {
@@ -170,6 +175,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
+        // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

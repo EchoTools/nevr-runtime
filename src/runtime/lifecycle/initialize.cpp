@@ -44,7 +44,10 @@
 #include "runtime/patch/mic_provider.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/lobby_full_backoff.h"
+#include "runtime/patch/lobby_settings_hook.h"
+#include "runtime/patch/queued_join_log.h"
 #include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
@@ -81,7 +84,7 @@ static EchoVR::IServerLib* g_ServerLib = nullptr;
 static EchoVR::IServerLib* ServerLibFactory() {
     if (!g_ServerLib) {
         g_ServerLib = new GameServerLib();
-        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", static_cast<void*>(g_ServerLib));
+        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] debug; ServerLib() created obj=%p\n", static_cast<void*>(g_ServerLib));
     }
     return g_ServerLib;
 }
@@ -177,7 +180,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
     if (!logged) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] serverlib symbol resolved -> gamepatches factory\n");
+        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] info; serverlib symbol resolved -> gamepatches factory\n");
         logged = true;
     }
     return reinterpret_cast<void*>(&ServerLibFactory);
@@ -185,7 +188,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   if (void* micFn = MicProviderSymbolOverride(dll_handle, symbol_name)) {
     static bool logged = false;
     if (!logged) {
-      nevr_boot_log_tee::TeeFprintf("[NEVR.MIC] pnsrad mic export(s) resolved -> WASAPI provider\n");
+      nevr_boot_log_tee::TeeFprintf("[NEVR.MIC] info; pnsrad mic export(s) resolved -> WASAPI provider\n");
       logged = true;
     }
     return traced(micFn);
@@ -224,7 +227,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
 
     if (strcmp(symbol_name, "XInputGetState") == 0) {
       static bool logged = false;
-      if (!logged) { nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] xinput stub name=XInputGetState state=not_connected\n"); logged = true; }
+      if (!logged) { nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; xinput stub name=XInputGetState state=not_connected\n"); logged = true; }
       return reinterpret_cast<void*>(xinput_get_state);
     }
     if (strcmp(symbol_name, "XInputSetState") == 0) return reinterpret_cast<void*>(xinput_set_state);
@@ -281,7 +284,7 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
     if (s_fakeServerLibModule) {
       static bool logged = false;
       if (!logged) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] pnsradgameserver load redirected to in-process "
+        nevr_boot_log_tee::TeeFprintf("[NEVR.GAMESERVER] info; pnsradgameserver load redirected to in-process "
                         "ServerLib factory (DLL eliminated, code lives in BugSplat64)\n");
         logged = true;
       }
@@ -339,11 +342,11 @@ static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequire
     snprintf(cause, sizeof(cause), "required hook %s not installed", name);
     NoteBootHookFailureCause(cause);
     nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.PATCH] required boot hook not installed name=%s; a server will refuse to start, a client "
+        "[NEVR.PATCH] warn; required boot hook not installed name=%s; a server will refuse to start, a client "
         "continues without it\n",
         name);
   } else {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] optional boot hook not installed name=%s; boot continues\n", name);
+    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; optional boot hook not installed name=%s; boot continues\n", name);
   }
 }
 
@@ -368,8 +371,8 @@ static VOID InitializeAfterGameImageGuard() {
   // static-CRT build (see boot_log_tee.h DESIGN DECISION and N43).
   nevr_boot_log_tee::Init();
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s\n", nevr_build_identity::IdentityLiteral());
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] info; Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] info; %s\n", nevr_build_identity::IdentityLiteral());
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
@@ -377,17 +380,17 @@ static VOID InitializeAfterGameImageGuard() {
   // log or any cache is opened. Win32 file calls and Log() (the boot tee while the boot phase lasts) only.
   nevr_root_move::RunAndLog();
   EchoVR::InitializeFunctionPointers();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; function pointers resolved\n");
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing hooking engine...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; initializing hooking engine...\n");
   if (!Hooking::Initialize()) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] error; FATAL hooking init failed\n");
     g_bootHookFailed = true;
     NoteBootHookFailureCause("hooking engine init failed");
     nevr_boot_log_tee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; minhook initialized\n");
 
   // Observe the platform Social factory result on every run. The hook preserves
   // a real provider object and substitutes the façade only for a null one, unless
@@ -402,17 +405,28 @@ static VOID InitializeAfterGameImageGuard() {
   // lobby_full_backoff.h).
   nevr_lobby_full_backoff::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
+  // [NEVR.MATCH]: what the client did with a lobby session success and what became of a join the game queued (#2163,
+  // queued_join_log.h).
+  nevr_queued_join_log::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // What the current server runs (EchoCombat, MEDIGUN), read from the lobby settings it gives its clients (#2333,
+  // lobby_settings_hook.h).
+  nevr_lobby_settings_hook::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
   // The runtime version on the menu's versions panel (menu_version_label.h).
   nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // A button press skips the splash screen (splash_skip.h).
   nevr_splash_skip::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
+  // The equipment change the game drops is applied again once the slot is still (#2121, equipment_refire.h).
+  nevr_equipment_refire::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
   // UI, splash and menu textures at their top mip (ui_texture_mips.h).
   nevr_ui_texture_mips::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing DLL load hooks...\n");
   const int dllLoadHooksInstalled = nevr_dll_load_hook::Install();
   // The four hooks are required (boot_hook_policy.h). Install() has already logged each failing variant and its
   // MH_STATUS; the PARTIAL line below carries the count and what it costs, and the verdict fails the boot. A server
@@ -438,9 +452,9 @@ static VOID InitializeAfterGameImageGuard() {
   // g_isHeadless may not be set yet (CLI not parsed), but the hook checks it at
   // call time — if the game is running in headless mode the stubs activate,
   // otherwise they pass through to real DirectX.
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] registering headless graphics hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; registering headless graphics hooks...\n");
   InstallHeadlessGraphicsHooks();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.HEADLESS] graphics hooks registered\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.HEADLESS] debug; graphics hooks registered\n");
 
   // N59: re-wire PatchDscProvider — the call site was lost when N43's
   // Initialize() rewrite merged over N41's include+call (a6bb57d).
@@ -448,12 +462,12 @@ static VOID InitializeAfterGameImageGuard() {
   // never executes, and the game paths that do not go through the
   // GetProviderPrefix detour below (GetUserIDString) format PSN-/???-
   // instead of DSC-.
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; patching DSC provider strings...\n");
   PatchDscProvider();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] detouring GetProviderPrefix → OVR-ORG...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; detouring GetProviderPrefix → OVR-ORG...\n");
   PatchProviderPrefixOvrOrg();
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing CSysDLL hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing CSysDLL hooks...\n");
   const bool isWine = nevr_system_info::Get().IsWine();
   g_micProviderInstalled = nevr_mic_policy::ShouldInstallProvider(isWine);
   nevr_boot_log_tee::TeeFprintf("%s", nevr_mic_policy::BootLine(g_micProviderInstalled, isWine));
@@ -464,7 +478,7 @@ static VOID InitializeAfterGameImageGuard() {
       static const unsigned char kGetSymbolPrologue[8] = {0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00, 0x48};
       if (memcmp(sym_target, kGetSymbolPrologue, sizeof(kGetSymbolPrologue)) != 0) {
         nevr_boot_log_tee::TeeFprintf(
-            "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
+            "[NEVR.PATCH] warn; hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
         g_bootHookFailed = true;
         NoteBootHookFailureCause("CSysDLL_GetSymbol prologue mismatch");
       } else {
@@ -473,18 +487,18 @@ static VOID InitializeAfterGameImageGuard() {
         const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(sym_target) : created;
         if (enabled == MH_OK) {
           nevr_hook_guard::Record(sym_target, "CSysDLL_GetSymbol");
-          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; hooked name=CSysDLL_GetSymbol\n");
         } else {
           if (created == MH_OK) {
             const MH_STATUS cleanup = MH_RemoveHook(sym_target);
             if (cleanup != MH_OK) {
-              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_GetSymbol reason=%s\n",
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; hook cleanup failed name=CSysDLL_GetSymbol reason=%s\n",
                                             MH_StatusToString(cleanup));
             }
             // The trampoline is written only when creation returned MH_OK.
             g_original_GetSymbol = nullptr;
           }
-          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;
           NoteBootHookFailureCause("CSysDLL_GetSymbol hook install failed");
@@ -497,25 +511,25 @@ static VOID InitializeAfterGameImageGuard() {
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x14105aa70 - 0x140000000));
       static const unsigned char kLoadModulePrologue[8] = {0x40, 0x53, 0x48, 0x81, 0xEC, 0x20, 0x04, 0x00};
       if (memcmp(load_target, kLoadModulePrologue, sizeof(kLoadModulePrologue)) != 0) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook skipped name=CSysDLL_Load va=0x14105aa70 reason=prologue_mismatch\n");
+        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; hook skipped name=CSysDLL_Load va=0x14105aa70 reason=prologue_mismatch\n");
       } else {
         const MH_STATUS created = MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
                                                  reinterpret_cast<void**>(&g_original_LoadModule));
         const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(load_target) : created;
         if (enabled == MH_OK) {
           nevr_hook_guard::Record(load_target, "CSysDLL_Load");
-          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
         } else {
           if (created == MH_OK) {
             const MH_STATUS cleanup = MH_RemoveHook(load_target);
             if (cleanup != MH_OK) {
-              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_Load reason=%s\n",
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; hook cleanup failed name=CSysDLL_Load reason=%s\n",
                                             MH_StatusToString(cleanup));
             }
             // The trampoline is written only when creation returned MH_OK.
             g_original_LoadModule = nullptr;
           }
-          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load stage=%s reason=%s\n",
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] warn; hook failed name=CSysDLL_Load stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;
           NoteBootHookFailureCause("CSysDLL_Load hook install failed");
@@ -524,29 +538,29 @@ static VOID InitializeAfterGameImageGuard() {
   }
 
   // --- Broadcaster dispatch guard ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing broadcaster guard...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing broadcaster guard...\n");
   nevr_broadcaster_guard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   // Truthful outcome: Install() is an empty placeholder (broadcaster_guard.cpp).
   // A line saying "broadcaster guard installed" would assert a fact that is false in
   // the source it describes: an operator (or an agent) would conclude a dispatch
   // guard exists. None does.
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] broadcaster guard: no-op placeholder, nothing installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; broadcaster guard: no-op placeholder, nothing installed\n");
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
   // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing log filter...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; initializing log filter...\n");
   nevr_builtin_log_filter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] log filter installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; log filter installed\n");
 
   // --- Game function hooks ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing game function hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing game function hooks...\n");
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "OK" : "FAILED");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s; hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "debug" : "warn", r1 ? "OK" : "FAILED");
   NoteBootHookResult(r1, "BuildCmdLineSyntaxDefinitions", BootHookRequirement::kRequired);
   BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook name=PreprocessCommandLine result=%s\n", r2 ? "OK" : "FAILED");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s; hook name=PreprocessCommandLine result=%s\n", r2 ? "debug" : "warn", r2 ? "OK" : "FAILED");
   NoteBootHookResult(r2, "PreprocessCommandLine", BootHookRequirement::kRequired);
   // Required: on a server it turns NoNetwork/LoadFailed back into a usable
   // state, ends the process when a session ends, and is the shutdown-request
@@ -574,50 +588,50 @@ static VOID InitializeAfterGameImageGuard() {
   // (config.cpp JsonValueAsStringHook).
   InstallBootDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook),
                     "EchoVR::JsonValueAsString", BootHookRequirement::kRequired);
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
   // The game's HTTP/REST calls go through the system MSXML6 XMLHTTP object over Schannel;
   // platform_compat only logs its creation (InstallMsxml6PassThroughHook).
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] tls deferred=ws_bridge stage=boot\n");
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; tls deferred=ws_bridge stage=boot\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing crash recovery hooks...\n");
   InstallCrashRecoveryHooks();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.CRASH] crash recovery hooks installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.CRASH] debug; crash recovery hooks installed\n");
   // CreateDirectory + MSXML6 pass-through hooks live in the platform_compat module (loaded in boot.cpp)
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
   // The game-main wrapper is hooked by the host; the runtime's initialize arms RuntimeGameMain
   // after this returns (lifecycle/runtime_entry.cpp, ArmGameMain, N125).
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing server crash-recovery hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing server crash-recovery hooks...\n");
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; server crash-recovery hooks installed\n");
   // --- Exception handling ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing exception handlers...\n");
   const nevr_veh_policy::InstallResult vehResult = InstallVEH();
   InstallCrashFilterInstrumentation();
   nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehResult));
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; console ctrl handler installed\n");
 
   // NOTE: InstallResourceOverride() deferred to PreprocessCommandLineHook —
   // directory scanning deadlocks during DllMain loader lock.
 
   // --- Startup patches (applied before CLI parsing) ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] applying startup patches...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; applying startup patches...\n");
   nevr_noovr_arglookup::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
   PatchDeadlockMonitor();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] startup patches applied\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; startup patches applied\n");
 
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing binary bug fix hooks...\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; initializing binary bug fix hooks...\n");
   nevr_binary_bug_fixes::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] binary bug fix hooks installed\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; binary bug fix hooks installed\n");
 
   // --- CDN asset loading ---
   // N131: lives in boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
@@ -629,7 +643,7 @@ static VOID InitializeAfterGameImageGuard() {
   // boot phase wrote to (run_log_writer.h), so there is no second file to replay. Any remaining TeeFprintf calls write to stderr and
   // that file.
   nevr_boot_log_tee::TeeFprintf(
-      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\nevr\\echovr\\logs\\nevr-<timestamp>.jsonl\n");
+      "[NEVR.BOOT] info; initialization complete; continuing in %%LOCALAPPDATA%%\\nevr\\echovr\\logs\\nevr-<timestamp>.jsonl\n");
   nevr_boot_log_tee::Close();
 
   Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,

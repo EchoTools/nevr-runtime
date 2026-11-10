@@ -153,7 +153,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(cert, key)
             server.socket = context.wrap_socket(server.socket, server_side=True)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
             thread.start()
             self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join()))
             out = Path(tmp) / "out"

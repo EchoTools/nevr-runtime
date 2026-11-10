@@ -114,7 +114,7 @@ class PublishFixture(unittest.TestCase):
         Quiet.mode = "plain"
         handler = lambda *a, **k: Quiet(*a, directory=str(self.served), **k)  # noqa: E731
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.env = {
@@ -523,6 +523,77 @@ class PublishVariantApk(PublishFixture):
         for value in SECRETS.values():
             for text in (ok.stdout, ok.stderr, failed.stdout, failed.stderr, log):
                 self.assertNotIn(value, text)
+
+
+ARENA_NAME = f"nevr-runtime-{TAG}-arena-quest.apk"
+ARENA_BYTES = b"PK\x03\x04 this stands in for the arena APK " * 40
+
+
+class PublishListedArena(PublishFixture):
+    """`--listed-variant arena` (#2298): the arena APK goes up through the signer's put-quest-apk with `--kind quest-apk-arena`, so
+    the manifest lists it; the claim is kept for the manifest publish."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.abuild = self.build / "arena"
+        self.abuild.mkdir()
+        (self.abuild / ARENA_NAME).write_bytes(ARENA_BYTES)
+        digest = hashlib.sha256(ARENA_BYTES).hexdigest()
+        (self.abuild / f"{ARENA_NAME}.sha256").write_text(f"{digest}  {ARENA_NAME}\n")
+        self.env["FAKE_EXTRA_BODY"] = json.dumps([{"name": ARENA_NAME, "sha256": digest, "size": len(ARENA_BYTES)}])
+
+    def run_arena(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+        env = {**self.env, **extra}
+        return subprocess.run([sys.executable, "-I", str(TOOL), TAG, "--listed-variant", "arena", "--dir", str(self.abuild), *args],
+                              capture_output=True, text=True, env=env, cwd=self.tmp.name)
+
+    def test_the_signer_is_run_with_the_arena_kind_and_the_claim_is_kept(self) -> None:
+        (self.served / "nevr-runtime" / TAG / ARENA_NAME).write_bytes(ARENA_BYTES)
+        target = pathlib.Path(self.tmp.name) / "claim.json"
+        result = self.run_arena("--extra-out", str(target))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        signer = [c for c in self.recorded() if c["who"] == "signer"]
+        self.assertEqual(len(signer), 1)
+        argv = signer[0]["argv"]
+        self.assertEqual(argv[0], "put-quest-apk")
+        self.assertEqual(argv[argv.index("--kind") + 1], "quest-apk-arena")
+        self.assertEqual(argv[argv.index("--apk") + 1], str(self.abuild / ARENA_NAME))
+        self.assertEqual(json.loads(target.read_text())[0]["name"], ARENA_NAME)
+        self.assertEqual(result.stdout.split()[0], ARENA_NAME)
+
+    def test_the_main_publish_never_passes_a_kind(self) -> None:
+        self.serve_apk()
+        self.assertEqual(self.run_tool(TAG).returncode, 0)
+        argv = [c for c in self.recorded() if c["who"] == "signer"][0]["argv"]
+        self.assertNotIn("--kind", argv)
+
+    def test_every_record_names_the_variant_and_the_default_directory_is_the_arena_one(self) -> None:
+        (self.served / "nevr-runtime" / TAG / ARENA_NAME).write_bytes(ARENA_BYTES)
+        result = subprocess.run([sys.executable, "-I", str(TOOL), TAG, "--listed-variant", "arena"], capture_output=True, text=True,
+                                env=self.env, cwd=self.build.parents[2])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(line["variant"] == "arena" for line in self.log_lines()))
+
+    def test_it_needs_the_whole_release_environment(self) -> None:
+        env = {k: v for k, v in self.env.items() if k != "RELEASE_SIGNER_BIN"}
+        result = subprocess.run([sys.executable, "-I", str(TOOL), TAG, "--listed-variant", "arena", "--dir", str(self.abuild)],
+                                capture_output=True, text=True, env=env, cwd=self.tmp.name)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("RELEASE_SIGNER_BIN", result.stderr)
+
+    def test_a_word_that_is_not_listed_and_the_unlisted_flag_together_are_refused(self) -> None:
+        for args in (["--listed-variant", "q15t"], ["--listed-variant", "arena", "--variant", "q15t"]):
+            with self.subTest(args=args):
+                result = subprocess.run([sys.executable, "-I", str(TOOL), TAG, *args, "--dir", str(self.abuild)],
+                                        capture_output=True, text=True, env=self.env, cwd=self.tmp.name)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual([c for c in self.recorded() if c["who"] == "signer"], [])
+
+    def test_a_failing_signer_is_a_failed_publish_and_leaves_no_claim(self) -> None:
+        target = pathlib.Path(self.tmp.name) / "claim.json"
+        result = self.run_arena("--extra-out", str(target), FAKE_SIGNER_EXIT="3")
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(target.exists())
 
 
 class Wiring(unittest.TestCase):

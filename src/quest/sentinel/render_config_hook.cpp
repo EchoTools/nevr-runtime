@@ -14,6 +14,7 @@
 
 #include "hook_install.h"
 #include "clock_levels_hook.h"
+#include "quest/combat/refresh_rate.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
 #include "render_config.h"
@@ -62,13 +63,21 @@ Value ToMilli(float hertz) noexcept {
   return static_cast<Value>(hertz * 1000.0f + 0.5f);
 }
 
-// Every handler calls the original first with the game's own arguments (clock levels: see OnSetClockLevels), then records, then returns the original's result:
-// the game's behaviour does not depend on this module. None logs, allocates or throws (callback_thunk.h rule 1).
+// Every handler calls the original with the game's own arguments, then records, then returns the original's result: the game's behaviour does
+// not depend on this module. Two handlers may change an argument, each by asking the one owner of that value (ADR 0039): the refresh rate
+// (combat::refresh_rate) and the clock levels (clock_levels::Choose). None allocates or throws (callback_thunk.h rule 1); the refresh-rate
+// request line is written by the owner, after the original returned.
 
+// The rate the original is called with is the combat refresh-rate rule's answer (#2172, #2000): the game's own unless combat::Active() and
+// the rule keeps a request above the level rate at it while a combat or lobby level is loaded. The rate stored is the one the original was
+// called with, so the line says what the headset was asked for. The tick's own re-ask on a change of level reaches this handler through
+// the slot too and comes back unchanged.
 int OnSetDisplayRefreshRate(RefreshRateThunk::Fn original, OvrMobileOpaque* ovr, float rate) noexcept {
-  const int result = original(ovr, rate);
-  g_refreshRequestedMilli.store(ToMilli(rate), std::memory_order_relaxed);
+  const float sent = combat::refresh_rate::Choose(ovr, rate);
+  const int result = original(ovr, sent);
+  g_refreshRequestedMilli.store(ToMilli(sent), std::memory_order_relaxed);
   g_refreshRequestResult.store(result, std::memory_order_relaxed);
+  combat::refresh_rate::Note(rate, sent, result);
   return result;
 }
 

@@ -6,8 +6,7 @@
 It prints one `release-check: PROBLEM: ...` line for each thing that is missing or wrong (it never stops at the first)
 and exits 1, or prints `release-check: OK` and exits 0. It changes nothing in the clone: it reads the environment
 (`just` loads `.env` with `set dotenv-load`), stats files, and runs `tools/release_preflight.py` (which appends one record
-to its own log). It never prints a value: a line it passes through from the preflight has every URL's userinfo
-redacted.
+to its own log). A line it passes through from the preflight is shown as the preflight wrote it.
 
 Paths are taken as written. `just` does not expand `~` in `.env`, and neither do the release recipes, so neither does
 this check. The Quest release timer and the beta rollback (tools/quest_release_timer.py, tools/rollback_beta.py) read
@@ -30,7 +29,6 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_preflight import redact_url  # noqa: E402
 from quest_release_base import REFERENCE_APK_SHA256  # noqa: E402
 
 # Every input a release reads, once each: (name, is it a file, what it is). `.env.example` lists the same names.
@@ -107,7 +105,7 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
         if pre.returncode != 0:
             for line in (pre.stdout + pre.stderr).splitlines():
                 if "PROBLEM" in line:
-                    out.append(f"preflight: {redact_url(line.split('PROBLEM:', 1)[-1].strip())}")
+                    out.append(f"preflight: {line.split('PROBLEM:', 1)[-1].strip()}")
             if not out:
                 out.append(f"preflight: tools/release_preflight.py exited {pre.returncode}")
     return out

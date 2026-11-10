@@ -16,7 +16,6 @@
 #include <sys/system_properties.h>
 #endif
 
-#include "config_write_lock.h"
 #include "core/nevr_config.h"
 #include "hand_flip.h"
 #include "hook_install.h"
@@ -587,11 +586,8 @@ int SaveChoice() noexcept {
   const Level level = tq::LevelForMenuIndex(index);
   nevr::NevrConfig config;
   config.BindFile(g_configFile);
-  nevr::ConfigSetResult set;
-  {
-    const ConfigWriteLock lock;  // the hand pose poller edits the same file (config_write_lock.h)
-    set = config.Set("graphics.texture_quality", std::string(tq::LevelName(level)));
-  }
+  // The hand pose poller edits the same file: NevrConfig::Set holds one lock per file across its read, splice and rename.
+  const nevr::ConfigSetResult set = config.Set("graphics.texture_quality", std::string(tq::LevelName(level)));
   if (!set.ok) {
     g_saveFailures.fetch_add(1, std::memory_order_relaxed);
     sentinel::LogFields(sentinel::LogLevel::kWarn, "texture_quality_saved",

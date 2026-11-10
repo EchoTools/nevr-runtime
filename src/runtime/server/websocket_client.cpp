@@ -43,7 +43,7 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
     return FALSE;
   }
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri);
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // Set the URL

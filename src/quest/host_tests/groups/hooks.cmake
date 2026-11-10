@@ -28,6 +28,7 @@ set(_hf NOEXC PTHREAD DL INCS ${_sent})
 set(_cf src/quest/tests/compile_fail)
 nevr_ht_obj(o_hooks_cf_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/control.cpp)
 nevr_ht_obj(o_hooks_cf_row_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/row_control.cpp)
+nevr_ht_obj(o_hooks_cf_asm_entry_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/asm_entry_control.cpp)
 nevr_ht_compile_fail(cf_fake_thunk ${_cf}/fake_thunk.cpp "error: static assertion failed: InstallThunk requires a CallbackThunk"
   GROUP hooks NOEXC INCS ${_sent})
 nevr_ht_compile_fail(cf_row_fake_thunk ${_cf}/row_fake_thunk.cpp "error: static assertion failed: InstallRowThunk requires a CallbackThunk"
@@ -35,6 +36,10 @@ nevr_ht_compile_fail(cf_row_fake_thunk ${_cf}/row_fake_thunk.cpp "error: static 
 nevr_ht_compile_fail(cf_direct_record ${_cf}/direct_record.cpp "HookRecord.*is private within this context"
   GROUP hooks NOEXC INCS ${_sent})
 nevr_ht_compile_fail(cf_plain_handler ${_cf}/plain_handler.cpp "error: invalid conversion from .*::Handler"
+  GROUP hooks NOEXC INCS ${_sent})
+nevr_ht_compile_fail(cf_asm_entry_direct_record ${_cf}/asm_entry_direct_record.cpp "AsmEntryRecord.*is private within this context"
+  GROUP hooks NOEXC INCS ${_sent})
+nevr_ht_compile_fail(cf_asm_entry_raw_install ${_cf}/asm_entry_raw_install.cpp "InstallEntry.*is private within this context"
   GROUP hooks NOEXC INCS ${_sent})
 
 # ── The GOT hook backend ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -226,12 +231,10 @@ nevr_ht_obj(o_hooks_nevr_config GROUP hooks HOST SRC src/core/nevr_config.cpp)
 # the real libr15.
 nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB} OBJS o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/hand_pose_log_hook_test.cpp src/quest/sentinel/hand_pose_log_hook.cpp)
-# Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
-# CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
-# 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
-# the real libr15.
-nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
-  SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
+# The variant stamp the sentinel reads beside its own library before its first line (#2170, build_variant.h): each word, the empty file,
+# a missing file, an unknown or padded word, a file too long, a link and a directory, read from a temporary directory.
+nevr_ht_test(build_variant_test GROUP hooks ${_hf} TIMEOUT 120
+  SRC src/quest/tests/build_variant_test.cpp src/quest/sentinel/build_variant.cpp)
 # The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
 # CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
 # Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the
@@ -247,6 +250,11 @@ nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB}
 # and the fill and the leaks in the log.
 nevr_ht_test(vk_free_guard_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/vk_free_guard_test.cpp src/quest/sentinel/vk_free_guard.cpp)
+# A GPU allocation libr15 reports as made with no memory (#2262): the real handler through the thunk entry against a model of
+# CGRawInterfaceVK::Allocate that does not read vkAllocateMemory's result and a model of CreateDeviceResource that binds what it
+# returns; the pinned words refused when one differs; the refusals in the log with the free-range table's fill.
+nevr_ht_test(vk_alloc_check_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/vk_alloc_check_test.cpp src/quest/sentinel/vk_alloc_check.cpp src/quest/sentinel/vk_free_guard.cpp)
 # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
 # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone). The handler
 # includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
@@ -281,10 +289,18 @@ nevr_ht_test(hwdump_share_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_i
   SRC src/quest/tests/hwdump_share_test.cpp src/quest/sentinel/texture_quality_hook.cpp src/quest/diag/hwdump_install.cpp
       src/quest/diag/hwdump_handlers.cpp src/quest/diag/hwdump_records.cpp)
 # The render-configuration log (#1139): the five real handlers through the thunk entries against stand-ins for the VrApi
-# functions, the line at the first frame and on each forced change, the globals read only from the proved image, the poller.
+# functions, the line at the first frame and on each forced change, the globals read only from the proved image, the poller, and the
+# refresh-rate rule the refresh handler asks (#2172: the original gets the combat rule's answer; the tick's re-ask reaches the line).
 nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/render_config_hook_test.cpp src/quest/sentinel/render_config_hook.cpp
-      src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp)
+      src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp
+      src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp
+      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/headset_gates.cpp src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/quest/combat/shaderstep.cpp
+      src/quest/combat/tablestep.cpp src/quest/combat/table_step.cpp src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
+      src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp src/quest/combat/impactsnd.cpp src/quest/combat/decals.cpp
+      src/quest/combat/powerboost.cpp src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp
+      src/quest/integration/module_observers.cpp src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp)
 # The shared core of the CDN texture delivery that resource_request_hook.cpp links (docs/adr/0045-cdn-texture-delivery.md).
 nevr_ht_obj(o_hooks_cargo_shadow GROUP hooks NOEXC INCS ${_sent} SRC src/core/resource_shadow.cpp)
 nevr_ht_obj(o_hooks_cargo_resolver GROUP hooks NOEXC INCS ${_sent} SRC src/core/cargo_resolver.cpp)

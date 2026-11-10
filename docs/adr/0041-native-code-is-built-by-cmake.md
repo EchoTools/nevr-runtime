@@ -59,7 +59,7 @@ What this costs, measured in the tree:
    `--target` to build part), and then runs, checks or packages what was built. A recipe, script or workflow step does not
    contain a compiler or linker command (`g++`, `gcc`, `clang`, `clang++`, `x86_64-w64-mingw32-*`, `aarch64-linux-android*-clang*`,
    `ld`, `ar`, `windres`, `ndk-build`), and does not compute a list of build steps and run them.
-4. **What stays a script.** Python and shell remain for:
+4. **What stays a script.** These stay scripts, in the language ADR 0044 allows (Go by default, Python only with a recorded reason, shell for sequencing):
    - checks that read build output (`nm`, `objdump`, `readelf`, the ELF and PE verifiers, `compile_commands.json` readers);
    - tests that run a built program;
    - code generators that CMake runs through `add_custom_command` or `add_custom_target`, with their outputs declared;

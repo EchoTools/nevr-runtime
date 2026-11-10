@@ -12,10 +12,10 @@ set(_off HOST NOEXC INCS ${_sent})
 # 1. sequence, post-load policy, identity, social switch, frame tap
 nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD TIMEOUT 300
   SRC src/quest/tests/integration_sequence_test.cpp
-      src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp
+      src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp src/quest/integration/module_observers.cpp
       src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp
       src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp
-      src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp)
+      src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp src/quest/sentinel/build_variant.cpp)
 
 # 2. the hook translation units and the counter budget
 foreach(f got_hook hook_report)
@@ -68,10 +68,10 @@ nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 
        o_integ_resource_request_hook o_integ_cargo_shadow o_integ_cargo_resolver o_integ_texture_quality_hook o_integ_texture_menu_hook o_integ_texture_menu
        o_integ_clock_levels_hook o_integ_prompt_board o_integ_login_counters o_integ_login_prerequisites o_integ_login_standin
        o_integ_id_libr15_identity o_integ_id_libr15_patch_identity o_integ_id_sha256
-  SRC src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp
+  SRC src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/module_observers.cpp src/quest/integration/ctor_sequence.cpp
       src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
       src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
-      src/runtime/lifecycle/stable_string_pool.cpp)
+      src/runtime/lifecycle/stable_string_pool.cpp src/quest/sentinel/build_variant.cpp)
 add_dependencies(host-tests-integration o_integ_quit_hook)
 
 # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it builds when none is injected)
@@ -86,7 +86,7 @@ nevr_ht_test(session_bridge_test GROUP integration ${_on} PTHREAD CURL TIMEOUT 3
 # checks its SHA-256 and runs the program by name, so the program is built here and is not a ctest test.
 nevr_ht_group(integration-pinned)
 nevr_ht_obj(o_integp_dlopen_hook GROUP integration-pinned NOEXC INCS ${_sent} SRC src/quest/integration/dlopen_hook.cpp)
-nevr_ht_obj(o_integp_post_load GROUP integration-pinned INCS ${_sent} SRC src/quest/integration/post_load.cpp)
+nevr_ht_obj(o_integp_post_load GROUP integration-pinned INCS ${_sent} SRC src/quest/integration/post_load.cpp src/quest/integration/module_observers.cpp)
 nevr_ht_test(integration_pinned_test GROUP integration-pinned NOEXC DL PTHREAD NO_TEST INCS ${_sent}
   OBJS o_integp_dlopen_hook o_integp_post_load
   SRC src/quest/tests/integration_pinned_test.cpp src/quest/plugin/script_redirect.cpp

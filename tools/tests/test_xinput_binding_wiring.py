@@ -16,7 +16,7 @@ INITIALIZE = ROOT / "src/runtime/lifecycle/initialize.cpp"
 GATE = "if (xinputSymbol && !g_isServer && !g_isHeadless) {"
 BIND_CALL = "if (void* bound = BindClientXInput(symbol_name)) return traced(bound);"
 SYSTEM_DLL = 'std::string(dir) + "\\\\xinput1_4.dll"'
-STUB_LOG = "[NEVR.PATCH] xinput stub name=XInputGetState state=not_connected"
+STUB_LOG = "[NEVR.PATCH] debug; xinput stub name=XInputGetState state=not_connected"
 SYMBOLS = ("XInputGetState", "XInputSetState", "XInputGetCapabilities")
 
 

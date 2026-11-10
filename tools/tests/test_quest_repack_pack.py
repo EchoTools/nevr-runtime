@@ -553,11 +553,12 @@ class RepackWithAPackTest(RepackFixture):
         self.assertEqual([n for n in without if n.startswith("assets/nevr-pack")], [])
         self.assertNotIn("stage-pack", bare.stdout)
         self.assertNotIn("pack-problems", bare.stdout)
-        # The entries a run with no pack writes: the store's (less the old signature files) and the renamed original loader.
+        # The entries a run with no pack writes: the store's (less the old signature files), the renamed original loader and the variant
+        # stamp every repack writes (an empty one for a plain release).
         with zipfile.ZipFile(self.apk) as store:
             store_names = {n for n in store.namelist() if not n.startswith("META-INF/")}
         self.assertEqual(set(without) - {n for n in without if n.startswith("META-INF/")},
-                         store_names | {"lib/arm64-v8a/libovrplatformloader_orig.so"})
+                         store_names | {"lib/arm64-v8a/libovrplatformloader_orig.so", libs.VARIANT_ENTRY})
         pack, meta_path = self.make_pack()
         packed = self.recipe(pack=pack, pack_meta=meta_path, work="packed")
         self.assertEqual(packed.returncode, 0, packed.stdout + packed.stderr)

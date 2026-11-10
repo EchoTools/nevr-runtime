@@ -225,7 +225,7 @@ pub unsafe extern "C" fn NevrArtifactFetch(s: *mut NevrSession, version: *const 
         let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let url = format!("{}/{}", s.cfg.base, art.path);
         let f = crate::artifact::download(&url, &art, std::path::Path::new(&out_path))?;
-        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
         Ok(NEVR_OK)
     })
 }
@@ -314,6 +314,23 @@ pub unsafe extern "C" fn NevrPcStage(s: *mut NevrSession, root_dir: *const c_cha
         };
         let (_reason, report) = s.pc_stage_body(None, std::path::Path::new(&root_dir), &cur)?;
         out_string(&report, out).map_err(|e| Error::new(0, e))?;
+        Ok(NEVR_OK)
+    })
+}
+
+/// Records that the runtime refused the staged release (`version`, whose runtime has `runtime_sha256`) after its own Authenticode check:
+/// the next `NevrPcStage` answers `none` with reason `discarded` for that release and fetches nothing. `reason` is a lowercase word.
+///
+/// # Safety
+/// String arguments are NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn NevrPcDiscard(s: *mut NevrSession, root_dir: *const c_char, version: *const c_char, runtime_sha256: *const c_char, reason: *const c_char) -> i32 {
+    let (root_dir, version, sha, reason) = match (cstr(root_dir), cstr(version), cstr(runtime_sha256), cstr(reason)) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a.to_string(), b.to_string(), c.to_string(), d.to_string()),
+        _ => return NEVR_BAD_ARGUMENT,
+    };
+    with_session(s, |s| {
+        s.pc_discard(std::path::Path::new(&root_dir), &version, &sha, &reason)?;
         Ok(NEVR_OK)
     })
 }

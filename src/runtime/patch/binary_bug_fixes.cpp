@@ -805,7 +805,7 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
     }
 
     // Aggregate summary per docs/standards/logging.md Rule 5
-    Log(EchoVR::LogLevel::Info,
+    Log(failed == 0 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s); diag netgame-host-check: %s",
         installed, failed,
         failedNames.empty() ? "none" : failedNames.c_str(),

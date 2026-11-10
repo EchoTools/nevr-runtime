@@ -113,7 +113,7 @@ TEST(RuntimeAbi, RejectsEachMissingRequiredEntry) {
 // Minor 1 appends the export table (the runtime's side of the 16 exports the host publishes). A reader uses it
 // only when the writer's struct_size covers it, so a v1.0 runtime is still accepted and has no exports.
 TEST(RuntimeAbi, ExportTableIsUsedOnlyWhenTheDescriptorCoversIt) {
-  EXPECT_EQ(nevr_runtime_abi::kMinor, 1u);
+  EXPECT_EQ(nevr_runtime_abi::kMinor, 2u);
   NevrRuntimeApi api = ValidApi();
   EXPECT_EQ(nevr_runtime_abi::RuntimeExports(&api), &api.exports);
   EXPECT_EQ(nevr_runtime_abi::RuntimeExports(nullptr), nullptr);
@@ -148,8 +148,39 @@ TEST(RuntimeAbi, V1LayoutIsPinned) {
   EXPECT_EQ(sizeof(NevrHostContext::wrapper_hook_bytes), nevr_runtime_abi::kHookBytesSize);
   EXPECT_EQ(nevr_runtime_abi::kHookBytesSize, 16u);
   EXPECT_EQ(offsetof(NevrHostContext, wrapper_hook_bytes_valid), 64u);
+  EXPECT_EQ(offsetof(NevrHostContext, reserved), 68u);
   EXPECT_EQ(nevr_runtime_abi::kHostContextV1Size, 72u);
-  EXPECT_EQ(sizeof(NevrHostContext), 72u);
+  // Minor 2 appends the capabilities word after `reserved`; the v1 size stays the smallest a writer may report.
+  EXPECT_EQ(offsetof(NevrHostContext, capabilities), 72u);
+  EXPECT_EQ(nevr_runtime_abi::kHostContextV1_2Size, 80u);
+  EXPECT_EQ(sizeof(NevrHostContext), 80u);
+}
+
+// ADR 0024, section 3, "A host that cannot swap": bit 0 of the capabilities word says the host performs the staged
+// swap and rolls a release that does not start back. A reader uses the word only when the writer's struct_size covers
+// it, so a host from before minor 2 (a 72-byte context) reads as one that cannot swap.
+TEST(RuntimeAbi, TheCapabilityWordIsReadOnlyWhenTheContextCoversIt) {
+  EXPECT_EQ(nevr_runtime_abi::kHostCapabilitySwap, 1u);
+  NevrHostContext host = ValidHost();
+  EXPECT_EQ(nevr_runtime_abi::HostCapabilities(&host), 0u) << "ValidHost sets no bit";
+  EXPECT_FALSE(nevr_runtime_abi::HostCanSwap(&host));
+  host.capabilities = nevr_runtime_abi::kHostCapabilitySwap;
+  EXPECT_EQ(nevr_runtime_abi::HostCapabilities(&host), nevr_runtime_abi::kHostCapabilitySwap);
+  EXPECT_TRUE(nevr_runtime_abi::HostCanSwap(&host));
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kOk);
+
+  host.header.struct_size = nevr_runtime_abi::kHostContextV1Size;  // a minor 1 host: the word is not in its context
+  EXPECT_EQ(nevr_runtime_abi::HostCapabilities(&host), 0u);
+  EXPECT_FALSE(nevr_runtime_abi::HostCanSwap(&host));
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kOk) << "an older host is still accepted";
+  host.header.struct_size = nevr_runtime_abi::kHostContextV1_2Size - 1;
+  EXPECT_FALSE(nevr_runtime_abi::HostCanSwap(&host));
+
+  EXPECT_EQ(nevr_runtime_abi::HostCapabilities(nullptr), 0u);
+  EXPECT_FALSE(nevr_runtime_abi::HostCanSwap(nullptr));
+  host = ValidHost();
+  host.capabilities = ~std::uint64_t{0} & ~nevr_runtime_abi::kHostCapabilitySwap;
+  EXPECT_FALSE(nevr_runtime_abi::HostCanSwap(&host)) << "only bit 0 means swap; unknown bits mean nothing";
 }
 
 // The wrapper takes the command-line pointer and returns the process exit code as a 64-bit

@@ -7,6 +7,7 @@
 #endif
 
 #include "runtime/patch/asset_registry.h"
+#include "runtime/patch/resource_label.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -42,6 +43,8 @@ RegisterStatus Registry::Register(uint64_t type, uint64_t name, const void* data
     if (type == 0 || name == 0 || data == nullptr || size == 0 || size > kMaxAssetBytes) {
         return RegisterStatus::BadArgument;
     }
+    // The label goes into log lines and the login's JSON, so one outside the rule (#2225, resource_label.h) never gets in.
+    if (!nevr_resource_label::Ok(label)) return RegisterStatus::BadArgument;
     // Ask the engine outside the lock: its predicate takes the resource manager's own lock.
     const LoadedProbe probe = isLoaded_.load(std::memory_order_acquire);
     if (probe && probe(type, name)) return RegisterStatus::AlreadyLoaded;
@@ -56,7 +59,7 @@ RegisterStatus Registry::Register(uint64_t type, uint64_t name, const void* data
     asset.name = name;
     asset.data = data;
     asset.size = size;
-    asset.label = label ? label : "";
+    asset.label = label;
     assets_.push_back(std::move(asset));
     count_.store(assets_.size(), std::memory_order_release);
     return RegisterStatus::Ok;
@@ -117,8 +120,9 @@ std::string Registry::ReportJson() const {
         j["bytes"] = a.size;
         out.push_back(std::move(j));
     }
-    // `replace`: a label comes from plugin code; dump() throws on invalid UTF-8 by default and the login must
-    // not fail over a label.
+    // Labels pass the label rule (resource_label.h) before they are stored, so they are valid ASCII here. `replace` is
+    // defense in case a future path stores one that does not: dump() throws on invalid UTF-8 by default and the login
+    // must not fail over a label.
     return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 

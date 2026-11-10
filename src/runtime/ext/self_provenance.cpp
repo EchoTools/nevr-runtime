@@ -6,7 +6,7 @@ namespace nevr_self_provenance {
 
 namespace {
 
-// A development version is X.Y.(Z+1)-dev.N+sha (cmake/set_project_version_from_git.cmake); only a CI build on a release tag
+// A development version is <next>-dev.N+sha (cmake/set_project_version_from_git.cmake); only a CI build on a release tag
 // carries plain X.Y.Z, and only that build is signed by the release pipeline.
 bool IsDevVersion(std::string_view projectVersion) {
   return projectVersion.find("-dev") != std::string_view::npos;

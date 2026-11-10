@@ -21,7 +21,12 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "core/crash_report.h"
+#include "quest/combat/combat_active.h"
+#include "quest/combat/combat_install.h"
+#include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
+#include "build_variant.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
 #include "menu_cards_hook.h"
@@ -42,6 +47,7 @@
 #include "render_config.h"
 #include "texture_menu_hook.h"
 #include "texture_quality_hook.h"
+#include "vk_alloc_check.h"
 #include "vk_free_guard.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
@@ -181,6 +187,10 @@ bool InstallPermissionWaitHook() noexcept {
     // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
     // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
     nevr_quest::combat::match_tags::Install();
+    // The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
+    // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
+    // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are.
+    nevr_quest::combat::equip_refire::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
@@ -192,6 +202,9 @@ bool InstallVkExtWindowHook() noexcept {
     // Libr15's array of free GPU ranges has no bound check (#1759): a free that would overflow it leaks the range instead. Its
     // vk_free_guard_install line says whether it went in; a refused install leaves the game's Free as it is.
     nevr_quest::vk_free_guard::Install();
+    // Libr15's Allocate does not read vkAllocateMemory's result (#2262): an allocation reported as made with no memory is refused,
+    // so CreateDeviceResource never binds it. Its vk_alloc_check_install line says whether it went in.
+    nevr_quest::vk_alloc_check::Install();
     return nevr_quest::vk_window::Install();
 }
 
@@ -263,6 +276,22 @@ bool InstallWizardMetricHook() noexcept {
 // by main_level::Install, and the plugins then keep the level they were given at init.
 bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(); }
 
+// The gate on the folded combat modules (#2170, combat/combat_active.h): the answer is made here, once the configuration is resolved, from
+// the variant the constructor recorded, this build's kind and the configuration's combat.force. entry.cpp holds nevr_build::kIsDev.
+void ResolveCombatActive(bool forceAsked) noexcept { nevr_quest::combat::Resolve(nevr_build::kIsDev, forceAsked); }
+
+// The combat area's steps (#2171, combat/combat_install.h): each asks combat::Active() itself, so a call that reaches one in a process
+// where combat does not run installs nothing and says so once.
+bool CombatActive() noexcept { return nevr_quest::combat::Active(); }
+bool InstallCombatEarly() noexcept { return nevr_quest::combat::InstallEarly().ran; }
+bool InstallCombatNormal() noexcept { return nevr_quest::combat::InstallNormal().ran; }
+void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::NoteNormalNotStarted(reason); }
+void NoteCombatProcessEnd() noexcept { nevr_quest::combat::NoteProcessEnd(); }
+void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {
+  nevr_quest::combat::SetConfig(config);  // the modules' switches, read by the install steps that follow
+  nevr_quest::combat::LogConfig(config);
+}
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
@@ -294,8 +323,18 @@ static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
+    // The variant the repack stamped beside this library (#2170, build_variant.h), read before the first line so that line names it. A
+    // stamp that is missing, unreadable or wrong is no variant; the begin record says which. The combat gate takes the word now and
+    // makes its answer when the configuration is resolved (ResolveCombatActive).
+    const nevr_quest::build_variant::Stamp variant = nevr_quest::build_variant::ReadOwnStamp();
+    nevr_quest::combat::SetVariant(variant.variant);
+    // The crash report names the build too (core/crash_report.h, ADR 0040 rule 2): its `build:` line is set now, so a crash anywhere below carries it.
+    char buildText[nevr_crash::kBuildBytes];
+    std::snprintf(buildText, sizeof(buildText), "version=%s kind=%s variant=%s", nevr_build::kVersion,
+                  nevr_build::kIsDev ? "dev" : "release", nevr_quest::build_variant::VariantName(variant.variant));
+    nevr_crash::SetBuild(buildText);
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit,
-                                                      nevr_build::kIsDev ? "dev" : "release");
+                                                      nevr_build::kIsDev ? "dev" : "release", variant);
     // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
     nevr_quest::redirect::SetLoginIdentity(
         {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});

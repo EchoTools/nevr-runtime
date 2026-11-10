@@ -415,7 +415,7 @@ class Server:
     def __init__(self, routes: dict, announce: bool = False):
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.httpd.routes, self.httpd.requests, self.httpd.announce = routes, [], announce
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.thread.start()
         self.base = "http://127.0.0.1:%d/nevr-runtime" % self.httpd.server_address[1]
 

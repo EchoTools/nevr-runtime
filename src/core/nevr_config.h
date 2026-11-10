@@ -185,9 +185,13 @@ class NevrConfig {
   const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
   /// Mistakes in the file's shape that the parser keeps going past (#583). DuplicateKeyCount: a key that repeats in
   /// one mapping (the first value is the one read). UnknownKeyCount: a key under a section in KnownConfigKeyPaths()
-  /// that no reader reads (ignored). Counts only: the names and values stay out, as the Quest's log requires.
+  /// that no reader reads (ignored). The names are the dotted paths of the keys (`social.facade`), in file order for
+  /// duplicates and in section order for unknown keys, each as often as it was found. The values are never kept: a value
+  /// can be `auth.password`.
   std::size_t DuplicateKeyCount() const { return duplicateKeys_; }
   std::size_t UnknownKeyCount() const { return unknownKeys_; }
+  const std::vector<std::string>& DuplicateKeyNames() const { return duplicateKeyNames_; }
+  const std::vector<std::string>& UnknownKeyNames() const { return unknownKeyNames_; }
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
@@ -203,6 +207,8 @@ class NevrConfig {
   std::vector<std::string> unsetBareVars_;
   std::size_t duplicateKeys_ = 0;
   std::size_t unknownKeys_ = 0;
+  std::vector<std::string> duplicateKeyNames_;
+  std::vector<std::string> unknownKeyNames_;
 };
 
 /// Every dotted path a reader of either build reads under a known section, sorted (#583): the one list the unknown-key
@@ -210,12 +216,17 @@ class NevrConfig {
 /// and is not checked.
 std::vector<std::string> KnownConfigKeyPaths();
 
+/// The key names of DuplicateKeyNames() or UnknownKeyNames() as one log-safe token: comma-separated, a character outside
+/// printable ASCII without space written as `?`, a name cut at 64 characters, at most 20 names and then `+N more`.
+/// Both builds' count warnings use it; it carries names only, never a value.
+std::string JoinKeyNamesForLog(const std::vector<std::string>& names);
+
 /// PC only (defined in nevr_config_policy.cpp): logs one Warning per name in cfg.UnsetBareVars(), through Log().
 /// The parser itself logs nothing, so the Quest can build it without the PC logger.
 void LogUnsetBareVars(const NevrConfig& cfg);
 
 /// PC only (defined in nevr_config_policy.cpp): one Warning with the duplicate and unknown-key counts when either is
-/// non-zero (#583). Names and values are not logged.
+/// non-zero (#583), with the names of the keys (never their values).
 void LogShapeWarnings(const NevrConfig& cfg);
 
 /// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list

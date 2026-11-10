@@ -18,6 +18,7 @@
 //
 //   nevr crash report v1
 //   summary: crash: SIGSEGV libr15.so+0x1a2b3c CSendEventNode::Enter+0x14 report=<path>
+//   build: version=<version> kind=<dev|release> variant=<word|none>      (only when the platform set one: SetBuild)
 //   signal: SIGSEGV (11) code=1 fault_addr=0x0000000000000008
 //   thread: name=GameThread tid=4242
 //   pc: libr15.so+0x1a2b3c build_id=<hex> symbol=CSendEventNode::Enter+0x14
@@ -49,6 +50,7 @@ constexpr std::size_t kSummaryCapacity = 512;
 constexpr std::size_t kModuleNameBytes = 96;
 constexpr std::size_t kBuildIdBytes = 72;
 constexpr std::size_t kSymbolBytes = 160;
+constexpr std::size_t kBuildBytes = 192;  // the build line's text, with its NUL
 
 // Where an address falls. `module` is empty when the address belongs to no module the platform knows.
 struct Location {
@@ -156,6 +158,11 @@ void CopyText(char* destination, std::size_t capacity, const char* source);
 
 // Writes the lower-case hex of `bytes` into `destination`, NUL-terminated, cut when it does not fit.
 void HexText(char* destination, std::size_t capacity, const std::uint8_t* bytes, std::size_t count);
+
+// Sets the text of the report's `build:` line: the version, the build kind and the variant of the running build (docs/adr/0040
+// rule 2), as the platform spells them. Call once at start, before a crash can reach WriteReport. A control character becomes a space and
+// a text past kBuildBytes - 1 is cut, so the text cannot start a second line. Without a call the report has no such line.
+void SetBuild(const char* text);
 
 // Test seam: empties the log ring and forgets the registered platform and the written flag.
 void ResetForTest();

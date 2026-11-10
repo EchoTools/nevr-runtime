@@ -17,21 +17,35 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <sys/mman.h>
+
 #include <thread>
 #include <vector>
 
 #include "clock_levels_hook.h"
 #include "hook_log.h"
+#include "nevr/symbol_hash.h"
 #include "pinned_targets.h"
+#include "quest/combat/combat_active.h"
+#include "quest/combat/combat_install.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/refresh_rate.h"
 #include "quest/tests/test_check.h"
 #include "render_config.h"
 #include "render_config_share.h"
 #include "texture_quality_hook.h"
 
+// sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
+namespace sentinel {
+const char* FilesDir() { return "/nonexistent-nevr-files"; }
+}  // namespace sentinel
+
 namespace {
 
 namespace rc = nevr_quest::render_config;
 namespace cl = nevr_quest::clock_levels;
+namespace combat = nevr_quest::combat;
+namespace rr = nevr_quest::combat::refresh_rate;
 namespace tq = nevr_quest::texture_quality;
 namespace pinned = sentinel::pinned;
 using pinned::OvrJavaOpaque;
@@ -49,8 +63,12 @@ int g_calls = 0;
 int g_lastPropertyCall = -1;
 int g_lastValueCall = -1;
 
-int FakeSetRefreshRate(OvrMobileOpaque*, float) {
+float g_refreshSeen = -1.0f;  // what the stand-in for vrapi_SetDisplayRefreshRate was called with
+int g_refreshCalls = 0;
+int FakeSetRefreshRate(OvrMobileOpaque*, float hz) {
   ++g_calls;
+  ++g_refreshCalls;
+  g_refreshSeen = hz;
   return g_refreshResult;
 }
 int FakeSetClockLevels(OvrMobileOpaque*, int cpu, int gpu) {
@@ -182,8 +200,14 @@ void ResetAll() {
   g_clockResult = 0;
   g_clockCpuSeen = -1;
   g_clockGpuSeen = -1;
+  g_refreshSeen = -1.0f;
+  g_refreshCalls = 0;
   g_reportedHertz = 90.0f;
   g_calls = 0;
+  combat::ResetForTest();  // combat does not run unless a test says so (the release case)
+  combat::ResetInstallForTest();
+  combat::tick::ResetForTest();
+  rr::ResetForTest();
   WireThunks();
 }
 
@@ -251,6 +275,126 @@ void TheClockOverrideRewritesTheGamesStockPairAndTheLineSaysSo() {
     QCHECK(cl::CurrentCounts().calls == 1 && cl::CurrentCounts().overridden == 0);
   }
   cl::ResetForTest();
+}
+
+// ---- the refresh-rate rule (#2172, #2000) -----------------------------------------------------------------------------------
+
+// A CR15Game with one gamespace table holding one gamespace, laid out where the rule reads it.
+struct FakeGame {
+  std::uintptr_t words[0x2000 / 8] = {};
+  std::uintptr_t rows[1][2] = {};
+  std::uintptr_t gamespace[0x60 / 8 + 1] = {};
+  std::uintptr_t Address() { return reinterpret_cast<std::uintptr_t>(words); }
+  void Load(std::uint64_t level) {
+    gamespace[0x8 / 8] = Address();
+    gamespace[0x58 / 8] = static_cast<std::uintptr_t>(level);
+    rows[0][0] = 0x5555;
+    rows[0][1] = reinterpret_cast<std::uintptr_t>(gamespace);
+    words[0x1f48 / 8] = reinterpret_cast<std::uintptr_t>(rows);
+    words[0x1f78 / 8] = 1;
+  }
+};
+FakeGame g_fakeGame;
+double g_fakeNow = 100.0;
+double FakeClock() noexcept { return g_fakeNow; }
+// libr15 as the rule's production re-ask finds it: a block of memory whose vrapi_SetDisplayRefreshRate slot holds the render-configuration
+// thunk's entry, so the re-ask is the game's own call through the slot and reaches the handler.
+constexpr std::size_t kLibr15Block = 0x3800000;
+unsigned char* g_libr15Block = nullptr;
+sentinel::ElfImage g_libr15Image;
+bool Libr15Lookup(const char* module, sentinel::ElfImage* out) {
+  if (g_libr15Block == nullptr || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_libr15Image;
+  return true;
+}
+void PutLibr15() {
+  void* const block = mmap(nullptr, kLibr15Block, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  QCHECK(block != MAP_FAILED);
+  g_libr15Block = static_cast<unsigned char*>(block);
+  g_libr15Image = sentinel::ElfImage{};
+  g_libr15Image.base = reinterpret_cast<std::uintptr_t>(block);
+  void** const slot = reinterpret_cast<void**>(g_libr15Image.base + *pinned::LibR15SetDisplayRefreshRate().slotVaddr);
+  *slot = RefreshT::EntryAddress();  // what the render-configuration install leaves in the slot
+  rr::SetImageLookupForTest(&Libr15Lookup);
+}
+void DropLibr15() {
+  rr::SetImageLookupForTest(nullptr);
+  if (g_libr15Block != nullptr) munmap(g_libr15Block, kLibr15Block);
+  g_libr15Block = nullptr;
+}
+
+void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
+  Capture capture;
+  ResetAll();
+  combat::SetVariant(nevr_quest::build_variant::Variant::kCombat);
+  combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
+  rr::SetQuest2ForTest(0);
+  PutLibr15();
+  rr::SetClockForTest(&FakeClock);
+  g_fakeGame = FakeGame{};
+  QCHECK(rr::Install(true, false, true).installed);
+  Capture::Clear();
+
+  QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == 0);  // Echo Arena, or no level: the game's own rate
+  QCHECK(g_refreshSeen == 120.0f && g_refreshCalls == 1);
+  QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
+
+  // A combat map loads: the tick re-asks through the slot, so the handler calls the original with 90 and the line reports it.
+  g_fakeGame.Load(EchoVR::CSymbol64Hash("mpl_combat_fission"));
+  g_fakeNow += 1.0;
+  rr::Tick(g_fakeGame.Address());
+  QCHECK(g_refreshCalls == 2 && g_refreshSeen == 90.0f);
+  QCHECK(rc::PollOnce(kFake));
+  std::vector<std::string> lines = Lines("render_config");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) QCHECK(Field(lines[0], "refresh_requested_hz") == "90.0" && Field(lines[0], "refresh_request_result") == "0");
+  QCHECK(Lines("combat_refresh_rate_switch").size() == 1);  // one decision, from one module
+  QCHECK(rr::CurrentStats().requests == 1);                // the re-ask was not taken for a request of the game's
+
+  // The game asks for 120 again during the match: the original is called with the rule's answer, 90, and the original's result comes back.
+  g_refreshResult = -3;
+  QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == -3);
+  QCHECK(g_refreshCalls == 3 && g_refreshSeen == 90.0f);
+  QCHECK(rc::PollOnce(kFake));
+  lines = Lines("render_config");
+  QCHECK(lines.size() == 2 && Field(lines[1], "refresh_requested_hz") == "90.0" && Field(lines[1], "refresh_request_result") == "-3");
+  g_refreshResult = 0;
+
+  // The map unloads: the session rate comes back through the handler.
+  g_fakeGame = FakeGame{};
+  g_fakeNow += 1.0;
+  rr::Tick(g_fakeGame.Address());
+  QCHECK(g_refreshCalls == 4 && g_refreshSeen == 120.0f);
+  DropLibr15();
+  rr::SetQuest2ForTest(-1);
+  rr::SetClockForTest(nullptr);
+  combat::tick::ResetForTest();
+}
+
+// The release case: combat does not run, so the handler's original gets the game's own rate whatever is loaded, and nothing of the rule's
+// is written or registered.
+void AReleaseApkKeepsTheGamesOwnRateWhateverIsLoaded() {
+  Capture capture;
+  ResetAll();
+  PutLibr15();
+  rr::SetClockForTest(&FakeClock);
+  g_fakeGame = FakeGame{};
+  g_fakeGame.Load(EchoVR::CSymbol64Hash("mpl_combat_fission"));
+  QCHECK(!combat::Active());
+  QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == 0);
+  QCHECK(g_refreshSeen == 120.0f);
+  g_fakeNow += 1.0;
+  rr::Tick(g_fakeGame.Address());  // not registered in a release, and a direct call asks nothing either
+  QCHECK(g_refreshCalls == 1);
+  QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == 0 && g_refreshSeen == 120.0f);
+  QCHECK(Lines("combat_refresh_rate_request").empty() && Lines("combat_refresh_rate_switch").empty());
+  QCHECK(!rr::Install(true, false, true).installed && combat::tick::Count() == 0);
+  QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
+  QCHECK(rc::PollOnce(kFake));
+  const std::vector<std::string> lines = Lines("render_config");
+  QCHECK(lines.size() == 1 && Field(lines[0], "refresh_requested_hz") == "120.0");
+  DropLibr15();
+  rr::SetClockForTest(nullptr);
 }
 
 // ---- the line at the first frame and on a change ---------------------------------------------------------------------------
@@ -659,6 +803,8 @@ void AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk() {
 int main() {
   EveryHookReturnsTheOriginalsResultAndPassesTheArgumentsOn();
   TheClockOverrideRewritesTheGamesStockPairAndTheLineSaysSo();
+  ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer();
+  AReleaseApkKeepsTheGamesOwnRateWhateverIsLoaded();
   NothingIsLoggedBeforeTheFirstFrame();
   TheFirstFrameWritesOneLineWithTheConfiguration();
   ANewFrameWithNothingChangedWritesNothing();

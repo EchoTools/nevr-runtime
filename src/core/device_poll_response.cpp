@@ -1,5 +1,7 @@
 #include "core/device_poll_response.h"
 
+#include <algorithm>
+
 #include "core/auth_token_model.h"
 
 #include <nlohmann/json.hpp>
@@ -51,24 +53,12 @@ bool IsKnownPollStatus(std::string_view status) {
   return status == "authorization_pending" || status == "pending" || status == "expired" || status == "verified";
 }
 
-std::string PollBodyPrefix(std::string_view body, std::string_view code, std::size_t max_chars) {
-  // A body that holds tokens is never echoed; neither is one that merely contains a token-shaped field.
-  for (const char* secret : {"access_token", "refresh_token", "\"token\""}) {
-    if (body.find(secret) != std::string_view::npos) {
-      return "<" + std::to_string(body.size()) + " bytes, token fields not logged>";
-    }
-  }
+std::string PollBodyPrefix(std::string_view body, std::size_t max_chars) {
   std::string out;
-  out.reserve(max_chars);
-  for (std::size_t i = 0; i < body.size() && out.size() < max_chars;) {
-    if (!code.empty() && body.compare(i, code.size(), code) == 0) {
-      out += "<code>";
-      i += code.size();
-      continue;
-    }
+  out.reserve(std::min(body.size(), max_chars));
+  for (std::size_t i = 0; i < body.size() && i < max_chars; ++i) {
     const unsigned char c = static_cast<unsigned char>(body[i]);
     out += (c < 0x20 || c == 0x7f) ? '.' : static_cast<char>(c);
-    ++i;
   }
   return out;
 }

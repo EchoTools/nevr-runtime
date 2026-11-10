@@ -237,6 +237,9 @@ struct RealCounterSteps final : Steps {
   PluginCounts PlanPlugins() override { return {}; }  // the plugin loader registers no reporter counter
   bool RunEarlyPlugins() override { return true; }
   void FinishPlugins(const char*) override {}
+  bool CombatActive() override { return false; }  // the combat area registers no reporter counter and installs no hook yet
+  bool InstallCombatEarly() override { return true; }
+  void FinishCombat(const char*) override {}
   bool RegisterClockCounters() override {
     static std::atomic<std::uint64_t> calls{0}, faults{0};
     bool ok = sentinel::RegisterReportCounter("clock_gettime_calls", &calls);
@@ -285,7 +288,7 @@ struct RealCounterSteps final : Steps {
   bool StartBridge() override { return true; }
   bool InstallRedirect() override { return true; }
   bool InstallSocial() override { return true; }
-  bool InstallDlopenHook(bool, bool, bool) override { return true; }
+  bool InstallDlopenHook(bool, bool, bool, bool) override { return true; }
   bool StartHwDump() override { return true; }
   bool InstallPnsProvider() override { return true; }
   bool PnsProviderAllowed() override { return true; }

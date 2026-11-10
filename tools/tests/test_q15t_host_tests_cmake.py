@@ -34,98 +34,47 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 
 HOST_TESTS = frozenset(
     [
-        "core.host_test_0_0",
-        "core.host_test_1_0",
-        "core.host_test_0_1",
-        "core.gates_test",
-        "core.library_name_test",
+        "core.host_test_0",
+        "core.host_test_1",
         "aibots.aibots_test",
         "boosterpool.boosterpool_test",
-        "bvh.bvh_core_test",
-        "bvh.bvh_test",
-        "combat_gates.combat_gates_test",
         "custctx.custctx_test",
-        "decals.decals_test",
         "droneguard.droneguard_test",
-        "dronekill.dronekill_test",
-        "dronemuzzle.dronemuzzle_test",
-        "early.early_test",
-        "ec.ec_test",
-        "ec.ec_page_symbol",
-        "ec.ec_page_test",
-        "ec.ec_page_test_other",
-        "ec.ec_test_defaults",
-        "ecfx.ecfx_test",
-        "ecfx.ecfx_test_missing",
-        "ecfx.ecfx_test_defaulton",
         "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
         "gunconnect.gunconnect_test",
-        "heaps.heaps_test",
         "hudmeter.hudmeter_test",
-        "impactsnd.impactsnd_test",
-        "instmodel.instmodel_test",
         "levelname.levelname_test",
-        "memsys.memsys_test",
-        "meshstep.meshstep_test",
-        "music.music_test",
         "peerclamp.peerclamp_test",
-        "pfx.pfx_test",
-        "pfxtev.pfxtev_test",
-        "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
-        "sensorwd.sensorwd_test",
-        "shaderstep.shaderstep_test",
         "shieldgamma.shieldgamma_test",
-        "tablestep.tablestep_test",
+        "thread_word.thread_word_test",
         "voipdrop.voipdrop_test",
-        "wallfire.wallfire_test",
         "weapon_arm.t26_test",
         "wiring.wiring_test",
-        "wiring.wiring_bvh_only",
-        "wiring.wiring_gate_link",
-        "wiring.wiring_gate_link_bots",
-        "wiring.wiring_gate_bots_levelname_off",
+        "wiring.wiring_tick_only",
         "wiring.wiring_caps_none",
         "wiring.wiring_caps_FXTRAIL",
         "wiring.wiring_caps_VOIPDROP",
         "wiring.wiring_caps_CUSTCTX",
-        "wiring.wiring_caps_IMPACTSND",
-        "wiring.wiring_caps_ECFX",
         "wiring.wiring_caps_HUDMETER",
-        "wiring.wiring_caps_MUSIC",
-        "wiring.wiring_caps_SENSORWD",
-        "wiring.wiring_caps_DECALS",
         "wiring.wiring_caps_SHIELDGAMMA_1",
         "wiring.wiring_caps_SHIELDGAMMA_2",
         "wiring.wiring_caps_DRONEGUARD",
         "wiring.wiring_caps_PEERCLAMP",
-        "wiring.wiring_caps_DRONEKILL",
-        "wiring.wiring_caps_DRONEMUZZLE",
         "wiring.wiring_caps_GUNCONNECT",
         "wiring.wiring_caps_AIBOTS",
-        "wiring.wiring_caps_BVH",
-        "wiring.wiring_caps_WALLFIRE",
         "wiring.wiring_caps_LEVELNAME",
         "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_HZ_MATCH90",
-        "wiring.wiring_caps_GATE_LINK",
-        "wiring.wiring_caps_GATE_PERM",
-        "wiring.wiring_caps_GATE_BOTS",
-        "wiring.wiring_caps_POWERBOOST_1",
-        "wiring.wiring_caps_POWERBOOST_2",
-        "wiring.wiring_caps_POWERBOOST_3",
-        "wiring.wiring_caps_EC",
     ]
 )
-# q15t_arm64_object(<src name>): the NDK static-initializer test for each of these, one per module the repack checks
+# q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
+# checks and one for each module that keeps per-thread state (none is left in the plugin)
 ARM64_OBJECTS = frozenset(
-    "decals dronekill dronemuzzle plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "hudmeter shieldgamma".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
-    "mod/dronemuzzle.cmake": ["dronemuzzle.arm64_thunks"],
-    "mod/powerboost.cmake": ["powerboost.arm64_thunk_disassembly", "powerboost.pb_thunk_qemu"],
 }
 
 
@@ -229,18 +178,77 @@ class HostTestsAreTargets(unittest.TestCase):
 
         database = json.loads((self.build / "compile_commands.json").read_text(encoding="utf-8"))
         compiled = {Path(entry["file"]).name for entry in database if Path(entry["file"]).parent == Q15T}
-        # compiled only in the NDK configure: the freestanding thunk program
-        ndk_only = {"pb_thunk_qemu.cpp"}
         sources = {p.name for p in Q15T.glob("*.cpp")}
-        self.assertEqual(sorted(sources - compiled - ndk_only), [], "a .cpp here no target compiles")
-        text = (Q15T / "mod/powerboost.cmake").read_text(encoding="utf-8")
-        self.assertIn("pb_thunk_qemu.cpp", text)
+        self.assertEqual(sorted(sources - compiled), [], "a .cpp here no target compiles")
 
     def test_a_label_per_module_file(self):
         labels = {t.split(".")[0] for t in self.tests}
         modules = {p.stem for p in (Q15T / "mod").glob("*.cmake")} | {"core"}
         self.assertEqual(sorted(labels - modules), [])
         self.assertEqual(sorted(modules - labels), [], "a module file registers no host test")
+
+
+class NoEmulatedTls(unittest.TestCase):
+    """check/no_emutls.sh: the Quest build targets API 26, where thread_local is emulated (__emutls_v.*) and allocates on first use."""
+
+    SCRIPT = Q15T / "check/no_emutls.sh"
+
+    def run_script(self, nm_output: str, *, nm_exit: int = 0, file_exists: bool = True):
+        with tempfile.TemporaryDirectory(prefix="q15t-no-emutls-") as tmp:
+            tmp_path = Path(tmp)
+            nm = tmp_path / "fake-nm"
+            nm.write_text(f"#!/bin/sh\ncat <<'EOF'\n{nm_output}\nEOF\nexit {nm_exit}\n", encoding="utf-8")
+            nm.chmod(0o755)
+            target = tmp_path / "libx.so"
+            if file_exists:
+                target.write_bytes(b"")
+            return subprocess.run([str(self.SCRIPT), str(nm), str(target), "x"], capture_output=True, text=True, check=False)
+
+    def test_an_emulated_variable_of_q15t_fails(self):
+        done = self.run_script("0000000000014f40 d __emutls_v._ZN4q15t12_GLOBAL__N_19t_allowedE\n0000000000001000 t main")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("__emutls_v._ZN4q15t12_GLOBAL__N_19t_allowedE", done.stdout)
+
+    def test_every_emulated_variable_is_named(self):
+        done = self.run_script("0 d __emutls_v.a\n0 d __emutls_v.b")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("__emutls_v.a", done.stdout)
+        self.assertIn("__emutls_v.b", done.stdout)
+
+    def test_libcxxabis_own_slot_is_allowed(self):
+        done = self.run_script("0000000000007b5c0 d __emutls_v._ZZN10__cxxabiv112_GLOBAL__N_19__globalsEvE10eh_globals")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_another_variable_of_the_cxxabiv1_namespace_fails(self):
+        # only libc++abi's eh_globals is allowed, by its exact symbol: a name that merely contains __cxxabiv1 is a variable like any other
+        done = self.run_script("0000000000000000 D __emutls_v._ZN10__cxxabiv116t_not_eh_globalsE\n0 t main")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("__emutls_v._ZN10__cxxabiv116t_not_eh_globalsE", done.stdout)
+
+    def test_a_file_with_no_symbols_is_a_failure(self):
+        # a stripped file lists nothing, so nothing was checked
+        for listing in ("", "libx.so: no symbols"):
+            with self.subTest(listing=listing):
+                done = self.run_script(listing)
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn("no symbols", done.stdout)
+
+    def test_an_object_that_only_refers_to_symbols_is_checked(self):
+        # undefined symbols are listed with two fields; they count as listed, and an emulated variable among them is not a definition
+        done = self.run_script("                 U memcpy")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_the_runtime_support_functions_are_not_a_variable_of_q15t(self):
+        done = self.run_script("000000000006b00c t __emutls_get_address\n0000000000088ac4 b emutls_pthread_key")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_an_nm_that_fails_is_a_failure(self):
+        done = self.run_script("", nm_exit=1)
+        self.assertEqual(done.returncode, 1, done.stdout)
+
+    def test_a_missing_file_is_a_failure(self):
+        done = self.run_script("", file_exists=False)
+        self.assertEqual(done.returncode, 1, done.stdout)
 
 
 class NdkChecksAreRegistered(unittest.TestCase):
@@ -250,6 +258,13 @@ class NdkChecksAreRegistered(unittest.TestCase):
             for call in re.findall(r"q15t_arm64_object\(([^)]*)\)", path.read_text(encoding="utf-8")):
                 found.update(call.split())
         self.assertEqual(found, set(ARM64_OBJECTS))
+
+    def test_an_emulated_tls_test_per_arm64_object(self):
+        # q15t_arm64_object registers it beside the static-initializer test, so every object listed above has one
+        text = (Q15T / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("NAME ${Q15T_MODULE}.arm64_no_emutls_${m}", text)
+        self.assertIn("check/no_emutls.sh", text)
+        self.assertIn("llvm-nm", text)
 
     def test_the_thunk_and_qemu_checks_are_registered(self):
         for relative, names in NDK_CHECKS.items():

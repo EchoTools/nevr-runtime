@@ -55,7 +55,9 @@ host validates the major version, the minimum `struct_size` and every required e
 before it calls anything, and hands the runtime a `NevrHostContext` that carries the game
 module, the trampoline of the original `GameMainWrapper`, and a record of the host's hook
 on it: the target address and the first 16 bytes found there after the host enabled the
-hook. Only C types cross. `test_runtime_abi` pins the
+hook. Minor 2 appends a `capabilities` word, which a reader uses only when the context's
+`struct_size` covers it (`HostCapabilities`); bit 0 says the host performs the staged swap and puts a release that
+does not start back (ADR 0024). Only C types cross. `test_runtime_abi` pins the
 layout and the rejections, including a descriptor shorter than the header, which the
 validator must not read past.
 
@@ -278,8 +280,12 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 
 ## Consequences
 
-- `BugSplat64.dll` and `nevr-runtime.dll` are a matched pair; a package or a test deployment
-  that carries one without the other is a defect, not a configuration.
+- `BugSplat64.dll` and `nevr-runtime.dll` are released as a matched pair: a package, a fresh install or a test
+  deployment carries both, from one release, and one that carries one without the other is a defect, not a
+  configuration. What runs together is a host and a runtime that agree on `abi_major` (`src/core/runtime_abi.h`), not
+  always one release: self-update (ADR 0024) replaces the runtime in the nevr root under the host already installed, so
+  an install that has updated itself holds a runtime of a later release than its host, and a release whose runtime
+  needs a newer host reaches players by installer only. (ADR 0024 amends this consequence.)
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
 - `src/runtime/host/` (the entry points, the rendezvous, the diagnostics, the crash capture and

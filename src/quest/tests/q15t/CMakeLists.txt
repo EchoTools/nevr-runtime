@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)  # -std=c++17, as every test was built before
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)  # no source is a module; ccache refuses a compile that carries the scan flags
-# The Android toolchain file adds -lm -latomic as standard libraries; pb_thunk_qemu is linked -nostdlib and has no libc to ask them of.
+# The Android toolchain file adds -lm -latomic as standard libraries; a freestanding check program is linked -nostdlib and has no libc to ask them of.
 set(CMAKE_CXX_STANDARD_LIBRARIES "")
 
 # Where the plugin's sources and the SDK headers are. The mutation run points the first at a scratch copy of src/.
@@ -32,7 +32,7 @@ set(Q15T_ARM64_OPTIONS -O2 -fno-exceptions -fno-rtti -fvisibility=hidden -Wall -
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   set(Q15T_ARM64 TRUE)
   get_filename_component(Q15T_NDK_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
-  foreach(tool llvm-readelf llvm-objdump)
+  foreach(tool llvm-readelf llvm-objdump llvm-nm)
     if(NOT EXISTS "${Q15T_NDK_BIN}/${tool}")
       message(FATAL_ERROR "q15t: ${tool} is not beside the NDK clang (${Q15T_NDK_BIN}); Q15T_NDK must be an Android NDK r26d install")
     endif()
@@ -108,7 +108,9 @@ function(q15t_extra_run name program)
 endfunction()
 
 # q15t_arm64_object(<src name>...): src/<name>.cpp compiled for arm64 with the NDK clang, with the plugin's own warning flags, and
-# the test that the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one).
+# two tests: the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one), and it defines
+# no emulated thread-local variable (__emutls_v.*: the API 26 toolchain emulates thread_local and allocates on a thread's first use,
+# which a hooked call must not do; the sentinel's TestNoEmulatedTLSInHookPath holds the same line for its own library).
 function(q15t_arm64_object)
   if(NOT Q15T_ARM64)
     return()
@@ -121,29 +123,23 @@ function(q15t_arm64_object)
     add_test(NAME ${Q15T_MODULE}.arm64_${m}
              COMMAND "${Q15T_TESTS_DIR}/check/arm64_no_static_init.sh" "${Q15T_NDK_BIN}/llvm-readelf" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
     set_tests_properties(${Q15T_MODULE}.arm64_${m} PROPERTIES LABELS ${Q15T_MODULE})
+    add_test(NAME ${Q15T_MODULE}.arm64_no_emutls_${m}
+             COMMAND "${Q15T_TESTS_DIR}/check/no_emutls.sh" "${Q15T_NDK_BIN}/llvm-nm" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
+    set_tests_properties(${Q15T_MODULE}.arm64_no_emutls_${m} PROPERTIES LABELS ${Q15T_MODULE})
   endforeach()
 endfunction()
 
-# ---- the core programs: the plugin's wiring and its headset gates (label core) ----
+# ---- the core programs: the plugin's entry per arm (label core) ----
 set(Q15T_MODULE core)
 add_custom_target(mod_core)
-foreach(arm "0 0" "1 0" "0 1")
-  string(REPLACE " " ";" arm "${arm}")
-  list(GET arm 0 cap)
-  list(GET arm 1 t26)
-  q15t_host_test(host_test_${cap}_${t26} TEST host_test.cpp
-    SRC plugin plugin_log script_redirect import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace
+foreach(t26 0 1)
+  q15t_host_test(host_test_${t26} TEST host_test.cpp
+    SRC plugin plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap weapon_arm gamespace
     OPTS "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h"
-    DEFS Q15T_HZ_MATCH90=${cap} Q15T_T26=${t26} Q15T_SLOT_SETCLOCKLEVELS=0x10 Q15T_SLOT_SETDISPLAYREFRESHRATE=0x18
+    DEFS Q15T_T26=${t26}
          "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\""
     LINK_OPTS -rdynamic LIBS dl)
 endforeach()
-# the headset gates (return-address gated wrappers)
-q15t_host_test(gates_test TEST gates_test.cpp SRC headset_gates plugin_log import_hook got_swap LIBS dl)
-# the link gate's library name (headset_gates.cpp LibraryName, its dladdr refusal, called directly: the Bind frame is absent on the
-# host). The test includes headset_gates.cpp itself, so it is not listed again.
-q15t_host_test(library_name_test TEST library_name_test.cpp SRC plugin_log import_hook got_swap LIBS dl)
-
 # ---- one mod/<module>.cmake per module: its host test programs and, in the NDK configure, its arm64 checks ----
 file(GLOB Q15T_MODULE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/mod/*.cmake")
 foreach(f IN LISTS Q15T_MODULE_FILES)

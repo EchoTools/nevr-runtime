@@ -270,7 +270,7 @@ def check_hooks(log: str) -> list[Result]:
     for summary in _HOOK_SUMMARY.finditer(text):
         if int(summary["failed"]) > 0:
             required.append(f"summary:{summary['failed']}")
-    if "[NEVR.PATCH] FATAL hooking init failed" in text:
+    if "FATAL hooking init failed" in text:
         required.append("initialization")
     for line in text.splitlines():
         if line in classified or _HOOK_SUMMARY.search(line):

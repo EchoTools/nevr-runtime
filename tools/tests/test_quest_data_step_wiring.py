@@ -248,18 +248,74 @@ class TheToastClearsEveryException(unittest.TestCase):
         self.assertIn("ExceptionClear", text)
 
 
+def strip_comments(text):
+    return re.sub(r"//[^\n]*", "", text)
+
+
 class TheConstructorBeginNamesTheBuild(unittest.TestCase):
     # #1391: the begin record carries this build's version and commit. The record is written by LogConstructorBegin
     # (src/quest/integration/ctor_sequence.cpp, pinned on the host by integration_sequence_test); this pins that the
-    # constructor hands it the build's own identity from the generated header, not a literal.
+    # constructor hands it the build's own identity from the generated header, not a literal. #2170 adds the variant: the stamp
+    # read beside the sentinel's own library, handed to the begin record and to the combat gate before the first line.
+    def ctor(self):
+        text = strip_comments(read("entry.cpp"))
+        return re.sub(r"\s+", " ", extract_braced_function(text, "static void nevr_sentinel_ctor() {"))
+
     def test_the_constructor_passes_the_generated_build_identity(self):
-        text = re.sub(r"//[^\n]*", "", read("entry.cpp"))
-        ctor = extract_braced_function(text, "static void nevr_sentinel_ctor() {")
-        flat = re.sub(r"\s+", " ", ctor)
         self.assertIn(
             'nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit, '
-            'nevr_build::kIsDev ? "dev" : "release");',
-            flat)
+            'nevr_build::kIsDev ? "dev" : "release", variant);',
+            self.ctor())
+
+    def test_the_variant_is_read_beside_the_library_and_handed_on_before_the_first_line(self):
+        ctor = self.ctor()
+        read_stamp = ctor.index("nevr_quest::build_variant::ReadOwnStamp()")
+        set_variant = ctor.index("nevr_quest::combat::SetVariant(variant.variant)")
+        begin = ctor.index("LogConstructorBegin(")
+        self.assertLess(ctor.index("sentinel::Arm();"), read_stamp)  # a crash in the read leaves a report
+        self.assertLess(read_stamp, set_variant)
+        self.assertLess(set_variant, begin)
+        self.assertLess(begin, ctor.index("RunSentinelConstructor()"))
+
+    def test_the_crash_report_is_given_the_build_line_before_the_first_line(self):
+        # ADR 0040 rule 2: a crash report carries the version, the kind and the variant (core/crash_report.h SetBuild).
+        ctor = self.ctor()
+        build = ctor.index("nevr_crash::SetBuild(")
+        self.assertIn('"version=%s kind=%s variant=%s", nevr_build::kVersion, nevr_build::kIsDev ? "dev" : "release", '
+                      'nevr_quest::build_variant::VariantName(variant.variant)', ctor)
+        self.assertLess(ctor.index("nevr_quest::build_variant::ReadOwnStamp()"), build)
+        self.assertLess(build, ctor.index("LogConstructorBegin("))
+
+    def test_the_combat_gate_is_resolved_with_the_build_kind_and_the_configurations_force_request(self):
+        entry = strip_comments(read("entry.cpp"))
+        resolve = extract_braced_function(entry, "void ResolveCombatActive(bool forceAsked) noexcept {")
+        self.assertIn("nevr_quest::combat::Resolve(nevr_build::kIsDev, forceAsked);", resolve)
+        steps = strip_comments((ROOT / "src/quest/integration/production_steps.cpp").read_text())
+        body = extract_braced_function(steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
+        self.assertIn("nevr_quest::integration::ResolveCombatActive(cfg.combat.force.on);", body)
+        self.assertLess(body.index("sentinel::InitActivation();"), body.index("ResolveCombatActive("))
+
+    def test_the_combat_switches_reach_the_modules_before_the_gate_is_resolved(self):
+        # The registration table's rows read their module's `combat:` switch from combat::SetConfig, which the configuration step calls
+        # (with the `combat_config` line) before the gate is resolved and long before the early install step.
+        entry = strip_comments(read("entry.cpp"))
+        log = extract_braced_function(entry, "void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {")
+        self.assertIn("nevr_quest::combat::SetConfig(config);", log)
+        self.assertLess(log.index("SetConfig(config)"), log.index("LogConfig(config)"))
+        steps = strip_comments((ROOT / "src/quest/integration/production_steps.cpp").read_text())
+        body = extract_braced_function(steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
+        self.assertIn("nevr_quest::integration::LogCombatConfig(cfg.combat);", body)
+        self.assertLess(body.index("LogCombatConfig(cfg.combat)"), body.index("ResolveCombatActive("))
+
+    def test_the_variant_and_the_combat_gate_are_built_into_the_sentinel(self):
+        self.assertIn("../sentinel/build_variant.cpp", (ROOT / "src/quest/integration/CMakeLists.txt").read_text())
+        self.assertIn("combat_active.cpp", (ROOT / "src/quest/combat/CMakeLists.txt").read_text())
+
+    def test_the_combat_code_that_ships_to_every_apk_says_it_is_outside_the_gate(self):
+        for name in ("match_tags.h", "equip_refire.h"):
+            text = (ROOT / "src/quest/combat" / name).read_text()
+            self.assertIn("ships to every APK", text, name)
+            self.assertIn("not gated by combat::Active()", text, name)
 
 
 class NoLoadTimeInitializer(unittest.TestCase):
