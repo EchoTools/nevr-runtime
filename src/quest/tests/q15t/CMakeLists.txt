@@ -129,17 +129,14 @@ function(q15t_arm64_object)
   endforeach()
 endfunction()
 
-# ---- the core programs: the plugin's entry per arm (label core) ----
+# ---- the core programs: the plugin's entry (label core) ----
 set(Q15T_MODULE core)
 add_custom_target(mod_core)
-foreach(t26 0 1)
-  q15t_host_test(host_test_${t26} TEST host_test.cpp
-    SRC plugin plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap weapon_arm gamespace
-    OPTS "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h"
-    DEFS Q15T_T26=${t26}
-         "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\""
-    LINK_OPTS -rdynamic LIBS dl)
-endforeach()
+q15t_host_test(host_test TEST host_test.cpp
+  SRC plugin plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap gamespace
+  OPTS "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h"
+  DEFS "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\""
+  LINK_OPTS -rdynamic LIBS dl)
 # ---- one mod/<module>.cmake per module: its host test programs and, in the NDK configure, its arm64 checks ----
 file(GLOB Q15T_MODULE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/mod/*.cmake")
 foreach(f IN LISTS Q15T_MODULE_FILES)

@@ -59,6 +59,7 @@ PROGRAMS = {
         "autopilot_run_test",
     ),
     "combat": (
+        "aibots_test",
         "bvh_core_test",
         "bvh_test",
         "combat_active_test",
@@ -73,6 +74,7 @@ PROGRAMS = {
         "dronemuzzle_test",
         "decals_test",
         "equip_refire_test",
+        "gunconnect_test",
         "headset_gates_library_name_test",
         "headset_gates_test",
         "heap_step_test",
@@ -93,6 +95,7 @@ PROGRAMS = {
         "powerboost_test",
         "sendguard_test",
         "wallfire_test",
+        "weapon_arm_test",
     ),
     "data": (
         "data_step_test",

@@ -1,5 +1,5 @@
 // Host test of the plugin's entry (NevrPluginInitEx) against a fake "game library" page (an mmap'd page whose words stand for the JUMP_SLOTs).
-// Built per arm (T-26) by src/quest/tests/q15t/CMakeLists.txt. Real code, real mprotect, real /proc/self/maps.
+// Built by src/quest/tests/q15t/CMakeLists.txt. Real code, real mprotect, real /proc/self/maps.
 //
 // What it pins (#2172, #2000): the plugin installs nothing on `vrapi_SetClockLevels` and `vrapi_SetDisplayRefreshRate`. The runtime owns both
 // behaviours (the refresh-rate rule in src/quest/combat/refresh_rate.h, the clock levels in src/quest/sentinel/clock_levels_hook.h), and the
@@ -105,12 +105,7 @@ int main() {
     q15t::Mapping m;
     CHECK(q15t::FindMapping(reinterpret_cast<uintptr_t>(page), &m) && std::strncmp(m.perms, "r--", 3) == 0,
           "page protection changed (perms %s)", m.perms);
-#if Q15T_T26
-    // no game library is loaded on the host: the T-26 arm refuses loudly and installs no tick
-    CHECK(HasLine("t26 not installed", 3), "T-26 arm without engine exports must log an ERROR");
-#else
-    CHECK(!HasLine("CncaGame::ExclusiveUpdateGame"), "no module ticks in this arm: the game tick must not be installed");
-#endif
+    CHECK(!HasLine("CncaGame::ExclusiveUpdateGame"), "no module ticks here: the game tick must not be installed");
     CHECK(page[kTickSlot / sizeof(uintptr_t)] == reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "tick slot swapped with no module to tick");
   }
   // 2. an `args: {clock: raise}` that older builds read: not read, not warned about, nothing installed.
@@ -133,17 +128,17 @@ int main() {
   }
   // 4. no context: refused before anything is touched.
   CHECK(NevrPluginInitEx(nullptr, "") != 0, "a null context must be refused");
-  // 5. the capability flags (no module option is on here): ALTERS_GAMEPLAY only with T-26.
+  // 5. the capability flags (no module option is on here): no ALTERS_GAMEPLAY.
   {
     const uint32_t caps = NevrPluginGetCapabilities();
     const bool gameplay = (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0;
-    CHECK(gameplay == (Q15T_T26 != 0), "caps 0x%x: ALTERS_GAMEPLAY is %d for this arm", caps, gameplay);
+    CHECK(!gameplay, "caps 0x%x: ALTERS_GAMEPLAY is %d with no module on", caps, gameplay);
     CHECK((caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE) != 0 && (caps & NEVR_PLUGIN_CAP_NETWORK) == 0, "caps 0x%x", caps);
   }
   if (g_fail == 0) {
-    std::printf("host_test: all checks pass (t26=%d)\n", Q15T_T26);
+    std::printf("host_test: all checks pass\n");
   } else {
-    std::printf("host_test: %d failure(s) (t26=%d)\n", g_fail, Q15T_T26);
+    std::printf("host_test: %d failure(s)\n", g_fail);
   }
   return g_fail == 0 ? 0 : 1;
 }

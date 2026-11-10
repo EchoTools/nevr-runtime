@@ -17,15 +17,17 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 - `src/` the plugin (`src/<module>.{h,cpp}`, `plugin.cpp` installs them in the order the module docs fix).
 - `tests/` host tests: a CMake project, `src/quest/tests/q15t/CMakeLists.txt` (`just test-quest-q15t`, or `just test-quest-q15t <module>`), one `tests/mod/<module>.cmake` per module,
   `src/quest/tests/q15t/mutants.sh` and `src/quest/tests/q15t/mutants.d/` (the mutation run, about an hour, one at a time, not part of the gate).
-- `docs/quest/q15t/modules/<module>.md`, `docs/quest/q15t/adr/`: one document per module and the two plugin decisions.
+- `docs/quest/q15t/modules/<module>.md`: one document per module.
 - `CMakeLists.txt`: the options (defaults and the reason for each are in it), added by `src/quest/integration/CMakeLists.txt`.
 
 ## Defaults
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
-  (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- On: fxtrail, voipdrop, custctx, droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- Gun connect, the practice AI bots and the gun hand default are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
+  `weapon_arm.h`). Their switches are the `combat:` keys `gunconnect`, `aibots`, `aibots_scenario` and `weapon_arm` in `config.yaml`, each on by default; no kill file
+  or data file switches any of them. The marker files of the gun hand stay in this plugin's data directory, `files/q15t` (player state).
 - The impact sounds and the level decals are not this plugin's: the runtime owns them (`src/quest/combat/impactsnd.h`, `src/quest/combat/decals.h`). Their
   switches are the `combat:` keys `impactsnd`, `impactsnd_write`, `decals`, `decals_flip_u`, `decals_flip_v` in `config.yaml`; the plugin's `decals.off`,
   `decalflipu.on` and `decalflipv.on` are no longer read.

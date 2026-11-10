@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/aibots.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
@@ -13,6 +14,7 @@
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/impactsnd.h"
@@ -29,6 +31,7 @@
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
 #include "quest/combat/wallfire.h"
+#include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -50,6 +53,17 @@ ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshs
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
+
+// The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
+ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
+ModuleResult AibotsNormal() noexcept {
+  aibots::Switches switches;
+  switches.on = g_config.aibots.on;
+  switches.scenario = g_config.aibotsScenario.source == nevr_quest::Source::kFile ? g_config.aibotsScenario.text : nullptr;
+  switches.devBuild = DevBuild();
+  return aibots::Install(switches);
+}
+ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config.weaponArm.on); }
 
 ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
 ModuleResult DecalsNormal() noexcept {
@@ -131,6 +145,11 @@ constexpr std::array kModules{
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
     // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},
+    // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
+    // callbacks, so they come after the tick's row; before the gates, which the plugin installed after all its modules.
+    Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
+    Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
+    Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
