@@ -611,6 +611,24 @@ TEST_F(CachedOverrides, ACachedFileIsDeliveredForItsTypeAndNameAndLogged) {
   EXPECT_TRUE(TestLogContains("entries=1 loaded=1 refused=0 missing=0"));
 }
 
+// What a level plugin needs (#2161, #2343): a fixed override replaces its resource on every load, so a level that loads
+// again gets the override again. Each load gets its own copy in the game's heap, and each says so.
+TEST_F(CachedOverrides, AFixedOverrideReplacesItsResourceOnEveryLoad) {
+  const std::vector<std::uint8_t> image = Image(300, 5);
+  RegisterResourceOverride(kSplashType, kSplashName, image.data(), image.size(), "every_load");
+  char original[10] = {};
+  const void* copies[3] = {};
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
+    ExpectGameCopy(image.data(), image.size());
+    copies[load - 1] = g_seenBuffer;
+  }
+  EXPECT_NE(copies[0], copies[1]) << "each load is handed a copy of its own, which the game frees on its own";
+  EXPECT_NE(copies[1], copies[2]);
+  EXPECT_EQ(TestLogLinesContaining("override applied label=every_load").size(), 3u);
+}
+
 TEST_F(CachedOverrides, ACachedFileForAnotherResourceIsNotDeliveredForThisOne) {
   Cache(Image(100, 1), kSplashType, kSplashName, "cache_splash");
   ASSERT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
@@ -1055,6 +1073,102 @@ TEST_F(ResourceTransforms, AFixedOverridePassedOverByAnEarlierOneIsReportedAsSuc
   EXPECT_EQ(report.never_applied, 1u);
   EXPECT_TRUE(TestLogContains("override passed over label=second"));
   EXPECT_FALSE(TestLogContains("override never applied label=second"));
+}
+
+// #2343: with two fixed entries for one key, the first registered serves every load and the later one is passed over
+// on every load; neither the second load nor the third falls through to the later entry or to the game's own bytes.
+TEST_F(ResourceTransforms, TheFirstFixedOverrideOfAKeyServesEveryLoadAndTheLaterOneStaysPassedOver) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80, 90};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+    ExpectGameCopy(first, sizeof(first));
+  }
+  EXPECT_EQ(TestLogLinesContaining("override applied label=first").size(), 3u);
+  EXPECT_TRUE(TestLogLinesContaining("override applied label=second").empty());
+}
+
+// A texture's payload (buffer 1) is written over the game's own buffer on every load too.
+TEST_F(ResourceTransforms, AFixedPayloadIsWrittenOverTheGamesBufferOnEveryLoad) {
+  static const std::uint8_t payload[] = {1, 2, 3, 4, 5, 6, 7, 8};
+  // Make(CGTextureResource, "Win10GPU") names buffer 1 of a CGTextureResource (resource_buffer_key.h).
+  constexpr std::uint64_t kPayloadKey = 0xbeac1969cb7b8861ull;
+  constexpr std::uint64_t kTexture = 0xb3ebe9e0bf0eb81full;
+  RegisterResourceOverride(kPayloadKey, kTransformName, payload, sizeof(payload), "payload_every_load");
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    std::uint8_t game[8] = {};
+    GameFinishesBuffer(kTexture, kTransformName, 1, game, sizeof(game));
+    EXPECT_EQ(std::memcmp(game, payload, sizeof(payload)), 0);
+  }
+  EXPECT_EQ(TestLogLinesContaining("override applied label=payload_every_load buffer=1").size(), 3u);
+}
+
+// The shutdown report tells the three fates of a fixed override apart after several loads (#2343): one that served is
+// neither counted nor warned about; one an earlier entry of its key took is "passed over"; one whose resource never
+// loaded is "never applied ... never requested".
+TEST_F(ResourceTransforms, ShutdownDoesNotCountOrWarnAboutAnOverrideThatServed) {
+  static const std::uint8_t served[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, served, sizeof(served), "served");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 1u);
+  EXPECT_EQ(report.never_applied, 0u);
+  EXPECT_TRUE(TestLogLinesContaining("label=served").empty()) << "no warning names an override that served";
+}
+
+TEST_F(ResourceTransforms, ShutdownReportsAnOverridePassedOverOnEveryLoadAsPassedOver) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 2u);
+  EXPECT_EQ(report.never_applied, 1u) << "only the passed-over entry";
+  EXPECT_TRUE(TestLogContains("override passed over label=second"));
+  EXPECT_FALSE(TestLogContains("override never applied label=second"));
+  EXPECT_TRUE(TestLogLinesContaining("label=first").empty());
+}
+
+TEST_F(ResourceTransforms, ShutdownReportsAnOverrideWhoseResourceNeverLoadedAsNeverRequested) {
+  static const std::uint8_t loaded[] = {10, 20, 30, 40};
+  static const std::uint8_t unloaded[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, loaded, sizeof(loaded), "loaded");
+  RegisterResourceOverride(kTransformType, kTransformName + 1, unloaded, sizeof(unloaded), "unloaded");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override never applied label=unloaded"));
+  EXPECT_TRUE(TestLogContains("resource was never requested"));
+  EXPECT_FALSE(TestLogContains("override passed over label=unloaded"));
+  EXPECT_TRUE(TestLogLinesContaining("label=loaded").empty());
+}
+
+// NEVR_ResetResourceOverrides stays in the plugin ABI with nothing to re-arm (#2343): it says so, the next load is still
+// served, and the shutdown report still knows the override served.
+TEST_F(ResourceTransforms, AResetRequestChangesNothingAndSaysSo) {
+  static const std::uint8_t fixed[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
+  ASSERT_TRUE(RegisterResourceTransform(kTransformType + 1, kTransformName, &ProbeTransform, nullptr, "probe"));
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ResetResourceOverrides();
+  EXPECT_TRUE(TestLogContains("reset requested fixed_overrides=1 - nothing to re-arm"));
+  // Read before any later load could mark the override served again; with the hook live the registry is kept.
+  EXPECT_EQ(ShutdownResourceOverride().never_applied, 0u) << "the reset does not erase that the override served";
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(fixed, sizeof(fixed));
 }
 
 class GameHeapCopies : public ResourceTransforms {};

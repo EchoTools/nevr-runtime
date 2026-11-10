@@ -40,15 +40,17 @@ ResourceOverrideShutdownReport ShutdownResourceOverride();
 /// directory for additional file-based overrides.
 void InstallResourceOverride();
 
-/// Register an embedded data override (data pointer must outlive the hook). The type names the buffer replaced
-/// (resource_buffer_key.h): 0, the logical type or Make(<logical>, "Win10") name buffer 0, which the game gets a copy of
-/// in its own heap; Make(<logical>, "Win10GPU") names buffer 1 (a texture's payload), which is written over the game's
-/// own buffer when it is no larger and is otherwise not served, with a Warning. The cache and `_overrides/` key the same.
-/// A texture's descriptor (buffer 0) and payload (buffer 1) are two entries: a payload of another size than the game's
-/// needs its descriptor entry too. Before #1421 an entry keyed by either on-disk type matched nothing.
-/// The label follows resource_label.h (1 to 64 bytes of printable ASCII, no double quote or backslash); any other label,
-/// a null one included, is refused with a Warning that gives its length and the rule, and nothing is registered. The same
-/// holds for RegisterResourceTransform (it returns false) and RegisterResourceOverrideFromFile.
+/// Register an embedded data override (data pointer must outlive the hook). It serves every load of its resource; with
+/// several fixed entries for one key, the first registered serves and the later ones are passed over (#2343). The type
+/// names the buffer replaced (resource_buffer_key.h): 0, the logical type or Make(<logical>, "Win10") name buffer 0,
+/// which the game gets a copy of in its own heap; Make(<logical>, "Win10GPU") names buffer 1 (a texture's payload),
+/// which is written over the game's own buffer when it is no larger and is otherwise not served, with a Warning. The
+/// cache and `_overrides/` key the same. A texture's descriptor (buffer 0) and payload (buffer 1) are two entries: a
+/// payload of another size than the game's needs its descriptor entry too. Before #1421 an entry keyed by either
+/// on-disk type matched nothing. The label follows resource_label.h (1 to 64 bytes of printable ASCII, no double quote
+/// or backslash); any other label, a null one included, is refused with a Warning that gives its length and the rule,
+/// and nothing is registered. The same holds for RegisterResourceTransform (it returns false) and
+/// RegisterResourceOverrideFromFile.
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);
@@ -62,14 +64,13 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
 using ResourceTransformFn = bool (*)(const void* original, uint64_t original_size, const void** out,
                                      uint64_t* out_size, void* user);
 
-/// Register a transform for a resource (type 0 = any type): unlike an override, which replaces the buffer once, a
-/// transform sees the game's buffer on every load of that resource, so it can build its answer from the player's
-/// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered: a transform
-/// keyed by a buffer-1 on-disk type is never asked. A fixed override of the same key outranks a transform whatever the
-/// registration order: the transform answers only the loads no override serves (#1479). Transforms of one key are asked
-/// in registration order; one that declines hands the load to the next.
-/// Returns true when the transform is in the registry. False: a null transform, or no registry (the caller's
-/// summary should say so). A failed hook install is logged where it fails.
+/// Register a transform for a resource (type 0 = any type): unlike an override, which serves the same bytes on every
+/// load, a transform sees the game's buffer on every load of that resource, so it can build its answer from the
+/// player's own data. Only the primary buffer (index 0) is offered: a transform keyed by a buffer-1 on-disk type is
+/// never asked. A fixed override of the same key outranks a transform whatever the registration order: the transform
+/// answers only the loads no override serves (#1479). Transforms of one key are asked in registration order; one that
+/// declines hands the load to the next. Returns true when the transform is in the registry. False: a null transform, or
+/// no registry (the caller's summary should say so). A failed hook install is logged where it fails.
 bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label);
 
@@ -89,7 +90,9 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
 size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir);
 size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_bytes);
 
-/// Reset all applied flags so overrides can re-trigger on next level load.
+/// Kept for the `NEVR_ResetResourceOverrides` export (plugin ABI): a fixed override already serves every load of its
+/// resource (#2343), so there is nothing to re-arm. It logs one Info line with the number of fixed overrides and
+/// changes nothing; the shutdown report still counts each override that served.
 void ResetResourceOverrides();
 
 /// Remove all overrides whose data pointer falls within [data_start, data_end).
