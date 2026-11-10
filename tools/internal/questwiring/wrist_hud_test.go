@@ -178,7 +178,7 @@ func TestThePluginHoldsNeitherSlotAndNoLongerBuildsEitherModule(t *testing.T) {
 		}
 	}
 	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt") + read(t, "src/quest/tests/q15t/mod/wiring.cmake")
-	for _, bad := range []string{"Q15T_HUDMETER", "Q15T_SHIELDGAMMA", "src/hudmeter", "src/shieldgamma", " hudmeter ", " shieldgamma ", "(HUDMETER", "SHIELDGAMMA="} {
+	for _, bad := range []string{"HUDMETER", "SHIELDGAMMA", "src/hudmeter", "src/shieldgamma"} {
 		if strings.Contains(cmake, bad) {
 			t.Errorf("the plugin's CMake or its wiring test still names %s", bad)
 		}
