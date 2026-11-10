@@ -3,7 +3,8 @@
  *
  * A plugin hands register_resources the bytes of a resource set as its own image maps them. This file checks that
  * those bytes are file bytes of a read-only section of that plugin's image (image_file_range.h), opens the plugin's
- * file read-only and deny-write for the life of the process, checks the file holds the same bytes, and hands the set
+ * file read-only and deny-write for the life of the process, checks the file holds the set's first and last MiB as
+ * mapped (the bytes between are not compared), and hands the set
  * to the registry (resource_set_registry.h). After the plugin pass it installs the resolver hook; on the game's own
  * thread, once the game has asked the resolver for its first resource (its boot package sets are all read by then), it
  * mounts the sets against the game's manifest, read with the game's own FindEntry (plugin_assets.cpp), publishes the
@@ -787,6 +788,19 @@ void SetBeforeAddForTest(void (*hook)()) { g_testBeforeAdd = hook; }
 void SetAfterPublishForTest(void (*hook)()) { g_testAfterPublish = hook; }
 
 void SetFilePathForTest(const wchar_t* path) { g_testFilePath = path != nullptr ? path : L""; }
+
+int FileCheckForTest(const wchar_t* path, std::uint64_t fileOffset, const unsigned char* mapped, std::uint64_t size) {
+  FileHandle file(CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                              nullptr));
+  if (file.get() == INVALID_HANDLE_VALUE) return 1;
+  DWORD error = 0;
+  switch (FileHoldsMappedBytes(file.get(), fileOffset, mapped, size, &error)) {
+    case FileCheck::kSame: return 0;
+    case FileCheck::kReadFailed: return 1;
+    case FileCheck::kDiffers: return 2;
+  }
+  return 1;
+}
 #endif
 
 }  // namespace nevr_resource_sets

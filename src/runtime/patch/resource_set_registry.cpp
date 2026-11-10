@@ -83,6 +83,8 @@ const char* RefusalName(Refusal refusal) {
     case Refusal::kUnresolved: return "unresolved";
     case Refusal::kIndexSpace: return "index_space";
     case Refusal::kFileOffset: return "file_offset_range";
+    case Refusal::kSizeLimit: return "size_limit";
+    case Refusal::kFrameSize: return "frame_size";
   }
   return "unknown";
 }
@@ -121,6 +123,25 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
   if (!parsed.ok()) {
     return Refuse(Refusal::kFormat, std::string(nevr_resource_set::ProblemName(parsed.problem)) + " at index " +
                                         std::to_string(parsed.index));
+  }
+
+  // Each chunk: at most kMaxResourceBytes decompressed, and its zstd frame header states exactly that many bytes (the
+  // header only; no frame is decompressed here). The game's reader allocates the declared size and decompresses into
+  // it, so a frame that holds another size would leave bytes of a resource unwritten or fail the read.
+  for (std::uint32_t i = 0; i < view.chunk_count(); ++i) {
+    const nevr_resource_set::Chunk c = view.ChunkAt(i);
+    if (c.decompressed > kMaxResourceBytes) {
+      return Refuse(Refusal::kSizeLimit, "chunk " + std::to_string(i) + " decompresses to " +
+                                             std::to_string(c.decompressed) + " bytes, over " +
+                                             std::to_string(kMaxResourceBytes));
+    }
+    const unsigned long long stated = ZSTD_getFrameContentSize(view.data() + c.offset, c.compressed);
+    if (stated != c.decompressed) {
+      const bool none = stated == ZSTD_CONTENTSIZE_UNKNOWN || stated == ZSTD_CONTENTSIZE_ERROR;
+      return Refuse(Refusal::kFrameSize, "chunk " + std::to_string(i) + " declares " +
+                                             std::to_string(c.decompressed) + " bytes and its frame header " +
+                                             (none ? std::string("states none") : "states " + std::to_string(stated)));
+    }
   }
 
   std::vector<Key> keys;
@@ -164,6 +185,16 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
     for (const Key& key : sorted) {
       if (SortedHas(otherKeys, key)) {
         return Refuse(Refusal::kCollides, KeyText(key.first, key.second) + " owner=plugin:" + other->plugin);
+      }
+    }
+    // Two sets' overrides of one key: the override registry keeps the first, so the second would be dropped silently.
+    for (std::uint32_t i = 0; i < view.override_count(); ++i) {
+      const nevr_resource_set::Override o = view.OverrideAt(i);
+      for (const OverrideRef& theirs : other->overrides) {
+        if (theirs.type == o.type && theirs.name == o.name) {
+          return Refuse(Refusal::kCollides,
+                        KeyText(o.type, o.name) + " (an override) owner=plugin:" + other->plugin);
+        }
       }
     }
   }

@@ -62,7 +62,10 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* arg
 
 The bytes must be file bytes of the plugin's own image: in one read-only section's raw data, with no base relocation in
 them. The section `.nevrres` that `NEVR_RESOURCE_SET_SECTION` names is initialised read-only data. The runtime checks this
-(`src/runtime/patch/image_file_range.h`) and compares the mapped bytes with the file's. `#embed` is C23 and C++26; GCC
+(`src/runtime/patch/image_file_range.h`) and compares the set's first and last MiB (the whole set when it is
+2 MiB or less) of the file with the mapped bytes. Bytes between those two MiB are not compared: the file is held
+deny-write from that read on, so it cannot change afterwards, but a file that differed in the middle before the open
+is not caught. `#embed` is C23 and C++26; GCC
 15 and Clang 19 accept it in C++ as an extension. The MinGW assembler has no `.pushsection` or `.previous` for PE, so an
 `.incbin` in a top-level asm statement cannot return to the section the compiler was in. A 1 GiB set builds in about two
 minutes.
@@ -76,9 +79,9 @@ and into the login's JSON.
 | --- | --- | --- |
 | 0 | `NEVR_RESOURCES_OK` | Registered; held until the init returns. |
 | 1 | `NEVR_RESOURCES_BAD_ARGUMENT` | A null pointer, a short `struct_size`, nonzero `flags`, a label outside the rule above, or a call from outside this plugin's init on its thread. |
-| 2 | `NEVR_RESOURCES_NOT_IN_FILE` | The bytes are not file bytes of a read-only section of the plugin's image, the file does not hold them, or a chunk ends past 4 GiB in the file. |
-| 3 | `NEVR_RESOURCES_BAD_FORMAT` | Not a resource set, or a set the runtime cannot serve: a `CScriptResource` record (a script is a DLL found by name), a texture descriptor without its payload record, a level root without its archive, an archive that is over `0x80000` bytes or does not read, more chunks than the shadow has indices left. Also the answer when the host failed inside the call (out of memory). |
-| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds, or a resource a plugin asset (`NEVR_RegisterAsset`) is. An asset is keyed by its logical type and a record by an on-disk type, so an asset of type T and name N is the records (T, N), (`Make(T, "Win10")`, N) and (`Make(T, "Win10GPU")`, N). The first holder keeps it, and a plugin asset that is a resource a set holds is refused in turn. |
+| 2 | `NEVR_RESOURCES_NOT_IN_FILE` | The bytes are not file bytes of a read-only section of the plugin's image, the file does not hold the set's first or last MiB as mapped, or a chunk ends past 4 GiB in the file. |
+| 3 | `NEVR_RESOURCES_BAD_FORMAT` | Not a resource set, or a set the runtime cannot serve: a `CScriptResource` record (a script is a DLL found by name), a texture descriptor without its payload record, a level root without its archive, an archive that is over `0x80000` bytes or does not read, a chunk that decompresses to more than 128 MiB (ADR 0045's size rule; `size_limit`), a chunk whose zstd frame header states no content size or one other than the chunk's (`frame_size`), more chunks than the shadow has indices left. Also the answer when the host failed inside the call (out of memory). |
+| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds, an override of a key another set's override replaces, or a resource a plugin asset (`NEVR_RegisterAsset`) is. An asset is keyed by its logical type and a record by an on-disk type, so an asset of type T and name N is the records (T, N), (`Make(T, "Win10")`, N) and (`Make(T, "Win10GPU")`, N). The first holder keeps it, and a plugin asset that is a resource a set holds is refused in turn. |
 | 5 | `NEVR_RESOURCES_TOO_LATE` | The run's sets are already mounted. |
 
 Every refusal is also a Warning: `[NEVR.RESOURCE] resource set refused plugin=<id> label="<label>" status=<n>
@@ -113,9 +116,18 @@ reason=<reason> detail="..."`.
 
 ## Overrides
 
-A set's overrides replace resources the game already has. Precedence is the game's manifests first, then resource
-sets (ADR 0045, decision 2: cargo, then stock, then plugin packages; the PC has no cargo set yet), so they cannot be
-records. The runtime registers a mounted set's overrides itself, at the mount, with the
+A set's overrides replace resources the game already has. They are an explicit exception to ADR 0045's decision 2
+(cargo, then stock, then plugin packages): on the client that carries the plugin, an override replaces a stock name,
+the same power `NEVR_RegisterResourceOverride` already gives a plugin, so it is declared per key and logged. Decision 2
+still governs a set's records: a record never carries a stock name, the game's manifests come first, and so an
+override cannot be a record.
+
+Two sets cannot override one key: the second set is refused whole (`collides`, naming the key and the first set's
+plugin). An override of the same key from outside the sets that is registered before the mount, from the CDN cache or a plugin's
+own `NEVR_RegisterResourceOverride`, wins: the override registry serves a load from the first entry for its key
+(`src/runtime/patch/resource_override.cpp`). The set's override is still registered and counted in the mount line's
+`overrides=`, and at shutdown it is logged `override passed over ... an earlier override of the same resource served its
+loads`. The runtime registers a mounted set's overrides itself, at the mount, with the
 override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold
 replaces nothing and is counted as unmatched. An override is keyed by on-disk type: buffer 0 for a `Win10` type, at any
 size; buffer 1 for a `Win10GPU` type, served only when it is no larger than the game's. Overrides apply where the game

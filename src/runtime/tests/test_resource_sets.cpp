@@ -43,6 +43,7 @@ using nevr_test_sets::SetU64;
 constexpr std::uint64_t kLevel = 0xdb69545ff59c76d0ULL;  // CSymbol64("mpl_arena_build")
 constexpr std::uint64_t kMeshType = 0x1111111111111111ULL;
 constexpr std::uint64_t kStockMesh = 0x2222222222222222ULL;
+constexpr std::uint32_t kMaxResourceBytesForTest = nevr_resource_sets::kMaxResourceBytes;
 
 // A level: its root, its archive listing a new mesh and a stock mesh, and the new mesh. One chunk.
 SetBuilder LevelSet(std::uint64_t level = kLevel, std::uint64_t mesh = 0x3333333333333333ULL) {
@@ -104,6 +105,11 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
       {"no records", Problem::kNoRecords, [](SetBuilder&, std::vector<unsigned char>& v) { SetU32(&v, 0x0c, 0); }},
       {"table range", Problem::kTableRange,
        [](SetBuilder&, std::vector<unsigned char>& v) { SetU64(&v, 0x20, v.size() - 4); }},
+      {"record table range", Problem::kTableRange,
+       [](SetBuilder&, std::vector<unsigned char>& v) { SetU64(&v, 0x18, v.size() - 4); }},
+      // With no overrides the table is 0 bytes long, so only an offset past the end is out of range.
+      {"override table range", Problem::kTableRange,
+       [](SetBuilder&, std::vector<unsigned char>& v) { SetU64(&v, 0x28, v.size() + 1); }},
       {"chunk range", Problem::kChunkRange,
        [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.ChunkAt(0) + 8, static_cast<std::uint32_t>(v.size())); }},
       {"chunk not zstd", Problem::kChunkNotZstd,
@@ -351,6 +357,87 @@ TEST(ResourceSetRegistry, ASecondPluginsSetWithAKeyTheFirstHoldsIsRefusedWholeAn
   EXPECT_EQ(registry.Mount(stock.View()).sets, 1u);
 }
 
+TEST(ResourceSetRegistry, ASecondSetThatOverridesAKeyAnEarlierSetOverridesIsRefusedWhole) {
+  SetBuilder a = LevelSet();
+  a.AddOverride(0x4444444444444444ULL, 0x5555ULL, Bytes(10, 0x33));
+  SetBuilder b = LevelSet(0x7777ULL, 0x8888ULL);  // no record key in common with the first
+  b.AddOverride(0x4444444444444444ULL, 0x5555ULL, Bytes(12, 0x44));
+  const std::vector<unsigned char> first = a.Build();
+  const std::vector<unsigned char> second = b.Build();
+  Registry registry;
+  ASSERT_TRUE(registry.Add("a", "first", first.data(), first.size(), 1, 0).ok());
+  const nevr_resource_sets::Outcome o = registry.Add("b", "second", second.data(), second.size(), 2, 0);
+  EXPECT_EQ(o.refusal, Refusal::kCollides);
+  EXPECT_NE(o.detail.find("0x4444444444444444:0x0000000000005555"), std::string::npos) << o.detail;
+  EXPECT_NE(o.detail.find("override"), std::string::npos) << o.detail;
+  EXPECT_NE(o.detail.find("owner=plugin:a"), std::string::npos) << o.detail;
+  EXPECT_EQ(registry.held(), 1u);
+}
+
+// A set with one chunk and one mesh record: no archive, so nothing else decompresses the chunk.
+std::vector<unsigned char> MeshOnlySet() {
+  SetBuilder b;
+  const std::uint32_t c = b.AddChunk();
+  b.AddRecord(kMeshType, 0x3333333333333333ULL, Bytes(200, 0x22), c);
+  return b.Build();
+}
+
+std::size_t ChunkTableAt(const std::vector<unsigned char>& v) {
+  std::uint64_t at = 0;
+  std::memcpy(&at, v.data() + 0x20, 8);
+  return static_cast<std::size_t>(at);
+}
+
+TEST(ResourceSetRegistry, AChunkWhoseFrameStatesAnotherSizeIsRefused) {
+  std::vector<unsigned char> bytes = MeshOnlySet();
+  {
+    Registry registry;
+    ASSERT_TRUE(registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0).ok()) << "the unchanged set";
+  }
+  SetU32(&bytes, ChunkTableAt(bytes) + 12, 201);  // declared one byte more than the frame holds; still a valid set
+  ASSERT_EQ(ParseProblem(bytes), Problem::kNone);
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kFrameSize);
+  EXPECT_NE(o.detail.find("chunk 0"), std::string::npos) << o.detail;
+  EXPECT_EQ(registry.held(), 0u);
+}
+
+TEST(ResourceSetRegistry, AChunkWhoseFrameStatesNoSizeIsRefused) {
+  std::vector<unsigned char> bytes = MeshOnlySet();
+  std::uint32_t frame = 0;
+  std::memcpy(&frame, bytes.data() + ChunkTableAt(bytes) + 4, 4);
+  // Frame header descriptor 0x00: no content size, not single segment; the next byte is the window descriptor, which
+  // overwrites the first byte of the 4-byte content size the builder wrote (the frame no longer decodes; the header
+  // is all the check reads).
+  bytes[frame + 4] = 0x00;
+  bytes[frame + 5] = 0x00;
+  ASSERT_EQ(ParseProblem(bytes), Problem::kNone);
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kFrameSize);
+}
+
+TEST(ResourceSetRegistry, AChunkOver128MiBIsRefusedAndOneAtTheLimitIsNotRefusedForItsSize) {
+  // A large record alone in its chunk, at the chunk's whole size: Parse accepts any size; the registry caps it at
+  // ADR 0045's 128 MiB.
+  for (const std::uint32_t declared : {kMaxResourceBytesForTest + 1, kMaxResourceBytesForTest}) {
+    std::vector<unsigned char> bytes = MeshOnlySet();
+    SetU32(&bytes, ChunkTableAt(bytes) + 12, declared);
+    std::uint64_t records = 0;
+    std::memcpy(&records, bytes.data() + 0x18, 8);
+    SetU32(&bytes, static_cast<std::size_t>(records) + 0x18, declared);
+    ASSERT_EQ(ParseProblem(bytes), Problem::kNone) << declared;
+    Registry registry;
+    const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+    if (declared > kMaxResourceBytesForTest) {
+      EXPECT_EQ(o.refusal, Refusal::kSizeLimit) << o.detail;
+    } else {
+      EXPECT_EQ(o.refusal, Refusal::kFrameSize) << "at the limit the size passes and the frame's own size is next";
+    }
+  }
+}
+
 TEST(ResourceSetRegistry, AFailedInitDropsItsSetsAndAnUncommittedSetIsNotMounted) {
   const std::vector<unsigned char> bytes = LevelSet().Build();
   Registry registry;
@@ -497,9 +584,11 @@ TEST(ResourceSetRegistry, AnArchiveLargerThanTheReadersBlockIsRefusedBeforeItIsR
 TEST(ResourceSetRegistry, AnArchiveWhoseChunkDoesNotDecompressToItsSizeIsRefused) {
   SetBuilder b = LevelSet();
   std::vector<unsigned char> v = b.Build();
-  std::uint32_t decompressed = 0;
-  std::memcpy(&decompressed, v.data() + b.ChunkAt(0) + 12, 4);
-  SetU32(&v, b.ChunkAt(0) + 12, decompressed + 16);  // the frame holds 16 bytes fewer than the chunk says
+  std::uint32_t compressed = 0;
+  std::memcpy(&compressed, v.data() + b.ChunkAt(0) + 8, 4);
+  // The frame's header states the chunk's size (the registry's frame check passes), but the chunk names 16 bytes fewer
+  // of the frame than it holds, so it does not decompress.
+  SetU32(&v, b.ChunkAt(0) + 8, compressed - 16);
   ASSERT_EQ(ParseProblem(v), Problem::kNone);
   Registry registry;
   const nevr_resource_sets::Outcome o = registry.Add("p", "l", v.data(), v.size(), 1, 0);

@@ -200,7 +200,8 @@ enum NevrResourcesStatus : int32_t {
     NEVR_RESOURCES_NOT_IN_FILE  = 2, /* the bytes are not file bytes of a read-only section of the calling plugin's own
                                       *   image: outside it, across a section boundary, past a section's raw data, in a
                                       *   writable section or touched by a base relocation; or the file does not hold
-                                      *   the same bytes there; or a chunk ends past the file offsets the game's reader
+                                      *   the set's first or last MiB there as mapped (the bytes between are not
+                                      *   compared); or a chunk ends past the file offsets the game's reader
                                       *   can address (4 GiB) */
     NEVR_RESOURCES_BAD_FORMAT   = 3, /* not a resource set (nevr/resource_set.h), or a set the runtime will not serve (a
                                       *   script record, a texture without its payload, a level without its archive, an

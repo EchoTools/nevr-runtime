@@ -3062,6 +3062,33 @@ std::filesystem::path FixtureCopy(const char* name, bool flipInSet, bool cutBefo
   return copy;
 }
 
+// The registration compares the set's first and last MiB of the file with the mapped bytes, not the whole set. A set of
+// 3 MiB: a byte changed in the first or the last MiB is caught; one in the middle MiB is not (the documented limit).
+TEST(ResourceSetFileCheck, TheFirstAndLastMiBAreComparedAndTheMiddleIsNot) {
+  constexpr std::size_t kMiB = 1u << 20;
+  constexpr std::uint64_t kOffset = 512;  // the set's offset in the file, as a section's raw data would put it
+  std::vector<unsigned char> mapped(3 * kMiB);
+  for (std::size_t i = 0; i < mapped.size(); ++i) mapped[i] = static_cast<unsigned char>(i * 31 + 7);
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / "nevr_test_resource_file_check.bin";
+  auto check = [&](std::ptrdiff_t flipAt) {
+    std::vector<unsigned char> file(kOffset, 0xEE);
+    file.insert(file.end(), mapped.begin(), mapped.end());
+    if (flipAt >= 0) file[kOffset + static_cast<std::size_t>(flipAt)] ^= 0x01;
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
+    }
+    return nevr_resource_sets::FileCheckForTest(path.wstring().c_str(), kOffset, mapped.data(), mapped.size());
+  };
+  EXPECT_EQ(check(-1), 0) << "the same bytes";
+  EXPECT_EQ(check(10), 2) << "a byte in the first MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(3 * kMiB - 10)), 2) << "a byte in the last MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(2 * kMiB)), 2) << "the first byte of the last MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(kMiB + kMiB / 2)), 0)
+      << "a byte in the middle MiB is not compared (plugin-resources.md says so)";
+  std::filesystem::remove(path);
+}
+
 TEST_F(PluginResourceSetTest, APluginFileThatDoesNotHoldTheMappedBytesIsRefused) {
   const std::filesystem::path differs = FixtureCopy("nevr_test_resources_differs.dll", true, false);
   ASSERT_FALSE(differs.empty());

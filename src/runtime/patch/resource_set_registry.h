@@ -41,6 +41,8 @@ enum class Refusal {
   kUnresolved,      // (mount) a level's archive lists a resource, or names an archive, that nothing serves
   kIndexSpace,      // the sets held so far and this one need more chunk indices than the shadow has
   kFileOffset,      // a chunk ends past the file offsets the game's u32 chunk record can hold
+  kSizeLimit,       // a chunk that decompresses to more than kMaxResourceBytes (so does any record in it)
+  kFrameSize,       // a chunk whose zstd frame header states no content size, or one other than the chunk's
 };
 
 const char* RefusalName(Refusal refusal);
@@ -78,6 +80,11 @@ struct OverrideRef {
 // The largest archive record a set may carry: an archive sits in a block-cache chunk (the game's largest is 66,256
 // bytes, in a chunk of 524,260), so its chunk decompresses to at most kBlockLimit and reading it allocates no more.
 inline constexpr std::uint32_t kMaxArchiveBytes = 0x80000;
+
+// The largest chunk a set may carry, decompressed: ADR 0045's size rule (decision 8, 128 MiB), the bound on any buffer
+// the game's reader allocates for a resource. A record lies inside its chunk's decompressed bytes (Parse), so it bounds
+// every record too.
+inline constexpr std::uint32_t kMaxResourceBytes = 128u * 1024u * 1024u;
 
 // A set as the registry holds it. Chunk offsets are offsets in the plugin's file; `package` is filled at the mount.
 struct Set {

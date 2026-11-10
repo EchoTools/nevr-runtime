@@ -81,6 +81,8 @@ void SetBeforeAddForTest(void (*hook)());
 void SetAfterPublishForTest(void (*hook)());
 // The file registration opens and compares instead of the plugin's own (null: the plugin's own).
 void SetFilePathForTest(const wchar_t* path);
+// The registration's compare of the file with the mapped bytes, on `path`: 0 the same, 1 a read failed, 2 differs.
+int FileCheckForTest(const wchar_t* path, std::uint64_t fileOffset, const unsigned char* mapped, std::uint64_t size);
 #endif
 
 }  // namespace nevr_resource_sets
