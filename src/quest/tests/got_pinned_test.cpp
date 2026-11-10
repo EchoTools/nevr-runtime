@@ -28,11 +28,14 @@
 #include "login_title_hook.h"
 #include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
+#include "quest/combat/aibots_targets.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/decals_targets.h"
-#include "quest/combat/ec_targets.h"
 #include "quest/combat/dronekill_targets.h"
 #include "quest/combat/dronemuzzle_targets.h"
+#include "quest/combat/ec_targets.h"
+#include "quest/combat/gamespace_targets.h"
+#include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/music_targets.h"
 #include "quest/combat/sensorwd_targets.h"
@@ -44,7 +47,9 @@
 #include "quest/combat/meshstep_targets.h"
 #include "quest/combat/shaderstep_targets.h"
 #include "quest/combat/tablestep_targets.h"
+#include "quest/combat/netgame_targets.h"
 #include "quest/combat/powerboost_targets.h"
+#include "quest/combat/weapon_arm_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/combat/sendguard_targets.h"
@@ -549,6 +554,62 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   }
   // The Bind's frame: `stp x19, x30, [sp, #0x10]` after `sub sp, sp, #0x20` puts the caller's address at sp + 0x18.
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
+}
+
+// The pins of gun connect, practice AI bots and the gun hand default (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
+// net game step they share, netgame_targets.h) against the real libr15: every function and object the modules call or read is defined at its pinned
+// address (the vtables the gun and equipment systems carry as their first word included), and every pinned code word is the one in the file.
+void CheckRealGunsAndBots(const LoadedElf& elf) {
+  namespace gt = nevr_quest::combat::gunconnect::targets;
+  namespace at = nevr_quest::combat::aibots::targets;
+  namespace wt = nevr_quest::combat::weapon_arm::targets;
+  namespace ng = nevr_quest::combat::netgame;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckDefinedAt(elf, gt::kConnectSymbol, gt::kConnectVaddr);
+  CheckDefinedAt(elf, gt::kHasTagSymbol, gt::kHasTagVaddr);
+  CheckDefinedAt(elf, gt::kTagCombatSymbol, gt::kTagCombatVaddr);
+  CheckDefinedAt(elf, gt::kGunCsVtableSymbol, gt::kGunCsVtableVaddr);
+  CheckDefinedAt(elf, ng::kNetGameMTSymbol, ng::kNetGameMTVaddr);
+  CheckDefinedAt(elf, ng::kUserActorSymbol, ng::kUserActorVaddr);
+  CheckDefinedAt(elf, at::kEnableSymbol, at::kEnableVaddr);
+  CheckDefinedAt(elf, at::kScenariosSymbol, at::kScenariosVaddr);
+  CheckDefinedAt(elf, at::kConnectBotSymbol, at::kConnectBotVaddr);
+  CheckDefinedAt(elf, at::kUpdateExpressionSymbol, at::kUpdateExpressionVaddr);
+  for (const auto* pin : {&wt::kClientProfile, &wt::kTString, &wt::kJsonInt, &wt::kIsValid, &wt::kGetArm, &wt::kSetArm, &wt::kInvoke, &wt::kQueue}) {
+    CheckDefinedAt(elf, pin->symbol, pin->vaddr);
+  }
+  CheckDefinedAt(elf, wt::kEquipCsVtableSymbol, wt::kEquipCsVtableVaddr);
+  QCHECK(gt::kGunCsVptrVaddr == 0x3696050 && wt::kEquipCsVptrVaddr == 0x3698200);  // the values an object's first word carries in the reference build
+  const struct {
+    const char* what;
+    nevr_quest::combat::pinned::Pins pins;
+  } lists[] = {{"gunconnect", gt::kPins},
+               {"gunconnect (ExclusiveUpdateConnect)", gt::kConnectPins},
+               {"aibots", at::kPins},
+               {"weapon_arm", wt::kPins},
+               {"netgame", ng::kPins},
+               {"gamespace", nevr_quest::combat::gamespace::targets::kPins}};
+  for (const auto& list : lists) {
+    for (std::size_t i = 0; i < list.pins.wordCount; ++i) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + list.pins.words[i].vaddr, sizeof(have));
+      if (have != list.pins.words[i].word) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#x, pinned %#x\n", list.what, list.pins.words[i].what, static_cast<unsigned long long>(list.pins.words[i].vaddr), have,
+                     list.pins.words[i].word);
+        QCHECK(false);
+      }
+    }
+    for (std::size_t i = 0; i < list.pins.quadCount; ++i) {
+      std::uint64_t have = 0;
+      std::memcpy(&have, mem + list.pins.quads[i].vaddr, sizeof(have));
+      if (have != list.pins.quads[i].value) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#llx, pinned %#llx\n", list.what, list.pins.quads[i].what, static_cast<unsigned long long>(list.pins.quads[i].vaddr),
+                     static_cast<unsigned long long>(have), static_cast<unsigned long long>(list.pins.quads[i].value));
+        QCHECK(false);
+      }
+    }
+  }
+  QCHECK(at::kEnableFirstWord == at::kWords[0].word);
 }
 
 // The EC client's pins (src/quest/combat/ec_targets.h, #2187) against the real files: libr15's five JUMP_SLOTs resolve at their pins and the four
@@ -1061,6 +1122,7 @@ int main(int argc, char** argv) {
   CheckRealHeapsAndMemsys(r15);
   CheckRealTableSteps(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealGunsAndBots(r15);
   CheckRealEc(r15, ovr, rad);
   CheckRealPowerboost(r15);
   CheckRealDrones(r15);

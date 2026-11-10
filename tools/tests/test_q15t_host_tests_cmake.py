@@ -34,15 +34,12 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 
 HOST_TESTS = frozenset(
     [
-        "core.host_test_0",
-        "core.host_test_1",
-        "aibots.aibots_test",
+        "core.host_test",
         "boosterpool.boosterpool_test",
         "custctx.custctx_test",
         "droneguard.droneguard_test",
         "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
-        "gunconnect.gunconnect_test",
         "hudmeter.hudmeter_test",
         "levelname.levelname_test",
         "peerclamp.peerclamp_test",
@@ -50,9 +47,8 @@ HOST_TESTS = frozenset(
         "shieldgamma.shieldgamma_test",
         "thread_word.thread_word_test",
         "voipdrop.voipdrop_test",
-        "weapon_arm.t26_test",
         "wiring.wiring_test",
-        "wiring.wiring_tick_only",
+        "wiring.wiring_no_tick",
         "wiring.wiring_caps_none",
         "wiring.wiring_caps_FXTRAIL",
         "wiring.wiring_caps_VOIPDROP",
@@ -62,10 +58,7 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_SHIELDGAMMA_2",
         "wiring.wiring_caps_DRONEGUARD",
         "wiring.wiring_caps_PEERCLAMP",
-        "wiring.wiring_caps_GUNCONNECT",
-        "wiring.wiring_caps_AIBOTS",
         "wiring.wiring_caps_LEVELNAME",
-        "wiring.wiring_caps_T26",
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
