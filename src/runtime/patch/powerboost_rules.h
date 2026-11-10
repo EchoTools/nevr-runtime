@@ -19,9 +19,11 @@
 //   - A use or link amount whose rounding carries it out of its band (1,999,999.75 gives v 1,000,000) is malformed, and is declined
 //     (kDeclined): no buff, no boost, no self-damage and no link, it is not passed on as a heal (the Quest's read-only stage 1 swallows no marker), and a use already running is left alone.
 //     EC's decode gives it dr 1.0 for 0 s, and that is not a no-op: the server's AddBuff, AddBoost and AddSelfDamage each take it as
-//     "until now", which ends the user's running buff, boost and OVERCHARGE cost; the client's g_boosted_until is set to now; and LinkState
-//     takes left = 1, so the client sends a link marker the server reads as a use (3,000,001), which gives the linked teammates 1 s of x0
-//     damage, a 1 s boost and 1 s of self-damage. An unlink amount needs no v; it is never declined.
+//     "until now", which ends the user's running buff, boost and OVERCHARGE cost, and the client's g_boosted_until is set to now. Its
+//     LinkState (called from ConeFilter with no server gate) then takes left = 1: the server gives a linked teammate x0 damage for 1 s,
+//     and the client sends a link marker (3,000,001). The server decodes that marker as a rez use with v 1 (dr 0, 1 s), so its AddBuff
+//     replaces the teammate's x0 buff with x1.0 for 1 s and adds a 1 s boost and 1 s of self-damage: the misread marker ends the
+//     immunity it was meant to grant. An unlink amount needs no v; it is never declined.
 //   - dr_permille is kept as the integer it is. EC keeps `(v / 1000) / 1000.0f` and re-encodes `(unsigned)(dr * 1000.0f + 0.5f)`; for every
 //     dr_permille a decode can give (0..999) that returns the same integer (the PC GTest checks all 1000), so the link marker is EC's.
 //   - A radius that is not finite names no bubble. EC converts `(r - floorf(r)) * 100000` to int with no check, which for a NaN or an

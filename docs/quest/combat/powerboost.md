@@ -65,7 +65,7 @@ continuation with the target, the caller's sp and x24; a return address one inst
 `powerboost_rules.h` holds the rules both ports run, from EchoCombat v2.0.0's `plugin/powerboost.cpp`. A marker's value is what is past its
 band's base, rounded (`+ 0.5f`), so 1,020,009.75 decodes to dr 20, 10 s. A use or link amount whose rounding carries it out of its band (1,999,999.75 gives
 v 1,000,000) is malformed and is declined: no buff, no link, never sent to the game's Heal once markers are swallowed (stage 2; the read-only stage 1 swallows none), and a use already running is left alone (EchoCombat's decode would end that
-use and give the linked teammates a second of immunity). The script's heal node writes whole amounts, which decode the same with or without the rounding. The angle in a bubble's
+use, and its link marker for the linked teammates is misread as a use that ends their one second of immunity). The script's heal node writes whole amounts, which decode the same with or without the rounding. The angle in a bubble's
 radius names POWER BOOST's bubble at 1..180 degrees and MEDIGUN's at 501..590; the Quest has no MEDIGUN and leaves that bubble, and any other, to the
 game's own radius check, as it does a radius that is not finite.
 

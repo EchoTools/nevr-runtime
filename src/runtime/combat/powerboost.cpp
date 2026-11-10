@@ -395,14 +395,23 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
     }
     const bool rez = m.rez != 0;
     if (m.kind == pbr::kDeclined) {
-        // The first 32 are each written; after that one Warning at every power of two says how many there have been, and the lines
-        // between are counted, not logged.
+        // The first 32 are each written. The 33rd writes one Warning that says the rest are counted, not logged, and after it a
+        // Warning with the count goes out on the first decline at least 10 s after the last one. This file has no shutdown path to write
+        // a final count, so the ones since the last Warning are reported by the next decline.
         static std::atomic<unsigned> declined{0};
+        static std::atomic<ULONGLONG> summarized{0};
         const unsigned n = declined.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 32)
+        if (n <= 32) {
             LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
-        else if ((n & (n - 1)) == 0)
-            LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
+        } else if (n == 33) {
+            summarized.store(GetTickCount64(), std::memory_order_relaxed);
+            LogWarning("declined markers: %u so far; later ones are counted, not logged, and the count follows at most every 10 s", n);
+        } else {
+            const ULONGLONG now = GetTickCount64();
+            ULONGLONG last = summarized.load(std::memory_order_relaxed);
+            if (now - last >= 10000 && summarized.compare_exchange_strong(last, now, std::memory_order_relaxed))
+                LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
+        }
         return;
     }
     if (m.kind == pbr::kUse) {
