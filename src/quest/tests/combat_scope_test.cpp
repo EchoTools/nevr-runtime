@@ -14,8 +14,11 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "nevr/symbol_hash.h"
@@ -289,6 +292,74 @@ void LiveFollowsTheTickAndTheTickInstallIsHonest() {
   End();
 }
 
+// When the tick comes back after a gap in which the readers saw a stale look, one Warning says so (nothing can write it while the tick is stopped): the gap, the
+// limit and the level the answer was held for. Not at the limit exactly, not for a gap after an answer that was not combat (arena's readers were never
+// affected), and once per gap, not once per look.
+void AStaleGapIsOneWarningWhenTheTickIsBack() {
+  Begin();
+  const auto idOf = [](const char* name) {
+    char want[48];
+    std::snprintf(want, sizeof(want), "\"level\":\"0x%016llx\"", static_cast<unsigned long long>(EchoVR::CSymbol64Hash(name)));
+    return std::string(want);
+  };
+  LookAt({"mpl_combat_dyson"});
+  g_nowMs += scope::kStaleAfterMs;  // exactly the limit: the answer was still believed, so nothing to say
+  scope::Refresh(g_model.Address());
+  QCHECK(Lines("combat_scope_stale").empty());
+  g_nowMs += scope::kStaleAfterMs + 1;  // a millisecond over
+  g_model.Only({"mpl_arena_a"});          // and the game is elsewhere when the tick is back: the record names the level held
+  scope::Refresh(g_model.Address());
+  std::vector<Line> stale = Lines("combat_scope_stale");
+  QCHECK(stale.size() == 1U);
+  if (stale.size() == 1U) {
+    QCHECK(stale[0].level == sentinel::LogLevel::kWarn);
+    QCHECK(Has(stale[0].text, "\"gap_ms\":1001,\"stale_after_ms\":1000,") && Has(stale[0].text, idOf("mpl_combat_dyson")));
+    QCHECK(Has(stale[0].text, "passed every call through to the game in that gap"));
+  }
+  Look();  // the next looks age from the one that said it: no second record
+  Look();
+  QCHECK(Lines("combat_scope_stale").size() == 1U);
+  // a gap after an arena answer says nothing: no reader was acting on a combat level
+  g_nowMs += 5 * scope::kStaleAfterMs;
+  scope::Refresh(g_model.Address());
+  QCHECK(Lines("combat_scope_stale").size() == 1U);
+  // a second gap after combat again is a second record, naming its own level (the combat lobby)
+  LookAt({"mpl_lobby_b_combat"});
+  g_nowMs += 3000;
+  scope::Refresh(g_model.Address());
+  stale = Lines("combat_scope_stale");
+  QCHECK(stale.size() == 2U && (stale.size() < 2U || (Has(stale[1].text, idOf("mpl_lobby_b_combat")) && Has(stale[1].text, "\"gap_ms\":3000"))));
+  End();
+}
+
+// The real clock: milliseconds of CLOCK_MONOTONIC. The look spacing and the staleness limit are in that unit, so a conversion that drops the seconds, the
+// factor or the nanosecond divisor changes how often the game is looked at and when an answer goes stale; the fake clock of the other tests cannot see it.
+void TheRealClockIsInMilliseconds() {
+  Begin();
+  scope::SetClockForTest(nullptr);
+  g_model.Only({"mpl_combat_dyson"});
+  scope::Refresh(g_model.Address());
+  QCHECK(scope::Looks() == 1 && scope::InCombatOrLobby());
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  scope::Refresh(g_model.Address());
+  QCHECK(scope::Looks() == 1);  // 100 ms: before the 250 ms spacing
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  scope::Refresh(g_model.Address());
+  QCHECK(scope::Looks() == 2 && scope::InCombatOrLobby());  // about 300 ms: a look, and a fresh answer
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  QCHECK(!scope::InCombatOrLobby() && !scope::InCombatMap());  // about 1.1 s without a look: stale
+  scope::Refresh(g_model.Address());
+  QCHECK(scope::Looks() == 3 && scope::InCombatOrLobby());
+  const std::vector<Line> stale = Lines("combat_scope_stale");
+  QCHECK(stale.size() == 1U);
+  if (stale.size() == 1U) {  // the gap the record carries is the real gap, in ms
+    const std::size_t at = stale[0].text.find("\"gap_ms\":");
+    const long gap = at == std::string::npos ? 0 : std::strtol(stale[0].text.c_str() + at + 9, nullptr, 10);
+    QCHECK(gap >= 1100 && gap < 5000);
+  }
+  End();
+}
+
 void TheRowRegistersTheRefreshOnceAndSaysSo() {
   Begin();
   QCHECK(tick::Count() == 0 && !scope::Live());
@@ -344,6 +415,8 @@ int main() {
   AFalseAnswerStaysFalseWhateverTheTime();
   AChangeIsOneInfoLineWithItsValueAndNoChangeIsNoLine();
   TheChangeLineNamesTheLevelThatDecided();
+  AStaleGapIsOneWarningWhenTheTickIsBack();
+  TheRealClockIsInMilliseconds();
   TheRowRegistersTheRefreshOnceAndSaysSo();
   LiveFollowsTheTickAndTheTickInstallIsHonest();
   ATickThatIsNotInstalledRegistersNothing();

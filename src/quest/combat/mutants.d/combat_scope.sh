@@ -41,4 +41,25 @@ runm sc_live_without_row    $C "s/return g_registered.load(std::memory_order_acq
 runm tick_installed_never   $T "s/^  g_installed.store(ok, std::memory_order_release);\$//" quest-host-combat combat_scope_test
 runm tick_installed_always  $T "s/^  g_installed.store(ok, std::memory_order_release);\$/  g_installed.store(true, std::memory_order_release);/" quest-host-combat combat_scope_test
 # the install table: the row sits after the tick and before every reader
-runm table_scope_row_gone   $I "s/^    Module{\"scope\", nullptr, \\&scope::InstallNormal},\$//" quest-host-combat combat_install_test
+runm table_scope_row_gone   $I "s/^    Module{\"scope\", nullptr, \\&ScopeNormal},\$//" quest-host-combat combat_install_test
+# the real clock, in milliseconds (the fake clock of the other tests cannot see its conversion)
+runm sc_clock_no_seconds_factor $C "s/static_cast<std::int64_t>(ts.tv_sec) \\* 1000 + /static_cast<std::int64_t>(ts.tv_sec) + /"
+runm sc_clock_seconds_divided   $C "s/static_cast<std::int64_t>(ts.tv_sec) \\* 1000 + /static_cast<std::int64_t>(ts.tv_sec) \\/ 1000 + /"
+runm sc_clock_nsec_per_us       $C "s/ts.tv_nsec \\/ 1000000;/ts.tv_nsec \\/ 1000;/"
+runm sc_clock_nsec_dropped      $C "s/ + ts.tv_nsec \\/ 1000000;/;/"
+# the stale record: once per gap, when the tick is back, only after a combat answer, past the limit, with the gap and the level held
+runm sc_stale_never_said        $C "s/if (CombatOrLobby(before) \\&\\& now - last > kStaleAfterMs) {/if (false) {/"
+runm sc_stale_at_limit          $C "s/CombatOrLobby(before) \\&\\& now - last > kStaleAfterMs) {/CombatOrLobby(before) \\&\\& now - last >= kStaleAfterMs) {/"
+runm sc_stale_after_arena       $C "s/if (CombatOrLobby(before) \\&\\& now - last > kStaleAfterMs) {/if (now - last > kStaleAfterMs) {/"
+runm sc_stale_quiet             $C "s/sentinel::LogLevel::kWarn, \"combat_scope_stale\"/sentinel::LogLevel::kInfo, \"combat_scope_stale\"/"
+runm sc_stale_gap_zero          $C "s/{\"gap_ms\", static_cast<std::int64_t>(now - last)}/{\"gap_ms\", 0}/"
+runm sc_stale_limit_zero        $C "s/{\"stale_after_ms\", kStaleAfterMs}/{\"stale_after_ms\", 0}/"
+runm sc_stale_level_zero        $C "s/HexString(levelText, g_lastLevel.load(std::memory_order_relaxed))/HexString(levelText, 0)/"
+runm sc_stale_level_unstored    $C "s/^  g_lastLevel.store(levelId, std::memory_order_relaxed);\$//"
+runm sc_stale_every_look        $C "s/^  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);\$/  if (now - last <= kStaleAfterMs) detail::g_lookedAtMs.store(now, std::memory_order_relaxed);/"
+# the row is on only while a reader of the scope is on
+runm sc_row_ignores_readers     $I "s/  if (!anyReader) return {false, \"off_config\", \\/\\*off=\\*\\/true};//" quest-host-combat combat_install_test
+runm sc_row_off_is_failed       $I "s/return {false, \"off_config\", \\/\\*off=\\*\\/true};/return {false, \"off_config\", \\/\\*off=\\*\\/false};/" quest-host-combat combat_install_test
+runm sc_row_hudmeter_not_reader $I "s/const bool anyReader = g_config.hudmeter.on || /const bool anyReader = /" quest-host-combat combat_install_test
+runm sc_row_gamma_not_reader    $I "s/ || g_config.shieldgammaGamma.on || / || /" quest-host-combat combat_install_test
+runm sc_row_mirror_not_reader   $I "s/ || g_config.shieldgammaTubeMirror.on;/;/" quest-host-combat combat_install_test

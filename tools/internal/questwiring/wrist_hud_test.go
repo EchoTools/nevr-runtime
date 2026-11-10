@@ -83,8 +83,8 @@ func TestTheScopeRefreshIsTheTicksCallbackRegisteredByItsOwnRowAndLooksAtTheGame
 
 func TestTheRowsInstallAfterTheRefreshRateInThePluginsOrder(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"scope", nullptr, &scope::InstallNormal}`)
-	before(t, table, `Module{"scope", nullptr, &scope::InstallNormal}`, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`)
+	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"scope", nullptr, &ScopeNormal}`)
+	before(t, table, `Module{"scope", nullptr, &ScopeNormal}`, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`)
 	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"hudmeter", nullptr, &HudmeterNormal`)
 	before(t, table, `Module{"hudmeter", nullptr, &HudmeterNormal`, `Module{"shieldgamma", nullptr, &ShieldgammaNormal}`)
 	// the three switches are generated records of their own (`combat_config_switch`), each read from its member

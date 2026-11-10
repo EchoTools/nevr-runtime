@@ -52,6 +52,13 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+// The scope's refresh is a look at the game's tables four times a second in every level, arena included, so it is registered only when a module that
+// reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
+ModuleResult ScopeNormal() noexcept {
+  const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on;
+  if (!anyReader) return {false, "off_config", /*off=*/true};
+  return scope::InstallNormal();
+}
 ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
 ModuleResult ShieldgammaNormal() noexcept {
   return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
@@ -129,7 +136,7 @@ constexpr std::array kModules{
     Module{"tick", nullptr, &tick::InstallNormal},
     // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
     // module that reads it.
-    Module{"scope", nullptr, &scope::InstallNormal},
+    Module{"scope", nullptr, &ScopeNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.

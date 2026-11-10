@@ -38,7 +38,7 @@ map or the combat lobby `mpl_lobby_b_combat` was loaded at the last look and no 
 game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no line. `hudmeter_test` pins that with data
 pointers nobody could read, a 0 x 0 write that stays 0 x 0, zero counters, and by count zero reads of the game's memory and zero `level::ScanCalls()`, in each arena level, the lobbies arena players use, a combat-to-arena transition and
 before the first look. The combat body is a separate `noinline` function, `ActInCombat`, that first asks `scope::LookIsFresh()`: when the tick has stopped for more than
-a second, a true answer is not believed and the call passes through (pinned by `TheModuleFollowsTheLevelBothWays`).
+a second, a true answer is not believed and the call passes through (pinned by `TheModuleFollowsTheLevelBothWays`). The first look after the tick is back writes one Warning, `combat_scope_stale` (`gap_ms`, `stale_after_ms`, `level`), because nothing could say so during the gap. The `scope` row registers the refresh only while a reader is on (`combat.hudmeter`, `combat.shieldgamma_gamma` or `combat.shieldgamma_tube_mirror`); with all three off the look is not made in any level.
 
 The plugin copy this replaces read the first 0x40 bytes of the data with `process_vm_readv` on every call, in every level. In an arena match the module now costs
 the call through the thunk and, in the handler, eight instructions with no frame, no stack canary and no call (NDK r26d clang -O2, `llvm-objdump -d`):

@@ -748,6 +748,9 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
+  // every reader of the scope is off: the scope's row is off too, so arena pays no look for nothing (and it is off, not failed)
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "scope=off_config"));
+  QCHECK(Lines("combat_scope_install").empty());
   QCHECK(Has(Lines("combat_hudmeter_install")[0].text, "\"reason\":\"off_config\""));
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
@@ -758,7 +761,19 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(gammaOnly);
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":1,\"tube_mirror\":0"));
+  QCHECK(!Has(ResultsOf(Lines("combat_install")[0]), "scope=off_config"));  // one reader on keeps the scope's row on
   Done();
+  // each single reader keeps the row on: the wrist HUD alone, the tube mirror alone
+  for (int only = 0; only < 2; ++only) {
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig one;
+    one.hudmeter = {only == 0, nevr_quest::Source::kFile};
+    one.shieldgammaTubeMirror = {only == 1, nevr_quest::Source::kFile};
+    combat::SetConfig(one);
+    combat::InstallNormal();
+    QCHECK(!Has(ResultsOf(Lines("combat_install")[0]), "scope=off_config"));
+    Done();
+  }
 }
 
 // The headset gates' keys have a line of their own (a log line is one 768-byte buffer): the defaults, each from the default; a key the file gave.
