@@ -1171,6 +1171,94 @@ TEST_F(ResourceTransforms, AResetRequestChangesNothingAndSaysSo) {
   ExpectGameCopy(fixed, sizeof(fixed));
 }
 
+// When the first fixed entry of a key is chosen for a load and its copy is refused, nothing served that load: a later
+// entry of the key was not passed over by an override that served, and the shutdown line says what did happen.
+TEST_F(ResourceTransforms, ALaterOverrideBehindARefusedCopyIsNotReportedAsPassedOverByOneThatServed) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  RemoveFakeHeap();  // the game-heap copy of "first" is refused: no memory context
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.never_applied, 2u);
+  EXPECT_FALSE(TestLogContains("override passed over label=second")) << "no override served the load it matched";
+  EXPECT_TRUE(TestLogContains(
+      "override not served label=second name=0xac360e41e4ede056 - an earlier override of the same resource was "
+      "chosen for each load it matched, and that override was not served (the refusal is logged where it happened)"));
+}
+
+// Once the earlier entry has served a load, the later one is passed over as before, even if another load was refused.
+TEST_F(ResourceTransforms, ALaterOverrideIsPassedOverOnceTheEarlierOneServesALoad) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  RemoveFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  InstallFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(first, sizeof(first));
+  ClearTestLogs();
+  EXPECT_EQ(ShutdownResourceOverride().never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override passed over label=second"));
+  EXPECT_FALSE(TestLogContains("override not served label=second"));
+}
+
+// The reader's buffer the game finished reading, allocated where the game's reader allocates it (SetupReadBuffer:
+// the block's allocator, slot +0x28), with the game's bytes in it.
+void* GameReadBuffer(const void* bytes, std::uint64_t size) {
+  void* const p = FakeAlloc(&g_fakeAllocator, 16, size);
+  std::memcpy(p, bytes, static_cast<std::size_t>(size));
+  return p;
+}
+
+bool StillAllocated(const void* p) {
+  std::lock_guard<std::mutex> lock(g_heap.mutex);
+  for (const FakeHeap::Block& b : g_heap.blocks) {
+    if (b.memory.get() == p) return !b.freed;
+  }
+  return false;
+}
+
+// KNOWN-WRONG #ISSUE-TBD: a buffer-0 replacement points the block at a copy in the game's heap and leaves the reader's
+// own buffer alone (game_buffer.h: the reader may own it), so nothing frees it: one buffer of orig_bytes stays
+// allocated, unreferenced by the block, for each load served. Serving one load per entry would cap it at one per
+// entry and lose the override on a level reload (#2343); transforms already pay it on every load. This test pins the cost so a
+// change to it is seen; the issue is to establish who owns the reader's buffer and free it.
+TEST_F(ResourceTransforms, EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone) {
+  static const std::uint8_t fixed[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
+  static const std::uint8_t stock[] = {1, 2, 3, 4, 5, 6};
+  std::vector<void*> left;
+  for (int load = 1; load <= 3; ++load) {
+    void* const original = GameReadBuffer(stock, sizeof(stock));
+    GameFinishesBuffer(kTransformType, kTransformName, 0, original, sizeof(stock));
+    ExpectGameCopy(fixed, sizeof(fixed));
+    if (g_seenBuffer != original && StillAllocated(original)) left.push_back(original);
+  }
+  EXPECT_EQ(left.size(), 3u) << "one reader buffer of orig_bytes per buffer-0 load served";
+
+  // Buffer 1: the payload is written over the reader's own buffer, which the block still holds, so none is left.
+  constexpr std::uint64_t kPayloadKey = 0xbeac1969cb7b8861ull;  // Make(CGTextureResource, "Win10GPU")
+  constexpr std::uint64_t kTexture = 0xb3ebe9e0bf0eb81full;
+  static const std::uint8_t payload[] = {7, 7, 7, 7};
+  RegisterResourceOverride(kPayloadKey, kTransformName + 1, payload, sizeof(payload), "payload");
+  std::size_t payloadLeft = 0;
+  for (int load = 1; load <= 3; ++load) {
+    void* const original = GameReadBuffer(stock, sizeof(stock));
+    GameFinishesBuffer(kTexture, kTransformName + 1, 1, original, sizeof(stock));
+    EXPECT_EQ(g_seenBuffer, original);
+    EXPECT_EQ(std::memcmp(original, payload, sizeof(payload)), 0);
+    if (g_seenBuffer != original && StillAllocated(original)) ++payloadLeft;
+  }
+  EXPECT_EQ(payloadLeft, 0u);
+}
+
 class GameHeapCopies : public ResourceTransforms {};
 
 TEST_F(GameHeapCopies, AFixedReplacementIsACopyTheGameCanFreeThroughItsOwnAllocator) {
