@@ -1,0 +1,1 @@
+On PC and the Quest combat build, the UMBRAL VEIL, OVERCHARGE and POINT tac mods show on servers that run EchoCombat; the server now tells every player who joins that it runs it.

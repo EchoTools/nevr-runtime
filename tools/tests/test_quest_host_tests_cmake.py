@@ -33,6 +33,7 @@ RECIPE_GROUPS = {
     "test-quest-invite-transport": "invite-transport",
     "test-quest-tls": "tls",
     "test-quest-hooks": "hooks",
+    "test-quest-combat": "combat",
     "test-quest-redirect": "redirect",
     "test-quest-hooks-pinned": "hooks-pinned",
     "test-quest-patcher": "patcher",
@@ -57,6 +58,42 @@ PROGRAMS = {
         "autopilot_route_test",
         "autopilot_run_test",
     ),
+    "combat": (
+        "bvh_core_test",
+        "bvh_test",
+        "combat_active_test",
+        "combat_gates_test",
+        "combat_install_test",
+        "combat_level_test",
+        "combat_tick_test",
+        "ec_page_test",
+        "ec_test",
+        "ecfx_test",
+        "dronekill_test",
+        "dronemuzzle_test",
+        "decals_test",
+        "equip_refire_test",
+        "headset_gates_library_name_test",
+        "headset_gates_test",
+        "heap_step_test",
+        "heaps_test",
+        "impactsnd_test",
+        "instmodel_test",
+        "match_tag_default_test",
+        "memsys_test",
+        "meshstep_test",
+        "music_test",
+        "refresh_rate_test",
+        "sensorwd_test",
+        "shaderstep_tablestep_test",
+        "shaderstep_test",
+        "tablestep_test",
+        "pfx_test",
+        "pfxtev_test",
+        "powerboost_test",
+        "sendguard_test",
+        "wallfire_test",
+    ),
     "data": (
         "cargo_manifest_test",
         "cargo_resolver_test",
@@ -75,6 +112,7 @@ PROGRAMS = {
     ),
     "hooks": (
         "arm64_reloc_test",
+        "build_variant_test",
         "cargo_hook_test",
         "clock_levels_hook_test",
         "crash_first_hook_test",
@@ -96,7 +134,6 @@ PROGRAMS = {
         "login_prompt_hook_test",
         "login_signin_code_chain_test",
         "login_title_hook_test",
-        "match_tag_default_test",
         "menu_cards_hook_test",
         "menu_version_label_test",
         "obb_skip_hook_test",
@@ -115,6 +152,7 @@ PROGRAMS = {
         "texture_menu_test",
         "texture_quality_hook_test",
         "unparsable_identity_test",
+        "vk_alloc_check_test",
         "vk_ext_window_test",
         "vk_free_guard_test",
         "wizard_metric_hook_test",
@@ -308,10 +346,13 @@ class RecipesBuildThroughPresets(unittest.TestCase):
 
 class EveryProgramIsATarget(unittest.TestCase):
     def test_every_program_the_recipes_built_is_a_target_of_the_project(self):
+        # Each listed program must still be a target of its group; a group may hold more (a module that moves in adds its own program,
+        # and need not edit this list), so the check is of presence, not of the whole list.
         found = targets()
         for group, expected in PROGRAMS.items():
-            with self.subTest(group=group):
-                self.assertEqual(sorted(expected), sorted(found.get(group, {})))
+            for program in expected:
+                with self.subTest(group=group, program=program):
+                    self.assertIn(program, found.get(group, {}), f"{program} is no longer a target of the {group} group")
 
     def test_the_programs_a_recipe_runs_by_name_are_not_ctest_tests_and_the_rest_are(self):
         found = targets()

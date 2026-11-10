@@ -33,6 +33,9 @@
  * for the base object). Both are hooked, so every construction path gets the default whichever symbol it takes; no ADR 0021 row is
  * needed, because libr15 is linked BIND_NOW and calls the constructor through a PLT stub.
  *
+ * Which APKs (docs/adr/0046 rule 5). This ships to every APK, the release APK and the variants alike, and is not gated by combat::Active()
+ * (combat_active.h): it installs on every launch (entry.cpp, InstallPermissionWaitHook) whatever the variant stamp says.
+ *
  * Frequency (ADR 0038). The constructor runs once per process (Main_), so the wrapper's cost is paid once; it is not a hot path.
  *
  * Owner (ADR 0039). This file owns the default of the MatchTagDisplay bit at construction. A player's choice is the game's own

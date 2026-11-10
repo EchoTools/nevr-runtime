@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -340,4 +341,97 @@ TEST(HostCrashCapture, WritesAStructurallyValidMinidumpNamingTheThreadAndRecords
   EXPECT_EQ(records[0].at("bytes"), bytes.size());
   EXPECT_EQ(records[0].at("path").get<std::string>(),
             std::string(dump.begin(), dump.end()));  // ASCII temp path
+}
+
+// ---- self-update's crash marker (docs/adr/0024-pc-self-update.md, section 6; F11, F21) -----------------------------
+
+namespace {
+
+bool PathExists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+void WriteSmallFile(const std::wstring& path, const char* text) {
+  const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(file, INVALID_HANDLE_VALUE) << GetLastError();
+  DWORD written = 0;
+  ASSERT_TRUE(WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr));
+  CloseHandle(file);
+}
+
+// Every record of the host log with the event `event`.
+std::vector<nlohmann::json> RecordsOf(const std::wstring& local, const char* event) {
+  std::vector<nlohmann::json> out;
+  const std::string text = ReadText(nevr_test::HostLogPath(local));
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    const nlohmann::json record = nlohmann::json::parse(text.substr(start, end - start), nullptr, false);
+    if (record.is_object() && record.value("event", "") == event) out.push_back(record);
+    start = end + 1;
+  }
+  return out;
+}
+
+}  // namespace
+
+// F11: the swapped release crashes during boot. The host's capture leaves update\crashed because update\pending.json
+// exists at the moment of the crash, and the next start rolls back. The marker is one empty file.
+TEST(HostCrashMarker, ACrashWhileAReleaseIsPendingLeavesTheMarker) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::wstring temp = MakeTempDir(L"temp");
+  Prepared prepared(local, temp);
+  const std::wstring update = local + L"\\nevr\\echovr\\update";
+  ASSERT_NE(CreateDirectoryW((local + L"\\nevr").c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS, FALSE);
+  CreateDirectoryW((local + L"\\nevr\\echovr").c_str(), nullptr);
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE) << GetLastError();
+  WriteSmallFile(update + L"\\pending.json", "{\"to\":{\"version\":\"1.2.3\"}}");
+  EXPECT_EQ(std::wstring(prepared.capture.LocalUpdateDir()), update);
+
+  prepared.capture.Capture(nullptr);
+  EXPECT_TRUE(PathExists(update + L"\\crashed")) << "update\\crashed marks a crash while the release was pending";
+  EXPECT_TRUE(ReadText(update + L"\\crashed").empty()) << "an empty file";
+  EXPECT_TRUE(PathExists(update + L"\\pending.json")) << "the capture changes nothing else";
+
+  const std::vector<nlohmann::json> marks = RecordsOf(local, "crash_marker");
+  ASSERT_EQ(marks.size(), 1u);
+  EXPECT_EQ(marks[0].at("outcome"), "written");
+  EXPECT_EQ(marks[0].at("tag"), "NEVR.HOST");
+}
+
+// F21: after the mark, UpdateConfirm has removed pending.json; a crash then is the release's own and leaves nothing.
+TEST(HostCrashMarker, ACrashWithNoPendingReleaseLeavesNothingAndMakesNoUpdateFolder) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::wstring temp = MakeTempDir(L"temp");
+  Prepared prepared(local, temp);
+  const std::wstring update = local + L"\\nevr\\echovr\\update";
+  prepared.capture.Capture(nullptr);
+  EXPECT_FALSE(PathExists(update)) << "a crash capture creates no update folder";
+  EXPECT_TRUE(RecordsOf(local, "crash_marker").empty());
+
+  // The folder is there (a confirmed release left it), pending.json is not.
+  CreateDirectoryW((local + L"\\nevr").c_str(), nullptr);
+  CreateDirectoryW((local + L"\\nevr\\echovr").c_str(), nullptr);
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE) << GetLastError();
+  WriteSmallFile(update + L"\\state.json", "{}");
+  prepared.capture.Capture(nullptr);
+  EXPECT_FALSE(PathExists(update + L"\\crashed")) << "no pending.json at the crash: no marker";
+  EXPECT_TRUE(RecordsOf(local, "crash_marker").empty());
+}
+
+// A marker that cannot be made is a record with the error, not silence (a directory where the file goes).
+TEST(HostCrashMarker, AMarkerThatCannotBeMadeIsRecordedWithTheError) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::wstring temp = MakeTempDir(L"temp");
+  Prepared prepared(local, temp);
+  const std::wstring update = local + L"\\nevr\\echovr\\update";
+  CreateDirectoryW((local + L"\\nevr").c_str(), nullptr);
+  CreateDirectoryW((local + L"\\nevr\\echovr").c_str(), nullptr);
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE);
+  WriteSmallFile(update + L"\\pending.json", "{}");
+  ASSERT_NE(CreateDirectoryW((update + L"\\crashed").c_str(), nullptr), FALSE);
+  prepared.capture.Capture(nullptr);
+  const std::vector<nlohmann::json> marks = RecordsOf(local, "crash_marker");
+  ASSERT_EQ(marks.size(), 1u);
+  EXPECT_EQ(marks[0].at("outcome"), "failed");
+  EXPECT_GT(marks[0].value("win32_error", 0u), 0u);
 }

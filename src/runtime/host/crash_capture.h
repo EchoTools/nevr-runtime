@@ -54,6 +54,13 @@ class CrashCapture {
   /// loaded on return, including when it already was.
   bool PreloadDbgHelp() noexcept;
 
+  /// Self-update's crash marker (docs/adr/0024-pc-self-update.md, section 6): when `update\pending.json` exists at the
+  /// moment of a crash, the swapped release is the one that crashed, and `update\crashed` (an empty file) tells the next
+  /// start to roll it back. One GetFileAttributesW and, only then, one CreateFileW on paths prepared at attach; no
+  /// heap, no lock. Called by Capture before the dump is written, whatever the dump does. A crash after the release
+  /// was confirmed finds no pending.json and leaves nothing.
+  void MarkUpdateCrashed() noexcept;
+
   /// The BugSplat_createReport body. Returns true when a minidump was written,
   /// false when it could not be (the failure is a record in the main log).
   bool Capture(PEXCEPTION_POINTERS exception_pointers) noexcept;
@@ -76,6 +83,7 @@ class CrashCapture {
 
   // Test seams.
   const wchar_t* LocalCrashDir() const { return local_crash_dir_; }
+  const wchar_t* LocalUpdateDir() const { return local_update_dir_; }
   bool LocalReady() const { return local_ready_; }
 
  private:
@@ -110,6 +118,10 @@ class CrashCapture {
   wchar_t local_app_data_[MAX_PATH] = {};
   wchar_t local_crash_dir_[MAX_PATH] = {};  // %LOCALAPPDATA%\nevr\echovr\crashes
   bool local_ready_ = false;
+  wchar_t local_update_dir_[MAX_PATH] = {};  // %LOCALAPPDATA%\nevr\echovr\update
+  wchar_t pending_path_[MAX_PATH] = {};      // <update>\pending.json
+  wchar_t crashed_path_[MAX_PATH] = {};      // <update>\crashed
+  bool update_ready_ = false;
 };
 
 }  // namespace nevr_host

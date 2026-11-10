@@ -242,6 +242,52 @@ fn a_quarantined_release_is_not_staged_again() {
     assert!(!staging(&w).exists());
 }
 
+fn discard(w: &World, version: &str, sha: &str, reason: &str) -> (i32, Value) {
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
+        .args(["pc", "discard", "--root", w.root.path().to_str().unwrap(), "--version", version, "--runtime-sha256", sha, "--reason", reason])
+        .output()
+        .unwrap();
+    let out: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+    (o.status.code().unwrap(), out)
+}
+
+#[test]
+fn a_release_the_runtime_discarded_is_not_staged_again_and_nothing_is_fetched() {
+    let w = world();
+    let base = publish(&w, &Opts::new());
+    let (code, out) = discard(&w, "1.0.0", &sha256_hex(RT), "verify_failed");
+    assert_eq!(code, 0, "{out}");
+    assert!(events(&w).contains(&"stage_discard".to_string()));
+    let (code, out, _) = run(&w, &base, &current("0.9.0", b"old"), &[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!((out["plan"]["action"].as_str(), out["plan"]["reason"].as_str()), (Some("none"), Some("discarded")));
+    assert!(!events(&w).contains(&"artifact_fetch".to_string()), "a discarded release is not downloaded again");
+    assert!(!staging(&w).exists());
+    // Recording it twice is one entry.
+    discard(&w, "1.0.0", &sha256_hex(RT), "verify_failed");
+    let text = std::fs::read_to_string(w.root.path().join("update/manifest/discards.json")).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["discards"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_discard_for_other_bytes_does_not_hold_back_a_rebuilt_release() {
+    let w = world();
+    let base = publish(&w, &Opts::new());
+    discard(&w, "1.0.0", &sha256_hex(b"other bytes"), "verify_failed");
+    let (code, out, _) = run(&w, &base, &current("0.9.0", b"old"), &[]);
+    assert_eq!((code, out["plan"]["action"].as_str()), (0, Some("staged")), "{out}");
+}
+
+#[test]
+fn a_discard_names_a_version_a_hash_and_a_word_or_is_refused() {
+    let w = world();
+    for (v, h, r) in [("../x", sha256_hex(RT), "ok"), ("1.0.0", "ABC".to_string(), "ok"), ("1.0.0", sha256_hex(RT), "not a word")] {
+        let (code, _) = discard(&w, v, &h, r);
+        assert_ne!(code, 0, "{v} {h} {r}");
+    }
+    assert!(!w.root.path().join("update/manifest/discards.json").exists());
+}
+
 #[test]
 fn a_quarantine_entry_for_other_bytes_does_not_hold_back_a_rebuilt_release() {
     let w = world();

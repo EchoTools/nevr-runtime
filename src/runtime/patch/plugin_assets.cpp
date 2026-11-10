@@ -35,6 +35,7 @@
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/resource_sets.h"
+#include "runtime/patch/resource_label.h"
 
 namespace nevr::assets {
 
@@ -368,8 +369,18 @@ uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name) {
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
     Global().SetLoadedProbe(&EngineHasLoaded);
-    const std::string printable = nevr_resource_sets::Printable(label);  // the label as the log lines carry it
-    const char* shown = printable.c_str();
+    // A label outside the rule is refused before any line is written: no line carries a plugin's bytes, only their length
+    // and the rule (#2225). Registry::Register applies the same rule itself, so it cannot be skipped by another caller.
+    if (!nevr_resource_label::Ok(label)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] register refused status=%d reason=%s label_bytes=%zu type=0x%016llx name=0x%016llx bytes=%llu "
+            "rule=\"%s\" - nothing is registered",
+            static_cast<int>(RegisterStatus::BadArgument), nevr_resource_label::kReason,
+            nevr_resource_label::Bytes(label), static_cast<unsigned long long>(type),
+            static_cast<unsigned long long>(name), static_cast<unsigned long long>(size), nevr_resource_label::kRule);
+        return RegisterStatus::BadArgument;
+    }
+    const char* shown = label;  // follows the rule, so it is safe to write
     RegisterStatus status = RegisterStatus::Ok;
     {
         // #2161: a resource a plugin's resource set holds is the set's; the two would be served by different hooks.

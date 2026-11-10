@@ -42,12 +42,12 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
   const WipeOnExit wipe_url{full_url};
   if (ops.on_code_issued) ops.on_code_issued(code, login_url);
   const intptr_t browserResult = ops.open_browser(full_url);
-  // The code is a credential for this session, so the log says where the browser was sent and
-  // what the open returned, with the code masked (ShellExecute reports success above 32).
+  // The log says where the browser was sent, with the full code, and what the open returned
+  // (ShellExecute reports success above 32). The code lives five minutes and a headless server's
+  // log is the only place its host can read it; tokens are never logged.
   log(LogLevel::Info,
       std::string(ops.shows_code_only ? "[NEVR.AUTH] code shown url=" : "[NEVR.AUTH] browser open requested url=") +
-          login_url + "?code=<" +
-          std::to_string(code.size()) + " chars masked> open_result=" + std::to_string(browserResult) +
+          full_url + " open_result=" + std::to_string(browserResult) +
           (browserResult <= kBrowserOpenAcceptedAbove ? (ops.shows_code_only ? " (not shown)" : " (failed)")
                                                       : (ops.shows_code_only ? " (shown)" : " (accepted)")));
   int uiResult = 1;
@@ -101,7 +101,7 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
     const nevr_token_auth::DevicePollResponse response = ops.poll(code);
     {
       // One Info line per poll (#397): the wait is otherwise silent, and a loop that polls and is told
-      // "pending" cannot be told from one that does not run. The body prefix is already masked.
+      // "pending" cannot be told from one that does not run. The body prefix withholds token bodies.
       static const char* const kNames[] = {"pending", "verified", "expired", "error"};
       log(LogLevel::Info,
           "[NEVR.AUTH] poll #" + std::to_string(++pollsSent) + " http=" +

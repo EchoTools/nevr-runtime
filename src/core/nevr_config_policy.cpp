@@ -39,8 +39,9 @@ void LogShapeWarnings(const NevrConfig& cfg) {
   if (cfg.DuplicateKeyCount() == 0 && cfg.UnknownKeyCount() == 0) return;
   Log(EchoVR::LogLevel::Warning,
       "[NEVR.CONFIG] config.yaml has duplicates=%zu unknown_nested=%zu (a duplicate key's first value is read; "
-      "an unknown key is ignored; no names or values are logged)",
-      cfg.DuplicateKeyCount(), cfg.UnknownKeyCount());
+      "an unknown key is ignored) duplicate_keys=%s unknown_keys=%s",
+      cfg.DuplicateKeyCount(), cfg.UnknownKeyCount(), JoinKeyNamesForLog(cfg.DuplicateKeyNames()).c_str(),
+      JoinKeyNamesForLog(cfg.UnknownKeyNames()).c_str());
 }
 
 NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_server) {

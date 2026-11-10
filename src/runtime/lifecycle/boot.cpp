@@ -1,3 +1,6 @@
+#include "runtime/combat/combat.h"
+#include "runtime/content/content_pack.h"
+#include "runtime/hook/script_resource_hook.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
@@ -10,6 +13,8 @@
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/lifecycle/state_machine.h"
+#include "runtime/lifecycle/runtime_entry.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -243,6 +248,13 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
     LoadPlugins(PluginPhase::Early);
   }
+  // #1424: an installed content pack (<root>\content\<id>\) is checked and its manifests, packages and scripts are served
+  // from here on. Before the original call, after the early pass: InitGlobals reads the manifests and opens the packages
+  // inside that call, and the early pass's plugin-signature rewriter stays first among the load rewriters. Once per process.
+  nevr_content::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  // #600: script hooks go in as the game loads each script and come out before it frees it. Before the original call, on
+  // client and server: the global level's scripts load inside it. Once per process.
+  nevr_script_resource_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
@@ -520,6 +532,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_telemetryDiag = TRUE;
     } else if (lstrcmpW(flag, L"-timestamps") == 0) {
       g_timestampLogs = TRUE;
+    } else if (lstrcmpW(flag, L"-no-update") == 0) {
+      // Read here, ahead of StartProcessWorker (the end of this function), which logs `update disabled reason=flag`.
+      g_noUpdate = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
     } else if (lstrcmpW(flag, L"-config") == 0) {
@@ -754,6 +769,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // after InstallResourceOverride, which created the registry.
   nevr_netgun_bullet_ids::Install();
 
+  // EchoCombat's balance values: a transform of the player's own stock mp_weapon_settings (runtime/combat/combat.h). It
+  // reads combat.balance when the resource first loads, after config.yaml is readable.
+  nevr_combat::RegisterBalance();
+
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
   // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
   // a create; the answer is written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every
@@ -891,6 +910,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         provenance.version.c_str(), provenance.reason.c_str());
   }
 
+  // EchoCombat, built in (runtime/combat/combat.h): after every hook of the runtime's own is in place, so its write gate
+  // sees them all, and where Cat's three plugins loaded before.
+  nevr_combat::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
+
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
   // #2161: the resource sets the plugins registered are mounted once the game's manifest exists (now, or from the
@@ -905,6 +928,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",
       g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
       static_cast<unsigned>(GetWebSocketBridgePort()));
+
+  // #1200, ADR 0024 section 3: PC self-update. The bootstrap is done (a client: the graphics device exists; a server: the first original
+  // call has returned), so the worker starts here, never earlier, and never on the game's thread: it decides once per launch (a dev
+  // build, -no-update, update.enabled: false and a host that cannot swap each end in one `update disabled` line), then checks on its own
+  // thread and confirms a swapped release once the per-frame dispatcher has run for 10 s (frame/tick.cpp).
+  nevr_update::StartProcessWorker(nevr_runtime_entry::HostCanSwap(), g_noUpdate != FALSE, g_isServer != FALSE);
 
 #ifdef NEVR_SCENARIO_CONTROL
   nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)

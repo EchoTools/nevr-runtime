@@ -6,7 +6,8 @@ handler; the two game calls and the log live in gameserver_callbacks.cpp, which 
 
   - the ServerDB message handler routes the TCP form of the message (CSymbol64("SNSLobbySettingsResponse")) to the
     relay, ahead of the "Unhandled WebSocket msgId" branch;
-  - the relay's two sinks are the game's local event and a send to all peers, both under the local-event symbol;
+  - the relay's two sinks (LobbySettingsSinksFor, which the server's own document uses too, #2333) are the game's local
+    event and a send to all peers, both under the local-event symbol;
   - a relayed document is recorded in the context only when the relay succeeded, and the report is logged at the
     level the relay chose;
   - the context reports the cleared record from StartSession and EndSession after it has released its lock;
@@ -35,6 +36,15 @@ def relay_body() -> str:
     return extract_braced_function(callbacks(), "void RelayLobbySettingsFrame(")
 
 
+def sinks_body() -> str:
+    """The two game calls, shared by the relay and the server's own document (#2333)."""
+    return extract_braced_function(callbacks(), "LobbySettingsSinksFor(EchoVR::Broadcaster* broadcaster)")
+
+
+def log_body() -> str:
+    return extract_braced_function(callbacks(), "void LogLobbySettingsReport(")
+
+
 def tcp_callbacks_body() -> str:
     return extract_braced_function(callbacks(), "void GameServerLib::RegisterTcpCallbacks()")
 
@@ -59,19 +69,24 @@ class MessageHandlerRoutesTheFrame(unittest.TestCase):
 
 
 class RelayUsesTheGameCalls(unittest.TestCase):
-    def test_local_event_uses_the_local_symbol_and_the_matching_name(self):
+    def test_the_relay_takes_its_sinks_and_logs_through_the_shared_helpers(self):
         body = relay_body()
+        self.assertIn("LobbySettingsSinksFor(context.GetBroadcaster())", body)
+        self.assertIn("LogLobbySettingsReport(report);", body)
+
+    def test_local_event_uses_the_local_symbol_and_the_matching_name(self):
+        body = sinks_body()
         self.assertRegex(
             body,
             r"EchoVR::BroadcasterReceiveLocalEvent\(\s*broadcaster\s*,\s*Sym::LobbySettingsResponse\s*,\s*\"SNSLobbySettingsResponse\"",
         )
 
     def test_send_goes_out_under_the_local_symbol(self):
-        body = relay_body()
+        body = sinks_body()
         self.assertRegex(body, r"EchoVR::BroadcasterSend\(\s*broadcaster\s*,\s*Sym::LobbySettingsResponse\s*,")
 
     def test_the_peer_is_the_one_the_relay_passes_not_a_literal(self):
-        body = relay_body()
+        body = sinks_body()
         send = body[body.index("EchoVR::BroadcasterSend(") :]
         send = send[: send.index(");")]
         self.assertIn("peer", send)
@@ -84,7 +99,7 @@ class RelayUsesTheGameCalls(unittest.TestCase):
         )
 
     def test_the_report_is_logged_at_the_level_the_relay_chose(self):
-        body = relay_body()
+        body = log_body()
         self.assertIn("LobbySettingsLogLevel::kWarning", body)
         self.assertRegex(body, r"Log\(\s*level\s*,\s*\"%s\"\s*,\s*report\.line\.c_str\(\)\s*\)")
 

@@ -29,7 +29,7 @@ Looked at 4 Hz (the source: every frame, with raw dereferences; here every read 
 4. Unchanged for `delay` (default 3 s): `EnableScenario(scenarios, scenario)` (default 1 = RandomAttack; 0 patrol, 2 weaponattack, 3 spike, 4 aithrowtest, 5 aionevone, 6 aibdebugarena), once; again if the count later changes and holds.
 Default: ON (the source's). **Runs when**: a combat match is in game and bot agents are connected. Bots exist only in Practice AI, so this is the offline-practice condition: arena, lobby and online
 matches have a zero agent count and nothing is ever called. Kept as the source has it: there is no separate offline/host gate (EnableScenario itself takes a client path when the server flags are not set).
-The record says `host yes|no` (the engine's own test, above) and `combat_map 0|1` (refresh_rate.cpp's `CombatMapLoaded`, the other detector of a combat level) so a headset run can compare them.
+The record says `host yes|no` (the engine's own test, above) and `combat_map 0|1` (`combat_map.cpp`'s `CombatMapLoaded`, the other detector of a combat level) so a headset run can compare them.
 `<data dir>/aibots.req` (`scenario=<0-6|name|off> delay=<s>`), re-read when its mtime changes (1 Hz); an unknown scenario keeps the old one with a WARNING. A changed request does not re-enable by itself.
 Added for the run: `aibots idle` (INFO, once per match) when 10 s in game have passed with no call, with matchiscombat, scenarios object and agent count.
 

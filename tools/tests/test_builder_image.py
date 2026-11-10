@@ -53,8 +53,8 @@ class BuilderImageTest(unittest.TestCase):
         for name in USERS:
             text = (WORKFLOWS / name).read_text()
             tags = re.findall(rf"image: ({re.escape(IMAGE)}:\S+)", text)
-            # build.yml runs two jobs in the image (installer and build, #1770); the other workflows run one
-            expected = [want, want] if name == "build.yml" else [want]
+            # build.yml runs three jobs in the image (installer, core-library and build, #1770, #1200); the other workflows run one
+            expected = [want, want, want] if name == "build.yml" else [want]
             self.assertEqual(tags, expected, f"{name}: builder image tag is not the Dockerfile hash; "
                                            f"set it to {dockerfile_tag()} (sha256sum of the Dockerfile)")
 

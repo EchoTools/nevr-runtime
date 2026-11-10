@@ -30,6 +30,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/credits_text.cpp",
     "patch/deadlock_monitor.cpp",
     "patch/early_quit_lockout.cpp",
+    "patch/equipment_refire.cpp",
     "patch/evrp_package.cpp",
     "patch/gpu_score.cpp",
     "patch/headless_graphics.cpp",
@@ -51,6 +52,8 @@ EXPECTED_PATCH_SOURCES = (
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/provider_name_redirect.cpp",
+    "patch/queued_join_log.cpp",
+    "patch/lobby_settings_hook.cpp",
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
@@ -64,7 +67,6 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 43
 
 
 class InventoryError(Exception):
@@ -108,12 +110,6 @@ def patch_sources(cmake: Path) -> list[str]:
 
 def verify(cmake: Path) -> list[str]:
     errors = []
-    if len(EXPECTED_PATCH_SOURCES) != EXPECTED_PATCH_SOURCE_COUNT:
-        errors.append(
-            "checker bug: EXPECTED_PATCH_SOURCE_COUNT does not match "
-            "EXPECTED_PATCH_SOURCES"
-        )
-
     actual = patch_sources(cmake)
     actual_counts = Counter(actual)
     expected = set(EXPECTED_PATCH_SOURCES)
@@ -151,7 +147,7 @@ def main() -> int:
 
     names = ", ".join(EXPECTED_PATCH_SOURCES)
     print(
-        f"patch-source-inventory: OK count={EXPECTED_PATCH_SOURCE_COUNT} names={names}"
+        f"patch-source-inventory: OK count={len(EXPECTED_PATCH_SOURCES)} names={names}"
     )
     return 0
 

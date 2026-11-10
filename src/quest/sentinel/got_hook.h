@@ -9,11 +9,13 @@
  *
  * This reaches only calls a module makes through a dynamic relocation that names
  * a symbol, whether that symbol is defined in another library or in the module
- * itself. It cannot reach a direct call, an inlined call, or a call through a
- * vtable. An internal hook is a row of the build-time libr15 patch (libr15_attach.h, docs/adr/0021).
+ * itself: a PLT or GOT word, or a vtable or factory word that an R_AARCH64_ABS64
+ * relocation fills with the symbol's address. It cannot reach a direct call, an
+ * inlined call, or a vtable word no relocation names. An internal hook is a row
+ * of the build-time libr15 patch (libr15_attach.h, docs/adr/0021).
  *
  * A target is one slot, named by module, symbol and relocation type
- * (R_AARCH64_JUMP_SLOT or R_AARCH64_GLOB_DAT). Nothing is patched unless
+ * (R_AARCH64_JUMP_SLOT, R_AARCH64_GLOB_DAT or R_AARCH64_ABS64). Nothing is patched unless
  *
  *   - the module is loaded and its optional build ID matches,
  *   - for a JUMP_SLOT, the module is linked BIND_NOW. A lazily bound slot starts
@@ -23,7 +25,11 @@
  *     lazy slots was not measured here, so a lazy JUMP_SLOT is refused rather
  *     than hooked on a guess,
  *   - exactly one relocation of the requested type names the symbol (or the one
- *     at the pinned link-time address does),
+ *     at the pinned link-time address does). An ABS64 target always pins its slot: a
+ *     symbol that a vtable lists has one such word in every vtable that lists it, and the
+ *     hook is for one of them. The pin must be a word whose relocation names the symbol
+ *     (kSlotOffsetMismatch otherwise); without a pin the target is kAmbiguousRelocation
+ *     when the symbol has several words and kPinRequired when it has one,
  *   - the relocation has no addend and its slot is an aligned pointer inside a
  *     writable segment of the image,
  *   - the slot holds the expected original, or an address inside an executable
@@ -47,6 +53,20 @@
  * called), so the others keep running. The chain's order is the order of registration. A handler's install is refused,
  * with a Warning that names the slot, the chain and the reason, when the slot holds a value the chain does not account for.
  *
+ * A data word the game reads, such as a heap-size descriptor pointer, is not a hook: GotDataSlot
+ * (below) stores a value of ours over it and puts the game's value back, through the same lock and
+ * registry.
+ *
+ * Assembly entries. A few hooks cannot be a CallbackThunk because they read what the thunk's handler cannot see: the caller's
+ * x30, sp or a callee-saved register. Such a hook is a reviewed assembly entry (callback_thunk.h rule 7) installed through
+ * InstallAsmEntry (hook_install.h) and the friend AsmEntryInstaller. It joins the chain like any hook (it may sit above the
+ * handlers already on its slot, and it calls the newest of them), reads the word it calls with acquire semantics at every
+ * call, and the manager publishes that word before the slot changes and again when the hook it calls leaves. It acts on the game's own call
+ * site, so it must stay the newest hook on its slot: a later install on that slot, a handler's or another entry's, is refused
+ * with kSlotHeldByEntry, a Warning that names the refused hook's owner and the chain with the entry marked (asm_entry). The
+ * rule ends when the entry leaves the chain: its Remove (which forgets the link when it finds the module gone or moved)
+ * or its Forget.
+ *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
  * and the caller's original pointer at its entry value, with one exception: if the
@@ -66,20 +86,22 @@
 
 namespace sentinel {
 
-enum class RelocKind : std::uint8_t { kJumpSlot, kGlobDat };
+// kAbs64: a word that an R_AARCH64_ABS64 relocation names a symbol for (a vtable or factory entry). Its target pins the slot.
+enum class RelocKind : std::uint8_t { kJumpSlot, kGlobDat, kAbs64 };
 
 const char* RelocKindName(RelocKind kind);
 
-// The two relocation type numbers a backend scans for. The production value is
+// The relocation type numbers a backend scans for. The production value is
 // the host architecture's; tests and fixture checks pass AArch64's explicitly so
 // an AArch64 image can be resolved on any host.
 struct RelocNumbers {
   std::uint32_t jumpSlot;
   std::uint32_t globDat;
+  std::uint32_t abs64;
 };
 
-constexpr RelocNumbers kAarch64Relocs{R_AARCH64_JUMP_SLOT, R_AARCH64_GLOB_DAT};
-constexpr RelocNumbers kX86_64Relocs{R_X86_64_JUMP_SLOT, R_X86_64_GLOB_DAT};
+constexpr RelocNumbers kAarch64Relocs{R_AARCH64_JUMP_SLOT, R_AARCH64_GLOB_DAT, R_AARCH64_ABS64};
+constexpr RelocNumbers kX86_64Relocs{R_X86_64_JUMP_SLOT, R_X86_64_GLOB_DAT, R_X86_64_64};
 #if defined(__aarch64__)
 constexpr RelocNumbers kNativeRelocs = kAarch64Relocs;
 #elif defined(__x86_64__)
@@ -114,6 +136,10 @@ enum class GotStatus : std::uint8_t {
   kSlotChanged,            // the slot no longer holds the value this write expected (chained hook, reload)
   kRegistryFull,           // the registry has no room for this hook (kRegistryCapacity, kCriticalReserve below)
   kSlotPoisoned,           // a failed Install left our entry possibly reachable through this slot
+  kPinRequired,            // an ABS64 target names its slot by a pinned link-time address, and this one has none
+  kSlotClaimed,            // the slot already holds a registry entry a data write may not share, or a data write holds it
+  kExecutableMapping,      // a data write's slot names a function or is in an executable mapping, or its new value is a code address (a code pointer is a hook)
+  kSlotHeldByEntry,        // the slot's newest hook is an assembly entry, which must stay the newest (see "Assembly entries" above GotHook)
 };
 
 // Stable tokens for log lines and tests.
@@ -216,6 +242,8 @@ struct SlotResolution {
   std::uint64_t slotVaddr = 0;      // link-time address of the slot
   void** slot = nullptr;            // runtime address (base applied)
   bool restoreReadOnly = false;     // slot page is RELRO: protect read-only after a write
+  bool inExecutableSegment = false; // the slot's PT_LOAD is executable as well as writable (a data write refuses it)
+  std::uint8_t symbolType = 0;      // ELF64_ST_TYPE of the symbol the slot's relocation names (a data write needs STT_OBJECT)
 };
 
 // Resolves a target to its slot inside `image` without reading or writing the
@@ -276,6 +304,11 @@ enum class StorePhase { kBeforeStore, kAfterStore };
 using StoreObserver = void (*)(void** slot, void* value, StorePhase phase);
 StoreObserver SetStoreObserver(StoreObserver observer);
 
+// Test seam: the relocation numbers Install, Write and Remove resolve slots with (default: the host architecture's, kNativeRelocs).
+// A test that resolves a real AArch64 image on an x86-64 host passes kAarch64Relocs; the pointer must stay valid while it is set.
+// Returns the previous setting (nullptr: the default).
+const RelocNumbers* SetRelocNumbers(const RelocNumbers* numbers);
+
 // Test seam for the page-protection call (default: mprotect). Used to make a
 // re-protect fail deterministically. Returns the previous function.
 using ProtectFn = int (*)(void* addr, std::size_t length, int prot);
@@ -319,12 +352,18 @@ class GotHook {
   // previous slot value, or the chain's newest hook); on failure it is restored to its entry value (see
   // the notes at the top of this file for the one exception). Private on purpose: production code
   // installs a CallbackThunk through InstallThunk (hook_install.h), which keeps every hook inside the frame
-  // sensor's reach; tests use GotHookTestAccess, and the plugin service uses PluginHandlerInstaller.
+  // sensor's reach; tests use GotHookTestAccess, the plugin service uses PluginHandlerInstaller and a reviewed assembly entry
+  // uses AsmEntryInstaller (hook_install.h; callback_thunk.h rule 7).
   friend struct ThunkInstaller;
   friend struct GotHookTestAccess;
   friend struct PluginHandlerInstaller;
+  friend struct AsmEntryInstaller;
   GotStatus Install(const GotTarget& target, void* hookFn, void** originalOut,
                     ImageLookup lookup = FindLoadedImage);
+  // Install for an assembly entry: the same chain join, with the entry marked so that no later hook joins above it.
+  // `nextOut` is the word the entry (or its continuation) loads with acquire semantics at every call.
+  GotStatus InstallEntry(const GotTarget& target, void* entryFn, void** nextOut, ImageLookup lookup);
+  GotStatus InstallImpl(const GotTarget& target, void* hookFn, void** originalOut, ImageLookup lookup, bool asmEntry);
 
   bool installed_ = false;
   bool mayBeLive_ = false;
@@ -332,6 +371,61 @@ class GotHook {
   ElfImage image_{};
   void** slot_ = nullptr;
   void* hookFn_ = nullptr;
+  bool restoreReadOnly_ = false;
+  ImageLookup lookup_ = FindLoadedImage;
+};
+
+// A data word the game reads, pointed at a value of ours (docs/adr/0046 rule 2; docs/adr/0019 section 5 (iii)): the heap-size
+// descriptor pointers a libr15 GLOB_DAT slot holds are the case. It is not a hook: there is no thunk, no original to call and no
+// chain, so one handle is the slot's only owner, and the store is outside ADR 0034's hook rules (rule 6). It is a write the manager
+// makes, so the page-protection call stays in this file (N151).
+//
+// The slot resolves as a hook's does (GotTarget: module, symbol, kind, build ID, optional pin; `expectedOriginal` is not read, the
+// `expected` argument of Write is the check) and takes one registry entry, a normal one unless the target is Critical(). The kind
+// is kGlobDat: a slot that holds the address of a data symbol (ADR 0046 rule 2); any other kind is kBadArgument. Write stores only
+// over `expected`, under the process-wide lock, and refuses:
+//   - a slot whose relocation does not name a data object (anything but STT_OBJECT: a function, an ifunc, or a symbol with no type
+//     such as a weak reference nothing defined, which the loader fills with a function): it holds a code pointer, which is a
+//     hook's business, installed with InstallThunk so the chain sees it (kExecutableMapping, stage `symbol_type`). The symbol
+//     decides, not the address: libr15's .rodata lies inside its executable segment, so a data object's address is an address in
+//     an executable segment, and the heap descriptors the first user writes over are such objects;
+//   - a `value` that is an address in an executable segment of a loaded module: a code pointer stored here would skip the chain
+//     (kExecutableMapping, stage `new_value`). `value` is therefore writable storage of the caller's, not a const object the
+//     linker places in an R E segment;
+//   - a slot in an executable mapping: its live protection in /proc/self/maps has x, or its PT_LOAD is flagged executable
+//     (kExecutableMapping, stages `store` and `segment`);
+//   - a slot that already holds a registry entry, a hook's chain or another data write (kSlotClaimed); a hook that asks for a
+//     slot a data write holds is refused the same way;
+//   - a slot that does not hold `expected` (kOriginalMismatch).
+// One Debug line records a write and one a restore; a refusal is one Warning line that names the slot and the stage (logging.md
+// Rules 6 and 13). A failed Write holds no entry and leaves the slot as it found it, except that a store another writer
+// overwrote right after ours is theirs. It never poisons an entry, where ADR 0019 section 5 (iii) does for a failed restore: a data
+// word has no chain through which a stored value could be called, so there is nothing to keep unreachable.
+class GotDataSlot {
+ public:
+  constexpr GotDataSlot() = default;
+  GotDataSlot(const GotDataSlot&) = delete;
+  GotDataSlot& operator=(const GotDataSlot&) = delete;
+
+  // Stores `value` in the slot `target` names, if it holds `expected` now. Neither may be null.
+  GotStatus Write(const GotTarget& target, const void* expected, void* value, ImageLookup lookup = FindLoadedImage);
+
+  // Stores `expected` back, only over `value`, and releases the slot. A slot someone else has changed since is left alone
+  // (kSlotChanged) and the handle stays written; Forget() drops it. A module that has gone or moved releases the handle
+  // without a write (kModuleChanged).
+  GotStatus Restore();
+
+  // Drops the handle without writing, as GotHook::Forget does. Does nothing if not written.
+  void Forget();
+
+  bool written() const { return written_; }
+
+ private:
+  bool written_ = false;
+  GotTarget target_{"", "", RelocKind::kJumpSlot};
+  ElfImage image_{};
+  void** slot_ = nullptr;
+  void* value_ = nullptr;
   bool restoreReadOnly_ = false;
   ImageLookup lookup_ = FindLoadedImage;
 };

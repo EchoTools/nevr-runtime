@@ -119,11 +119,12 @@ func TestExportHygiene_NoBreakpadLeak(t *testing.T) {
 	}
 }
 
-// Only the two entry points the loader needs are exported. Everything else,
-// including the hook API and its test seams, is hidden (-fvisibility=hidden).
+// Only the two entry points the loader needs and the EC script libraries' page are exported. Everything else,
+// including the hook API and its test seams, is hidden (-fvisibility=hidden). re33_ec_page is a data symbol: the EC
+// script libraries find it with dlsym(RTLD_DEFAULT, "re33_ec_page") (src/quest/sentinel/ec_page.h, #2187).
 func TestExportAllowlist(t *testing.T) {
 	requireArtifact(t)
-	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true}
+	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true, "re33_ec_page": true}
 	dyn := run(t, "nm", "-D", "--defined-only", soPath(t))
 	for _, line := range strings.Split(dyn, "\n") {
 		fields := strings.Fields(line)
@@ -131,8 +132,35 @@ func TestExportAllowlist(t *testing.T) {
 			continue
 		}
 		if name := fields[len(fields)-1]; !allowed[name] {
-			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad)", name)
+			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad, re33_ec_page)", name)
 		}
+	}
+}
+
+// The EC script libraries' page is exported as data: 4096 bytes in .bss (src/quest/sentinel/ec_page.h, #2187). A page that is
+// missing, or exported as a function or with another size, is a page the scripts cannot use as echovr.exe's image base.
+func TestEcPageIsAnExportedDataPage(t *testing.T) {
+	requireArtifact(t)
+	dyn := run(t, "nm", "-D", "--defined-only", "-S", soPath(t))
+	found := false
+	for _, line := range strings.Split(dyn, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 || fields[3] != "re33_ec_page" {
+			continue
+		}
+		found = true
+		if fields[1] != "0000000000001000" {
+			t.Errorf("re33_ec_page has size %s, want 0x1000: %s", fields[1], line)
+		}
+		if fields[2] != "B" && fields[2] != "b" {
+			t.Errorf("re33_ec_page is not a .bss data symbol (type %s): %s", fields[2], line)
+		}
+		if !strings.HasSuffix(fields[0], "000") {
+			t.Errorf("re33_ec_page is not 4096-aligned: %s", line)
+		}
+	}
+	if !found {
+		t.Errorf("re33_ec_page is not a dynamic export of the sentinel")
 	}
 }
 
@@ -180,7 +208,8 @@ var (
 // A hook is a record in the nevr_hook_records output section, emitted by NEVR_HOOK_RECORD:
 // {entry, handler}, two function pointers that the dynamic linker relocates (R_AARCH64_RELATIVE),
 // so they are read from the relocation addends. Every thunk Entry must have exactly one
-// record, so a thunk whose handler is not recorded (and therefore not walked) fails.
+// record, so a thunk whose handler is not recorded (and therefore not walked) fails. A reviewed
+// assembly entry (NEVR_ASM_ENTRY_RECORD) is a record of {entry, continuation} in the same section.
 type elfFunc struct {
 	addr, size uint64
 	name       string
@@ -256,11 +285,7 @@ func parseFuncs(t *testing.T) []elfFunc {
 func TestHookFramesCarryNoPersonality(t *testing.T) {
 	requireArtifact(t)
 	art := loadFrameGraph(t, soPath(t))
-	byAddr := map[uint64]*elfFunc{}
-	for i := range art.funcs {
-		byAddr[art.funcs[i].addr] = &art.funcs[i]
-	}
-	// Exactly one record per thunk Entry, and no record for anything else.
+	// Exactly one record per thunk Entry, and no record for anything else but a reviewed assembly entry.
 	thunkEntries := map[uint64]bool{}
 	for i := range art.funcs {
 		if strings.Contains(art.funcs[i].name, "CallbackThunk") && strings.Contains(art.funcs[i].name, "5EntryE") {
@@ -270,15 +295,12 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	if len(thunkEntries) == 0 {
 		t.Fatalf("no CallbackThunk Entry in the library: the sensor is looking at nothing")
 	}
-	for a := range thunkEntries {
-		if art.recordEntries[a] != 1 {
-			t.Errorf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", byAddr[a].name, art.recordEntries[a])
-		}
+	for _, msg := range recordEntryErrors(art.graph.names, thunkEntries, art.recordEntries, reviewedAsmEntries) {
+		t.Error(msg)
 	}
-	for a, n := range art.recordEntries {
-		if !thunkEntries[a] {
-			t.Errorf("hook record names %#x (x%d), which is not a CallbackThunk Entry", a, n)
-		}
+	// A reviewed assembly entry's own text: its acquire loads, the branch to its record's continuation, its unwind rows at each bl.
+	for _, msg := range asmEntryErrors(t, soPath(t), art, thunkEntries) {
+		t.Error(msg)
 	}
 
 	v := walkHookFrames(art.graph)
@@ -408,8 +430,8 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be
 // named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
 // installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The one
-// other install is the plugin hook service's (PluginHandlerInstaller, ADR 0034); the second check
-// below pins where that name may appear. The check is textual and cheap. It reads every file with
+// other installs are the plugin hook service's (PluginHandlerInstaller, ADR 0034) and the reviewed assembly entry's
+// (AsmEntryInstaller, callback_thunk.h rule 7); the checks below pin where those names may appear. The check is textual and cheap. It reads every file with
 // a .cpp, .cc, .cxx, .h, .hpp or .inc extension under src/, and it fails if a file outside a
 // tests/ directory
 //   - names GotHookTestAccess, or
@@ -429,6 +451,56 @@ var pluginInstallerFiles = map[string]bool{
 	"quest/sentinel/got_hook.h":   true,
 	"quest/sentinel/got_hook.cpp": true,
 	"quest/plugin/slot_hook.cpp":  true,
+}
+
+// The assembly-entry installer (callback_thunk.h rule 7, ADR 0046 rule 2) is the manager's fourth friend. A reviewed entry is
+// code the sensor cannot vet beyond its frames, so who may name the installer is pinned: the files that declare, define and
+// document it, the tests, and src/quest/combat/, where the combat modules that need an entry live.
+var asmEntryInstallerFiles = map[string]bool{
+	"quest/sentinel/got_hook.h":       true,
+	"quest/sentinel/hook_install.h":   true,
+	"quest/sentinel/callback_thunk.h": true,
+}
+
+var asmEntryInstallerRe = regexp.MustCompile(`\b(AsmEntryInstaller|InstallAsmEntry)\b`)
+
+// The message for a file (slash path relative to src/) that names the installer where it may not, or "".
+func asmEntryInstallerViolation(rel, text string) string {
+	if !asmEntryInstallerRe.MatchString(text) || strings.HasPrefix(rel, "quest/tests/") || asmEntryInstallerFiles[rel] ||
+		strings.HasPrefix(rel, "quest/combat/") {
+		return ""
+	}
+	return rel + " names AsmEntryInstaller or InstallAsmEntry; only got_hook.h, hook_install.h, callback_thunk.h, src/quest/combat and src/quest/tests may (ADR 0046 rule 2)"
+}
+
+func TestAsmEntryInstallerPinNamesWhoMayCallIt(t *testing.T) {
+	const call = "sentinel::InstallAsmEntry(hook, target, kEntry, &next);"
+	for _, rel := range []string{
+		"quest/combat/dronemuzzle.cpp",
+		"quest/tests/got_hook_test.cpp",
+		"quest/sentinel/hook_install.h",
+	} {
+		if v := asmEntryInstallerViolation(rel, call); v != "" {
+			t.Errorf("%s may name the installer, got %q", rel, v)
+		}
+	}
+	for _, rel := range []string{
+		"quest/plugins/q15t/src/dronemuzzle.cpp", // the plugin is not combat code
+		"quest/sentinel/entry.cpp",
+		"quest/combat_libs/x.cpp", // a prefix test on "quest/combat" would let this through
+		"quest/plugin/slot_hook.cpp",
+		"runtime/patch/mode_patches.cpp",
+	} {
+		if v := asmEntryInstallerViolation(rel, call); !strings.Contains(v, rel) {
+			t.Errorf("%s must be refused for naming the installer, got %q", rel, v)
+		}
+	}
+	if v := asmEntryInstallerViolation("quest/sentinel/entry.cpp", "friend struct AsmEntryInstaller;"); v == "" {
+		t.Errorf("the type's name is pinned as well as the function's")
+	}
+	if v := asmEntryInstallerViolation("quest/sentinel/entry.cpp", "// an AsmEntryInstallerLike name is a different identifier"); v != "" {
+		t.Errorf("the match is on whole identifiers, got %q", v)
+	}
 }
 
 func TestRawInstallOnlyInTests(t *testing.T) {
@@ -454,6 +526,7 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	}
 	seen := 0
 	installerSeen := map[string]bool{}
+	asmInstallerSeen := map[string]bool{}
 	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
 		if werr == nil && info.Mode()&os.ModeSymlink != 0 {
 			// filepath.Walk does not follow a symlink, so a link under src/ would hide the files behind it
@@ -483,6 +556,12 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 				t.Errorf("%s names PluginHandlerInstaller; only got_hook.h, got_hook.cpp and plugin/slot_hook.cpp may (ADR 0034)", rel)
 			}
 		}
+		if asmEntryInstallerRe.MatchString(string(data)) {
+			asmInstallerSeen[rel] = true
+		}
+		if v := asmEntryInstallerViolation(rel, string(data)); v != "" {
+			t.Error(v)
+		}
 		// Other tests (src/runtime/tests, ...) may include the shared test vectors; production may not.
 		if !strings.Contains("/"+rel, "/tests/") {
 			for _, m := range includeRe.FindAllStringSubmatch(string(data), -1) {
@@ -509,6 +588,11 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	for f := range pluginInstallerFiles {
 		if !installerSeen[f] {
 			t.Errorf("%s does not name PluginHandlerInstaller: the pin is looking at nothing", f)
+		}
+	}
+	for f := range asmEntryInstallerFiles {
+		if !asmInstallerSeen[f] {
+			t.Errorf("%s does not name the assembly-entry installer: the pin is looking at nothing", f)
 		}
 	}
 }

@@ -21,6 +21,7 @@ BOOL g_telemetryDiag = FALSE;
 BOOL g_timestampLogs = FALSE;
 /// Whether UPnP port forwarding is enabled. Set by -upnp or config "upnp".
 BOOL g_upnpEnabled = FALSE;
+BOOL g_noUpdate = FALSE;
 /// External UPnP port override (0 = use broadcaster port). Set by config "upnp_port".
 UINT16 g_upnpPort = 0;
 /// Internal IP override for registration (empty = auto). Set by config "internal_ip".

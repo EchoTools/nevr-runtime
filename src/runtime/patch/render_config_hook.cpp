@@ -367,7 +367,7 @@ void Poll(std::uint64_t nowUs) {
       // (observers installed after the game's boot Apply call, or a boot return address that is not the one the game uses).
       if (!g_traceLogged.exchange(true)) {
         const SettingsObserver::View seen = g_observer.Snapshot();
-        Log(EchoVR::LogLevel::Info,
+        Log(seen.readFailures == 0 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
             "[NEVR.RENDER] render_config settings_trace apply_calls=%llu read_failures=%llu last_apply_return=0x%llx "
             "boot_return=0x%llx",
             static_cast<unsigned long long>(seen.applyCalls), static_cast<unsigned long long>(seen.readFailures),

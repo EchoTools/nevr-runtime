@@ -15,7 +15,7 @@ registrations) and #1997 (the release redesign).
 A tester's log or crash report has to say which build produced it, or a probe build's numbers and a release's are
 indistinguishable. What the tree has:
 
-- **Version.** It comes from git: `X.Y.Z` for a CI build of a tag, `X.Y.(Z+1)-dev.<N>+<sha>` for every other build,
+- **Version.** It comes from git: `X.Y.Z` for a CI build of a tag, `<next>-dev.<N>+<sha>` for every other build,
   "which sorts after the tag it descends from and before the next release" (AGENTS.md "Build Commands").
 - **Identity literal.** `NEVR-BUILD <version> <commit40>` binds the version to the commit. Its format is a cross-repo
   contract: the release signer and `tools/package_release.py` read it with a fixed pattern, and the plugin-trust literal
@@ -44,9 +44,14 @@ measurement build, ADR 0037), and a first log line and crash report that carry t
      `cmake/nevr_build_info.cmake` gives `nevr_build::kIsDev`: a version with no `-dev.` part, or a CI build of a release
      tag (rc tags included) that the CI ref names, is a release build, even when `git describe` gave it a `-dev.`
      version. The plugin-trust word keeps its meaning (N147) and is not the build kind.
-   - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`), set by the
+   - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`, `arena`), set by the
      recipe that makes the artifact. A release's variant APKs share the release's loader, so their name is stamped by the
      packaging step, where the sentinel reads it, not by the loader build.
+   - On Quest the packaging step stamps the word into the APK: `just android-repack-apk` takes it as its last parameter, every
+     recipe that repacks an APK passes it (empty for a plain release or a development build of the tree), refuses a word that is
+     not one of the four, and writes `lib/arm64-v8a/libnevr_build_variant.so` holding the word as its exact bytes. The sentinel
+     reads that file beside its own library before its first line (`src/quest/sentinel/build_variant.h`); a missing, unreadable or
+     wrong stamp is no variant, and a second line says so.
 2. **The first log line says it.** The sentinel's first line and the PC runtime's first line carry the version, the build
    kind and the variant name, and so does every crash report (`docs/reference/crash-report.md`).
 3. **versionCode stays as it is.** Every Quest APK is stamped through `tools/quest_apk_version.py`; no recipe types a
@@ -68,5 +73,5 @@ sources.
 
 ## Not claimed
 
-How the variant name reaches the sentinel in a variant APK (an asset, a manifest field); the first PR that implements
-this decides, against #1997's work.
+The PC side of rule 2: the Quest sentinel's first line and crash report carry the version, the kind and the variant; the PC crash report
+carries no build line (KNOWN-WRONG #2231).

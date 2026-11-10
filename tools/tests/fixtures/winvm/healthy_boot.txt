@@ -43,7 +43,6 @@
 [NEVR.CRASH] veh installed
 [NEVR.BOOT] installing console ctrl handler...
 [90m2026-09-21T16:37:44.936Z[0m [0minfo[0m [NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)[0m
-[90m2026-09-21T16:37:44.936Z[0m [0minfo[0m [NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)[0m
 [NEVR.PATCH] console ctrl handler installed
 [NEVR.BOOT] applying startup patches...
 [NEVR.PATCH] startup patches applied

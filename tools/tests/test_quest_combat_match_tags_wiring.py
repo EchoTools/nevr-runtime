@@ -40,12 +40,17 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
 
     def test_the_combat_target_is_built_without_exceptions_and_hidden(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+match_tags\.cpp\)")
+        block = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
+        self.assertIsNotNone(block)
+        # The list grows with each module that moves in, so each file is checked, not the whole list.
+        for name in ("combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"):
+            self.assertIn(name, block.group(1).split())
         options = re.search(r"target_compile_options\(nevr_quest_combat PRIVATE([^)]*)\)", cmake)
         self.assertIsNotNone(options)
         for flag in ("-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fvisibility=hidden"):
             self.assertIn(flag, options.group(1))
-        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook)", cmake)
+        # nlohmann: runtime/compat/server_features.h, which the EC client reads the server's statement with (#2333)
+        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk nlohmann_json::nlohmann_json)", cmake)
 
     def test_the_quest_project_adds_the_combat_directory_after_the_sentinel(self):
         cmake = read("src/quest/CMakeLists.txt")
@@ -68,11 +73,11 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         )
         self.assertEqual(body.count("nevr_quest::combat::match_tags::Install();"), 1)
 
-    def test_the_host_test_is_a_target_of_the_hooks_group(self):
-        cmake = read("src/quest/host_tests/groups/hooks.cmake")
+    def test_the_host_test_is_a_target_of_the_combat_group(self):
+        cmake = read("src/quest/host_tests/groups/combat.cmake")
         self.assertRegex(
             cmake,
-            r"nevr_ht_test\(match_tag_default_test GROUP hooks[^)]*src/quest/tests/match_tag_default_test\.cpp"
+            r"nevr_ht_test\(match_tag_default_test GROUP combat[^)]*src/quest/tests/match_tag_default_test\.cpp"
             r"\s+src/quest/combat/match_tags\.cpp\)",
         )
 

@@ -199,6 +199,8 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
   context_.header.struct_size = sizeof(NevrHostContext);
   context_.header.abi_major = nevr_runtime_abi::kMajor;
   context_.header.abi_minor = nevr_runtime_abi::kMinor;
+  // This host performs the staged swap and puts a release that does not start back (ADR 0024, sections 4 and 6).
+  context_.capabilities = nevr_runtime_abi::kHostCapabilitySwap;
   context_.host_module = host_module_;
   context_.game_module = game_module_;
   context_.original_game_main_wrapper = original_;
@@ -238,7 +240,8 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   // The attach decisions are reported first, now that attach has returned, so the
   // load record that follows reads in order.
   self->diagnostics_->FlushAttachJournal();
-  const RuntimeLoadResult result = self->loader_.Load(self->context_, *self->diagnostics_);
+  // Self-update's swap and rollback, and the load itself (RuntimeLoader::LoadAtStart; ADR 0024, sections 4 and 6).
+  const RuntimeLoadResult result = self->loader_.LoadAtStart(self->context_, *self->diagnostics_);
   if (result.Loaded()) self->api_.store(result.api, std::memory_order_release);
   // A load that did not wait for the install may have run ahead of its last journal entry.
   if (waited != InstallWait::kSignalled) self->diagnostics_->FlushAttachJournal();
@@ -263,7 +266,7 @@ std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
     WriteRuntimeStopLine(*diagnostics_, loader_.Result());
     const RuntimeLoadResult& result = loader_.Result();
     // The same cause in plain words (#1533): a -server run gets no dialog, so this line is what its console shows.
-    const wchar_t* sentence = StopNoticeTextFor(result.outcome, result.verify_reason_code);
+    const wchar_t* sentence = StopNoticeTextFor(result.outcome, result.verify_reason_code, result.update_failed);
     const bool console_took = WriteRuntimeNoticeLine(sentence, *diagnostics_, result);
     // A person at a console that took the line gets a moment to read it; a dialog already held the process open.
     if (console_took && decision == StopNotice::kSuppressedServerOrHeadless) Sleep(ExitNoticeWaitMs());

@@ -18,11 +18,13 @@
 #include <vector>
 #include <windows.h>
 
+#include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
 #include "runtime/patch/resource_buffer_key.h"
+#include "runtime/patch/plugin_assets.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
 #include "runtime/lifecycle/cli.h"
@@ -31,6 +33,7 @@
 bool TestLogContains(const std::string& needle);
 bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle);
 void ClearTestLogs();
+std::vector<std::string> TestLogLinesContaining(const std::string& needle);
 
 namespace {
 
@@ -268,6 +271,137 @@ void RunCallbackFor(std::uint64_t name) {
   TestHook_RunResourceCallback(callback.data());
 }
 
+// #2215: a label comes from a plugin and is written into log lines, so one outside the label rule (1 to 64 bytes of
+// printable ASCII, no double quote or backslash) is refused where it enters, and no line carries its bytes.
+namespace {
+
+bool TransformNeverCalled(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
+
+struct BadLabel {
+  const char* what;
+  std::string label;
+};
+
+std::vector<BadLabel> BadLabels() {
+  return {
+      {"newline", "lbl-a\nb"},
+      {"carriage return", "lbl-a\rb"},
+      {"control byte", std::string("lbl-a\x01") + "b"},
+      {"DEL", "lbl-a\x7f" "b"},
+      {"non-ASCII", "lbl-caf\xc3\xa9"},
+      {"invalid UTF-8", "lbl-\xff\xc3("},
+      {"double quote", "lbl-a\"b"},
+      {"backslash", "lbl-a\\b"},
+      {"empty", ""},
+      {"65 bytes", std::string(65, 'q')},
+  };
+}
+
+}  // namespace
+
+TEST(ResourceOverride, ALabelOutsideTheRuleIsRefusedAtEveryEntryAndNoLineCarriesItsBytes) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  static char bytes[] = "hostile";
+  std::uint64_t name = kName;
+  for (const BadLabel& bad : BadLabels()) {
+    SCOPED_TRACE(bad.what);
+    const std::size_t before = TestLogLinesContaining("[NEVR.RESOURCE]").size();
+    RegisterResourceOverride(kType, name++, bytes, sizeof(bytes), bad.label.c_str());
+    EXPECT_FALSE(RegisterResourceTransform(kType, name++, &TransformNeverCalled, nullptr, bad.label.c_str()));
+    EXPECT_GE(TestLogLinesContaining("[NEVR.RESOURCE]").size(), before + 2u) << "a refusal is logged";
+  }
+  // A null label is outside the rule too.
+  RegisterResourceOverride(kType, name++, bytes, sizeof(bytes), nullptr);
+  EXPECT_FALSE(RegisterResourceTransform(kType, name++, &TransformNeverCalled, nullptr, nullptr));
+
+  const std::size_t refusals = TestLogLinesContaining("reason=bad_label").size();
+  EXPECT_EQ(refusals, 2u * BadLabels().size() + 2u) << "one Warning per refused registration";
+  for (const std::string& line : TestLogLinesContaining("reason=bad_label")) {
+    EXPECT_NE(line.find("status=1"), std::string::npos) << line;
+    EXPECT_NE(line.find("1 to 64 bytes of printable ASCII"), std::string::npos) << "names the rule: " << line;
+    EXPECT_NE(line.find("label_bytes="), std::string::npos) << "gives the length: " << line;
+  }
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "a refused label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining(std::string(65, 'q')).empty());
+
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 0u) << "nothing was registered";
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+}
+
+// #2225: the asset registry's entry (NEVR_RegisterAsset) follows the same rule as the override registry above.
+TEST(PluginAssetLabel, ALabelOutsideTheRuleIsRefusedAndNoLineCarriesItsBytes) {
+  ClearTestLogs();
+  // With no game base a registration that is accepted cannot install the engine hooks (EnsureHooksInstalled warns and
+  // returns), so a label the rule fails to refuse shows as a failed assertion here, not as a fault in the hook install.
+  // RegisterPluginAsset installs the engine's loaded-resource probe on the process-wide registry; take it out again so a
+  // later test that registers into that registry does not read the stand-in game image.
+  struct Restore {
+    CHAR* base = EchoVR::g_GameBaseAddress;
+    ~Restore() {
+      EchoVR::g_GameBaseAddress = base;
+      nevr::assets::Global().SetLoadedProbe(nullptr);
+    }
+  } restore;
+  EchoVR::g_GameBaseAddress = nullptr;
+  static const unsigned char bytes[8] = {1, 2, 3};
+  const std::size_t registeredBefore = nevr::assets::Global().Count();
+  std::uint64_t name = 0x7a5e700000000001ULL;
+  for (const BadLabel& bad : BadLabels()) {
+    SCOPED_TRACE(bad.what);
+    EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), bad.label.c_str()),
+              nevr::assets::RegisterStatus::BadArgument);
+  }
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), nullptr),
+            nevr::assets::RegisterStatus::BadArgument)
+      << "a null label";
+
+  const std::vector<std::string> refusals = TestLogLinesContaining("[NEVR.ASSET] register refused");
+  EXPECT_EQ(refusals.size(), BadLabels().size() + 1u) << "one Warning per refused registration";
+  for (const std::string& line : refusals) {
+    EXPECT_NE(line.find("reason=bad_label"), std::string::npos) << line;
+    EXPECT_NE(line.find("label_bytes="), std::string::npos) << "gives the length: " << line;
+    EXPECT_NE(line.find("1 to 64 bytes of printable ASCII"), std::string::npos) << "names the rule: " << line;
+  }
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "a refused label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining(std::string(65, 'q')).empty());
+  EXPECT_TRUE(TestLogLinesContaining("[NEVR.ASSET] registered").empty()) << "nothing was registered";
+  EXPECT_EQ(nevr::assets::Global().Count(), registeredBefore);
+}
+
+TEST(ResourceOverride, AFileOverrideWithALabelOutsideTheRuleIsRefusedAndItsFileIsNotLoaded) {
+  char directory[MAX_PATH] = {};
+  char path[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
+  ASSERT_NE(GetTempFileNameA(directory, "nvr", 0, path), 0u);
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << "owned";
+  }
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  RegisterResourceOverrideFromFile(kType, kName, path, "lbl-a\nb");
+  EXPECT_FALSE(TestLogLinesContaining("reason=bad_label").empty());
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+  DeleteFileA(path);
+}
+
+TEST(ResourceOverride, ALabelInsideTheRuleIsAccepted) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  static char bytes[] = "ok";
+  RegisterResourceOverride(kType, kName, bytes, sizeof(bytes), "my levels-1.0 (b)");
+  RegisterResourceOverride(kType, kName + 1, bytes, sizeof(bytes), std::string(64, 'x').c_str());
+  EXPECT_TRUE(RegisterResourceTransform(kType, kName + 2, &TransformNeverCalled, nullptr, "t"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 3u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+}
+
 TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
   TestHook_InitResourceOverrides(&NoopOriginal);
   InstallFakeHeap();
@@ -478,19 +612,22 @@ TEST_F(CachedOverrides, ACachedFileIsDeliveredForItsTypeAndNameAndLogged) {
   EXPECT_TRUE(TestLogContains("entries=1 loaded=1 refused=0 missing=0"));
 }
 
-// What a level plugin needs (#2161): a fixed override replaces its resource on every load, so a level that loads again
-// gets the override again. KNOWN-WRONG #2343 a fixed entry is skipped once applied (resource_override.cpp,
-// Hook_AsyncIOCallback) until a plugin calls NEVR_ResetResourceOverrides, so the second and third loads get the game's
-// own bytes. Disabled until #2343 lands; run it with --gtest_also_run_disabled_tests to see the state.
-TEST_F(CachedOverrides, DISABLED_AFixedOverrideReplacesItsResourceOnEveryLoad) {
+// What a level plugin needs (#2161, #2343): a fixed override replaces its resource on every load, so a level that loads
+// again gets the override again. Each load gets its own copy in the game's heap, and each says so.
+TEST_F(CachedOverrides, AFixedOverrideReplacesItsResourceOnEveryLoad) {
   const std::vector<std::uint8_t> image = Image(300, 5);
   RegisterResourceOverride(kSplashType, kSplashName, image.data(), image.size(), "every_load");
   char original[10] = {};
+  const void* copies[3] = {};
   for (int load = 1; load <= 3; ++load) {
     SCOPED_TRACE(load);
     GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
     ExpectGameCopy(image.data(), image.size());
+    copies[load - 1] = g_seenBuffer;
   }
+  EXPECT_NE(copies[0], copies[1]) << "each load is handed a copy of its own, which the game frees on its own";
+  EXPECT_NE(copies[1], copies[2]);
+  EXPECT_EQ(TestLogLinesContaining("override applied label=every_load").size(), 3u);
 }
 
 bool NeverServes(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
@@ -563,6 +700,46 @@ TEST_F(CachedOverrides, AOneByteFlippedCachedFileIsRefusedLoggedAndNeverDelivere
   GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
   EXPECT_EQ(g_seenBuffer, static_cast<const void*>(original));
   EXPECT_FALSE(TestLogContains("override applied"));
+}
+
+// #2215: a cache index entry whose label is outside the label rule is refused, counted, and its bytes are in no line.
+TEST_F(CachedOverrides, AnIndexEntryWithALabelOutsideTheRuleIsRefusedAndItsBytesAreInNoLine) {
+  const std::string sha = Cache(Image(64, 3), kSplashType, kSplashName, "lbl-a\nb\xc3\xa9");
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 0u);
+  EXPECT_TRUE(TestLogContains("entries=1 loaded=0 refused=1 missing=0"));
+  EXPECT_FALSE(TestLogLinesContaining("cache refused entry=cache status=1 reason=bad_label label_bytes=").empty());
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "the label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining("cache hit").empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "nothing is registered";
+  EXPECT_FALSE(sha.empty());
+}
+
+// The _overrides/ scan labels a file by its parsed hashes, so a player's file is never refused over its name.
+TEST(ResourceOverride, AnOverrideFileWithALongOrNonAsciiNameStillInstalls) {
+  char tmp[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
+  const std::string dir = std::string(tmp) + "nevr-override-files-" + std::to_string(GetCurrentProcessId());
+  CreateDirectoryA(dir.c_str(), nullptr);
+  const std::vector<std::string> names = {
+      "0x00000000000000aa.0x00000000000000bb.caf\xc3\xa9" + std::string(70, 'n') + ".bin",  // long and non-ASCII
+      "0x00000000000000cc.bin",                                                               // plain
+  };
+  for (const std::string& name : names) {
+    std::ofstream file(dir + "\\" + name, std::ios::binary);
+    file << "bytes";
+    ASSERT_TRUE(file.good()) << name;
+  }
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_RegisterOverrideFilesIn(dir.c_str()), 0u) << "no file is refused over its name";
+  EXPECT_TRUE(TestLogLinesContaining("reason=bad_label").empty());
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x00000000000000aa.0x00000000000000bb"));
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x0000000000000000.0x00000000000000cc"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+  for (const std::string& name : names) DeleteFileA((dir + "\\" + name).c_str());
+  RemoveDirectoryA(dir.c_str());
 }
 
 TEST_F(CachedOverrides, AnIndexedBlobThatIsNotInTheCacheIsReportedMissing) {
@@ -929,6 +1106,190 @@ TEST_F(ResourceTransforms, AFixedOverridePassedOverByAnEarlierOneIsReportedAsSuc
   EXPECT_EQ(report.never_applied, 1u);
   EXPECT_TRUE(TestLogContains("override passed over label=second"));
   EXPECT_FALSE(TestLogContains("override never applied label=second"));
+}
+
+// #2343: with two fixed entries for one key, the first registered serves every load and the later one is passed over
+// on every load; neither the second load nor the third falls through to the later entry or to the game's own bytes.
+TEST_F(ResourceTransforms, TheFirstFixedOverrideOfAKeyServesEveryLoadAndTheLaterOneStaysPassedOver) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80, 90};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+    ExpectGameCopy(first, sizeof(first));
+  }
+  EXPECT_EQ(TestLogLinesContaining("override applied label=first").size(), 3u);
+  EXPECT_TRUE(TestLogLinesContaining("override applied label=second").empty());
+}
+
+// A texture's payload (buffer 1) is written over the game's own buffer on every load too.
+TEST_F(ResourceTransforms, AFixedPayloadIsWrittenOverTheGamesBufferOnEveryLoad) {
+  static const std::uint8_t payload[] = {1, 2, 3, 4, 5, 6, 7, 8};
+  // Make(CGTextureResource, "Win10GPU") names buffer 1 of a CGTextureResource (resource_buffer_key.h).
+  constexpr std::uint64_t kPayloadKey = 0xbeac1969cb7b8861ull;
+  constexpr std::uint64_t kTexture = 0xb3ebe9e0bf0eb81full;
+  RegisterResourceOverride(kPayloadKey, kTransformName, payload, sizeof(payload), "payload_every_load");
+  for (int load = 1; load <= 3; ++load) {
+    SCOPED_TRACE(load);
+    std::uint8_t game[8] = {};
+    GameFinishesBuffer(kTexture, kTransformName, 1, game, sizeof(game));
+    EXPECT_EQ(std::memcmp(game, payload, sizeof(payload)), 0);
+  }
+  EXPECT_EQ(TestLogLinesContaining("override applied label=payload_every_load buffer=1").size(), 3u);
+}
+
+// The shutdown report tells the three fates of a fixed override apart after several loads (#2343): one that served is
+// neither counted nor warned about; one an earlier entry of its key took is "passed over"; one whose resource never
+// loaded is "never applied ... never requested".
+TEST_F(ResourceTransforms, ShutdownDoesNotCountOrWarnAboutAnOverrideThatServed) {
+  static const std::uint8_t served[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, served, sizeof(served), "served");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 1u);
+  EXPECT_EQ(report.never_applied, 0u);
+  EXPECT_TRUE(TestLogLinesContaining("label=served").empty()) << "no warning names an override that served";
+}
+
+TEST_F(ResourceTransforms, ShutdownReportsAnOverridePassedOverOnEveryLoadAsPassedOver) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 2u);
+  EXPECT_EQ(report.never_applied, 1u) << "only the passed-over entry";
+  EXPECT_TRUE(TestLogContains("override passed over label=second"));
+  EXPECT_FALSE(TestLogContains("override never applied label=second"));
+  EXPECT_TRUE(TestLogLinesContaining("label=first").empty());
+}
+
+TEST_F(ResourceTransforms, ShutdownReportsAnOverrideWhoseResourceNeverLoadedAsNeverRequested) {
+  static const std::uint8_t loaded[] = {10, 20, 30, 40};
+  static const std::uint8_t unloaded[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, loaded, sizeof(loaded), "loaded");
+  RegisterResourceOverride(kTransformType, kTransformName + 1, unloaded, sizeof(unloaded), "unloaded");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override never applied label=unloaded"));
+  EXPECT_TRUE(TestLogContains("resource was never requested"));
+  EXPECT_FALSE(TestLogContains("override passed over label=unloaded"));
+  EXPECT_TRUE(TestLogLinesContaining("label=loaded").empty());
+}
+
+// NEVR_ResetResourceOverrides stays in the plugin ABI with nothing to re-arm (#2343): it says so, the next load is still
+// served, and the shutdown report still knows the override served.
+TEST_F(ResourceTransforms, AResetRequestChangesNothingAndSaysSo) {
+  static const std::uint8_t fixed[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
+  ASSERT_TRUE(RegisterResourceTransform(kTransformType + 1, kTransformName, &ProbeTransform, nullptr, "probe"));
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ResetResourceOverrides();
+  EXPECT_TRUE(TestLogContains("reset requested fixed_overrides=1 - nothing to re-arm"));
+  // Read before any later load could mark the override served again; with the hook live the registry is kept.
+  EXPECT_EQ(ShutdownResourceOverride().never_applied, 0u) << "the reset does not erase that the override served";
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(fixed, sizeof(fixed));
+}
+
+// When the first fixed entry of a key is chosen for a load and its copy is refused, nothing served that load: a later
+// entry of the key was not passed over by an override that served, and the shutdown line says what did happen.
+TEST_F(ResourceTransforms, ALaterOverrideBehindARefusedCopyIsNotReportedAsPassedOverByOneThatServed) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  RemoveFakeHeap();  // the game-heap copy of "first" is refused: no memory context
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.never_applied, 2u);
+  EXPECT_FALSE(TestLogContains("override passed over label=second")) << "no override served the load it matched";
+  EXPECT_TRUE(TestLogContains(
+      "override not served label=second name=0xac360e41e4ede056 - an earlier override of the same resource was "
+      "chosen for each load it matched, and that override was not served (the refusal is logged where it happened)"));
+}
+
+// Once the earlier entry has served a load, the later one is passed over as before, even if another load was refused.
+TEST_F(ResourceTransforms, ALaterOverrideIsPassedOverOnceTheEarlierOneServesALoad) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  RemoveFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  InstallFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(first, sizeof(first));
+  ClearTestLogs();
+  EXPECT_EQ(ShutdownResourceOverride().never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override passed over label=second"));
+  EXPECT_FALSE(TestLogContains("override not served label=second"));
+}
+
+// The reader's buffer the game finished reading, allocated where the game's reader allocates it (SetupReadBuffer:
+// the block's allocator, slot +0x28), with the game's bytes in it.
+void* GameReadBuffer(const void* bytes, std::uint64_t size) {
+  void* const p = FakeAlloc(&g_fakeAllocator, 16, size);
+  std::memcpy(p, bytes, static_cast<std::size_t>(size));
+  return p;
+}
+
+bool StillAllocated(const void* p) {
+  std::lock_guard<std::mutex> lock(g_heap.mutex);
+  for (const FakeHeap::Block& b : g_heap.blocks) {
+    if (b.memory.get() == p) return !b.freed;
+  }
+  return false;
+}
+
+// KNOWN-WRONG #2345: a buffer-0 replacement points the block at a copy in the game's heap and leaves the reader's
+// own buffer alone (game_buffer.h: the reader may own it), so nothing frees it: one buffer of orig_bytes stays
+// allocated, unreferenced by the block, for each load served. Serving one load per entry would cap it at one per
+// entry and lose the override on a level reload (#2343); transforms already pay it on every load. This test pins the cost so a
+// change to it is seen; the issue is to establish who owns the reader's buffer and free it.
+TEST_F(ResourceTransforms, EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone) {
+  static const std::uint8_t fixed[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
+  static const std::uint8_t stock[] = {1, 2, 3, 4, 5, 6};
+  std::vector<void*> left;
+  for (int load = 1; load <= 3; ++load) {
+    void* const original = GameReadBuffer(stock, sizeof(stock));
+    GameFinishesBuffer(kTransformType, kTransformName, 0, original, sizeof(stock));
+    ExpectGameCopy(fixed, sizeof(fixed));
+    if (g_seenBuffer != original && StillAllocated(original)) left.push_back(original);
+  }
+  EXPECT_EQ(left.size(), 3u) << "one reader buffer of orig_bytes per buffer-0 load served";
+
+  // Buffer 1: the payload is written over the reader's own buffer, which the block still holds, so none is left.
+  constexpr std::uint64_t kPayloadKey = 0xbeac1969cb7b8861ull;  // Make(CGTextureResource, "Win10GPU")
+  constexpr std::uint64_t kTexture = 0xb3ebe9e0bf0eb81full;
+  static const std::uint8_t payload[] = {7, 7, 7, 7};
+  RegisterResourceOverride(kPayloadKey, kTransformName + 1, payload, sizeof(payload), "payload");
+  std::size_t payloadLeft = 0;
+  for (int load = 1; load <= 3; ++load) {
+    void* const original = GameReadBuffer(stock, sizeof(stock));
+    GameFinishesBuffer(kTexture, kTransformName + 1, 1, original, sizeof(stock));
+    EXPECT_EQ(g_seenBuffer, original);
+    EXPECT_EQ(std::memcmp(original, payload, sizeof(payload)), 0);
+    if (g_seenBuffer != original && StillAllocated(original)) ++payloadLeft;
+  }
+  EXPECT_EQ(payloadLeft, 0u);
 }
 
 class GameHeapCopies : public ResourceTransforms {};

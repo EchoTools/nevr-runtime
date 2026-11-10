@@ -33,7 +33,7 @@ through `NEVR_COMBAT_LIBSRC`. The asset patch loader's source repository is not 
 those files and compares hashes.
 
 **Reconstructions.** The sentinel pins its addresses in `src/quest/sentinel/pinned_targets.h`, and q15t modules pin every
-word they were derived from (`kMeshStepWordPins` in `src/quest/plugins/q15t/src/meshstep.h`).
+word they were derived from (`kWords` in `src/quest/combat/meshstep_targets.h`).
 `tools/quest_apk_patch_map.tsv` maps each change the community patch repo makes to the code of ours that replaces it
 (#1187); `tools/quest_apk_patch_map.py` checks that every done row names a path and symbol that exist here, and checks
 against the patch repo in both directions only when given its checkout. No single index ties every pinned address to the

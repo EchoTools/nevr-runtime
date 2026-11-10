@@ -131,11 +131,15 @@ on-disk type that is, or by type 0, which names buffer 0 of every type. Since th
 told from an on-disk type alone, a type-0 entry is always taken to compete (`FirstFixedOverrideLabelFor`,
 `src/runtime/patch/resource_override.h`). An override registered after the mount follows the set's.
 
-KNOWN-WRONG #2343: every fixed override, a set's included, replaces its resource on one load per process. The override
-registry skips an entry once it has applied it, until a plugin calls `NEVR_ResetResourceOverrides`, and the runtime never
-calls that itself. A level loaded a second time in one process gets the game's own bytes for an overridden resource.
-`CachedOverrides.DISABLED_AFixedOverrideReplacesItsResourceOnEveryLoad` in `src/runtime/tests/test_resource_override.cpp`
-states what a level plugin needs. It is disabled until #2343 lands. The runtime registers a mounted set's overrides itself, at the mount, with the
+An override serves every load of its resource: a level loaded again in one process gets the set's bytes again. With
+several fixed entries for one key, the first registered serves every load and the later ones are passed over
+(`CachedOverrides.AFixedOverrideReplacesItsResourceOnEveryLoad`, `src/runtime/tests/test_resource_override.cpp`).
+
+KNOWN-WRONG #2345: each served load costs memory. A buffer-0 override gives the game a copy in its own heap and leaves
+the reader's own buffer allocated. Each load served leaves one buffer of the game's original size, so a level loaded N
+times leaves N per overridden buffer-0 resource. A buffer-1 payload is written in place and leaves none.
+
+The runtime registers a mounted set's overrides itself, at the mount, with the
 override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold
 replaces nothing and is counted as unmatched. An override is keyed by on-disk type: buffer 0 for a `Win10` type, at any
 size; buffer 1 for a `Win10GPU` type, served only when it is no larger than the game's. Overrides apply where the game
