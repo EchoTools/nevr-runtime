@@ -56,13 +56,17 @@ func TestHookedHealDecodesThroughTheSharedRuleAndActsOnUnlinkFirst(t *testing.T)
 		"return;",
 		"const bool rez = m.rez != 0;",
 		"if (m.kind == pbr::kDeclined) {",
-		"const unsigned n = declined.fetch_add(1, std::memory_order_relaxed) + 1;",
+		"const ULONGLONG now = GetTickCount64();",
+		"const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;",
+		"g_declined_at.store(now, std::memory_order_relaxed);",
 		"if (n <= 32) {",
+		"g_declined_written.store(n, std::memory_order_relaxed);",
 		"LogWarning(\"marker %.2f for %p/%u declined",
 		"} else if (n == 33) {",
-		"summarized.store(GetTickCount64(), std::memory_order_relaxed);",
+		"g_declined_line_at.store(now, std::memory_order_relaxed);",
 		"LogWarning(\"declined markers: %u so far; later ones are counted, not logged, and the count follows at most every 10 s\", n);",
-		"if (now - last >= 10000 && summarized.compare_exchange_strong(last, now, std::memory_order_relaxed))",
+		"ULONGLONG last = g_declined_line_at.load(std::memory_order_relaxed);",
+		"if (now - last >= 10000 && g_declined_line_at.compare_exchange_strong(last, now, std::memory_order_relaxed)) {",
 		"LogWarning(\"declined markers: %u so far; the ones since the last line are counted, not logged\", n);",
 		"        return;\n    }\n    if (m.kind == pbr::kUse) {",
 		"g_dr_permille = m.drPermille;",
@@ -72,6 +76,42 @@ func TestHookedHealDecodesThroughTheSharedRuleAndActsOnUnlinkFirst(t *testing.T)
 		"if (m.kind == pbr::kLink) {",
 		"AddBuff(cs, (uint16_t)index, static_cast<float>(m.drPermille) / 1000.0f, m.seconds, rez, false);",
 		"Real_Heal(cs, index, amount, a4, a5);")
+}
+
+// The declined-marker count reaches the log: the counters are shared by every decline (file scope, not per call), and the heal bubble
+// update, which runs on a client and on a server, flushes what the last Warning did not cover once no decline has come for 10 s.
+func TestTheDeclinedMarkerCountIsFlushedFromTheHealBubbleUpdate(t *testing.T) {
+	t.Parallel()
+	src := code(t, pcPowerboost)
+	for _, decl := range []string{
+		"std::atomic<unsigned> g_declined{0}, g_declined_written{0};",
+		"std::atomic<ULONGLONG> g_declined_at{0}, g_declined_line_at{0};",
+	} {
+		if strings.Count(src, decl) != 1 {
+			t.Errorf("the declined-marker counters are no longer one file-scope declaration: %q", decl)
+		}
+	}
+	ordered(t, "FlushDeclined", body(t, src, "void FlushDeclined("),
+		"const unsigned n = g_declined.load(std::memory_order_relaxed);",
+		"unsigned written = g_declined_written.load(std::memory_order_relaxed);",
+		"if (n <= written || now - g_declined_at.load(std::memory_order_relaxed) < 10000) return;",
+		"if (!g_declined_written.compare_exchange_strong(written, n, std::memory_order_relaxed)) return;",
+		"LogWarning(\"declined markers: %u in all; the ones since the last line are counted, not logged, and none has come for 10 s\", n);")
+	ordered(t, "Hooked_BubbleUpdate", body(t, src, "void __fastcall Hooked_BubbleUpdate("),
+		"SelfDamageTick(now);",
+		"FlushDeclined(now);")
+}
+
+// Each of the three paths that write a declined-marker line (the first 32, the 33rd, the later counted one) records what the line covers.
+func TestEveryDeclinedMarkerLineRecordsWhatItCovers(t *testing.T) {
+	t.Parallel()
+	fn := body(t, code(t, pcPowerboost), "void __fastcall Hooked_Heal(")
+	if got := strings.Count(fn, "g_declined_written.store(n, std::memory_order_relaxed);"); got != 3 {
+		t.Errorf("Hooked_Heal records what a declined-marker line covers %d times, want 3 (the first 32, the 33rd, the counted line)", got)
+	}
+	if strings.Contains(fn, "std::atomic") || strings.Contains(fn, "static ") {
+		t.Error("Hooked_Heal declares its own state: the declined-marker counters are the file-scope ones, shared by every decline")
+	}
 }
 
 func TestLinkStateBuildsItsMarkerThroughTheSharedRule(t *testing.T) {

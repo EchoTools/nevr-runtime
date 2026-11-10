@@ -384,6 +384,21 @@ void EndBuff(void *cs, uint16_t index) {
 
 void AddSelfDamage(void *cs, uint32_t index, unsigned seconds);
 
+// The declined markers (Hooked_Heal): how many there have been, how many the last written line covered, and when the last decline and
+// the last counted line came. Hooked_Heal runs on a client and on a server; FlushDeclined runs from the heal bubble update, which runs
+// on both while that hook is installed (when its prologue check fails, a decline after the last Warning is not flushed).
+std::atomic<unsigned> g_declined{0}, g_declined_written{0};
+std::atomic<ULONGLONG> g_declined_at{0}, g_declined_line_at{0};
+
+// Writes the count of declined markers the last Warning did not cover, once no decline has come for 10 s.
+void FlushDeclined(ULONGLONG now) {
+    const unsigned n = g_declined.load(std::memory_order_relaxed);
+    unsigned written = g_declined_written.load(std::memory_order_relaxed);
+    if (n <= written || now - g_declined_at.load(std::memory_order_relaxed) < 10000) return;
+    if (!g_declined_written.compare_exchange_strong(written, n, std::memory_order_relaxed)) return;
+    LogWarning("declined markers: %u in all; the ones since the last line are counted, not logged, and none has come for 10 s", n);
+}
+
 // nEVR port: a marker's kind (use, link, unlink, or a real heal), rez and the encoded value are pbr::Decode
 // (runtime/patch/powerboost_rules.h, #2339): his Marker, with the unlink band tested first as here. A use or link whose
 // rounded value leaves its band is declined: logged, never a buff and never a heal.
@@ -395,22 +410,25 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
     }
     const bool rez = m.rez != 0;
     if (m.kind == pbr::kDeclined) {
-        // The first 32 are each written. The 33rd writes one Warning that says the rest are counted, not logged, and after it a
-        // Warning with the count goes out on the first decline at least 10 s after the last one. This file has no shutdown path to write
-        // a final count, so the ones since the last Warning are reported by the next decline.
-        static std::atomic<unsigned> declined{0};
-        static std::atomic<ULONGLONG> summarized{0};
-        const unsigned n = declined.fetch_add(1, std::memory_order_relaxed) + 1;
+        // The first 32 are each written. The 33rd writes one Warning that says the rest are counted, not logged; after it a Warning
+        // with the count goes out on the first decline at least 10 s after the last Warning, and FlushDeclined (the heal bubble
+        // update, both sides) writes the count once no decline has come for 10 s.
+        const ULONGLONG now = GetTickCount64();
+        const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;
+        g_declined_at.store(now, std::memory_order_relaxed);
         if (n <= 32) {
+            g_declined_written.store(n, std::memory_order_relaxed);
             LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
         } else if (n == 33) {
-            summarized.store(GetTickCount64(), std::memory_order_relaxed);
+            g_declined_line_at.store(now, std::memory_order_relaxed);
+            g_declined_written.store(n, std::memory_order_relaxed);
             LogWarning("declined markers: %u so far; later ones are counted, not logged, and the count follows at most every 10 s", n);
         } else {
-            const ULONGLONG now = GetTickCount64();
-            ULONGLONG last = summarized.load(std::memory_order_relaxed);
-            if (now - last >= 10000 && summarized.compare_exchange_strong(last, now, std::memory_order_relaxed))
+            ULONGLONG last = g_declined_line_at.load(std::memory_order_relaxed);
+            if (now - last >= 10000 && g_declined_line_at.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+                g_declined_written.store(n, std::memory_order_relaxed);
                 LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
+            }
         }
         return;
     }
@@ -2278,6 +2296,7 @@ void __fastcall Hooked_BubbleUpdate(void *cs) {
     MedigunTick(cs, now);
     ActivateRemote(cs, now);
     SelfDamageTick(now);
+    FlushDeclined(now);
     if (!g_server) PlaceBeams(now);
     // A MEDIGUN bubble whose owner's beam is off ends now (this frame's update sees it past its duration).
     MediBubble list[16];
