@@ -268,7 +268,7 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                  * A fixed replacement outranks every transform of the same key whatever the registration order (#1479),
                  * so transforms are offered only when none matches. Every match is recorded, so a shutdown can tell an
                  * entry passed over from one never requested.
-                 * KNOWN-WRONG #ISSUE-TBD: the cost of every load. A buffer-0 replacement points the block at a copy in
+                 * KNOWN-WRONG #2345: the cost of every load. A buffer-0 replacement points the block at a copy in
                  * the game's heap and leaves the reader's own buffer alone (game_buffer.h: the reader may own it), so
                  * one buffer of orig_bytes stays allocated for each load served, a level loaded N times leaving N of
                  * them per overridden buffer-0 resource. Serving one load per entry would cap that at one per entry,

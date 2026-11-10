@@ -1225,7 +1225,7 @@ bool StillAllocated(const void* p) {
   return false;
 }
 
-// KNOWN-WRONG #ISSUE-TBD: a buffer-0 replacement points the block at a copy in the game's heap and leaves the reader's
+// KNOWN-WRONG #2345: a buffer-0 replacement points the block at a copy in the game's heap and leaves the reader's
 // own buffer alone (game_buffer.h: the reader may own it), so nothing frees it: one buffer of orig_bytes stays
 // allocated, unreferenced by the block, for each load served. Serving one load per entry would cap it at one per
 // entry and lose the override on a level reload (#2343); transforms already pay it on every load. This test pins the cost so a

@@ -42,7 +42,7 @@ void InstallResourceOverride();
 
 /// Register an embedded data override (data pointer must outlive the hook). It serves every load of its resource; with
 /// several fixed entries for one key, the first registered serves and the later ones are passed over (#2343).
-/// KNOWN-WRONG #ISSUE-TBD: each buffer-0 load served leaves the reader's own buffer (orig_bytes) allocated, since only
+/// KNOWN-WRONG #2345: each buffer-0 load served leaves the reader's own buffer (orig_bytes) allocated, since only
 /// the copy is handed to the game and the original is not freed (game_buffer.h); a level loaded N times leaves N per
 /// overridden buffer-0 resource, as a transform's answer already does. A buffer-1 payload is written in place and
 /// leaves none. The type names the buffer replaced (resource_buffer_key.h): 0, the logical type or Make(<logical>,
