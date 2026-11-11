@@ -77,6 +77,15 @@ void ExpectRepeatedBytesAt(const std::vector<uint8_t>& bytes, size_t offset, siz
 
 void IgnoreGameLog(EchoVR::LogLevel, UINT64, const CHAR*, va_list) {}
 
+std::string g_capturedLog;
+
+void CaptureGameLog(EchoVR::LogLevel, UINT64, const CHAR* format, va_list args) {
+  char line[1024];
+  vsnprintf(line, sizeof(line), format, args);
+  g_capturedLog += line;
+  g_capturedLog += '\n';
+}
+
 class ScopedGameLogger {
  public:
   ScopedGameLogger() : previous_(EchoVR::WriteLog) {
@@ -166,6 +175,66 @@ TEST(MessagesEncoding, RegistrationSuccessHasExpectedFixedLayout) {
   EXPECT_EQ(encoded.data[10], 113U);
   EXPECT_EQ(encoded.data[11], 9U);
   EXPECT_EQ(ReadLe64(encoded.data, 12), 0U);
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithAnIpv6AddressWritesZerosAndWarns) {
+  g_capturedLog.clear();
+  const auto previous = EchoVR::WriteLog;
+  EchoVR::WriteLog = &CaptureGameLog;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(0x1122334455667788ULL);
+  message.set_external_ip_address("2001:db8::1");
+  const EncodedMessage encoded = EncodeRegistrationSuccess(message);
+  EchoVR::WriteLog = previous;
+
+  ASSERT_EQ(encoded.size(), 20U);
+  ExpectRepeatedBytesAt(encoded.data, 8, 4, 0);
+  EXPECT_NE(g_capturedLog.find("server_id=1234605616436508552"), std::string::npos) << g_capturedLog;
+  EXPECT_NE(g_capturedLog.find("family=ipv6"), std::string::npos) << g_capturedLog;
+  EXPECT_NE(g_capturedLog.find("external_ip_address=2001:db8::1"), std::string::npos) << g_capturedLog;
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithAnInvalidAddressWritesZerosAndWarns) {
+  g_capturedLog.clear();
+  const auto previous = EchoVR::WriteLog;
+  EchoVR::WriteLog = &CaptureGameLog;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("not-an-ip");
+  const EncodedMessage encoded = EncodeRegistrationSuccess(message);
+  EchoVR::WriteLog = previous;
+
+  ASSERT_EQ(encoded.size(), 20U);
+  ExpectRepeatedBytesAt(encoded.data, 8, 4, 0);
+  EXPECT_NE(g_capturedLog.find("family=invalid"), std::string::npos) << g_capturedLog;
+  EXPECT_NE(g_capturedLog.find("external_ip_address=not-an-ip"), std::string::npos) << g_capturedLog;
+}
+
+TEST(MessagesEncoding, RegistrationSuccessLogsAnAddressOnOneLineAndBounded) {
+  g_capturedLog.clear();
+  const auto previous = EchoVR::WriteLog;
+  EchoVR::WriteLog = &CaptureGameLog;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("a\nb" + std::string(100, 'x'));
+  (void)EncodeRegistrationSuccess(message);
+  EchoVR::WriteLog = previous;
+
+  EXPECT_NE(g_capturedLog.find("external_ip_address=a?b" + std::string(61, 'x') + " "), std::string::npos)
+      << g_capturedLog;
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithAnIpv4AddressLogsNothing) {
+  g_capturedLog.clear();
+  const auto previous = EchoVR::WriteLog;
+  EchoVR::WriteLog = &CaptureGameLog;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("203.0.113.9");
+  (void)EncodeRegistrationSuccess(message);
+  EchoVR::WriteLog = previous;
+
+  EXPECT_TRUE(g_capturedLog.empty()) << g_capturedLog;
 }
 
 TEST(MessagesEncoding, LobbySessionStartV4CarriesFixedFieldsAndSettingsPayload) {

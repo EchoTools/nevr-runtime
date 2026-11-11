@@ -460,7 +460,19 @@ EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegist
     result.data.push_back(static_cast<uint8_t>((addr.s_addr >> 16) & 0xFF));
     result.data.push_back(static_cast<uint8_t>((addr.s_addr >> 24) & 0xFF));
   } else {
-    // Invalid IP, write zeros
+    // The game's own field is 4 bytes, so a non-IPv4 address is written as zeros. Say so: the
+    // operator would otherwise see a server that registered with 0.0.0.0 and no reason.
+    const std::string& external = msg.external_ip_address();
+    struct in6_addr addr6;
+    const char* family = inet_pton(AF_INET6, external.c_str(), &addr6) == 1 ? "ipv6" : "invalid";
+    std::string printable = external.substr(0, 64);
+    for (char& c : printable) {
+      if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) c = '?';
+    }
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] registration success external address is not IPv4 server_id=%llu family=%s"
+        " external_ip_address=%s — the game's 4-byte field is written as 0.0.0.0",
+        static_cast<unsigned long long>(msg.server_id()), family, printable.c_str());
     for (int i = 0; i < 4; i++) {
       result.data.push_back(0);
     }
