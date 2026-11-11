@@ -38,7 +38,7 @@ One family, three cases:
 
 | Surface | New names |
 | --- | --- |
-| Directory, source file | lower case, words joined by `_` (`src/runtime/server/gameserver.cpp`) |
+| Directory, source file | lower case, whole words joined by `_`; a component's files are its name plus one role suffix ("Component names, file roles and placement") |
 | CMake target | `nevr_<name>` (`nevr_core`, `nevr_abi`, `nevr_runtime`) |
 | Namespace | `nevr` or `nevr_<area>` (`nevr_cfg`, `nevr_plugincfg`) |
 | Macro, environment variable | `NEVR_<NAME>` |
@@ -56,7 +56,7 @@ that docs and config examples carry are written out in `tools/tests/test_naming.
 
 Markdown. A file name is kebab-case, except the root scaffolding names that tools and GitHub look for by
 exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, and
-the like) and the date prefixes and ADR numbers already in the tree. A heading is a descriptive phrase in
+the like) and the date prefixes and ADR numbers already in the tree and a component's doc, which carries the component's name exactly (see "Directories"). A heading is a descriptive phrase in
 sentence case, as in `docs/standards/` and `docs/adr/` (an ADR's H1 is `ADR NNNN: <phrase>`).
 
 ## The read contract at the top of an ADR
@@ -89,6 +89,124 @@ A new ADR carries the block, with `read_via` naming its own file. Nothing in thi
 check reads the block, and the hook that warns on a partial read of a file that declares one runs on one maintainer's
 machine, outside the repository. For a reader without that hook, this section is the whole rule: read the ADR to its
 last line, with the `read_via` command, before relying on any part of it.
+
+## Component names, file roles and placement
+
+A **component** is one behaviour the runtime adds to or changes in the game, with its own switch, its own log events or
+its own hook: a module of `src/quest/combat/` (ADR 0046 rule 1), a patch in `src/runtime/patch/`, an EchoCombat feature in
+`src/runtime/combat/`. Its name is the stem of its files, the last component of its namespace, the middle of its log
+events and its config key, so a grep for the name finds all of it.
+
+### The name
+
+- A component name MUST be lower-case whole words joined by `_` (`impact_sound`, `drone_muzzle`, `refresh_rate`). It
+  MUST NOT squash words together (`impactsnd`, `dronemuzzle`, `tablestep`) or shorten a word (`snd`, `inst`, `wd`,
+  `ctx`, `pfx`).
+- An abbreviation MAY be a word of the name only when it passes one of two tests, and the review states which:
+  1. **The game spells it that way.** It is a whole word, in that spelling, of the game's own symbol, script element or
+     resource for the thing the component acts on (`bvh` from `CBVHTree`, `ai` from `CR15NetAIScenarios`), and the
+     component doc cites the symbol.
+  2. **It is on this list**, of terms with one meaning in general computing: `ai`, `bvh`, `cdn`, `elf`, `got`, `gpu`,
+     `hud`, `id`, `obb`, `tls`, `ui`, `uri`, `url`, `voip`, `xpid`. A term is added to the list in a change to this
+     section, never in the change that first uses it.
+  A word of a third party's product name (EchoCombat's `ec`, VeilNet, DroneFix, PowerBoost; the reference build's
+  `afk_*`) passes neither test.
+- A component has **one name on PC and Quest.** Where both platforms carry it, every surface spells it the same way:
+  the file stems (`src/runtime/<area>/<name>.cpp`, `src/quest/<area>/<name>.cpp`), the shared rules header
+  (`<name>_rules.h`), the namespace's last component (`nevr_quest::combat::<name>`), the log events
+  (`combat_<name>_*`), the config key (`combat.<name>`, and `combat.<name>_<option>` for its options), the doc
+  (`docs/quest/combat/<name>.md`), the mutant file (`mutants.d/<name>.sh`) and the tests (`<name>_test.cpp`, and
+  `<name>_rules_test.cpp` for the shared rules header).
+- A component's name states the area once: inside `src/quest/combat/` it is `music`, not `combat_music`. The area's own
+  infrastructure, which is no component (`combat_install`, `combat_tick`, `combat_level`), carries the area's name.
+- The name a component had upstream (a q15t-upstream module, an EchoCombat plugin file, a reference-build `afk_*` file)
+  MUST NOT be a stem, namespace, event, key or doc name. It survives in one place: the origin note ADR 0046 rule 9
+  requires at the top of the component's header, which cites the upstream file and line at its commit. A string the
+  game's content or another binary resolves by name (an export such as `re33_ec_page`, a config key a released build
+  reads, a symbol a script calls) keeps its spelling; the exports rule above already says an export is never renamed
+  in place.
+- A config key that a released `vX.Y.Z` tag reads is renamed only with a former-key step: the old key is no longer
+  read, and finding it writes one Warning that names the new key and says the old value was not applied, the same rule
+  ADR 0046 rule 4 sets for a former switch file. The step goes with the rename; an issue marked `KNOWN-WRONG` tracks
+  its removal.
+- Two names in one directory MUST NOT be equal once case, `_` and `-` are ignored (`table_step.cpp` beside
+  `tablestep.cpp`, `tools/package-release/` beside `tools/package_release.py`): each reads as a typo of the other. Files
+  that share a stem and differ in extension (`music.h`, `music.cpp`) are one name.
+
+### File roles
+
+A component's files are its name plus at most one role suffix from this list. A suffix not on the list is a word of
+the name and has to make sense as one.
+
+| Suffix | Role | Holds | Never holds |
+| --- | --- | --- | --- |
+| (none) `<name>.h`, `<name>.cpp` | the platform half | the hooks, the install, the reads of game memory, the log lines | a rule a host test could drive without the game |
+| `<name>_rules.h` | the decisions | pure C++: what the component decides from values it is handed. Header only | a read of game memory, a call into the game or the OS, or a log write, other than through a seam the caller passes (an `Env`, an `Ops`); an address |
+| `<name>_targets.h` | the pins | the game's addresses, slots and instruction words the component hooks or reads, with the compile-time checks that tie each offset to its word | logic |
+| `_entry.inc` | a reviewed assembly entry | the assembly a manager slot enters (ADR 0046 rule 2), included at global scope by the platform half and by its qemu test, so the test runs the text the build ships | C++ |
+
+- `<name>_rules.h` is the only suffix for the decisions, whether one platform uses them or both. A component has at most one
+  `<name>_rules.h`. `<name>_core.h` is not a role suffix.
+- `hook` is a word, not a role. The platform half that holds a component's hook is the bare name on both platforms
+  (`src/runtime/patch/splash_skip.cpp`, `src/quest/sentinel/ui_texture_mips.cpp`). A component whose name is a hook
+  mechanism keeps the word (`got_hook`, `dll_load_hook`). `swap`, `layout`, `policy`, `model` and `check` are words too:
+  each has to be part of a name that says what the file holds.
+- `_entry.inc` is the only suffix for an assembly entry. `_thunk.inc` is not a role suffix (`thunk` is the manager's
+  C++ wrapper, `callback_thunk.h`).
+- A file MUST NOT carry the platform in its stem (`_quest`, `_win`, `_pc`, `_android`): the directory names the
+  platform, and includes are path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of
+  one component. A suffix that names a binary format or a binary's role (`_pe`, `_elf`, `_host`) is a word, not a
+  platform.
+- A test is named for the stem it tests. A C++ test is `<stem>_test.cpp`; a freestanding qemu test is
+  `<stem>_qemu.cpp`; a Python test is `test_<stem>.py` and a Go test `<stem>_test.go`, as their test runners require.
+
+### Placement
+
+- A `<name>_rules.h` shared by PC and Quest lives in `src/runtime/<area>/`, in the directory of the PC half that includes it,
+  by the membership test of that directory (`AGENTS.md`, "Architecture"): `splash_skip_rules.h` beside `splash_skip.cpp`
+  in `patch/`, `<name>_rules.h` beside the drone code in `combat/`. A rule with no PC half lives with its only
+  platform half.
+- The Quest half of a shared component lives in the Quest directory of its area and takes the component's name:
+  `src/quest/sentinel/ui_texture_mips.cpp` for `src/runtime/patch/ui_texture_mips_rules.h`.
+- A PC file ported whole from an upstream file that holds several components (EchoCombat's `dronefix.cpp`) is not split
+  by a rename: it takes the name of the player-facing feature it implements, which is also its config key
+  (`combat.<feature>`, so `<feature>.cpp`), and each component in it is named, by its component name, in a section comment, so a
+  grep for the name finds its PC code. Splitting it is a change of its own.
+
+### Directories
+
+- A directory under `src/`, `sdk/`, `installer/` and `tools/` is lower case, words joined by `_`. Two kinds keep the
+  name an outside tool gives them: a vcpkg overlay port (`src/quest/vcpkg-overlay-ports/<port>`, named as the port is)
+  and a Go command (`tools/cmd/<command>`, named as the binary is).
+- A component's Markdown doc is `docs/<area>/<name>.md` with the component's name exactly, `_` included: one spelling
+  for the name everywhere outranks the kebab-case rule for Markdown, which every other document keeps.
+
+### What checks it
+
+`tools/tests/test_naming.py` checks:
+
+- **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
+  removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
+  only shrinks, and an entry that no longer collides fails the test until it is removed.
+- **N-ROLES.** No stem ends in `_core` or `_thunk` in `src/`; no stem under `src/quest/` ends in `_quest` and none under
+  `src/runtime/` ends in `_win` or `_pc`; no C++ file under `src/` is named `test_<stem>.cpp`. Known breaks:
+  `KNOWN_ROLE_BREAKS`, same form; an entry MAY be a glob (`src/runtime/tests/test_*.cpp`), so one marker covers a
+  directory that a single rename unit fixes.
+- **N-COMBAT.** Every file in `src/quest/combat/`, `src/quest/combat/mutants.d/`, `src/quest/combat/check/` and
+  `docs/quest/combat/` (its `adr/` aside, and the scaffolding names `CMakeLists.txt`, `README.md`, `mutants.sh`) has a stem that is a name in `COMBAT_NAMES` (the components and the area's infrastructure), optionally with a
+  role suffix from the table (or, for a mutant file, `_<n>`). A new module is added to `COMBAT_NAMES` in the change
+  that creates it, where the review applies the name rule. The names that break the rule today are in the list with a
+  `KNOWN-WRONG #<issue>` marker.
+- **N-RULES-HOME.** Every `src/runtime/**/<x>_rules.h` that a file under `src/quest/` includes has a non-test file under
+  `src/runtime/` that includes it in the same directory, and a non-test file under `src/quest/` whose stem is `<x>`.
+  A component whose hook is shared with another component's file on both platforms is listed with the
+  reason (`lobby_failure_message`: its hook is the lobby-full hook of `lobby_full_backoff`). Known breaks: same form.
+- **N-DIRS.** No directory under `src/`, `sdk/`, `installer/` or `tools/` has a `-` in its name, the two kinds above
+  aside. Known breaks: `KNOWN_DIR_BREAKS`, same form.
+
+`tools/check_known_wrong.py` already requires every `KNOWN-WRONG #<n>` marker to name an open issue. The review checks
+what no test reads: that a word is whole, that an abbreviation passes its test, and that one component has one name
+across platforms where its files do not include a shared header.
 
 ## The plugin and module C ABI prefix: `Nevr`, with `Nvr` deprecated
 
