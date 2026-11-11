@@ -8,7 +8,7 @@ Files: `src/quest/combat/dronekill.{h,cpp}`, `dronekill_core.h` (the platform-fr
 (the per-thread words); tests `src/quest/tests/dronekill_test.cpp` (`just test-quest-combat dronekill`), the pins in `src/quest/tests/got_pinned_test.cpp`
 (`just test-quest-hooks-pinned`); mutants `src/quest/combat/mutants.d/dronekill{,_b,_c,_d,_e,_f}.sh`.
 
-Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and afk_dronekill_core.h (kotorvr's q15t-upstream), which port EchoCombat
+Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and afk_dronekill_core.h (kotorvr's echoquest-combat), which port EchoCombat
 `c14c3e0a` `plugin/dronefix.cpp` (LockedOn df 805-827, ChaseTarget df 1059-1095; the groups df 434-560, TouchLive df 778-793, the touch rule
 df 731-835, the gun table df 700-729, the chase table df 1037-1095).
 
@@ -170,7 +170,7 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
   the game tick runs inside that window; the reference build's net tick ran in `recvfrom`) - then every `combat_dronekill_tick` Warning says `waiting_invoke_immediate_0>0`.
 - A `combat_dronekill_touch` `"step":"locked_on"` for a drone that is dead, or a grabbable drone after its first shot: the lock-on binding is wrong.
 - Any crash with a frame in `dronekill`: a read path that is not guarded (all are `SafeRead`).
-- In an Echo Arena match on the combat APK: any `combat_dronekill_*` line other than `combat_dronekill_scope` with `"in_combat":0`, or a drone, a
+- In an Echo Arena match on the combat APK: any `combat_dronekill_*` line other than `combat_dronekill_scope` with `"in_combat":0` and the process-end `combat_dronekill_stats`, or a drone, a
   grabbable object or a bullet that behaves differently from the arena APK: the scope does not hold.
 
 ## Lines (sentinel log)
@@ -180,6 +180,9 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
   `component_lookups`; `"result":"off"` (`off_config`); `"result":"refused"` with `reason` (the status token), `why` and the consequence (Error).
 - `combat_dronekill_link`: the kill feed is registered with ec. `combat_dronekill_tick_first`: the frame tick runs.
 - `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change.
+- `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`).
+- `combat_dronekill_expired` `{"index":n,"group":n,"tid":n}`: Info, the drone's end: its damageable went off while its group was live. A drone that K killed and then ends writes none and is not counted. The first 16 of a run.
+- `combat_dronekill_log_cap` `{"lines":"expired","cap":16}`: Warning, once, written by the drone end past the cap; the stats record goes on counting.
 - `combat_dronekill_function` (Error: a function missing or not at its pin), `combat_dronekill_comparator` (Warning), `combat_dronekill_chase_off` (Error).
 - Acting lines, each kind capped (note 24, enter 160, off 64, K 48, touch/gun 96, chase 8) with one `combat_dronekill_cap` line at the cap:
   `combat_dronekill_release`, `_component`, `_note` (why a drone Enter was not tracked), `_reenabled`, `_k`, `_off`, `_tick` (Warning when due
@@ -192,7 +195,7 @@ What a headset run must show, on the combat APK with `combat.dronekill` absent (
 1. Boot: four `combat_dronekill_hook` lines with `"status":"installed"`, `combat_dronekill_install` `"result":"installed"`, `combat_dronekill_link`,
    `combat_dronekill_tick_first`, and a `combat_install_module` record for dronekill with `"outcome":"installed"`.
 2. An arena match: one `combat_dronekill_scope` `"in_combat":0` (or none, if the first ask already found no combat map: the scope starts out of
-   combat), no other `combat_dronekill_*` line; its call counts on the next change are the arena rates (Enter and Actor per script node).
+   combat), no other `combat_dronekill_*` line except the process-end `combat_dronekill_stats` (`"final":1`); its call counts on the next change are the arena rates (Enter and Actor per script node).
 3. A combat match against drones with an EC server: `combat_dronekill_scope` `"in_combat":1`, `combat_dronekill_release` and `_component` lines at a
    drone's spawn, `_touch` `deployed` / `on_again` / `locked_on`, `_gun` `mirrored`, `_chase`, and with the server's 'K' datagrams `_k`
    `"result":"shut_down"` then `_off` `"result":"OFF"`.

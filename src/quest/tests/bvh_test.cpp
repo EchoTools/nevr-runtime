@@ -403,7 +403,7 @@ void SwitchesDecideWhatIsInstalled() {
     QCHECK(Count(std::string("\"level\":\"error\"")) == 0);
     End();
   }
-  {  // the shipped default is on (q15t-upstream's): Switches{} installs the module, gate and touch included
+  {  // the shipped default is on (echoquest-combat's): Switches{} installs the module, gate and touch included
     Begin();
     Build();
     const nevr_quest::combat::ModuleResult r = bvh::Install(bvh::Switches{});

@@ -1,7 +1,7 @@
 // The platform-free part of dronekill (dronekill.h): the libr15 shape checks (vtable thunks / bodies), the drone group table (rules R1' / R2 /
 // R3), the F3 touch table, the F5 gun table and the F7 chase table. Nothing here calls the game or reads game memory.
 //
-// Origin. The reference build's `runtime/native/afkxr/afk_dronekill_core.h` (kotorvr's q15t-upstream; 325 of this file's 354 distinct lines
+// Origin. The reference build's `runtime/native/afkxr/afk_dronekill_core.h` (kotorvr's echoquest-combat; 325 of this file's 354 distinct lines
 // are that file's), which ports EchoCombat `c14c3e0a` `plugin/dronefix.cpp` ("df"): the groups df 434-560 (Newest df 461-468), TouchLive
 // df 778-793, the touch rule df 731-835 (Deployed df 772, LockedOn df 810-826), the gun table df 700-729 and the chase table df 1037-1095
 // (df 1077-1082). The differences from that file: the namespace, the 'K' ring (the reference build's recvfrom thread pushes into it; here
@@ -12,10 +12,35 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "runtime/patch/dronekill_rules.h"  // the drone kill rules, shared with PC (#2359)
+
 namespace nevr_quest::combat::dronekill::dk {
 
-constexpr uint64_t kDroneActor = 0x10e40287a9bf5a13ull;    // the drone actor's symbol (upstream)
-constexpr uint64_t kDamageable = 0xc9dc08cfc2f5920full;    // R14NetDamageable: its ON = a drone release = a new group
+// The drone kill rules are one header, shared with PC (runtime/patch/dronekill_rules.h, #2359): the symbols, the chase
+// velocity, the gun table and the group sizes and windows. What follows in this file is the Quest's own: the shape checks,
+// the touch table, the chase slot table, the due bits and the table's Quest payload.
+using ::nevr_dronekill::kDroneActor;   // the drone actor's symbol (EC 196)
+using ::nevr_dronekill::kDamageable;   // R14NetDamageable: its ON = a drone release = a new group (EC 214)
+using ::nevr_dronekill::kNcaModel;
+using ::nevr_dronekill::kGun;
+using ::nevr_dronekill::kSatellite;
+using ::nevr_dronekill::kPort;
+using ::nevr_dronekill::kGroups;
+using ::nevr_dronekill::kGuns;
+using ::nevr_dronekill::kGroupComps;
+using ::nevr_dronekill::kPending;
+using ::nevr_dronekill::kJoinMs;
+using ::nevr_dronekill::kPendingMs;
+using ::nevr_dronekill::kSwallowMs;
+using ::nevr_dronekill::GunTable;
+using ::nevr_dronekill::HideGunOnKill;
+using ::nevr_dronekill::ChaseVelocity;
+using ::nevr_dronekill::kChaseSpeed;
+using ::nevr_dronekill::kChaseDistance;
+using ::nevr_dronekill::kChaseGain;
+using ::nevr_dronekill::kChaseAbove;
+constexpr uint64_t kR14Touch = ::nevr_dronekill::kTouchInteract;   // the Quest's name for it (the touch table's tests use it)
+constexpr uint64_t kDueMs = 2000;                                  // a due bit older than this expires (unchanged)
 
 // libr15 4987566 (both md5 pins; a source-build test reads every component system's vtable in both files):
 // vtable slot +0x1b8 = Component(SActor, CSymbol64), 7 words, byte-identical in 286 of 287 systems: it calls slot
@@ -125,21 +150,15 @@ inline MaskAt MaskOffsets(const uint32_t* en) { return MaskAt{ Imm12(en[3]) * 8,
 // and, with `due`, every component of it due for a disable. R3: a component of a dead group younger than kSwallowMs
 // that goes ON again is due again (it is disabled after the game's own Enter: by effect, DK-3 kept). Due bits expire
 // kDueMs after they were set (DK1-2). The caller holds its own lock around every call (DK-5: never across a game call).
-constexpr uint64_t kJoinMs = 5000, kPendingMs = 3000, kSwallowMs = 25000, kDueMs = 2000;
-constexpr int kGroupComps = 20, kGroups = 8, kPending = 20;
 
 // owner = [system+0x80] read at the Enter that recorded it; space / actor = Actor()'s out-parameters there (0 = unknown)
-struct Comp { uint64_t system = 0, sysSym = 0, compSym = 0; uint32_t handle = 0; uint64_t ms = 0; uint64_t actor = 0, space = 0, owner = 0; };
-struct Group {
-    uint64_t system = 0;   // the damageable system
-    uint32_t handle = 0;   // its handle (index = the low 16 bits)
-    uint64_t ms = 0, actor = 0;
-    int n = 0, overflow = 0, number = 0;   // number 0 = a free slot
-    bool dead = false;     // a 'K' named it
-    uint32_t due = 0;      // bit i = comps[i] is to be disabled
-    uint64_t dueMs = 0;
-    Comp comps[kGroupComps];
-};
+// The Quest's payload on the shared table (#2359): a component's symbols, game space and owner word, and a group's log
+// number, overflow count and due bits. The table itself (release, join, pending, swallow, kill pick, dead marking) is
+// runtime/patch/dronekill_rules.h, the one definition PC calls too.
+struct QComp { uint64_t sysSym = 0, compSym = 0, space = 0, owner = 0; };
+struct QGroup { int number = 0, overflow = 0; uint32_t due = 0; uint64_t dueMs = 0; };
+using Comp = ::nevr_dronekill::Comp<QComp>;
+using Group = ::nevr_dronekill::Group<QComp, QGroup>;
 // group 0 = none (the component went to the pending list); again = R3: a dead group's component, due again
 struct Joined { int group; int pendingJoined; bool pending; bool again; };
 struct Due { Comp c; int number; int idx; };
@@ -147,161 +166,107 @@ struct Due { Comp c; int number; int idx; };
 inline int Bits(uint32_t v) { int n = 0; for (; v; v &= v - 1) ++n; return n; }
 
 struct Table {
-    Group groups[kGroups];
-    int made = 0;          // groups so far = the last group's number
-    Comp pending[kPending];
-    int pendingN = 0;
-    uint64_t pendingDropped = 0;
-    uint64_t space = 0;    // the game space of the table's components (0 = none yet)
-    uint32_t spaceClears = 0;
-    uint64_t expired = 0;  // due bits that ran out (kDueMs)
+    ::nevr_dronekill::Groups<QComp, QGroup> t;   // the shared group table: groups, the pending list, the space
+    int made = 0;                                 // groups so far = the last group's number (QGroup::number)
+    uint64_t expired = 0;                         // due bits that ran out (kDueMs)
 
-    void Clear() {
-        for (auto& g : groups) g = Group();
-        pendingN = 0;
-    }
-    Group* Newest() {   // the last group made (any state; tests and lines)
+    void Clear() { t.Clear(); }                   // groups and pending list; the space and its clears stay
+    Group* Newest() {                             // the last group made (any state; tests and lines)
         Group* best = nullptr;
-        for (auto& g : groups) if (g.number && (!best || g.number > best->number)) best = &g;
+        for (auto& g : t.g) if (g.used && (!best || g.x.number > best->x.number)) best = &g;
         return best;
     }
     Group* ByNumber(int number) {
-        for (auto& g : groups) if (number && g.number == number) return &g;
+        for (auto& g : t.g) if (number && g.x.number == number) return &g;
         return nullptr;
     }
-    // upstream Newest(actor): this actor's live group, else the newest live one younger than kJoinMs
+    // upstream Newest(actor): this actor's live group, else the newest live one younger than kJoinMs (the shared rule, D7)
     Group* Newest(uint64_t actor, uint64_t nowMs) {
-        Group* best = nullptr;
-        if (actor)
-            for (auto& g : groups)
-                if (g.number && !g.dead && g.actor == actor && (!best || g.number > best->number)) best = &g;
-        if (best) return best;
-        for (auto& g : groups)
-            if (g.number && !g.dead && nowMs - g.ms < kJoinMs && (!best || g.number > best->number)) best = &g;
-        return best;
-    }
-    static void Add(Group& g, const Comp& c) {   // upstream AddComp: once per (system, handle)
-        for (int i = 0; i < g.n; ++i) if (g.comps[i].system == c.system && g.comps[i].handle == c.handle) return;
-        if (g.n < kGroupComps) g.comps[g.n++] = c; else ++g.overflow;
+        const int s = t.Newest(actor, nowMs);
+        return s < 0 ? nullptr : &t.g[s];
     }
 
     Joined On(uint64_t system, uint64_t sysSym, uint64_t compSym, uint32_t handle, uint64_t nowMs, uint64_t actor = 0,
               uint64_t spaceNow = 0, uint64_t owner = 0) {
-        if (spaceNow && space && spaceNow != space) { Clear(); ++spaceClears; }
-        if (spaceNow) space = spaceNow;
-        Comp c = { system, sysSym, compSym, handle, nowMs };
-        c.actor = actor;
-        c.space = spaceNow;
-        c.owner = owner;
+        const QComp x{ sysSym, compSym, spaceNow, owner };
         if (sysSym == kDamageable) {
-            Group* g = nullptr;
-            for (auto& x : groups) if (x.number && x.system == system && x.handle == handle) { g = &x; break; }   // C2
-            if (!g) for (auto& x : groups) if (!x.number) { g = &x; break; }
-            if (!g) { g = &groups[0]; for (auto& x : groups) if (x.number < g->number) g = &x; }   // the oldest
-            *g = Group();
-            g->system = system;
-            g->handle = handle;
-            g->ms = nowMs;
-            g->actor = actor;
-            g->number = ++made;
-            g->comps[g->n++] = c;
-            int joined = 0, kept = 0;
-            for (int i = 0; i < pendingN; ++i) {
-                const Comp& p = pending[i];
-                if (nowMs - p.ms >= kPendingMs) continue;
-                if (!actor || !p.actor || p.actor == actor) { Add(*g, p); ++joined; }
-                else pending[kept++] = p;                       // another drone's, released next
-            }
-            pendingN = kept;
-            return { g->number, joined, false, false };
+            const auto r = t.Release(system, handle, actor, spaceNow, nowMs, x);
+            Group& g = t.g[r.group];
+            g.x.number = ++made;
+            g.x.overflow += r.full;
+            return { g.x.number, r.pendingJoined, false, false };
         }
-        for (auto& g : groups) {   // R3
-            if (!g.number || !g.dead || nowMs - g.ms >= kSwallowMs) continue;
-            for (int i = 0; i < g.n; ++i)
-                if (g.comps[i].system == system && g.comps[i].handle == handle) {
-                    g.due |= 1u << i;
-                    g.dueMs = nowMs;
-                    return { g.number, 0, false, true };
-                }
+        const auto r = t.Enable(system, handle, actor, spaceNow, nowMs, true, x);
+        if (r.swallowed) {   // R3: a dead group's component is due again
+            Group& g = t.g[r.group];
+            g.x.due |= 1u << r.comp;
+            g.x.dueMs = nowMs;
+            return { g.x.number, 0, false, true };
         }
-        Group* g = Newest(actor, nowMs);
-        if (g && (!actor || !g->actor || g->actor == actor)) {
-            Add(*g, c);
-            return { g->number, 0, false, false };
-        }
-        if (pendingN == kPending) {   // drop the oldest
-            memmove(pending, pending + 1, sizeof(Comp) * (kPending - 1));
-            --pendingN;
-            ++pendingDropped;
-        }
-        pending[pendingN++] = c;
-        return { 0, 0, true, false };
+        if (r.pending) return { 0, 0, true, false };
+        t.g[r.group].x.overflow += r.full;
+        return { t.g[r.group].x.number, 0, false, false };
+    }
+    // D11: a drone node turned its damageable off (the drone's end). Returns the group's number, 0 none. Only a live group is an
+    // end (MarkDead's wasAlive): a drone that K killed and then ends was already dead, so it is not counted again (returns 0).
+    int Off(uint64_t system, uint32_t handle) {
+        const auto m = t.MarkDead(system, handle);
+        return m.group < 0 || !m.wasAlive ? 0 : t.g[m.group].x.number;
     }
 
-    // 'K' for a damageable index: the newest live group whose index's low 16 bits match (upstream's compare). Marks it
-    // dead (and with `due` every component due) and returns it; null = no live group has that index.
+    // 'K' for a damageable index: the first live group in table order whose index's low 16 bits match (the shared rule, D9).
+    // Marks it dead (and with `due` every component due) and returns it; null = no live group has that index.
     Group* Killed(uint32_t index, uint64_t nowMs = 0, bool due = false) {
-        Group* best = nullptr;
-        for (auto& g : groups)
-            if (g.number && !g.dead && (g.handle & 0xffff) == (index & 0xffff) && (!best || g.number > best->number)) best = &g;
-        if (!best) return nullptr;
-        best->dead = true;
-        if (due && best->n) {
-            best->due = best->n >= 32 ? ~0u : (1u << best->n) - 1;
-            best->dueMs = nowMs;
-        }
-        return best;
+        const int s = t.KillIndex(index);
+        if (s < 0) return nullptr;
+        Group& g = t.g[s];
+        if (due && g.n) { g.x.due = g.n >= 32 ? ~0u : (1u << g.n) - 1; g.x.dueMs = nowMs; }
+        return &g;
     }
 
     // the due components (at most cap), oldest group first is not needed: any order; expired bits are dropped
     int TakeDue(uint64_t nowMs, Due* out, int cap) {
         int n = 0;
-        for (auto& g : groups) {
-            if (!g.number || !g.due) continue;
-            if (nowMs - g.dueMs >= kDueMs) { expired += Bits(g.due); g.due = 0; continue; }
+        for (auto& g : t.g) {
+            if (!g.used || !g.x.due) continue;
+            if (nowMs - g.x.dueMs >= kDueMs) { expired += Bits(g.x.due); g.x.due = 0; continue; }
             for (int i = 0; i < g.n && n < cap; ++i)
-                if (g.due & (1u << i)) out[n++] = { g.comps[i], g.number, i };
+                if (g.x.due & (1u << i)) out[n++] = { g.comps[i], g.x.number, i };
         }
         return n;
     }
     void Done(int number, int idx) {
-        if (Group* g = ByNumber(number)) g->due &= ~(1u << idx);
+        if (Group* g = ByNumber(number)) g->x.due &= ~(1u << idx);
     }
     bool AnyDue() const {
-        for (const auto& g : groups) if (g.number && g.due) return true;
+        for (const auto& g : t.g) if (g.used && g.x.due) return true;
         return false;
     }
 
     // "live: #<index> ..." for the K line; returns the number of live groups
     int Live(uint32_t* indexes, int cap) const {
         int n = 0;
-        for (const auto& g : groups)
-            if (g.number && !g.dead && n < cap) indexes[n++] = g.handle & 0xffff;
+        for (const auto& g : t.g)
+            if (g.used && !g.dead && n < cap) indexes[n++] = g.handle & 0xffff;
         return n;
     }
     // F7 (AUD-7 DFC-1): the game space recorded at the Enter of a table component whose system's [+0x80] was owner
     // (0 = none: the caller does not use a space it has not seen with that owner)
     uint64_t SpaceOf(uint64_t owner) const {
         if (!owner) return 0;
-        for (const auto& g : groups)
-            for (int i = 0; g.number && i < g.n; ++i) if (g.comps[i].owner == owner && g.comps[i].space) return g.comps[i].space;
-        for (int i = 0; i < pendingN; ++i) if (pending[i].owner == owner && pending[i].space) return pending[i].space;
+        for (const auto& g : t.g)
+            for (int i = 0; g.used && i < g.n; ++i) if (g.comps[i].x.owner == owner && g.comps[i].x.space) return g.comps[i].x.space;
+        for (int i = 0; i < t.pendingN; ++i) if (t.pending[i].x.owner == owner && t.pending[i].x.space) return t.pending[i].x.space;
         return 0;
     }
     // F3 TouchLive (upstream, stricter: the full handle with its generation): (system, handle) is
     // a component of a group that is not dead
-    bool LiveComp(uint64_t system, uint32_t handle) const {
-        for (const auto& g : groups) {
-            if (!g.number || g.dead) continue;
-            for (int i = 0; i < g.n; ++i) if (g.comps[i].system == system && g.comps[i].handle == handle) return true;
-        }
-        return false;
-    }
+    bool LiveComp(uint64_t system, uint32_t handle) const { return t.LiveComp(system, handle); }
     // F3-1 (EC-DRONE2 drone L1 read): a touch record never joins a group (the script's Enter disables it and the RE-ON
     // enable is a direct EnableComponent), so its liveness is its actor's: a live (not dead) group of the same actor
     bool LiveActor(uint64_t actor) const {
         if (!actor) return false;
-        for (const auto& g : groups) if (g.number && !g.dead && g.actor == actor) return true;
+        for (const auto& g : t.g) if (g.used && !g.dead && g.actor == actor) return true;
         return false;
     }
 };
@@ -311,7 +276,6 @@ struct Table {
 // the net tick), then HELD; the drone's first shot (any FireBulletLocal, local or remote) binds the HELD record
 // deployed last (< kLockMs) to its auto-target handle and makes it OFF-DUE (off at the net tick). Due states expire
 // kDueMs after they were set (as the group table's bits). The caller holds its lock around every call.
-constexpr uint64_t kR14Touch = 0x2E40131422F7B1FCull;      // CSymbol64("R14TouchInteract") = CR15TouchInteractCS
 constexpr uint64_t kLockMs = 120000;
 constexpr int kTouches = 16;
 enum TouchState : uint8_t { kTouchFree = 0, kTouchReOn, kTouchHeld, kTouchOffDue, kTouchDone };
@@ -370,29 +334,8 @@ struct TouchTable {
     void OffDone(int slot) { if (t[slot].state == kTouchOffDue) t[slot].state = kTouchDone; }
 };
 
-// F5 (section 3; upstream): each drone's last gun state, keyed by the captured SActor (upstream: the actor
-// symbol, one state for every drone). Full = the oldest dropped.
-constexpr uint64_t kNcaModel = 0x38EE951A26FB816Aull, kGun = 0x72F91FFFA17C3C8Cull, kSatellite = 0x106C63A2927B7A4Dull,
-                   kPort = 0x45B09F0FA9F7FA33ull;
-constexpr int kGuns = 32;
-struct GunTable {
-    struct G { uint64_t actor; uint32_t shown; };
-    G g[kGuns] = {};
-    void Clear() { for (auto& x : g) x = G{ 0, 0 }; }
-    void Set(uint64_t actor, uint32_t shown) {
-        if (!actor) return;
-        int slot = -1;
-        for (int i = 0; i < kGuns && slot < 0; ++i) if (g[i].actor == actor) slot = i;
-        for (int i = 0; i < kGuns && slot < 0; ++i) if (!g[i].actor) slot = i;
-        if (slot < 0) { memmove(g, g + 1, sizeof g - sizeof g[0]); slot = kGuns - 1; }
-        g[slot] = G{ actor, shown };
-    }
-    bool Shown(uint64_t actor, uint32_t* shown) const {
-        if (!actor) return false;
-        for (const auto& x : g) if (x.actor == actor) { *shown = x.shown; return true; }
-        return false;
-    }
-};
+// F5 (section 3; upstream): each drone's last gun state. The table is the shared one (runtime/patch/dronekill_rules.h, #2359),
+// keyed by the node's actor symbol, which is the drone symbol on this path (D4): one state for every drone, and a kill hides it.
 
 // F7 (section 4; upstream): the velocity toward the target, computed after AttackTarget, applied at the
 // net tick while it is younger than kChaseMs. p = the drone's position, q = the target's (both world).
@@ -407,21 +350,8 @@ constexpr uint64_t kDmIdx = 0xd0, kDmRecs = 0x100, kDmStride = 0xb8, kDmPhysH = 
                    kDmXf = 0x138, kBodyPos = 0x8f8;
 // CPhysicsCS: [phys+0xc8] index table, [phys+0x100] the owners (16 bytes per slot, the SActor first)
 constexpr uint64_t kPhIdx = 0xc8, kPhOwners = 0x100;
-constexpr float kChaseSpeed = 7.0f, kChaseDistance = 7.0f, kChaseGain = 2.0f, kChaseAbove = 0.5f;
 constexpr uint64_t kChaseMs = 100;
 constexpr int kChases = 16;
-// false = no velocity (the two positions coincide: upstream returns without writing)
-inline bool ChaseVelocity(const float* p, const float* q, float* v, float* distOut = nullptr) {
-    const float d[3] = { q[0] - p[0], q[1] + kChaseAbove - p[1], q[2] - p[2] };
-    const float dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    if (dist2 < 1e-6f) return false;
-    const float dist = sqrtf(dist2);
-    float speed = (dist - kChaseDistance) * kChaseGain;
-    speed = speed > kChaseSpeed ? kChaseSpeed : speed < -kChaseSpeed ? -kChaseSpeed : speed;
-    for (int i = 0; i < 3; ++i) v[i] = d[i] / dist * speed;
-    if (distOut) *distOut = dist;
-    return true;
-}
 struct Chase { uint64_t cs = 0, physics = 0, owner = 0, atOwner = 0; uint32_t handle = 0, phys = 0; float v[3] = {}; uint64_t ms = 0;
                bool moving = false, due = false; };
 struct ChaseTable {

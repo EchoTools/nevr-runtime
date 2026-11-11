@@ -12,7 +12,7 @@
  *     stand-in body; link / unlink markers go out from the EC client's net tick (ec::OnNetTick). Without that tick stage 3 is refused,
  *     loudly, and stage 2 stays.
  *
- * Switch. `combat.powerboost_stage` in config.yaml, an integer 0..3, default 3: what kotorvr's q15t-upstream ships (its wave-2
+ * Switch. `combat.powerboost_stage` in config.yaml, an integer 0..3, default 3: what kotorvr's echoquest-combat ships (its wave-2
  * recipe qa-1104-aj4-w2z22.json lists an empty powerboost.on, whose words are `swallow cone`, afk_powerboost.cpp:89). 0 installs nothing.
  *
  * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map

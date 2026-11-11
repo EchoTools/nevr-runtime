@@ -187,7 +187,7 @@ FUN_14151e280("…\\cresourcemanager.cpp",0x410,0xe8cc523d0fc9e5fe,
 There is no fallback in this function in either binary: no loose file, no file server, no download. **An asset
 the engine can load is an asset some added manifest lists.** On Quest, the game's function is not the whole
 story: our `FillResourceFileRequest` hook (`src/quest/sentinel/resource_request_hook.cpp`, `ServeLoose`) and the
-reference build's cave (`q15t-upstream/tools/qcp_patches.py`, P9) serve a loose file from the platform data
+reference build's cave (`echoquest-combat/tools/qcp_patches.py`, P9) serve a loose file from the platform data
 directory when the manifest misses. The function itself still has no fallback.
 
 ## Reading it

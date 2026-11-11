@@ -30,7 +30,7 @@ struct PinnedDataSet {
 };
 
 // Where the numbers come from: the sizes and sha256 digests of the pack's files as recorded in the pack's own
-// metadata (q15t-upstream OUTPUTS.md) and, in a release, in the `game-data` entry of the signed release manifest.
+// metadata (echoquest-combat OUTPUTS.md) and, in a release, in the `game-data` entry of the signed release manifest.
 // They describe ONE pack release (combatw19s 1.1.9, which requires the stock manifest
 // 762c16ae58c9bc70eee071d8c0e2e8fc0408d1f0691032164029294c5cb7ec48) and change with every pack release, so this table
 // is updated together with the pack and is never edited alone. Package 0 is the stock package the pack's manifest

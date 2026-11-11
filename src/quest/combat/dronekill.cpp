@@ -17,6 +17,7 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill_core.h"
+#include "quest/combat/line_budget.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/safe_read.h"
 #include "quest/combat/thread_word.h"
@@ -56,6 +57,7 @@ using FireThunk = sentinel::CallbackThunk<FireTag, void(void*, std::uint32_t, Dk
 using AttackThunk = sentinel::CallbackThunk<AttackTag, void(void*, std::uint32_t)>;
 
 constexpr int kLineCap = 160, kNoteCap = 24, kOffLineCap = 64, kKLineCap = 48, kF357LineCap = 96;
+constexpr unsigned kExpiredLines = 16;  // the expired lines (D11) written before the one notice: the first 16 of a run
 constexpr int kVtCache = 16;
 
 // The four handles: Actor, Enter, FireBulletLocal, AttackTarget.
@@ -103,6 +105,8 @@ void SetCapture(Capture* c) noexcept { g_t_cap.Set(reinterpret_cast<std::uintptr
 
 std::atomic<int> g_lines{0}, g_notes{0}, g_off_lines{0}, g_k_lines{0}, g_f357_lines{0}, g_chase_lines{0};
 std::atomic<std::uint32_t> g_enter_drone{0}, g_enter_other{0}, g_fires{0}, g_attacks{0}, g_ticks{0}, g_due_runs{0};
+std::atomic<std::uint32_t> g_expired{0};  // drone ends the D11 rule saw (the stats record's expired)
+std::atomic<unsigned> g_expired_lines{0};  // the expired lines the budget has counted
 
 // What the scope line reports: each hook's thunk calls when the scope last changed, and when.
 std::uint64_t g_scopeSince[kHookCount] = {};
@@ -289,6 +293,19 @@ bool ReadNode(const NodeData* data, NodeData* d) noexcept {
   return SafeRead(a, d, 0x20) && SafeRead(a + 0x20, &d->enable, sizeof d->enable);  // 0x24 bytes: never reads past the game's struct
 }
 
+// The stats line (#2359): every counter CurrentStats() returns, and the drone ends the D11 rule saw. The same record every combat module writes.
+void LogStats(bool final) noexcept {
+  const Stats s = CurrentStats();
+  sentinel::LogFields(final ? LogLevel::kInfo : LogLevel::kDebug, "combat_dronekill_stats",
+                      {{"enter_drone", s.enter_drone}, {"enter_other", s.enter_other}, {"fires", s.fires}, {"attacks", s.attacks},
+                       {"ticks", s.ticks}, {"due_runs", s.due_runs}, {"capturing", s.capturing}, {"expired", s.expired},
+                       {"final", final ? 1 : 0},
+                       {"consequence", "enter_drone and enter_other are the drone and the other node Enters in a combat map, fires the drone's shots, "
+                                       "attacks its AttackTarget calls, ticks the frame ticks, due_runs the ticks with components due, capturing the drone "
+                                       "Enters in flight now, expired the drone ends that found their group; their rates over the run's time are the call rates "
+                                       "of the hooks"}});
+}
+
 // CEnableComponentNode::Enter in a combat map (EnterHandler below is the hook).
 __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, const NodeData* data) noexcept {
   std::uint64_t actor = 0;
@@ -302,7 +319,8 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
     real(node, data);
     return;
   }
-  g_enter_drone.fetch_add(1, std::memory_order_relaxed);
+  const std::uint32_t drones = g_enter_drone.fetch_add(1, std::memory_order_relaxed) + 1;
+  if ((drones & (kStatsEvery - 1)) == 0) LogStats(false);
   Capture cap;
   Capture* const outer = CurrentCapture();  // a drone Enter inside a drone Enter keeps its own capture
   g_capturing.fetch_add(1, std::memory_order_relaxed);
@@ -344,12 +362,17 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
     pthread_mutex_unlock(&g_mu);
   }
   if (g_lockon && d.system == kR14Touch && !d.enable) {  // F3 L1: the script made it ungrabbable (a release)
-    Comp c = {reinterpret_cast<std::uint64_t>(system), d.system, d.component, handle, NowMs()};
+    Comp c;
+    c.system = reinterpret_cast<std::uint64_t>(system);
+    c.handle = handle;
+    c.at = NowMs();
     c.actor = cap.actor;
-    c.space = reinterpret_cast<std::uint64_t>(cap.space);
-    c.owner = owner;
+    c.x.sysSym = d.system;
+    c.x.compSym = d.component;
+    c.x.space = reinterpret_cast<std::uint64_t>(cap.space);
+    c.x.owner = owner;
     pthread_mutex_lock(&g_mu);
-    g_touch.Deployed(c, c.ms);
+    g_touch.Deployed(c, c.at);
     g_any_due.store(true, std::memory_order_release);
     pthread_mutex_unlock(&g_mu);
     F357Line("combat_dronekill_touch", "touch deployed: the drone stays grabbable until it locks on; on again at the tick",
@@ -359,8 +382,8 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
     std::uint32_t shown = 0;
     bool known = false;
     pthread_mutex_lock(&g_mu);
-    if (d.component == kGun) g_guns.Set(cap.actor, d.enable);
-    else known = g_guns.Shown(cap.actor, &shown);
+    if (d.component == kGun) g_guns.Set(d.actor, d.enable);
+    else known = g_guns.Shown(d.actor, &shown);
     pthread_mutex_unlock(&g_mu);
     Capture* const saved = CurrentCapture();  // the Actor handler only passes through for our own extra Enters (M1)
     SetCapture(nullptr);
@@ -393,6 +416,20 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
                    reinterpret_cast<std::uint64_t>(cap.space), owner);
     if (j.again && g_kill) g_any_due.store(true, std::memory_order_release);  // R3: off again at the next tick
     pthread_mutex_unlock(&g_mu);
+  }
+  if (!d.enable && d.system == kDamageable) {  // D11 (#2359): the drone's damageable went off, which is the drone's end: its group is dead
+    pthread_mutex_lock(&g_mu);
+    const int dead = g_table.Off(reinterpret_cast<std::uint64_t>(system), handle);
+    pthread_mutex_unlock(&g_mu);
+    if (dead != 0) {
+      g_expired.fetch_add(1, std::memory_order_relaxed);
+      if (LineBudget(&g_expired_lines, kExpiredLines, "dronekill", "expired",
+                     "no further expired lines are written; the stats line still counts every drone end")) {
+        sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_expired",
+                            {{"index", handle & 0xffff}, {"group", dead}, {"tid", tid},
+                             {"msg", "a drone's damageable went off (its end): its group is dead, and a component of it that goes on again is held off"}});
+      }
+    }
   }
   char sys[19], comp[19], fl[19];
   if (j.again) {
@@ -431,15 +468,15 @@ void EnterHandler(EnterThunk::Fn real, void* node, const NodeData* data) noexcep
 // Stage 1, D2 / D4: the recorded component is still that one. Null with *why when not.
 void* Revalidate(const Comp& c, std::uintptr_t* owner_out, const char** why) noexcept {
   std::uintptr_t owner = 0;
-  if (c.space == 0 || c.owner == 0) {
+  if (c.x.space == 0 || c.x.owner == 0) {
     *why = "no game space recorded";
     return nullptr;
   }
-  if (!SafeRead(static_cast<std::uintptr_t>(c.system) + kSysOwner, &owner, sizeof owner) || owner != c.owner) {
+  if (!SafeRead(static_cast<std::uintptr_t>(c.system) + kSysOwner, &owner, sizeof owner) || owner != c.x.owner) {
     *why = "system's game space changed";
     return nullptr;
   }
-  void* const system = g_fns.find != nullptr ? g_fns.find(reinterpret_cast<const void*>(c.space), c.sysSym) : nullptr;
+  void* const system = g_fns.find != nullptr ? g_fns.find(reinterpret_cast<const void*>(c.x.space), c.x.sysSym) : nullptr;
   if (system != reinterpret_cast<void*>(c.system)) {
     *why = "system not found again in its game space";
     return nullptr;
@@ -449,7 +486,7 @@ void* Revalidate(const Comp& c, std::uintptr_t* owner_out, const char** why) noe
     *why = "Component() not the read shape";
     return nullptr;
   }
-  if (static_cast<std::uint32_t>(CallComponent(component, system, c.actor, c.compSym)) != c.handle) {
+  if (static_cast<std::uint32_t>(CallComponent(component, system, c.actor, c.x.compSym)) != c.handle) {
     *why = "handle changed";
     return nullptr;
   }
@@ -750,8 +787,8 @@ __attribute__((noinline)) void TickBody() noexcept {
     if (Allow(g_off_lines, kOffLineCap, "off")) {
       char sys[19], comp[19];
       sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_off",
-                          {{"group", due[i].number}, {"system", sentinel::HexString(sys, due[i].c.sysSym)},
-                           {"component", sentinel::HexString(comp, due[i].c.compSym)}, {"index", due[i].c.handle & 0xffff},
+                          {{"group", due[i].number}, {"system", sentinel::HexString(sys, due[i].c.x.sysSym)},
+                           {"component", sentinel::HexString(comp, due[i].c.x.compSym)}, {"index", due[i].c.handle & 0xffff},
                            {"result", r == 0 ? "OFF" : why}, {"tid", tid}});
     }
   }
@@ -1036,13 +1073,13 @@ void OnKilled(std::uint32_t index) noexcept {
   pthread_mutex_lock(&g_mu);
   if (g_kill) {
     if (Group* g = g_table.Killed(index, NowMs(), true)) {
-      group = g->number;
+      group = g->x.number;
       comps = g->n;
-      if (g->due) g_any_due.store(true, std::memory_order_release);
-      if (g_gun) g_guns.Set(g->actor, 0);  // M4: EchoCombat Shutdown's SetGun(DRONE_ACTOR, 0)
+      if (g->x.due) g_any_due.store(true, std::memory_order_release);
+      if (g_gun) HideGunOnKill(g_guns);  // M4: EchoCombat Shutdown's SetGun(DRONE_ACTOR, 0): the drone symbol's state, hidden (D4)
     }
   } else if (Group* g = g_table.Killed(index)) {
-    group = g->number;
+    group = g->x.number;
     comps = g->n;
   }
   live_n = g_table.Live(live, kGroups);
@@ -1067,7 +1104,11 @@ bool ShotActive() noexcept { return g_shot_swapped.load(std::memory_order_acquir
 
 Stats CurrentStats() noexcept {
   return {g_enter_drone.load(), g_enter_other.load(), g_fires.load(), g_attacks.load(), g_ticks.load(), g_due_runs.load(),
-          static_cast<std::uint32_t>(g_capturing.load())};
+          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load()};
+}
+
+void NoteEnd() noexcept {
+  if (g_installed.load(std::memory_order_acquire)) LogStats(true);
 }
 
 void SetCallsForTest(const Calls* calls) noexcept { g_test_calls = calls; }
@@ -1118,7 +1159,8 @@ void ResetForTest() noexcept {
   g_t_shot.Set(0);
   g_t_in_tick.Set(0);
   for (std::atomic<int>* n : {&g_lines, &g_notes, &g_off_lines, &g_k_lines, &g_f357_lines, &g_chase_lines}) n->store(0);
-  for (std::atomic<std::uint32_t>* n : {&g_enter_drone, &g_enter_other, &g_fires, &g_attacks, &g_ticks, &g_due_runs}) n->store(0);
+  for (std::atomic<std::uint32_t>* n : {&g_enter_drone, &g_enter_other, &g_fires, &g_attacks, &g_ticks, &g_due_runs, &g_expired}) n->store(0);
+  g_expired_lines.store(0);
   for (std::uint64_t& s : g_scopeSince) s = 0;
   g_scopeSinceMs = 0;
   g_clock_ms = nullptr;

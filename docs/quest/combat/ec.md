@@ -131,7 +131,7 @@ menu must reach the combat lobby) and writes its capped `combat_ec_sel` line, an
 UnloadEquipmentConfig (an event, not a frame) so a rebuild that began before the scope changed is never read half-built.
 
 Outside a combat map and the combat lobby, ec sends no datagram and takes no lock on the socket calls. It also keeps its own scope narrower than
-kotorvr's q15t-upstream, which pauses its EC client only while an Echo Arena level is loaded. In the lobbies arena players use (`mpl_lobby_b`, `_b2`,
+kotorvr's echoquest-combat, which pauses its EC client only while an Echo Arena level is loaded. In the lobbies arena players use (`mpl_lobby_b`, `_b2`,
 `_b2_lowspec`, `_b_arena`, `_b_social`) the EC client does not run, so `hide` does not cut the tac-mod list (smoke, buff and point) there, as it does in the
 combat lobby and on a combat map (on a server without EC). Which lobby a Quest combat player chooses a loadout in is not established; the headset row below
 has a line for it.
@@ -146,7 +146,7 @@ the PR body (ADR 0038).
 | `combat.ec_words` | absent: `types=VPTO equip hide` | `types=<letters of VPTO>` (the types carried; none, empty or another letter: 'T' only), `equip` / `noequip`, `hide`, `loctoken=<s>` (TEST: a LOC token every s seconds, 1..600). |
 | `combat.ecfx` | true | NEUTRON effects on ec's net tick (needs ec). |
 
-The defaults are q15t-upstream's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the q15t
+The defaults are echoquest-combat's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the q15t
 plugin shipped them. The plugin's files `ec.on`, `ec.off`, `ec_preset1.on` .. `ec_preset3.on` and `neutronfx.on` are not read; one found in the
 plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_legacy_switch`) that names the key.
 

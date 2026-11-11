@@ -11,7 +11,7 @@ An EchoCombat server puts POWER BOOST's messages into the heal channel: a heal a
 
 ## Switch and default
 
-`combat.powerboost_stage` in `config.yaml`, an integer 0..3, default **3** (swallow and cone): what kotorvr's q15t-upstream ships (its wave-2
+`combat.powerboost_stage` in `config.yaml`, an integer 0..3, default **3** (swallow and cone): what kotorvr's echoquest-combat ships (its wave-2
 recipe, `qa-1104-aj4-w2z22.json` in its trials directory, lists an empty `powerboost.on`, whose words are `swallow cone`, `afk_powerboost.cpp:89`). A value
 that is not an integer in 0..3 keeps 3 with a Warning that names the key. `0` installs nothing. No file in the app's data directory switches
 the module.

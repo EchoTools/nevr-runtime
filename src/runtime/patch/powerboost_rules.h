@@ -10,7 +10,7 @@
 //
 // Origin. EchoCombat's `plugin/powerboost.cpp` (he_is_the_cat, heisthecat31/EchoCombat), as released in v2.0.0 (nevr-pack 4d1f0024, whose
 // powerboost.cpp is c3ff4b54's; "EC" lines below are that file). PC ports c3ff4b54 (runtime/combat/powerboost.cpp); the Quest ported
-// c14c3e0a through the reference build's `runtime/native/afkxr/afk_powerboost_core.h` (kotorvr's q15t-upstream). Rule for rule: the decode
+// c14c3e0a through the reference build's `runtime/native/afkxr/afk_powerboost_core.h` (kotorvr's echoquest-combat). Rule for rule: the decode
 // EC 381-393, Rotate and AngleTo EC 531-544, LeftSeconds EC 554-557, LinkMarker EC 565-567, the slack and the send interval EC 673-674,
 // the bubble table EC 681-687, the angle and the bands EC 707-709, the owner's 0.3 m EC 731, the cone decision EC 751-769.
 // Both builds hold these forms (#2339):

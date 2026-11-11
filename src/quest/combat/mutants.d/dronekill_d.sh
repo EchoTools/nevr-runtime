@@ -3,8 +3,9 @@ NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagn
 # a per-thread word shared by every thread (the mutants of the per-thread state)
 SHARED_WORD='struct SharedWord { int Create() noexcept { return 0; } std::uintptr_t Get() const noexcept { return v; } void Set(std::uintptr_t x) noexcept { v = x; } std::uintptr_t v = 0; }'
 # dronekill (part 4 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
-runm dc_chase_dist_out src/quest/combat/dronekill_core.h "s/    if (distOut) \*distOut = dist;//;$NOWARN" quest-host-combat dronekill_test
-runm dc_chase_above_y src/quest/combat/dronekill_core.h "s/q\[1\] + kChaseAbove - p\[1\]/q[1] - p[1]/" quest-host-combat dronekill_test
+# a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
+runm dc_chase_dist_out src/runtime/patch/dronekill_rules.h "s/if (distOut) \*distOut = dist;/(void)distOut;/" quest-host-combat dronekill_test
+runm dc_chase_above_y src/runtime/patch/dronekill_rules.h "s/q\[1\] + kChaseAbove - p\[1\]/q[1] - p[1]/" quest-host-combat dronekill_test
 runm dc_chase_find src/quest/combat/dronekill_core.h "s/    Chase\* Find(uint64_t cs, uint32_t handle) {\n/XX/;/Chase\* Find/,/^    }/s/x.cs == cs \&\& x.handle == handle/x.cs == cs/;$NOWARN" quest-host-combat dronekill_test
 runm dc_chase_take src/quest/combat/dronekill_core.h "s/if (!x.cs || (!x.moving \&\& !x.due)) {/if (!x.cs) {/" quest-host-combat dronekill_test
 runm dc_chase_take_f src/quest/combat/dronekill_core.h "s/if (Chase\* x = Find(cs, handle)) return x;//" quest-host-combat dronekill_test
@@ -17,8 +18,8 @@ runm dc_ph src/quest/combat/dronekill_core.h "s/kNetPhysicsPhys = 0x170;/kNetPhy
 runm dk_gun_word src/quest/combat/dronekill.cpp "s/  if (g_gun \&\& d.system == kNcaModel \&\& (d.component == kGun || d.component == kPort)) {/  if (d.system == kNcaModel \&\& (d.component == kGun || d.component == kPort)) {/" quest-host-combat dronekill_test
 runm dk_gun_system src/quest/combat/dronekill.cpp "s/  if (g_gun \&\& d.system == kNcaModel \&\& (d.component == kGun || d.component == kPort)) {/  if (g_gun \&\& (d.component == kGun || d.component == kPort)) {/" quest-host-combat dronekill_test
 runm dk_gun_comp src/quest/combat/dronekill.cpp "s/ \&\& (d.component == kGun || d.component == kPort)) {/ \&\& (d.component == kGun)) {/" quest-host-combat dronekill_test
-runm dk_gun_set src/quest/combat/dronekill.cpp "s/    if (d.component == kGun) g_guns.Set(cap.actor, d.enable);/    if (d.component == kGun) (void)0;/" quest-host-combat dronekill_test
-runm dk_gun_shown src/quest/combat/dronekill.cpp "s/    else known = g_guns.Shown(cap.actor, \&shown);/    else known = false;/" quest-host-combat dronekill_test
+runm dk_gun_set src/quest/combat/dronekill.cpp "s/    if (d.component == kGun) g_guns.Set(d.actor, d.enable);/    if (d.component == kGun) (void)0;/" quest-host-combat dronekill_test
+runm dk_gun_shown src/quest/combat/dronekill.cpp "s/    else known = g_guns.Shown(d.actor, \&shown);/    else known = false;/" quest-host-combat dronekill_test
 runm dk_gun_sat src/quest/combat/dronekill.cpp "s/for (const std::uint64_t sym : {kSatellite, kPort}) {/for (const std::uint64_t sym : {kPort}) {/" quest-host-combat dronekill_test
 runm dk_gun_port src/quest/combat/dronekill.cpp "s/for (const std::uint64_t sym : {kSatellite, kPort}) {/for (const std::uint64_t sym : {kSatellite}) {/" quest-host-combat dronekill_test
 runm dk_gun_m3 src/quest/combat/dronekill.cpp "s/        if ((static_cast<std::uint32_t>(CallComponent(component, system, cap.actor, sym)) \& 0xffff) == 0xffff) {  \/\/ M3/        if (false) {  \/\/ M3/" quest-host-combat dronekill_test

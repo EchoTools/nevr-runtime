@@ -37,12 +37,16 @@
 // so it is first drawn there (see TickFrame). The first SHOT_LOG shots are logged.
 // nEVR port: MUZZLE, BACK_MAX, the frame average and the move are runtime/patch/dronemuzzle_rules.h, the one
 // definition the Quest's dronemuzzle.cpp calls too (#2337); this file keeps its clock, its pose read and its lines.
+// nEVR port: the drone kill rules (the symbols, the chase velocity, the gun table, the group table) are
+// runtime/patch/dronekill_rules.h, the one definition the Quest's dronekill.cpp calls too (#2359); this file
+// keeps its hooks, its clock reads and its lines.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include "runtime/patch/dronemuzzle_rules.h"  // nEVR port: the muzzle rule, shared with the Quest (#2337)
+#include "runtime/patch/dronekill_rules.h"  // nEVR port: the drone kill rules, shared with the Quest (#2359)
 #include "core/burst_then_count.h"  // nEVR port: repeated Warnings are counted, never silenced (#2349)
 #include "runtime/patch/ecfx_rules.h"  // nEVR port: NEUTRON's effects drain, shared with the Quest (#2349)
 #include <windows.h>
@@ -74,6 +78,7 @@ constexpr uintptr_t TRANSFORM_GET_RVA = 0x3c4470;           // CTransformCS::get
 constexpr uint8_t FIRE_GET_CALL_BYTES[] = { 0xe8, 0x88, 0x1c, 0x6e, 0xff, 0x0f, 0x10, 0x45, 0x40 };
 // nEVR port: the gun's muzzle in the drone (MUZZLE, fix_drone_model.py's) and BACK_MAX are dm::kMuzzle and dm::kBackMax
 namespace dm = nevr_dronemuzzle;
+namespace dk = nevr_dronekill;  // nEVR port: the drone kill rules (#2359)
 
 constexpr uintptr_t FIRE_LOCAL_RVA = 0xce2550;              // CR15NetAutoTargetCS::FireBulletLocal
 constexpr uint8_t FIRE_LOCAL_BYTES[] = { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x53, 0x57, 0x41, 0x54 };
@@ -86,12 +91,8 @@ constexpr LONG SHOT_LOG = 40;
 //               component, enable }
 constexpr uintptr_t ENABLE_ENTER_RVA = 0x12478d0;
 constexpr uint8_t ENABLE_ENTER_BYTES[] = { 0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0x01 };
-constexpr uint64_t NCA_MODEL = 0x38EE951A26FB816Aull;       // CSymbol64("ncaModel")
-constexpr uint64_t GUN = 0x72F91FFFA17C3C8Cull;
-constexpr uint64_t SATELLITE = 0x106C63A2927B7A4Dull;
 // the port on the body's front (fix_drone_model.py's PORT_COMP: a detonator part the drone's
 // script shows once deployed; 0xA977.. is the one it shows only in the hand)
-constexpr uint64_t PORT = 0x45B09F0FA9F7FA33ull;
 using enable_enter_fn = void(__fastcall *)(void *, const uint64_t *);
 enable_enter_fn Real_EnableEnter = nullptr;
 volatile LONG g_mirrored = 0;
@@ -243,7 +244,6 @@ void TickFrame() {
 }
 
 // shared by the death and grab rules below
-constexpr uint64_t DRONE_ACTOR = 0x10E40287A9BF5A13ull;
 using disable_fn = void(__fastcall *)(void *system, uint32_t index, uint16_t flag);
 disable_fn Real_Disable = nullptr;
 
@@ -261,7 +261,6 @@ constexpr uintptr_t ENABLE_COMP_RVA = 0x160070;                  // (component s
 constexpr uint8_t ENABLE_COMP_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x20, 0x55, 0x56, 0x41, 0x56 };
 constexpr uintptr_t DEATH_RVA = 0xccf3a0;                        // CR15NetDamageableCS death (cs, index)
 constexpr uint8_t DEATH_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10 };
-constexpr uint64_t R14_DAMAGEABLE = 0xC9DC08CFC2F5920Full;      // CSymbol64("R14NetDamageable")
 //: the drone death token (fix_drone_fx.py's DEATH_TOKEN_RVA): +00 count, +08 expiry, +10 shown
 constexpr uintptr_t DEATH_TOKEN_RVA = 0x2104D60;
 //: the system the drone's script turns off first when its lifetime ends (all of it): its sound
@@ -532,15 +531,17 @@ void DeathFxDue() {
     for (int i = 0; i < nspawn; ++i) SpawnDeathFx(spawn[i]);
     for (int i = 0; i < noff; ++i) Real_Disable(off[i].system, off[i].index, 1);
 }
-struct DroneGroup { uint8_t *dcs; uint32_t didx; ULONGLONG opened; bool dead; bool test_killed; int n; Comp comps[20];
-                    void *ctx;                                 // ctx: a node context of its script (its explosion)
-                    uint64_t actor; };                         // the actor it is (ActorOf its damageable)
-DroneGroup g_drones[8];
+// nEVR port: the drone groups and their pending components are the shared table (runtime/patch/dronekill_rules.h, #2359).
+// A component's system is keyed by its address (SysKey); PC keeps two things per group: its node context and the test kill.
+uint64_t SysKey(const void *p) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p)); }
+void *SysPtr(uint64_t k) { return reinterpret_cast<void *>(static_cast<uintptr_t>(k)); }
+struct PcGroup { void *ctx = nullptr; bool test_killed = false; };   // ctx: a node context of its script (its explosion)
+dk::Groups<dk::None, PcGroup> g_groups;
 SRWLOCK g_drones_lock = SRWLOCK_INIT;
-// drone components the script turns on just before its damageable (the models): no group yet
-struct Pending { Comp c; ULONGLONG at; uint64_t actor; };
-Pending g_pending[16];
-int g_npending = 0;
+// the gun table: each drone's last gun state by actor symbol, so the port follows it whatever the drone's script does with
+// the port's component (the shared table, #2359). Declared here because Shutdown hides it.
+dk::GunTable g_guns;
+SRWLOCK g_guns_lock = SRWLOCK_INIT;
 
 uint8_t *DamageRecord(uint8_t *cs, uint32_t index) {
     uint16_t slot = *(uint16_t *)(*(uint8_t **)(cs + 0xd0) + (uint64_t)(index & 0xffff) * 4);
@@ -559,39 +560,13 @@ void Revive(uint8_t *cs, uint32_t index) {                        // health back
     }
 }
 
-DroneGroup *Newest(uint64_t actor) {                              // (under the lock) this actor's drone, else the newest
-    if (actor)
-        for (auto &d : g_drones)
-            if (d.dcs && !d.dead && d.actor == actor) return &d;
-    DroneGroup *g = nullptr;
-    for (auto &d : g_drones)
-        if (d.dcs && !d.dead && GetTickCount64() - d.opened < 5000 && (!g || d.opened > g->opened)) g = &d;
-    return g;
-}
-
-void AddComp(DroneGroup *g, void *system, uint32_t index) {      // (under the lock)
-    for (int i = 0; i < g->n; ++i)
-        if (g->comps[i].system == system && g->comps[i].index == index) return;
-    if (g->n < 20) g->comps[g->n++] = { system, index };
-}
-
 // how long after its release a dead drone's script can still try to turn its parts on (the
 // stock lifetime is 20 s); the next one is out no sooner (cooldown 30 s)
-constexpr ULONGLONG DEAD_SWALLOW_MS = 25000;
 // when a drone last died (0: none yet): an enable that isn't a drone's own goes straight
-// through, no lock, unless one did within DEAD_SWALLOW_MS (every component enable in the
+// through, no lock, unless one did within dk::kSwallowMs (every component enable in the
 // game comes through Hooked_EnableComp)
 volatile ULONGLONG g_last_death = 0;
 volatile ULONGLONG g_last_deploy = 0;                            // when a drone was last released
-
-bool InDeadGroup(void *system, uint32_t index) {                  // (under the lock)
-    for (auto &d : g_drones) {
-        if (!d.dcs || !d.dead || GetTickCount64() - d.opened > DEAD_SWALLOW_MS) continue;
-        for (int i = 0; i < d.n; ++i)
-            if (d.comps[i].system == system && d.comps[i].index == index) return true;
-    }
-    return false;
-}
 
 void __fastcall Hooked_EnableComp(void *system, uint32_t index, uint16_t flag) {
     int what = t_drone_enable;
@@ -599,43 +574,19 @@ void __fastcall Hooked_EnableComp(void *system, uint32_t index, uint16_t flag) {
     if (what) LearnCtx(system, index);
     if (!what) {
         ULONGLONG died = g_last_death;
-        if (!died || GetTickCount64() - died > DEAD_SWALLOW_MS) { Real_EnableComp(system, index, flag); return; }
+        if (!died || GetTickCount64() - died > dk::kSwallowMs) { Real_EnableComp(system, index, flag); return; }
     }
     AcquireSRWLockExclusive(&g_drones_lock);
+    const ULONGLONG now = GetTickCount64();                       // nEVR port: one clock read per call (#2359)
     bool swallow = false;
     if (what == 2) {                                              // a release: this drone's new life
-        DroneGroup *g = nullptr;
-        for (auto &d : g_drones) if (d.dcs == system && d.didx == index) g = &d;
-        if (!g) for (auto &d : g_drones) if (!d.dcs) { g = &d; break; }
-        if (!g) { g = &g_drones[0]; for (auto &d : g_drones) if (d.opened < g->opened) g = &d; }
-        *g = {};
-        g->dcs = (uint8_t *)system;
-        g->didx = index;
-        g->opened = GetTickCount64();
-        g->comps[g->n++] = { system, index };
-        g_last_deploy = g->opened;
+        const dk::Verdict r = g_groups.Release(SysKey(system), index, actor, 0, now);   // nEVR port: shared rule (#2359)
+        g_last_deploy = now;
         // this enable is the drone script's own node: the context the dispatcher just left
-        g->ctx = t_node ? DroneCtx(t_node) : nullptr;
-        g->actor = actor;
-        int kept = 0;                                             // the models, turned on first
-        for (int i = 0; i < g_npending; ++i) {
-            if (g->opened - g_pending[i].at >= 3000) continue;
-            if (!actor || !g_pending[i].actor || g_pending[i].actor == actor)
-                AddComp(g, g_pending[i].c.system, g_pending[i].c.index);
-            else
-                g_pending[kept++] = g_pending[i];                 // another drone's, released next
-        }
-        g_npending = kept;
+        g_groups.g[r.group].x.ctx = t_node ? DroneCtx(t_node) : nullptr;
     } else {
-        swallow = InDeadGroup(system, index);                     // dead: the script can't bring it back
-        if (!swallow && what == 1) {
-            DroneGroup *g = Newest(actor);
-            if (g && (!actor || g->actor == actor || !g->actor)) AddComp(g, system, index);
-            else {
-                if (g_npending == 16) g_npending = 0;
-                g_pending[g_npending++] = { { system, index }, GetTickCount64(), actor };
-            }
-        }
+        // dead: the script can't bring it back; else a drone component joins its group or waits (nEVR port: shared rule, #2359)
+        swallow = g_groups.Enable(SysKey(system), index, actor, 0, now, what == 1).swallowed;
     }
     ReleaseSRWLockExclusive(&g_drones_lock);
     if (what == 2) Revive((uint8_t *)system, index);
@@ -646,40 +597,47 @@ void __fastcall Hooked_EnableComp(void *system, uint32_t index, uint16_t flag) {
 void AddTouch(void *system, uint32_t index) {
     uint64_t actor = ActorOf(system, index);
     AcquireSRWLockExclusive(&g_drones_lock);
-    if (DroneGroup *g = Newest(actor)) AddComp(g, system, index);
+    const ULONGLONG now = GetTickCount64();
+    const int g = g_groups.Newest(actor, now);                    // nEVR port: shared rule (#2359)
+    if (g >= 0) g_groups.Add(g, SysKey(system), index, actor, now);
     ReleaseSRWLockExclusive(&g_drones_lock);
 }
 
-void SetGun(uint64_t actor, uint32_t shown);
 
 // Turns the drone whose damageable is (dcs, didx) off; dcs null: the one whose damageable
 // index is didx (a client told by the server).
-void Shutdown(uint8_t *dcs, uint32_t didx, const char *why) {
-    Comp comps[20];
+bool Shutdown(uint8_t *dcs, uint32_t didx, const char *why) {
+    Comp comps[dk::kGroupComps];
     int n = 0;
     void *ctx = nullptr;
     AcquireSRWLockExclusive(&g_drones_lock);
-    for (auto &d : g_drones) {
-        if (!d.dcs || d.dead) continue;
-        if (dcs ? (d.dcs == dcs && d.didx == didx) : ((d.didx & 0xffff) == (didx & 0xffff))) {
-            d.dead = true;
-            g_last_death = GetTickCount64();
-            n = d.n;
-            ctx = CtxOfActor(d.actor);
-            if (!ctx) ctx = d.ctx;
-            memcpy(comps, d.comps, sizeof(Comp) * n);
-            break;
-        }
+    int g = -1;
+    if (dcs) {
+        const dk::DeadMark m = g_groups.MarkDead(SysKey(dcs), didx);   // nEVR port: shared rule (#2359, D11)
+        if (m.wasAlive) g = m.group;
+    } else {
+        g = g_groups.KillIndex(didx);                                  // nEVR port: shared rule (#2359, D9)
+    }
+    if (g >= 0) {
+        const auto &d = g_groups.g[g];
+        g_last_death = GetTickCount64();
+        n = d.n;
+        ctx = CtxOfActor(d.actor);
+        if (!ctx) ctx = d.x.ctx;
+        for (int i = 0; i < n; ++i) comps[i] = { SysPtr(d.comps[i].system), d.comps[i].handle };
     }
     ReleaseSRWLockExclusive(&g_drones_lock);
-    if (!n || !Real_Disable) return;                              // (unhooked: VeilNet's 'K' after shutdown)
-    SetGun(DRONE_ACTOR, 0);                                       // the port's override: hidden
+    if (!n || !Real_Disable) return g >= 0;                            // (unhooked: VeilNet's 'K' after shutdown)
+    AcquireSRWLockExclusive(&g_guns_lock);
+    dk::HideGunOnKill(g_guns);                                         // the port's override: hidden (EC 621)
+    ReleaseSRWLockExclusive(&g_guns_lock);
     for (int i = 0; i < n; ++i) Real_Disable(comps[i].system, comps[i].index, 1);
     // the explosion, on the next follow update (the game thread). Clients only: a particle
     // spawn on the headless server crashed it.
     if (!g_is_server && ctx) QueueDeathFx(ctx, nullptr, 0);
     Log("drone %u %s: shut down (%d components off)%s", didx & 0xffff, why, n,
         !g_is_server && ctx ? ", explosion" : "");
+    return true;
 }
 
 // The drone's own end (its lifetime, 20 s): its script turns off its sound system
@@ -701,21 +659,19 @@ void ExpiredDamageable(void *system, uint32_t index) {            // (Hooked_Dis
     bool alive = false;
     ULONGLONG age = 0;
     AcquireSRWLockExclusive(&g_drones_lock);
-    for (auto &d : g_drones)
-        if (d.dcs == system && d.didx == index) {
-            alive = !d.dead;
-            d.dead = true;
-            g_last_death = GetTickCount64();
-            age = GetTickCount64() - d.opened;
-            break;
-        }
+    const dk::DeadMark m = g_groups.MarkDead(SysKey(system), index);   // nEVR port: shared rule (#2359, D11)
+    if (m.group >= 0) {
+        alive = m.wasAlive;
+        g_last_death = GetTickCount64();
+        age = GetTickCount64() - g_groups.g[m.group].opened;
+    }
     ReleaseSRWLockExclusive(&g_drones_lock);
     Expiry e = t_expiry;
     t_expiry = {};
     {                                                              // this drone's, kept at its release
         AcquireSRWLockShared(&g_drones_lock);
-        for (auto &d : g_drones)
-            if (d.dcs == system && d.didx == index && d.ctx) e.ctx = d.ctx;
+        const int g = g_groups.Find(SysKey(system), index);
+        if (g >= 0 && g_groups.g[g].x.ctx) e.ctx = g_groups.g[g].x.ctx;
         ReleaseSRWLockShared(&g_drones_lock);
     }
     if (alive && !g_is_server && e.open && e.ctx) {
@@ -729,12 +685,7 @@ void ExpiredDamageable(void *system, uint32_t index) {            // (Hooked_Dis
 
 void __fastcall Hooked_Death(void *cs, uint32_t index) {
     Real_Death(cs, index);
-    bool mine = false;
-    AcquireSRWLockShared(&g_drones_lock);
-    for (auto &d : g_drones) if (d.dcs == cs && d.didx == index && !d.dead) mine = true;
-    ReleaseSRWLockShared(&g_drones_lock);
-    if (!mine) return;
-    Shutdown((uint8_t *)cs, index, "destroyed");
+    if (!Shutdown((uint8_t *)cs, index, "destroyed")) return;   // nEVR port: not a live drone (#2359)
     if (g_is_server) {
         using killed_fn = void(__cdecl *)(uint32_t);
         static killed_fn tell = nullptr;
@@ -755,11 +706,11 @@ void KillTestDue() {                                              // (test) kill
     uint8_t *cs = nullptr;
     uint32_t index = 0;
     AcquireSRWLockExclusive(&g_drones_lock);
-    for (auto &d : g_drones)
-        if (d.dcs && !d.dead && !d.test_killed && GetTickCount64() - d.opened >= KILL_TEST_MS) {
-            d.test_killed = true;
-            cs = d.dcs;
-            index = d.didx;
+    for (auto &d : g_groups.g)
+        if (d.used && !d.dead && !d.x.test_killed && GetTickCount64() - d.opened >= KILL_TEST_MS) {
+            d.x.test_killed = true;
+            cs = static_cast<uint8_t *>(SysPtr(d.system));
+            index = d.handle;
             break;
         }
     ReleaseSRWLockExclusive(&g_drones_lock);
@@ -833,30 +784,15 @@ void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
 // Each drone's last gun state (by actor), so the port follows it whatever the drone's
 // script does with the port's component: that script is the detonator's, and shows / hides
 // its parts on its own (the part PORT is on is one it shows once the drone is deployed).
-struct GunState { uint64_t actor; uint32_t shown; };
-GunState g_guns[32];
-SRWLOCK g_guns_lock = SRWLOCK_INIT;
-
 void SetGun(uint64_t actor, uint32_t shown) {
     AcquireSRWLockExclusive(&g_guns_lock);
-    int slot = -1;
-    for (int i = 0; i < 32 && slot < 0; ++i)
-        if (g_guns[i].actor == actor) slot = i;
-    for (int i = 0; i < 32 && slot < 0; ++i)
-        if (!g_guns[i].actor) slot = i;
-    if (slot < 0) {                                         // full: forget the oldest
-        memmove(g_guns, g_guns + 1, sizeof(g_guns) - sizeof(g_guns[0]));
-        slot = 31;
-    }
-    g_guns[slot] = { actor, shown };
+    g_guns.Set(actor, shown);                                     // nEVR port: the shared table (#2359, D3, D4)
     ReleaseSRWLockExclusive(&g_guns_lock);
 }
 
 bool GunShown(uint64_t actor, uint32_t *shown) {
     AcquireSRWLockShared(&g_guns_lock);
-    bool found = false;
-    for (int i = 0; i < 32 && !found; ++i)
-        if (g_guns[i].actor == actor) { *shown = g_guns[i].shown; found = true; }
+    const bool found = g_guns.Shown(actor, shown);
     ReleaseSRWLockShared(&g_guns_lock);
     return found;
 }
@@ -869,7 +805,6 @@ bool GunShown(uint64_t actor, uint32_t *shown) {
 // with this drone's record reset (a new life). At the drone's first shot, the drone that has
 // not fired yet and was deployed last is the one shooting: its touch interact is turned off
 // then, so a drone that has locked onto someone can't be grabbed. The next release starts again.
-constexpr uint64_t R14_TOUCH_INTERACT = 0x2E40131422F7B1FCull;   // CSymbol64("R14TouchInteract")
 constexpr uintptr_t DISABLE_RVA = 0x9cb780;                      // (component system, index, flag): disable
 constexpr uint8_t DISABLE_BYTES[] = { 0x48, 0x83, 0xec, 0x78, 0x48, 0x8b, 0xc1 };
 thread_local bool t_capture = false;
@@ -913,14 +848,8 @@ void __fastcall Hooked_Disable(void *system, uint32_t index, uint16_t flag) {
 // and disabling a component the game has since freed crashed clients (echovr+0x198b2d reads
 // through a stale component, null +0x388, from DISABLE_RVA).
 bool TouchLive(void *system, uint32_t index) {
-    bool live = false;
     AcquireSRWLockExclusive(&g_drones_lock);
-    for (auto &d : g_drones) {
-        if (!d.dcs || d.dead) continue;
-        for (int i = 0; i < d.n && !live; ++i)
-            live = d.comps[i].system == system && d.comps[i].index == index;
-        if (live) break;
-    }
+    const bool live = g_groups.LiveComp(SysKey(system), index);   // nEVR port: shared rule (#2359)
     ReleaseSRWLockExclusive(&g_drones_lock);
     return live;
 }
@@ -985,14 +914,14 @@ struct NodeTag {
 };
 
 void __fastcall Hooked_EnableEnter(void *node, const uint64_t *data) {
-    NodeTag node_tag(data[0] == DRONE_ACTOR ? node : t_node);
-    if (data[0] == DRONE_ACTOR) DroneCtx(node, true);       // each drone node: learn its drone's context
+    NodeTag node_tag(data[0] == dk::kDroneActor ? node : t_node);
+    if (data[0] == dk::kDroneActor) DroneCtx(node, true);       // each drone node: learn its drone's context
 #ifdef ECHOCOMBAT_LOG
-    if (data[0] == DRONE_ACTOR && InterlockedIncrement(&g_dbg_enables) <= 400)
+    if (data[0] == dk::kDroneActor && InterlockedIncrement(&g_dbg_enables) <= 400)
         LogDebug("[test] drone script: %s %016llx/%016llx", (uint32_t)data[4] ? "on " : "off", data[2], data[3]);
 #endif
-    if (data[0] == DRONE_ACTOR && !(uint32_t)data[4] && Real_EnableComp && Real_Disable
-        && (data[2] == DRONE_SOUND || data[2] == R14_DAMAGEABLE)) {
+    if (data[0] == dk::kDroneActor && !(uint32_t)data[4] && Real_EnableComp && Real_Disable
+        && (data[2] == DRONE_SOUND || data[2] == dk::kDamageable)) {
         if (data[2] == DRONE_SOUND) {                       // the end begins: this node's context
             for (int i = 0; i < t_expiry.nsound; ++i)        // (an unfinished one before: let it go)
                 Real_Disable(t_expiry.sound[i].system, t_expiry.sound[i].index, 1);
@@ -1005,14 +934,14 @@ void __fastcall Hooked_EnableEnter(void *node, const uint64_t *data) {
         t_expiry_step = 0;
         return;
     }
-    EnableTag tag(data[0] == DRONE_ACTOR && (uint32_t)data[4] ? (data[2] == R14_DAMAGEABLE ? 2 : 1) : 0);
-    if (data[0] == DRONE_ACTOR && data[2] == R14_TOUCH_INTERACT && !(uint32_t)data[4] && Real_Disable) {
+    EnableTag tag(data[0] == dk::kDroneActor && (uint32_t)data[4] ? (data[2] == dk::kDamageable ? 2 : 1) : 0);
+    if (data[0] == dk::kDroneActor && data[2] == dk::kTouchInteract && !(uint32_t)data[4] && Real_Disable) {
         t_capture = true;                                   // the engine resolves it; Hooked_Disable keeps it
         Real_EnableEnter(node, data);
         t_capture = false;
         return;
     }
-    if (data[2] == NCA_MODEL && data[3] == PORT) {          // the script's own say: the gun's instead
+    if (data[2] == dk::kNcaModel && data[3] == dk::kPort) {          // the script's own say: the gun's instead
         uint32_t shown;
         if (GunShown(data[0], &shown) && shown != (uint32_t)data[4]) {
             uint64_t copy[5];
@@ -1023,13 +952,13 @@ void __fastcall Hooked_EnableEnter(void *node, const uint64_t *data) {
         }
     }
     Real_EnableEnter(node, data);
-    if (data[2] == NCA_MODEL && data[3] == GUN) {
+    if (data[2] == dk::kNcaModel && data[3] == dk::kGun) {
         SetGun(data[0], (uint32_t)data[4]);
         uint64_t copy[5];                                   // actor, scope, system, component, enable
         memcpy(copy, data, sizeof copy);
-        copy[3] = SATELLITE;
+        copy[3] = dk::kSatellite;
         Real_EnableEnter(node, copy);
-        copy[3] = PORT;
+        copy[3] = dk::kPort;
         Real_EnableEnter(node, copy);
         if (InterlockedIncrement(&g_mirrored) <= 5)
             LogDebug("drone gun %s: body and port too", (uint32_t)data[4] ? "shown" : "hidden");
@@ -1159,10 +1088,6 @@ constexpr uint8_t ATTACK_BYTES[] = { 0x48, 0x8b, 0xc4, 0x55, 0x53, 0x56, 0x57, 0
 constexpr uintptr_t TARGET_POS_RVA = 0xd5fe40;               // (target system, &pose, index): its pose
 constexpr uintptr_t DEFER_RVA = 0x198c40;                    // CDeferredMethodQueue (queue, sys, fn, index, &vec3)
 constexpr uintptr_t SET_VELOCITY_RVA = 0x469cb0;             // CPhysicsCS (sys, index, &world velocity)
-constexpr float CHASE_SPEED = 7.0f;                          // m/s
-constexpr float CHASE_DISTANCE = 7.0f;                       // m from the target it holds (closer: a bullet lands before it is drawn)
-constexpr float CHASE_GAIN = 2.0f;                           // speed per metre off that distance
-constexpr float CHASE_ABOVE = 0.5f;                          // m above the target's position
 using attack_fn = void(__fastcall *)(uint8_t *, uint32_t);
 attack_fn Real_Attack = nullptr;
 using target_pos_fn = Pose *(__fastcall *)(void *, Pose *, uint32_t);
@@ -1207,12 +1132,8 @@ void ChaseTarget(uint8_t *cs, uint32_t handle) {
     }
     Pose them;
     TargetPos(*(void **)(rec + 0x88), &them, *(uint16_t *)(rec + 0x80));
-    float d[3] = { them.p[0] - me.p[0], them.p[1] + CHASE_ABOVE - me.p[1], them.p[2] - me.p[2] };
-    float dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-    if (dist < 1e-3f) return;
-    float speed = (dist - CHASE_DISTANCE) * CHASE_GAIN;
-    speed = speed > CHASE_SPEED ? CHASE_SPEED : speed < -CHASE_SPEED ? -CHASE_SPEED : speed;
-    float v[3] = { d[0] / dist * speed, d[1] / dist * speed, d[2] / dist * speed };
+    float v[3], dist = 0.0f, speed = 0.0f;
+    if (!dk::ChaseVelocity(me.p, them.p, v, &dist, &speed)) return;   // nEVR port: shared rule (#2359)
     SetDroneVelocity(cs, rec, v);
     c->moving = true;
     if (InterlockedIncrement(&g_chases) <= 5)
@@ -1277,7 +1198,7 @@ void __fastcall Hooked_Impact(uint8_t *sys, uint32_t index, uint8_t *hit) {
 void __fastcall Hooked_WeaponHit(uint8_t *cs, uint32_t index, void *a, void *b, void *c, void *d) {
     bool drone = false;
     AcquireSRWLockShared(&g_drones_lock);
-    for (auto &g : g_drones) if (g.dcs == cs && (g.didx & 0xffff) == (index & 0xffff)) drone = true;
+    for (auto &g : g_groups.g) if (g.used && g.system == SysKey(cs) && (g.handle & 0xffff) == (index & 0xffff)) drone = true;
     ReleaseSRWLockShared(&g_drones_lock);
     EC_TRY {
         float hp = *(float *)(DamageRecord(cs, index) + 0x20);
@@ -1547,15 +1468,15 @@ void DroneHitsDue() {                                           // (server, once
         ULONGLONG now = GetTickCount64();
         AcquireSRWLockShared(&g_drones_lock);
         int alive = 0;
-        DroneGroup *only = nullptr;
-        for (auto &d : g_drones) if (d.dcs && !d.dead) { ++alive; only = &d; }
+        const dk::Group<dk::None, PcGroup> *only = nullptr;
+        for (auto &d : g_groups.g) if (d.used && !d.dead) { ++alive; only = &d; }
         for (auto &h : hs) {
             if (!h.seen || now - h.seen > 25000 || nl == 8) continue;
             uint64_t actor = ActorOf(at, h.handle);
-            DroneGroup *g = nullptr;
-            for (auto &d : g_drones) if (d.dcs && !d.dead && actor && d.actor == actor) g = &d;
+            const dk::Group<dk::None, PcGroup> *g = nullptr;
+            for (auto &d : g_groups.g) if (d.used && !d.dead && actor && d.actor == actor) g = &d;
             if (!g && alive == 1 && only->opened <= h.seen) g = only;   // (one drone out: its shots are its)
-            if (g) live[nl++] = { g->dcs, g->didx, g->actor, h.handle };
+            if (g) live[nl++] = { static_cast<uint8_t *>(SysPtr(g->system)), g->handle, g->actor, h.handle };
         }
         ReleaseSRWLockShared(&g_drones_lock);
 #ifdef ECHOCOMBAT_LOG
@@ -1668,7 +1589,7 @@ void InstallChase(uintptr_t base) {
     DetourAttach(&(PVOID &)Real_BulletSpawn, Hooked_BulletSpawn);
     LONG rc = DetourTransactionCommit();
     if (rc == NO_ERROR)
-        Log("hooked AttackTarget and bullet spawn: a drone chases its target (%.0f m/s, holds %.0f m)", CHASE_SPEED, CHASE_DISTANCE);
+        Log("hooked AttackTarget and bullet spawn: a drone chases its target (%.0f m/s, holds %.0f m)", dk::kChaseSpeed, dk::kChaseDistance);
     else
         LogWarning("AttackTarget / bullet spawn hook failed");
 }

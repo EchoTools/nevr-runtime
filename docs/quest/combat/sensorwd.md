@@ -8,7 +8,7 @@ ELF vaddr = disassembly VA - 0x100000.
 
 ## Provenance
 
-Every line cited here is kotorvr's (Ducky's) q15t-upstream at `c5a67e8`, `runtime/native/afkxr/afk_fx.cpp` (read with `git -C <q15t-upstream> show c5a67e8:runtime/native/afkxr/afk_fx.cpp`):
+Every line cited here is kotorvr's (Ducky's) echoquest-combat at `c5a67e8`, `runtime/native/afkxr/afk_fx.cpp` (read with `git -C <echoquest-combat> show c5a67e8:runtime/native/afkxr/afk_fx.cpp`):
 the comment that names the sphere, the pings and the vtable words `:6108-6114`, the constants `:6115-6121`, the slot `:6125-6130`, the sphere test `SnsIsSphere` `:6141-6152`, the
 enable and disable hooks `:6162-6201`, the tick `SnsTick` `:6204-6243`, the event hook from `:6244`, and the gate to combat maps (below). It came into this tree with the q15t plugin import
 (#1591) and moved here from `src/quest/plugins/q15t/src/sensorwd.{h,cpp}`. What is ours: the manager install of the three words (the plugin swapped them itself), the 34 code-word pins,
@@ -116,7 +116,7 @@ On a combat APK built at a tag after this unit, or a development APK repacked wi
 `"state":"on"` and three `ok` statuses, `combat_sensorwd_scope` `from 0 to 1`, then `combat_sensorwd_first` for `ping` and `sphere_enable`, and `combat_sensorwd_thread` lines naming the roles' threads;
 `combat_sensorwd_off` only in a match where a sphere sticks. In an arena match on the same APK: none of these after the install line. Without a scanner used in the match the row is not met.
 
-## Evidence for the behaviour and the constants (q15t-upstream `c5a67e8`)
+## Evidence for the behaviour and the constants (echoquest-combat `c5a67e8`)
 
 | constant / rule | value | source |
 |---|---|---|
