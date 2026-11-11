@@ -55,9 +55,9 @@ namespace nevr_quest::combat::levelname {
 // "installed", "refused", "off", "already_ran", "module_not_loaded". A refused step leaves nothing installed and may be tried again.
 ModuleResult Install(bool on) noexcept;
 
-// The same on the image `lookup` finds; the plugin's old kill file is looked for in `legacyDir` (nullptr: the plugin's data directory, worked out from
-// the package name).
-ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on, const char* legacyDir) noexcept;
+// The same on the image `lookup` finds. The plugin's old kill file is looked for through legacy::Present (legacy_switch.h), in the directory that
+// the test seam (legacy::SetDirectoryForTest) names, or the plugin's own data directory.
+ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept;
 
 // True once Install put all four thunks in and until ResetForTest: the companion (boosterpool.h) installs only then.
 bool Installed() noexcept;

@@ -1,11 +1,10 @@
 #include "quest/combat/levelname.h"
 
-#include <unistd.h>
-
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -97,33 +96,10 @@ constexpr SlotOps kOps[kHookCount] = {{&ArmSlot<0>, &DisarmSlot<0>, &PutSlot<0>,
                                       {&ArmSlot<2>, &DisarmSlot<2>, &PutSlot<2>, &ResetSlot<2>},
                                       {&ArmSlot<3>, &DisarmSlot<3>, &PutSlot<3>, &ResetSlot<3>}};
 
-// The plugin's data directory: /sdcard/Android/data/<package>/files/q15t, the package from /proc/self/cmdline (the plugin's own rule). False when
-// none can be named.
-bool PluginDataDir(char* out, std::size_t n) noexcept {
-  char cmd[256] = {};
-  std::FILE* f = std::fopen("/proc/self/cmdline", "re");
-  if (f == nullptr) return false;
-  const std::size_t got = std::fread(cmd, 1, sizeof(cmd) - 1, f);
-  std::fclose(f);
-  cmd[got] = '\0';
-  if (char* colon = std::strchr(cmd, ':')) *colon = '\0';
-  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return false;
-  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", cmd);
-  return true;
-}
-
 // The plugin's kill file `levelname.off` is not read: a file there turns nothing off (docs/adr/0046 rule 4). One found is a Warning that names the
 // `combat:` key that replaces it, so an operator who relied on it learns why the full level is loading.
-void WarnLegacyKillFile(const char* legacyDir) noexcept {
-  char dir[300] = {};
-  if (legacyDir == nullptr) {
-    if (!PluginDataDir(dir, sizeof(dir))) return;
-  } else {
-    std::snprintf(dir, sizeof(dir), "%s", legacyDir);
-  }
-  char path[400];
-  std::snprintf(path, sizeof(path), "%s/levelname.off", dir);
-  if (access(path, F_OK) != 0) return;
+void WarnLegacyKillFile() noexcept {
+  if (!legacy::Present("levelname.off")) return;
   sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_levelname_legacy_switch",
                       {{"file", "levelname.off"},
                        {"replaced_by", "combat.levelname: false"},
@@ -172,8 +148,8 @@ Result Fresh(const char* result, const char* reason) noexcept {
 
 }  // namespace
 
-ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on, const char* legacyDir) noexcept {
-  WarnLegacyKillFile(legacyDir);
+ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept {
+  WarnLegacyKillFile();
   if (!on) {
     LogInstall(Fresh("off", "off_config"), "combat.levelname is false: global_mp loads as the game's cut level when the lowspec flag is set");
     return {false, "off"};
@@ -227,7 +203,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on, const char* legacy
 
 ModuleResult Install(bool on) noexcept {
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
-  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, on, nullptr);
+  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, on);
 }
 
 bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }

@@ -714,6 +714,7 @@ void TheBotGateSeesTheRuntimesLevelname() {
   Begin();
   ln::ResetForTest();
   ln::SetImageLookupForTest(&Lookup);
+  nevr_quest::combat::legacy::SetDirectoryForTest(kNoLegacyDir);
   Build(/*withLevelname=*/true);
   CombatMapLoaded();
   QCHECK(Installed(AllLibs()));
@@ -722,10 +723,10 @@ void TheBotGateSeesTheRuntimesLevelname() {
   QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) == stock);
   QCHECK(HeadCallerBots(head) == kRealKind);  // levelname not in: the cut level loads, the combat bot is not in it
   // combat.levelname off: the module installs nothing, the word stays the game's, the gate keeps the game's choice
-  QCHECK(!ln::InstallAt(&Lookup, /*on=*/false, kNoLegacyDir).installed);
+  QCHECK(!ln::InstallAt(&Lookup, /*on=*/false).installed);
   QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) == stock && HeadCallerBots(head) == kRealKind);
   // combat.levelname on: the real hook takes the slot the gate reads
-  QCHECK(ln::InstallAt(&Lookup, /*on=*/true, kNoLegacyDir).installed);
+  QCHECK(ln::InstallAt(&Lookup, /*on=*/true).installed);
   QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) != stock);
   QCHECK(HeadCallerBots(head) == hg::kNotQuest);
   ln::ResetForTest();  // the hook out again: the word is the stock function and the gate leaves the game's choice

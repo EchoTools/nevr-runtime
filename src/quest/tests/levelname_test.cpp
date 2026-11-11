@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "quest/combat/combat_level.h"
+#include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/mapping_perms.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -134,6 +135,7 @@ void Begin() {
   g_lines.clear();
   levelname::ResetForTest();
   levelname::SetImageLookupForTest(&Lookup);
+  nevr_quest::combat::legacy::SetDirectoryForTest(kNoLegacyDir);  // no kill file unless a test puts one in the directory
   g_realCalls = g_plainCalls = 0;
   g_realGame = g_plainGame = nullptr;
   g_realName = g_plainName = 0;
@@ -151,7 +153,7 @@ void End() {
 // An install, and the fakes standing in for the game's two callees: the originals the manager published (the slot's word, base + the function, is
 // zeros in the image) and the plain stub.
 nevr_quest::combat::ModuleResult InstallWithFakes(bool fourDistinct = false) {
-  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
   if (!r.installed) return r;
   *levelname::targets::Thunk<0>::OriginalOut() = reinterpret_cast<void*>(fourDistinct ? kOriginals[0] : &FakeReal);
   *levelname::targets::Thunk<1>::OriginalOut() = reinterpret_cast<void*>(fourDistinct ? kOriginals[1] : &FakeReal);
@@ -175,7 +177,7 @@ void TheConstantsAreTheStoreLibr15s() {
 // All four words (and only those) hold their thunk after the install; the callee addresses are base + the vaddrs; the line says so.
 void AnInstallPutsAThunkInEachOfTheFourWords() {
   Begin();
-  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
   QCHECK(levelname::Installed());
   QCHECK(Word(0) == reinterpret_cast<std::uintptr_t>(levelname::targets::Thunk<0>::EntryAddress()));
@@ -325,7 +327,7 @@ void AWordThatIsNotTheFunctionRefusesAllFourAndPutsBackTheRest() {
   for (std::size_t bad = 0; bad < 4; ++bad) {
     Begin();
     g_image.Put<std::uintptr_t>(kSlot[bad], g_image.Base() + kFn + 4);  // some other function
-    const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+    const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
     QCHECK(!r.installed && std::strcmp(r.status, "refused") == 0 && !levelname::Installed());
     for (std::size_t i = 0; i < 4; ++i) {
       const std::uintptr_t want = i == bad ? g_image.Base() + kFn + 4 : g_image.Base() + kFn;
@@ -353,7 +355,7 @@ void AWordThatIsNotTheFunctionRefusesAllFourAndPutsBackTheRest() {
     // the refused install leaves the retry possible once the word is right
     g_image.Put<std::uintptr_t>(kSlot[bad], g_image.Base() + kFn);
     g_lines.clear();
-    const nevr_quest::combat::ModuleResult again = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+    const nevr_quest::combat::ModuleResult again = levelname::InstallAt(&Lookup, true);
     QCHECK(again.installed && levelname::Installed());
     End();
   }
@@ -374,7 +376,7 @@ void ARollbackThatCannotPutAWordBackSaysSo() {
   g_observedSlot = g_image.Base() + kSlot[0];
   g_observedRestore = g_image.Base() + kFn;
   const sentinel::StoreObserver previous = sentinel::SetStoreObserver(&OtherWriter);
-  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
   sentinel::SetStoreObserver(previous);
   QCHECK(!r.installed && !levelname::Installed());
   const std::vector<Line> install = Lines("combat_levelname_install");
@@ -387,18 +389,18 @@ void ARollbackThatCannotPutAWordBackSaysSo() {
 // The other refusals: no libr15, a second install, a different build.
 void TheOtherRefusalsSayWhy() {
   Begin();
-  nevr_quest::combat::ModuleResult r = levelname::InstallAt(&NoLibr15, true, kNoLegacyDir);
+  nevr_quest::combat::ModuleResult r = levelname::InstallAt(&NoLibr15, true);
   QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
-  r = levelname::InstallAt(nullptr, true, kNoLegacyDir);
+  r = levelname::InstallAt(nullptr, true);
   QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
   const std::vector<Line> refused = Lines("combat_levelname_install");
   QCHECK(refused.size() == 2U && refused[0].level == sentinel::LogLevel::kError && Has(refused[0].text, "\"reason\":\"module_not_loaded\""));
   QCHECK(Word(0) == g_image.Base() + kFn);
 
-  r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  r = levelname::InstallAt(&Lookup, true);
   QCHECK(r.installed);
   g_lines.clear();
-  r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);  // a second install is refused and writes nothing
+  r = levelname::InstallAt(&Lookup, true);  // a second install is refused and writes nothing
   QCHECK(!r.installed && std::strcmp(r.status, "already_ran") == 0);
   QCHECK(Lines("combat_levelname_refused").size() == 1U && Lines("combat_levelname_refused")[0].level == sentinel::LogLevel::kWarn);
   QCHECK(Word(0) == reinterpret_cast<std::uintptr_t>(levelname::targets::Thunk<0>::EntryAddress()));
@@ -412,7 +414,7 @@ void TheOtherRefusalsSayWhy() {
                  {kSymbol, kSlot[3], false, false, kFn, true}},
                 "0000000000000000000000000000000000000001");  // not the patched libr15
   for (const std::uintptr_t s : kSlot) g_image.Put<std::uintptr_t>(s, g_image.Base() + kFn);
-  r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  r = levelname::InstallAt(&Lookup, true);
   QCHECK(!r.installed && std::strcmp(r.status, "refused") == 0);
   QCHECK(Has(Lines("combat_levelname_install")[0].text, "\"reason\":\"build_id_mismatch\""));
   QCHECK(Word(0) == g_image.Base() + kFn && Word(3) == g_image.Base() + kFn);
@@ -422,7 +424,7 @@ void TheOtherRefusalsSayWhy() {
 // combat.levelname false: nothing is written, one Info line says why.
 void TheSwitchTurnsTheModuleOffAndNothingIsWritten() {
   Begin();
-  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, false, kNoLegacyDir);
+  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, false);
   QCHECK(!r.installed && std::strcmp(r.status, "off") == 0 && !levelname::Installed());
   for (std::size_t i = 0; i < 4; ++i) QCHECK(Word(i) == g_image.Base() + kFn);
   const std::vector<Line> install = Lines("combat_levelname_install");
@@ -438,7 +440,8 @@ void TheLegacyKillFileIsAWarningAndNothingElse() {
   QCHECK(made);
   if (!made) return;
   Begin();
-  nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, dir);
+  nevr_quest::combat::legacy::SetDirectoryForTest(dir);
+  nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
   QCHECK(r.installed && Lines("combat_levelname_legacy_switch").empty());  // no file: nothing said
   levelname::ResetForTest();
   BuildImage();
@@ -447,7 +450,7 @@ void TheLegacyKillFileIsAWarningAndNothingElse() {
   QCHECK(f != nullptr);
   if (f != nullptr) std::fclose(f);
   g_lines.clear();
-  r = levelname::InstallAt(&Lookup, true, dir);
+  r = levelname::InstallAt(&Lookup, true);
   QCHECK(r.installed && levelname::Installed());  // the file did not turn it off
   const std::vector<Line> legacy = Lines("combat_levelname_legacy_switch");
   QCHECK(legacy.size() == 1U && legacy[0].level == sentinel::LogLevel::kWarn);
@@ -456,11 +459,12 @@ void TheLegacyKillFileIsAWarningAndNothingElse() {
   levelname::ResetForTest();
   BuildImage();
   g_lines.clear();
-  r = levelname::InstallAt(&Lookup, false, dir);
+  r = levelname::InstallAt(&Lookup, false);
   QCHECK(!r.installed && Lines("combat_levelname_legacy_switch").size() == 1U);
   // a directory without the file: nothing is said
   g_lines.clear();
-  r = levelname::InstallAt(&Lookup, false, kNoLegacyDir);
+  nevr_quest::combat::legacy::SetDirectoryForTest(kNoLegacyDir);
+  r = levelname::InstallAt(&Lookup, false);
   QCHECK(Lines("combat_levelname_legacy_switch").empty());
   End();
   unlink(file.c_str());
@@ -472,7 +476,7 @@ void AReadOnlyVtablePageIsWrittenAndRestored() {
   Begin();
   const std::size_t page = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
   for (const std::uintptr_t s : kSlot) mprotect(reinterpret_cast<void*>((g_image.Base() + s) & ~(page - 1)), page, PROT_READ);
-  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true, kNoLegacyDir);
+  const nevr_quest::combat::ModuleResult r = levelname::InstallAt(&Lookup, true);
   QCHECK(r.installed);
   QCHECK(Word(0) == reinterpret_cast<std::uintptr_t>(levelname::targets::Thunk<0>::EntryAddress()));
   QCHECK(Word(3) == reinterpret_cast<std::uintptr_t>(levelname::targets::Thunk<3>::EntryAddress()));
