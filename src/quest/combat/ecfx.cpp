@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/burst_then_count.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx_core.h"
 #include "quest/combat/legacy_switch.h"
@@ -28,7 +29,8 @@ using sentinel::LogLevel;
 
 constexpr char kEntrySym[4][32] = {"re33_ecent_ac4e93_17900", "re33_ecent_ac4e93_17700", "re33_ecent_ac4e93_17b00", "re33_ecent_ac4e93_17b60"};
 constexpr const char* kKindName[4] = {"charge", "burst", "boom", "sound"};
-constexpr int kLineCap = 96;
+constexpr unsigned kLineCap = 96;  // ran and drain records each written, then counted (#2349)
+constexpr std::uint64_t kLineEveryMs = 10000;
 using EntryFn = void (*)(void* tp);
 
 Entries g_entries;                              // set before the tick is registered; read on the tick only
@@ -37,7 +39,14 @@ std::atomic<bool> g_gateOn{false};
 std::uint64_t g_lastMs = 0;                     // the tick only
 std::atomic_flag g_running = ATOMIC_FLAG_INIT;  // one drain at a time, whatever calls the tick
 void* g_lib = nullptr;                          // our own reference to the wall lib, held for the process: it is never unmapped
-std::atomic<int> g_lines{0};
+// The ran and drain records' budget (nevr::BurstThenCount, the tick only): the first kLineCap are each written, then one
+// combat_ecfx_lines record says the later ones are counted, then a combat_ecfx_sum record with the counts at most every
+// kLineEveryMs and once none has come for kLineEveryMs.
+nevr::BurstThenCount g_lineBudget{kLineCap, kLineEveryMs};
+struct Totals {
+  long long ran = 0, notRun = 0, boom = 0, sound = 0, refused = 0, stale = 0;
+};
+Totals g_totals;  // the tick only
 bool g_attached = false;
 bool g_noThread = false;
 bool g_told_waiting = false;
@@ -69,30 +78,63 @@ bool Named(std::uint64_t fn, int kind) noexcept {
 std::uint32_t* Gate() noexcept { return reinterpret_cast<std::uint32_t*>(sentinel::EcPage() + kGateOff); }
 std::uint64_t* Queue() noexcept { return reinterpret_cast<std::uint64_t*>(sentinel::EcPage() + kQueueOff); }
 
+// The budget's own records: the cap, then the counts.
+void BudgetLine(const nevr::BurstThenCount::Line& l) noexcept {
+  if (l.verdict == nevr::BurstThenCount::Verdict::kCapped) {
+    sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_lines",
+                        {{"records", static_cast<long long>(l.total)},
+                         {"msg", "later combat_ecfx_ran and combat_ecfx_drain records are counted, not logged; combat_ecfx_sum follows at most every 10 s"}});
+  } else if (l.verdict == nevr::BurstThenCount::Verdict::kCount) {
+    sentinel::LogFields(g_totals.notRun ? LogLevel::kWarn : LogLevel::kInfo, "combat_ecfx_sum",
+                        {{"records", static_cast<long long>(l.total)}, {"since_last", static_cast<long long>(l.sinceLine)}, {"ran", g_totals.ran},
+                         {"not_run", g_totals.notRun}, {"boom_freed", g_totals.boom}, {"sound_repeats", g_totals.sound}, {"refused", g_totals.refused},
+                         {"stale_freed", g_totals.stale}, {"msg", "NEUTRON effects in all; the records since the last line were counted, not logged"}});
+  }
+}
+// One would-be record at `now`: true when it is written; else the budget's own record, if one is due, is written instead.
+bool LineDue(std::uint64_t now) noexcept {
+  const nevr::BurstThenCount::Line l = g_lineBudget.Event(now);
+  if (l.verdict == nevr::BurstThenCount::Verdict::kWrite) return true;
+  BudgetLine(l);
+  return false;
+}
+
 void TickOnce(std::uint64_t now) noexcept {
   if (g_lastMs && now - g_lastMs < kEveryMs) return;
   g_lastMs = now;
-  Run run[kSlots];
   Counts c;
-  const int n = g_drain.Plan(Queue(), g_entries, now, &WallOf, run, &c);
-  for (int i = 0; i < n; ++i) {
-    if (Named(run[i].fn, run[i].kind)) {
-      reinterpret_cast<EntryFn>(run[i].fn)(reinterpret_cast<void*>(run[i].ctx));  // the entry checks tp itself
-      if (g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap) {
+  Env env;
+  env.entries = &g_entries;  // the exact-entry check is on: the entries are the wall library's, from dlsym (#2349 D1)
+  env.wallOf = &WallOf;
+  // Each entry runs as the drain reaches its slot, and the drain frees the slot after it returned (#2349 D5, Q-1)
+  g_drain.Plan(Queue(), env, now, [now](const Run& r) {
+    if (Named(r.fn, r.kind)) {
+      reinterpret_cast<EntryFn>(r.fn)(reinterpret_cast<void*>(r.ctx));  // the entry checks tp itself
+      ++g_totals.ran;
+      if (LineDue(now)) {
         char tp[19];
-        sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_ran", {{"kind", kKindName[run[i].kind]}, {"tp", sentinel::HexString(tp, run[i].ctx)}});
+        sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_ran", {{"kind", kKindName[r.kind]}, {"tp", sentinel::HexString(tp, r.ctx)}});
       }
-    } else if (g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap) {
-      char entry[19];
-      sentinel::LogFields(LogLevel::kWarn, "combat_ecfx_ran",
-                          {{"kind", kKindName[run[i].kind]}, {"entry", sentinel::HexString(entry, run[i].fn)}, {"status", "not_run"},
-                           {"msg", "the queued entry is no longer the wall library's: the effect is not run"}});
+    } else {
+      ++g_totals.notRun;
+      if (LineDue(now)) {
+        char entry[19];
+        sentinel::LogFields(LogLevel::kWarn, "combat_ecfx_ran",
+                            {{"kind", kKindName[r.kind]}, {"entry", sentinel::HexString(entry, r.fn)}, {"status", "not_run"},
+                             {"msg", "the queued entry is no longer the wall library's: the effect is not run"}});
+      }
     }
-    Free(Queue(), run[i].slot);  // Q-1: after the entry returned
+  }, &c);
+  g_totals.boom += c.boom;
+  g_totals.sound += c.sound;
+  g_totals.refused += c.refused;
+  g_totals.stale += c.stale;
+  if (c.boom || c.sound || c.refused || c.stale) {
+    if (LineDue(now))
+      sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_drain",
+                          {{"boom_freed", c.boom}, {"sound_repeats", c.sound}, {"refused", c.refused}, {"stale_freed", c.stale}});
   }
-  if ((c.boom || c.sound || c.refused || c.stale) && g_lines.fetch_add(1, std::memory_order_relaxed) < kLineCap)
-    sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_drain",
-                        {{"boom_freed", c.boom}, {"sound_repeats", c.sound}, {"refused", c.refused}, {"stale_freed", c.stale}});
+  BudgetLine(g_lineBudget.Flush(now));  // a count no record covers yet goes out once none has come for 10 s
   if (!g_gateOn.load(std::memory_order_relaxed)) {  // fail-closed: only after a drain ran on the tick
     g_gateOn.store(true, std::memory_order_relaxed);
     __atomic_store_n(Gate(), 1u, __ATOMIC_RELEASE);
@@ -198,7 +240,8 @@ void ResetForTest() noexcept {
   g_lastMs = 0;
   g_attached = false;
   g_told_waiting = false;
-  g_lines = 0;
+  g_lineBudget = nevr::BurstThenCount{kLineCap, kLineEveryMs};
+  g_totals = Totals();
   g_installed = false;
 }
 bool GateOpenForTest() noexcept { return __atomic_load_n(Gate(), __ATOMIC_ACQUIRE) != 0; }
