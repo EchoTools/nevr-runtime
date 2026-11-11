@@ -21,6 +21,7 @@
 #endif
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/patch/resource_sets.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
@@ -915,6 +916,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
+  // #2161: the resource sets the plugins registered are mounted once the game's manifest exists (now, or from the
+  // per-frame tick when it is not built yet).
+  nevr_resource_sets::MountWhenReady();
 
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();

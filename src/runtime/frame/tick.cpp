@@ -48,6 +48,7 @@
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
+#include "runtime/patch/resource_sets.h"
 #include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
@@ -166,6 +167,13 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // #2161: a resource-set mount deferred until the game's manifest exists (run on the game's own thread only), and
+    // the sets' read summary.
+    {
+        const unsigned long loop = GameLoopThreadId();
+        nevr_resource_sets::OnFrame(loop != 0 && loop == GetCurrentThreadId());
+    }
 
     // #906, #896: the UI text writer touches the game's UI state, so it runs on the thread that runs the game's main
     // wrapper (crash_recovery.cpp records it) only. This dispatcher is also driven from GetTimeMicroseconds, which any

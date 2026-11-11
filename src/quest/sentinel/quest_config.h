@@ -33,6 +33,9 @@
 // `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
 //
+// `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0045) change the CDN texture delivery's defaults
+// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default.
+//
 // `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
 // written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
 // with one Warning that names the key, never the value. It is also where a choice made in the menu is kept: the sentinel writes it
@@ -58,6 +61,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/nevr_config.h"
@@ -145,6 +149,20 @@ struct TextureChoice {
 struct HandFlipChoice {
   bool on = false;
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
+};
+
+// The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
+// defaults live in code (quest/cargo/cargo_service.h); the file only changes them, and an empty field means the code's default.
+//   assets.cdn_url        the host's base (https only); assets.manifest the manifest's path under it (a test device names its own)
+//   assets.required_only  fetch only the labels whose state is `required`
+//   assets.labels.<name>  on, off or required; a label the code and the file do not name is off, whatever a manifest says
+// A key that is wrong is one Warning that names the key and never the value, and the default stays.
+struct AssetsChoice {
+  std::string cdnUrl;
+  std::string manifest;
+  bool requiredOnly = false;
+  std::vector<std::pair<std::string, std::string>> labels;  // (label, "on" | "off" | "required"), in file order
+  Source source = Source::kAbsent;                         // kFile: the file gave at least one accepted assets key
 };
 
 // The combat.force request (#2170, docs/adr/0046 rule 5), after the file and the default have spoken: the file asks for the folded
@@ -246,6 +264,7 @@ struct ResolvedConfig {
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
   HandFlipChoice handFlip;
+  AssetsChoice assets;
   CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).

@@ -108,10 +108,16 @@ PROGRAMS = {
         "weapon_arm_test",
     ),
     "data": (
+        "cargo_manifest_test",
+        "cargo_resolver_test",
+        "cargo_run_test",
+        "cargo_service_test",
+        "cargo_store_test",
         "data_step_test",
         "data_test",
         "fetch_test",
         "pack_test",
+        "resource_shadow_test",
     ),
     "data-net": (
         "curl_transport_test",
@@ -120,6 +126,7 @@ PROGRAMS = {
     "hooks": (
         "arm64_reloc_test",
         "build_variant_test",
+        "cargo_hook_test",
         "clock_levels_hook_test",
         "crash_first_hook_test",
         "credits_text_test",

@@ -23,6 +23,7 @@
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/plugin_assets.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
@@ -627,6 +628,38 @@ TEST_F(CachedOverrides, AFixedOverrideReplacesItsResourceOnEveryLoad) {
   EXPECT_NE(copies[0], copies[1]) << "each load is handed a copy of its own, which the game frees on its own";
   EXPECT_NE(copies[1], copies[2]);
   EXPECT_EQ(TestLogLinesContaining("override applied label=every_load").size(), 3u);
+}
+
+bool NeverServes(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
+
+// #2161: which earlier entry takes a resource set override's place at the mount. The set's override is keyed by an
+// on-disk type; a CGTextureResource is read as buffer 0 by Make(<logical>, "Win10") and buffer 1 by
+// Make(<logical>, "Win10GPU") (resource_buffer_key.h).
+TEST_F(CachedOverrides, TheFirstFixedEntryForAnOnDiskKeyIsFoundByEveryTypeThatNamesItsBuffer) {
+  using nevr_resource_key::OnDiskType;
+  using nevr_resource_key::kTextureResourceType;
+  const std::uint64_t descriptor = OnDiskType(kTextureResourceType, 0);
+  const std::uint64_t payload = OnDiskType(kTextureResourceType, 1);
+  static const std::uint8_t kBytes[4] = {1, 2, 3, 4};
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "") << "an empty registry";
+
+  RegisterResourceOverride(descriptor, 0x10, kBytes, 4, "same_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "same_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x11), "") << "another name";
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x10), "") << "the other buffer's type";
+
+  RegisterResourceOverride(kTextureResourceType, 0x20, kBytes, 4, "logical");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x20), "logical") << "the logical type names buffer 0";
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x20), "") << "and only buffer 0";
+
+  RegisterResourceOverride(0, 0x30, kBytes, 4, "any_type");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(payload, 0x30), "any_type") << "type 0 is taken to compete";
+
+  ASSERT_TRUE(RegisterResourceTransform(descriptor, 0x40, &NeverServes, nullptr, "a_transform"));
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x40), "") << "a transform is not a fixed entry";
+
+  RegisterResourceOverride(descriptor, 0x10, kBytes, 4, "second");
+  EXPECT_EQ(FirstFixedOverrideLabelFor(descriptor, 0x10), "same_type") << "the first of two";
 }
 
 TEST_F(CachedOverrides, ACachedFileForAnotherResourceIsNotDeliveredForThisOne) {

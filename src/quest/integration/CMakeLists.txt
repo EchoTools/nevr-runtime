@@ -116,6 +116,11 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_ho
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_request_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_request_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The cargo decision in that hook links the shared shadow builder and pins (docs/adr/0045-cdn-texture-delivery.md).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../core/resource_shadow.cpp"
+                                              "${CMAKE_CURRENT_SOURCE_DIR}/../../core/cargo_resolver.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../../core/resource_shadow.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../../core/cargo_resolver.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 # And the #943 texture-quality hook's counters (also without exceptions).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"

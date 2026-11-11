@@ -32,6 +32,9 @@ struct LoginProfileInputs {
   nlohmann::json plugins = nlohmann::json::array();
   // A JSON array of the assets the loaded plugins carry (#432); the key is sent only when this is non-empty.
   nlohmann::json assets = nlohmann::json::array();
+  // A JSON array of the resource sets the loaded plugins carry, mounted (#2161); the key is sent only when this is
+  // non-empty.
+  nlohmann::json resources = nlohmann::json::array();
 };
 
 std::string BuildLoginProfileJson(const LoginProfileInputs& inputs);

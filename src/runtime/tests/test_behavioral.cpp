@@ -154,6 +154,16 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// The logged lines that contain `needle`, one per line, for an assertion's failure message.
+std::string TestLogLinesWith(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::string lines;
+  for (const std::string& message : g_testLogMessages) {
+    if (message.find(needle) != std::string::npos) lines += message + "\n";
+  }
+  return lines.empty() ? "no line contains " + needle : lines;
+}
+
 // Every captured line that holds `needle`, whole, for a test that asserts what a single line looks like (#2215).
 std::vector<std::string> TestLogLinesContaining(const std::string& needle) {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
@@ -313,6 +323,14 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/patch/asset_registry.h"
+#include "runtime/patch/resource_buffer_key.h"  // #2161: the fixture's on-disk record types
+#include "runtime/patch/resource_override.h"  // #2161: a mounted set's overrides
+#include "runtime/patch/resource_sets.h"  // #2161
+#include "runtime/server/installed_levels.h"   // #2161
+#include "runtime/server/registered_levels.h"  // #2161
+#include <set>
+#include "core/resource_shadow.h"
+#include <zstd.h>
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
 #include "core/nevr_root.h"
@@ -2616,7 +2634,7 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 }
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
-  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 8u);
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 9u);
   NevrGameContext ctx = {};
   ctx.ctx_size = sizeof(NevrGameContext);
   EXPECT_GE(ctx.ctx_size, offsetof(NevrGameContext, log) + sizeof(NevrLogFn));
@@ -2799,6 +2817,765 @@ TEST_F(PluginLevelTest, NoLevelAndNoGameObjectBothReadAsNoLevel) {
   EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kFrameCtx), 1u);
   EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
   EXPECT_EQ(LevelFixtureName(kFrameCtx), nullptr);
+}
+
+// ============================================================================
+// #2161: plugin resource sets, through the real loader and the fixture plugin's real file. The game's manifest is
+// a fake (SetStockForTest), so the mount does not touch the game's resolver; the shadow it builds is read the way
+// the game's FillResourceFileRequest reads one (nevr_shadow::ReadLikeTheEngine), and the chunk is read back from the
+// plugin's file through the handle the host holds.
+// ============================================================================
+
+namespace {
+
+constexpr uint64_t kFixtureLevel = 0x0123456789abcdefULL;
+constexpr uint64_t kFixtureMeshLogicalType = 0x1111111111111111ULL;
+// The fixture keys its records the way a manifest does, by on-disk type: the mesh by its buffer-1 type, the level
+// root by CGameLevelResource's buffer-0 type.
+constexpr uint64_t kFixtureMeshType = nevr_resource_key::OnDiskType(kFixtureMeshLogicalType, 1);
+constexpr uint64_t kLevelResourceType = 0xfd7c74d55c15302bULL;  // CGameLevelResource
+static_assert(kFixtureMeshType == 0x50d40e361b19a95bULL, "Make(0x1111111111111111, \"Win10GPU\")");
+static_assert(nevr_resource_key::OnDiskType(kLevelResourceType, 0) == 0xe8e38d7781a338a6ULL,
+              "the fixture's level root type is Make(CGameLevelResource, \"Win10\")");
+constexpr uint64_t kFixtureMesh = 0x2222222222222222ULL;
+constexpr uint64_t kFixtureOverrideType = 0x5555555555555555ULL;
+constexpr uint64_t kFixtureOverrideName = 0x6666666666666666ULL;
+
+std::set<std::pair<uint64_t, uint64_t>> g_resourceStock;
+bool ResourceStockHas(uint64_t type, uint64_t name) { return g_resourceStock.count({type, name}) != 0; }
+uint64_t g_resourceNow = 0;
+uint64_t ResourceNow() { return g_resourceNow; }
+
+// A stand-in for the game's FillResourceFileRequest: it records the manager the resolver hook handed it.
+const void* g_requestManager = nullptr;
+uint64_t __cdecl RecordingRequest(void* manager, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*) {
+  g_requestManager = manager;
+  return 0;
+}
+
+// A plugin asset registered on another thread while a set's registration is between its check of the assets and its
+// Add (SetBeforeAddForTest runs this there): the other thread is given 200 ms to take the set's level root.
+const unsigned char kRacingAssetBytes[16] = {};
+std::atomic<int> g_racingStatus{-1};
+std::thread* g_racing = nullptr;
+void StartRacingAsset() {
+  if (g_racing != nullptr) return;  // the first registration's only
+  g_racing = new std::thread([] {
+    g_racingStatus = static_cast<int>(
+        nevr::assets::RegisterPluginAsset(kLevelResourceType, kFixtureLevel, kRacingAssetBytes, 16, "racing"));
+  });
+  for (int i = 0; i < 40 && g_racingStatus.load() == -1; ++i) Sleep(5);
+}
+
+int32_t ResourcesFixtureStatus(uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_resources.dll");
+  if (plugin == nullptr) return -1000;
+  const auto fn = reinterpret_cast<int32_t (*)(uint32_t)>(GetProcAddress(plugin, "NevrTestPluginResourcesStatus"));
+  return fn != nullptr ? fn(which) : -1001;
+}
+
+class PluginResourceSetTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    nevr_resource_sets::ResetForTest();
+    // RegisterPluginAsset installs the engine's "already loaded" probe on the process-wide asset registry, and this
+    // process has no engine to ask: a test's direct Register must not call it.
+    nevr::assets::Global().SetLoadedProbe(nullptr);
+    g_resourceStock.clear();
+    g_resourceNow = 1000000;
+    nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+    nevr_resource_sets::SetClockForTest(&ResourceNow);
+    TestHook_InitResourceOverrides(nullptr);  // the override registry, with no hook: Shutdown reports and releases it
+  }
+  void TearDown() override {
+    UnloadPlugins();
+    nevr_resource_sets::ResetForTest();
+    nevr::assets::SetRequestOriginalForTest(nullptr);
+    ShutdownResourceOverride();
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+  void Plan(const char* args = "{}") {
+    g_testPluginLoadPlan.push_back({"levels", "test_plugin_resources.dll", false, "", args});
+  }
+  // The mount as the game runs it: armed after the plugin pass, then run by the tick on the game's own thread once the
+  // resolver has seen the game's first request.
+  void Mount() {
+    nevr_resource_sets::MountWhenReady();
+    nevr_resource_sets::NoteRequest();
+    nevr_resource_sets::OnFrame(true);
+  }
+};
+
+}  // namespace
+
+TEST_F(PluginResourceSetTest, ThePluginRegistersItsSetFromInitAndTheBadRegistrationsAreRefused) {
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  EXPECT_EQ(ResourcesFixtureStatus(1), NEVR_RESOURCES_COLLIDES) << "the same keys again";
+  EXPECT_EQ(ResourcesFixtureStatus(2), NEVR_RESOURCES_NOT_IN_FILE) << "writable data";
+  EXPECT_EQ(ResourcesFixtureStatus(3), NEVR_RESOURCES_NOT_IN_FILE) << "read-only data with a relocated pointer";
+  EXPECT_EQ(ResourcesFixtureStatus(4), NEVR_RESOURCES_BAD_ARGUMENT) << "a label with a newline";
+  EXPECT_EQ(ResourcesFixtureStatus(5), NEVR_RESOURCES_NOT_IN_FILE) << "another module's bytes";
+  EXPECT_EQ(ResourcesFixtureStatus(6), NEVR_RESOURCES_BAD_ARGUMENT) << "a label with a byte above 0x7e";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.RESOURCE] resource set registered plugin=levels label=\"fixture levels\" "
+                                     "records=3 chunks=1 levels=1 overrides=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "reason=collides"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"writable\" status=2 reason=writable_section"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"relocated\" status=2 reason=relocated"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"two?lines\" status=1 reason=bad_label"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"elsewhere\" status=2 reason=not_in_image"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"caf?\" status=1 reason=bad_label"));
+  EXPECT_FALSE(TestLogContains("two\nlines")) << "a label's newline never reaches the log";
+}
+
+TEST_F(PluginResourceSetTest, TheMountServesTheLevelFromThePluginsFileAndTheReadIsTheRightBytes) {
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  Mount();
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.RESOURCE] resource sets mounted sets=1 refused=0 records=3 levels=1"));
+  EXPECT_TRUE(TestLogContains("resource set mounted plugin=levels label=\"fixture levels\" records=3 levels=1 "
+                              "level_names=0x0123456789abcdef overrides=0 overrides_unmatched=1"));
+
+  const void* manager = nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh);
+  ASSERT_NE(manager, nullptr);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, 0x9999ULL), nullptr) << "a key no set holds";
+
+  // What the game's own function fills from the shadow, and what its reader then reads from the plugin's file.
+  nevr_shadow::Found found;
+  ASSERT_TRUE(nevr_shadow::ReadLikeTheEngine(manager, kFixtureMeshType, kFixtureMesh, &found));
+  EXPECT_GE(found.chunk, nevr_shadow::kFirstChunkIndex);
+  std::vector<unsigned char> frame(found.compressed);
+  OVERLAPPED at = {};
+  at.Offset = found.file_offset;
+  DWORD got = 0;
+  ASSERT_TRUE(ReadFile(reinterpret_cast<HANDLE>(static_cast<intptr_t>(found.handle)), frame.data(),
+                       static_cast<DWORD>(frame.size()), &got, &at));
+  ASSERT_EQ(got, frame.size());
+  std::vector<unsigned char> plain(found.decompressed);
+  ASSERT_EQ(ZSTD_decompress(plain.data(), plain.size(), frame.data(), frame.size()), plain.size());
+  ASSERT_LE(found.offset_in_chunk + found.size, plain.size());
+  EXPECT_EQ(found.size, 16u);
+  for (uint32_t i = 0; i < found.size; ++i) EXPECT_EQ(plain[found.offset_in_chunk + i], 0x22) << "byte " << i;
+
+  EXPECT_EQ(nevr_resource_sets::MountedLevelNames(), std::vector<uint64_t>{kFixtureLevel});
+  const nlohmann::json report = nlohmann::json::parse(nevr_resource_sets::ReportJson());
+  ASSERT_EQ(report.size(), 1u);
+  EXPECT_EQ(report[0].at("plugin"), "levels");
+  EXPECT_EQ(report[0].at("levels"), nlohmann::json::array({"0x0123456789abcdef"}));
+}
+
+TEST_F(PluginResourceSetTest, ASetThatHoldsAKeyTheGameHasIsRefusedAtTheMountAndServesAndReplacesNothing) {
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "resource set refused at mount plugin=levels label=\"fixture levels\" "
+                                     "reason=stock_key"));
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_TRUE(nevr_resource_sets::MountedLevelNames().empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "a refused set's override is never registered";
+}
+
+// #2161: a server's installed_levels lists a mounted set's level, counted as a plugin level, through the same key list
+// and merge FillRegistrationMetadata uses; a set refused at the mount, or not yet mounted, adds nothing.
+TEST_F(PluginResourceSetTest, AMountedSetsLevelIsInInstalledLevelsAndARefusedOrUnmountedOneIsNot) {
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  nevr_game_server::InstalledLevels before;
+  before.levels = {0x10ULL};
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &before);
+  EXPECT_EQ(before.levels, std::vector<uint64_t>{0x10ULL}) << "registered, not yet mounted";
+  EXPECT_EQ(before.pluginLevels, 0u);
+
+  Mount();
+  nevr_game_server::InstalledLevels after;
+  after.levels = {0x10ULL};
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &after);
+  EXPECT_EQ(after.levels, (std::vector<uint64_t>{0x10ULL, kFixtureLevel}));
+  EXPECT_EQ(after.pluginLevels, 1u);
+}
+
+TEST_F(PluginResourceSetTest, ASetRefusedAtTheMountAddsNoLevelToInstalledLevels) {
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});
+  Plan();
+  LoadPlugins();
+  Mount();
+  ASSERT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "reason=stock_key"));
+  nevr_game_server::InstalledLevels levels;
+  nevr_game_server::AddRegisteredLevels(nevr_game_server::RegisteredLevelKeys(), &levels);
+  EXPECT_TRUE(levels.levels.empty());
+  EXPECT_EQ(levels.pluginLevels, 0u);
+}
+
+TEST_F(PluginResourceSetTest, AMountedSetsOverrideIsRegisteredOnlyWhenTheGameHasItsKey) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("level_names=0x0123456789abcdef overrides=1 overrides_unmatched=0 overrides_skipped=0"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 1u);
+}
+
+// A fixed override of the same key registered before the mount (the CDN cache, a plugin's own
+// NEVR_RegisterResourceOverride) keeps it: the mount does not register the set's override, counts it as skipped and
+// names the key and the earlier entry's label.
+TEST_F(PluginResourceSetTest, AnEarlierOverrideOfTheSameKeyKeepsItAndTheSetsIsSkippedAtTheMount) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  static const unsigned char kEarlier[4] = {1, 2, 3, 4};
+  RegisterResourceOverride(kFixtureOverrideType, kFixtureOverrideName, kEarlier, sizeof(kEarlier), "cache_entry");
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("level_names=0x0123456789abcdef overrides=0 overrides_unmatched=0 overrides_skipped=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.RESOURCE] resource set override skipped plugin=levels label=\"fixture levels\" "
+                                     "key=0x5555555555555555:0x6666666666666666 owner=\"cache_entry\""));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 1u) << "only the earlier entry";
+}
+
+// An entry of another key, or a transform of this key, does not take the set's override's place.
+TEST_F(PluginResourceSetTest, AnEarlierOverrideOfAnotherKeyDoesNotSkipTheSetsOverride) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  static const unsigned char kOther[4] = {1, 2, 3, 4};
+  RegisterResourceOverride(kFixtureOverrideType, kFixtureOverrideName + 1, kOther, sizeof(kOther), "other_name");
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("overrides=1 overrides_unmatched=0 overrides_skipped=0"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
+}
+
+TEST_F(PluginResourceSetTest, AnInitThatFailsDropsTheSetItRegisteredAndItsOverride) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  Plan(R"({"fail":"1"})");
+  LoadPlugins();
+  EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource set registered plugin=levels label=\"fixture levels\""))
+      << TestLogLinesWith("fixture levels");
+  EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource sets dropped plugin=levels count=1"));
+  // The fixture has a shutdown export, so the loader releases it after the failed init: its set no longer holds the
+  // file, and nothing of the module is left to answer.
+  EXPECT_TRUE(TestLogContains("shutdown after failed init code=1 completed; module released"));
+  EXPECT_EQ(ResourcesFixtureStatus(0), -1000) << "the module is still loaded";
+  Mount();
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
+TEST_F(PluginResourceSetTest, AnArgumentWithFlagsIsRefusedBeforeAnythingElseIsChecked) {
+  static const unsigned char bytes[64] = {};
+  NevrResourcesDesc desc = {};
+  desc.struct_size = sizeof(desc);
+  desc.flags = 1;
+  desc.data = bytes;
+  desc.size = sizeof(bytes);
+  desc.label = "flags";
+  EXPECT_EQ(nevr_resource_sets::HostRegisterResources("levels", &desc), NEVR_RESOURCES_BAD_ARGUMENT);
+  EXPECT_TRUE(TestLogContains("label=\"flags\" status=1 reason=bad_argument"));
+}
+
+// The plugin's file, copied and changed: what the host reads from it must be what the image maps.
+std::filesystem::path FixtureCopy(const char* name, bool flipInSet, bool cutBeforeSet) {
+  const HMODULE self = GetModuleHandleA(nullptr);
+  char exe[MAX_PATH] = {};
+  GetModuleFileNameA(self, exe, MAX_PATH);
+  const std::filesystem::path source = std::filesystem::path(exe).parent_path() / "plugins" / "test_plugin_resources.dll";
+  std::ifstream in(source, std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const std::string text(bytes.begin(), bytes.end());
+  const std::size_t at = text.find("NEVRRES1");
+  if (at == std::string::npos) return {};
+  if (flipInSet) bytes[at + 20] ^= 0x01;  // a byte of the set's header, inside the first MiB the host compares
+  if (cutBeforeSet) bytes.resize(at);
+  const std::filesystem::path copy = std::filesystem::temp_directory_path() / name;
+  std::ofstream out(copy, std::ios::binary | std::ios::trunc);
+  out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  return copy;
+}
+
+// The registration compares the set's first and last MiB of the file with the mapped bytes, not the whole set. A set of
+// 3 MiB: a byte changed in the first or the last MiB is caught; one in the middle MiB is not (the documented limit).
+TEST(ResourceSetFileCheck, TheFirstAndLastMiBAreComparedAndTheMiddleIsNot) {
+  constexpr std::size_t kMiB = 1u << 20;
+  constexpr std::uint64_t kOffset = 512;  // the set's offset in the file, as a section's raw data would put it
+  std::vector<unsigned char> mapped(3 * kMiB);
+  for (std::size_t i = 0; i < mapped.size(); ++i) mapped[i] = static_cast<unsigned char>(i * 31 + 7);
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / "nevr_test_resource_file_check.bin";
+  auto check = [&](std::ptrdiff_t flipAt) {
+    std::vector<unsigned char> file(kOffset, 0xEE);
+    file.insert(file.end(), mapped.begin(), mapped.end());
+    if (flipAt >= 0) file[kOffset + static_cast<std::size_t>(flipAt)] ^= 0x01;
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
+    }
+    return nevr_resource_sets::FileCheckForTest(path.wstring().c_str(), kOffset, mapped.data(), mapped.size());
+  };
+  EXPECT_EQ(check(-1), 0) << "the same bytes";
+  EXPECT_EQ(check(10), 2) << "a byte in the first MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(3 * kMiB - 10)), 2) << "a byte in the last MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(2 * kMiB)), 2) << "the first byte of the last MiB";
+  EXPECT_EQ(check(static_cast<std::ptrdiff_t>(kMiB + kMiB / 2)), 0)
+      << "a byte in the middle MiB is not compared (plugin-resources.md says so)";
+  std::filesystem::remove(path);
+}
+
+TEST_F(PluginResourceSetTest, APluginFileThatDoesNotHoldTheMappedBytesIsRefused) {
+  const std::filesystem::path differs = FixtureCopy("nevr_test_resources_differs.dll", true, false);
+  ASSERT_FALSE(differs.empty());
+  nevr_resource_sets::SetFilePathForTest(differs.wstring().c_str());
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_NOT_IN_FILE);
+  EXPECT_TRUE(TestLogContains("label=\"fixture levels\" status=2 reason=file_differs"));
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+  std::filesystem::remove(differs);
+
+  const std::filesystem::path cut = FixtureCopy("nevr_test_resources_cut.dll", false, true);
+  ASSERT_FALSE(cut.empty());
+  nevr_resource_sets::SetFilePathForTest(cut.wstring().c_str());
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_NOT_IN_FILE);
+  EXPECT_TRUE(TestLogContains("label=\"fixture levels\" status=2 reason=file_read "
+                              "detail=\"the plugin's file ends before the offset its headers name"))
+      << TestLogLinesWith("fixture levels");
+  UnloadPlugins();
+  std::filesystem::remove(cut);
+}
+
+TEST_F(PluginResourceSetTest, ARegistrationFromOutsideThePluginsInitIsRefused) {
+  Plan();
+  LoadPlugins();
+  const HMODULE plugin = GetModuleHandleA("test_plugin_resources.dll");
+  ASSERT_NE(plugin, nullptr);
+  const auto setOf = reinterpret_cast<const unsigned char* (*)(uint64_t*)>(GetProcAddress(plugin, "NevrTestPluginResourcesSet"));
+  ASSERT_NE(setOf, nullptr);
+  NevrResourcesDesc desc = {};
+  desc.struct_size = sizeof(desc);
+  desc.data = setOf(&desc.size);
+  desc.label = "late";
+  EXPECT_EQ(nevr_resource_sets::HostRegisterResources("levels", &desc), NEVR_RESOURCES_BAD_ARGUMENT);
+  EXPECT_TRUE(TestLogContains("reason=not_in_init"));
+}
+
+TEST_F(PluginResourceSetTest, AMountWaitsForTheGamesFirstRequestAndARecordInItsManifest) {
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 0);
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource sets wait for the game's manifest sets=1"));
+  nevr_resource_sets::NoteRequest();
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr) << "no manifest yet";
+  nevr_resource_sets::ResetForTest();  // again, the manifest first and the request after
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69694);
+  nevr_resource_sets::SetClockForTest(&ResourceNow);
+  UnloadPlugins();
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr)
+      << "the game has asked for nothing yet: its boot sets may not all be read";
+  nevr_resource_sets::NoteRequest();
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_TRUE(TestLogContains("stock_records=69694"));
+}
+
+TEST_F(PluginResourceSetTest, TheResolverHooksFirstRequestIsWhatReleasesTheMount) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  nevr::assets::SetRequestOriginalForTest(&RecordingRequest);
+  int callers = 0;
+  nevr::assets::CallRequestHookForTest(&callers, 0x9999ULL, 0x9999ULL);  // the game's first request, of any key
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+}
+
+TEST_F(PluginResourceSetTest, AMountRunsOnlyOnTheGamesThreadAndSaysSoAfterAMinuteOfWaiting) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::NoteRequest();
+  for (int i = 0; i < 3; ++i) {
+    nevr_resource_sets::OnFrame(false);
+    g_resourceNow += 1000;
+  }
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_FALSE(TestLogContains("resource sets still not mounted"));
+  g_resourceNow += 57000;
+  nevr_resource_sets::OnFrame(false);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "resource sets still not mounted after 60 s sets=1 stock_records=69651 "
+                                     "first_request_seen=true game_thread_seen=false"));
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_TRUE(TestLogContains("resource sets mounted sets=1 refused=0 records=3 levels=1 chunk_base="))
+      << TestLogLinesWith("resource sets mounted");
+  EXPECT_TRUE(TestLogContains("waited_ms=60000 duration_ms=0")) << TestLogLinesWith("resource sets mounted");
+}
+
+TEST_F(PluginResourceSetTest, TheLateWarningSaysTheGamesThreadRanWhenOnlyTheFirstRequestIsMissing) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::OnFrame(true);  // the game's thread, before any request
+  g_resourceNow += 60000;
+  nevr_resource_sets::OnFrame(false);  // the minute passes on another thread
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "first_request_seen=false game_thread_seen=true"))
+      << TestLogLinesWith("still not mounted");
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+}
+
+TEST_F(PluginResourceSetTest, AMountThatThrowsBeforeItPublishesServesNothingAndIsNotTriedAgain) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kBeforeMount);
+  Mount();  // returns: nothing the mount throws leaves the game's frame
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error,
+                                     "resource sets mount failed reason=out_of_memory served=false"));
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kNowhere);
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr)
+      << "a mount that threw is not tried again";
+}
+
+TEST_F(PluginResourceSetTest, AMountThatThrowsAfterItPublishesSaysTheSetsAreServed) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kMountLines);
+  Mount();
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "resource sets mount failed reason=out_of_memory served=true"));
+  EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_FALSE(TestLogContains("resource sets mounted sets="));
+}
+
+TEST_F(PluginResourceSetTest, AReadSummaryThatThrowsIsSkippedAndTheNextWindowIsWritten) {
+  Plan();
+  LoadPlugins();
+  Mount();
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kReadSummary);
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "resource set read summary skipped reason=out_of_memory"));
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kNowhere);
+  ASSERT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);  // one read served
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=1 window_ms=10000"))
+      << TestLogLinesWith("resource set reads");
+}
+
+TEST_F(PluginResourceSetTest, WithNoResolverHookNoSetIsMountedAndTheLineNamesThePlugins) {
+  nevr_resource_sets::SetNoResolverHookForTest(true);
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  Mount();
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "resource sets not mounted sets=1 plugins=levels reason=no_resolver_hook"));
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  EXPECT_TRUE(nevr_resource_sets::MountedLevelNames().empty());
+  EXPECT_FALSE(nevr_resource_sets::HoldsKey(kFixtureMeshLogicalType, kFixtureMesh)) << "an abandoned set holds no key";
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+
+  // The line itself throws: MountWhenReady's guard takes it.
+  nevr_resource_sets::SetNoResolverHookForTest(true);
+  nevr_resource_sets::SetMountThrowForTest(nevr_resource_sets::MountThrowAt::kMountLines);
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error,
+                                     "resource sets mount failed reason=out_of_memory served=false"));
+}
+
+// A plugin id comes from config.yaml: every line that names one writes it as printable ASCII, any other byte (and a
+// quote) as '?'. An asset's label outside the label rule is refused before any line carries it (#2225); one inside it
+// meets the set's key claim next.
+TEST_F(PluginResourceSetTest, EveryLineWritesAnOddPluginIdOrAssetLabelPrintable) {
+  const char* const kOddId = "odd\x01\"id";
+  const std::string shown = "odd??id";
+  auto planOdd = [&] { g_testPluginLoadPlan.push_back({kOddId, "test_plugin_resources.dll", false, "", "{}"}); };
+  planOdd();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  Mount();
+  ASSERT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);  // one read
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});  // the game's manifest gains a set's key
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  for (const std::string& line : {"resource set registered plugin=" + shown, "resource set mounted plugin=" + shown,
+                                  "resource set reads plugin=" + shown, "first=0x50d40e361b19a95b:0x2222222222222222 plugin=" + shown}) {
+    EXPECT_TRUE(TestLogContains(line)) << line << "\n" << TestLogLinesWith("NEVR.RESOURCE");
+  }
+
+  // The asset lines: an odd label is refused by the label rule and only its length is written; a label inside the rule
+  // whose key the set holds is refused by the key claim.
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
+  static const unsigned char assetBytes[16] = {};
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshLogicalType, kFixtureMesh, assetBytes, 16, "a\x01\"label"),
+            nevr::assets::RegisterStatus::BadArgument);
+  EXPECT_TRUE(TestLogContains("register refused status=1 reason=bad_label label_bytes=8")) << TestLogLinesWith("NEVR.ASSET");
+  EXPECT_FALSE(TestLogContains("a\x01")) << "the label's bytes never reach a line";
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshLogicalType, kFixtureMesh, assetBytes, 16, "plain_label"),
+            nevr::assets::RegisterStatus::Duplicate);
+  EXPECT_TRUE(TestLogContains("register refused label=plain_label type=0x1111111111111111 name=0x2222222222222222 "
+                              "bytes=16 reason=duplicate (a plugin's resource set holds this key)"))
+      << TestLogLinesWith("NEVR.ASSET");
+  EchoVR::g_GameBaseAddress = base;
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+
+  // A set refused at the mount.
+  planOdd();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("resource set refused at mount plugin=" + shown)) << TestLogLinesWith("refused at mount");
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+  g_resourceStock.clear();
+
+  // No resolver hook.
+  nevr_resource_sets::SetNoResolverHookForTest(true);
+  planOdd();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("plugins=" + shown + " reason=no_resolver_hook")) << TestLogLinesWith("not mounted");
+}
+
+TEST_F(PluginResourceSetTest, ASetRefusedAtTheMountHoldsNoKeyAPluginAssetMayTake) {
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});  // the set carries a key the game has: stock_key
+  Plan();
+  LoadPlugins();
+  ASSERT_TRUE(nevr_resource_sets::HoldsKey(kFixtureMeshLogicalType, kFixtureMesh)) << "held until the mount";
+  Mount();
+  ASSERT_TRUE(TestLogContains("reason=stock_key"));
+  EXPECT_FALSE(nevr_resource_sets::HoldsKey(kFixtureMeshLogicalType, kFixtureMesh));
+  EXPECT_FALSE(nevr_resource_sets::HoldsKey(kLevelResourceType, kFixtureLevel));
+}
+
+TEST_F(PluginResourceSetTest, UnloadingThePluginDropsTheOverridesItsSetCarried) {
+  g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
+  Plan();
+  LoadPlugins();
+  Mount();
+  ASSERT_TRUE(TestLogContains("overrides=1 overrides_unmatched=0"));
+  UnloadPlugins();
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "an override still points into the unloaded plugin's image";
+}
+
+// The host holds the plugin's file read-only and deny-write while a set is held; a throw after the open closes it.
+TEST_F(PluginResourceSetTest, ThePluginsFileIsHeldDenyWriteAndAThrowAfterTheOpenClosesIt) {
+  const std::filesystem::path copy = FixtureCopy("nevr_test_resources_held.dll", false, false);
+  ASSERT_FALSE(copy.empty());
+  auto writerOpens = [&copy] {
+    const HANDLE writer = CreateFileW(copy.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (writer == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(writer);
+    return true;
+  };
+  ASSERT_TRUE(writerOpens()) << "nothing holds the copy yet";
+  nevr_resource_sets::SetFilePathForTest(copy.wstring().c_str());
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  EXPECT_FALSE(writerOpens()) << "a held set's file denies writers";
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  EXPECT_TRUE(writerOpens()) << "the reset closes the files the registry held";
+
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+  nevr_resource_sets::SetFilePathForTest(copy.wstring().c_str());
+  nevr_resource_sets::SetThrowAfterOpenForTest(true);
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_BAD_FORMAT);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "resource set refused plugin=levels reason=out_of_memory"));
+  EXPECT_TRUE(writerOpens()) << "a registration that threw after the open still holds the file";
+  UnloadPlugins();
+  std::filesystem::remove(copy);
+}
+
+TEST_F(PluginResourceSetTest, TheResolverHookFillsASetsKeyFromTheShadowAndOtherKeysFromTheCallersManager) {
+  Plan();
+  LoadPlugins();
+  Mount();
+  nevr::assets::SetRequestOriginalForTest(&RecordingRequest);
+  int callers = 0;  // the manager the game passed: any address
+  nevr::assets::CallRequestHookForTest(&callers, kFixtureMeshType, kFixtureMesh);
+  const void* shadow = g_requestManager;
+  EXPECT_NE(shadow, &callers) << "a set's key is filled from the shadow";
+  EXPECT_EQ(shadow, nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh));
+  nevr::assets::CallRequestHookForTest(&callers, kFixtureMeshType, 0x9999ULL);
+  EXPECT_EQ(g_requestManager, &callers) << "any other key goes to the caller's manager";
+
+  // Two reads in the window that started at the mount (the hook's and the comparison's), a 12 s window.
+  g_resourceNow += 12000;
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=2 window_ms=12000"));
+
+  // A key the game's manifest gains after the mount is the game's, and the first one is named.
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});
+  nevr::assets::CallRequestHookForTest(&callers, kFixtureMeshType, kFixtureMesh);
+  EXPECT_EQ(g_requestManager, &callers);
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "keys answered by the game's manifest count=1 "
+                                     "first=0x50d40e361b19a95b:0x2222222222222222 plugin=levels"));
+}
+
+TEST_F(PluginResourceSetTest, TheLoginCarriesTheMountedSets) {
+  Plan();
+  LoadPlugins();
+  Mount();
+  const std::string request = TestHook_BuildLoginRequest(55, 4, "Player", "token");
+  constexpr size_t kJsonOffset = 56;
+  ASSERT_GT(request.size(), kJsonOffset);
+  const nlohmann::json login =
+      nlohmann::json::parse(request.substr(kJsonOffset, request.size() - kJsonOffset - 1));
+  ASSERT_TRUE(login.contains("nevr_resources"));
+  ASSERT_EQ(login.at("nevr_resources").size(), 1u);
+  EXPECT_EQ(login.at("nevr_resources")[0].at("label"), "fixture levels");
+  EXPECT_EQ(login.at("nevr_resources")[0].at("levels"), nlohmann::json::array({"0x0123456789abcdef"}));
+  EXPECT_TRUE(TestLogContains("login nevr_resources count=1"));
+}
+
+TEST_F(PluginResourceSetTest, APluginAssetAndAResourceSetNeverHoldOneKey) {
+  // An asset first: the set that carries its key is refused, naming the asset.
+  static const unsigned char assetBytes[16] = {};
+  ASSERT_EQ(nevr::assets::Global().Register(kFixtureMeshType, kFixtureMesh, assetBytes, sizeof(assetBytes), "asset mesh"),
+            nevr::assets::RegisterStatus::Ok);
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_COLLIDES);
+  EXPECT_TRUE(TestLogContains("owner=asset:asset mesh"));
+  UnloadPlugins();
+  nevr::assets::DeregisterPluginAssets(assetBytes, assetBytes + sizeof(assetBytes));
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+
+  // The set first: an asset with one of its keys is refused. With no game base the engine's "already loaded" probe
+  // answers no, so a registration the set's check let through would reach the registry.
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshType, kFixtureMesh, assetBytes, sizeof(assetBytes), "late"),
+            nevr::assets::RegisterStatus::Duplicate);
+  EchoVR::g_GameBaseAddress = base;
+  EXPECT_TRUE(TestLogContains("a plugin's resource set holds this key"));
+  nevr::assets::DeregisterPluginAssets(assetBytes, assetBytes + sizeof(assetBytes));
+}
+
+TEST_F(PluginResourceSetTest, AnAssetRegisteredWhileASetIsAddedWaitsForTheAddAndIsRefused) {
+  g_racingStatus = -1;
+  g_racing = nullptr;
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;  // the racing asset's "already loaded" probe answers no
+  nevr_resource_sets::SetBeforeAddForTest(&StartRacingAsset);
+  Plan();
+  LoadPlugins();
+  ASSERT_NE(g_racing, nullptr) << "no registration reached its Add";
+  g_racing->join();
+  delete g_racing;
+  g_racing = nullptr;
+  EchoVR::g_GameBaseAddress = base;
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  EXPECT_EQ(g_racingStatus.load(), static_cast<int>(nevr::assets::RegisterStatus::Duplicate))
+      << "the asset took the set's level root while the set was being added";
+  nevr::assets::DeregisterPluginAssets(kRacingAssetBytes, kRacingAssetBytes + 16);
+}
+
+TEST_F(PluginResourceSetTest, AReadServedRightAfterThePublishIsCountedInAWindowThatStartsAtTheMount) {
+  nevr_resource_sets::SetAfterPublishForTest([] { nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh); });
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_FALSE(TestLogContains("resource set reads")) << TestLogLinesWith("resource set reads");
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=1 window_ms=10000"))
+      << TestLogLinesWith("resource set reads");
+}
+
+// A plugin asset is keyed by its logical type (the submit hook matches CResource + 0x28) and a set's record by the
+// on-disk type the game reads a buffer by, so an asset and a record of one resource carry different keys: the
+// fixture's level root is the buffer-0 key of a CGameLevelResource, its mesh the buffer-1 key of its logical type.
+TEST_F(PluginResourceSetTest, APluginAssetAndAResourceSetNeverHoldOneResourceUnderItsLogicalAndOnDiskKeys) {
+  static const unsigned char levelBytes[16] = {};
+  static const unsigned char meshBytes[16] = {};
+  // An asset of either resource first: the set is refused, naming the asset.
+  const struct {
+    uint64_t type, name;
+    const unsigned char* bytes;
+    const char* label;
+  } assets[] = {{kLevelResourceType, kFixtureLevel, levelBytes, "asset level"},
+                {kFixtureMeshLogicalType, kFixtureMesh, meshBytes, "asset mesh payload"}};
+  for (const auto& asset : assets) {
+    ASSERT_EQ(nevr::assets::Global().Register(asset.type, asset.name, asset.bytes, 16, asset.label),
+              nevr::assets::RegisterStatus::Ok);
+    Plan();
+    LoadPlugins();
+    EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_COLLIDES) << asset.label;
+    EXPECT_TRUE(TestLogContains(std::string("owner=asset:") + asset.label)) << TestLogLinesWith("owner=asset");
+    UnloadPlugins();
+    nevr::assets::DeregisterPluginAssets(asset.bytes, asset.bytes + 16);
+    nevr_resource_sets::ResetForTest();
+    nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+    ClearTestLogs();
+  }
+
+  // The set first: an asset of either resource, by its logical type, is refused. With no game base the engine's
+  // "already loaded" probe answers no, so a registration the set's check let through would reach the registry.
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
+  for (const auto& asset : assets) {
+    EXPECT_EQ(nevr::assets::RegisterPluginAsset(asset.type, asset.name, asset.bytes, 16, asset.label),
+              nevr::assets::RegisterStatus::Duplicate)
+        << asset.label;
+  }
+  EchoVR::g_GameBaseAddress = base;
+  EXPECT_EQ(nevr::assets::Global().Count(), 0u);
+  for (const auto& asset : assets) nevr::assets::DeregisterPluginAssets(asset.bytes, asset.bytes + 16);
+}
+
+TEST_F(PluginResourceSetTest, AnExceptionInsideTheHostNeverReachesThePluginsInit) {
+  nevr_resource_sets::SetThrowForTest(true);
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::SetThrowForTest(false);
+  ASSERT_EQ(GetLoadedPluginCount(), 1) << "the plugin's init ran to its end";
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_BAD_FORMAT);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "resource set refused plugin=levels reason=out_of_memory"));
 }
 
 TEST_F(PluginLevelTest, FrameContextSeesALevelChangeWithNoStateTransition) {
@@ -5907,6 +6684,25 @@ TEST(LoginProfile, AssetsAreCarriedAsAnArrayNextToThePluginList) {
   ASSERT_TRUE(profile.at("nevr_assets").is_array());
   EXPECT_EQ(profile.at("nevr_assets"), inputs.assets);
   EXPECT_EQ(profile.at("nevr_plugins"), inputs.plugins);
+}
+
+// #2161: the mounted resource sets are reported beside the plugin list, so the game service can send a client only to a
+// level it carries. Absent when there are none.
+TEST(LoginProfile, NoResourceSetsMeansNoResourcesKey) {
+  nevr_login_profile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
+  EXPECT_FALSE(profile.contains("nevr_resources"));
+}
+
+TEST(LoginProfile, ResourceSetsAreCarriedAsAnArray) {
+  nevr_login_profile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.resources = nlohmann::json::parse(
+      R"([{"plugin":"levels","label":"custom levels","levels":["0xdb69545ff59c76d0"],"records":90,"bytes":4096}])");
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
+  ASSERT_TRUE(profile.contains("nevr_resources"));
+  EXPECT_EQ(profile.at("nevr_resources"), inputs.resources);
 }
 
 TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {

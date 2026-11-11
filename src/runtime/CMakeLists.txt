@@ -133,6 +133,10 @@ set(PATCHES_SOURCES
     "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
+    # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
+    "patch/resource_sets.cpp"
+    "patch/resource_set_registry.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
     "compat/ws_bridge.cpp"
     # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
     "compat/session_router.cpp"
@@ -205,6 +209,7 @@ set(PATCHES_SOURCES
     "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
     "server/registration_metadata.cpp"
+    "server/registered_levels.cpp"
     "server/installed_levels.cpp"
     "server/telemetry_game_type.cpp"
     "server/game_type_table.h"
@@ -1832,6 +1837,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
+    # #2161: plugin resource sets: the format (nevr/resource_set.h), the registry and its mount checks
+    # (patch/resource_set_registry.cpp), the shadow it builds (core/resource_shadow.cpp) and the PE image mapping
+    # (patch/image_file_range.h). std, zstd and the SDK only.
+    add_executable(test_resource_sets
+      tests/test_resource_sets.cpp
+      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
+    set_source_files_properties(tests/test_resource_sets.cpp patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_resource_sets PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_resource_sets PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main zstd::libzstd)
+    gtest_discover_tests(test_resource_sets DISCOVERY_MODE PRE_TEST)
+
     # The plugin asset registry (patch/asset_registry.cpp): std + nlohmann-json only, so it builds and runs on
     # its own. The hooks that serve it to the engine (patch/plugin_assets.cpp) are in BugSplat64.dll.
     add_executable(test_asset_registry
@@ -2264,6 +2283,13 @@ if(BUILD_TESTING)
       patch/asset_registry.cpp
       # The engine hooks that serve the registry: the N84 test installs one through InstallHookForTest (PatchDetour).
       patch/plugin_assets.cpp
+      # #2161: the resource sets plugin_loader.cpp opens to a plugin's init and plugin_assets.cpp asks the resolver about.
+      patch/resource_sets.cpp
+      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      # #2161: a mounted set's levels reach installed_levels through the production key list and merge.
+      server/registered_levels.cpp
+      server/installed_levels.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
@@ -2358,7 +2384,7 @@ if(BUILD_TESTING)
       )
     endif()
     target_link_libraries(test_behavioral PRIVATE
-      GTest::gtest GTest::gtest_main nevr::plugin_sdk
+      GTest::gtest GTest::gtest_main nevr::plugin_sdk zstd::libzstd
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
       ws2_32 psapi advapi32 crypt32
     )
@@ -2404,6 +2430,15 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_level"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # #2161: a plugin that carries a resource set in its own file and registers it from its init.
+    add_library(test_plugin_resources SHARED
+      tests/plugin_resources_test_dll.cpp)
+    target_compile_definitions(test_plugin_resources PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_link_libraries(test_plugin_resources PRIVATE nevr::plugin_sdk)
+    set_target_properties(test_plugin_resources PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_resources"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -2441,7 +2476,7 @@ if(BUILD_TESTING)
     endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level
+      test_plugin_level test_plugin_resources
       test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)

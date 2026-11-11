@@ -28,6 +28,7 @@
 
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
+#include "quest/cargo/cargo_service.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
@@ -608,6 +609,8 @@ class ProductionSteps final : public Steps {
   bool InstallResourceRequestLog(bool countersRegistered, bool logLines) override {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
+    // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
+    if (ok) nevr_quest::cargo::Start(sentinel::ActiveConfig().assets);
     return ok;
   }
 

@@ -14,6 +14,7 @@
 #include "runtime/compat/ws_session_transport.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/asset_registry.h"
+#include "runtime/patch/resource_sets.h"
 #include "runtime/patch/provider_identity.h"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -1195,6 +1196,11 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   if (assets.is_discarded() || !assets.is_array()) assets = nlohmann::json::array();
   Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_assets count=%zu", assets.size());
   profileInputs.assets = std::move(assets);
+  // #2161: the mounted resource sets, as the registry reports them.
+  nlohmann::json resources = nlohmann::json::parse(nevr_resource_sets::ReportJson(), nullptr, false);
+  if (resources.is_discarded() || !resources.is_array()) resources = nlohmann::json::array();
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_resources count=%zu", resources.size());
+  profileInputs.resources = std::move(resources);
   const std::string jsonStr = nevr_login_profile::BuildLoginProfileJson(profileInputs);
 
   // Frame layout (UUID, platform, account, JSON, NUL) is EvrCodec's, shared with the Quest target.

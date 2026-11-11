@@ -775,7 +775,8 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
       "combat.bvh", "combat.bvh_gate", "combat.bvh_touch", "combat.wallfire", "combat.sendguard", "combat.music", "combat.sensorwd", "combat.ec",
       "combat.ec_words", "combat.ecfx", "combat.powerboost_stage", "combat.dronekill", "combat.dronemuzzle", "combat.gunconnect", "combat.aibots", "combat.aibots_scenario", "combat.weapon_arm",
       "combat.hudmeter", "combat.shieldgamma_gamma", "combat.shieldgamma_tube_mirror", "combat.fxtrail", "combat.voipdrop", "combat.custctx",
-      "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp"};
+      "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp", "assets.cdn_url",
+      "assets.manifest", "assets.required_only", "assets.labels"};
   for (const std::string& path : questReads) {
     EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
   }

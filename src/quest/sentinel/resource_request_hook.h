@@ -38,6 +38,14 @@
  *   resource_overlay_served         manifest misses served from a loose file
  *   resource_overlay_failed         manifest misses whose loose file could not be served (the game's error follows)
  *
+ * The CDN textures (docs/adr/0045-cdn-texture-delivery.md). A mounted cargo set (PublishCargo) is a shadow manifest in the game's own
+ * layout (core/resource_shadow.h). Before the overlay and before the game's own search, a request whose (type, name) the published
+ * shadow holds is filled by calling the game's function with the shadow's manager in place of the live one: the engine fills the
+ * request itself and its own reader reads our file, so cargo replaces stock for that key. A texture is two reads of one name on one
+ * thread; the shadow that answered index 0 answers index 1 (core/cargo_resolver.h), so a set published between the two never pairs a
+ * stock descriptor with a cargo payload. The hot path takes no lock and allocates nothing. `cargo_served` is written at a key's 1st,
+ * 2nd, 4th, 8th ... serve; a call the game's function fails with a shadow is a `cargo_failed` warning at the same schedule.
+ *
  * Every build. The constructor sequence installs the hook in every build (ctor_sequence.h); nevr_build::kIsDev decides
  * only whether every request is logged or the failed ones alone. The handler runs its overlay with no frame live across game code that holds
  * a destructor, and it logs after the original has returned, so no logging frame is live while game code runs. It may
@@ -47,6 +55,7 @@
 
 #include <cstdint>
 
+#include "core/cargo_store.h"
 #include "pinned_targets.h"
 
 namespace nevr_quest::resource_request {
@@ -96,6 +105,13 @@ bool InstallCounted(bool countersRegistered, bool logRequests) noexcept;
 
 // The name of the call site whose game return address is `pinnedReturn` (a pinned virtual address), or "unknown".
 const char* SiteName(std::uint64_t pinnedReturn) noexcept;
+
+// Publishes a mounted cargo set: its shadow answers the requests it holds from now on. The set is never freed (a request being filled
+// from its shadow must stay valid); at most kCargoSets sets are remembered for their label names. nullptr is ignored.
+inline constexpr unsigned kCargoSets = 16;
+void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept;
+// Requests filled from a cargo shadow so far.
+unsigned long long CargoServedCount() noexcept;
 
 // Test support: arms the handler without touching a GOT slot, clears the key table, the line count and the flags.
 // `loadBase` is the base the caller address is made relative to; `logRequests` decides whether lines are written.
