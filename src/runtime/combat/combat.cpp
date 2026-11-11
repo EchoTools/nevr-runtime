@@ -15,6 +15,7 @@
 #include "runtime/combat/balance_values.h"
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
+#include "runtime/combat/clock_pause.h"
 #include "runtime/combat/combat_settings.h"
 #include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
@@ -176,9 +177,11 @@ void Install(std::uintptr_t gameBase, bool isServer) {
 
     // PAUSE gives the players the pre-match spawn orbs, and the orbs say when the match is live (orb_pause.h): both go
     // through the RULES mailbox VeilNet's match control keeps, so they register with it.
+    // PAUSE also holds Combat's clocks (clock_pause.h), read from the same mailbox.
     // POINT RATE and PAUSE also set how fast a capture point's points rise (point_rate.h), from the same mailbox.
     if (veilnet::MatchControlStarted()) {
       orb_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      clock_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       point_rate::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
