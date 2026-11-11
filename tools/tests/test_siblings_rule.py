@@ -1,4 +1,4 @@
-"""AGENTS.md asks a fix PR for the shape it fixed and every sibling instance, and the PR template asks again (#1282)."""
+"""AGENTS.md asks a fix commit for the shape it fixed and every sibling instance, and the PR template asks again (#1282)."""
 import unittest
 from pathlib import Path
 
@@ -10,14 +10,14 @@ def flat(text: str) -> str:
 
 
 class SiblingsRule(unittest.TestCase):
-    def test_agents_md_carries_the_rule_among_what_a_pr_carries(self):
+    def test_agents_md_carries_the_rule_among_what_a_landed_commit_carries(self):
         text = (ROOT / "AGENTS.md").read_text()
-        start = text.index("### What a PR carries")
+        start = text.index("### What a landed commit carries")
         end = text.index("\n### ", start + 1)
         section = flat(text[start:end])
         self.assertIn("**Siblings, for a fix.**", section)
         for part in ("names the shape it fixed", "the `git grep` that finds every instance of that shape",
-                     "fixed in this PR", "filed (`#N`)", "not the same shape (the reason)", "## Siblings"):
+                     "fixed in this commit", "filed (`#N`)", "not the same shape (the reason)", "## Siblings"):
             self.assertIn(part, section)
         self.assertLess(section.index("**A search statement.**"), section.index("**Siblings, for a fix.**"))
 
