@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "quest/combat/pinned_words.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/pinned_targets.h"
 
@@ -50,16 +51,12 @@ struct Pins {
 };
 inline constexpr Pins kPins = {0x3700470ULL, 0x1634f7cULL, 0x364c030ULL, 0x36cd0e0ULL, 0x2544228ULL};
 
-// The first three words of BeginModelSwap as the file holds them (ELF address, encoding).
-struct Word {
-  std::uint64_t vaddr;
-  std::uint32_t word;
-};
+// The first three words of BeginModelSwap as the file holds them.
 inline constexpr std::size_t kSwapPrologueCount = 3;
-inline constexpr Word kSwapPrologue[kSwapPrologueCount] = {
-    {0x1634f7cULL, 0xd10183ffU},
-    {0x1634f80ULL, 0xa9016bfbU},
-    {0x1634f84ULL, 0xa90263f9U},
+inline constexpr pinned::Word kSwapPrologue[kSwapPrologueCount] = {
+    {"BeginModelSwap: sub sp,sp,#0x60", 0x1634f7cULL, 0xd10183ffU},
+    {"BeginModelSwap: stp x27,x26,[sp,#0x10]", 0x1634f80ULL, 0xa9016bfbU},
+    {"BeginModelSwap: stp x25,x24,[sp,#0x20]", 0x1634f84ULL, 0xa90263f9U},
 };
 
 // The resource manager word, its section, and the four words that set x8 and store through it (adrp, two instructions that write
@@ -68,11 +65,11 @@ inline constexpr std::uint64_t kResMgrWord = 0x376ed60ULL;
 inline constexpr const char* kResMgrSection = ".bss";
 inline constexpr std::uint64_t kResMgrWriterAt = 0x2aa89b0ULL;  // the first of the four words
 inline constexpr std::size_t kResMgrWriterCount = 4;
-inline constexpr Word kResMgrWriter[kResMgrWriterCount] = {
-    {0x2aa89b0ULL, 0xd0006628U},
-    {0x2aa89b4ULL, 0xf9001734U},
-    {0x2aa89b8ULL, 0xb4000054U},
-    {0x2aa89bcULL, 0xf906b114U},
+inline constexpr pinned::Word kResMgrWriter[kResMgrWriterCount] = {
+    {"InitGlobals: adrp x8,0x376e000", 0x2aa89b0ULL, 0xd0006628U},
+    {"InitGlobals: str x20,[x25,#0x28] (no x8)", 0x2aa89b4ULL, 0xf9001734U},
+    {"InitGlobals: cbz x20,0x2aa89c0 (no x8)", 0x2aa89b8ULL, 0xb4000054U},
+    {"InitGlobals: str x20,[x8,#0xd60] (the resource manager word)", 0x2aa89bcULL, 0xf906b114U},
 };
 
 // The two JUMP_SLOT and ABS64 targets, each with its slot pinned. A target carries no expected original: the slot's value at run

@@ -1,4 +1,4 @@
-/* The pinned table words of the texel-buffer guard (the module that U5 adds): the Vulkan function table that libr15 calls through,
+/* The pinned table words of the texel-buffer guard (the texel-buffer guard module, not in the tree yet): the Vulkan function table that libr15 calls through,
  * and the fill stores that write its slots. Checked against the store libr15 by src/quest/tests/texel_buffer_guard_pinned_test.cpp
  * (the hooks-pinned group, which needs the store APK).
  *
@@ -6,11 +6,13 @@
  * The disassembly and ReVault (project echovr, binary libr15.so, base 0x100000) use ELF + 0x100000; each read below gives its VA.
  *
  * The table. The word at ELF 0x370f360 (VA 0x380f360) is an R_AARCH64_GLOB_DAT relocation for NRadEngine::gContext, which is a
- * 0xb80-byte object in .bss (ELF 0x3775488). The file holds zero there: every slot is filled at run time, by CGS::Initialize
- * (ELF 0x18dc9d4, VA 0x19dc9d4, 14884 bytes). The fill reads the table pointer from that word (`adrp x29,0x370f000` at ELF
+ * 0xb80-byte object in .bss (ELF 0x3775488). The file holds zero there. The three slots this guard uses are written at run time by the fill stores below, all in
+ * CGS::Initialize (ELF 0x18dc9d4, VA 0x19dc9d4, 14884 bytes); that no other instruction writes them is not shown (a store through another register
+ * that holds the table pointer would not be found by reading these stores). The fill reads the table pointer from that word (`adrp x29,0x370f000` at ELF
  * 0x18dca84, `ldr x29,[x29,#0x360]` at ELF 0x18dca88, VA 0x19dca84 and 0x19dca88) and, for each entry point, does
  *   ldr x8,[x29,#0x88] (vkGetDeviceProcAddr); ldr x0,[x29,#0xb50] (the device); adrp/add the name; blr x8; str x0,[x29,#slot]
- * The name of each slot is the string its fill loads (the adrp/add before the blr).
+ * The name of each slot is the string its fill loads (the adrp/add before the blr); that is read from the file by hand, and no test reads the names.
+ * Not established: the light-UV texel binding of shader 407e0930 (set 0, bindings 3 and 4); nothing here reads that shader.
  *
  * The slots this guard uses (slot = byte offset in the table; the fill store is the one instruction that writes it):
  *   0x290 vkCreateDescriptorSetLayout  fill store ELF 0x18de8b4 (VA 0x19de8b4), word 0xf9014ba0
@@ -23,11 +25,13 @@
  * When the table is filled. The normal step (src/quest/combat/README.md, "When a module installs") runs at the first non-null dlopen
  * the game makes. INFERENCE: that is before android_main runs, because android_app_entry (VA 0x1079994) calls android_main
  * (VA 0x10784c4) only after the library is loaded. So the table is not yet filled when the normal step runs. CGS::Initialize
- * (VA 0x19dc9d4) is called from Initialize (VA 0x2bbfd00). Not established: the caller of Initialize at VA 0x2bbfd00 (ReVault's
- * measured call graph has no caller edge for it, indirect or inferred), so the step that reaches the fill is open. The fill needs
- * the device at gctx+0xb50. A guard that uses a slot installs after the fill has run; the trigger is U5's design.
+ * (VA 0x19dc9d4) is called from CEngine::InitCGS (ELF 0x2aab5e0, VA 0x2bab5e0): `bl` at ELF 0x2aab5ec to the PLT stub at ELF 0xf267a0
+ * (VA 0x10267a0), whose JUMP_SLOT ELF 0x36eaab8 names CGS::Initialize (readelf -rW). InitCGS is reached from CEngine::Initialize (ELF 0x2abfd00,
+ * VA 0x2bbfd00): `bl` at ELF 0x2ac0204 to the PLT stub at ELF 0xf203d0, whose JUMP_SLOT ELF 0x36e78d0 names InitCGS. Not established: the caller
+ * of CEngine::Initialize (ReVault's measured call graph has no caller edge for it, indirect or inferred), so the step that reaches the fill is open. The fill needs
+ * the device at gctx+0xb50. A guard that uses a slot installs after the fill has run; the trigger is the guard's own design.
  *
- * Manager operation. The table words are .bss words written at run time: a checked data-slot write (F06) is the operation for them,
+ * Manager operation. The table words are .bss words written at run time: the sentinel's checked data-slot write is the operation for them,
  * and this header pins them (the address lies in .bss, and the store instruction that writes each one is named with its encoding).
  *
  * Drift from the upstream reference (kotorvr/echoquest-combat at c5a67e8), recorded here, not carried as fact. Upstream's comments
@@ -58,7 +62,9 @@ inline constexpr std::uintptr_t kSlotVkAllocateDescriptorSets = 0x2b8;
 inline constexpr std::uintptr_t kSlotVkUpdateDescriptorSets = 0x2c8;
 inline constexpr std::uintptr_t kSlotDevice = 0xb50;
 
-// The instruction that reads the gctx word into x29 (CGS::Initialize, ELF 0x18dca88; the adrp is at 0x18dca84).
+// The two instructions that read the gctx word into x29 (CGS::Initialize): the adrp at ELF 0x18dca84 names the page 0x370f000, the ldr at
+// 0x18dca88 adds 0x360; the test decodes both and checks that they name kGctxWordVaddr.
+inline constexpr pinned::Word kLoadGctxPage{"adrp x29,0x370f000 (CGS::Initialize, the gctx word's page)", 0x18dca84ULL, 0xf000f19dU};
 inline constexpr pinned::Word kLoadGctxBase{"ldr x29,[x29,#0x360] (CGS::Initialize reads the gctx word)", 0x18dca88ULL, 0xf941b3bdU};
 
 // The fill stores, one per slot: the instruction that writes the slot (`str x0,[x29,#slot]`), named with its encoding.
@@ -67,7 +73,7 @@ inline constexpr pinned::Word kFillAllocateDescriptorSets{"str x0,[x29,#0x2b8] (
 inline constexpr pinned::Word kFillUpdateDescriptorSets{"str x0,[x29,#0x2c8] (vkUpdateDescriptorSets)", 0x18de978ULL, 0xf90167a0U};
 
 // Every word the test checks against the file.
-inline constexpr pinned::Word kWords[] = {kLoadGctxBase, kFillCreateDescriptorSetLayout, kFillAllocateDescriptorSets,
+inline constexpr pinned::Word kWords[] = {kLoadGctxPage, kLoadGctxBase, kFillCreateDescriptorSetLayout, kFillAllocateDescriptorSets,
                                           kFillUpdateDescriptorSets};
 
 }  // namespace nevr_quest::combat::texel_buffer_guard::targets

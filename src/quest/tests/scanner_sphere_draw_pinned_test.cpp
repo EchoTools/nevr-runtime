@@ -100,6 +100,29 @@ std::uint64_t AdrpPage(std::uint32_t word, std::uint64_t pc) {
   return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc & ~static_cast<std::uint64_t>(0xfff)) + (imm << 12));
 }
 
+// The .dynsym entry of `symbol`, or false when absent.
+bool DynamicSymbol(const LoadedElf& elf, const char* symbol, Elf64_Sym* out) {
+  const std::vector<char>& b = elf.bytes;
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, b.data(), sizeof(eh));
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
+  std::vector<Elf64_Shdr> sh(eh.e_shnum);
+  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
+  for (const Elf64_Shdr& s : sh) {
+    if (s.sh_type != SHT_DYNSYM || s.sh_link >= sh.size()) continue;
+    const Elf64_Shdr& str = sh[s.sh_link];
+    for (std::uint64_t off = 0; off + sizeof(Elf64_Sym) <= s.sh_size; off += sizeof(Elf64_Sym)) {
+      Elf64_Sym sym;
+      std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
+      if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
+        *out = sym;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -132,17 +155,14 @@ int main(int argc, char** argv) {
   // The pool-11 argument is `mov w2,#pool`: destination w2, immediate the pool.
   QCHECK((sd::kPool11ArgWord & 0x1fU) == 2);
   QCHECK(MovImmediate(sd::kPool11ArgWord) == sd::kPool11Pool);
-  QCHECK(sd::kPool11Pool == 11);
 
-  // The call is a `bl` to the stub, and it returns to the next instruction (the return site is the call plus four).
+  // The call is a `bl` to the stub (its return site is a pinned word, checked above).
   QCHECK((sd::kPool11CallWord & 0xfc000000U) == 0x94000000U);
   QCHECK(BlTarget(sd::kPool11CallWord, sd::kPool11CallVaddr) == sd::kThunkVaddr);
-  QCHECK(sd::kPool11ReturnVaddr == sd::kPool11CallVaddr + 4);
 
   // The stub: `adrp x16,page; ldr x17,[x16,#off]; br x17`. The adrp page plus the ldr offset is the JUMP_SLOT word.
   QCHECK((sd::kThunkAdrpWord & 0x9f000000U) == 0x90000000U);
   QCHECK(AdrpPage(sd::kThunkAdrpWord, sd::kThunkVaddr) + LdrXOffset(sd::kThunkLdrWord) == sd::kRenderDrawDataSlotVaddr);
-  QCHECK(sd::kThunkLdrVaddr == sd::kThunkVaddr + 4);
 
   // The JUMP_SLOT word is R_AARCH64_JUMP_SLOT for RenderDrawData<CGDrawData> (readelf -rW: 00000000036fad88 JUMP_SLOT).
   const GotTarget slot{pinned::kLibR15, sd::kRenderDrawDataSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId,
@@ -150,10 +170,30 @@ int main(int argc, char** argv) {
   const SlotResolution slotRes = ResolveSlot(elf.image, slot, kAarch64Relocs);
   QCHECK_STATUS(slotRes.status, GotStatus::kOk);
   QCHECK(slotRes.slotVaddr == sd::kRenderDrawDataSlotVaddr);
+  // The symbol that relocation names is defined at the pinned function, whose first word is a pinned word.
+  Elf64_Sym drawSym;
+  QCHECK(DynamicSymbol(elf, sd::kRenderDrawDataSymbol, &drawSym));
+  if (drawSym.st_value != sd::kRenderDrawDataVaddr) {
+    std::fprintf(stderr, "RenderDrawData<CGDrawData> .dynsym value %#llx, pinned %#llx\n", static_cast<unsigned long long>(drawSym.st_value),
+                 static_cast<unsigned long long>(sd::kRenderDrawDataVaddr));
+  }
+  QCHECK(ELF64_ST_TYPE(drawSym.st_info) == STT_FUNC);
+  QCHECK(drawSym.st_value == sd::kRenderDrawDataVaddr);
 
   // The gctx word and the object it names, as in texel_buffer_guard_targets.h.
   const GotTarget gctx{pinned::kLibR15, sd::kGctxSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, sd::kGctxWordVaddr};
   QCHECK_STATUS(ResolveSlot(elf.image, gctx, kAarch64Relocs).status, GotStatus::kOk);
+  // The object the gctx word names is the .dynsym object of the symbol: its address and its size are the pinned ones.
+  Elf64_Sym gctxSym;
+  QCHECK(DynamicSymbol(elf, sd::kGctxSymbol, &gctxSym));
+  if (gctxSym.st_value != sd::kGctxObjectVaddr || gctxSym.st_size != sd::kGctxObjectSize) {
+    std::fprintf(stderr, "gContext .dynsym is %#llx size %#llx, pinned %#llx size %#llx\n", static_cast<unsigned long long>(gctxSym.st_value),
+                 static_cast<unsigned long long>(gctxSym.st_size), static_cast<unsigned long long>(sd::kGctxObjectVaddr),
+                 static_cast<unsigned long long>(sd::kGctxObjectSize));
+  }
+  QCHECK(ELF64_ST_TYPE(gctxSym.st_info) == STT_OBJECT);
+  QCHECK(gctxSym.st_value == sd::kGctxObjectVaddr);
+  QCHECK(gctxSym.st_size == sd::kGctxObjectSize);
   QCHECK(InBss(elf, sd::kGctxObjectVaddr, sd::kGctxObjectSize));
 
   // The blend slot is the one the fill stores (`str x0,[x29,#0x368]`).

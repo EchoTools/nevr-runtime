@@ -31,7 +31,7 @@ using sentinel::SlotResolution;
 using sentinel::kAarch64Relocs;
 using sentinel::ResolveSlot;
 namespace combat_pinned = nevr_quest::combat::pinned;
-namespace bv = nevr_quest::combat::bullet_velocity_guard;
+namespace bv = nevr_quest::combat::bullet_velocity_guard::targets;
 namespace dm = nevr_quest::combat::dronemuzzle;
 
 struct LoadedElf {

@@ -1,7 +1,7 @@
 /* The pinned slot, function and normalise words the bullet-velocity guard relies on (the guard skips a FireBullet whose |v| is below 1e-6 or whose
  * components are not finite; the Quest side is tracked in #1737).
  *
- * Every address is an ELF virtual address in the store libr15 (build ID in pinned_targets.h, `LibR15PatchedBuildId`); the disassembly's address is
+ * Every address is an ELF virtual address in the store libr15 (the store file's build ID is `kLibR15StockBuildId` in pinned_targets.h); the disassembly's address is
  * the ELF address plus 0x100000. src/quest/tests/bullet_velocity_guard_pinned_test.cpp checks each word against the real file
  * (`just test-quest-hooks-pinned`, which needs the store APK).
  *
@@ -25,7 +25,7 @@
 #include "quest/combat/dronemuzzle_targets.h"
 #include "quest/combat/pinned_words.h"
 
-namespace nevr_quest::combat::bullet_velocity_guard {
+namespace nevr_quest::combat::bullet_velocity_guard::targets {
 
 // FireBullet's slot and function are dronemuzzle's pins; this module names them, it does not repin them.
 inline constexpr const char* kFireSymbol = dronemuzzle::kFireSymbol;
@@ -39,4 +39,4 @@ inline constexpr pinned::Word kWords[] = {
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
 inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
 
-}  // namespace nevr_quest::combat::bullet_velocity_guard
+}  // namespace nevr_quest::combat::bullet_velocity_guard::targets

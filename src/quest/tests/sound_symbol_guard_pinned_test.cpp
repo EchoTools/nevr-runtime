@@ -30,7 +30,7 @@ using sentinel::SlotResolution;
 using sentinel::kAarch64Relocs;
 using sentinel::ResolveSlot;
 namespace combat_pinned = nevr_quest::combat::pinned;
-namespace sg = nevr_quest::combat::sound_symbol_guard;
+namespace sg = nevr_quest::combat::sound_symbol_guard::targets;
 
 struct LoadedElf {
   std::vector<char> bytes;  // the file, for the section and dynamic symbol tables

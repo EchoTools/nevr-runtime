@@ -1,5 +1,5 @@
-/* The pinned draw site of the scanner sphere (the module that U6 adds): the place in the store libr15 where the eye pass draws its
- * pool-11 entries, the call that U6 follows with a second draw of pool 18, and the words that call goes through. Checked against the
+/* The pinned draw site of the scanner sphere (the scanner-sphere module, not in the tree yet): the place in the store libr15 where the eye pass draws its
+ * pool-11 entries, the call the module follows with a second draw of pool 18, and the words that call goes through. Checked against the
  * store libr15 by src/quest/tests/scanner_sphere_draw_pinned_test.cpp (the hooks-pinned group, which needs the store APK).
  *
  * Addresses. Every address is an ELF virtual address in the store libr15 (build id in pinned_targets.h, `kLibR15StockBuildId`).
@@ -7,7 +7,7 @@
  *
  * The draw site. NRadEngine::CGRenderPassMainAndroid::Render (ELF 0x189e838, VA 0x199e838) calls
  * NRadEngine::CGRenderer::RenderDrawData<CGDrawData> through a PLT stub, once per pool. The pool is an immediate in the call's
- * argument setup; the pool-11 call is the one U6 follows:
+ * argument setup; the pool-11 call is the one the module follows:
  *   ELF 0x189f0e8 (VA 0x199f0e8)  mov w2,#0xb            the pool argument (ERenderPool 11)
  *   ELF 0x189f0f8 (VA 0x199f0f8)  bl 0xf46d40            the call (the thunk below)
  *   ELF 0x189f0fc (VA 0x199f0fc)  add x23,x22,#0x378     the instruction the call returns to
@@ -18,13 +18,14 @@
  * VA 0x1046d44), which reads the JUMP_SLOT word at ELF 0x36fad88 (VA 0x37fad88), then `br x17`. The relocation of that word is
  * R_AARCH64_JUMP_SLOT for kRenderDrawDataSymbol, whose value is ELF 0x1898b78 (the function, defined in this library).
  *
- * The function. ELF 0x1898b78 (VA 0x1998b78), size 320: its first instruction is `stp x25,x24,[sp,#-0x40]!`.
+ * The function. ELF 0x1898b78 (VA 0x1998b78), size 320, the .dynsym value of kRenderDrawDataSymbol (the test reads it): its first instruction is `stp x25,x24,[sp,#-0x40]!`.
  *
- * The blend constants. The pool-18 draw sets the blend constants first, through the table at gctx+0x368 (vkCmdSetBlendConstants).
- * That slot is filled by CGS::Initialize (ELF 0x18deba8, VA 0x19deba8), which stores `str x0,[x29,#0x368]` (word 0xf901b7a0).
+ * The blend constants. Upstream's pool-18 draw sets the blend constants before it draws, through the table at gctx+0x368
+ * (vkCmdSetBlendConstants); that is upstream's behaviour, not measured in this tree. Measured here: CGS::Initialize stores
+ * `str x0,[x29,#0x368]` (ELF 0x18deba8, VA 0x19deba8, word 0xf901b7a0), the store whose offset is that slot.
  * The gctx word and its object are the ones in texel_buffer_guard_targets.h (ELF 0x370f360, VA 0x380f360; object ELF 0x3775488).
  *
- * The draw of pool 18 itself is the eye-pass change U6 makes; it is not pinned here.
+ * The draw of pool 18 itself is the eye-pass change the module makes; it is not pinned here.
  *
  * Drift from the upstream reference (kotorvr/echoquest-combat at c5a67e8), recorded here, not carried as fact:
  *   1. The label of the word at ELF 0x3753258 (VA 0x3853258). Upstream (afk_fx.cpp:645) calls it "u32 frame slot MainAndroid indexes

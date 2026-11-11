@@ -1,6 +1,6 @@
 // The pins of src/quest/combat/texel_buffer_guard_targets.h, checked against the store libr15 (the hooks-pinned group).
 // Each word is read from the file at its ELF address and compared with its encoding; the gctx word is a GLOB_DAT relocation for the
-// gctx object; the object lies in .bss; every slot offset agrees with the store instruction that fills it.
+// gctx object; the object is gContext's .dynsym object and lies in .bss; the gctx load's adrp and ldr name the word; every slot offset agrees with the store instruction that fills it.
 #include <elf.h>
 #include <sys/mman.h>
 
@@ -84,6 +84,36 @@ bool InBss(const LoadedElf& elf, std::uint64_t vaddr, std::uint64_t size) {
   return false;
 }
 
+// The .dynsym entry of `symbol`, or false when absent.
+bool DynamicSymbol(const LoadedElf& elf, const char* symbol, Elf64_Sym* out) {
+  const std::vector<char>& b = elf.bytes;
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, b.data(), sizeof(eh));
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
+  std::vector<Elf64_Shdr> sh(eh.e_shnum);
+  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
+  for (const Elf64_Shdr& s : sh) {
+    if (s.sh_type != SHT_DYNSYM || s.sh_link >= sh.size()) continue;
+    const Elf64_Shdr& str = sh[s.sh_link];
+    for (std::uint64_t off = 0; off + sizeof(Elf64_Sym) <= s.sh_size; off += sizeof(Elf64_Sym)) {
+      Elf64_Sym sym;
+      std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
+      if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
+        *out = sym;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The page an `adrp` at pc names: (pc & ~0xfff) + immhi:immlo << 12, immediate sign-extended.
+std::uint64_t AdrpPage(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = (static_cast<std::int64_t>((word >> 5) & 0x7ffffU) << 2) | static_cast<std::int64_t>((word >> 29) & 3U);
+  if ((imm & (1 << 20)) != 0) imm -= (1 << 21);
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc & ~static_cast<std::uint64_t>(0xfff)) + (imm << 12));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -107,6 +137,18 @@ int main(int argc, char** argv) {
   const SlotResolution gctxSlot = ResolveSlot(elf.image, gctx, kAarch64Relocs);
   QCHECK_STATUS(gctxSlot.status, GotStatus::kOk);
   QCHECK(gctxSlot.slotVaddr == tb::kGctxWordVaddr);
+
+  // The object the gctx word names is the .dynsym object of the symbol: its address and its size are the pinned ones.
+  Elf64_Sym gctxSym;
+  QCHECK(DynamicSymbol(elf, tb::kGctxSymbol, &gctxSym));
+  if (gctxSym.st_value != tb::kGctxObjectVaddr || gctxSym.st_size != tb::kGctxObjectSize) {
+    std::fprintf(stderr, "gContext .dynsym is %#llx size %#llx, pinned %#llx size %#llx\n", static_cast<unsigned long long>(gctxSym.st_value),
+                 static_cast<unsigned long long>(gctxSym.st_size), static_cast<unsigned long long>(tb::kGctxObjectVaddr),
+                 static_cast<unsigned long long>(tb::kGctxObjectSize));
+  }
+  QCHECK(ELF64_ST_TYPE(gctxSym.st_info) == STT_OBJECT);
+  QCHECK(gctxSym.st_value == tb::kGctxObjectVaddr);
+  QCHECK(gctxSym.st_size == tb::kGctxObjectSize);
 
   // The object the word names lies in .bss: the file holds no value for it, the fill writes it at run time.
   QCHECK(InBss(elf, tb::kGctxObjectVaddr, tb::kGctxObjectSize));
@@ -132,8 +174,10 @@ int main(int argc, char** argv) {
   QCHECK(LdrXOffset(tb::kFillCreateDescriptorSetLayout.word) == tb::kSlotVkCreateDescriptorSetLayout);
   QCHECK(LdrXOffset(tb::kFillAllocateDescriptorSets.word) == tb::kSlotVkAllocateDescriptorSets);
   QCHECK(LdrXOffset(tb::kFillUpdateDescriptorSets.word) == tb::kSlotVkUpdateDescriptorSets);
-  // The gctx base load reads the GOT word at ELF 0x370f360 through x29's adrp page (0x370f000 + 0x360).
-  QCHECK(LdrXOffset(tb::kLoadGctxBase.word) == 0x360);
+  // The gctx base load is `adrp x29,page; ldr x29,[x29,#off]`: page plus offset is the GOT word whose relocation was checked above.
+  QCHECK((tb::kLoadGctxPage.word & 0x9f000000U) == 0x90000000U);
+  QCHECK((tb::kLoadGctxPage.word & 0x1fU) == 29);
+  QCHECK(AdrpPage(tb::kLoadGctxPage.word, tb::kLoadGctxPage.vaddr) + LdrXOffset(tb::kLoadGctxBase.word) == tb::kGctxWordVaddr);
 
   if (quest_test::Failures() == 0) std::printf("texel_buffer_guard_pinned_test: ok (%s)\n", buildId);
   return quest_test::Failures() == 0 ? 0 : 1;

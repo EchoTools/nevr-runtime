@@ -1,7 +1,7 @@
 /* The pinned slots, functions, code words and data facts the sound-symbol guard relies on (the guard drops a post whose CSoundSymbol is 0 or the
  * invalid id; the Quest side is tracked in #1737).
  *
- * Every address is an ELF virtual address in the store libr15 (build ID in pinned_targets.h, `LibR15PatchedBuildId`); the disassembly's address is
+ * Every address is an ELF virtual address in the store libr15 (the store file's build ID is `kLibR15StockBuildId` in pinned_targets.h); the disassembly's address is
  * the ELF address plus 0x100000. src/quest/tests/sound_symbol_guard_pinned_test.cpp checks each slot, word and fact against the real file
  * (`just test-quest-hooks-pinned`, which needs the store APK). The store libr15 (sha256 8dd9a961...) relocations, from `llvm-readelf -rW`:
  *
@@ -9,8 +9,11 @@
  *   CSoundPlayer::Play3DSound  JUMP_SLOT 0x3701090 -> 0x134b468
  *
  * The bullet site, `bl` at 0x21230d0 inside CR15NetBulletCS::Update, calls Play3DSound through the PLT stub at 0xf53350 and returns to 0x21230d4.
- * It takes its CSoundSymbol from the .bss word 0x37af76c. `_INIT_355` (0xf70e14, listed in .init_array) writes that word once, at load, with the
- * .rodata word 0x31c8330 (0x1406b30a), so the default is 0x1406b30a and not zero. ReVault (libr15.so, id 576) lists no other write to 0x37af76c.
+ * The .bss word 0x37af76c is the default of the CSoundSymbol it passes: CR15NetBulletCS::Update loads it into w28 at 0x2122fdc and `mov w1, w28`
+ * (0x21230c4) makes it the symbol argument. One path replaces w28 first: when the table lookup at 0x2123014..0x2123084 finds an index other than -1
+ * (`cmn x11, #1` / `b.eq` at 0x2123084 not taken), `ldr w28, [x8, #0x8]` at 0x21230a0 loads that table entry's word. So the word is the
+ * default, not the only source. `_INIT_355` (ReVault's name for 0xf70e14, listed in .init_array) writes the word once, at load, with the
+ * .rodata word 0x31c8330 (0x1406b30a), so the default is 0x1406b30a and not zero. ReVault (libr15.so) lists no other write to 0x37af76c.
  *
  * The crash offset 0x11d1cac from upstream's notes is the return address after the `bl` at 0x11d1ca8, which calls the C1 constructor of
  * CConsoleStream through a PLT stub, inside OutputError (0x11d1b38, 1268 bytes). It is not a faulting instruction: a crash that logs +0x11d1cac is
@@ -30,7 +33,7 @@
 
 #include "quest/combat/pinned_words.h"
 
-namespace nevr_quest::combat::sound_symbol_guard {
+namespace nevr_quest::combat::sound_symbol_guard::targets {
 
 inline constexpr const char* kPlaySymbol =
     "_ZN10NRadEngine8CSoundCS9PlaySoundENS_18SCompactPoolHandleENS_12CSoundSymbolEfNS_15SSoundDebugInfoE";
@@ -73,4 +76,4 @@ inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
 inline constexpr std::uint64_t kDefaultSymbolVaddr = 0x37af76c;
 inline constexpr std::uint64_t kDefaultWriterFn = 0xf70e14;
 
-}  // namespace nevr_quest::combat::sound_symbol_guard
+}  // namespace nevr_quest::combat::sound_symbol_guard::targets
