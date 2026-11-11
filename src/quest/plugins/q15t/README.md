@@ -24,7 +24,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, droneguard, peerclamp, and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- On: levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - Gun connect, the practice AI bots and the gun hand default are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
   `weapon_arm.h`). Their switches are the `combat:` keys `gunconnect`, `aibots`, `aibots_scenario` and `weapon_arm` in `config.yaml`, each on by default; no kill file
   or data file switches any of them. The marker files of the gun hand stay in this plugin's data directory, `files/q15t` (player state).
@@ -45,7 +45,7 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   `combat:` keys `music` and `sensorwd` (both on by default) in `config.yaml`; no kill file switches either.
 - The wrist HUD's heat fill and the shield colour are not this plugin's: the runtime owns them (`src/quest/combat/hudmeter.h`, `src/quest/combat/shieldgamma.h`),
   switched by the `combat:` keys `hudmeter` (on), `shieldgamma_tube_mirror` (on) and `shieldgamma_gamma` (off) in `config.yaml`; no `hudmeter.on` file or build option switches either.
-- Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
+- The crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are not the plugin's: they are modules of the runtime's combat area (`src/quest/combat/`, `docs/quest/combat/`), switched by `combat.<module>` keys in `config.yaml` (docs/adr/0046).
 - dronekill and dronemuzzle are not this plugin's: the runtime owns them (`src/quest/combat/dronekill.h`, `src/quest/combat/dronemuzzle.h`).
   Their switches are the `combat:` keys `dronekill` and `dronemuzzle` in `config.yaml`.
 - The refresh-rate rule (90 Hz, 72 on a Quest 2, on combat maps and in the lobby) and the clock levels are not this plugin's: the runtime

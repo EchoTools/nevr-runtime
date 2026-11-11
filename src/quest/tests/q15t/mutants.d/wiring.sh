@@ -1,8 +1,5 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
-for _m in DRONEGUARD PEERCLAMP LEVELNAME; do
-  runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
-done
-runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_PEERCLAMP) caps/if (Q15T_PEERCLAMP || Q15T_FXTRAIL) caps/"
+runm wiring wire_caps_levelname src/plugin.cpp "s/if (Q15T_LEVELNAME) caps |=/if (false) caps |=/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
 runm wiring wire_failure_quiet     src/plugin.cpp "s/Log(ok || off ? NEVR_LOG_INFO : NEVR_LOG_ERROR,/Log(NEVR_LOG_INFO,/"
 runm wiring wire_off_is_error      src/plugin.cpp "s/const bool off = !ok \&\& (std::strcmp(r.reason, \"off\") == 0 || std::strcmp(r.reason, \"off_file\") == 0);/const bool off = false;/"
@@ -11,11 +8,7 @@ runm wiring wire_reason_blank      src/plugin.cpp "s/const char\* reason = r.rea
 runm wiring wire_name_blank        src/plugin.cpp "s/{\"module\", module},/{\"module\", \"\"},/"
 runm wiring wire_status_hidden     src/plugin.cpp "s/{\"status\", off ? \"off\" : StatusName(r.status)},/{\"status\", \"\"},/"
 runm wiring wire_modules_unlisted  src/plugin.cpp "s/{\"modules\", kCompiledModules}};/{\"modules\", \"\"}};/"
-runm wiring wire_drop_fxtrail      src/plugin.cpp "s/^  ReportModule(\"fxtrail\", InstallFxTrail(base));//"
-runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\", InstallVoipDrop(base));//"
-runm wiring wire_drop_custctx      src/plugin.cpp "s/^  ReportModule(\"custctx\", InstallCustCtx(base));//"
-runm wiring wire_drop_droneguard   src/plugin.cpp "s/^  ReportModule(\"droneguard\", InstallDroneGuard(base));//"
-runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp\", InstallPeerClamp(base));//"
+runm wiring wire_levelname_off_ignored src/plugin.cpp "s/ \&\& !ModuleSwitchPresent(\"levelname.off\")//"
 runm wiring wire_drop_levelname    src/plugin.cpp "s/^    ReportModule(\"levelname\", InstallLevelName(base));//"
 # the tick table (tests/game_tick_test.cpp)
 runm game_tick tick_max_8          src/game_tick.h   "s/inline constexpr int kMaxGameTicks = 16;/inline constexpr int kMaxGameTicks = 8;/"

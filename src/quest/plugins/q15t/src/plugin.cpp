@@ -5,18 +5,13 @@
 #include <cstdint>
 #include <cstring>
 
-#include "custctx.h"
-#include "droneguard.h"
 #include "nevr/plugin_interface.h"
-#include "fxtrail.h"
 #include "game_tick.h"
 #include "levelname.h"
 #include "boosterpool.h"
-#include "peerclamp.h"
 #include "plugin_log.h"
 #include "script_redirect.h"
 #include "module_switch.h"
-#include "voipdrop.h"
 
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
@@ -28,21 +23,6 @@
 // reason, from the module's doc); the default HERE is 0, so a build that names no option installs none of them and the
 // perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
 // step (src/quest/combat/heaps.h, memsys.h).
-#ifndef Q15T_FXTRAIL
-#define Q15T_FXTRAIL 0
-#endif
-#ifndef Q15T_VOIPDROP
-#define Q15T_VOIPDROP 0
-#endif
-#ifndef Q15T_CUSTCTX
-#define Q15T_CUSTCTX 0
-#endif
-#ifndef Q15T_DRONEGUARD
-#define Q15T_DRONEGUARD 0  // Q15T_DRONEGUARD_IDX (the second stage) is read by droneguard.cpp itself
-#endif
-#ifndef Q15T_PEERCLAMP
-#define Q15T_PEERCLAMP 0
-#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -75,21 +55,6 @@ bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->
 
 // Every compiled-in module, by name, for the init line.
 constexpr char kCompiledModules[] =
-#if Q15T_FXTRAIL
-    "fxtrail "
-#endif
-#if Q15T_VOIPDROP
-    "voipdrop "
-#endif
-#if Q15T_CUSTCTX
-    "custctx "
-#endif
-#if Q15T_DRONEGUARD
-    "droneguard "
-#endif
-#if Q15T_PEERCLAMP
-    "peerclamp "
-#endif
 #if Q15T_LEVELNAME
     "levelname "
     "boosterpool "
@@ -162,10 +127,8 @@ NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
 NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-  // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards).
-  if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
+  // Modules that change what a player experiences or what the game computes (per their docs, the others skip, add or answer game
+  // logic). Not here: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's now.
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
   return caps;
 }
@@ -194,21 +157,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   // The modules, in an order the docs fix (bvh, wallfire, impactsnd, decals, ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).
   // Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
-#if Q15T_FXTRAIL
-  ReportModule("fxtrail", InstallFxTrail(base));
-#endif
-#if Q15T_VOIPDROP
-  ReportModule("voipdrop", InstallVoipDrop(base));
-#endif
-#if Q15T_CUSTCTX
-  ReportModule("custctx", InstallCustCtx(base));
-#endif
-#if Q15T_DRONEGUARD
-  ReportModule("droneguard", InstallDroneGuard(base));
-#endif
-#if Q15T_PEERCLAMP
-  ReportModule("peerclamp", InstallPeerClamp(base));
-#endif
 #if Q15T_LEVELNAME
   if (levelname_on) {
     ReportModule("levelname", InstallLevelName(base));

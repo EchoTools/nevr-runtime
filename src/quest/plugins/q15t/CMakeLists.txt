@@ -5,29 +5,17 @@ set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # ---- Gameplay and fix modules (src/<m>.{h,cpp}; docs/quest/q15t/modules/<m>.md). Defaults are each doc's own, i.e. the source build's. ----
 # ON: the source build installs it unless switched off (a runtime off-file in the plugin data directory is kept where the doc keeps it).
-option(Q15T_FXTRAIL "fxtrail (R29): a bullet whose trail effect has no instance ends its trail. Source: ON by default" ON)
-option(Q15T_VOIPDROP "voipdrop (R30): a remote voice packet that cannot be stored is dropped. Source: DEFAULT ON" ON)
-option(Q15T_CUSTCTX "custctx (R31-R33): three guards on the customization renderer. Source: DEFAULT ON" ON)
-# The runtime owns hudmeter and shieldgamma (#2186); impactsnd and decals (#2183); ec, ecfx, POWER BOOST, dronekill and dronemuzzle (#2187); gunconnect, aibots and weapon_arm (#2185):
+# The runtime owns fxtrail, voipdrop, custctx, droneguard and peerclamp (#2178); hudmeter and shieldgamma (#2186); impactsnd and decals (#2183); ec, ecfx, POWER BOOST, dronekill and dronemuzzle (#2187); gunconnect, aibots and weapon_arm (#2185):
 # src/quest/combat/, keys combat.impactsnd, combat.impactsnd_write, combat.decals, combat.decals_flip_u, combat.decals_flip_v, combat.ec,
 # combat.ec_words, combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronemuzzle, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter, combat.shieldgamma_gamma,
-# combat.shieldgamma_tube_mirror.
-# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp): ON here.
-# Droneguard's second stage, the levelname pair and the gate options below stay OFF (not in the on-list, or they need content in the pack).
-option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY; on in the wave19a on-list" ON)
-option(Q15T_DRONEGUARD_IDX "droneguard stage 1 (needs Q15T_DRONEGUARD). Source: TEST ONLY" OFF)
-option(Q15T_PEERCLAMP "peerclamp (R36): clamp a peer's stamp in CleanupPeers. Source: TEST ONLY; on in the wave19a on-list" ON)
+# combat.shieldgamma_tube_mirror, combat.fxtrail, combat.voipdrop, combat.custctx, combat.droneguard, combat.droneguard_stage1, combat.peerclamp.
 option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its plain name, so the full-size global_mp in the pack loads. Source combat build: on. Kill file levelname.off" ON)
-
-if(Q15T_DRONEGUARD_IDX AND NOT Q15T_DRONEGUARD)
-  message(FATAL_ERROR "Q15T_DRONEGUARD_IDX needs Q15T_DRONEGUARD")
-endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/got_swap.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX DRONEGUARD PEERCLAMP LEVELNAME)
+foreach(m LEVELNAME)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -49,7 +37,5 @@ target_link_libraries(nevr_q15t PRIVATE nevr::plugin_sdk dl)
 target_compile_options(nevr_q15t PRIVATE ${Q15T_COMMON_OPTIONS})
 target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
-  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}>
-  Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
   Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}>)
 target_link_options(nevr_q15t PRIVATE ${Q15T_COMMON_LINK})

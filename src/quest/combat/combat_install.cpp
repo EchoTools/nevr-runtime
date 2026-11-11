@@ -10,11 +10,14 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/custctx.h"
 #include "quest/combat/decals.h"
+#include "quest/combat/droneguard.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/fxtrail.h"
 #include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
@@ -24,6 +27,7 @@
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
 #include "quest/combat/music.h"
+#include "quest/combat/peerclamp.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/powerboost.h"
@@ -33,6 +37,7 @@
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
+#include "quest/combat/voipdrop.h"
 #include "quest/combat/wallfire.h"
 #include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
@@ -55,7 +60,8 @@ ModuleResult RefreshRateNormal() noexcept {
 // The scope's refresh is a look at the game's tables four times a second in every level, arena included, so it is registered only when a module that
 // reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
 ModuleResult ScopeNormal() noexcept {
-  const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on;
+  const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
+                         g_config.peerclamp.on || g_config.custctx.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -122,6 +128,12 @@ ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
 ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
 ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
+// The crash and timing guards (#2178). fxtrail, peerclamp and custctx read the combat level answer, so their switches are readers of the scope row above.
+ModuleResult FxtrailNormal() noexcept { return fxtrail::Install(g_config.fxtrail.on); }
+ModuleResult VoipdropNormal() noexcept { return voipdrop::Install(g_config.voipdrop.on); }
+ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx.on); }
+ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
+ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -178,6 +190,16 @@ constexpr std::array kModules{
     Module{"wallfire", nullptr, &WallfireNormal, "combat.wallfire", &nevr_quest::CombatConfig::wallfire},
     // sendguard: the script-event guard, installed after the modules that hook the tick and before the decisions (#2179).
     Module{"sendguard", nullptr, &SendguardNormal, "combat.sendguard", &nevr_quest::CombatConfig::sendguard, &sendguard::NoteEnd},
+    // The crash and timing guards (#2178), in the plugin's order: fxtrail, voipdrop, custctx, droneguard, peerclamp. They hook the game's own slots and
+    // read the scope's answer where they change a value (fxtrail, peerclamp, custctx's pool refusal), so they come after the scope's row; each writes its
+    // counts at the end of the process. droneguard_stage1 is a switch of droneguard's with no step of its own: its row exists so the switch is one
+    // generated `combat_config_switch` record.
+    Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd},
+    Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd},
+    Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd},
+    Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd},
+    Module{"droneguard_stage1", nullptr, nullptr, "combat.droneguard_stage1", &nevr_quest::CombatConfig::droneguardStage1},
+    Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},

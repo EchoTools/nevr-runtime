@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "module_switch.h"
 #include "nevr/plugin_interface.h"
-#include "fxtrail.h"
 
 extern "C" {
 NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext*, const char*);
@@ -146,16 +146,20 @@ int main() {
   for (uintptr_t s : kLevelNameSlots) *reinterpret_cast<uintptr_t*>(base + s) = base + 0x1202ecc;
   // boosterpool: the GOT word of the AllocatePooledActor import holds its pinned function (ELF 0x18037c4)
   *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
-  // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
-  for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
   mprotect(p, kImage, PROT_READ);
 
-  // fxtrail's own off switch (fxtrail.off in the data directory): a choice, so INFO status=off, not an ERROR
+  // The data directory the kill file is looked for in is a directory of this test's. With WIRING_LEVELNAME_OFF it holds `levelname.off`, the pair's own off
+  // switch: a choice, so INFO status=off for both modules and neither slot touched, not an ERROR.
   char dir[] = "/tmp/q15t_wiring_XXXXXX";
   if (mkdtemp(dir) == nullptr) std::abort();
-  const std::string off_file = std::string(dir) + "/fxtrail.off";
+  const std::string off_file = std::string(dir) + "/levelname.off";
+#if defined(WIRING_LEVELNAME_OFF)
+  constexpr bool kPairOff = true;
   if (FILE* f = std::fopen(off_file.c_str(), "w")) std::fclose(f);
-  q15t::SetFxTrailDirForTest(dir);
+#else
+  constexpr bool kPairOff = false;
+#endif
+  q15t::SetModuleSwitchDirForTest(dir);
 
   NevrGameContext ctx{};
   ctx.base_addr = base;
@@ -181,8 +185,7 @@ int main() {
   CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
   // every compiled module is named in the init record
-  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",
-                        "levelname", "boosterpool"};
+  const char* kAll[] = {"levelname", "boosterpool"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -192,39 +195,23 @@ int main() {
   }
 
   // what must have installed, been switched off, or refused, on this image
-  const char* kInstalled[] = {"levelname", "boosterpool"};
-  const char* kOff[] = {"fxtrail"};
-  struct Refusal {
-    const char* module;
-    const char* reason;  // the reason token the record must carry
-  };
-  const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
-                              {"peerclamp", "word_pin_mismatch"}};
-  for (const char* m : kInstalled)
-    CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
-  for (const char* m : kOff)
-    CHECK(CountLines(std::string("module install module=") + m + " status=off", 1) == 1, "module %s: a deliberate off must be INFO status=off", m);
-  for (const Refusal& r : kRefused) {
-    const std::string line = FindLine(std::string("module install FAILED module=") + r.module + " ");
-    CHECK(CountLines(std::string("module install FAILED module=") + r.module + " ", 3) == 1, "module %s: its refusal is not an ERROR line", r.module);
-    CHECK(line.find(std::string(" reason=") + r.reason + " real_resolved=") != std::string::npos, "module %s: want reason %s: %s", r.module, r.reason,
-          line.c_str());
-    CHECK(line.find(" status=") != std::string::npos, "module %s: ERROR line has no status: %s", r.module, line.c_str());
+  for (const char* m : kAll) {
+    CHECK(CountLines(std::string("module install module=") + m + (kPairOff ? " status=off" : " status=ok"), 1) == 1,
+          "module %s did not report status=%s at INFO", m, kPairOff ? "off" : "ok");
   }
   // what the installs did to the image
-  CHECK(w_slot(base, q15t::kFxTrailSlot) == 0, "fxtrail was off: its slot must be untouched");
-  CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
-  CHECK(w_slot(base, 0x36cd1f8) != base + 0x18037c4, "boosterpool: its GOT slot was not swapped");
+  CHECK((w_slot(base, 0x362ef90) != base + 0x1202ecc) == !kPairOff, "levelname: its slot %s", kPairOff ? "was swapped with levelname.off present" : "was not swapped");
+  CHECK((w_slot(base, 0x36cd1f8) != base + 0x18037c4) == !kPairOff, "boosterpool: its GOT slot %s", kPairOff ? "was swapped with levelname.off present" : "was not swapped");
   // no module of the plugin registers a game tick (gunconnect, aibots and weapon_arm are the runtime's): the plugin installs none and
   // writes no tick record, and the tick slot is the one the host passed.
   CHECK(CountLines("game tick callbacks") == 0, "the plugin logged a tick table: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook=CncaGame::ExclusiveUpdateGame") == 0, "the plugin installed the game tick: %s", FindLine("hook=CncaGame::ExclusiveUpdateGame").c_str());
   CHECK(w[4] == reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was written");
-  CHECK(CountLines("module install FAILED") == 4, "%d FAILED lines, want 4", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 0, "%d FAILED lines, want 0", CountLines("module install FAILED"));
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (9 modules named, 2 installed, 1 off, 6 refusals at ERROR, no game tick, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (2 modules named, both %s, no refusal, no game tick, InitEx returned 0)\n", kPairOff ? "off by levelname.off" : "installed");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);
