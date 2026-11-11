@@ -53,7 +53,7 @@ runm lb_every_edge     $B "s#if (nowMs - lastLine_ >= everyMs_) return#if (nowMs
 runm lb_flush_edge     $B "s#nowMs - lastEvent_ >= everyMs_#nowMs - lastEvent_ > everyMs_#"
 runm lb_flush_always   $B "s#if (total_ > written_ \&\& nowMs#if (nowMs#"
 runm lb_written        $B "s#^    written_ = total_;##"
-runm lb_last_line      $B "s#^    lastLine_ = nowMs;##"
+runm lb_last_line      $B "s#^    lastLine_ = nowMs;#    lastLine_ = nowMs - everyMs_;#"
 runm lb_last_event     $B "s#^    lastEvent_ = nowMs;##"
 runm lb_since          $B "s#return Wrote(Verdict::kCount, nowMs, total_ - written_);\$#return Wrote(Verdict::kCount, nowMs, total_);#"
 # off by its key is counted off on the phase line (combat_install_test)

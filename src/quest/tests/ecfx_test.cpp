@@ -222,6 +222,42 @@ static void RuleTests() {
     std::memset(g_q, 0, sizeof g_q);
   }
 
+  // a boom uses up its node's turn (EC 445 before 450): the node's sound waits for the next drain
+  {
+    std::memset(g_q, 0, sizeof g_q);
+    Drain db;
+    Put(0, 0x100, kE2 | 2);
+    Put(1, 0x100, kE3 | 3);
+    c = Counts();
+    n = PlanInto(db, Ents(), 9100, run, &c);
+    CHECK(n == 0 && c.boom == 1 && g_q[2] == 0x100, "the boom did not use up its node's turn: n %d", n);
+    c = Counts();
+    n = PlanInto(db, Ents(), 9110, run, &c);
+    CHECK(n == 1 && run[0].kind == kSound, "the node's sound did not run on the next drain");
+    std::memset(g_q, 0, sizeof g_q);
+  }
+  // the lowest kind is looked for after the slot only (EC 442): a passed slot of the node, written by a running entry, waits
+  {
+    std::memset(g_q, 0, sizeof g_q);
+    Drain dl;
+    Env env;
+    const Entries ents = Ents();
+    env.entries = &ents;
+    env.wallOf = &WallFake;
+    int queued = 0, k = 0;
+    int slots[kSlots] = {};
+    Put(2, 0x100, kE0);
+    c = Counts();
+    n = dl.Plan(g_q, env, 9200, [&](const Run& r) {
+      slots[k++] = r.slot;
+      if (r.ctx != 0x100 || queued++) return;
+      Put(0, 0x200, kE0);      // a passed slot, node 0x200's charge
+      Put(4, 0x200, kE1 | 1);  // a later slot, node 0x200's burst
+    }, &c);
+    CHECK(n == 2 && slots[1] == 4 && g_q[0] == 0x200, "the lowest kind was looked for before the slot: n %d slot %d", n, slots[1]);
+    std::memset(g_q, 0, sizeof g_q);
+  }
+
   // stale: more than 500 ms since the last drain frees every complete slot, runs nothing
   Drain d2;
   Put(0, 0x100, kE0);
@@ -409,14 +445,14 @@ static void FullTests(const char* path) {
   CHECK(CountLines("\"event\":\"combat_ecfx_lines\"") == 1 && HasLine("\"records\":97", 1), "no combat_ecfx_lines record at the 97th record");
   CHECK(CountLines("\"event\":\"combat_ecfx_ran\"") + CountLines("\"event\":\"combat_ecfx_drain\"") == 96,
         "the ran and drain records written: %d, want 96", CountLines("\"event\":\"combat_ecfx_ran\"") + CountLines("\"event\":\"combat_ecfx_drain\""));
-  for (int i = 0; i < 5; ++i) {  // within 10 s of the last line: counted, nothing written
-    QPut(0, ctx0, e2 | kBoom);
+  for (int i = 0; i < 5; ++i) {  // within 10 s of the last line: counted, nothing written; a run entry too
+    QPut(0, ctx0, (i % 2 ? e2 | kBoom : e0 | kCharge));
     Tick();
   }
   CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 0 && CountLines("\"event\":\"combat_ecfx_drain\"") + CountLines("\"event\":\"combat_ecfx_ran\"") == 96,
         "a record was written within 10 s of the cap");
   QPut(0, ctx0, e2 | kBoom);
-  Tick(10000);  // the first record at least 10 s after the last line: the count goes out
+  Tick(9950);  // exactly 10 s after the last line (five 10 ms ticks, then 9950 ms): the count goes out
   CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 1 && HasLine("\"records\":103,\"since_last\":6"), "no count 10 s after the cap");
   QPut(0, ctx0, e2 | kBoom);
   Tick(400);
