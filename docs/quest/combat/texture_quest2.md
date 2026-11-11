@@ -37,9 +37,14 @@ queued for config.yaml), the reference input's start rule naming a level (`Resol
 The rules are `src/quest/sentinel/texture_quality_rules.h` (pure). The look's gate (`LookStep`) runs on the owner's poller thread twice a
 second; the per-frame apply (`ApplyPending`, `src/quest/sentinel/texture_menu_hook.cpp`) works towards `EffectiveLevel`. Combat's look comes
 from `src/quest/combat/texture_quest2.cpp`: a combat-tick callback, every 500 ms, reads the loaded levels (`level::Scan`, the two loaded
-tables, an Echo Arena level winning) and CncaGame's init-fiber count (game + 0x1f08, `combat_level_targets.h` `kFiberCount`: the gamespaces
-still loading); a count that is not 0, or that cannot be read, is a load. It registers itself with the owner through
-`src/quest/sentinel/texture_quality_input.h`; texture_quality includes no combat header.
+tables, an Echo Arena level winning) and CncaGame's init-fiber count (game + 0x1f08, `combat_level_targets.h` `kFiberCount`). Inferred: the
+count is of the gamespaces still loading (the table of in-flight init fibers it indexes is read by `combat_level`, and `meshstep.md` reads the
+fiber's insertion into the loaded tables). `UpdateGameSpaceInit` (ELF 0x17ecc7c, the function that inserts the gamespace at 0x17ed480) has no
+reconstruction in the r15 set (queued in NEEDED.tsv), so when the count returns to 0 is not shown: that it is 0 only after the last
+gamespace's resources are built, and not earlier, is not established. A count that is not 0, or that cannot be read, is a load. The tick
+also keeps the time it last saw a load (`Look::lastLoadMs`). The combat input registers itself with the owner through
+`src/quest/sentinel/texture_quality_input.h`; texture_quality includes no combat module header (`texture_menu_hook.cpp` includes the utility
+`quest/combat/pinned_words.h`, to check the upload words; it includes neither `combat_scope.h` nor a module's header).
 
 ## The guard: no look-driven Resize in a load window
 
@@ -60,7 +65,10 @@ A look-driven change (a step down, or the way back up while the player has not c
 unless all of these hold at the frame it would be made (`ResizeHold`):
 
 1. the look combat made is at most 1.5 s old (`kLookFreshMs`) and shows no gamespace loading;
-2. no gamespace has been seen loading for 10 s (`kSettleMs`; the gate's quiet stretch, restarted by every look that sees a load);
+2. no gamespace has been seen loading for 10 s (`kSettleMs`), by both measures, and the stricter decides: the gate's quiet stretch (the
+   poller's, restarted by every sample that sees a load) and the time of the last load the combat tick itself saw (`Look::lastLoadMs`). The
+   tick looks every 500 ms and the poller samples every 500 ms, so a load the next look overwrote before the poller read would not restart
+   the poller's stretch; the tick's time keeps it;
 3. the upload count (0x379b400) reads 0 and the upload lock (0x379b780) reads 0, read without taking the lock. This is a narrowing, not the
    guard: it sees an `Upload` already between its slot and its `End`, and nothing that starts after the read.
 
@@ -74,13 +82,20 @@ or leaves combat for 90 s.
 
 Inferred, from the analysis below; nothing here was observed on a headset.
 
+- A load shorter than the look spacing: the tick reads the init-fiber count every 500 ms, so a count that is non-zero only between two looks
+  is not seen by either measure.
 - An `Upload` that is not part of a gamespace load: the init-fiber count does not see it. Which callers upload in a settled level (the
   `CGBuffer` initializers that upload initial data, through 0x182bdf0, created at run time, if any) and on which thread is not shown.
 - A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock up to
   five times over its whole length. Whether a new init fiber reaches an `Upload` inside that time is not shown.
 - An `Upload` taken after the count and lock read: the read narrows, it does not close (the section "What this means" below).
-- The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure.
-- The 10 s settle is upstream's number, not measured here.
+- The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure. The menu's Resize (a change the player makes,
+  `ApplyPending` with no look behind it) is made with no hold: no load window, no upload word is read.
+- The Resize that undoes a refused one (`ApplyPending`, after a failed Resize it puts the previous level back and resizes again) has no
+  guard either: it runs at once, in whatever window the refused one was made, and a look-driven refusal is itself a Resize that passed the
+  guard above, so the undo adds one more Resize at the same exposure.
+- The 10 s settle is upstream's number, not measured here, and when the init-fiber count returns to 0 against the end of a load's uploads is
+  not shown (above).
 
 Given that the deadlock is unobserved and a hang is worse than not stepping down, `combat.texture_quest2_step_down` is FALSE by default
 here (upstream ships it on); the headset row decides flipping it.
@@ -101,11 +116,15 @@ here (upstream ships it on); the headset row decides flipping it.
 - `combat_texture_quest2_look` Info, once per change of the class or of loading (a load begins or ends): `where`, `loading`, `fibers` (-1:
   unreadable), `looks`; at most 64 per run.
 - `texture_quality_level_rule` Info, from the poller, once per change of the level sent or its reason: `level_asked`, `level_sent`,
-  `reason`, `where`, `quest2`, `player_chose`, `unlogged`; at most 32, then one notice, and the next line's `unlogged` counts the rest.
+  `reason`, `where`, `quest2`, `player_chose`, `unlogged`; at most 32, then one notice (`capped`). After it `texture_quality_level_rule_count`
+  (`unlogged`, and the latest `level_sent` and `reason`) is written when the count grew, at most once every 60 s (`kRuleCountEveryMs`), the first
+  as soon as a change is not written.
 - `texture_quality_level_held` Info, once per hold (not per frame): `level_from`, `level_to`, `hold`
   (stale_look|loading|settling|uploads|lock), `uploads`, `lock`, `quiet_ms`, `holds`.
 - `texture_quality_level_rule_off` Warning, once: `why` (resize_failed|upload_words_unavailable).
-- `texture_menu_upload_words` Warning at install when a word that forms the two addresses differs: `what`, `va`, `expected`, `actual`.
+- `texture_menu_upload_words` Warning at install when a word that forms the two addresses differs: `what`, `va`, `expected`, `actual`. It is
+  written on every APK, the release one included, which registers no step-down; its `consequence` says that a step-down, where this build
+  registers one, is off for the run and that the player's level is unaffected.
 - The existing `texture_quality_applied` line records each change of the applied level, the step-down's included.
 
 ## Arena cost
@@ -269,6 +288,8 @@ The game's own Resize (a display change) has the same exposure.
 - The eight unreconstructed functions read whole: `CGS::FlushGPU`, `CGDisplay::Resize`, the reaper 0x18ebb48, the allocator 0x18ebd38,
   both `CGUploader::Upload` and both `End`. Each is queued for a byte-checked reconstruction; until then their behaviour beyond the
   pinned words is inferred.
+- When the init-fiber count (game + 0x1f08) returns to 0 against the end of a gamespace's uploads: `UpdateGameSpaceInit` (ELF 0x17ecc7c) has no
+  reconstruction yet.
 - Who writes the queue lock pointer at 0x379b478.
 - What `SubmitPendingTemporaryCommandBuffers` and the call through gctx + 0xf8 do in `FlushGPU`, and what `CGDisplay::Resize` runs
   between its four destroys.

@@ -28,6 +28,7 @@ runm tq2_no_lock         $R "s/  if (in.lock != 0) return Hold::kLock;//" $RT
 runm tq2_no_loading      $R "s/  if (in.look.loading) return Hold::kLoading;//" $RT
 runm tq2_no_stale        $R "s/  if (!Fresh(in.look, in.nowMs)) return Hold::kStaleLook;//" $RT
 runm tq2_no_settling     $R "s/  if (in.quietSinceMs == 0 || in.nowMs - in.quietSinceMs < kSettleMs) return Hold::kSettling;//" $RT
+runm tq2_tick_load_unused $R "s/  if (in.look.lastLoadMs != 0 \&\& in.nowMs - in.look.lastLoadMs < kSettleMs) return Hold::kSettling;.*//" $RT
 # the owner: who chose, the hold, the look turned off
 M=src/quest/sentinel/texture_menu_hook.cpp
 MT="quest-host-hooks texture_menu_hook_test"
@@ -43,11 +44,16 @@ runm tq2_words_ignored   $M "s/    LookOff(\"upload_words_unavailable\");/    (v
 runm tq2_gate_unpublished $M "s/  g_lookOn.store(g_gate.on, std::memory_order_release);/  (void)0;/" $MT
 runm tq2_held_every_frame $M "s/  if (!g_holding.exchange(true, std::memory_order_acq_rel)) g_lookHolds/  g_holding.store(true); g_lookHolds/" $MT
 runm tq2_rule_line_debug $M "s/LogLevel::kInfo, \"texture_quality_level_rule\", fields, 8U/LogLevel::kDebug, \"texture_quality_level_rule\", fields, 8U/" $MT
+runm tq2_count_never      $M "s/  if (g_logged.ruleLines >= kRuleLines \&\& g_logged.ruleUnlogged != g_logged.ruleCounted \&\&/  if (false \&\& g_logged.ruleUnlogged != g_logged.ruleCounted \&\&/" $MT
+runm tq2_count_every_poll $M "s/(g_logged.ruleCountAtMs == 0 || now - g_logged.ruleCountAtMs >= kRuleCountEveryMs)/true/" $MT
+runm tq2_count_when_same  $M "s/g_logged.ruleUnlogged != g_logged.ruleCounted \&\&/true \&\&/" $MT
 Q=src/quest/sentinel/texture_quality_hook.cpp
 runm tq2_config_choice   $Q "s/  if (fromConfig \&\& level != Level::kStock) NotePlayerChose();//" quest-host-hooks texture_quality_hook_test
 runm tq2_config_stock    $Q "s/  if (fromConfig \&\& level != Level::kStock) NotePlayerChose();/  if (fromConfig) NotePlayerChose();/" quest-host-hooks texture_quality_hook_test
 # combat's look
 C=src/quest/combat/texture_quest2.cpp
+runm tq2_lastload_unstored $C "s/  if (loading) g_lastLoadMs.store(now, std::memory_order_release);.*//"
+runm tq2_lastload_unread   $C "s/  look.lastLoadMs = g_lastLoadMs.load(std::memory_order_relaxed);//"
 runm tq2_key_ignored     $C "s/  if (!on) {/  if (!on \&\& false) {/"
 runm tq2_unreadable_ok   $C "s/  const bool loading = !ok || fibers != 0;/  const bool loading = ok \&\& fibers != 0;/"
 runm tq2_fibers_ignored  $C "s/  const bool loading = !ok || fibers != 0;/  const bool loading = !ok;/"

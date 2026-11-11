@@ -47,6 +47,18 @@
  *   gfx_eye_size_served                           answers replaced by the applied level's size
  *   gfx_thunk_faults                              the vrapi thunk had no original
  *
+ * Owner and inputs (ADR 0039). This hook, with the live apply (texture_menu_hook.cpp), owns the eye size the game gets: the level sent is
+ * decided in one place (texture_menu_hook.cpp Decide, rules in texture_quality_rules.h), from these inputs:
+ *   - the configuration's graphics.texture_quality (InstallVia), and the development property debug.nevr.texture_level;
+ *   - the player's change in the menu (the game's settings document, texture_menu_hook.cpp), and the reference input's start rule;
+ *   - the headset's profile (headset_profile.h), which gives each level's size;
+ *   - combat's look (texture_quality_input.h; combat/texture_quest2.cpp registers it only in the combat APK with
+ *     combat.texture_quest2_step_down true): where the game is and whether a level loads, which on a Quest 2 whose player chose no level
+ *     sends Very Low in a settled combat level. No registration leaves the other inputs' answer unchanged.
+ * Every level change is one line, `texture_quality_level_rule`, naming the level asked, the level sent, the reason and the where. This
+ * hook includes no combat module header; texture_menu_hook.cpp includes quest/combat/pinned_words.h, a word-checking utility, and the
+ * registration function pointer is the only thing combat gives it.
+ *
  * The hardware dump (sysprop_int_share.h) shares nothing with this hook: the vrapi slot is owned here (a successful install marks
  * it owned), so the dump installs its own observer and is told each query's native answer by this handler.
  *

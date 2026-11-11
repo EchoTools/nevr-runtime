@@ -154,6 +154,31 @@ void AnInitFiberOrAnUnreadableCountIsALoad() {
   End();
 }
 
+void TheLookCarriesTheTimeOfTheLastLoadTheTickSaw() {
+  Begin();
+  QCHECK(tq2::Install(true, true).installed);
+  g_model.Only({"mpl_combat_dyson"});
+  QCHECK(tq2::CurrentLook().lastLoadMs == 0);  // none seen
+  SetFibers(0);
+  QCHECK(LookNow().lastLoadMs == 0);           // a look with no load leaves it at none
+  SetFibers(2);
+  const std::int64_t loadAt = LookNow().atMs;
+  QCHECK(tq2::CurrentLook().lastLoadMs == loadAt);
+  // The next looks see no load: `loading` goes back to false, the time of the load stays (a reader that samples slower than the tick still
+  // learns of it).
+  SetFibers(0);
+  rules::Look look = LookNow();
+  QCHECK(!look.loading && look.lastLoadMs == loadAt && look.atMs > loadAt);
+  g_nowMs += 5000;
+  tq2::Tick(g_model.Address());
+  QCHECK(tq2::CurrentLook().lastLoadMs == loadAt);
+  // An unreadable count is a load too.
+  g_nowMs += tq2::kLookEveryMs;
+  tq2::Tick(0x10);
+  QCHECK(tq2::CurrentLook().lastLoadMs == g_nowMs);
+  End();
+}
+
 void ItLooksAtMostEveryHalfSecondAndLogsChangesOnly() {
   Begin();
   QCHECK(tq2::Install(true, true).installed);
@@ -181,6 +206,7 @@ void ItLooksAtMostEveryHalfSecondAndLogsChangesOnly() {
 int main() {
   TheKeyOffRegistersNothing();
   ItIsRefusedWhenCombatIsOffOrTheTickCannotLook();
+  TheLookCarriesTheTimeOfTheLastLoadTheTickSaw();
   InstalledItRegistersTheTickAndTheOwnersInput();
   TheLookNamesTheLoadedClassAndArenaWins();
   AnInitFiberOrAnUnreadableCountIsALoad();

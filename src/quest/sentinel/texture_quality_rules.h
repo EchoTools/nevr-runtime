@@ -19,7 +19,8 @@
  * the look is on, and never after the look was turned off for the run (a Resize the engine refused, or the upload words could not be pinned).
  *
  * The Resize (ResizeHold). A change the look causes (stepping down, or back up when the look turns off) is made only when the input's look made
- * now is fresh, shows no gamespace loading, and no gamespace has loaded for kSettleMs, and the game's upload count (0x379b400) reads 0 and its
+ * now is fresh, shows no gamespace loading, and no gamespace has loaded for kSettleMs (by the poller's quiet stretch and by the time of the last load
+ * the input itself saw, whichever is stricter), and the game's upload count (0x379b400) reads 0 and its
  * upload lock (0x379b780) reads 0 (texture_quality_targets.h). The load-window rule is the guard; the count and lock read only narrows what
  * remains (docs/quest/combat/texture_quest2.md "What exposure remains"). A change the player makes in the menu keeps the menu's own path.
  */
@@ -57,6 +58,9 @@ struct Look {
   Where where = Where::kNone;
   bool loading = true;
   std::int64_t atMs = 0;
+  // The time the input last saw a load (0: none yet). The input looks more often than the owner's poller reads, so a load that the next look
+  // overwrote before the poller sampled is still in this word (ResizeHold).
+  std::int64_t lastLoadMs = 0;
 };
 
 struct StepDownSwitches {
@@ -191,6 +195,7 @@ constexpr Hold ResizeHold(const ResizeInputs& in) noexcept {
   if (!Fresh(in.look, in.nowMs)) return Hold::kStaleLook;
   if (in.look.loading) return Hold::kLoading;
   if (in.quietSinceMs == 0 || in.nowMs - in.quietSinceMs < kSettleMs) return Hold::kSettling;
+  if (in.look.lastLoadMs != 0 && in.nowMs - in.look.lastLoadMs < kSettleMs) return Hold::kSettling;  // a load the poller never sampled
   if (in.uploads != 0) return Hold::kUploads;
   if (in.lock != 0) return Hold::kLock;
   return Hold::kNone;

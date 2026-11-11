@@ -1632,6 +1632,53 @@ void ALookDrivenResizeWaitsWhileALevelLoads() {
   QCHECK(g_resizeCalls == 1);
 }
 
+void ALoadSeenByTheTickBetweenTwoPollerSamplesStillBlocksForTenSeconds() {
+  ResetStepDown();
+  SettleInCombat();
+  // The tick saw a load now and the next look overwrote it before the poller read it: loading is false in every look the poller reads, so its
+  // quiet stretch never restarts. Only `lastLoadMs` carries the load.
+  g_look.lastLoadMs = g_nowMs;
+  Frame();
+  QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+  PollFor(rules::kSettleMs - 500);
+  Frame();
+  QCHECK(g_resizeCalls == 0);  // 9.5 s after the load
+  PollFor(1000);
+  Frame();
+  QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
+}
+
+// 40 changes of the level sent (combat, arena, combat, ...), each after a settle: the 32 lines, the cap notice, then a count line at most once a
+// minute while the count grows.
+void TheCapOnRuleLinesIsFollowedByACountThatKeepsComing() {
+  ResetStepDown();
+  Capture log;
+  for (int i = 0; i < 40; ++i) {
+    SetLook(i % 2 == 0 ? rules::Where::kCombatMap : rules::Where::kEchoArena, false);
+    PollFor(rules::kSettleMs + 500);
+  }
+  QCHECK(CountLines("\"event\":\"texture_quality_level_rule\",") >= 33);
+  QCHECK(CountLines("\"capped\":32") == 1);
+  const std::size_t counts = CountLines("texture_quality_level_rule_count");
+  QCHECK(counts >= 2);
+  QCHECK(counts <= static_cast<std::size_t>(40 * (rules::kSettleMs + 500) / 60000 + 1));  // at most one a minute
+  // The last count line names every change the cap left unwritten.
+  std::string last;
+  for (const std::string& l : g_lines) {
+    if (l.find("texture_quality_level_rule_count") != std::string::npos) last = l;
+  }
+  PollFor(61000);  // quiet for a minute: the count catches up
+  for (const std::string& l : g_lines) {
+    if (l.find("texture_quality_level_rule_count") != std::string::npos) last = l;
+  }
+  QCHECK(last.find("\"unlogged\":") != std::string::npos);
+  QCHECK(last.find("\"unlogged\":0") == std::string::npos);
+  // Nothing changes any more: no further count line.
+  const std::size_t after = CountLines("texture_quality_level_rule_count");
+  PollFor(130000);
+  QCHECK(CountLines("texture_quality_level_rule_count") == after);
+}
+
 void APlayerChoiceStandsInCombat() {
   ResetStepDown();
   Capture log;
@@ -1722,6 +1769,8 @@ int main() {
   AQuest2InASettledCombatMapIsSentVeryLowInAQuietWindow();
   ALookDrivenResizeWaitsForTheUploadCountAndLock();
   ALookDrivenResizeWaitsWhileALevelLoads();
+  ALoadSeenByTheTickBetweenTwoPollerSamplesStillBlocksForTenSeconds();
+  TheCapOnRuleLinesIsFollowedByACountThatKeepsComing();
   APlayerChoiceStandsInCombat();
   AStepDownMadeStandsAsideForAMenuChoiceAtOnce();
   ADevelopmentPropertyIsAChoice();

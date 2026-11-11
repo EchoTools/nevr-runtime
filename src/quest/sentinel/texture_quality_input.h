@@ -1,7 +1,7 @@
 /* The texture-quality owner's one input from combat (#1737, ADR 0039; docs/quest/combat/texture_quest2.md): where the game is, for the Quest 2
  * step-down (texture_quality_rules.h).
  *
- * texture_quality owns the eye size; it does not include a combat header. Combat's `texture_quest2` row registers a function that returns its
+ * texture_quality owns the eye size; it includes no combat module header (texture_menu_hook.cpp includes the utility quest/combat/pinned_words.h, never combat_scope.h or a module's). Combat's `texture_quest2` row registers a function that returns its
  * last look (texture_quality_rules.h `Look`) and the step-down switches. No registration (the release APK, or the key false) leaves the owner's
  * behaviour exactly as it was: the per-frame apply reads one null pointer.
  *

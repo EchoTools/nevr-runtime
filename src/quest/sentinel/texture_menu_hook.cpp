@@ -163,7 +163,12 @@ rules::Hold LookHold(std::uint64_t* uploads, std::uint32_t* lock) noexcept {
   *uploads = in.uploads;
   *lock = in.lock;
   const rules::Hold hold = rules::ResizeHold(in);
-  if (hold != rules::Hold::kNone) g_holdQuietMs.store(in.quietSinceMs == 0 ? 0 : in.nowMs - in.quietSinceMs, std::memory_order_relaxed);
+  if (hold != rules::Hold::kNone) {
+    // The quiet time the hold read: the poller's stretch, or the time since the input's own last load when that is shorter.
+    std::int64_t quiet = in.quietSinceMs == 0 ? 0 : in.nowMs - in.quietSinceMs;
+    if (in.look.lastLoadMs != 0 && in.nowMs - in.look.lastLoadMs < quiet) quiet = in.nowMs - in.look.lastLoadMs;
+    g_holdQuietMs.store(quiet, std::memory_order_relaxed);
+  }
   return hold;
 }
 
@@ -672,6 +677,8 @@ struct Logged {
   int ruleReason = -1;
   int ruleLines = 0;
   unsigned long long ruleUnlogged = 0;
+  unsigned long long ruleCounted = 0;       // the value of ruleUnlogged the last count line named
+  std::int64_t ruleCountAtMs = 0;           // when it was written (0: none yet)
   unsigned long long holds = 0;
   bool lookOff = false;
 };
@@ -679,6 +686,8 @@ Logged g_logged;
 // The look's gate (texture_quality_rules.h), stepped by the poller only (under g_pollMutex).
 rules::LookGate g_gate;
 constexpr int kRuleLines = 32;
+// After the cap, the count of changes not written is logged at most this often, and only while it grew.
+constexpr std::int64_t kRuleCountEveryMs = 60000;
 
 // Steps the look's gate and publishes it, then writes the step-down's lines: one per change of the level sent or its reason (at most kRuleLines,
 // then one notice and a count), one per hold, one when the step-down is turned off for the run. Writes nothing with no look registered.
@@ -721,12 +730,23 @@ int PollLook() noexcept {
       ++lines;
       if (g_logged.ruleLines == kRuleLines) {
         sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_level_rule",
-                            {{"capped", kRuleLines}, {"msg", "later changes of the level sent are counted, not logged; the next line names how many"}});
+                            {{"capped", kRuleLines}, {"msg", "later changes of the level sent are counted, not logged; texture_quality_level_rule_count names how many, at most once a minute while it grows"}});
         ++lines;
       }
     } else {
       ++g_logged.ruleUnlogged;
     }
+  }
+  if (g_logged.ruleLines >= kRuleLines && g_logged.ruleUnlogged != g_logged.ruleCounted &&
+      (g_logged.ruleCountAtMs == 0 || now - g_logged.ruleCountAtMs >= kRuleCountEveryMs)) {
+    g_logged.ruleCounted = g_logged.ruleUnlogged;
+    g_logged.ruleCountAtMs = now;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_level_rule_count",
+                        {{"unlogged", static_cast<long long>(g_logged.ruleUnlogged)},
+                         {"level_sent", tq::LevelName(static_cast<Level>(g_logged.ruleLevel))},
+                         {"reason", rules::RuleReasonName(static_cast<rules::RuleReason>(g_logged.ruleReason))},
+                         {"msg", "changes of the level sent past the 32 written lines; the level and reason here are the latest"}});
+    ++lines;
   }
   const unsigned long long holds = g_lookHolds.load(std::memory_order_acquire);
   if (holds != g_logged.holds) {
@@ -1120,7 +1140,7 @@ bool Install(tq::Level level, bool fromConfig) noexcept {
                           {{"result", "mismatch"}, {"what", failure.what}, {"va", sentinel::HexString(va, failure.vaddr)},
                            {"expected", sentinel::HexString(expected, failure.want)},
                            {"actual", sentinel::HexString(actual, failure.have)},
-                           {"consequence", "the Quest 2 step-down is off for this run (it cannot see an upload in flight)"}});
+                           {"consequence", "the upload words are not pinned in this libr15, so a Quest 2 step-down, if this build registers one, is off for this run; the player's texture level is unaffected"}});
     }
   }
   ArmForTest(game, level, fromConfig, property);

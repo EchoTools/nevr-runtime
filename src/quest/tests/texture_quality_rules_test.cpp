@@ -167,6 +167,24 @@ void AResizeIsAllowedOnlyInAQuietWindowWithNoUpload() {
   QCHECK(rules::ResizeHold(in) == rules::Hold::kStaleLook);
 }
 
+void ALoadTheTickSawBetweenTwoPollerSamplesBlocksForTenSeconds() {
+  // The poller's quiet stretch says ten quiet seconds, but the tick saw a load 4 s ago that the poller never sampled.
+  rules::ResizeInputs in = Quiet();
+  in.look.lastLoadMs = in.nowMs - 4000;
+  QCHECK(rules::ResizeHold(in) == rules::Hold::kSettling);
+  in.look.lastLoadMs = in.nowMs - rules::kSettleMs + 1;
+  QCHECK(rules::ResizeHold(in) == rules::Hold::kSettling);
+  in.look.lastLoadMs = in.nowMs - rules::kSettleMs;
+  QCHECK(rules::ResizeHold(in) == rules::Hold::kNone);  // exactly ten seconds: settled
+  in.look.lastLoadMs = 0;                               // never saw one
+  QCHECK(rules::ResizeHold(in) == rules::Hold::kNone);
+  // The stricter of the two wins: the poller's stretch is short, the tick's load is old.
+  in = Quiet();
+  in.look.lastLoadMs = in.nowMs - 60000;
+  in.quietSinceMs = in.nowMs - 3000;
+  QCHECK(rules::ResizeHold(in) == rules::Hold::kSettling);
+}
+
 void TheConstantsAreTheDocumentedOnes() {
   QCHECK(rules::kSettleMs == 10000);
   QCHECK(rules::kGapMs == 90000);
@@ -184,6 +202,7 @@ int main() {
   ALoadGapKeepsTheLookOnUntilNinetySeconds();
   TheLevelSentIsVeryLowOnlyOnAQuest2InCombatWithoutAChoice();
   AResizeIsAllowedOnlyInAQuietWindowWithNoUpload();
+  ALoadTheTickSawBetweenTwoPollerSamplesBlocksForTenSeconds();
   TheConstantsAreTheDocumentedOnes();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_quality_rules_test: %d failure(s)\n", quest_test::Failures());

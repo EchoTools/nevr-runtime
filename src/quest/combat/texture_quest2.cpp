@@ -22,9 +22,11 @@ namespace rules = nevr_quest::texture_quality::rules;
 namespace input = nevr_quest::texture_quality::input;
 using sentinel::LogLevel;
 
-// The published look: the class and loading are stored before the time, which is the release store a reader pairs with.
+// The published look: the class, loading and the time of the last load are stored before the time of the look, which is the release store a
+// reader pairs with.
 std::atomic<int> g_where{static_cast<int>(rules::Where::kNone)};
 std::atomic<bool> g_loading{true};
+std::atomic<std::int64_t> g_lastLoadMs{0};
 std::atomic<std::int64_t> g_atMs{0};
 std::atomic<bool> g_registered{false};
 std::atomic<std::int64_t> g_nextLookMs{0};
@@ -60,6 +62,7 @@ rules::Look CurrentLook() noexcept {
   look.atMs = g_atMs.load(std::memory_order_acquire);
   look.where = static_cast<rules::Where>(g_where.load(std::memory_order_relaxed));
   look.loading = g_loading.load(std::memory_order_relaxed);
+  look.lastLoadMs = g_lastLoadMs.load(std::memory_order_relaxed);
   return look;
 }
 
@@ -78,6 +81,7 @@ void Tick(std::uintptr_t game) noexcept {
                        g_atMs.load(std::memory_order_relaxed) == 0;
   g_where.store(static_cast<int>(where), std::memory_order_relaxed);
   g_loading.store(loading, std::memory_order_relaxed);
+  if (loading) g_lastLoadMs.store(now, std::memory_order_release);  // kept after the load ends: the owner's poller may not sample it
   g_atMs.store(now, std::memory_order_release);
   if (!changed) return;
   const int lines = g_changeLines.fetch_add(1, std::memory_order_relaxed);
@@ -118,6 +122,7 @@ void SetClockForTest(std::int64_t (*clockMs)() noexcept) noexcept { g_clock.stor
 void ResetForTest() noexcept {
   g_where.store(static_cast<int>(rules::Where::kNone));
   g_loading.store(true);
+  g_lastLoadMs.store(0);
   g_atMs.store(0);
   g_registered.store(false);
   g_nextLookMs.store(0);
