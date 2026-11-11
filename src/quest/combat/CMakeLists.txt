@@ -11,8 +11,7 @@ add_library(nevr_quest_combat STATIC
   combat_active.cpp
   combat_install.cpp
   combat_level.cpp
-  combat_tick.cpp
-  combat_level.cpp
+  combat_scope.cpp
   combat_tick.cpp
   decals.cpp
   dronekill.cpp
@@ -24,6 +23,7 @@ add_library(nevr_quest_combat STATIC
   gunconnect.cpp
   headset_gates.cpp
   heaps.cpp
+  hudmeter.cpp
   impactsnd.cpp
   instmodel.cpp
   match_tags.cpp
@@ -37,6 +37,7 @@ add_library(nevr_quest_combat STATIC
   sendguard.cpp
   sensorwd.cpp
   shaderstep.cpp
+  shieldgamma.cpp
   table_step.cpp
   tablestep.cpp
   wallfire.cpp
