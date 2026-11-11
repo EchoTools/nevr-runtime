@@ -123,9 +123,13 @@ kept), so a later call costs one atomic load and one compare. An unreadable plai
 combat_levelname_install  {"result":"installed|refused|off","reason":"ok|off_config|<GotStatus token>|module_not_loaded","key":"combat.levelname","slots":4,
                            "failed_slot":"none|cr15_game|dedicated_server|lan_server|net_server","cr15_game":"ok",..,"rolled_back":0,"rollback_failed":0,"consequence":".."}
 combat_levelname_kept     {"name":"0x3f9915d3001dc28e","n":1,"lowspec":1,"answer":"plain name"}   Info, the first 16; KeptPlainCount() keeps counting
+combat_levelname_log_cap  {"lines":"kept","cap":16,"msg":".."}   Warning, once: written by the 17th substitution (line_budget.h)
+combat_levelname_stats    {"kept_plain":<n>,"final":1,"consequence":".."}   Info, once at the end of the process, when installed
 combat_levelname_legacy_switch  Warning, `levelname.off` found
 combat_boosterpool_install {"result":"installed|refused|off","reason":"ok|off_config|needs_levelname|<GotStatus token>|module_not_loaded","key":"combat.levelname","slot":"<GotStatus>","consequence":".."}
 combat_boosterpool_kept    {"name":"0x..","n":1,"answer":"plain name"}   Info, the first 16; KeptCount() keeps counting
+combat_boosterpool_log_cap  {"lines":"kept","cap":16,"msg":".."}   Warning, once: written by the 17th substitution (line_budget.h)
+combat_boosterpool_stats  {"kept":<n>,"unreadable":<n>,"final":1,"consequence":".."}   Info, once at the end of the process, when installed
 ```
 Info when installed or off, Error when refused. A real record from the host test, a refused word:
 ```
@@ -161,7 +165,7 @@ Arena and combat run on the same APK, so every combat module is installed while 
 The booster pool's handler through the real thunk and the real `GotHook` slot, built `-O2` on an x86-64 host, 50,000,000 calls of a name that is not the
 suffixed one, three repetitions, against the same call made directly (a stand-in for the function that returns at once; Append is a stand-in too):
 2.0 to 2.3 ns for the direct call, 6.9 to 7.3 ns through the thunk and handler once the names are cached, so 4.5 to 5.2 ns added per call. The first call of a
-process, which reads the plain name with `process_vm_readv` and calls Append, costs 893 ns on that host; the q15t plugin's handler paid that on every call.
+process, which reads the plain name with `process_vm_readv` and calls Append, costs 893 ns on that host.
 These are host numbers: the Quest's cost per call and the calls per frame were not measured, so the added time per frame (ADR 0038) is not established.
 
 ## Prediction (written before any headset run)
