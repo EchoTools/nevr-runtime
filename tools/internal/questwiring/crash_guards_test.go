@@ -1,7 +1,6 @@
 package questwiring
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,16 +87,13 @@ func TestThePluginInstallsOnNoSlotOfTheGuardsAndTheirFilesAreGone(t *testing.T) 
 			}
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(root(t), "src/quest/plugins/q15t/src"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
 		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
 			continue
 		}
-		code := stripComments(read(t, "src/quest/plugins/q15t/src/"+e.Name()))
+		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
 		for _, g := range guards {
 			for _, bad := range append(append([]string{}, g.symbols...), g.slots...) {
 				if strings.Contains(code, bad) {
@@ -106,7 +102,7 @@ func TestThePluginInstallsOnNoSlotOfTheGuardsAndTheirFilesAreGone(t *testing.T) 
 			}
 		}
 	}
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt") + read(t, "src/quest/plugins/q15t/src/plugin.cpp")
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
 	for _, bad := range []string{"Q15T_FXTRAIL", "Q15T_VOIPDROP", "Q15T_CUSTCTX", "Q15T_DRONEGUARD", "Q15T_PEERCLAMP", "InstallFxTrail", "InstallVoipDrop",
 		"InstallCustCtx", "InstallDroneGuard", "InstallPeerClamp"} {
 		if strings.Contains(cmake, bad) {

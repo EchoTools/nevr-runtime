@@ -1,7 +1,6 @@
 /* The slot of the game-thread tick (combat_tick.h): `CncaGame::ExclusiveUpdateGame`, which `CncaGame::Render` calls once per frame on the
- * game thread with x0 = the CR15Game. Pinned to the store libr15 (build id in pinned_targets.h, `LibR15PatchedBuildId`), the addresses
- * the q15t plugin's tick wrapper has used since it was written (`plugin.cpp`: Q15T_SLOT_EXCLUSIVEUPDATEGAME, Q15T_REAL_EXCLUSIVEUPDATEGAME,
- * Q15T_GAME_VPTR), checked against the store file by got_pinned_test.cpp (`just test-quest-hooks-pinned`, which needs the store APK).
+ * game thread with x0 = the CR15Game. Pinned to the store libr15 (build id in pinned_targets.h, `LibR15PatchedBuildId`), checked against
+ * the store file by got_pinned_test.cpp (`just test-quest-hooks-pinned`, which needs the store APK).
  */
 #pragma once
 
@@ -22,9 +21,9 @@ struct Tag {};
 using Sig = void(void* game);
 using Thunk = sentinel::CallbackThunk<Tag, Sig>;
 
-// No expected original: the slot holds the game's function, or the wrapper another module put there first (the q15t plugin's tick
-// wrapper, which installs before the combat normal step), and the manager takes either as the function this hook calls (got_hook.h, "the
-// first handler on a slot"). A word that is no executable address is refused.
+// No expected original: the slot holds the game's function, or a wrapper another owner put there before the combat normal step (a
+// plugin's, at the plugin pass), and the manager takes either as the function this hook calls (got_hook.h, "the first handler on a
+// slot"; combat_tick_test, AWrapperAlreadyInTheSlotIsTheFunctionTheThunkCalls). A word that is no executable address is refused.
 inline sentinel::GotTarget Target() {
   return sentinel::GotTarget{sentinel::pinned::kLibR15, kSymbol, sentinel::RelocKind::kJumpSlot,
                              sentinel::pinned::LibR15PatchedBuildId(), kSlotVaddr}

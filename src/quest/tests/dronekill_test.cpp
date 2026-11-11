@@ -32,7 +32,7 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/ec_stub.h"
-#include "quest/tests/q15t/key_hog.h"
+#include "quest/tests/key_hog.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
 namespace {

@@ -36,7 +36,7 @@
 #include "quest/combat/impactsnd_targets.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
-#include "quest/tests/q15t/key_hog.h"
+#include "quest/tests/key_hog.h"
 
 namespace impactsnd = nevr_quest::combat::impactsnd;
 

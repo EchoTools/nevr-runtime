@@ -46,9 +46,9 @@ class LinkGateLibs(unittest.TestCase):
         header = (COMBAT / "headset_gates.h").read_text()
         self.assertRegex(header, r"kLinkHeadset = 4;")
 
-    def test_the_plugin_no_longer_carries_the_list(self):
-        self.assertFalse((ROOT / "src/quest/plugins/q15t/src/headset_gates.cpp").exists())
-        self.assertNotIn("Q15T_LINK_GATE_LIBS", (ROOT / "src/quest/plugins/q15t/CMakeLists.txt").read_text())
+    def test_no_plugin_carries_a_second_list(self):
+        # The q15t plugin, which carried its own list, is deleted (#2189): the runtime's list is the only one.
+        self.assertFalse((ROOT / "src/quest/plugins/q15t").exists())
 
 
 if __name__ == "__main__":

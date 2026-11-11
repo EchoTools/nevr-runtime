@@ -105,7 +105,7 @@ func TestTheDroneRowsAreInTheNormalStepInThePluginsOrderAndThePluginCarriesNeith
 			t.Errorf("%s must not exist: the drone modules are the runtime's", gone)
 		}
 	}
-	plugin := read(t, "src/quest/plugins/q15t/src/plugin.cpp") + read(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp") + pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
 	for _, name := range []string{"Q15T_DRONEKILL", "Q15T_DRONEMUZZLE", "InstallDroneKill", "InstallDroneMuzzle", "DroneKill", "0x36cfa18", "0x36f3cf8",
 		"0x36e2080", "0x36cacf8", "0x36c37a8", "0x36e6610"} {
 		if strings.Contains(plugin, name) {

@@ -5,8 +5,8 @@
  * after Attach and the early plugin pass, before the clock hook and long before `android_main`. A module that must act before the game
  * reads its own configuration registers a function for it. The normal step is a post-load action (integration/post_load.h): it runs on the
  * first non-null `dlopen` the game makes after the sentinel's login and matchmaking installs and after the normal plugin pass has returned,
- * on the thread that ran it. The q15t plugin installs first on a slot both touch (ADR 0046 rule 7); a module that has moved in must not
- * install before the plugin's hooks are in.
+ * on the thread that ran it. A plugin's hook on a slot a combat module also takes is in first, and the module's hook joins it through the
+ * manager's first-handler rule (ADR 0046 rule 7); a combat module never installs before the plugin pass.
  *
  * The gate. Both steps ask `combat::Active()` (combat_active.h) and install nothing when it is false: a plain release runs no module of
  * combat's, and a step that is reached anyway writes one `skipped` line and runs no module function. The sequence does not reach them in

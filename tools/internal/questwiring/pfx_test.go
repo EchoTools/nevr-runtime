@@ -72,8 +72,8 @@ func TestThePluginHoldsNoPfxModuleAndTheDocsMoved(t *testing.T) {
 			t.Errorf("docs/quest/combat/%s.md is missing", n)
 		}
 	}
-	plugin := stripComments(read(t, "src/quest/plugins/q15t/src/plugin.cpp"))
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
 	for _, bad := range []string{"Q15T_PFX", "InitPfxGate", "PfxGateOn", "PfxTevAllows", "pfx.h"} {
 		if strings.Contains(plugin, bad) || strings.Contains(cmake, bad) {
 			t.Errorf("the plugin still names %s", bad)

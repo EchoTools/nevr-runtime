@@ -40,6 +40,7 @@ add_library(nevr_quest_combat STATIC
   pfxtev.cpp
   powerboost.cpp
   refresh_rate.cpp
+  script_redirect.cpp
   sendguard.cpp
   sensorwd.cpp
   shaderstep.cpp
@@ -53,3 +54,5 @@ target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk nlohmann_json::nlohmann_json)  # nlohmann: runtime/compat/server_features.h (#2333)
+# The host script-redirect registry (integration/CMakeLists.txt, nevr_quest_plugin), which script_redirect.cpp registers with (#2189).
+target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_plugin)

@@ -4,9 +4,9 @@
  * Built only with -DNEVR_QUEST_PERF_PROBE=ON (src/quest/CMakeLists.txt; default OFF), so no release or package-dev APK
  * carries it. Installed right after the libr15 attach step accepts the file, on either input it accepts: the patched file
  * (the release's reference base, and the store base) or the pinned service-only file (every target is
- * GotTarget::ServiceSide(), like path_rewrite_hook.h). No sentinel hook uses these six slots. The q15t plugin wraps two of them
- * (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType) and refuses a slot the probe took first, so a probe APK carries no
- * q15t.
+ * GotTarget::ServiceSide(), like path_rewrite_hook.h). No sentinel hook uses these six slots. The combat area's headset gates take two of
+ * them (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType; combat/headset_gates_targets.h) and run only in the q15t and combat
+ * variants (combat::Active()), so a probe APK, whose variant is perf-probe, runs no combat module on them.
  *
  * Six JUMP_SLOT imports of libr15.so (link-time slot addresses from `readelf -r` of the pinned file), each wrapped, timed
  * around the original call and counted:

@@ -74,14 +74,17 @@ func TestThePluginCarriesNeitherModuleAndItsMarkerLostTheField(t *testing.T) {
 			}
 		}
 	}
-	plugin := stripComments(read(t, "src/quest/plugins/q15t/src/plugin.cpp"))
+	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
 	for _, bad := range []string{"levelname.h", "boosterpool.h", "Q15T_LEVELNAME", "InstallLevelName", "InstallBoosterPool"} {
 		if strings.Contains(plugin, bad) {
 			t.Errorf("plugin.cpp still names %s", bad)
 		}
 	}
 	for _, f := range []string{"src/quest/plugins/q15t/CMakeLists.txt", "justfile", "src/quest/tests/q15t/mod/wiring.cmake"} {
-		code := read(t, f)
+		code := pluginRead(t, f)
+		if f == "justfile" {
+			code = read(t, f)
+		}
 		if strings.Contains(code, "Q15T_LEVELNAME") || strings.Contains(code, " levelname=1") {
 			t.Errorf("%s still names the deleted option or its marker field", f)
 		}

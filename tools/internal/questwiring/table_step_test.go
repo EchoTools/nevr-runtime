@@ -91,8 +91,8 @@ func TestTheScopeIsTheSharedLevelAnswerAndArenaWinsOverACombatMapLoadedDuringATr
 }
 
 func TestThePluginHoldsNoneOfTheFourModulesAndTheirDocsMoved(t *testing.T) {
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	plugin := read(t, "src/quest/plugins/q15t/src/plugin.cpp")
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
 	for _, m := range tableStepModules {
 		for _, p := range []string{
 			"src/quest/plugins/q15t/src/" + m + ".h", "src/quest/plugins/q15t/src/" + m + ".cpp",

@@ -48,8 +48,8 @@ struct PostLoadActions {
   // retry). null: no plugin waits for it.
   ActionFn plugins = nullptr;
   // The combat area's normal install step (#2171, combat/combat_install.h). It shares the plugin pass's runner: one thread at a time
-  // is in it, the combat action starts only after the plugin action has returned and its settled flag is set (the q15t plugin installs
-  // first on a slot both touch, ADR 0046 rule 7), on the thread that ran the plugin action, outside the lock above, and a call that
+  // is in it, the combat action starts only after the plugin action has returned and its settled flag is set (a plugin's hook on a slot a
+  // combat module also takes is in first, and the combat hook joins it through the manager's first-handler rule, ADR 0046 rule 7), on the thread that ran the plugin action, outside the lock above, and a call that
   // arrives while either runs returns without starting anything. With no plugin action it runs at the first non-null dlopen, behind the
   // same guard. Runs once and settles whatever it answers. null: combat does not run in this process, nothing is tried.
   ActionFn combat = nullptr;

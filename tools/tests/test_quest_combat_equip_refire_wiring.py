@@ -134,24 +134,10 @@ class TheModuleChangesNoCodePage(unittest.TestCase):
 
 
 class NothingOfItIsLeftInTheQ15tPlugin(unittest.TestCase):
-    def test_the_plugin_has_no_equiprefire_file_or_mention(self):
-        for path in (
-            "src/quest/plugins/q15t/src/equiprefire.cpp",
-            "src/quest/plugins/q15t/src/equiprefire.h",
-            "src/quest/tests/q15t/equiprefire_test.cpp",
-            "src/quest/tests/q15t/mod/equiprefire.cmake",
-            "src/quest/tests/q15t/mutants.d/equiprefire.sh",
-            "docs/quest/q15t/modules/equiprefire.md",
-        ):
+    def test_the_plugin_and_its_tests_are_gone(self):
+        # The q15t plugin and its host tests are deleted (#2189): no second copy of the re-fire can come back through them.
+        for path in ("src/quest/plugins/q15t", "src/quest/tests/q15t", "docs/quest/q15t"):
             self.assertFalse((ROOT / path).exists(), path)
-        for path in (
-            "src/quest/plugins/q15t/CMakeLists.txt",
-            "src/quest/plugins/q15t/README.md",
-            "src/quest/plugins/q15t/src/plugin.cpp",
-            "src/quest/tests/q15t/CMakeLists.txt",
-            "src/quest/tests/q15t/wiring_test.cpp",
-        ):
-            self.assertNotIn("equiprefire", read(path).lower(), path)
 
 
 class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
@@ -229,9 +215,11 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
             r"\s+src/quest/combat/combat_install\.cpp",
         )
 
-    def test_verify_runs_the_recipe_beside_the_q15t_one(self):
+    def test_verify_runs_the_combat_recipe_and_names_no_q15t_one(self):
         justfile = read("justfile")
-        self.assertRegex(justfile, r"test-quest-q15t \\\n\s+test-quest-combat \\\n")
+        verify = justfile.split("\nverify:", 1)[1]
+        self.assertRegex(verify, r"\n\s+test-quest-combat \\\n")
+        self.assertNotIn("test-quest-q15t", justfile)
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):

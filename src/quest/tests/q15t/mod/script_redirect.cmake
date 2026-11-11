@@ -1,1 +1,0 @@
-q15t_host_test(script_redirect_test TEST script_redirect_test.cpp SRC script_redirect plugin_log)

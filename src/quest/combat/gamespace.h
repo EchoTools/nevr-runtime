@@ -7,7 +7,7 @@
  * own lookup.
  *
  * Origin. The reference build's `FindCs` (kotorvr's echoquest-combat repository, commit c5a67e8, runtime/native/afkxr/afk_gunconnect.cpp:186-218),
- * which the q15t plugin carried as `gamespace.cpp`; the plugin's copy stays until powerboost moves (KNOWN-WRONG #2168).
+ * the only copy in the tree.
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */

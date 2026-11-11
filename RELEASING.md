@@ -257,22 +257,21 @@ build is signed with the new key (Android refuses an update from a different sig
 certificate in the release-signer's `config/`; a new key needs that pin changed there before the publish.
 
 The variant APK (`nevr-runtime-vX.Y.Z-q15t-quest.apk`) is built by `just release-quest-variant-apk vX.Y.Z` from the
-same loader asset plus the q15t plugin library the tag's own source builds: the recipe runs `just build-quest-q15t` in the checkout (HEAD is
-the tag's commit) and packages `build/quest-q15t/libq15t.so`, so the library in the APK is the tag's build output, behind that recipe's
-checks (static initializers, emulated thread-local storage, the pinned libr15 build ID, the shipped defaults). The heap sizes and the render-target
-pool are not a library: the sentinel sets them in its own early combat step (`src/quest/combat/heaps.h`), before `android_main` reads them, so neither APK
-packages an early plugin. The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages the same library.
+same loader asset, stamped with the variant word `q15t`. No release APK carries a plugin library: every combat module is the sentinel's own
+(`src/quest/combat/`), and the heap sizes and the render-target pool are set in its early combat step (`src/quest/combat/heaps.h`), before
+`android_main` reads them. The combat APK, `just release-quest-combat-apk vX.Y.Z`, is the same repack stamped `combat`.
 Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
 `combat` for the combat APK, `arena` for the arena APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
 (`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).
-No library is an argument to either recipe; a path in the place of the store APK is refused. The build needs an Android NDK r26d
-(`ANDROID_NDK_HOME`), a vcpkg checkout (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`) and
-`config/public-defaults.env`, as `just build-android` does, and the store APK it repacks (`NEVR_STORE_APK`, a file). The variant is published with
+No library is an argument to either recipe; a path in the place of the store APK is refused. The repack needs the store APK
+(`NEVR_STORE_APK`, a file). The timer's `variant_configure` step also needs an Android NDK r26d (`ANDROID_NDK_HOME`), a vcpkg checkout
+(`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`, which hold the headers the repack's libr15
+patcher is built with) and `config/public-defaults.env`, as `just build-android` does. The variant is published with
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. Neither APK is in the manifest through this document's flow.
 
 **The arena APK.** Each release also gets `nevr-runtime-vX.Y.Z-arena-quest.apk` (with its `.sha256`): the store APK repacked with
 the release's own loader and nothing else, so it has no combat (#2298). `just release-quest-arena-apk vX.Y.Z` builds it into
-`build/quest-release/vX.Y.Z/arena/`: no q15t library and no plugin manifest are built or packaged, and the repack stamps the word
+`build/quest-release/vX.Y.Z/arena/`: no plugin library and no plugin manifest are built or packaged, and the repack stamps the word
 `arena`. `tools/quest_release_base.py check-arena` refuses the APK, before it is copied out, if it holds any entry of the reference
 build (`assets/afk_default_on.txt`, `libassetpatch.so`), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
 the q15t variant, it is **listed in the manifest**, as the kind `quest-apk-arena` beside the combat `quest-apk` (the reference
@@ -339,24 +338,21 @@ runs build no arena APK.
 
 **The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
 published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK
-(step 3) from the release's own loader asset, signed with the same key, plus the q15t plugin library (`libq15t.so`) that the
-tag's own source builds, so the two APKs of one version can always be compared and the plugin is the tag's. The timer builds it
+(step 3) from the release's own loader asset, signed with the same key, stamped with the variant word `q15t` (which turns the combat
+area on) and carrying no plugin library, so the two APKs of one version can always be compared. The timer builds it
 in the same run as the main APK, after the main release is complete (published, listed and verified live):
 
 - `variant_configure` runs `just configure-android` in the tag's worktree, in the same slice as the main build: the Quest build
   tree and its vcpkg ports. For a tag that was already listed the run makes the worktree and the PC configure first;
-- `variant_build` runs `just release-quest-variant-apk vX.Y.Z` in the same worktree (it writes `build/quest-release/vX.Y.Z/variant/`),
-  which runs `just build-quest-q15t` and packages its `libq15t.so`. Its whole output
+- `variant_build` runs `just release-quest-variant-apk vX.Y.Z` in the same worktree (it writes `build/quest-release/vX.Y.Z/variant/`).
+  Its whole output
   goes to `variant-vX.Y.Z-build.log` in the timer's work directory, a file that is 0600 from the moment it is opened, kept when
-  the step fails and removed when the variant is done. After the build the run writes one `variant_library` record for the
-  packaged library: its name, size, sha256 and the libr15 build ID in its `q15t-config` marker, read from the library inside the signed
-  APK the recipe wrote (the file that is published) and compared with the file the build wrote. An APK whose library is not the build's,
-  an APK without the library, or a library without that marker fails this step, and nothing is published;
+  the step fails and removed when the variant is done;
 - `variant_publish` runs `tools/publish_quest_apk.py vX.Y.Z --variant q15t`: `rclone copyto --ignore-existing` for the APK and
   its `.sha256`, then the same fetch-back by size and sha256 from the public host. There is no signer call and no manifest
   claim, an object already on the host is never replaced, and only the R2 credential is in its environment.
 
-The variant is always built; there is no setting that turns it off or supplies its library.
+The variant is always built; there is no setting that turns it off.
 
 A failing variant step never blocks or undoes the main release, which is complete by then. It is recorded as `failed` with the
 step (`variant_configure`, `variant_build`, `variant_publish`, or `variant_exists` and the shared `worktree`, `build_slot` and

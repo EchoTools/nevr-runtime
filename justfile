@@ -557,36 +557,6 @@ _quest-apk store_apk: _build-guard _require-ndk
 quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
     just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so "" "" "" ""
 
-# The q15t plugin library (#1546, src/quest/plugins/q15t/README.md): libq15t.so, built with the android-arm64
-# preset, through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
-# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26), checks that it names the
-# pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp), all on the build tree's
-# files, and only then copies it to build/quest-q15t/ (a refused build leaves nothing there) and prints its sha256.
-# No release or package-dev APK carries it; the variant and combat recipes (release-quest-variant-apk, release-quest-combat-apk)
-# run this recipe in the tag's checkout and package its output, so these checks guard what ships.
-build-quest-q15t: configure-android
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cmake --build build/android-arm64 --target nevr_q15t -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
-    built=build/android-arm64/integration/q15t
-    out=build/quest-q15t
-    mkdir -p "$out"
-    # Nothing an earlier build left may sit where the repacks read while this build's libraries are checked.
-    rm -f "$out/libq15t.so"
-    id=$(sed -n 's/.*kLibR15StockBuildId = "\([0-9a-f]*\)".*/\1/p' src/quest/sentinel/pinned_targets.h)
-    [ -n "$id" ] || { echo "build-quest-q15t: no kLibR15StockBuildId in src/quest/sentinel/pinned_targets.h" >&2; exit 1; }
-    # Every check runs on the build tree's file; the library is copied to $out only after all of them pass.
-    for lib in libq15t.so; do
-        [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
-        tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$built/$lib"
-        src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$built/$lib" "$lib"
-        grep -qaF "$id" "$built/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
-    done
-    grep -qaF "q15t-config build_id=$id" "$built/libq15t.so" \
-        || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
-    cp "$built/libq15t.so" "$out/"
-    (cd "$out" && sha256sum libq15t.so)
-
 # The game's NDK, r21b (tools/game_ndk.pin; evidence in docs/reference/quest-game-ndk.md). The store APK's Quest binaries were built
 # with it, so a build that is compared with them uses it: the combat script libraries (build-quest-combat-libs). Downloads the
 # archive once, verifies its sha256 and sha1, gates on the pinned `clang --version` line, and installs under
@@ -670,11 +640,9 @@ quest-autopilot-run route *args:
 release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-quest-apk "release-quest-apk" tag reference_apk "" "" "" "")
 
 # The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
-# repack of the store game with the same release loader asset, plus the q15t plugin library the tag's own source builds: this recipe
-# runs `just build-quest-q15t` in the checkout (HEAD is the tag's commit, checked below) and packages build/quest-q15t/libq15t.so, so
-# the library is the tag's build output with that recipe's checks behind it (static init, emulated TLS, libr15 build ID, shipped
-# defaults). The heap sizes and the render-target pool are the sentinel's own early step (src/quest/combat/heaps.h), not a library.
-# No library is an argument: a path passed where the store APK goes is refused. Everything `release-quest-apk` checks is
+# repack of the store game with the same release loader asset, stamped with the variant word `q15t` (docs/adr/0040 rule 1), which
+# turns on the combat area (docs/adr/0046 rule 5). It carries no plugin library: every combat module is the sentinel's own
+# (src/quest/combat/). No library is an argument: a path passed where the store APK goes is refused. Everything `release-quest-apk` checks is
 # checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
 # build/quest-release/<tag>/variant/nevr-runtime-<tag>-q15t-quest.apk and its .sha256 beside, in sha256sum format. The APK is
 # never listed in the manifest: tools/publish_quest_apk.py --variant puts it on the release host. It uploads nothing and never tags.
@@ -682,33 +650,32 @@ release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-q
 # only this variant takes them, never the release APK.
 release-quest-variant-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk "q15t" pack pack_meta)
 
-# The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the q15t libraries the tag's
-# own source builds (`just build-quest-q15t` in the checkout, as for the variant): libq15t.so.
-# It is written to build/quest-release/<tag>/combat/ under the release's own name,
+# The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, stamped with the variant word
+# `combat`, with no plugin library (the combat modules are the sentinel's own, src/quest/combat/). It is written to build/quest-release/<tag>/combat/ under the release's own name,
 # `libs` is a directory of script libraries and their SHA256SUMS: `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
 release-quest-combat-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk "combat" pack pack_meta libs)
 
 # The arena APK of a release (#2298): the store APK repacked with the release's own loader asset and NOTHING else, so it has no
-# combat: no q15t library, no plugin manifest, none of the reference build's entries. Its variant stamp is `arena`. It is written to
+# combat: no plugin manifest, none of the reference build's entries. Its variant stamp is `arena`. It is written to
 # build/quest-release/<tag>/arena/nevr-runtime-<tag>-arena-quest.apk with its .sha256 beside, after tools/quest_release_base.py
 # check-arena has refused any combat entry in it. It is LISTED in the manifest as the kind `quest-apk-arena` beside the combat
 # `quest-apk`: tools/publish_quest_apk.py --listed-variant arena puts it up through the signer. It uploads nothing and never tags.
 release-quest-arena-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-arena-apk" tag store_apk "arena" "" "" "")
 
 # The body of release-quest-apk, release-quest-variant-apk, release-quest-combat-apk and release-quest-arena-apk. `label` is the public recipe's name, which every
-# message of the run carries. `variant` is empty (the release APK, which never carries a plugin) or names the variant: `q15t`
-# (written under build/quest-release/<tag>/variant) or `combat`; either one carries the q15t libraries the checkout's own build writes.
-# `arena` (written under build/quest-release/<tag>/arena) is the store APK with the loader and no plugin: it builds no q15t library.
+# message of the run carries. `variant` is empty (the release APK) or names the variant: `q15t` (written under
+# build/quest-release/<tag>/variant) or `combat`, whose word turns the combat area on, or `arena` (written under
+# build/quest-release/<tag>/arena), the store APK with the loader and no combat. No APK of this recipe carries a plugin library.
 # `pack` and `pack_meta` are empty (every release APK) or, for a variant, a game-data pack zip and its description file.
 _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     #!/usr/bin/env bash
     set -euo pipefail
     label="{{ label }}"; tag="{{ tag }}"; variant="{{ variant }}"; pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; libs="{{ libs }}"
     [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$label: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
-    # The q15t libraries are built from the tag (below), never handed in: the old call shape put a library path where the store APK goes.
+    # No library is handed in: the old call shape put a library path where the store APK goes.
     case "{{ store_apk }}" in
-        *.so|*:*) echo "$label: no plugin library is an argument: the q15t libraries are built from the tag by build-quest-q15t" >&2; exit 1 ;;
+        *.so|*:*) echo "$label: no plugin library is an argument: the APK carries none, the combat modules are the sentinel's own" >&2; exit 1 ;;
     esac
     [ -n "$variant" ] || [ -z "$pack" ] || { echo "$label: a release APK carries no game-data pack" >&2; exit 1; }
     [ -n "$pack" ] || [ -z "$pack_meta" ] || { echo "$label: pack_meta describes a pack, and no pack is given" >&2; exit 1; }
@@ -749,18 +716,9 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     echo "$label: packaging the $tag loader asset at ${head:0:7}" >&2
     loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
-    # The q15t libraries are the tag's own build (HEAD is the tag's commit, above): `just build-quest-q15t` builds them and runs its
-    # library checks, and the repack packages that output. Its sha256 lines go to stderr: stdout is the APK's sha256 line only.
-    # Neither variant carries an early plugin: the heap sizes and the render-target pool are set by the sentinel's own early combat step
-    # (src/quest/combat/heaps.h), before android_main reads them.
-    plugin=""
-    if [ -n "$variant" ] && [ "$variant" != arena ]; then
-        echo "$label: building the q15t libraries of $tag at ${head:0:7} (just build-quest-q15t)" >&2
-        just build-quest-q15t >&2
-        plugin="build/quest-q15t/libq15t.so"
-    fi
-    # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK.
-    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "" "" "$pack" "$pack_meta" "$libs" "$variant"
+    # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK. No APK
+    # carries a plugin library (the plugin argument is empty): the combat modules are the sentinel's own (src/quest/combat/).
+    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "" "$ver" "" "" "" "" "" "$pack" "$pack_meta" "$libs" "$variant"
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2
@@ -1901,57 +1859,6 @@ test-quest-plugins: _vcpkg-quest-host
     ctest --preset quest-host-plugins
     echo "test-quest-plugins: all plugin loader tests pass on the host"
 
-# The q15t plugin's host tests (src/quest/tests/q15t/, a CMake project; ADR 0041): the plugin built for the host against fake game
-# memory and a fake loader, one program per module (mod/<module>.cmake), configured, built and run by ctest in the capped build
-# slice. Then the same project configured with the NDK toolchain file (preset q15t-ndk-checks) builds the arm64 compile checks and
-# the thunk program, and ctest judges them (no static initializer, thunk disassembly, thunk under qemu-aarch64). The NDK is
-# Q15T_NDK, else ANDROID_NDK_HOME (an NDK r26d install); Q15T_SKIP_NDK=1 skips the second stage and says so, Q15T_SKIP_QEMU=1 skips
-# the qemu run and says so. `just test-quest-q15t <module>` builds and runs one module's tests. A program that allocates forever
-# dies alone under a 2 GiB address-space cap (Q15T_TEST_VMEM_KB). The mutation run (src/quest/tests/q15t/mutants.sh, about an
-# hour) is not part of this gate. Fail-close.
-test-quest-q15t module="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Every build and test runs in the shared capped slice: re-exec inside it when not there already.
-    if ! grep -q 'nevr-builds.slice' /proc/self/cgroup 2>/dev/null; then
-      exec systemd-run --user --scope --quiet --slice=nevr-builds.slice -p MemoryMax=4G -- "{{ just_executable() }}" test-quest-q15t "{{ module }}"
-    fi
-    module="{{ module }}"
-    jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
-    cd src/quest/tests/q15t
-    ctest_args=()
-    # An empty arm64 set passes only when no module asks for one: no mod/*.cmake calls q15t_arm64_object. When one does and ctest still finds nothing
-    # (the NDK configure left Q15T_ARM64 off, or the registration is inside a branch that was not taken), that is an error, not an empty set.
-    ctest_ndk_args=()
-    if ! grep -qE '^[[:space:]]*q15t_arm64_object[[:space:]]*\(' mod/*.cmake; then
-      ctest_ndk_args=(--no-tests=ignore)
-    fi
-    if [ -n "$module" ]; then
-      ctest_args=(-L "^${module}$")
-      ctest_ndk_args=(-L "^${module}$" --no-tests=ignore)
-    fi
-    cmake --preset q15t-host-tests
-    if [ -n "$module" ]; then
-      cmake --build --preset q15t-host-tests -j "$jobs" --target "mod_${module}"
-    else
-      cmake --build --preset q15t-host-tests -j "$jobs"
-    fi
-    (ulimit -v "${Q15T_TEST_VMEM_KB:-2097152}" && ctest --preset q15t-host-tests "${ctest_args[@]}")
-    if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then
-      echo "test-quest-q15t: Q15T_SKIP_NDK=1: the arm64 compile checks, the thunk checks and the qemu run were NOT run"
-      exit 0
-    fi
-    export Q15T_NDK="${Q15T_NDK:-${ANDROID_NDK_HOME:-}}"
-    [ -n "$Q15T_NDK" ] || { echo "test-quest-q15t: Q15T_NDK is not set (point it at an Android NDK r26d install, or set Q15T_SKIP_NDK=1 to skip the arm64 checks)" >&2; exit 1; }
-    cmake --preset q15t-ndk-checks
-    if [ -n "$module" ]; then
-      cmake --build --preset q15t-ndk-checks -j "$jobs" --target "mod_${module}"
-    else
-      cmake --build --preset q15t-ndk-checks -j "$jobs"
-    fi
-    (ulimit -v "${Q15T_TEST_VMEM_KB:-2097152}" && ctest --preset q15t-ndk-checks "${ctest_ndk_args[@]}")
-    echo "test-quest-q15t: all q15t host tests and arm64 checks pass"
-
 # The combat area's host tests (src/quest/combat, docs/adr/0046-combat-is-part-of-the-quest-runtime.md): the gate, the two install
 # steps and each module, built without exceptions as the sentinel links them (src/quest/host_tests/groups/combat.cmake). A module's
 # test programs have its name in theirs: `just test-quest-combat <module>` runs those, then the module's arm64 checks. The arm64
@@ -2147,7 +2054,6 @@ verify:
         test-quest-plugins \
         test-quest-autopilot \
         test-quest-obb \
-        test-quest-q15t \
         test-quest-combat \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
@@ -3141,15 +3047,14 @@ verify:
     # stores only DATA at run time. Four things keep it so, each a scan of src/quest outside the tests:
     #   (1) a protection or mapping call (mprotect, mmap, mremap, PROT_EXEC, PROT_WRITE) appears only in the files that need
     #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory),
-    #       credits_text.cpp (its anonymous buffer) and plugins/q15t/src/got_swap.cpp (the q15t GOT swap, data pages only),
-    #       plus the two headers that declare those seams;
+    #       credits_text.cpp (its anonymous buffer), plus the two headers that declare those seams;
     #   (2) the run-time code writers of the old inline hooks (InstallInlineThunk, WriteWord, AllocateInReach) do not come back;
     #   (3) credits_text.cpp makes exactly one protection call, on its own buffer, and no other mprotect;
     #   (4) the STOCK build ID constant is named only by the files that need the stock file's identity. A hook that compares the
     #       stock ID where it means the patched one is a no-op on the patched libr15 that no unit test of the hook's own logic sees.
     # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
     # BEGIN N151
-    N151_PROT_OK=" plugins/q15t/src/got_swap.cpp sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
+    N151_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
     N151_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
     n151_fail() { echo "verify: FAIL — N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
     N151_RC=0; N151_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?

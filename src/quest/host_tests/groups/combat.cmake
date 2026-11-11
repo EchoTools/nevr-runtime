@@ -37,6 +37,8 @@ set(_cwrist src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/q
 # answer (combat_scope.cpp, above) where they change a value.
 # levelname and its companion boosterpool (#2181): the table names them, so every program that links combat_install.cpp takes them.
 set(_clevelname src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp)
+# The script redirect's row (#2189): the combat module and the host registry it registers with; every program that links combat_install.cpp takes both.
+set(_credirect src/quest/combat/script_redirect.cpp src/quest/plugin/script_redirect.cpp)
 set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
              src/quest/combat/peerclamp.cpp)
 
@@ -48,10 +50,14 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
+# The script redirect (#2189, combat/script_redirect.h): the registry asked once by `combat` for the nine hashes in order, the line for a
+# registration and for each refusal, and the shipped Install() reaching the real host registry.
+nevr_ht_test(combat_script_redirect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+  SRC src/quest/tests/combat_script_redirect_test.cpp ${_credirect})
 # Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
 # CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
 # stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
@@ -60,7 +66,7 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
 # and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
 # and the pins in the real libr15.
 nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
@@ -93,31 +99,26 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
       src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
-# combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
-# the plugin first and then the runner's normal step leaves nothing to refuse (`unexpected_original` is never logged); the reverse order is the
-# plugin's refusal.
+# combat, q15t): the runner's normal step installs this module alone, and a plain release installs nothing.
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  INCS src/quest/plugins/q15t/src
-  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
-      src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
-      src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
-      src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp ${_ctables})
+      src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp ${_ctables})
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
-      src/quest/combat/combat_install.cpp ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
       src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp ${_ctables})
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena

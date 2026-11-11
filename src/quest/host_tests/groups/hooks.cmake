@@ -298,7 +298,7 @@ nevr_ht_test(hwdump_share_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_i
 nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/render_config_hook_test.cpp src/quest/sentinel/render_config_hook.cpp
       src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp
-      src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp
+      src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp src/quest/combat/script_redirect.cpp src/quest/plugin/script_redirect.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp
       src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/quest/combat/shaderstep.cpp
       src/quest/combat/tablestep.cpp src/quest/combat/table_step.cpp src/quest/combat/gunconnect.cpp src/quest/combat/aibots.cpp

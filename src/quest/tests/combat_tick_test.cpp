@@ -7,14 +7,7 @@
 // carries the CR15Game's vptr, one Error the first time it does not), the pinned slot, and who owns the slot on each variant of the APK:
 //
 //   plain release   nothing installs (combat_install_test.cpp), so the slot keeps the game's function and no callback runs;
-//   combat          this module alone: the slot holds its thunk, which calls the game's function;
-//   q15t            the plugin's wrapper first (it installs at the plugin pass), then this module through the runner's normal step:
-//                   both run, the plugin's wrapper calls the game's function once, and nothing logs `unexpected_original`;
-//   the other order this module first and then the plugin's install, which the plugin refuses (`unexpected_original`): the order the
-//                   runner never produces (the normal step runs after the plugin pass), shown so the guarantee is the order's.
-//
-// The q15t plugin's own tick code (src/quest/plugins/q15t/src/game_tick.cpp, import_hook.cpp, got_swap.cpp) is linked in, so the plugin
-// side of both orders is the real one, not a model.
+//   combat, q15t    this module alone, through the runner's normal step: the slot holds its thunk, which calls the game's function.
 //
 // Built and run by `just test-quest-combat`.
 
@@ -30,10 +23,7 @@
 #include <string>
 #include <vector>
 
-#include "game_tick.h"
 #include "hook_log.h"
-#include "nevr/plugin_interface.h"
-#include "plugin_log.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/combat_tick_targets.h"
@@ -59,8 +49,6 @@ struct Line {
 };
 std::vector<Line> g_lines;
 void Capture(sentinel::LogLevel level, const char* line) { g_lines.push_back({level, line}); }
-std::vector<std::string> g_pluginLines;  // what the q15t plugin logs through the host's log function
-void PluginLog(const char*, std::uint32_t, const char* message, const NevrLogField*, std::uint32_t) { g_pluginLines.emplace_back(message); }
 
 bool Has(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
 std::vector<Line> Lines(const char* event) {
@@ -74,9 +62,6 @@ std::vector<Line> Lines(const char* event) {
 bool AnyLineHas(const char* needle) {
   for (const Line& l : g_lines) {
     if (Has(l.text, needle)) return true;
-  }
-  for (const std::string& l : g_pluginLines) {
-    if (Has(l, needle)) return true;
   }
   return false;
 }
@@ -94,10 +79,6 @@ template <int N>
 void CombatCallback(std::uintptr_t game) noexcept {
   g_order.push_back("combat" + std::to_string(N));
   g_seenGame.push_back(game);
-}
-template <int N>
-void PluginCallback(std::uintptr_t) {
-  g_order.push_back("plugin" + std::to_string(N));
 }
 
 // ---- the libr15 image, in memory ----------------------------------------------------------------------------------------------
@@ -225,7 +206,6 @@ void World(bv::Variant variant) {
   combat::ResetForTest();
   combat::ResetInstallForTest();
   g_lines.clear();
-  g_pluginLines.clear();
   g_order.clear();
   g_seenGame.clear();
   sentinel::SetLogSink(&Capture);
@@ -259,14 +239,14 @@ void TheTableTakesSixteenCallbacksAndRefusesTheRest() {
   tick::ResetForTest();
 }
 
-void ThePinnedSlotIsTheOneThePluginWrapped() {
+void ThePinnedSlotIsExclusiveUpdateGames() {
   const sentinel::GotTarget t = tick::targets::Target();
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.symbol, "_ZN10NRadEngine8CncaGame19ExclusiveUpdateGameEv") == 0);
   QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36e7f28ULL);
   QCHECK(tick::targets::kStockVaddr == 0x17ef62cULL && tick::targets::kGameVptrVaddr == 0x362ed30ULL);
-  QCHECK(t.expectedOriginal == nullptr);  // so the plugin's wrapper in the slot is taken as the function it calls
+  QCHECK(t.expectedOriginal == nullptr);  // a wrapper another owner put in the slot first is taken as the function the thunk calls
   QCHECK(t.owner != nullptr && std::strcmp(t.owner, "combat_tick") == 0);
   QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, pinned::LibR15PatchedBuildId()) == 0);
 }
@@ -387,23 +367,10 @@ void ARefusedInstallLeavesTheSlotAloneAndSaysWhy() {
   Done();
 }
 
-// The q15t variant: the plugin's wrapper is in the slot first (the plugin pass), then the runner's normal step installs this module. Both
-// run, the game's function runs once, and nothing logs `unexpected_original`.
-void OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing() {
+// The q15t variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
+// the combat variant: the game's function runs once, then combat's callbacks, and nothing logs `unexpected_original`.
+void OnAQ15tApkTheRunnersStepInstallsTheTickAlone() {
   World(bv::Variant::kQ15t);
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &PluginLog;
-  q15t::SetLogContext(&ctx);
-  QCHECK(q15t::AddGameTick(&PluginCallback<1>));
-  const q15t::InstallResult plugin = q15t::InstallGameTick(Base(), tick::targets::kSlotVaddr,
-                                                           reinterpret_cast<std::uintptr_t>(&GameExclusiveUpdate) - Base(), tick::targets::kGameVptrVaddr);
-  QCHECK(plugin.status == q15t::SwapStatus::kOk);
-  QCHECK(*Slot() != reinterpret_cast<void*>(&GameExclusiveUpdate));  // the plugin's wrapper
-  void* const pluginWrapper = *Slot();
-
-  // The runner's normal step, with the module's install bound to the fixture's image: it runs after the plugin pass.
   static const combat::Module kTable[] = {{"tick", nullptr, [](void) noexcept -> combat::ModuleResult {
                                              const bool ok = tick::InstallAt(&Lookup);
                                              return {ok, ok ? "installed" : "refused"};
@@ -411,10 +378,9 @@ void OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing() {
   QCHECK(tick::Add(&CombatCallback<1>));
   const combat::Outcome outcome = combat::RunPhase(combat::Phase::kNormal, kTable, 1);
   QCHECK(outcome.ran && outcome.installed == 1 && outcome.failed == 0);
-  QCHECK(*Slot() != pluginWrapper);  // this module's thunk is above the plugin's wrapper
-
+  QCHECK(*Slot() != reinterpret_cast<void*>(&GameExclusiveUpdate));  // this module's thunk
   CallSlot(Game(VptrValue()));
-  QCHECK((g_order == std::vector<std::string>{"game", "plugin1", "combat1"}));  // the game's function once, then the plugin's callbacks, then combat's
+  QCHECK((g_order == std::vector<std::string>{"game", "combat1"}));
   QCHECK(!AnyLineHas("unexpected_original"));
   QCHECK(Lines("combat_install").size() == 1U && Lines("combat_install_module").size() == 1U &&
          Has(Lines("combat_install_module")[0].text, "\"module\":\"tick\",\"outcome\":\"installed\",\"status\":\"installed\""));
@@ -423,21 +389,22 @@ void OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing() {
   Done();
 }
 
-// The order the runner never produces: this module first, then the plugin's install. The plugin expects the game's function in the slot and
-// refuses (`unexpected_original`); the combat tick is unaffected, and the plugin's callbacks do not run. The refusal is the plugin's own
-// code, not a model.
-void TheOtherOrderIsRefusedByThePluginAndLeavesTheCombatTickRunning() {
-  World(bv::Variant::kQ15t);
+// A wrapper another owner put in the slot before the normal step (combat_tick.h, "The slot"): the target pins no expected original, so
+// the install takes the wrapper as the function its thunk calls. The wrapper runs, then the game's function through it, then combat's
+// callbacks, and nothing is refused.
+void OtherOwnersWrapper(void* game) {
+  g_order.emplace_back("wrapper");
+  GameExclusiveUpdate(game);
+}
+void AWrapperAlreadyInTheSlotIsTheFunctionTheThunkCalls() {
+  World(bv::Variant::kCombat);
+  *Slot() = reinterpret_cast<void*>(&OtherOwnersWrapper);
   QCHECK(tick::Add(&CombatCallback<1>));
   QCHECK(tick::InstallAt(&Lookup));
-  void* const thunk = *Slot();
-  const q15t::InstallResult plugin = q15t::InstallGameTick(Base(), tick::targets::kSlotVaddr,
-                                                           reinterpret_cast<std::uintptr_t>(&GameExclusiveUpdate) - Base(), tick::targets::kGameVptrVaddr);
-  QCHECK(plugin.status == q15t::SwapStatus::kUnexpectedOriginal);
-  QCHECK(std::strcmp(q15t::StatusName(plugin.status), "unexpected_original") == 0);
-  QCHECK(*Slot() == thunk);  // nothing was written
+  QCHECK(*Slot() != reinterpret_cast<void*>(&OtherOwnersWrapper));  // this module's thunk, above the wrapper
   CallSlot(Game(VptrValue()));
-  QCHECK((g_order == std::vector<std::string>{"game", "combat1"}));  // the plugin's callbacks never ran
+  QCHECK((g_order == std::vector<std::string>{"wrapper", "game", "combat1"}));
+  QCHECK(!AnyLineHas("unexpected_original"));
   Done();
 }
 
@@ -462,14 +429,14 @@ void OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone() {
 
 int main() {
   TheTableTakesSixteenCallbacksAndRefusesTheRest();
-  ThePinnedSlotIsTheOneThePluginWrapped();
+  ThePinnedSlotIsExclusiveUpdateGames();
   TheHandlerRunsTheGamesFunctionThenTheCallbacksInOrder();
   AnObjectThatIsNotTheGameRunsNoCallbackAndSaysSoOnce();
   TheVptrIsReadOncePerObjectNotOncePerFrame();
   ARefusedInstallLeavesTheSlotAloneAndSaysWhy();
   OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone();
-  OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing();
-  TheOtherOrderIsRefusedByThePluginAndLeavesTheCombatTickRunning();
+  OnAQ15tApkTheRunnersStepInstallsTheTickAlone();
+  AWrapperAlreadyInTheSlotIsTheFunctionTheThunkCalls();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_tick_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

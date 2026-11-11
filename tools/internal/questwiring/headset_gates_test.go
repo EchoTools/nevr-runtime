@@ -96,7 +96,7 @@ func TestTheGatesRegisterLastInTheNormalTableAndThePluginInstallsNeitherSlot(t *
 			t.Errorf("%s must not exist: the gates are the runtime's", gone)
 		}
 	}
-	plugin := read(t, "src/quest/plugins/q15t/src/plugin.cpp") + read(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp") + pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
 	for _, name := range []string{"InstallHeadsetGate", "InstallPartyHeadsetGate", "Q15T_GATE_", "PartyMemberHeadsetType", "CVR11HeadsetType", "SetLinkGateLibs"} {
 		if strings.Contains(plugin, name) {
 			t.Errorf("the q15t plugin must not carry %s", name)

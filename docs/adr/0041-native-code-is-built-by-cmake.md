@@ -52,7 +52,7 @@ What this costs, measured in the tree:
    make: PC DLLs and EXEs, the Quest sentinel, the Quest plugins, the Quest script libraries, host tools the build runs
    (`quest_patch_libr15`), and test programs, including a program whose only job is a compile check.
 2. **Configuration is a preset and a toolchain file.** The compiler, its version pin, the sysroot, the API level, the flags and
-   the include paths a binary needs are in `CMakePresets.json` (root, `src/quest`, or beside the CMake project it configures, as `src/quest/tests/q15t` does), a toolchain file, or the target's
+   the include paths a binary needs are in `CMakePresets.json` (root, `src/quest`, or beside the CMake project it configures, as `src/quest/combat_libs` does), a toolchain file, or the target's
    `CMakeLists.txt`. A toolchain the game's binaries require (the NDK that built them) is a toolchain file the preset names;
    it is never a compiler path passed to a script.
 3. **Recipes dispatch.** A `justfile` recipe configures with `cmake --preset`, builds with `cmake --build --preset` (with

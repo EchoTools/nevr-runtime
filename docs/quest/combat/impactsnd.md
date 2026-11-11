@@ -62,7 +62,7 @@ back `b243509c08ce677aeb95fa348016949b3fc45230`):
 The RW LOAD ends at `0x35f9eb0 + 0x1d8688 = 0x37d2538`; RELRO ends at `0x35f9eb0 + 0x132150 = 0x372c000`. D (`0x37af8d0`)
 and `kSoundSettings` (`0x37af6a0`) are in `.bss` (`0x3761180` to `0x37d2538`), above the RELRO end: writable at run time, no
 mprotect (the module only reads D and writes nothing there: R12 / R13 below). The JUMP_SLOT `0x36fa3c0` and the GLOB_DAT `0x370fa70` are in `.got`, inside RELRO (read-only after
-relocation): the slot swap needs the one-page mprotect that `got_swap.cpp` does and undoes (data page only, never executable).
+relocation): the slot write needs the one-page mprotect that the hook manager (`src/quest/sentinel/got_hook.cpp`) makes and undoes (data page only, never executable).
 
 ### The Shutdown slot (R17), proven
 
@@ -81,8 +81,7 @@ $ readelf -sW libr15.so | grep " 00000000021226f0 "
 
 The slot is a vtable word: an `R_AARCH64_ABS64` relocation to `Shutdown` between two `CComponentSystem` virtuals, so after
 relocation it holds `base + 0x21226f0`. It lies in `.data.rel.ro` (`0x35fac50` to `0x36bf210`), inside RELRO (ends `0x372c000`):
-read-only at run time, swapped with the same one-page mprotect and restore as a GOT slot (`got_swap.cpp`, which also refuses a
-page that is executable). disassembly: `22226f0 | Shutdown | 348`; xrefs to the function: `33c37c4 data`, `35df8b8 data`, `37933e8 data`
+read-only at run time, written with the same one-page mprotect and restore as a GOT slot, by the same manager. disassembly: `22226f0 | Shutdown | 348`; xrefs to the function: `33c37c4 data`, `35df8b8 data`, `37933e8 data`
 and no call or branch xref, so the vtable word is the only dispatch path the disassembly sees (the call graph is measured, not
 exhaustive; the other two `data` xrefs parallel LoadSoundSettings' `33c37a4` / `35df808` at the same distance pattern, look like
 table entries, and I did not read them: unverified). the disassembly xrefs to the slot word itself: 0 rows (a relocated word has none);

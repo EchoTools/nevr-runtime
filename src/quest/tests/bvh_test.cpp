@@ -33,7 +33,7 @@
 #include "quest/combat/legacy_switch.h"
 #include "quest/tests/bvh_build.h"
 #include "quest/tests/combat_libr15_image.h"
-#include "quest/tests/q15t/key_hog.h"
+#include "quest/tests/key_hog.h"
 #include "quest/tests/test_check.h"
 
 namespace {

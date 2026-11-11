@@ -27,7 +27,7 @@ One game, two binaries, one codebase: a feature is written once, with a per-bina
 | Scripting | `src/scripting/`, `extern/luau`, `docs/lua-scripting.md` | the Luau host (prototype, ADR 0016) |
 | Game service and protocol | `src/nevr_api/`, `gen/`, `src/runtime/compat/`, `docs/reference/social-nakama-protocol.md` | protobuf from BSR (`just proto`), the WebSocket bridge, the session router, codecs |
 | Quest sentinel | `src/quest/` | a separate CMake project (NDK, arm64); `libr15.so` is patched on the host at build time (ADR 0021, N151) |
-| Quest plugins | `src/quest/plugins/q15t`, `src/quest/plugins/autopilot`, `src/quest/plugin/` | the Quest plugin loader (ADR 0019), q15t modules, the autopilot route (ADR 0025); in no release or package-dev APK |
+| Quest plugins | `src/quest/plugins/autopilot`, `src/quest/plugin/` | the Quest plugin loader (ADR 0019) and the autopilot route (ADR 0025); in no release or package-dev APK |
 | Content packs and game data | `docs/reference/content-packs.md`, `content-pack-hosting.md`, `src/runtime/content/`, `tools/echomod/`, `src/runtime/patch/{asset_cdn,resource_override,evrp_package}.cpp`, `src/quest/data/` | game data the runtime serves from the nevr root, hosted on the CDN, named by the signed manifest (ADR 0028, 0029) |
 | Core installer | `installer/` (Rust crate; the binary is `install-nevr-runtime`), `tools/package-release/` | one install method for PC and Quest (ADR 0023, 0024) |
 | Python tools | `tools/`, `tools/tests/` | gate checks (`verify_*.py`), release and Quest-APK tooling, scenario harness (`tools/scenario/`), Windows VM rig (`tools/winvm/`) |
@@ -101,7 +101,7 @@ named as not run.
 | `src/runtime/server` | the above; a server outcome is read from the run's own log, on a game copy (`verify-server.sh`, "The game install") |
 | `sdk/`, `src/runtime/ext` | `just test-auth-unit`; `just test-plugins-groundtruth` |
 | `src/scripting` | `just test-scripting` (needs `extern/luau`) |
-| `src/quest` | `just test-android` and the `test-quest-*` recipe for the subdirectory (`shared`, `redirect`, `social`, `integration`, `data`, `invite`, `router`, `plugins`, `q15t`, `autopilot`, `patcher`, `hooks`); the `*-pinned` variants need the store APK; `just check-android-static-init` |
+| `src/quest` | `just test-android` and the `test-quest-*` recipe for the subdirectory (`shared`, `redirect`, `social`, `integration`, `data`, `invite`, `router`, `plugins`, `combat`, `autopilot`, `patcher`, `hooks`); the `*-pinned` variants need the store APK; `just check-android-static-init` |
 | `installer/` | `just test-installer` |
 | `tools/`, any doc | `just test-tools`; `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree) |
 | `tests/` Go modules | `go vet ./...` in the module; the system suites write into `$EVR_GAME_DIR`, so only on a game copy |

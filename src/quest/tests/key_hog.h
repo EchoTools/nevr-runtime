@@ -1,6 +1,6 @@
 #pragma once
 // Takes every pthread key the process has left, so the next pthread_key_create fails (a module's install must then refuse and change
-// nothing); the destructor gives them back. Used by the q15t host tests of the modules that keep per-thread state in a ThreadWord.
+// nothing); the destructor gives them back. Used by the combat host tests of the modules that keep per-thread state in a ThreadWord.
 #include <pthread.h>
 
 #include <vector>

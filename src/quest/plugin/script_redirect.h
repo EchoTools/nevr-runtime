@@ -10,7 +10,8 @@
 // there covers every script load, including Load's own, and needs no code written into libr15. Hooking Load would see the
 // name before the converter and would miss the other five call sites.
 //
-// Registry: one registration per process, from the combat unit's init (NevrQuestHostApi::register_script_redirect). It
+// Registry: one registration per process: the combat area's normal step (combat/script_redirect.h, owner `combat`), or a plugin's
+// init through NevrQuestHostApi::register_script_redirect. It
 // is all or nothing: each lib<hash16>_q15t.so must be a file in the directory the sentinel itself was loaded from (the APK's
 // native library directory), or nothing is registered. A process with no registration (a plain APK) passes every name
 // through unchanged.
@@ -73,12 +74,12 @@ const char* LibraryDirectoryOf(const char* path, char* dir, std::size_t cap) noe
 NevrScriptRedirectResult RegisterFromLibraryPath(const char* pluginId, const char* libraryPath, const std::uint64_t* hashes,
                                                  std::uint32_t count) noexcept;
 
-// The registration against the directory the sentinel was loaded from (dladdr on this function). Called from plugin init.
-// A refusal other than ALREADY_ARMED leaves nothing registered, so a caller may call again.
+// The registration against the directory the sentinel was loaded from (dladdr on this function). Called from the combat area's
+// normal step, or from a plugin's init. A refusal other than ALREADY_ARMED leaves nothing registered, so a caller may call again.
 //
-// Timing: the q15t plugin calls this from its NevrPluginInitEx, which the loader runs after a hooked dlopen has returned a
-// handle (post_load.cpp, AfterDlopen -> RunPlugins). A script-library load whose hooked open comes before that is not
-// redirected; its script_load line (registry_set=false) shows it.
+// Timing: the combat area calls this from its normal install step, which runs after a hooked dlopen has returned a handle and the
+// plugin pass has returned (post_load.cpp, AfterDlopen -> RunPluginsAndCombat). A script-library load whose hooked open comes
+// before that is not redirected; its script_load line (registry_set=false) shows it.
 NevrScriptRedirectResult Register(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) noexcept;
 
 // Per-item script_load lines for loads that are not redirected: on in a development build, off otherwise. Set when the plugin

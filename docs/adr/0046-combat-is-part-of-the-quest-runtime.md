@@ -14,11 +14,11 @@ per game behaviour) and ADR 0040 (every build names its variant). Tracking issue
 ## Context
 
 The combat behaviour that the q15t and combat APKs add is a plugin, q15t: `libq15t.so` and `libq15t_early.so`, built from
-`src/quest/plugins/q15t/` by this tree's CMake and packaged beside the sentinel by the variant recipes (`release-quest-variant-apk`,
+src/quest/plugins/q15t/ by this tree's CMake and packaged beside the sentinel by the variant recipes (`release-quest-variant-apk`,
 `release-quest-combat-apk` in `justfile`). The plugin boundary kept combat code apart from the runtime; the code is in this public tree
 and is built by its CMake, so the boundary separates nothing. What it costs:
 
-- **A second hook mechanism.** q15t writes GOT and vtable words itself (`src/quest/plugins/q15t/src/got_swap.cpp`: its own lock,
+- **A second hook mechanism.** q15t writes GOT and vtable words itself (src/quest/plugins/q15t/src/got_swap.cpp: its own lock,
   `mprotect` and compare-and-swap), outside the manager's registry; ADR 0034 names it (H1, H2). Where the sentinel holds a slot first,
   q15t's install refuses by code: #2000, the refresh-rate and clock-level hooks (not yet seen in a headset log).
 - **Two owners of one behaviour.** q15t's clock module and the sentinel's `clock_levels` both decide the clock levels (ADR 0039 O1).
@@ -26,7 +26,7 @@ and is built by its CMake, so the boundary separates nothing. What it costs:
   build options set the defaults. N133 says every config key is read from `config.yaml`.
 - **A second library for timing.** heaps and memsys must act before `android_main` reads the heap sizes, so they are a second plugin in
   the loader's early phase, which depends on a constructor-time `dlopen` never observed on a headset (ADR 0019 P10).
-- **Its own log path, packaging and harness.** Lines through `ctx->log`, dropped without a context (`plugin_log.cpp`); variant APKs
+- **Its own log path, packaging and harness.** Lines through `ctx->log`, dropped without a context (plugin_log.cpp); variant APKs
   whose plugin libraries a recipe takes from outside the tree (`release-quest-variant-apk <tag> <plugins>`, the release timer's
   `NEVR_VARIANT_DIR`); a test project of 128 files beside the `test-quest-*` groups.
 
@@ -100,7 +100,7 @@ Scope: `src/quest`, `justfile`, `tools/`, `config/`.
 
 ## Consequences
 
-- #2000 is fixed when the refresh-rate rule and the clock module leave the plugin; ADR 0034's q15t consequence is met; `got_swap.cpp`
+- #2000 is fixed when the refresh-rate rule and the clock module leave the plugin; ADR 0034's q15t consequence is met; got_swap.cpp
   leaves N151's allowlist; #2002 is superseded.
 - heaps and memsys stop depending on ADR 0019 P10.
 - The release timer and the variant recipes stop reading libraries from outside the tree (part of #2009, ADR 0035 P4).

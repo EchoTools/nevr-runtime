@@ -5,12 +5,9 @@
  * Owner (ADR 0039). This file owns the combat modules' per-frame callback. A module registers with `Add`, from its install function; it
  * may do so before or after the thunk is installed.
  *
- * KNOWN-WRONG #2168: the q15t plugin still installs its own wrapper on the same slot for the modules that have not moved (its last
- * ticked module moves; gunconnect, aibots and weapon_arm have not moved). The plugin installs first, at the normal plugin pass, and this module installs after it (combat_install.h:
- * the normal step runs after the pass), so the slot holds the plugin's wrapper and this thunk joins the manager's chain above it through
- * the first-handler rule: the thunk calls the plugin's wrapper, which calls the game's function and its own callbacks, and then runs the
- * combat callbacks. The reverse order is what the plugin's own install refuses (it expects the game's function in the slot,
- * `unexpected_original`), which the runner's order never produces; `combat_tick_test` runs both orders on a fixture slot.
+ * The slot. No other module of the tree hooks it. The target pins no expected original: a wrapper another owner put in the slot before
+ * the normal step (which runs after the plugin pass, combat_install.h) is taken as the function the thunk calls, through the manager's
+ * first-handler rule.
  *
  * Which APKs (ADR 0046 rule 5). Installed by the normal step of the q15t and combat variants only.
  *

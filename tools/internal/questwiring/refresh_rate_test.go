@@ -39,10 +39,49 @@ func exists(t *testing.T, path string) bool {
 	return err == nil
 }
 
+// The q15t plugin and its host tests are deleted (#2189). A check that the plugin holds none of a module's code reads the plugin through
+// these: a deleted plugin holds nothing, so they answer empty; while it exists they read it as before, and a missing file is a failure.
+const pluginDir = "src/quest/plugins/q15t"
+
+func pluginGone(t *testing.T) bool {
+	t.Helper()
+	return !exists(t, pluginDir) && !exists(t, "src/quest/tests/q15t")
+}
+
+func pluginRead(t *testing.T, path string) string {
+	t.Helper()
+	if pluginGone(t) {
+		return ""
+	}
+	return read(t, path)
+}
+
+func pluginEntries(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	if pluginGone(t) {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(root(t), dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+func TestTheQ15tPluginAndItsTestsAreGone(t *testing.T) {
+	for _, p := range []string{pluginDir, "src/quest/tests/q15t", "docs/quest/q15t"} {
+		if exists(t, p) {
+			t.Errorf("%s exists: the q15t plugin is folded into the runtime (#2189)", p)
+		}
+	}
+}
+
 var blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 var lineComment = regexp.MustCompile(`//[^\n]*`)
 
-func stripComments(s string) string { return lineComment.ReplaceAllString(blockComment.ReplaceAllString(s, ""), "") }
+func stripComments(s string) string {
+	return lineComment.ReplaceAllString(blockComment.ReplaceAllString(s, ""), "")
+}
 
 // body returns the text of the braced function whose signature starts with sig.
 func body(t *testing.T, code, sig string) string {
@@ -108,9 +147,10 @@ func TestTheTickIsAThunkInstalledThroughTheManagerWithNoExpectedOriginal(t *test
 	if !strings.Contains(read(t, "src/quest/sentinel/hook_budget.h"), `{"combat/combat_tick.cpp", 1, 0}`) {
 		t.Error("no hook budget row for the tick")
 	}
+	// No plugin wraps the slot any more, so the marker that said one did is gone with it.
 	for _, p := range []string{"src/quest/combat/combat_tick.h", "src/quest/combat/combat_tick.cpp"} {
-		if !strings.Contains(read(t, p), "KNOWN-WRONG #2168") {
-			t.Errorf("%s does not mark the plugin's tick KNOWN-WRONG #2168", p)
+		if strings.Contains(read(t, p), "KNOWN-WRONG #2168") {
+			t.Errorf("%s still marks a plugin tick KNOWN-WRONG #2168, and no plugin wraps the slot", p)
 		}
 	}
 }
@@ -177,35 +217,32 @@ func TestThePluginInstallsOnNeitherSlotAndTheDeletedModulesAreGone(t *testing.T)
 			}
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(root(t), "src/quest/plugins/q15t/src"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
 		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
 			continue
 		}
-		code := stripComments(read(t, "src/quest/plugins/q15t/src/"+e.Name()))
+		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
 		for _, bad := range []string{"vrapi_SetClockLevels", "vrapi_SetDisplayRefreshRate", "Q15T_HZ_MATCH90", "SetClockRaise"} {
 			if strings.Contains(code, bad) {
 				t.Errorf("%s names %s", e.Name(), bad)
 			}
 		}
 	}
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
 	for _, bad := range []string{"Q15T_HZ_MATCH90", "Q15T_CPU_LEVEL", "Q15T_GPU_LEVEL", "clock_levels", "refresh_rate", "plugin_args"} {
 		if strings.Contains(cmake, bad) {
 			t.Errorf("the plugin's CMake still names %s", bad)
 		}
 	}
-	if !strings.Contains(cmake, "src/combat_map.cpp") {
+	if !pluginGone(t) && !strings.Contains(cmake, "src/combat_map.cpp") {
 		t.Error("the detector aibots reads is not built")
 	}
-	if strings.Contains(read(t, "src/quest/plugins/q15t/src/plugin.cpp"), "hz_level") || strings.Contains(read(t, "justfile"), "hz_level") {
+	if strings.Contains(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"), "hz_level") || strings.Contains(read(t, "justfile"), "hz_level") {
 		t.Error("the config marker still carries hz_level")
 	}
-	plugin := stripComments(read(t, "src/quest/plugins/q15t/src/plugin.cpp"))
+	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
 	for _, bad := range []string{"clock_candidate", "clock_arg", "hz_mode", "ArgString"} {
 		if strings.Contains(plugin, bad) {
 			t.Errorf("the init line still has %s", bad)

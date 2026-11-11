@@ -91,6 +91,8 @@ tools/tests/test_check_quest_static_init.py	ported by its unit of #2132
 tools/tests/test_cli_flag_names.py	ported by its unit of #2132
 tools/tests/test_cmake_source_properties.py	ported by its unit of #2132
 tools/tests/test_combat_libs_cmake.py	ported by its unit of #2132
+tools/tests/test_combat_link_gate_libs.py	ported by its unit of #2132
+tools/tests/test_combat_script_redirect.py	ported by its unit of #2132
 tools/tests/test_compile_checks_use_cmake.py	ported by its unit of #2132
 tools/tests/test_config_yaml_source.py	ported by its unit of #2132
 tools/tests/test_console_output_cp_wiring.py	ported by its unit of #2132
@@ -163,9 +165,6 @@ tools/tests/test_process_memcpy_error_argument.py	ported by its unit of #2132
 tools/tests/test_proto_stamp.py	ported by its unit of #2132
 tools/tests/test_provider_name_redirect_wiring.py	ported by its unit of #2132
 tools/tests/test_publish_quest_apk.py	ported by its unit of #2132
-tools/tests/test_q15t_host_tests_cmake.py	ported by its unit of #2132
-tools/tests/test_q15t_link_gate_libs.py	ported by its unit of #2132
-tools/tests/test_q15t_script_redirect.py	ported by its unit of #2132
 tools/tests/test_quest_apk_patch_map.py	ported by its unit of #2132
 tools/tests/test_quest_apk_rename_package.py	ported by its unit of #2132
 tools/tests/test_quest_apk_version.py	ported by its unit of #2132

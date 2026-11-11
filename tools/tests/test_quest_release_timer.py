@@ -49,7 +49,7 @@ STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree"
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
 NDK_PROPERTIES = "Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"  # r26d
-APK_LIBRARY_ENTRY = "lib/arm64-v8a/libq15t.so"  # where android-repack-apk puts a plugin library in the APK
+APK_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"  # the variant word the repack stamps; the APK carries no plugin library
 HEAD = "c0ffee" + "0" * 34
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
@@ -80,12 +80,7 @@ class Fake:
         self.jobs = [{"name": name, "conclusion": "success"} for name in PUBLISHING_JOBS]
         self.local_tags: dict = dict(TAGS)  # what the checkout holds
         self.remote_tags: dict = dict(TAGS)  # what origin holds
-        self.library: bytes | None = None  # what the variant build writes to build/quest-q15t/libq15t.so (None: the default library)
-        self.writes_library = True  # False: the variant build exits 0 and writes nothing
-        self.apk_library: bytes | None = None  # what the APK the recipe wrote carries as libq15t.so (None: the build's library)
-        self.apk_entry = APK_LIBRARY_ENTRY  # the entry name the library is under in that APK
-        self.writes_apk = True  # False: the recipe exits 0 and writes no APK
-        self.apk_bytes: bytes | None = None  # the file the recipe writes instead of an APK
+        self.apk_entries = {APK_ENTRY: b"q15t"}  # what the APK the variant recipe writes holds: no plugin library
         self.signer_usage = ""  # what `put-quest-apk -h` prints on standard error: empty is a signer without `--kind` (#2298)
         self.arena_listed = True  # the live manifest lists the arena APK once the release is published
     def step_of(self, argv: list[str]) -> str:
@@ -119,20 +114,13 @@ class Fake:
         top = step.split(".")[0]
         if self.fail and self.fail in (step, top):
             return completed(argv, 2, "", f"{step} broke")
-        if step == "variant_build" and self.writes_library and cwd:
-            built = pathlib.Path(cwd) / "build" / "quest-q15t"
-            built.mkdir(parents=True, exist_ok=True)
-            data = library_bytes("libq15t.so") if self.library is None else self.library
-            (built / "libq15t.so").write_bytes(data)
-            if self.writes_apk:
-                tag = argv[-1]  # `just release-quest-variant-apk <tag>`
-                out = pathlib.Path(cwd) / "build" / "quest-release" / tag / "variant"
-                out.mkdir(parents=True, exist_ok=True)
-                if self.apk_bytes is not None:
-                    (out / f"nevr-runtime-{tag}-q15t-quest.apk").write_bytes(self.apk_bytes)
-                else:
-                    with zipfile.ZipFile(out / f"nevr-runtime-{tag}-q15t-quest.apk", "w") as apk:
-                        apk.writestr(self.apk_entry, data if self.apk_library is None else self.apk_library)
+        if step == "variant_build" and cwd:
+            tag = argv[-1]  # `just release-quest-variant-apk <tag>`
+            out = pathlib.Path(cwd) / "build" / "quest-release" / tag / "variant"
+            out.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(out / f"nevr-runtime-{tag}-q15t-quest.apk", "w") as apk:
+                for entry, data in self.apk_entries.items():
+                    apk.writestr(entry, data)
         if step in self.overrides:
             return self.overrides[step](argv)
         if step == "checkout.status":
@@ -1368,17 +1356,8 @@ class RealProcess(TimerCase):
 
 VARIANT = "q15t"
 VARIANT_APK = f"nevr-runtime-{TAG}-{VARIANT}-quest.apk"
-LIBRARIES = ("libq15t.so",)  # what the variant APK carries: the one q15t plugin library
-BUILD_ID = "0123456789abcdef0123456789abcdef01234567"
 MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure",
               "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
-
-
-def library_bytes(name: str) -> bytes:
-    """A synthetic library as the build writes it: random bytes, the same on every run, and the config marker the real library
-    carries (src/quest/plugins/q15t/src/plugin.cpp) with the libr15 build ID it was built for."""
-    marker = f"q15t-config build_id={BUILD_ID}".encode()
-    return random.Random(name).randbytes(4096) + b"\0" + marker + b"\0"
 
 
 HOST_APK = b"apk bytes the host serves"
@@ -1611,16 +1590,6 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
                 self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
                 self.assert_release_stands(fake)
 
-    def test_a_library_the_build_did_not_write_after_a_complete_release_leaves_the_release_standing(self) -> None:
-        fake = Fake(self.root)
-        fake.writes_library = False
-        code, stderr = self.run_captured(fake)
-        self.assertEqual(code, 1)
-        self.assertEqual([e["step"] for e in self.failed()], ["variant_build"])
-        self.assertNotIn("variant_publish", fake.steps(), "an APK whose library cannot be recorded is not published")
-        self.assertNotIn("done", self.names())
-        self.assert_release_stands(fake)
-
     def test_the_next_run_builds_only_the_variant_and_then_the_tag_is_done(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root, fail="variant_build")), 1)
         self.assertNotIn("done", self.names())
@@ -1661,118 +1630,36 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertIn("skipped_after_failures", self.names())
 
 
-class VariantLibraries(VariantCase):
-    """The variant packages the library the tag's own build wrote. The run records that file's sha256 and the libr15 build ID the
-    build put in it (`variant_library`), so the APK can be compared with the build; a library the build did not write, or one that
-    carries no build ID, fails the variant before anything is published."""
+class VariantWithoutALibrary(VariantCase):
+    """The variant APK is the release's loader with the variant word stamped; it carries no plugin library, so the variant_build
+    step has no library to record and publishes the APK the recipe wrote."""
 
     def libraries(self) -> list[dict]:
         return [e for e in self.events() if e["event"] == "variant_library"]
 
-    def test_one_record_per_packaged_library_names_the_file_its_size_its_sha256_and_the_build_id(self) -> None:
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        data = library_bytes("libq15t.so")
-        self.assertEqual([(e["name"], e["size"], e["sha256"], e["libr15_build_id"]) for e in self.libraries()],
-                         [("libq15t.so", len(data), hashlib.sha256(data).hexdigest(), BUILD_ID)])
-        self.assertEqual([e["name"] for e in self.libraries()], list(LIBRARIES), "the variant APK carries the one q15t library")
-
-    def test_the_record_is_of_the_file_the_build_wrote_not_of_a_fixed_one(self) -> None:
-        other = library_bytes("another build") .replace(BUILD_ID.encode(), b"f" * 40)
+    def test_a_variant_apk_with_no_plugin_library_passes_and_is_published(self) -> None:
         fake = Fake(self.root)
-        fake.library = other
         self.assertEqual(self.run_timer(fake), 0)
-        [record] = self.libraries()
-        self.assertEqual((record["sha256"], record["libr15_build_id"], record["size"]), (hashlib.sha256(other).hexdigest(), "f" * 40, len(other)))
+        self.assertIn("variant_publish", fake.steps())
+        self.assertEqual(self.failed(), [])
 
-    def test_the_records_are_written_after_the_build_and_before_the_publish(self) -> None:
+    def test_the_variant_build_step_writes_no_variant_library_record(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        self.assertEqual(self.libraries(), [])
         events = [(e["event"], e.get("step")) for e in self.events()]
-        built, library, published = ("step_ok", "variant_build"), ("variant_library", None), ("step_ok", "variant_publish")
-        self.assertLess(events.index(library), events.index(built))
-        self.assertLess(events.index(built), events.index(published))
+        self.assertLess(events.index(("step_ok", "variant_build")), events.index(("step_ok", "variant_publish")))
 
-    def test_a_build_that_wrote_no_library_fails_the_build_step_and_names_the_file(self) -> None:
-        fake = Fake(self.root)
-        fake.writes_library = False
-        code, stderr = self.run_captured(fake)
-        self.assertEqual(code, 1)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_build")
-        self.assertIn("libq15t.so is not in build/quest-q15t after the build", failure["error"])
-        self.assertEqual(self.libraries(), [])
-        self.assertNotIn("variant_publish", fake.steps())
-        self.assertIn("quest-release-timer: variant_build:", stderr)
-
-    def test_a_library_with_no_config_marker_or_no_build_id_is_a_failure_of_the_build_step(self) -> None:
-        for name, data in (("no marker", b"\x7fELF" + b"x" * 100),
-                           ("no build id", b"q15t-config ec_words=[types=VPTO]\0")):
-            with self.subTest(name):
-                self.log.unlink(missing_ok=True)
-                fake = Fake(self.root)
-                fake.library = data
-                self.assertEqual(self.run_timer(fake), 1)
-                [failure] = self.failed()
-                self.assertEqual(failure["step"], "variant_build")
-                self.assertIn("libq15t.so carries no q15t-config marker with a build_id", failure["error"])
-                self.assertEqual(self.libraries(), [])
-                self.assertNotIn("variant_publish", fake.steps())
-
-    def test_the_record_is_of_the_library_in_the_apk_that_is_published(self) -> None:
+    def test_the_variant_build_runs_no_q15t_library_build(self) -> None:
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        [record] = self.libraries()
-        self.assertEqual(record["source"], f"{VARIANT_APK}:{APK_LIBRARY_ENTRY}")
+        joined = [" ".join(c["argv"]) for c in fake.calls]
+        self.assertEqual([j for j in joined if "build-quest-q15t" in j], [])
 
-    def test_a_library_in_the_apk_that_is_not_the_one_the_build_wrote_is_a_failure_of_the_build_step(self) -> None:
-        fake = Fake(self.root)
-        fake.apk_library = library_bytes("a stale library")
-        code, stderr = self.run_captured(fake)
-        self.assertEqual(code, 1)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_build")
-        self.assertIn(f"{APK_LIBRARY_ENTRY} in {VARIANT_APK} is not the library the build wrote", failure["error"])
-        self.assertIn(hashlib.sha256(library_bytes("libq15t.so")).hexdigest(), failure["error"])
-        self.assertIn(hashlib.sha256(library_bytes("a stale library")).hexdigest(), failure["error"])
-        self.assertEqual(self.libraries(), [])
-        self.assertNotIn("variant_publish", fake.steps(), "an APK that does not carry the build's library is not published")
-
-    def test_an_apk_without_the_library_entry_is_a_failure_of_the_build_step(self) -> None:
-        fake = Fake(self.root)
-        fake.apk_entry = "lib/arm64-v8a/libother.so"
-        self.assertEqual(self.run_timer(fake), 1)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_build")
-        self.assertIn(f"{VARIANT_APK} has no {APK_LIBRARY_ENTRY}", failure["error"])
-        self.assertNotIn("variant_publish", fake.steps())
-
-    def test_a_recipe_that_wrote_no_apk_is_a_failure_of_the_build_step(self) -> None:
-        fake = Fake(self.root)
-        fake.writes_apk = False
-        self.assertEqual(self.run_timer(fake), 1)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_build")
-        self.assertIn(f"{VARIANT_APK} is not in build/quest-release/{TAG}/variant after the build", failure["error"])
-        self.assertNotIn("variant_publish", fake.steps())
-
-    def test_a_file_that_is_not_a_zip_is_a_failure_of_the_build_step(self) -> None:
-        fake = Fake(self.root)
-        fake.apk_bytes = b"not a zip"
-        self.assertEqual(self.run_timer(fake), 1)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_build")
-        self.assertIn(f"{VARIANT_APK} cannot be read as an APK", failure["error"])
-
-    def test_a_failed_build_records_no_library_even_when_an_old_file_is_there(self) -> None:
+    def test_a_failed_build_publishes_nothing(self) -> None:
         fake = Fake(self.root, fail="variant_build")
         self.assertEqual(self.run_timer(fake), 1)
+        self.assertNotIn("variant_publish", fake.steps())
         self.assertEqual(self.libraries(), [])
-
-    def test_a_library_in_the_marker_of_a_prefix_of_the_id_is_read_whole(self) -> None:
-        fake = Fake(self.root)
-        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] build_id=" + BUILD_ID.encode() + b"\0rest"
-        self.assertEqual(self.run_timer(fake), 0)
-        [record] = self.libraries()
-        self.assertEqual(record["libr15_build_id"], BUILD_ID)
 
 
 class VariantOfAListedRelease(VariantCase):
@@ -2803,16 +2690,13 @@ elif name == "systemd-run":
     os.execvp(rest[0], rest)
 elif name == "just":
     if args[0] == "release-quest-variant-apk":
-        # The recipe builds the libraries from the checkout (`just build-quest-q15t`) and packages them: no library is an argument.
+        # The recipe repacks the store game with the variant word: no plugin library is built, packaged or an argument.
         assert len(args) == 2, args
-        built = pathlib.Path("build/quest-q15t")
-        built.mkdir(parents=True)
-        (built / "libq15t.so").write_bytes(bytes.fromhex(os.environ["FAKE_LIBRARY"]))
         out = pathlib.Path("build/quest-release") / args[1] / "variant"
         out.mkdir(parents=True)
         file = f"nevr-runtime-{args[1]}-q15t-quest.apk"
         with zipfile.ZipFile(out / file, "w") as archive:
-            archive.writestr("lib/arm64-v8a/libq15t.so", (built / "libq15t.so").read_bytes())
+            archive.writestr("lib/arm64-v8a/libnevr_build_variant.so", b"q15t")
         apk = (out / file).read_bytes()
         (out / f"{file}.sha256").write_text(f"{hashlib.sha256(apk).hexdigest()}  {file}\n")
     elif args[0] == "remove-worktree":
@@ -2847,8 +2731,7 @@ class VariantRealProcess(TimerCase):
         self.run_env = {**self.env, "PATH": f"{self.bin}{os.pathsep}/usr/bin", "HOME": str(self.root),
                         "GH_BIN": str(self.bin / "gh-fake"), "CALLS": str(self.calls), "FAKE_TAG": TAG,
                         "FAKE_SERVE": str(self.served / "nevr-runtime" / TAG), "FAKE_TOOLS": str(ROOT / "tools"),
-                        "RELEASE_PUBLIC_BASE": f"http://127.0.0.1:{server.server_address[1]}",
-                        "FAKE_LIBRARY": library_bytes("libq15t.so").hex()}
+                        "RELEASE_PUBLIC_BASE": f"http://127.0.0.1:{server.server_address[1]}"}
         self.publish_log = self.root / "state" / "nevr-runtime" / "publish-quest-apk.jsonl"
 
     def start(self) -> subprocess.CompletedProcess:
@@ -2864,10 +2747,7 @@ class VariantRealProcess(TimerCase):
         self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"],
                          ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists", "worktree",
                           "build_slot", "configure", "variant_configure", "variant_build", "variant_publish", "cleanup"])
-        data = library_bytes("libq15t.so")
-        libraries = [e for e in self.events() if e["event"] == "variant_library"]
-        self.assertEqual([(e["name"], e["size"], e["sha256"], e["libr15_build_id"]) for e in libraries],
-                         [("libq15t.so", len(data), hashlib.sha256(data).hexdigest(), BUILD_ID)])
+        self.assertEqual([e for e in self.events() if e["event"] == "variant_library"], [], "the APK carries no plugin library")
         self.assertEqual(self.names()[-1], "done")
         publish = [json.loads(line) for line in self.publish_log.read_text().splitlines()]
         self.assertEqual([e["event"] for e in publish],
@@ -2879,7 +2759,7 @@ class VariantRealProcess(TimerCase):
         self.assertEqual((self.served / "nevr-runtime" / TAG / f"{VARIANT_APK}.sha256").read_text(),
                          f"{hashlib.sha256(apk).hexdigest()}  {VARIANT_APK}\n")
         with zipfile.ZipFile(io.BytesIO(apk)) as archive:
-            self.assertEqual(archive.read("lib/arm64-v8a/libq15t.so"), data, "the APK carries the library the build wrote")
+            self.assertEqual([n for n in archive.namelist() if n.endswith("libq15t.so")], [], "the APK carries no plugin library")
         signer = [c["args"] for c in self.tool_calls() if c["tool"] == "signer"]
         self.assertEqual(signer, [["verify-manifest", "--live"]], "the signer only reads the manifest: no claim, no put")
         just = [c["args"][0] for c in self.tool_calls() if c["tool"] == "just"]
@@ -2908,12 +2788,15 @@ class ReleasingDoc(unittest.TestCase):
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         section = text.split("## The Quest half of a release", 1)[1].split("\n## ", 1)[0]
         for want in ("variant_configure", "variant_build", "variant_publish", "variant_exists", "variant_listed",
-                     "never blocks", "release-quest-variant-apk", "--variant", "variant_library",
-                     "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env", "build-quest-q15t"):
+                     "never blocks", "release-quest-variant-apk", "--variant",
+                     "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env"):
             self.assertIn(want, section)
-        for want in ("variant_configure", "variant_build", "variant_publish", "variant_library",
+        for want in ("variant_configure", "variant_build", "variant_publish",
                      "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env"):
             self.assertIn(want, timer.__doc__)
+        for gone in ("variant_library", "build-quest-q15t", "libq15t.so"):
+            self.assertNotIn(gone, section)
+            self.assertNotIn(gone, timer.__doc__)
         for gone in ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured", "variant_pins", "private build"):
             self.assertNotIn(gone, section)
             self.assertNotIn(gone, timer.__doc__)

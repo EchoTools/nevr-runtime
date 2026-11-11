@@ -111,7 +111,7 @@ MANIFEST_SCHEMA = 1
 # installer extracts it beside the sentinel, like the manifest, and is never loaded as a library.
 VARIANT_STAMP_NAME = "libnevr_build_variant.so"
 VARIANT_ENTRY = f"{ABI_DIR}/{VARIANT_STAMP_NAME}"
-# The variant words: one for each variant or option a recipe adds. `q15t` and `combat` are the APKs that carry the q15t libraries
+# The variant words: one for each variant or option a recipe adds. `q15t` and `combat` are the APKs whose word turns the combat area on
 # (docs/adr/0046 rule 5); `perf-probe` is the measurement build (ADR 0037); `arena` is the release's APK built from the store APK with no combat
 # (#2298). Every other word is refused; the empty word is a plain release.
 VARIANT_WORDS = ("q15t", "combat", "perf-probe", "arena")
@@ -793,8 +793,8 @@ STAGED_REPLACE_LIST = "lib-replace.txt"  # in the stage directory: read back by 
 STAGED_SCRIPT_LIST = "script-libs.txt"  # in the stage directory: the script libraries stage_libs staged, by their staged names
 # The nine stock script libraries a combat unit redirects (#1737). Each is given to the APK as lib<hash16>_q15t.so, beside the
 # stock lib<hash16>.so, which is never replaced: verify_signed checks every store library is byte-identical. The builder
-# names them lib<hash16>.so; the redirect name is given here, at staging. src/quest/plugins/q15t/src/script_redirect.h holds
-# the same list (tools/tests/test_q15t_script_redirect.py keeps them equal).
+# names them lib<hash16>.so; the redirect name is given here, at staging. src/quest/combat/script_redirect_list.h holds
+# the same list (tools/tests/test_combat_script_redirect.py keeps them equal).
 COMBAT_REDIRECT_HASHES = (
     "37f88adb0d8066f7", "3c11128c3bd783dd", "4b65d1b009973281", "6a0f689e5b91c666", "80461e04c6d82c21",
     "812075466da9e147", "954c89b6c61625f6", "a5c64faa725f2334", "ac4cd8e0a786d5c5",

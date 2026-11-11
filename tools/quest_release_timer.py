@@ -27,12 +27,14 @@ Given the published release's tag, this tool finishes the release:
   cleanup          the worktree and the signer snapshot, by exact path
 
 The variant. Every release also gets an unlisted second APK, nevr-runtime-<tag>-q15t-quest.apk, in the same run, built
-from the release's own loader asset plus the q15t plugin library the tag's own source builds, and published beside the main
-APK. The library is built, never supplied: `just release-quest-variant-apk` runs `just build-quest-q15t` in the tag's worktree
-(its static-init, emulated-TLS, libr15 build ID and shipped-defaults checks included) and packages build/quest-q15t/libq15t.so.
-The build needs an Android NDK (ANDROID_NDK_HOME), a vcpkg checkout (VCPKG_ROOT; the configure installs the arm64-android ports
-of src/quest/vcpkg.json) and config/public-defaults.env in the checkout the timer runs from; a run that lacks one is refused
-before any step, with a line that names it. The variant steps run after the main release is complete (published, listed and
+from the release's own loader asset and stamped with the variant word `q15t` (docs/adr/0040 rule 1), which turns the combat area
+on (docs/adr/0046 rule 5), and published beside the main APK. It carries no plugin library: every combat module is the
+sentinel's own. `just release-quest-variant-apk` repacks the store game in the tag's worktree.
+The repack needs an Android NDK (ANDROID_NDK_HOME) and a vcpkg checkout (VCPKG_ROOT) because the variant_configure step runs
+`just configure-android` (justfile: `configure-android: _build-guard _require-ndk`), whose arm64-android ports of
+src/quest/vcpkg.json hold the nlohmann/json headers the repack's libr15 patcher is built with (the `json_trees` list in
+`android-repack-apk`); it also needs config/public-defaults.env in the checkout the timer runs from. A run that lacks one is
+refused before any step, with a line that names it. The variant steps run after the main release is complete (published, listed and
 verified live) and never before:
 
   variant_exists     (a listed tag only) the host's variant pair: 404 for the APK is absent (it is built and published); an
@@ -45,13 +47,11 @@ verified live) and never before:
                      itself first
   variant_build      `just release-quest-variant-apk` in the same worktree. Its output goes to the 0600 file
                      <work>/variant-<tag>-build.log, kept when the step fails and removed when the variant is done. After it
-                     the run writes one `variant_library` record per packaged library (libq15t.so): its size, its sha256 and
-                     the libr15 build ID the build put in it (the q15t-config marker); a library the build did not write, or
-                     one without that marker, fails this step before anything is published
+                     the run writes no per-library record: the APK carries no plugin library
   variant_publish    tools/publish_quest_apk.py --variant: R2 and the public host only, no signer, no manifest claim
 
-A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
-plugin check prints the plugin's own symbol names); variant_build's failure names the 0600 file.
+A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output;
+variant_build's failure names the 0600 file.
 
 A failing variant step is recorded as `failed` with its step name, exits 1 and
 counts toward the same three tries, but the main release is by then complete and nothing of it is undone. `done` is written
@@ -94,8 +94,6 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-import zipfile
-import zlib
 from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -106,8 +104,8 @@ from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the pre
 # NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-apk`, #1994).
 # NEVR_STORE_APK is the store APK the variant is repacked from (`just release-quest-variant-apk`); it is read after the main release
 # is published, so a run without it is refused before that, as for the build inputs below.
-# ANDROID_NDK_HOME and VCPKG_ROOT are the Quest build's inputs (`just configure-android`, `just build-quest-q15t`): the variant is built
-# from the tag, so a run without them is refused before the main release is published, not after.
+# ANDROID_NDK_HOME and VCPKG_ROOT are the inputs of the variant's configure step (`just configure-android`, which the repack's libr15
+# patcher build reads its nlohmann/json headers from): a run without them is refused before the main release is published, not after.
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
                 "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO", "NEVR_QUEST_REFERENCE_APK", "NEVR_STORE_APK", "ANDROID_NDK_HOME", "VCPKG_ROOT")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "NEVR_RCLONE_REMOTE")
@@ -123,10 +121,6 @@ ARENA = "arena"
 ARENA_KIND = "quest-apk-arena"
 ARENA_BLOCKS = "arena_blocks_dispatch"
 SIGNER_KIND_FLAG = re.compile(r"^[ \t]+--?kind\b", re.MULTILINE)  # in `put-quest-apk -h`; Go's flag package prints one dash
-VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries: the one q15t plugin library
-APK_LIBRARY_DIR = "lib/arm64-v8a/"  # where android-repack-apk puts a plugin library in the APK
-# The marker the build puts in libq15t.so (src/quest/plugins/q15t/src/plugin.cpp, read back by `just build-quest-q15t`): the libr15 build ID.
-LIBRARY_MARKER = re.compile(rb"q15t-config [^\x00]*?build_id=([0-9a-f]{16,64})")
 MANIFEST_PATH = "nevr-runtime/manifest.json"
 USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 to the default agent
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
@@ -728,57 +722,15 @@ class Timer:
         # The Quest build tree and its vcpkg ports, in the tag's worktree; the recipe configures again and finds them in place.
         self.cmd("variant_configure", [*slice_command, "just", "configure-android"], worktree, build_env)
         self.ok("variant_configure")
-        # The recipe builds the q15t library from the tag (`just build-quest-q15t`) and packages it: no library is handed in.
+        # The recipe repacks the store game with the variant word; no plugin library is built or handed in.
         self.cmd("variant_build", [*slice_command, "just", "release-quest-variant-apk", tag], worktree, build_env,
                  output_file=self.variant_build_log(tag))
-        self.record_libraries(tag, worktree)
         self.ok("variant_build", apk=self.variant_apk_name(tag))
         # Only the R2 credential: the variant has no signer and no manifest claim. The publish tool's own log has its reasons.
         self.cmd("variant_publish", ["python3", "tools/publish_quest_apk.py", tag, "--variant", VARIANT], worktree, dict(self.r2),
                  quiet=True)
         self.ok("variant_publish", apk=self.variant_apk_name(tag))
         self.forget_build_log(tag)
-
-    def record_libraries(self, tag: str, worktree: pathlib.Path) -> None:
-        """One `variant_library` record per packaged library, read out of the signed APK the recipe wrote (the file that is
-        published) and held to the library the build wrote in the tag's worktree: a library in the APK that is not that file
-        fails the build step, so the record is of what is published. The record carries the APK library's size, sha256 and the
-        libr15 build ID in its config marker. A library or APK that is missing, unreadable or without the marker fails the
-        step too (nothing is published from an APK whose library cannot be named)."""
-        step = "variant_build"
-        built = worktree / "build" / "quest-q15t"
-        apk_name = self.variant_apk_name(tag)
-        apk_path = worktree / "build" / "quest-release" / tag / "variant" / apk_name
-        records = []
-        for name in VARIANT_LIBRARIES:
-            try:
-                data = (built / name).read_bytes()
-            except FileNotFoundError as error:
-                raise StepFailure(step, f"{name} is not in build/quest-q15t after the build") from error
-            except OSError as error:
-                raise StepFailure(step, f"{name} cannot be read: {error.strerror}") from error
-            entry = APK_LIBRARY_DIR + name
-            try:
-                with zipfile.ZipFile(apk_path) as apk:
-                    try:
-                        published = apk.read(entry)
-                    except KeyError as error:
-                        raise StepFailure(step, f"{apk_name} has no {entry}") from error
-            except FileNotFoundError as error:
-                raise StepFailure(step, f"{apk_name} is not in build/quest-release/{tag}/variant after the build") from error
-            except (OSError, zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError) as error:
-                raise StepFailure(step, f"{apk_name} cannot be read as an APK: {type(error).__name__}") from error
-            built_digest, published_digest = hashlib.sha256(data).hexdigest(), hashlib.sha256(published).hexdigest()
-            if built_digest != published_digest:
-                raise StepFailure(step, f"{entry} in {apk_name} is not the library the build wrote: the APK has sha256 "
-                                        f"{published_digest}, build/quest-q15t/{name} has {built_digest}")
-            found = LIBRARY_MARKER.search(published)
-            if not found:
-                raise StepFailure(step, f"{name} carries no q15t-config marker with a build_id")
-            records.append({"name": name, "source": f"{apk_name}:{entry}", "size": len(published), "sha256": published_digest,
-                            "libr15_build_id": found.group(1).decode("ascii")})
-        for record in records:
-            self.log.event("variant_library", **record)
 
     def cleanup(self, worktree: pathlib.Path | None, signer_dir: pathlib.Path, tarball: pathlib.Path,
                 extra_file: pathlib.Path, raising: bool, arena_file: pathlib.Path | None = None) -> None:

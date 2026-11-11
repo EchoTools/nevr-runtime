@@ -45,10 +45,11 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    project's rules (ADR 0046 rule 9).
 6. A module's pinned slots are in its own `<module>_targets.h` with its own pinned test, so two module units never edit one file. The files
    every module unit edits are shared and merge in sequence: the registration table, the `combat:` key set, `hook_budget.h`,
-   `CMakeLists.txt`, `host_tests/groups/combat.cmake`, and the plugin's module list while it exists.
+   `CMakeLists.txt` and `host_tests/groups/combat.cmake`.
 7. A module's host test is a program in the `combat` group with the module's name in its own, so `just test-quest-combat <module>` finds it.
-8. An early function does not touch a slot that `libq15t.so` installs at its normal pass. The early step runs before the plugin's hooks are in,
-   so it would take the slot first and q15t would refuse it (the #2000 shape); such a module installs in the normal step, after the plugin pass.
+8. An early function does not touch a slot a plugin may hook at its normal pass. The early step runs before any plugin's hooks are in, so it would
+   take the slot first and a plugin that expects the game's function there would refuse it (the #2000 shape); such a module installs in the normal
+   step, after the plugin pass.
 9. A hook on a slot that arena's scripts also call tests `scope::SeenCombatOrLobby()` or `scope::SeenCombatMap()` (`combat_scope.h`) first and, outside a combat
    level, calls the game's function with the same arguments and does nothing else: no read of the game's data, no write, no counter, no line. The handler is
    that test and a tail call to the game's function or to a `[[gnu::noinline]]` body for the combat case, so it has no frame (check the arm64 object with

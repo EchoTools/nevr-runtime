@@ -24,7 +24,7 @@ func TestThePluginInstallsOnNoneOfTheEcSlots(t *testing.T) {
 		}
 	}
 	files, err := filepath.Glob(filepath.Join(root(t), "src/quest/plugins/q15t/src/*"))
-	if err != nil || len(files) == 0 {
+	if err != nil || (len(files) == 0 && !pluginGone(t)) {
 		t.Fatalf("no plugin sources: %v", err)
 	}
 	for _, f := range files {
@@ -53,7 +53,7 @@ func TestThePluginInstallsOnNoneOfTheEcSlots(t *testing.T) {
 			t.Errorf("%s must not exist: ec and ecfx are the runtime's", gone)
 		}
 	}
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt")
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
 	for _, name := range []string{"Q15T_EC ", "Q15T_ECFX", "Q15T_EC_DEFAULT_WORDS", " EC ECFX"} {
 		if strings.Contains(cmake, name) {
 			t.Errorf("the q15t plugin's CMakeLists.txt must not carry %s", name)

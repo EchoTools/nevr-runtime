@@ -101,7 +101,7 @@ func TestThePluginHoldsNoneOfThemAndTheDocsMoved(t *testing.T) {
 	if !exists(t, "docs/quest/combat/adr/0003-weapon-arm-new-profile.md") {
 		t.Error("the weapon-arm decision did not move to docs/quest/combat/adr")
 	}
-	plugin := read(t, "src/quest/plugins/q15t/CMakeLists.txt") + read(t, "src/quest/plugins/q15t/src/plugin.cpp")
+	plugin := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
 	for _, bad := range []string{"Q15T_T26", "Q15T_GUNCONNECT", "Q15T_AIBOTS", "GunConnectTick", "AiBotsTick", "WeaponArmTick"} {
 		if strings.Contains(plugin, bad) {
 			t.Errorf("the plugin still names %s", bad)

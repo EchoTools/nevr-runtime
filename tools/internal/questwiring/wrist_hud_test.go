@@ -1,7 +1,6 @@
 package questwiring
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -161,23 +160,20 @@ func TestThePluginHoldsNeitherSlotAndNoLongerBuildsEitherModule(t *testing.T) {
 			}
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(root(t), "src/quest/plugins/q15t/src"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
 		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
 			continue
 		}
-		code := stripComments(read(t, "src/quest/plugins/q15t/src/"+e.Name()))
+		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
 		for _, bad := range []string{"InstallHudmeter", "InstallShieldGamma", "Q15T_HUDMETER", "Q15T_SHIELDGAMMA", "0x36c6ce8", "0x36d2020"} {
 			if strings.Contains(code, bad) {
 				t.Errorf("%s names %s", e.Name(), bad)
 			}
 		}
 	}
-	cmake := read(t, "src/quest/plugins/q15t/CMakeLists.txt") + read(t, "src/quest/tests/q15t/mod/wiring.cmake")
+	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/tests/q15t/mod/wiring.cmake")
 	for _, bad := range []string{"HUDMETER", "SHIELDGAMMA", "src/hudmeter", "src/shieldgamma"} {
 		if strings.Contains(cmake, bad) {
 			t.Errorf("the plugin's CMake or its wiring test still names %s", bad)

@@ -31,7 +31,7 @@
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
-#include "quest/tests/q15t/key_hog.h"
+#include "quest/tests/key_hog.h"
 #include "quest/tests/test_check.h"
 #include "runtime/patch/powerboost_rules.h"
 
