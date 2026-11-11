@@ -89,6 +89,7 @@ set(PATCHES_SOURCES
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/orb_pause.cpp"
     "combat/rules_button.cpp"
     "combat/script_guard.cpp"
     "combat/shared_magazine.cpp"
@@ -1198,6 +1199,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
 
+    # #600: the spawn orbs' PAUSE hook and slot (runtime/combat/orb_pause.h), on a fake spawn point script.
+    add_executable(test_orb_pause tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_orb_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_orb_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_orb_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_orb_pause DISCOVERY_MODE PRE_TEST)
+
     # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
     add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp
@@ -1907,6 +1917,13 @@ if(BUILD_TESTING)
     target_include_directories(test_powerboost_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_powerboost_rules PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_powerboost_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_ecfx_rules.cpp (#2349, header-only patch/ecfx_rules.h; the Quest host test compiles the same header).
+    add_executable(test_ecfx_rules tests/test_ecfx_rules.cpp)
+    set_source_files_properties(tests/test_ecfx_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ecfx_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ecfx_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ecfx_rules DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)

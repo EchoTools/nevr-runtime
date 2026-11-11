@@ -1,6 +1,6 @@
 # Combat module `ec` and `ecfx`: the EC network client, EC's spare page, the tac-mod store and hide, NEUTRON effects
 
-Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, `ecfx.{h,cpp}`, `ecfx_core.h`; the page `src/quest/sentinel/ec_page.{h,cpp}`.
+Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, `ecfx.{h,cpp}`, `ecfx_core.h` (the drain's rules are `src/runtime/patch/ecfx_rules.h`, shared with PC); the page `src/quest/sentinel/ec_page.{h,cpp}`.
 Tests: `src/quest/tests/ec_test.cpp`, `ec_page_test.cpp` (with `ec_page_shim.cpp`, `ec_page_libr15.cpp`, `ec_page_script.cpp`, `ec_page_other.cpp`),
 `ecfx_test.cpp` (with `ecfx_wall_stub.cpp`), the `CheckRealEc` part of `got_pinned_test.cpp`, `TestExportAllowlist` and
 `TestEcPageIsAnExportedDataPage` in `tests/quest/elf_groundtruth_test.go`. Mutants: `src/quest/combat/mutants.d/ec.sh`, `ecfx.sh`.
@@ -108,8 +108,11 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
   calls up to four callbacks (`ec::OnNetTick`): ecfx and powerboost hang there. A first-time 'K' goes to `ec::OnDroneKilled`'s handler (dronekill).
 - **ecfx**: once the wall library `libac4e9374a146d3a4.so` is loaded (looked for once a second by its own thread, quietly), its four entries
   `re33_ecent_ac4e93_17900` / `_17700` / `_17b00` / `_17b60` are resolved and re-checked by `dladdr` (name and exact start) before each call; on
-  the net tick the queue is drained (one entry per ctx, the lowest kind first; BOOM is the server's and is never run; a repeated sound inside
-  3000 ms is refused; a queue not drained for over 500 ms is freed unrun), and the gate +0xe20 opens only after the first drain.
+  the net tick the queue is drained (one entry per ctx, the lowest kind first, each run as the drain reaches its slot and its slot freed after
+  it returns; BOOM is the server's and is never run; a repeated sound inside 3000 ms, a sound whose wall cannot be read, an entry of 0 or with
+  bit 2 or 3 set, and an entry that is not the wall library's for its kind are freed unrun; a queue not drained for over 500 ms is freed
+  unrun), and the gate +0xe20 opens only after the first drain. The rules are `src/runtime/patch/ecfx_rules.h`, which PC's
+  `src/runtime/combat/dronefix.cpp` drains through too, with the exact-entry check off (#2349).
 
 ## Arena
 
@@ -159,7 +162,8 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
     combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
     (48 each per process, kill 16), combat_ec_sum (every 10 s, 60 in all), combat_ec_legacy_switch (Warning)
-    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (96 in all)
+    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (the first 96),
+    combat_ecfx_lines (once: later ones are counted), combat_ecfx_sum (the counts, at most every 10 s and after 10 s quiet)
 
 ## Headset row
 
