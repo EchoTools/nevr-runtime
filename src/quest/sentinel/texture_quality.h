@@ -11,9 +11,10 @@
  * repository's Texture Resolution setting (EchoTools/echoApkPatch, by marshmallow-mia, graphics v9: native/texres/texres.c
  * kQ3W/kQ2W/kQ3H/kQ2H); nothing here measured the native size of any headset. The samples stay at two.
  *
- * Per headset. The table is chosen by the runtime's own answer to the same call: a stock width or height of at least
- * kHeadsetSplit is a Quest 3 (stock 1680x1760), below it a Quest 2 (stock 1440x1584). Very Low is about 0.8 times the
- * stock size per axis (the patch's own values: Quest 3 1344x1408, Quest 2 1152x1264, where 0.8 x 1584 would be 1267).
+ * Per headset. The sizes are the headset's profile's (headset_profile.h, ADR 0031): the identity step names the headset from its
+ * system properties once at start, and a size is the row's value for the applied level. The runtime's own answer names no
+ * headset. Very Low is about 0.8 times the stock size per axis (the patch's own values: Quest 3 1344x1408, Quest 2 1152x1264,
+ * where 0.8 x 1584 would be 1267).
  * Low is the stock size on each headset, so it answers what `stock` would answer; it is a level so that a player can
  * ask for it by name.
  *
@@ -26,6 +27,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "quest/headset_profile.h"
+
 namespace nevr_quest::texture_quality {
 
 // vrapi_GetSystemPropertyInt property ids libr15 passes at RefreshRTSize (ELF 0x1a709f4 and 0x1a70a04).
@@ -33,14 +36,6 @@ inline constexpr int kEyeWidthPropertyId = 5;
 inline constexpr int kEyeHeightPropertyId = 6;
 
 enum class Level { kStock, kVeryLow, kLow, kMedium, kHigh, kVeryHigh, kUltra };
-
-// The headset a stock size belongs to. A Quest 3's stock size is 1680x1760 and a Quest 2's is 1440x1584, so one split
-// at 1680 separates them on either axis. A size the runtime did not answer (0) is a Quest 2.
-enum class Headset { kQuest2, kQuest3 };
-inline constexpr int kHeadsetSplit = 1680;
-constexpr Headset HeadsetForStockSize(int stockSize) noexcept {
-  return stockSize >= kHeadsetSplit ? Headset::kQuest3 : Headset::kQuest2;
-}
 
 // What the key gives when the file does not set it. `stock` (no hook, the headset runtime's own size) until a Quest 2 has been
 // measured at `high` for frame time and memory (#943): the flip is this one line, and the test that pins it.
@@ -51,24 +46,14 @@ inline constexpr Level kDefaultLevel = Level::kStock;
 inline constexpr Level kFallbackLevel = Level::kStock;
 inline constexpr std::size_t kLevelCount = 7;
 
-struct EyeSize {
-  int width;
-  int height;
-};
+using EyeSize = headset_profile::EyeSize;
 
-// The size a level answers ids 5 and 6 with on a headset. `stock` has none: {0, 0}.
-constexpr EyeSize SizeFor(Level level, Headset headset) noexcept {
-  const bool quest3 = headset == Headset::kQuest3;
-  switch (level) {
-    case Level::kStock: return {0, 0};
-    case Level::kVeryLow: return quest3 ? EyeSize{1344, 1408} : EyeSize{1152, 1264};
-    case Level::kLow: return quest3 ? EyeSize{1680, 1760} : EyeSize{1440, 1584};
-    case Level::kMedium: return quest3 ? EyeSize{2376, 2568} : EyeSize{1728, 1904};
-    case Level::kHigh: return quest3 ? EyeSize{3072, 3380} : EyeSize{2016, 2224};
-    case Level::kVeryHigh: return quest3 ? EyeSize{3584, 3944} : EyeSize{2304, 2528};
-    case Level::kUltra: return quest3 ? EyeSize{4096, 4506} : EyeSize{2592, 2848};
-  }
-  return {0, 0};
+// The size a level answers ids 5 and 6 with on the headset a profile names. `stock` has none: {0, 0}. The values are the
+// profile's (headset_profile.h kQuest2Eyes, kQuest3Eyes).
+constexpr EyeSize SizeFor(Level level, const headset_profile::Profile& profile) noexcept {
+  if (level == Level::kStock) return {0, 0};
+  const std::size_t index = static_cast<std::size_t>(level);
+  return index < headset_profile::kEyeLevelCount ? profile.eye[index] : EyeSize{0, 0};
 }
 
 // ---- the in-game control (#1012) ----------------------------------------------------------------------------------------
@@ -94,11 +79,12 @@ constexpr int MenuIndexForLevel(Level level) noexcept {
   return level == Level::kStock ? kDefaultMenuIndex : static_cast<int>(level) - 1;
 }
 
-// The eye size the game is given at a level when the runtime's own answer is native: the native size for `stock`, the table's
-// for the others. Two levels that give the same pair need no rebuild between them (a `stock` that is Low on its headset).
-constexpr EyeSize EffectiveSize(Level level, EyeSize native) noexcept {
-  if (level == Level::kStock) return native;
-  return SizeFor(level, HeadsetForStockSize(native.width));
+// The eye size the game is given at a level when the runtime's own answer is native: the native size for `stock`, the profile's
+// for the others, and the native size too when no profile is known yet (the identity step has not run). Two levels that give the
+// same pair need no rebuild between them (a `stock` that is Low on its headset).
+constexpr EyeSize EffectiveSize(Level level, EyeSize native, const headset_profile::Profile* profile) noexcept {
+  if (level == Level::kStock || profile == nullptr) return native;
+  return SizeFor(level, *profile);
 }
 
 // The config.yaml word for a level (graphics.texture_quality).

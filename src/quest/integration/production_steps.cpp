@@ -34,6 +34,7 @@
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/entry_hooks.h"
 #include "quest/integration/crash_send_step.h"
+#include "quest/integration/headset_identity_step.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/libr15_attach_step.h"
@@ -490,6 +491,7 @@ class ProductionSteps final : public Steps {
   bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
   bool RegisterClockLevelsCounters() override { return nevr_quest::integration::RegisterClockLevelsCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
+  bool IdentifyHeadset() override { return nevr_quest::integration::IdentifyHeadset(); }
 
   bool AttachLibR15() override {
     const AttachStepOutcome outcome = RunAttachStep(BuildAttachOptions());

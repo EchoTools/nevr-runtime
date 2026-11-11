@@ -140,12 +140,13 @@ diagnostics:
 
 graphics:
   # Quest only. The size of the eye buffer the game renders into (per eye). One of: stock, very_low, low, medium, high,
-  # very_high, ultra (lower case, exactly). The sizes are the ones the community patch repository's Texture Resolution
-  # setting uses for the same names, chosen by headset (a Quest 2 or a Quest 3, from the suggested width): Quest 3 very_low
-  # 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944, ultra 4096x4506; Quest 2 very_low
-  # 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2 samples. This build
-  # has not measured any headset's native size. A bigger size looks sharper and costs frame time. `low` answers the
-  # headset's own size, and so does `stock`.
+  # very_high, ultra (lower case, exactly). The headset profile (src/quest/headset_profile.h) decides the sizes: the device
+  # name picks the row, hollywood a Quest 2 and eureka (not yet measured) a Quest 3, and a headset no rule names gets the
+  # Quest 2 sizes. The sizes are the ones the community patch repository's Texture Resolution setting uses for the same
+  # names: Quest 3 very_low 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944, ultra 4096x4506;
+  # Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2
+  # samples. This build has not measured any headset's native size. A bigger size looks sharper and costs frame time.
+  # `stock` answers the headset's own size; every other level answers the profile's table.
   # The game's settings menu has the same setting: a NEVR page with one control, "Texture Resolution", of the six
   # levels (Very Low to Ultra). A change there applies at the next frame, with no restart, and the game saves it. This key
   # is the level the game starts at when the player has chosen nothing; what the player saved always wins over it. The

@@ -8,6 +8,7 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "quest/headset_profile.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/mapping_perms.h"
 
@@ -16,6 +17,7 @@ namespace nevr_quest::combat::heaps {
 namespace {
 
 namespace pinned = sentinel::pinned;
+namespace headset_profile = nevr_quest::headset_profile;
 
 // The values the game reads. A reader holds the slot's pointer for the process's lifetime, so these stay valid for it: plain static
 // storage of the sentinel, which is never unloaded. A GotDataSlot refuses a value in an executable segment; .bss is not one.
@@ -129,8 +131,12 @@ ModuleResult Refused(const char* token, const char* device) noexcept {
 
 }  // namespace
 
+// The System heap is the headset profile's (quest/headset_profile.h: 512 MiB on a Quest 2); a profile with none (0) keeps the row's own
+// target (640 MiB), as every headset no rule names does.
 std::uint64_t SystemBytesFor(const char* device) noexcept {
-  return device != nullptr && std::strcmp(device, "hollywood") == 0 ? kQuest2SystemBytes : kRows[kSystemRow].target;
+  const headset_profile::Match match = headset_profile::IdentifyDevice(device != nullptr ? device : "");
+  if (match.profile->systemHeapMiB > 0) return static_cast<std::uint64_t>(match.profile->systemHeapMiB) * kMiB;
+  return kRows[kSystemRow].target;
 }
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const char* device, bool heapsOn, bool systemOn) noexcept {

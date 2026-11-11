@@ -266,6 +266,10 @@ nevr_ht_test(menu_version_label_test GROUP hooks ${_hf} "${_mv}" TIMEOUT 120 OBJ
 # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
 nevr_ht_test(texture_quality_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/texture_quality_hook_test.cpp src/quest/sentinel/texture_quality_hook.cpp)
+# The headset identity (ADR 0031): the rules on device names, the settings each profile holds against the values the code gave before
+# the table, and the identity step on a host (no property: the generic headset, one headset_profile line).
+nevr_ht_test(headset_profile_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/headset_profile_test.cpp src/quest/integration/headset_identity_step.cpp src/quest/sentinel/texture_quality_hook.cpp)
 # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
 # parse, the index-to-level map and the float truncation. No game, no hook.
 nevr_ht_test(refresh_eye_size_test GROUP hooks NOEXC INCS ${_sent} TIMEOUT 120 SRC src/quest/tests/refresh_eye_size_test.cpp)

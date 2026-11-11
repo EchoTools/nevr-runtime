@@ -147,6 +147,7 @@ void AQuest2GetsA512MibSystemHeapAndTheOthersAreUnchanged() {
   QCHECK(GameRead(1) == 512 * kMiB);
   QCHECK(GameRead(0) == 320 * kMiB && GameRead(2) == 512 * kMiB && GameRead(3) == 128 * kMiB);
   QCHECK(heaps::SystemBytesFor("hollywood") == 512 * kMiB && heaps::SystemBytesFor("eureka") == 640 * kMiB &&
+         heaps::SystemBytesFor("panther") == 640 * kMiB && heaps::SystemBytesFor("hollywood2") == 640 * kMiB &&
          heaps::SystemBytesFor("") == 640 * kMiB && heaps::SystemBytesFor(nullptr) == 640 * kMiB);
   End();
   Begin();

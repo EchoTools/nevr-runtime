@@ -35,7 +35,6 @@ namespace nevr_quest::combat::heaps {
 inline constexpr std::uint64_t kMiB = 1ULL << 20;
 inline constexpr std::size_t kRowCount = 4;
 inline constexpr std::size_t kSystemRow = 1;  // R07, the row `combat.memsys: false` leaves alone
-inline constexpr std::uint64_t kQuest2SystemBytes = 512 * kMiB;
 
 // `ldr x1,[x8]` and `ldr x0,[x8]`: the loads that read a size through its slot.
 inline constexpr std::uint32_t kLdrX1FromX8 = 0xf9400101;

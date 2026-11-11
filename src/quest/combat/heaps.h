@@ -6,7 +6,7 @@
  * game-space allocation all fail on the stock heaps (the reference build's combat patches raise them for that reason).
  *
  * What this does. Each of the four slots is pointed at a u64 of ours that holds the new size (heaps_targets.h): 320 MiB for the
- * resource heap, 640 MiB for the System heap (512 MiB on a Quest 2, the headset whose device name is `hollywood`), 512 MiB for the GPU
+ * resource heap, 640 MiB for the System heap (512 MiB on a Quest 2: the headset profile's, quest/headset_profile.h), 512 MiB for the GPU
  * heap and 128 MiB for the game space. The write goes through the hook manager's checked data slot (sentinel::GotDataSlot, ADR 0046
  * rule 2): it stores only over the exact word the loader put there, refuses a slot that holds code or sits in an executable mapping, and
  * touches no .rodata or code word. Before a row is written its reader word and its .rodata size are read and compared with the stock
@@ -25,8 +25,10 @@
  * leaves the System heap (R07) as the game has it, because the System heap and the render-target pool are one memory change
  * (memsys.h) and one switch covers both.
  *
- * The headset. The System heap's size follows the headset, read once from the device name system property (`ro.product.device`). The
- * identity step of ADR 0031 does not exist in the sentinel yet (#2037 moves this read there).
+ * The headset. The System heap's size follows the headset, read once from the device name system property (`ro.product.device`) and
+ * named by the headset profile's rules (quest/headset_profile.h, `IdentifyDevice`). The identity step of ADR 0031
+ * (integration/headset_identity_step.h) names the same profile from the same property; #2037 hands its profile to this module, so
+ * this file stops reading the property itself.
  *
  * Frequency (ADR 0038). One step per process; no hook, so nothing here runs afterwards.
  *

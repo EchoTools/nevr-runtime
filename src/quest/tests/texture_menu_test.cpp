@@ -15,6 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/headset_profile.h"
 #include "quest/sentinel/texture_menu.h"
 #include "quest/sentinel/texture_quality.h"
 #include "quest/tests/test_check.h"
@@ -23,6 +24,7 @@ namespace {
 
 namespace tm = nevr_quest::texture_menu;
 namespace tq = nevr_quest::texture_quality;
+namespace headset_profile = nevr_quest::headset_profile;
 using Json = nlohmann::json;
 
 // A menu document: a DISPLAY page of other settings, the graphics page that holds the msaa row between two others, and a page
@@ -84,17 +86,25 @@ void TheMenuLevelsAreInTheMenusOrder() {
 }
 
 void StockAndLowGiveTheSameEyeSizeOnEachHeadset() {
-  for (const tq::EyeSize native : {tq::EyeSize{1680, 1760}, tq::EyeSize{1440, 1584}}) {
-    const tq::EyeSize stock = tq::EffectiveSize(tq::Level::kStock, native);
-    const tq::EyeSize low = tq::EffectiveSize(tq::Level::kLow, native);
-    QCHECK(stock.width == native.width && stock.height == native.height);
-    QCHECK(low.width == native.width && low.height == native.height);
+  const headset_profile::Profile* const profiles[] = {&headset_profile::kQuest3, &headset_profile::kQuest2};
+  const tq::EyeSize natives[] = {tq::EyeSize{1680, 1760}, tq::EyeSize{1440, 1584}};
+  for (int i = 0; i < 2; ++i) {
+    const tq::EyeSize stock = tq::EffectiveSize(tq::Level::kStock, natives[i], profiles[i]);
+    const tq::EyeSize low = tq::EffectiveSize(tq::Level::kLow, natives[i], profiles[i]);
+    QCHECK(stock.width == natives[i].width && stock.height == natives[i].height);
+    QCHECK(low.width == natives[i].width && low.height == natives[i].height);
   }
-  // A level above Low is the table's, by the headset the native size names.
-  const tq::EyeSize q3 = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1680, 1760});
+  // A level above Low is the table of the profile the identity step set, not a table picked by the native size.
+  const tq::EyeSize q3 = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1680, 1760}, &headset_profile::kQuest3);
   QCHECK(q3.width == 3072 && q3.height == 3380);
-  const tq::EyeSize q2 = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1440, 1584});
+  const tq::EyeSize q2 = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1440, 1584}, &headset_profile::kQuest2);
   QCHECK(q2.width == 2016 && q2.height == 2224);
+  // The native size does not name the headset: a Quest 2 profile gives its table whatever the native size is, and with no
+  // profile yet the native size stands.
+  const tq::EyeSize byProfile = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1680, 1760}, &headset_profile::kQuest2);
+  QCHECK(byProfile.width == 2016 && byProfile.height == 2224);
+  const tq::EyeSize unknown = tq::EffectiveSize(tq::Level::kHigh, tq::EyeSize{1680, 1760}, nullptr);
+  QCHECK(unknown.width == 1680 && unknown.height == 1760);
 }
 
 void TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn() {

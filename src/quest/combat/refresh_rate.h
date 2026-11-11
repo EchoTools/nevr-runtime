@@ -117,7 +117,10 @@ void SetLegacyDirForTest(const char* dir) noexcept;
 // How the re-ask finds libr15 (production: the loaded image). The re-ask reads vrapi_SetDisplayRefreshRate's slot in the image this finds
 // each time it asks, so a test with a word of its own in a block of memory drives the production path. nullptr restores production.
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
-// Whether the headset is a Quest 2 (production: ro.product.device is "hollywood"). -1 restores production.
+// Whether the device name `device` (a `ro.product.device` value; nullptr reads as "") names a Quest 2: the headset profile's rules
+// (quest/headset_profile.h, IdentifyDevice) choose the Quest 2 profile for it.
+bool IsQuest2Device(const char* device) noexcept;
+// Whether the headset is a Quest 2 (production: IsQuest2Device of ro.product.device). -1 restores production.
 void SetQuest2ForTest(int quest2) noexcept;
 // The monotonic clock in seconds (nullptr restores CLOCK_MONOTONIC).
 void SetClockForTest(double (*clock)() noexcept) noexcept;

@@ -26,6 +26,7 @@
 #include "hand_flip.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "texture_menu.h"
 #include "texture_menu_hook.h"
@@ -33,6 +34,7 @@
 namespace {
 
 namespace tq = nevr_quest::texture_quality;
+namespace headset_profile = nevr_quest::headset_profile;
 namespace tm = nevr_quest::texture_menu;
 namespace hf = nevr_quest::hand_flip;
 namespace pin = sentinel::pinned;
@@ -160,6 +162,7 @@ void Reset(tq::Level configLevel = tq::Level::kLow, bool fromConfig = true) {
   g_order.clear();
   g_natW = kQ3W;
   g_natH = kQ3H;
+  tq::SetHeadsetProfile(&headset_profile::kQuest3);
   g_refreshAsks = true;
   g_seenW = g_seenH = 0;
   g_resizeRc = 0;
@@ -222,6 +225,7 @@ void TheSizesFollowTheHeadset() {
   Reset(tq::Level::kLow);
   g_natW = 1440;
   g_natH = 1584;  // a Quest 2
+  tq::SetHeadsetProfile(&headset_profile::kQuest2);
   QCHECK(Eye().first == 1440);
   tq::RequestLevel(tq::Level::kUltra, tq::RequestSource::kMenu);
   Frame();

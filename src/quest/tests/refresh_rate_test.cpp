@@ -204,6 +204,18 @@ void TheRuleFollowsItsThreeKeysAndTheHeadset() {
   QCHECK(rr::kLevelHz == 90.0f && rr::kQuest2LevelHz == 72.0f);
 }
 
+// The headset is named by the headset profile's rules (quest/headset_profile.h): "hollywood" is a Quest 2; the Quest 3 ("eureka"), a
+// device no rule names ("panther"), an empty name, a near miss and no name at all are not, so they ask the match rate.
+void TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo() {
+  QCHECK(rr::IsQuest2Device("hollywood"));
+  QCHECK(!rr::IsQuest2Device("eureka"));
+  QCHECK(!rr::IsQuest2Device("panther"));
+  QCHECK(!rr::IsQuest2Device(""));
+  QCHECK(!rr::IsQuest2Device("hollywood2"));
+  QCHECK(!rr::IsQuest2Device("Hollywood"));
+  QCHECK(!rr::IsQuest2Device(nullptr));
+}
+
 void ARequestAboveTheLevelRateInALevelIsKept() {
   rr::Rule on;
   on.on = true;
@@ -647,6 +659,7 @@ void TheProductionReaskCallsTheWordNowInTheSlot() {
 
 int main() {
   TheRuleFollowsItsThreeKeysAndTheHeadset();
+  TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo();
   ARequestAboveTheLevelRateInALevelIsKept();
   ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
   AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();

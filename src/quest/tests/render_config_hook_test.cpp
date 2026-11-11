@@ -30,6 +30,7 @@
 #include "quest/combat/combat_install.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "render_config.h"
 #include "render_config_share.h"
@@ -561,6 +562,7 @@ sentinel::GotStatus InstallNone(int) noexcept { return sentinel::GotStatus::kMod
 void ALevelThatReplacesTheSizeIsNamedWithTheRuntimesOwnAnswer() {
   Capture capture;
   ResetAll();
+  tq::SetHeadsetProfile(&nevr_quest::headset_profile::kQuest2);  // the identity step sets it at start; a level needs one
   // The texture-quality hook serves a level; its native counters hold the runtime's own answers.
   *tq::SystemPropertyIntThunk::OriginalOut() = reinterpret_cast<void*>(&FakeSysPropInt);
   QCHECK(tq::ArmForTest(tq::Level::kHigh));
