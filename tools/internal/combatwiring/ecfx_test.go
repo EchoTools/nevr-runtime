@@ -40,20 +40,128 @@ func TestWallFxDueDrainsThroughTheSharedRuleWithTheEntryCheckOff(t *testing.T) {
 		"FX_QUEUE_RVA",
 		"fx::Env env;",
 		"env.wallOf = &WallOf;",
-		"g_wall_drain.Plan(q, env, GetTickCount64(), [](const fx::Run &r) {",
+		"const ULONGLONG now = GetTickCount64();",
+		"g_wall_drain.Plan(q, env, now, [](const fx::Run &r) {",
 		"RunWallFx(reinterpret_cast<void *>(r.ctx), static_cast<uintptr_t>(r.fn));",
 		"}, &c);",
-		"if (c.refused || c.nowall) {",
-		"const unsigned line = g_wall_refusals.fetch_add(1, std::memory_order_relaxed) + 1;",
-		"if (line <= 16)",
-		"LogWarning(\"NEUTRON effects freed and not run in one drain: refused=%d",
-		"c.refused, c.nowall, line);")
+		"const bool bad = c.refused || c.nowall;",
+		"if (!bad && !g_wall_lines_pending.load(std::memory_order_relaxed)) return;",
+		"AcquireSRWLockExclusive(&g_wall_lines_lock);",
+		"g_wall_refused_total += static_cast<uint64_t>(c.refused);",
+		"g_wall_nowall_total += static_cast<uint64_t>(c.nowall);",
+		"const nevr::LineBudget::Line l = bad ? g_wall_lines.Event(now) : g_wall_lines.Flush(now);",
+		"g_wall_lines_pending.store(g_wall_lines.Pending(), std::memory_order_relaxed);",
+		"ReleaseSRWLockExclusive(&g_wall_lines_lock);",
+		"ReportWallRefusals(l, c, refused, nowall);")
 	if strings.Contains(fn, "env.entries") {
 		t.Errorf("WallFxDue sets an entry table: PC resolves no entry address, so its exact-entry check is off (#2349 D1):\n%s", fn)
 	}
 	if strings.Count(fn, "RunWallFx(") != 1 {
 		t.Errorf("WallFxDue runs an entry other than the ones the shared drain hands it:\n%s", fn)
 	}
+}
+
+// The refusal Warnings are never silenced (#2349, logging.md Rule 5): the first 16 drains each, the cap line, then the count with the
+// running totals; the budget is 16 lines and 10 s.
+func TestTheRefusalWarningsSayWhenTheyStopAndCount(t *testing.T) {
+	t.Parallel()
+	src := code(t, dronefix)
+	if !strings.Contains(src, "nevr::LineBudget g_wall_lines{16, 10000};") {
+		t.Error("the NEUTRON refusal Warnings no longer have their 16-line, 10 s budget")
+	}
+	ordered(t, "ReportWallRefusals", body(t, src, "void ReportWallRefusals("),
+		"if (l.verdict == V::kWrite)",
+		"LogWarning(\"NEUTRON effects freed and not run in one drain: refused=%d",
+		"c.refused, c.nowall, static_cast<unsigned long long>(l.total));",
+		"else if (l.verdict == V::kCapped)",
+		"later drains are counted, not logged, and the count follows at most every 10 s",
+		"static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(refused), static_cast<unsigned long long>(nowall));",
+		"else if (l.verdict == V::kCount)",
+		"since the last line, counted, not logged) refused=%llu nowall=%llu in all",
+		"static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine), static_cast<unsigned long long>(refused),")
+}
+
+// The follow update's fault Warnings, a sibling of the shape: the first 5, the cap line, then the count; flushed on every follow update,
+// the early return included, and one atomic load when there is nothing to say.
+func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
+	t.Parallel()
+	src := code(t, dronefix)
+	if !strings.Contains(src, "nevr::LineBudget g_fault_lines{5, 10000};") {
+		t.Error("the follow update's fault Warnings no longer have their 5-line, 10 s budget")
+	}
+	if strings.Contains(src, "InterlockedIncrement(&g_faults) <= 5") {
+		t.Error("the follow update's fault Warnings stop at 5 again, with no count")
+	}
+	ordered(t, "FaultLines", body(t, src, "void FaultLines("),
+		"if (!faulted && !g_fault_lines_pending.load(std::memory_order_relaxed)) return;",
+		"AcquireSRWLockExclusive(&g_fault_lines_lock);",
+		"const nevr::LineBudget::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);",
+		"g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);",
+		"ReleaseSRWLockExclusive(&g_fault_lines_lock);",
+		"if (l.verdict == V::kWrite)",
+		"LogWarning(\"follow update faulted and was contained",
+		"else if (l.verdict == V::kCapped)",
+		"later ones are counted, not logged",
+		"else if (l.verdict == V::kCount)",
+		"since the last line, counted, not logged")
+	update := body(t, src, "void __fastcall Hooked_FollowUpdate(")
+	ordered(t, "Hooked_FollowUpdate", update,
+		"Log(\"follow update skipped: no orbit target set yet (cs %p)\", (void *)cs);",
+		"FaultLines(false, cs);",
+		"return;",
+		"const bool faulted = !CallGuarded(cs);",
+		"if (faulted) InterlockedIncrement(&g_faults);",
+		"FaultLines(faulted, cs);")
+}
+
+// The Quest's ran and drain records, the other sibling: the first 96 in all, the cap record, then the count; no record path writes
+// past the budget.
+func TestTheQuestDrainRecordsSayWhenTheyStopAndCount(t *testing.T) {
+	t.Parallel()
+	src := code(t, questEcfx)
+	for _, s := range []string{"constexpr unsigned kLineCap = 96;", "nevr::LineBudget g_lineBudget{kLineCap, kLineEveryMs};", "constexpr std::uint64_t kLineEveryMs = 10000;"} {
+		if !strings.Contains(src, s) {
+			t.Errorf("%s no longer has %q", questEcfx, s)
+		}
+	}
+	if strings.Contains(src, "g_lines") {
+		t.Errorf("%s has a line counter outside the budget", questEcfx)
+	}
+	tick := body(t, src, "void TickOnce(")
+	if got := strings.Count(tick, "if (LineDue(now))"); got != 3 {
+		t.Errorf("TickOnce gates %d records on the budget, want 3 (ran, not run, drain):\n%s", got, tick)
+	}
+	if got := strings.Count(tick, "sentinel::LogFields("); got != 4 {
+		t.Errorf("TickOnce writes %d records, want 4 (the 3 the budget gates and the gate's own, once):\n%s", got, tick)
+	}
+	ordered(t, "TickOnce", tick, "}, &c);", "BudgetLine(g_lineBudget.Flush(now));")
+	ordered(t, "BudgetLine", body(t, src, "void BudgetLine("),
+		"if (l.verdict == nevr::LineBudget::Verdict::kCapped) {",
+		"\"combat_ecfx_lines\"",
+		"} else if (l.verdict == nevr::LineBudget::Verdict::kCount) {",
+		"\"combat_ecfx_sum\"")
+}
+
+// Free stores the word, then the node: the writer claims only a slot whose node is 0, so a node freed first could be claimed while
+// the old word is still there. A single-threaded test cannot see the order; this pins it.
+func TestFreeStoresTheWordBeforeTheNode(t *testing.T) {
+	t.Parallel()
+	ordered(t, "Free", body(t, code(t, "src/runtime/patch/ecfx_rules.h"), "inline void Free("),
+		"__atomic_store_n(q + 2 * i + 1, uint64_t{0}, __ATOMIC_RELEASE);",
+		"__atomic_store_n(q + 2 * i, uint64_t{0}, __ATOMIC_RELEASE);")
+}
+
+// The Quest's drain has one caller, RunTick, the single runner the net tick calls (the call site the host mutant ecfx_tick_slot holds).
+func TestTheQuestDrainHasOneCaller(t *testing.T) {
+	t.Parallel()
+	src := code(t, questEcfx)
+	if got := len(regexp.MustCompile(`\bTickOnce\(`).FindAllStringIndex(src, -1)); got != 2 {
+		t.Errorf("%s names TickOnce %d times, want 2 (its definition and RunTick's call)", questEcfx, got)
+	}
+	ordered(t, "RunTick", body(t, src, "void RunTick("),
+		"if (g_running.test_and_set(std::memory_order_acquire)) return;",
+		"TickOnce(now);",
+		"g_running.clear(std::memory_order_release);")
 }
 
 // WallOf reads [[ctx]+0x68] and returns 0, the rule's read-failure value, when the read faults (#2349 D3).
@@ -90,7 +198,7 @@ func TestTheQuestDrainsThroughTheSharedRuleWithItsEntriesFilled(t *testing.T) {
 		"Env env;",
 		"env.entries = &g_entries;",
 		"env.wallOf = &WallOf;",
-		"g_drain.Plan(Queue(), env, now, [](const Run& r) {",
+		"g_drain.Plan(Queue(), env, now, [now](const Run& r) {",
 		"if (Named(r.fn, r.kind)) {",
 		"reinterpret_cast<EntryFn>(r.fn)(reinterpret_cast<void*>(r.ctx));",
 		"}, &c);")

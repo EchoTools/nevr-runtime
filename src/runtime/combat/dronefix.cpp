@@ -43,6 +43,7 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include "runtime/patch/dronemuzzle_rules.h"  // nEVR port: the muzzle rule, shared with the Quest (#2337)
+#include "core/line_budget.h"  // nEVR port: repeated Warnings are counted, never silenced (#2349)
 #include "runtime/patch/ecfx_rules.h"  // nEVR port: NEUTRON's effects drain, shared with the Quest (#2349)
 #include <windows.h>
 #include <stdint.h>
@@ -50,7 +51,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdarg.h>
-#include <atomic>  // nEVR port: the NEUTRON refusal line's count
+#include <atomic>  // nEVR port: the Warning budgets' pending flags (#2349)
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
 namespace nevr_combat::dronefix {  // nEVR port: one namespace per file
@@ -121,6 +122,8 @@ void NoteAtHandle(uint32_t handle) {
 volatile LONG g_muzzle_shots = 0;
 volatile LONG g_skipped = 0;
 volatile LONG g_faults = 0;
+SRWLOCK g_fault_lines_lock = SRWLOCK_INIT;            // nEVR port: the fault Warnings' budget (#2349)
+nevr::LineBudget g_fault_lines{5, 10000};
 
 // One line through nEVR's host log. Debug and Info are counted apart, so a burst of Debug lines
 // never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap, and the
@@ -423,8 +426,26 @@ void RunWallFx(void *ctx, uintptr_t stub) {
 
 // nEVR port: the drain is fx::Drain::Plan with no exact-entry check (PC resolves no entry address, as EC did not, #2349 D1).
 // A word with no entry or a stray flag bit, or a sound whose wall could not be read, is freed and not run (D2, D3; EC ran
-// each inside __try); the first 16 such drains are logged, so a wall content that writes them is seen, not hidden.
-std::atomic<unsigned> g_wall_refusals{0};
+// each inside __try). A drain that freed one is a Warning: the first 16 each, then one that says the later ones are counted,
+// then the count at most every 10 s, and once no such drain has come for 10 s (nevr::LineBudget, core/line_budget.h).
+SRWLOCK g_wall_lines_lock = SRWLOCK_INIT;
+nevr::LineBudget g_wall_lines{16, 10000};
+uint64_t g_wall_refused_total = 0, g_wall_nowall_total = 0;
+std::atomic<bool> g_wall_lines_pending{false};
+
+void ReportWallRefusals(const nevr::LineBudget::Line &l, const fx::Counts &c, uint64_t refused, uint64_t nowall) {
+    using V = nevr::LineBudget::Verdict;
+    if (l.verdict == V::kWrite)
+        LogWarning("NEUTRON effects freed and not run in one drain: refused=%d (no entry or a stray flag bit) nowall=%d (a sound whose wall could not be read) drain=%llu of the first 16 logged (the wall content wrote a word its defer stub never writes, or the wall is gone)",
+                   c.refused, c.nowall, static_cast<unsigned long long>(l.total));
+    else if (l.verdict == V::kCapped)
+        LogWarning("NEUTRON effects freed and not run: drains=%llu refused=%llu nowall=%llu so far; later drains are counted, not logged, and the count follows at most every 10 s",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(refused), static_cast<unsigned long long>(nowall));
+    else if (l.verdict == V::kCount)
+        LogWarning("NEUTRON effects freed and not run: drains=%llu (%llu since the last line, counted, not logged) refused=%llu nowall=%llu in all",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine), static_cast<unsigned long long>(refused),
+                   static_cast<unsigned long long>(nowall));
+}
 
 void WallFxDue() {
     if (g_is_server) return;
@@ -432,18 +453,25 @@ void WallFxDue() {
     fx::Env env;
     env.wallOf = &WallOf;
     fx::Counts c;
+    const ULONGLONG now = GetTickCount64();
     // The stun explosion is the server's alone: its explosion is the one that stuns (with
     // none there, nobody was). Activated here too, a client it stunned crashed -- only
     // the team the NEUTRON's owner wasn't on ever did. (nEVR port: fx::Drain frees it unrun.)
-    g_wall_drain.Plan(q, env, GetTickCount64(), [](const fx::Run &r) {
+    g_wall_drain.Plan(q, env, now, [](const fx::Run &r) {
         RunWallFx(reinterpret_cast<void *>(r.ctx), static_cast<uintptr_t>(r.fn));
     }, &c);
-    if (c.refused || c.nowall) {
-        const unsigned line = g_wall_refusals.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (line <= 16)
-            LogWarning("NEUTRON effects freed and not run in one drain: refused=%d (no entry or a stray flag bit) nowall=%d (a sound whose wall could not be read) line=%u of at most 16 (the wall content wrote a word its defer stub never writes, or the wall is gone)",
-                       c.refused, c.nowall, line);
+    const bool bad = c.refused || c.nowall;
+    if (!bad && !g_wall_lines_pending.load(std::memory_order_relaxed)) return;
+    AcquireSRWLockExclusive(&g_wall_lines_lock);
+    if (bad) {
+        g_wall_refused_total += static_cast<uint64_t>(c.refused);
+        g_wall_nowall_total += static_cast<uint64_t>(c.nowall);
     }
+    const nevr::LineBudget::Line l = bad ? g_wall_lines.Event(now) : g_wall_lines.Flush(now);
+    g_wall_lines_pending.store(g_wall_lines.Pending(), std::memory_order_relaxed);
+    const uint64_t refused = g_wall_refused_total, nowall = g_wall_nowall_total;
+    ReleaseSRWLockExclusive(&g_wall_lines_lock);
+    ReportWallRefusals(l, c, refused, nowall);
 }
 
 void DeathFxDue() {
@@ -717,6 +745,30 @@ void WatchDue();
 void GrabKeyDue();
 void DroneHitsDue();
 
+// nEVR port: the follow update's fault Warnings (#2349). The first 5 faults are each a Warning, then one that says the later
+// ones are counted, then the count at most every 10 s and once none has come for 10 s (nevr::LineBudget); his `<= 5` stopped
+// without a count. With no fault and nothing pending this is one atomic load: the follow update runs every frame.
+std::atomic<bool> g_fault_lines_pending{false};
+
+void FaultLines(bool faulted, uintptr_t cs) {
+    if (!faulted && !g_fault_lines_pending.load(std::memory_order_relaxed)) return;
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_fault_lines_lock);
+    const nevr::LineBudget::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);
+    g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+    using V = nevr::LineBudget::Verdict;
+    if (l.verdict == V::kWrite)
+        LogWarning("follow update faulted and was contained (cs %p, target system %p, index %u)", (void *)cs,
+            *(void **)(cs + TARGET_BODY_SYSTEM), *(uint16_t *)(cs + 0x190));
+    else if (l.verdict == V::kCapped)
+        LogWarning("follow update faults contained: %llu so far; later ones are counted, not logged, and the count follows at most every 10 s",
+                   static_cast<unsigned long long>(l.total));
+    else if (l.verdict == V::kCount)
+        LogWarning("follow update faults contained: %llu in all (%llu since the last line, counted, not logged)",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
+}
+
 void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     if (g_drone_on) {                                             // nEVR port: the drone's per-frame work, with DRONE on
     TickFrame();
@@ -730,11 +782,12 @@ void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     if (*(uintptr_t *)(cs + TARGET_BODY_SYSTEM) == 0) {
         if (InterlockedIncrement(&g_skipped) == 1)
             Log("follow update skipped: no orbit target set yet (cs %p)", (void *)cs);
+        FaultLines(false, cs);                                    // nEVR port: a pending fault count still goes out
         return;
     }
-    if (!CallGuarded(cs) && InterlockedIncrement(&g_faults) <= 5)
-        LogWarning("follow update faulted and was contained (cs %p, target system %p, index %u)", (void *)cs,
-            *(void **)(cs + TARGET_BODY_SYSTEM), *(uint16_t *)(cs + 0x190));
+    const bool faulted = !CallGuarded(cs);
+    if (faulted) InterlockedIncrement(&g_faults);
+    FaultLines(faulted, cs);
 }
 
 // Each drone's last gun state (by actor), so the port follows it whatever the drone's

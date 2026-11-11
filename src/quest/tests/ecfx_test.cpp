@@ -398,6 +398,33 @@ static void FullTests(const char* path) {
   CHECK(calls[0] == 4, "the entry did not run for the re-entry test");
   *hook = nullptr;
 
+  // the record budget (#2349): the ran and drain records are written up to 96 in all, then one combat_ecfx_lines record says the
+  // later ones are counted, then combat_ecfx_sum carries the counts at most every 10 s, and once none has come for 10 s
+  int ticks = 0;
+  while (CountLines("\"event\":\"combat_ecfx_lines\"") == 0 && ticks < 200) {
+    QPut(0, ctx0, e2 | kBoom);
+    Tick();
+    ++ticks;
+  }
+  CHECK(CountLines("\"event\":\"combat_ecfx_lines\"") == 1 && HasLine("\"records\":97", 1), "no combat_ecfx_lines record at the 97th record");
+  CHECK(CountLines("\"event\":\"combat_ecfx_ran\"") + CountLines("\"event\":\"combat_ecfx_drain\"") == 96,
+        "the ran and drain records written: %d, want 96", CountLines("\"event\":\"combat_ecfx_ran\"") + CountLines("\"event\":\"combat_ecfx_drain\""));
+  for (int i = 0; i < 5; ++i) {  // within 10 s of the last line: counted, nothing written
+    QPut(0, ctx0, e2 | kBoom);
+    Tick();
+  }
+  CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 0 && CountLines("\"event\":\"combat_ecfx_drain\"") + CountLines("\"event\":\"combat_ecfx_ran\"") == 96,
+        "a record was written within 10 s of the cap");
+  QPut(0, ctx0, e2 | kBoom);
+  Tick(10000);  // the first record at least 10 s after the last line: the count goes out
+  CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 1 && HasLine("\"records\":103,\"since_last\":6"), "no count 10 s after the cap");
+  QPut(0, ctx0, e2 | kBoom);
+  Tick(400);
+  Tick(9992);  // quiet for 9992 ms since the last record: nothing yet
+  CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 1, "the count went out before 10 s of quiet");
+  Tick(8);  // quiet for 10 s (the next drain the 8 ms cadence lets through): the pending count is flushed
+  CHECK(CountLines("\"event\":\"combat_ecfx_sum\"") == 2 && HasLine("\"records\":104,\"since_last\":1"), "the pending count was not flushed after 10 s of quiet");
+
   // the net tick registered by ecfx drives it: find it through a recvfrom-free path is covered in ec_test; here the tick function
   // is the registered one, so draining through EcfxTickForTest is the same code
   (void)free_slots;

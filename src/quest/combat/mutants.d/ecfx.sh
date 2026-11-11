@@ -2,6 +2,7 @@
 # bent once; src/quest/tests/ecfx_test.cpp must fail on every one (the rules' mutants are also killed by PC's test_ecfx_rules).
 # Sourced by ../mutants.sh. The run judges ecfx_test (the complete wall library); ecfx_test_missing is the same program on the other library.
 C=src/runtime/patch/ecfx_rules.h
+B=src/core/line_budget.h
 F=src/quest/combat/ecfx.cpp
 runm ecfx_stale        $C "s#const bool stale = last \&\& nowMs - last > kStaleMs;#const bool stale = false;#"
 runm ecfx_stale_edge   $C "s#nowMs - last > kStaleMs#nowMs - last >= kStaleMs#"
@@ -35,5 +36,25 @@ runm ecfx_switch       $F "s#  if (!on) {#  if (!on \&\& false) {#"
 runm ecfx_needs_ec     $F "s#  } else if (!ec::Installed()) {#  } else if (false) {#"
 runm ecfx_once         $F "s#  } else if (g_installed.exchange(true)) {#  } else if (false) {#"
 runm ecfx_legacy       $F "s#  if (legacy::Present(\"neutronfx.on\")) {#  if (false) {#"
+# F2-F4: a boom uses up its node's turn (EC 445 before 450); the drain after a stale one runs; the lowest kind is looked for after the slot
+runm ecfx_boom_turn    $C "/^      ran\[nran++\] = ctx;$/d;s#^      if (kind == kBoom) {#      if (kind != kBoom) ran[nran++] = ctx;\n      if (kind == kBoom) {#"
+runm ecfx_stale_sticks $C "s#^    last = nowMs;#    if (!stale) last = nowMs;#"
+runm ecfx_best_from_0  $C "s#for (int j = i + 1; j < kSlots; ++j) {#for (int j = 0; j < kSlots; ++j) {#"
+# the record budget (#2349): the first 96 ran and drain records, the cap record, the counts at most every 10 s and after 10 s quiet
+runm ecfx_cap_96       $F "s#kLineCap = 96;#kLineCap = 95;#"
+runm ecfx_ran_ungated  $F "s#^      if (LineDue(now)) {#      if ((void)LineDue(now), true) {#"
+runm ecfx_drain_ungated $F "s#^    if (LineDue(now))\$#    if ((void)LineDue(now), true)#"
+runm ecfx_no_flush     $F "s#^  BudgetLine(g_lineBudget.Flush(now));.*##"
+runm ecfx_no_cap_line  $F "s#if (l.verdict == nevr::LineBudget::Verdict::kCapped) {#if (false) {#"
+runm ecfx_no_count_line $F "s#} else if (l.verdict == nevr::LineBudget::Verdict::kCount) {#} else if (false) {#"
+runm lb_burst_edge     $B "s#if (total_ <= burst_) return#if (total_ < burst_) return#"
+runm lb_no_cap         $B "s#if (total_ == uint64_t{burst_} + 1) return#if (false) return#"
+runm lb_every_edge     $B "s#if (nowMs - lastLine_ >= everyMs_) return#if (nowMs - lastLine_ > everyMs_) return#"
+runm lb_flush_edge     $B "s#nowMs - lastEvent_ >= everyMs_#nowMs - lastEvent_ > everyMs_#"
+runm lb_flush_always   $B "s#if (total_ > written_ \&\& nowMs#if (nowMs#"
+runm lb_written        $B "s#^    written_ = total_;##"
+runm lb_last_line      $B "s#^    lastLine_ = nowMs;##"
+runm lb_last_event     $B "s#^    lastEvent_ = nowMs;##"
+runm lb_since          $B "s#return Wrote(Verdict::kCount, nowMs, total_ - written_);\$#return Wrote(Verdict::kCount, nowMs, total_);#"
 # off by its key is counted off on the phase line (combat_install_test)
 runm ecfx_off_not_counted $F "s#  return {ok, token, !on};#  return {ok, token, false};#" quest-host-combat combat_install_test

@@ -162,7 +162,8 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
     combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
     (48 each per process, kill 16), combat_ec_sum (every 10 s, 60 in all), combat_ec_legacy_switch (Warning)
-    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (96 in all)
+    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (the first 96),
+    combat_ecfx_lines (once: later ones are counted), combat_ecfx_sum (the counts, at most every 10 s and after 10 s quiet)
 
 ## Headset row
 

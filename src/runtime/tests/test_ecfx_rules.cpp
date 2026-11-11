@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/line_budget.h"
 #include "runtime/patch/ecfx_rules.h"
 
 namespace {
@@ -129,6 +130,9 @@ TEST_F(EcfxDrain, AQueueNotDrainedForMoreThan500msIsFreedUnrun) {
   EXPECT_EQ(c.stale, 2);
   EXPECT_TRUE(Empty(0) && Empty(1));
   EXPECT_EQ(q[4], 0x300u) << "a slot still being written stays";
+  Put(0, 0x100, kE0);
+  EXPECT_EQ(Drain(6011), 1) << "the drain after a stale one runs again";
+  EXPECT_EQ(c.stale, 0);
 }
 
 TEST_F(EcfxDrain, OneSoundPerWallPer3000ms) {
@@ -153,6 +157,35 @@ TEST(EcfxRules, TheNinthWallReplacesTheOldest) {
   EXPECT_FALSE(s.Again(9, 10100));
   EXPECT_FALSE(s.Again(1, 10101)) << "the oldest wall was forgotten";
   EXPECT_TRUE(s.Again(9, 10102));
+}
+
+// EC marks the node as run before its boom check (EC 445, then 450): a boom uses up its node's turn this drain.
+TEST_F(EcfxDrain, ABoomUsesUpItsNodesTurn) {
+  Put(0, 0x100, kE2 | fx::kBoom);
+  Put(1, 0x100, kE3 | fx::kSound);
+  EXPECT_EQ(Drain(1000), 0);
+  EXPECT_EQ(c.boom, 1);
+  EXPECT_TRUE(Empty(0));
+  EXPECT_EQ(q[2], 0x100u) << "the node's sound waits for the next drain";
+  EXPECT_EQ(Drain(1010), 1);
+  EXPECT_EQ(runs[0].kind, fx::kSound);
+}
+
+// The lowest kind is looked for in the slots after this one (EC 442, j = i + 1): an earlier slot of the same node, written by a
+// running entry after the drain passed it, waits for the next drain.
+TEST_F(EcfxDrain, TheLowestKindIsLookedForAfterTheSlotOnly) {
+  Put(2, 0x100, kE0);
+  int queued = 0;
+  const int n = Drain(1000, Env(), [&](const fx::Run& r) {
+    if (r.ctx != 0x100 || queued++) return;
+    Put(0, 0x200, kE0 | fx::kCharge);  // a passed slot, node 0x200's charge
+    Put(4, 0x200, kE1 | fx::kBurst);   // a later slot, node 0x200's burst
+  });
+  ASSERT_EQ(n, 2);
+  EXPECT_EQ(runs[1].slot, 4);
+  EXPECT_EQ(runs[1].kind, fx::kBurst);
+  EXPECT_EQ(q[0], 0x200u) << "the passed slot waits";
+  EXPECT_EQ(q[1], kE0 | fx::kCharge);
 }
 
 // D2: a word the defer stub never writes is freed and not run.
@@ -233,6 +266,56 @@ TEST_F(EcfxDrain, AnEffectQueuedByARunningEntryIntoALaterSlotRunsThisDrain) {
   EXPECT_EQ(q[0], 0x300u);
   EXPECT_EQ(q[8], 0x100u);
   EXPECT_EQ(Drain(1010), 2);
+}
+
+// The Warning budget the PC drain and the follow update's faults use (core/line_budget.h): the first `burst` each, then one that says
+// the later ones are counted, then the count at most every 10 s, and once none has come for 10 s.
+TEST(LineBudget, TheFirstBurstAreEachWrittenThenOneSaysTheRestAreCounted) {
+  nevr::LineBudget b{3, 10000};
+  for (uint64_t i = 1; i <= 3; ++i) {
+    const auto l = b.Event(1000 + i);
+    EXPECT_EQ(l.verdict, nevr::LineBudget::Verdict::kWrite);
+    EXPECT_EQ(l.total, i);
+  }
+  const auto capped = b.Event(1004);
+  EXPECT_EQ(capped.verdict, nevr::LineBudget::Verdict::kCapped);
+  EXPECT_EQ(capped.total, 4u);
+  EXPECT_FALSE(b.Pending());
+  EXPECT_EQ(b.Event(1005).verdict, nevr::LineBudget::Verdict::kCounted);
+  EXPECT_TRUE(b.Pending());
+}
+
+TEST(LineBudget, TheCountGoesOutOnTheFirstEventTenSecondsAfterTheLastLine) {
+  nevr::LineBudget b{1, 10000};
+  b.Event(1000);                                                       // written
+  b.Event(1001);                                                       // capped: the last line at 1001
+  EXPECT_EQ(b.Event(11000).verdict, nevr::LineBudget::Verdict::kCounted);  // 9999 ms after the last line
+  const auto l = b.Event(11001);
+  EXPECT_EQ(l.verdict, nevr::LineBudget::Verdict::kCount);
+  EXPECT_EQ(l.total, 4u);
+  EXPECT_EQ(l.sinceLine, 2u);
+  EXPECT_FALSE(b.Pending());
+}
+
+TEST(LineBudget, AFlushWritesThePendingCountAfterTenSecondsOfQuiet) {
+  nevr::LineBudget b{1, 10000};
+  b.Event(1000);
+  b.Event(1001);
+  b.Event(2000);
+  b.Event(3000);
+  EXPECT_EQ(b.Flush(12999).verdict, nevr::LineBudget::Verdict::kCounted) << "9999 ms of quiet";
+  const auto l = b.Flush(13000);
+  EXPECT_EQ(l.verdict, nevr::LineBudget::Verdict::kCount);
+  EXPECT_EQ(l.total, 4u);
+  EXPECT_EQ(l.sinceLine, 2u);
+  EXPECT_EQ(b.Flush(30000).verdict, nevr::LineBudget::Verdict::kCounted) << "nothing pending: nothing to write";
+}
+
+TEST(LineBudget, NothingIsFlushedWhileEveryEventWasWritten) {
+  nevr::LineBudget b{16, 10000};
+  b.Event(1000);
+  EXPECT_FALSE(b.Pending());
+  EXPECT_EQ(b.Flush(50000).verdict, nevr::LineBudget::Verdict::kCounted);
 }
 
 }  // namespace
