@@ -29,7 +29,7 @@
  * Initialize builds a tree only for a combat map or the combat lobby, loaded or still loading (`Classify(game, true, ..., inFlight)`), or when the tick has
  * not shown the module a game yet (then nothing is known about the level and it builds); any other level logs `combat_bvh_tree` `skipped` with the scope
  * it found and its level, and its CBVHTree keeps the word 0, so the game's function answers for it and the page probes of a build are not paid.
- * KNOWN-WRONG #2246: the scope here is this module's own cached answer. combat_scope.h (F19) is the shared one; this module switches to it when it lands.
+ * KNOWN-WRONG #2168: the scope here is this module's own cached answer. combat_scope.h (F19, #2186) is the shared one, and this module has not switched to it yet.
  * The tick's look scans the level tables in every level, arena included, four times a second (about 20 microseconds a second on the host).
  *
  * Reads. Each plain load is backed by the game's own dereference of the same object on that path (disassembly of the stock libr15): the ray of

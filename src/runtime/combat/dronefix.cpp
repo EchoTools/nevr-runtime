@@ -35,24 +35,30 @@
 // to MuzzleTransform. Every auto-target component is the drone's, and both the server's and
 // the clients' shots go through it. Each bullet starts a frame's travel (at most BACK_MAX) behind the muzzle,
 // so it is first drawn there (see TickFrame). The first SHOT_LOG shots are logged.
+// nEVR port: MUZZLE, BACK_MAX, the frame average and the move are runtime/patch/dronemuzzle_rules.h, the one
+// definition the Quest's dronemuzzle.cpp calls too (#2337); this file keeps its clock, its pose read and its lines.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
+#include "runtime/patch/dronemuzzle_rules.h"  // nEVR port: the muzzle rule, shared with the Quest (#2337)
+#include "core/burst_then_count.h"  // nEVR port: repeated Warnings are counted, never silenced (#2349)
+#include "runtime/patch/ecfx_rules.h"  // nEVR port: NEUTRON's effects drain, shared with the Quest (#2349)
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdarg.h>
+#include <atomic>  // nEVR port: the Warning budgets' pending flags (#2349)
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
 namespace nevr_combat::dronefix {  // nEVR port: one namespace per file
 constexpr const char *kCatModule = "dronefix";  // nEVR port
 NEVR_DEFINE_PLUGIN_LOG("[DroneFix]")
 
-constexpr const char *kLogName = "DroneFix";   // names the plugin in its log-cap Warning
+constexpr const char *kLogName = "DroneFix";   // names the plugin in its log-cap Warnings
 
 namespace {
 
@@ -66,9 +72,8 @@ follow_update_fn Real_FollowUpdate = nullptr;
 constexpr uintptr_t FIRE_GET_CALL_RVA = 0xce27e3;           // in FireBulletLocal
 constexpr uintptr_t TRANSFORM_GET_RVA = 0x3c4470;           // CTransformCS::get
 constexpr uint8_t FIRE_GET_CALL_BYTES[] = { 0xe8, 0x88, 0x1c, 0x6e, 0xff, 0x0f, 0x10, 0x45, 0x40 };
-// the gun's muzzle in the drone (x, y, z; metres): fix_drone_model.py's MUZZLE
-constexpr float MUZZLE[3] = { 0.000024f, 0.075634f, 0.147283f };
-constexpr float BACK_MAX = 0.25f;                           // m a bullet may start behind the muzzle
+// nEVR port: the gun's muzzle in the drone (MUZZLE, fix_drone_model.py's) and BACK_MAX are dm::kMuzzle and dm::kBackMax
+namespace dm = nevr_dronemuzzle;
 
 constexpr uintptr_t FIRE_LOCAL_RVA = 0xce2550;              // CR15NetAutoTargetCS::FireBulletLocal
 constexpr uint8_t FIRE_LOCAL_BYTES[] = { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x53, 0x57, 0x41, 0x54 };
@@ -117,15 +122,57 @@ void NoteAtHandle(uint32_t handle) {
 volatile LONG g_muzzle_shots = 0;
 volatile LONG g_skipped = 0;
 volatile LONG g_faults = 0;
+SRWLOCK g_fault_lines_lock = SRWLOCK_INIT;            // nEVR port: the fault Warnings' budget (#2349)
+nevr::BurstThenCount g_fault_lines{5, 10000};
 
 // One line through nEVR's host log. Debug and Info are counted apart, so a burst of Debug lines
-// never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap, and the
-// first line past either cap writes one Warning that says so. A Warning or an Error is always
-// written.
+// never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap. A line past
+// either cap is counted, not written (nEVR port, #2349): the first says so in a Warning, then the
+// count follows at most every 10 s, flushed with DRONE on and at Stop (nevr::BurstThenCount with no
+// burst of its own: the cap is the burst). A Warning or an Error is always written.
 constexpr LONG kDebugCap = 5000;
 constexpr LONG kInfoCap = 20000;
 volatile LONG g_logged_debug = 0;
 volatile LONG g_logged_info = 0;
+SRWLOCK g_dropped_lock = SRWLOCK_INIT;
+nevr::BurstThenCount g_dropped_lines[2] = {{0, 10000}, {0, 10000}};  // [0] Debug, [1] Info
+std::atomic<bool> g_dropped_pending{false};
+
+void ReportDropped(bool debug, LONG cap, const nevr::BurstThenCount::Line &l) {
+    using V = nevr::BurstThenCount::Verdict;
+    char note[200];
+    if (l.verdict == V::kCapped)
+        snprintf(note, sizeof(note), "%s log cap reached: later %s lines are counted, not written (cap %ld); the count follows at most every 10 s",
+                 kLogName, debug ? "Debug" : "Info", static_cast<long>(cap));
+    else if (l.verdict == V::kCount)
+        snprintf(note, sizeof(note), "%s %s lines over the cap: %llu not written in all (%llu since the last line)", kLogName,
+                 debug ? "Debug" : "Info", static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
+    else
+        return;
+    PluginLogFields(NEVR_LOG_WARNING, note, {});
+}
+
+void DroppedLine(bool debug, LONG cap) {
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_dropped_lock);
+    const nevr::BurstThenCount::Line l = g_dropped_lines[debug ? 0 : 1].Event(now);
+    g_dropped_pending.store(g_dropped_lines[0].Pending() || g_dropped_lines[1].Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_dropped_lock);
+    ReportDropped(debug, cap, l);
+}
+
+// The dropped-line counts no line covers yet: once none has come for 10 s, or (final) at once.
+void FlushDropped(bool final) {
+    if (!final && !g_dropped_pending.load(std::memory_order_relaxed)) return;
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_dropped_lock);
+    const nevr::BurstThenCount::Line debugLine = final ? g_dropped_lines[0].Final(now) : g_dropped_lines[0].Flush(now);
+    const nevr::BurstThenCount::Line infoLine = final ? g_dropped_lines[1].Final(now) : g_dropped_lines[1].Flush(now);
+    g_dropped_pending.store(g_dropped_lines[0].Pending() || g_dropped_lines[1].Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_dropped_lock);
+    ReportDropped(true, kDebugCap, debugLine);
+    ReportDropped(false, kInfoCap, infoLine);
+}
 
 void LogLine(uint32_t level, const char *fmt, va_list args) {
     if (level < NEVR_LOG_WARNING) {
@@ -133,12 +180,7 @@ void LogLine(uint32_t level, const char *fmt, va_list args) {
         LONG cap = debug ? kDebugCap : kInfoCap;
         LONG n = InterlockedIncrement(debug ? &g_logged_debug : &g_logged_info);
         if (n > cap) {
-            if (n == cap + 1) {
-                char note[160];
-                snprintf(note, sizeof(note), "%s log cap reached: further %s lines are dropped (cap %ld)",
-                         kLogName, debug ? "Debug" : "Info", static_cast<long>(cap));
-                PluginLogFields(NEVR_LOG_WARNING, note, {});
-            }
+            DroppedLine(debug, cap);
             return;
         }
     }
@@ -195,8 +237,7 @@ void TickFrame() {
     QueryPerformanceCounter(&now);
     if (g_last_frame.QuadPart) {
         float dt = (float)(now.QuadPart - g_last_frame.QuadPart) / (float)g_qpf.QuadPart;
-        if (dt > 1.0f / 240.0f && dt < 0.1f)
-            g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f;
+        g_frame_dt = dm::FrameDt(g_frame_dt, dt);                // nEVR port: the shared rule (#2337)
     }
     g_last_frame = now;
 }
@@ -393,25 +434,16 @@ void SpawnDeathFx(void *ctx) {
 // sound; the stun explosion is left to the server), one sound per wall (both its nodes may
 // queue one), the node's own state kept round each, as for the drone's explosion.
 constexpr uintptr_t FX_QUEUE_RVA = 0x2104DA0;                    // veil_fx.FX_QUEUE_RVA
-constexpr int FX_QUEUE_LEN = 6;
 constexpr uintptr_t FX_DEFER_RVA = 0x2104E20;                    // veil_fx.FX_DEFER_RVA
-constexpr int FX_BOOM = 2, FX_SOUND = 3;
-struct WallFx { void *volatile ctx; volatile uintptr_t stub; };
-struct WallSound { uintptr_t wall; ULONGLONG at; };
-WallSound g_wall_sounds[8];
+// nEVR port: the queue's length and kinds, SoundAgain and the drain's rules are runtime/patch/ecfx_rules.h, the one
+// definition the Quest's ecfx.cpp uses too (#2349). The drain runs each entry as it reaches its slot, as EC's WallFxDue does.
+namespace fx = nevr_ecfx;
+fx::Drain g_wall_drain;                                          // the follow update only
 
-uintptr_t WallOf(void *ctx) {                                     // the wall's script data: [[ctx]+68h]
-    EC_TRY { return *(uintptr_t *)(*(uint8_t **)ctx + 0x68); } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { return 0; }
-}
-
-bool SoundAgain(uintptr_t wall, ULONGLONG now) {                 // this wall's sound already played
-    WallSound *oldest = &g_wall_sounds[0];
-    for (auto &w : g_wall_sounds) {
-        if (w.wall == wall && now - w.at < 3000) return true;
-        if (w.at < oldest->at) oldest = &w;
-    }
-    *oldest = { wall, now };
-    return false;
+uint64_t WallOf(uint64_t ctx) {                                   // the wall's script data: [[ctx]+68h]; 0 = unreadable
+    EC_TRY {
+        return *reinterpret_cast<const uint64_t *>(*reinterpret_cast<uint8_t *const *>(ctx) + 0x68);
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 void RunWallFx(void *ctx, uintptr_t stub) {
@@ -427,41 +459,54 @@ void RunWallFx(void *ctx, uintptr_t stub) {
     }
 }
 
+// nEVR port: the drain is fx::Drain::Plan with no exact-entry check (PC resolves no entry address, as EC did not, #2349 D1).
+// A word with no entry or a stray flag bit, or a sound whose wall could not be read, is freed and not run (D2, D3; EC ran
+// each inside __try). A drain that freed one is a Warning: the first 16 each, then one that says the later ones are counted,
+// then the count at most every 10 s, and once no such drain has come for 10 s (nevr::BurstThenCount, core/burst_then_count.h).
+SRWLOCK g_wall_lines_lock = SRWLOCK_INIT;
+nevr::BurstThenCount g_wall_lines{16, 10000};
+uint64_t g_wall_refused_total = 0, g_wall_nowall_total = 0;
+std::atomic<bool> g_wall_lines_pending{false};
+
+void ReportWallRefusals(const nevr::BurstThenCount::Line &l, const fx::Counts &c, uint64_t refused, uint64_t nowall) {
+    using V = nevr::BurstThenCount::Verdict;
+    if (l.verdict == V::kWrite)
+        LogWarning("NEUTRON effects freed and not run in one drain: refused=%d (no entry or a stray flag bit) nowall=%d (a sound whose wall could not be read) drain=%llu of the first 16 logged (the wall content wrote a word its defer stub never writes, or the wall is gone)",
+                   c.refused, c.nowall, static_cast<unsigned long long>(l.total));
+    else if (l.verdict == V::kCapped)
+        LogWarning("NEUTRON effects freed and not run: drains=%llu refused=%llu nowall=%llu so far; later drains are counted, not logged, and the count follows at most every 10 s",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(refused), static_cast<unsigned long long>(nowall));
+    else if (l.verdict == V::kCount)
+        LogWarning("NEUTRON effects freed and not run: drains=%llu (%llu since the last line, counted, not logged) refused=%llu nowall=%llu in all",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine), static_cast<unsigned long long>(refused),
+                   static_cast<unsigned long long>(nowall));
+}
+
 void WallFxDue() {
     if (g_is_server) return;
-    auto q = (WallFx *)((uint8_t *)GetModuleHandleW(nullptr) + FX_QUEUE_RVA);
-    void *ran[FX_QUEUE_LEN];
-    int nran = 0;
-    ULONGLONG now = GetTickCount64();
-    static ULONGLONG last = 0;
-    bool stale = last && now - last > 500;                        // not run for a while: those walls may be gone
-    last = now;
-    if (stale) {
-        for (int i = 0; i < FX_QUEUE_LEN; ++i)
-            if (q[i].ctx && q[i].stub) { q[i].stub = 0; InterlockedExchangePointer(&q[i].ctx, nullptr); }
-        return;
+    auto q = reinterpret_cast<uint64_t *>(reinterpret_cast<uint8_t *>(GetModuleHandleW(nullptr)) + FX_QUEUE_RVA);
+    fx::Env env;
+    env.wallOf = &WallOf;
+    fx::Counts c;
+    const ULONGLONG now = GetTickCount64();
+    // The stun explosion is the server's alone: its explosion is the one that stuns (with
+    // none there, nobody was). Activated here too, a client it stunned crashed -- only
+    // the team the NEUTRON's owner wasn't on ever did. (nEVR port: fx::Drain frees it unrun.)
+    g_wall_drain.Plan(q, env, now, [](const fx::Run &r) {
+        RunWallFx(reinterpret_cast<void *>(r.ctx), static_cast<uintptr_t>(r.fn));
+    }, &c);
+    const bool bad = c.refused || c.nowall;
+    if (!bad && !g_wall_lines_pending.load(std::memory_order_relaxed)) return;
+    AcquireSRWLockExclusive(&g_wall_lines_lock);
+    if (bad) {
+        g_wall_refused_total += static_cast<uint64_t>(c.refused);
+        g_wall_nowall_total += static_cast<uint64_t>(c.nowall);
     }
-    for (int i = 0; i < FX_QUEUE_LEN; ++i) {
-        void *ctx = q[i].ctx;
-        uintptr_t st = q[i].stub;
-        if (!ctx || !st) continue;                                // free, or still being written
-        bool done = false;
-        for (int k = 0; k < nran; ++k) done |= ran[k] == ctx;
-        if (done) continue;
-        int best = i;                                             // this node's lowest kind first
-        for (int j = i + 1; j < FX_QUEUE_LEN; ++j)
-            if (q[j].ctx == ctx && q[j].stub && (q[j].stub & 3) < (q[best].stub & 3)) best = j;
-        st = q[best].stub;
-        ran[nran++] = ctx;
-        int kind = (int)(st & 3);
-        // The stun explosion is the server's alone: its explosion is the one that stuns (with
-        // none there, nobody was). Activated here too, a client it stunned crashed -- only
-        // the team the NEUTRON's owner wasn't on ever did.
-        bool run = kind == FX_BOOM ? false : kind != FX_SOUND || !SoundAgain(WallOf(ctx), now);
-        if (run) RunWallFx(ctx, st & ~(uintptr_t)0xF);
-        q[best].stub = 0;
-        InterlockedExchangePointer(&q[best].ctx, nullptr);
-    }
+    const nevr::BurstThenCount::Line l = bad ? g_wall_lines.Event(now) : g_wall_lines.Flush(now);
+    g_wall_lines_pending.store(g_wall_lines.Pending(), std::memory_order_relaxed);
+    const uint64_t refused = g_wall_refused_total, nowall = g_wall_nowall_total;
+    ReleaseSRWLockExclusive(&g_wall_lines_lock);
+    ReportWallRefusals(l, c, refused, nowall);
 }
 
 void DeathFxDue() {
@@ -735,6 +780,34 @@ void WatchDue();
 void GrabKeyDue();
 void DroneHitsDue();
 
+// nEVR port: the follow update's fault Warnings (#2349). The first 5 faults are each a Warning, then one that says the later
+// ones are counted, then the count at most every 10 s and once none has come for 10 s (nevr::BurstThenCount); his `<= 5` stopped
+// without a count. The follow update runs every frame in every level, arena included, so its call sites enter FaultLines only on a
+// fault or with a count pending: with neither, the follow update pays one relaxed load and one branch.
+std::atomic<bool> g_fault_lines_pending{false};
+
+void ReportFaults(const nevr::BurstThenCount::Line &l, uintptr_t cs) {
+    using V = nevr::BurstThenCount::Verdict;
+    if (l.verdict == V::kWrite)
+        LogWarning("follow update faulted and was contained (cs %p, target system %p, index %u)", (void *)cs,
+            *(void **)(cs + TARGET_BODY_SYSTEM), *(uint16_t *)(cs + 0x190));
+    else if (l.verdict == V::kCapped)
+        LogWarning("follow update faults contained: %llu so far; later ones are counted, not logged, and the count follows at most every 10 s",
+                   static_cast<unsigned long long>(l.total));
+    else if (l.verdict == V::kCount)
+        LogWarning("follow update faults contained: %llu in all (%llu since the last line, counted, not logged)",
+                   static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
+}
+
+void FaultLines(bool faulted, uintptr_t cs) {
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_fault_lines_lock);
+    const nevr::BurstThenCount::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);
+    g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+    ReportFaults(l, cs);
+}
+
 void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     if (g_drone_on) {                                             // nEVR port: the drone's per-frame work, with DRONE on
     TickFrame();
@@ -744,15 +817,17 @@ void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     KillTestDue();
     DeathFxDue();
     WallFxDue();
+    FlushDropped(false);                                          // nEVR port: a pending dropped-line count goes out (#2349)
     }
     if (*(uintptr_t *)(cs + TARGET_BODY_SYSTEM) == 0) {
         if (InterlockedIncrement(&g_skipped) == 1)
             Log("follow update skipped: no orbit target set yet (cs %p)", (void *)cs);
+        if (g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(false, cs);  // nEVR port: a pending fault count still goes out
         return;
     }
-    if (!CallGuarded(cs) && InterlockedIncrement(&g_faults) <= 5)
-        LogWarning("follow update faulted and was contained (cs %p, target system %p, index %u)", (void *)cs,
-            *(void **)(cs + TARGET_BODY_SYSTEM), *(uint16_t *)(cs + 0x190));
+    const bool faulted = !CallGuarded(cs);
+    if (faulted) InterlockedIncrement(&g_faults);
+    if (faulted || g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(faulted, cs);
 }
 
 // Each drone's last gun state (by actor), so the port follows it whatever the drone's
@@ -975,21 +1050,13 @@ Pose *__fastcall MuzzleTransform(void *transforms, Pose *out, uint32_t index) {
     Real_TransformGet(transforms, out, index);
     const float *v = t_velocity;
     if (!v) return out;
-    float len = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if (len < 1e-4f) return out;
-    // AttackTarget's basis: Z = aim, X = (z, 0, -x) / |..|, Y = Z x X
-    float z[3] = { v[0] / len, v[1] / len, v[2] / len };
-    float xl = sqrtf(z[2] * z[2] + z[0] * z[0]);
-    float x[3] = { xl > 1e-4f ? z[2] / xl : 1.0f, 0.0f, xl > 1e-4f ? -z[0] / xl : 0.0f };
-    float y[3] = { z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0] };
-    float root[3] = { out->p[0], out->p[1], out->p[2] };
-    float dt = g_frame_dt;
-    dt = dt < 1.0f / 120.0f ? 1.0f / 120.0f : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
-    // ...but no more than BACK_MAX behind it: at 30 fps a frame is 4 m, which put the start
-    // inside the wall behind a drone backed into a corner (and through the drone itself).
-    float back = len * dt > BACK_MAX ? BACK_MAX / len : dt;
-    for (int i = 0; i < 3; ++i)
-        out->p[i] += MUZZLE[0] * x[i] + MUZZLE[1] * y[i] + MUZZLE[2] * z[i] - v[i] * back;
+    // nEVR port: AttackTarget's basis (Z = aim, X = (z, 0, -x) / |..|, Y = Z x X), the clamped frame and the
+    // BACK_MAX cap (at 30 fps a frame is 4 m, which put the start inside the wall behind a drone backed into a
+    // corner, and through the drone itself) are dm::MuzzleMove. A velocity below 1e-4 or NaN leaves the pose (#2337).
+    const float root[3] = { out->p[0], out->p[1], out->p[2] };
+    const float frame = g_frame_dt;
+    if (!dm::MuzzleMove(root, v, frame, out->p)) return out;
+    const float dt = dm::ClampDt(frame);                        // the frame time the move used, for the line below
     LONG n = InterlockedIncrement(&g_muzzle_shots);
     if (n <= SHOT_LOG)
         LogDebug("[pid %lu] shot %ld%s: root (%.3f %.3f %.3f) spawn (%.3f %.3f %.3f) velocity (%.2f %.2f %.2f) "
@@ -1677,7 +1744,7 @@ void InstallMuzzle(uintptr_t base) {
         return;
     }
     g_fire_site = site;
-    Log("drone bullets fire from the muzzle (%.4f %.4f %.4f) (+0x%llx)", MUZZLE[0], MUZZLE[1], MUZZLE[2],
+    Log("drone bullets fire from the muzzle (%.4f %.4f %.4f) (+0x%llx)", dm::kMuzzle[0], dm::kMuzzle[1], dm::kMuzzle[2],
         (unsigned long long)FIRE_GET_CALL_RVA);
 }
 
@@ -1818,7 +1885,24 @@ void Stop() {
     Real_Disable = nullptr;
     Real_EnableComp = nullptr;
     Real_Death = nullptr;
-    Log("unhooked (%ld updates skipped, %ld faults contained)", g_skipped, g_faults);
+    // nEVR port (#2349): every count no line covers yet goes out now, then the totals, in a line the Info cap cannot drop
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_fault_lines_lock);
+    ReportFaults(g_fault_lines.Final(now), 0);
+    g_fault_lines_pending.store(false, std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+    AcquireSRWLockExclusive(&g_wall_lines_lock);
+    const nevr::BurstThenCount::Line wall = g_wall_lines.Final(now);
+    g_wall_lines_pending.store(false, std::memory_order_relaxed);
+    const uint64_t refused = g_wall_refused_total, nowall = g_wall_nowall_total;
+    ReleaseSRWLockExclusive(&g_wall_lines_lock);
+    ReportWallRefusals(wall, fx::Counts(), refused, nowall);
+    FlushDropped(true);
+    char line[256];
+    snprintf(line, sizeof(line), "unhooked (%ld updates skipped, %ld faults contained, %llu NEUTRON effects refused, %llu sounds with no wall)",
+             static_cast<long>(g_skipped), static_cast<long>(g_faults), static_cast<unsigned long long>(refused),
+             static_cast<unsigned long long>(nowall));
+    PluginLogFields(NEVR_LOG_INFO, line, {});
 }
 
 }  // namespace nevr_combat::dronefix

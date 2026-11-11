@@ -34,71 +34,24 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 
 HOST_TESTS = frozenset(
     [
-        "core.host_test_0",
-        "core.host_test_1",
-        "aibots.aibots_test",
+        "core.host_test",
         "boosterpool.boosterpool_test",
-        "custctx.custctx_test",
-        "droneguard.droneguard_test",
-        "dronekill.dronekill_test",
-        "dronemuzzle.dronemuzzle_test",
-        "ec.ec_test",
-        "ec.ec_page_symbol",
-        "ec.ec_page_test",
-        "ec.ec_page_test_other",
-        "ec.ec_test_defaults",
-        "ecfx.ecfx_test",
-        "ecfx.ecfx_test_missing",
-        "ecfx.ecfx_test_defaulton",
-        "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
-        "gunconnect.gunconnect_test",
-        "hudmeter.hudmeter_test",
         "levelname.levelname_test",
-        "music.music_test",
-        "peerclamp.peerclamp_test",
-        "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
-        "sensorwd.sensorwd_test",
-        "shieldgamma.shieldgamma_test",
         "thread_word.thread_word_test",
-        "voipdrop.voipdrop_test",
-        "weapon_arm.t26_test",
         "wiring.wiring_test",
-        "wiring.wiring_tick_only",
+        "wiring.wiring_levelname_off",
+        "wiring.wiring_no_tick",
         "wiring.wiring_caps_none",
-        "wiring.wiring_caps_FXTRAIL",
-        "wiring.wiring_caps_VOIPDROP",
-        "wiring.wiring_caps_CUSTCTX",
-        "wiring.wiring_caps_ECFX",
-        "wiring.wiring_caps_HUDMETER",
-        "wiring.wiring_caps_MUSIC",
-        "wiring.wiring_caps_SENSORWD",
-        "wiring.wiring_caps_SHIELDGAMMA_1",
-        "wiring.wiring_caps_SHIELDGAMMA_2",
-        "wiring.wiring_caps_DRONEGUARD",
-        "wiring.wiring_caps_PEERCLAMP",
-        "wiring.wiring_caps_DRONEKILL",
-        "wiring.wiring_caps_DRONEMUZZLE",
-        "wiring.wiring_caps_GUNCONNECT",
-        "wiring.wiring_caps_AIBOTS",
         "wiring.wiring_caps_LEVELNAME",
-        "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_POWERBOOST_1",
-        "wiring.wiring_caps_POWERBOOST_2",
-        "wiring.wiring_caps_POWERBOOST_3",
-        "wiring.wiring_caps_EC",
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
-# checks and one for each module that keeps per-thread state (dronekill, powerboost, sensorwd)
-ARM64_OBJECTS = frozenset(
-    "dronekill dronemuzzle hudmeter music powerboost sensorwd shieldgamma".split()
-)
+# checks and one for each module that keeps per-thread state (none is left in the plugin)
+ARM64_OBJECTS = frozenset()
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
-    "mod/dronemuzzle.cmake": ["dronemuzzle.arm64_thunks"],
-    "mod/powerboost.cmake": ["powerboost.arm64_thunk_disassembly", "powerboost.pb_thunk_qemu"],
 }
 
 
@@ -202,12 +155,8 @@ class HostTestsAreTargets(unittest.TestCase):
 
         database = json.loads((self.build / "compile_commands.json").read_text(encoding="utf-8"))
         compiled = {Path(entry["file"]).name for entry in database if Path(entry["file"]).parent == Q15T}
-        # compiled only in the NDK configure: the freestanding thunk program
-        ndk_only = {"pb_thunk_qemu.cpp"}
         sources = {p.name for p in Q15T.glob("*.cpp")}
-        self.assertEqual(sorted(sources - compiled - ndk_only), [], "a .cpp here no target compiles")
-        text = (Q15T / "mod/powerboost.cmake").read_text(encoding="utf-8")
-        self.assertIn("pb_thunk_qemu.cpp", text)
+        self.assertEqual(sorted(sources - compiled), [], "a .cpp here no target compiles")
 
     def test_a_label_per_module_file(self):
         labels = {t.split(".")[0] for t in self.tests}
@@ -283,9 +232,23 @@ class NdkChecksAreRegistered(unittest.TestCase):
     def test_a_static_initializer_test_per_checked_module(self):
         found = set()
         for path in (Q15T / "mod").glob("*.cmake"):
-            for call in re.findall(r"q15t_arm64_object\(([^)]*)\)", path.read_text(encoding="utf-8")):
+            for call in re.findall(r"q15t_arm64_object\s*\(([^)]*)\)", path.read_text(encoding="utf-8")):
                 found.update(call.split())
         self.assertEqual(found, set(ARM64_OBJECTS))
+
+    def test_the_recipes_guard_sees_every_spelling_of_the_call(self):
+        # test-quest-q15t lets an empty arm64 set pass only when no mod/*.cmake calls q15t_arm64_object; CMake allows a space before the parenthesis, and a
+        # call inside an if() block is indented. The guard's grep pattern is the one in the justfile.
+        recipe = (ROOT / "justfile").read_text(encoding="utf-8")
+        found = re.search(r"grep -qE '([^']*q15t_arm64_object[^']*)' mod/\*\.cmake", recipe)
+        self.assertIsNotNone(found, "the recipe has no grep for q15t_arm64_object calls")
+        pattern = re.compile(found.group(1).replace("[[:space:]]", r"\s"))
+        for line in ("q15t_arm64_object(fxtrail)", "q15t_arm64_object (fxtrail)", "  q15t_arm64_object(fxtrail)", "\tq15t_arm64_object \t(fxtrail)"):
+            with self.subTest(line=line):
+                self.assertTrue(pattern.search(line))
+        for line in ("# q15t_arm64_object(fxtrail)", "function(q15t_arm64_object)", "set(x q15t_arm64_object(a))"):
+            with self.subTest(line=line):
+                self.assertFalse(pattern.search(line))
 
     def test_an_emulated_tls_test_per_arm64_object(self):
         # q15t_arm64_object registers it beside the static-initializer test, so every object listed above has one

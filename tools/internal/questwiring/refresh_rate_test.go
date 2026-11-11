@@ -200,7 +200,7 @@ func TestThePluginInstallsOnNeitherSlotAndTheDeletedModulesAreGone(t *testing.T)
 		}
 	}
 	if !strings.Contains(cmake, "src/combat_map.cpp") {
-		t.Error("the detector aibots and music read is not built")
+		t.Error("the detector aibots reads is not built")
 	}
 	if strings.Contains(read(t, "src/quest/plugins/q15t/src/plugin.cpp"), "hz_level") || strings.Contains(read(t, "justfile"), "hz_level") {
 		t.Error("the config marker still carries hz_level")

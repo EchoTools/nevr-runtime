@@ -24,6 +24,7 @@
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/compat/session_router.h"
 #include "runtime/tests/lobby_record_golden.h"
 
@@ -3475,6 +3476,31 @@ void TestNoRecordsWithoutTheOption() {
   QCHECK(rig.games.Sent().size() == 1);
 }
 
+// #2333: a success in another lobby clears what the last server stated (server_features.h), whatever the limiter writes, and says so;
+// a second success for the same lobby leaves the new server's statement alone. Failure caught: the gate kept across a change of
+// server (the tac mods shown on a server that never stated EchoCombat), or cleared by a repeat of the same session.
+void TestASuccessInAnotherLobbyClearsTheServersStatement() {
+  const CaseScope scope("server features cleared by a new lobby");
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = 1000;
+  nevr_server_features::ClientState& client = nevr_server_features::Client();
+  client.ClearForLobby(nevr_server_features::ClientState::Lobby{}, nullptr);
+  client.Apply(nevr_server_features::Gate{true, true});
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  QCHECK(!client.Current().echoCombat && !client.Current().medigun);
+  QCHECK(RecordLines(rig.logs, "server features cleared") ==
+         std::vector<std::string>{"[NEVR.WS] server features cleared lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 was_stated=yes "
+                                  "(the EchoCombat tac mods stay hidden until this server's lobby settings state them)"});
+  client.Apply(nevr_server_features::Gate{true, false});  // the new server's lobby settings
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  QCHECK(client.Current().echoCombat);
+  QCHECK(RecordLines(rig.logs, "server features cleared").size() == 1);
+  client.Clear();
+}
+
 // A join is a request as a find is: the answer names it as the last request, age from the join, outstanding.
 void TestAnAnswerNamesAJoinAsItsRequest() {
   const CaseScope scope("lobby records join");
@@ -3780,6 +3806,7 @@ int main() {
   TestAnswerRecordsMatchTheGoldenLines();
   TestNoRecordsWithoutTheOption();
   TestAnAnswerNamesAJoinAsItsRequest();
+  TestASuccessInAnotherLobbyClearsTheServersStatement();
   TestAnAnswerWithNoRequestAndNoPartyNamesNone();
   TestAnAnswerWithNoPartySourceSaysUnknown();
   TestAnUnknownFailureCodeNamesNoReason();
