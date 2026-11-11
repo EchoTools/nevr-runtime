@@ -36,7 +36,7 @@ host that looks only for new ones refuses it. A frozen set kept two prefixes in 
    `[NEVR.PLUGIN] plugin=<name> file=<file> loaded with deprecated Nvr exports (...)`, so an operator can see which
    plugins still need a rebuild. A plugin exporting both spellings runs the `Nevr*` ones.
 4. **Nothing in the tree is written against `Nvr` any more.** The in-repo plugins, fixtures and callers use `Nevr*`.
-   `tools/tests/test_naming.py` allows `Nvr` only as the deprecated aliases in the two headers and in the named places that
+   `Nvr` appears only as the deprecated aliases in the two headers and in the named places that
    prove the old names still load.
 
 ## Alternatives
@@ -57,7 +57,7 @@ rename land without stranding a built plugin; the Info line gives the evidence f
 Remove both when no plugin that ships or that a supported config names still exports `Nvr*`. The evidence is the loader's own
 Info line: a release cycle in which no run reports `loaded with deprecated Nvr exports` for a plugin the project distributes
 or knows of. The removal is one change: the aliases in the two headers, the fallback in both loaders, and
-`DEPRECATED_NVR_USES` in `tools/tests/test_naming.py`.
+the fixtures that prove an old plugin loads.
 
 ## Not claimed
 

@@ -92,9 +92,9 @@ load is a refusal with its own reason (`restricted search unsupported`), because
 did not cover. An unsigned-allowed run keeps the fallback.
 
 **There is one load site.** The v1 legacy runtime (`gamepatcheslegacy`), whose loader called `LoadLibraryA` on every `*.dll` in
-`plugins\` with no check, is not in the tree (#1264). `tools/tests/test_release_contract.py` asserts that no release workflow,
-`package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`, so it cannot come back into a
-release package unnoticed. The threat model puts anyone who installs their own runtime DLL outside the gate.
+`plugins\` with no check, is not in the tree (#1264). No release workflow,
+`package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`; the review keeps it out of a
+release package. The threat model puts anyone who installs their own runtime DLL outside the gate.
 
 **Dependencies, delay loads, forwarders.** N75 restricts a plugin's imports to its own directory and System32 (`LoadModule`). An
 unsigned DLL in the plugins directory that a signed plugin imports would load without a check. `VerifyPluginTree`

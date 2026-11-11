@@ -52,7 +52,7 @@ One family, three cases:
 
 Names that belong to the game or to third parties (`EchoVR::`, `BugSplat64`, `IServerLib`) keep their
 own spelling. A plugin someone else publishes is named as they name it (`NvrContentOverlay`); the names
-that docs and config examples carry are written out in `tools/tests/test_naming.py` (`THIRD_PARTY_NVR`).
+that docs and config examples carry keep that spelling.
 
 Markdown. A file name is kebab-case, except the root scaffolding names that tools and GitHub look for by
 exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, and
@@ -185,7 +185,7 @@ the name and has to make sense as one.
 
 ### What checks it
 
-`tools/tests/test_naming.py` checks:
+The review checks (no automated check reads these):
 
 - **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
   removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
@@ -208,8 +208,7 @@ the name and has to make sense as one.
 - **N-DIRS.** No directory under `src/`, `sdk/`, `installer/` or `tools/` has a `-` in its name, the two kinds above
   aside. Known breaks: `KNOWN_DIRECTORY_BREAKS`, same form.
 
-`tools/check_known_wrong.py` requires every `KNOWN-WRONG #<n>` marker to name an issue, and with `--online` an open
-one. The review checks
+Every `KNOWN-WRONG #<n>` marker names an open issue. The review checks
 what no test reads: that a word is whole, that an abbreviation passes its test, and that one component has one name
 across platforms where its files do not include a shared header.
 
@@ -228,8 +227,8 @@ compile against. Its prefix is `Nevr`: `NevrPluginInfo`, `NevrGameContext`, `Nev
 - Both plugin loaders (`src/runtime/ext/plugin_loader.cpp`, `src/quest/plugin/plugin_loader.cpp`) resolve each entry
   point's `Nevr*` export first and the `Nvr*` export when the plugin has no other, and log one Info line per plugin that
   loaded through a deprecated export (`loaded with deprecated Nvr exports`).
-- Nothing else in the tree is spelled `Nvr`. `tools/tests/test_naming.py` allows it in the two alias headers
-  and in the places written out in `DEPRECATED_NVR_USES` (the fixtures that prove an old plugin loads, and the loaders'
+- Nothing else in the tree is spelled `Nvr`. It is allowed in the two alias headers
+  and in (the fixtures that prove an old plugin loads, and the loaders'
   messages), and nowhere else.
 
 The aliases and the fallback go when no plugin that ships still exports `Nvr*`: when the Info line above has not been logged
@@ -240,7 +239,7 @@ the alternatives.
 
 - The brand spelling `nEVR` outside prose: the `-n` program name in `cmake/codesign/sign.sh` and the certificate
   subjects under `certs/` (a certificate subject is a trust identity, so changing one is the owner's call).
-  `LEGACY_SPELLINGS` in `tools/tests/test_naming.py` lists each file and token; the list only shrinks.
+  The set of such files and tokens only shrinks.
 - Exports without the `NEVR_` prefix: `TokenAuth_GetToken`, `token_auth_Init`, `platform_compat_Init`
   and their siblings (declared with `NEVR_MODULE_API`).
 - Targets whose name is the name of a file users touch or of a third party, so `nevr_` is not applied:
@@ -254,13 +253,13 @@ the alternatives.
   predates the rule) and `EchoVR::Symbols` with its nested `Social` and `Tcp` (`src/abi/symbols.h`, named after
   the game's symbol tables).
 - The game's own namespaces that `src/reconstruction` takes from the binary (`NRadEngine::CMemory`, `NRadGame`,
-  `NWriteLog`, `CVR`, ...) keep the game's spelling; `GAME_NAMESPACES` in `tools/tests/test_naming.py` lists them.
+  `NWriteLog`, `CVR`, ...) keep the game's spelling.
   A namespace the reconstruction wrote takes the rule on its last component, after the game's prefix:
   `NRadEngine::nevr_reconstruction`, `NRadEngine::NRadGame::nevr_reconstruction`.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-`tools/tests/test_naming.py` enforces the machine-checkable rules: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
+The review enforces these rules: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
 no non-canonical spelling of the project name in a file (or token) that does not already carry one
 (`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
 `nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the

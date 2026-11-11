@@ -45,7 +45,7 @@ suggested bindings ([Meta: OpenXR actions, action sets and bindings](https://dev
    decides that scope (its section H15 keeps OpenXR runtime work out of scope today). A controller fix goes into that
    reconstruction. Until then, a fix made above the boundary for players who need it now is marked at its site with the
    literal `KNOWN-WRONG #<issue>`, naming the open issue that tracks moving it into the layer, so
-   `tools/check_known_wrong.py` sees it.
+   a search for the marker finds it.
 4. **Each controller the layer binds is logged once per session**: the interaction profile path and the pose source used.
 
 ## Finding a violation

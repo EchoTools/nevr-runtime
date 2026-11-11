@@ -266,7 +266,7 @@ run; `rank 2:` a test that drives the code that ships (not a copy of it); `rank 
 either a `just verify` sensor whose FAIL line names the rule (written `verify`) or a Python check over source text.
 A rule whose Kind is `run` is checked at rank 1 or rank 2, or its cell has an `unchecked:` item naming the part
 nothing drives: a sensor that finds the call site does not show what the run does. A `source` rule may rest on
-rank 3, and `none` means nothing checks it. `tools/tests/test_n_rules_index.py` checks this form; the review checks
+rank 3, and `none` means nothing checks it. The review checks this form and
 that each Kind and rank is true.
 
 #### Boot, shutdown and crash path
@@ -685,7 +685,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
-- **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the plugin ABI's `Nevr*` prefix with its deprecated `Nvr*` aliases are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces `Nvr` as deprecated aliases only and the project-name spellings.
+- **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the plugin ABI's `Nevr*` prefix with its deprecated `Nvr*` aliases are in `docs/standards/naming.md`.
 
 ## Reverse engineering
 
@@ -1026,8 +1026,8 @@ your seat name, for example `claude-main` or `codex`.
   gets one first. No test asserts the absence of a fix: no `assertNotIn` of the fix's symbol with a message that defers
   it ("ADR 0012 step 6", "not yet"), and no smoke row that passes on "Expect none". A doc that defers a build (`not
   yet implemented`, `until ... lands`) names the issue that tracks it. When the fix lands, the marker goes with it.
-  `tools/check_known_wrong.py` checks all four in `just test-tools`; run it with `--online` when you add or remove a
-  marker, so a marker never names a closed issue.
+  The review checks all four, and that a marker never
+  names a closed issue.
 - **Public prose carries no hosting URLs, no chat quotes and no local paths.** A seat posts the issue a unit needs
   itself, without waiting, and sends Spritz the text as posted; a comment or release note is drafted and sent
   to Spritz first. A commit landed through "Landing" is not a post. The reason: seats post on the owner's account, so their words are public in his name,
