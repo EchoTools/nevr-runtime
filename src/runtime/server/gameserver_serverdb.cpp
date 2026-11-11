@@ -327,11 +327,10 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     return;
   }
 
-  sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
   uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 
   // Resolve IP addresses and apply UPnP / config overrides
-  std::string internalIp = Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr);
+  std::string internalIp = BroadcasterInternalIp(broadcaster->data->addr, "registration");
   std::string externalIp;  // empty = let UPnP fill it, or falls back to internalIp
 
   NevrUPnPConfig upnpCfg = {};

@@ -1277,7 +1277,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_server_context.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_context PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_session_unregister

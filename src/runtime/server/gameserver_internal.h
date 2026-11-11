@@ -10,6 +10,8 @@
 #include <string>
 
 #include "abi/echovr.h"
+#include "core/logging.h"
+#include "runtime/server/broadcaster_address.h"
 #include "runtime/server/gameserver.h"
 #include "runtime/hook/patching.h"  // NevrUPnPConfig
 #include "runtime/server/upnp.h"
@@ -44,9 +46,15 @@ inline std::string GuidToUuidString(const GUID& guid) {
   return buf;
 }
 
-// Helper to convert IPv4 address (uint32_t) to string
-inline std::string Ipv4ToString(uint32_t ip) {
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (ip >> 0) & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
-  return buf;
+// The broadcaster's own address as the registration's default internal IP. A slot that is not IPv4 is
+// named in a Warning with its family and address, and yields an empty string so the config/UPnP
+// override (or nothing, which the caller's registration line shows) decides the address.
+inline std::string BroadcasterInternalIp(const EchoVR::AddressInfo& slot, const char* site) {
+  const nevr_game_server::BroadcasterAddress address = nevr_game_server::ReadBroadcasterAddress(slot);
+  if (address.isIpv4) return address.text;
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.GAMESERVER] broadcaster address is not IPv4 site=%s family=%u address=%s"
+      " — registration uses the config or UPnP address, none if unset",
+      site, static_cast<unsigned>(address.family), address.text.empty() ? "none" : address.text.c_str());
+  return std::string();
 }
