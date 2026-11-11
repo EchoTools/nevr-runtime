@@ -2813,8 +2813,11 @@ verify:
     # The allowlist reads one-line declarations only (a type split over lines, or with spaces inside its template
     # arguments, would pass it), so the hook's whole text through the GameMain(gameArg); line is also pinned: any edit
     # there fails here until a reviewer has checked it adds no non-trivial local and updates the pin.
+    # The pinned text includes the landing branch's call to nevr_error_dialog::ResetAfterLongjmp(), an inline
+    # function with no locals that clears a thread_local int (log/error_dialog_depth.h). The locals in scope at the
+    # GameMain call are crashCount, gameArg and the result, all trivial (#2245).
     S515_PRE_SHA=$(sha256sum <<<"$S515_PRE_GAMEMAIN" | cut -c1-64)
-    if [ "$S515_PRE_SHA" != "5c1fe4be63ca49aacae848c47932f247b5634604d1b12b8b0141546f6d1c42f1" ]; then
+    if [ "$S515_PRE_SHA" != "ede647d23942ea5732dee07b06cbad51d279fb3e955e9fced639ae9b4b19b966" ]; then
         echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text through GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
         echo "Check that the edit leaves no local with a destructor alive across GameMain, then set the pin to that hash." >&2
         exit 1
