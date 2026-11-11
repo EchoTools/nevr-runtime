@@ -111,7 +111,7 @@ HOST_ALLOWED_IMPORTS = ("kernel32.dll", "crypt32.dll", "advapi32.dll")
 HOST_ALLOWED_IMPORT_PREFIXES = ("api-ms-win-crt-",)
 # Text that only the runtime carries: a plugin trust literal, a log tag of the bridge, a library's name.
 RUNTIME_ONLY_MARKERS = (b"NEVR-PLUGIN-TRUST ", b"[NEVR.PLUGIN]", b"[NEVR.WS]", b"ixwebsocket")
-# The unstripped host (with its debug sections) measures 0x276000; the runtime's image is 0x1c30000.
+# The host's sections other than .debug_* end at 0x1f2000; the runtime's image is 0x1c30000.
 HOST_MAX_SIZE_OF_IMAGE = 0x400000
 
 # echovr.exe sha256 b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043
@@ -136,6 +136,10 @@ _EXPORT_ROW = re.compile(r"^\s*\[\s*\d+\]\s+\+base\[\s*(\d+)\]\s+[0-9a-fA-F]+\s+
 _NAMED_IMPORT_ROW = re.compile(r"^\s*[0-9a-fA-F]+\s+<none>\s+[0-9a-fA-F]+\s+(\S+)")
 _IMAGE_BASE = re.compile(r"^ImageBase\s+([0-9a-fA-F]+)\s*$", re.MULTILINE)
 _SIZE_OF_IMAGE = re.compile(r"^SizeOfImage\s+([0-9a-fA-F]+)\s*$", re.MULTILINE)
+# `objdump -h` section row: ` 12 .debug_info   00136dcd  0000000180095000  0000000180095000  0008aa00  2**0`
+_SECTION_ROW = re.compile(r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+2\*\*\d+\s*$",
+                          re.MULTILINE)
+_PAGE = 0x1000
 
 
 class ContractError(Exception):
@@ -250,7 +254,16 @@ def parse_image(objdump_text):
     base, size = _IMAGE_BASE.search(objdump_text), _SIZE_OF_IMAGE.search(objdump_text)
     if base is None or size is None:
         raise ContractError("no ImageBase / SizeOfImage in objdump output (objdump format changed?)")
-    return {"base": int(base.group(1), 16), "size": int(size.group(1), 16)}
+    image = {"base": int(base.group(1), 16), "size": int(size.group(1), 16)}
+    # SizeOfImage counts the DWARF sections the toolchain's static libraries carry (the distribution's libstdc++.a holds
+    # DWARF for every member), and how much of libstdc++ a link pulls in moves it by megabytes; the cap is on the code
+    # and data the host maps, so it reads the end of the last section that is not .debug_*. Text with no section
+    # table (objdump -p alone) has only SizeOfImage.
+    ends = [int(vma, 16) - image["base"] + int(length, 16) for name, length, vma in _SECTION_ROW.findall(objdump_text)
+            if not name.startswith(".debug_")]
+    if ends:
+        image["loaded_size"] = -(-max(ends) // _PAGE) * _PAGE
+    return image
 
 
 def identity_in(blob, label):
@@ -277,9 +290,10 @@ def check_host_is_thin(objdump_text, blob):
     if image["base"] != HOST_IMAGE_BASE:
         raise ContractError(f"host image base is {image['base']:#x}, expected {HOST_IMAGE_BASE:#x} "
                             "(N146: the DLL the game imports keeps the stock image base)")
-    if image["size"] > HOST_MAX_SIZE_OF_IMAGE:
-        raise ContractError(f"host SizeOfImage is {image['size']:#x}, over the {HOST_MAX_SIZE_OF_IMAGE:#x} cap "
-                            "(runtime code does not belong in the host)")
+    loaded = image.get("loaded_size", image["size"])
+    if loaded > HOST_MAX_SIZE_OF_IMAGE:
+        raise ContractError(f"host SizeOfImage is {image['size']:#x} ({loaded:#x} without its .debug_* sections), "
+                            f"over the {HOST_MAX_SIZE_OF_IMAGE:#x} cap (runtime code does not belong in the host)")
     identity_in(blob, HOST_DLL)
     return image
 
@@ -332,10 +346,10 @@ def run_objdump(path):
     objdump = next((tool for tool in OBJDUMP_CANDIDATES if shutil.which(tool)), None)
     if objdump is None:
         raise ContractError(f"no objdump found (tried {', '.join(OBJDUMP_CANDIDATES)})")
-    result = subprocess.run([objdump, "-p", str(path)], capture_output=True, text=True,
+    result = subprocess.run([objdump, "-p", "-h", str(path)], capture_output=True, text=True,
                             check=False)
     if result.returncode != 0:
-        raise ContractError(f"{objdump} -p {path} exited {result.returncode}: "
+        raise ContractError(f"{objdump} -p -h {path} exited {result.returncode}: "
                             f"{result.stderr.strip()}")
     return result.stdout
 

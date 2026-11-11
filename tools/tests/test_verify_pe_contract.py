@@ -241,6 +241,21 @@ class ThinHostTest(unittest.TestCase):
         with self.assertRaisesRegex(contract.ContractError, "SizeOfImage"):
             contract.check_host_is_thin(thin_host_dump(size=0x1730000), b"MZ" + identity())
 
+    def test_debug_sections_do_not_count_toward_the_cap(self):
+        # The toolchain's static libstdc++ carries DWARF; a host of 0x1f2000 mapped bytes is thin whatever it adds.
+        sections = (" 0 .text   00188670  0000000180001000  0000000180001000  00000400  2**4\n"
+                    " 1 .reloc  000017ac  00000001801f0000  00000001801f0000  00000800  2**2\n"
+                    " 2 .debug_info 007455fc  0000000180203000  0000000180203000  00000c00  2**0\n")
+        dump = thin_host_dump(size=0xdd2000) + sections
+        image = contract.check_host_is_thin(dump, b"MZ" + identity())
+        self.assertEqual(image["loaded_size"], 0x1f2000)
+
+    def test_a_big_code_section_still_fails_with_a_section_table(self):
+        sections = (" 0 .text   01500000  0000000180001000  0000000180001000  00000400  2**4\n"
+                    " 1 .debug_info 00001000  0000000181501000  0000000181501000  00000c00  2**0\n")
+        with self.assertRaisesRegex(contract.ContractError, "without its .debug_"):
+            contract.check_host_is_thin(thin_host_dump(size=0x1502000) + sections, b"MZ" + identity())
+
     def test_the_host_is_linked_at_the_image_base_the_game_imports_it_at(self):
         # N146: the DLL the game imports stays at the stock image base, so the game's graphics DLLs load.
         for base in (RUNTIME_BASE, 0x140000000, 0x10000000):
