@@ -983,8 +983,7 @@ void GameServerLib::ProcessPendingReconnect() {
   // Resolve IP the same way as initial registration: prefer UPnP/config external IP,
   // fall back to raw socket address. The "internal_ip_address" protobuf field is a
   // legacy misnomer — ServerDB expects the public-facing IP here.
-  std::string internalIp = Ipv4ToString(
-      reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr)->sin_addr.S_un.S_addr);
+  std::string internalIp = BroadcasterInternalIp(broadcaster->data->addr, "re-registration");
   std::string externalIp;
   uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 

@@ -61,7 +61,6 @@ struct SessionState {
   uint64_t serverId = 0;
   EchoVR::SymbolId regionId = 0;
   EchoVR::SymbolId versionLock = 0;
-  sockaddr_in gameServerAddr = {};
   uint32_t defaultTimeStepUsecs = 0;
 
   void Reset();

@@ -38,7 +38,6 @@ void SessionState::Reset() {
   serverId = 0;
   regionId = 0;
   versionLock = 0;
-  gameServerAddr = {};
   defaultTimeStepUsecs = 0;
 }
 

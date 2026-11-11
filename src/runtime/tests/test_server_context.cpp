@@ -7,6 +7,7 @@
 // the life of the process. Every test below mutates the fake lobby AFTER
 // Initialize and asserts the accessors see the mutation.
 #include "runtime/server/server_context.h"
+#include "runtime/server/broadcaster_address.h"
 
 #include <gtest/gtest.h>
 
@@ -721,4 +722,51 @@ TEST(ServerContextLobbySettings, TheEndSessionHandlerRunsWithNoContextLockHeld) 
 
   EXPECT_NE(seen, nevr_game_server::ServerState::Uninitialized);
   EXPECT_TRUE(fixture.context.GetLobbySettings().present);  // the handler's own write survives
+}
+
+// #568 unit A4: registration reads the broadcaster's address slot by family.
+namespace {
+
+EchoVR::AddressInfo SlotWith(const void* bytes, size_t n) {
+  EchoVR::AddressInfo slot{};
+  std::memcpy(slot.raw, bytes, n);
+  return slot;
+}
+
+}  // namespace
+
+TEST(BroadcasterAddress, Ipv4SlotReadsAsDottedQuad) {
+  sockaddr_in sin{};
+  sin.sin_family = AF_INET;
+  sin.sin_port = htons(6792);
+  sin.sin_addr.S_un.S_addr = htonl(0xC0A80107);  // 192.168.1.7
+  const auto address = nevr_game_server::ReadBroadcasterAddress(SlotWith(&sin, sizeof(sin)));
+  EXPECT_TRUE(address.isIpv4);
+  EXPECT_EQ(address.family, AF_INET);
+  EXPECT_EQ(address.text, "192.168.1.7");
+}
+
+TEST(BroadcasterAddress, Ipv6SlotIsNotReadAsIpv4AndIsNamed) {
+  sockaddr_in6 sin6{};
+  sin6.sin6_family = AF_INET6;
+  ASSERT_EQ(inet_pton(AF_INET6, "2001:db8::1", &sin6.sin6_addr), 1);
+  const auto address = nevr_game_server::ReadBroadcasterAddress(SlotWith(&sin6, sizeof(sin6)));
+  EXPECT_FALSE(address.isIpv4);
+  EXPECT_EQ(address.family, 23);
+  EXPECT_EQ(address.text, "2001:db8::1");
+}
+
+TEST(BroadcasterAddress, UnknownFamilyReportsFamilyAndRawBytes) {
+  uint8_t bytes[18] = {99, 0, 0xAB, 0xCD};
+  const auto address = nevr_game_server::ReadBroadcasterAddress(SlotWith(bytes, sizeof(bytes)));
+  EXPECT_FALSE(address.isIpv4);
+  EXPECT_EQ(address.family, 99);
+  EXPECT_EQ(address.text, "abcd0000000000000000000000000000");
+}
+
+TEST(BroadcasterAddress, ZeroSlotIsNotIpv4) {
+  const auto address = nevr_game_server::ReadBroadcasterAddress(EchoVR::AddressInfo{});
+  EXPECT_FALSE(address.isIpv4);
+  EXPECT_EQ(address.family, 0);
+  EXPECT_TRUE(address.text.empty());
 }
