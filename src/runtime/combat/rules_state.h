@@ -8,6 +8,9 @@
 // computes it at run time; the image guard makes the build the supported one). The fields the script hooks use:
 //  +0x00, +0x04  starting scores, blue and orange (float points; 0 is the stock 0; the game-mode script's publish nodes
 //                write them, the capture point hooks read them)
+//  +0x08         T, the RULES page's two time rows as one MM:SS value in seconds (float; set when its bits as an int32 are
+//                above 0; the time page hooks write it)
+//  +0x0C         the capture time, T mod 60 (float; the time page hooks write it, VeilNet reads it)
 //  +0x14..+0x16  station cells shown per gear type (u8 each; VeilNet writes, the station hooks read)
 //  +0x2D         POINT RATE shown (u8, quarters: 4 is x1, 0 not set; VeilNet writes, the point rate hook reads)
 //  +0x2E         PAUSE shown (u8: 0 off, 1 paused, 2 the 5 s resume countdown; VeilNet writes, on server and client)
@@ -23,6 +26,8 @@ namespace nevr_combat::rules {
 inline constexpr std::uintptr_t kMailboxRva = 0x2104ec0;
 inline constexpr std::uint32_t kBlueStartScore = 0x00;
 inline constexpr std::uint32_t kOrangeStartScore = 0x04;
+inline constexpr std::uint32_t kRoundTotal = 0x08;
+inline constexpr std::uint32_t kCaptureTime = 0x0C;
 inline constexpr std::uint32_t kStationCells = 0x14;
 inline constexpr std::uint32_t kPointRate = 0x2d;
 inline constexpr std::uint32_t kPausedShown = 0x2e;
@@ -50,6 +55,16 @@ class RulesState {
     if (m_ == nullptr) return;
     *reinterpret_cast<volatile float*>(m_ + kBlueStartScore) = blue;
     *reinterpret_cast<volatile float*>(m_ + kOrangeStartScore) = orange;
+  }
+  /// T, and whether it is set: its bits as an int32 above 0, as his `cmp dword [T], 0; jg` reads it.
+  float RoundTotal() const { return m_ != nullptr ? *reinterpret_cast<const volatile float*>(m_ + kRoundTotal) : 0.0f; }
+  bool RoundTotalSet() const {
+    return m_ != nullptr && *reinterpret_cast<const volatile std::int32_t*>(m_ + kRoundTotal) > 0;
+  }
+  void SetRoundTime(float total, float capture) const {
+    if (m_ == nullptr) return;
+    *reinterpret_cast<volatile float*>(m_ + kRoundTotal) = total;
+    *reinterpret_cast<volatile float*>(m_ + kCaptureTime) = capture;
   }
   const volatile std::uint8_t* StationCells() const { return m_ != nullptr ? m_ + kStationCells : nullptr; }
 

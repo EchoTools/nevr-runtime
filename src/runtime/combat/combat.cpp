@@ -14,6 +14,7 @@
 #include "runtime/combat/balance_merge.h"
 #include "runtime/combat/balance_values.h"
 #include "runtime/combat/capture_scores.h"
+#include "runtime/combat/capture_time.h"
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
 #include "runtime/combat/clock_pause.h"
@@ -186,6 +187,7 @@ void Install(std::uintptr_t gameBase, bool isServer) {
       clock_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       point_rate::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       capture_scores::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      capture_time::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
