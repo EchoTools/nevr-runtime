@@ -337,25 +337,29 @@ A component that initializes silently is a component whose failure is
 undetectable. Every `Init()` function SHALL log at entry and exit, with
 the exit log including success/failure and any relevant state.
 
-### Rule 4: Remote text and response bodies are not log fields
+### Rule 4: Remote text and response bodies are not log fields, except what this rule names
 
 HTTP response bodies, JSON parser exception text, protobuf error messages,
 WebSocket close/error reasons, and callback exception text can echo secrets or
 user supplied content. Do not log these values, even at Debug. Keep the
 operational signal by logging numeric status/error codes, bounded byte counts,
-retry counts, and stable event markers. A URL is logged whole, through
-`UrlForDiagnostics` (userinfo, query and fragment included; control characters
-are written as %XX so one URL is one line). A network address that parsed
-(an IP, a port, an endpoint of them) is a value and is logged as it is. Text
-from a peer that did not parse, such as an endpoint the decoder refused, is raw
-remote text: it is logged through `nevr_remote_text::Escape`
-(`src/core/remote_text.h`) as a quoted value (Rule 15): at most 64 bytes of it,
-inside double quotes, each non-printable byte, each backslash and each double
-quote written as `\xNN`, so the text cannot end its own field or start another,
-with its full length beside it (`endpoint_len=<n>`, so a cut value says so).
-Preserve the original
-response and request bytes for protocol handling; this rule changes diagnostics
-only.
+retry counts, and stable event markers. Three things are logged as values:
+
+- A URL is logged whole, through `UrlForDiagnostics` (userinfo, query and
+  fragment included; control characters are written as %XX so one URL is one
+  line).
+- A network address that parsed (an IP, a port, an endpoint of them) is logged
+  as it is.
+- A peer's endpoint or lobby id that did not parse, which the operator needs to
+  see why a session success was refused, is logged through
+  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value
+  (Rule 15): at most 64 bytes of it, inside double quotes, each non-printable
+  byte, each backslash and each double quote written as `\xNN`, so the text
+  cannot end its own field or start another, with its full length beside it
+  (`endpoint_len=<n>`, `lobby_len=<n>`, so a cut value says so).
+
+Any other text from a peer stays out of the log. Preserve the original response
+and request bytes for protocol handling; this rule changes diagnostics only.
 
 ### Rule 5: Noise is a defect
 

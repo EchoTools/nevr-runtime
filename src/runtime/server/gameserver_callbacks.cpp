@@ -202,9 +202,10 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
 
     case gameservice::v1::Envelope::kLobbySessionSuccessV5: {
       const auto& sessionSuccess = envelope.lobby_session_success_v5();
+      const std::string shownLobby = nevr_remote_text::Escape(sessionSuccess.lobby_id());
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s, game_mode=0x%llX",
-          sessionSuccess.lobby_id().c_str(),
+          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s lobby_len=%zu, game_mode=0x%llX",
+          shownLobby.c_str(), sessionSuccess.lobby_id().size(),
           static_cast<unsigned long long>(sessionSuccess.game_mode()));
 
       SessionState state = self->GetContext().GetSessionState();
@@ -218,12 +219,12 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       std::string failureReason;
       if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch,
                                                       &failureReason)) {
-        const std::string shownLobby = nevr_remote_text::Escape(sessionSuccess.lobby_id());
         const std::string shownEndpoint = nevr_remote_text::Escape(sessionSuccess.endpoint());
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 lobby=%s reason=%s endpoint=%s"
-            " endpoint_len=%zu — the session success was not delivered to the game",
-            shownLobby.c_str(), failureReason.c_str(), shownEndpoint.c_str(), sessionSuccess.endpoint().size());
+            "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 lobby=%s lobby_len=%zu reason=%s"
+            " endpoint=%s endpoint_len=%zu — the session success was not delivered to the game",
+            shownLobby.c_str(), sessionSuccess.lobby_id().size(), failureReason.c_str(), shownEndpoint.c_str(),
+            sessionSuccess.endpoint().size());
       }
       break;
     }

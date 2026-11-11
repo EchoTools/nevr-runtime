@@ -184,8 +184,10 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("msg->errorInfo.reason.c_str()", telemetry)
         # Unparsed remote text reaches the session-success line only through nevr_remote_text::Escape.
         self.assertNotIn("sessionSuccess.endpoint().c_str()", gameserver)
-        self.assertNotIn("sessionSuccess.lobby_id().c_str(), failureReason", gameserver)
-        self.assertIn("nevr_remote_text::Escape(sessionSuccess.endpoint())", gameserver)
+        block = gameserver.split("case gameservice::v1::Envelope::kLobbySessionSuccessV5:", 1)[1].split("case gameservice", 1)[0]
+        self.assertNotIn("lobby_id().c_str()", block)
+        self.assertIn("nevr_remote_text::Escape(sessionSuccess.lobby_id())", block)
+        self.assertIn("nevr_remote_text::Escape(sessionSuccess.endpoint())", block)
 
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()

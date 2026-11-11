@@ -280,15 +280,17 @@ TEST(MessagesEndpoint, RefusalsNameTheFieldTheReasonAndTheEndpoint) {
     const char* endpoint;
     const char* reason;
     const char* field;
+    const char* family;
   };
   const Case cases[] = {
-      {"[2001:db8::1]:[2001:db8::1]:6792", "reason=not_ipv4", "field=internal"},
-      {"10.0.0.1:[2001:db8::1]:6792", "reason=not_ipv4", "field=external"},
-      {"2001:db8::1:2001:db8::2:6792", "reason=not_ipv4", "field=endpoint"},
-      {"not-an-ip:203.0.113.9:6721", "reason=bad_address", "field=internal"},
-      {"10.0.0.1:nope:6721", "reason=bad_address", "field=external"},
-      {"malformed-endpoint", "reason=bad_address", "field=endpoint"},
-      {"10.0.0.1:203.0.113.9:65536", "reason=bad_port", "field=port"},
+      {"[2001:db8::1]:[2001:db8::1]:6792", "reason=not_ipv4", "field=internal", "family=ipv6"},
+      {"10.0.0.1:[2001:db8::1]:6792", "reason=not_ipv4", "field=external", "family=ipv6"},
+      {"2001:db8::1:2001:db8::2:6792", "reason=not_ipv4", "field=endpoint", "family=ipv6"},
+      {"not-an-ip:203.0.113.9:6721", "reason=bad_address", "field=internal", "family=unknown"},
+      {"10.0.0.1:nope:6721", "reason=bad_address", "field=external", "family=unknown"},
+      {"malformed-endpoint", "reason=bad_address", "field=endpoint", "family=unknown"},
+      {"10.0.0.1:203.0.113.9:65536", "reason=bad_port", "field=port", "family=ipv4"},
+      {"[2001:db8::1:x:80", "reason=bad_address", "field=endpoint", "family=unknown"},
   };
   for (const Case& c : cases) {
     ScopedCapturedLog capture;
@@ -297,6 +299,7 @@ TEST(MessagesEndpoint, RefusalsNameTheFieldTheReasonAndTheEndpoint) {
     EXPECT_FALSE(ParseEndpoint(c.endpoint, ip1, ip2, port)) << c.endpoint;
     EXPECT_NE(CapturedLog().find(c.reason), std::string::npos) << c.endpoint << " log: " << CapturedLog();
     EXPECT_NE(CapturedLog().find(c.field), std::string::npos) << c.endpoint << " log: " << CapturedLog();
+    EXPECT_NE(CapturedLog().find(c.family), std::string::npos) << c.endpoint << " log: " << CapturedLog();
     EXPECT_NE(CapturedLog().find(std::string("endpoint=\"") + c.endpoint + "\""), std::string::npos)
         << c.endpoint << " log: " << CapturedLog();
   }
@@ -378,6 +381,26 @@ TEST(MessagesEncoding, SessionSuccessWithBadEncoderSettingsNamesTheReason) {
   EXPECT_EQ(reason, "bad_encoder_settings");
 }
 
+TEST(MessagesEncoding, SessionSuccessWithAMalformedLobbyOrGroupIdNamesWhich) {
+  ScopedGameLogger logger;
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_game_mode(1);
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  message.set_server_encoder_flags(MakeEncoderFlags());
+  message.set_client_encoder_flags(MakeEncoderFlags());
+  std::string reason;
+  message.set_lobby_id("not-a-uuid");
+  EXPECT_EQ(EncodeLobbySessionSuccessV5(message, &reason).size(), 0U);
+  EXPECT_EQ(reason, "bad_lobby_id");
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id("not-a-uuid");
+  reason.clear();
+  EXPECT_EQ(EncodeLobbySessionSuccessV5(message, &reason).size(), 0U);
+  EXPECT_EQ(reason, "bad_group_id");
+}
+
 TEST(MessagesEndpoint, AValidEndpointWritesNoLine) {
   ScopedCapturedLog capture;
   uint32_t ip1 = 0, ip2 = 0;
@@ -386,7 +409,10 @@ TEST(MessagesEndpoint, AValidEndpointWritesNoLine) {
   EXPECT_EQ(CapturedLog(), "");
 }
 
-TEST(MessagesEndpoint, ADroppedSessionSuccessSaysWhichLobbyAndWhy) {
+// What this drives is the reason out-parameter of ApplyLobbySessionSuccess. The caller's Warning (lobby=, reason=,
+// endpoint=) is in gameserver_callbacks.cpp, which no test binary compiles; tools/tests/test_release_contract.py
+// checks its source text.
+TEST(MessagesEndpoint, ADroppedSessionSuccessReportsTheReasonToItsCaller) {
   ScopedCapturedLog capture;
   gameservice::v1::SNSLobbySessionSuccessV5Message message;
   message.set_game_mode(1);
