@@ -174,12 +174,20 @@ def noncanonical(text):
 # Component names, file roles and placement (docs/standards/naming.md). Each check finds its breaks on the tracked tree
 # and compares them with a known-breaks list: a break that is not listed fails, and so does a listed entry that breaks
 # nothing (its message says to delete it). The lists carry KNOWN-WRONG #2363 and only shrink; the rename that fixes an
-# entry deletes it. An entry may be a glob where the rule allows one.
+# entry deletes it.
 NAME_EXCLUDED_PREFIXES = ("extern/",)  # a vendored submodule path, not a name of ours
 DIRECTORY_ROOTS = ("src", "sdk", "installer", "tools")
 # A vcpkg overlay port and a Go command keep the name an outside tool gives them (docs/standards/naming.md).
 OUTSIDE_THE_DIRECTORY_RULE = ("src/quest/vcpkg-overlay-ports/", "tools/cmd/")
 QUEST_RULES_INCLUDE = re.compile(r'#\s*include\s*"(runtime/[^"]*_rules\.h)"')
+# A word that names a platform; a stem carries none after its first word (docs/standards/naming.md, "File roles").
+PLATFORM_WORDS = frozenset({"quest", "win", "pc", "android"})
+# N-RULES-HOME's allowed exception: a shared rules header whose Quest half is another component's file, because both
+# platforms put its hook in that file. Not a break, so it carries no known-wrong marker; an entry whose header no
+# longer needs it fails the test. Rules stem -> the Quest stem that holds its hook, and why.
+RULES_HOME_SHARED_HOOK = {
+    "lobby_failure_message": ("lobby_full_backoff", "its hook is the lobby-full hook of lobby_full_backoff"),
+}
 KNOWN_COLLISIONS = frozenset({
     "src/quest/combat: table_step (file) ~ tablestep (file)",  # KNOWN-WRONG #2363
     "tools: package-release (dir) ~ package_release (file)",  # KNOWN-WRONG #2363
@@ -194,25 +202,26 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/quest/combat/mutants.d/bvh_core.sh",  # KNOWN-WRONG #2363
     "src/quest/combat/powerboost_core.h",  # KNOWN-WRONG #2363
     "src/quest/combat/powerboost_thunk.inc",  # KNOWN-WRONG #2363
+    "src/quest/diag/hwdump_android.cpp",  # KNOWN-WRONG #2363
+    "src/quest/diag/hwdump_android.h",  # KNOWN-WRONG #2363
     "src/quest/invite/invite_transport_quest.cpp",  # KNOWN-WRONG #2363
     "src/quest/invite/invite_transport_quest.h",  # KNOWN-WRONG #2363
     "src/quest/invite/join_game_quest.cpp",  # KNOWN-WRONG #2363
     "src/quest/invite/join_game_quest.h",  # KNOWN-WRONG #2363
     "src/quest/invite/ui_text_quest.cpp",  # KNOWN-WRONG #2363
     "src/quest/invite/ui_text_quest.h",  # KNOWN-WRONG #2363
-    "src/quest/login/login_thunk.h",  # KNOWN-WRONG #2363
-    "src/quest/sentinel/callback_thunk.h",  # KNOWN-WRONG #2363
     "src/quest/sentinel/crash_report_quest.cpp",  # KNOWN-WRONG #2363
     "src/quest/sentinel/crash_report_quest.h",  # KNOWN-WRONG #2363
-    "src/quest/tests/compile_fail/fake_thunk.cpp",  # KNOWN-WRONG #2363
-    "src/quest/tests/compile_fail/row_fake_thunk.cpp",  # KNOWN-WRONG #2363
-    "src/reconstruction/r15/wwise_symbol_bucket_count_thunk.cpp",  # KNOWN-WRONG #2363
-    "src/runtime/hook/export_trace_thunk.cpp",  # KNOWN-WRONG #2363
-    "src/runtime/hook/export_trace_thunk.h",  # KNOWN-WRONG #2363
+    "src/quest/tests/crash_report_quest_test.cpp",  # KNOWN-WRONG #2363
+    "src/quest/tests/invite_join_quest_test.cpp",  # KNOWN-WRONG #2363
+    "src/quest/tests/invite_transport_quest_test.cpp",  # KNOWN-WRONG #2363
+    "src/quest/tests/pb_thunk_qemu.cpp",  # KNOWN-WRONG #2363
     "src/runtime/lifecycle/crash_first_win.cpp",  # KNOWN-WRONG #2363
     "src/runtime/lifecycle/crash_first_win.h",  # KNOWN-WRONG #2363
     "src/runtime/lifecycle/crash_report_win.cpp",  # KNOWN-WRONG #2363
     "src/runtime/lifecycle/crash_report_win.h",  # KNOWN-WRONG #2363
+    "src/runtime/lifecycle/crash_report_win_common.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/lifecycle/crash_report_win_common.h",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_arena_round_time.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_arena_rules_hook.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_asset_cache.cpp",  # KNOWN-WRONG #2363
@@ -400,7 +409,6 @@ KNOWN_RULES_HOME_BREAKS = frozenset({
     "src/runtime/patch/ec_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/ecfx_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/equipment_refire_rules.h: no non-test file under src/quest/ is named equipment_refire",  # KNOWN-WRONG #2363
-    "src/runtime/patch/lobby_failure_message_rules.h: no non-test file under src/quest/ is named lobby_failure_message",  # KNOWN-WRONG #2363: its hook is the lobby-full hook of lobby_full_backoff
     "src/runtime/patch/powerboost_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/splash_skip_rules.h: no non-test file under src/quest/ is named splash_skip",  # KNOWN-WRONG #2363
 })
@@ -455,17 +463,21 @@ def collisions(paths):
             for (directory, _), members in groups.items() if len(members) > 1}
 
 def role_breaks(paths):
-    """N-ROLES: a stem the file-role rules forbid, or a C++ file under src/ named test_<stem>.cpp."""
+    """N-ROLES, under src/: a `_core` stem; a `.inc` (or its `.want` frame check) whose stem ends in `_thunk`; a
+    platform word after a stem's first word; a C++ file named test_<stem>.cpp; a `<stem>_qemu.cpp` whose stem has no
+    `<stem>.cpp` or `<stem>_entry.inc`."""
+    source = [p for p in paths if p.startswith("src/")]
+    runs = {pathlib.PurePosixPath(p).name for p in source}
     breaks = set()
-    for path in paths:
-        if not path.startswith("src/"):
-            continue
+    for path in source:
         pure = pathlib.PurePosixPath(path)
         stem = pure.stem
-        if (stem.endswith(("_core", "_thunk"))
-                or (path.startswith("src/quest/") and stem.endswith("_quest"))
-                or (path.startswith("src/runtime/") and stem.endswith(("_win", "_pc")))
-                or (pure.name.startswith("test_") and pure.suffix == ".cpp")):
+        qemu_of = stem[:-len("_qemu")] if stem.endswith("_qemu") and pure.suffix == ".cpp" else None
+        if (stem.endswith("_core")
+                or (stem.endswith("_thunk") and pure.suffix in (".inc", ".want"))
+                or PLATFORM_WORDS & set(stem.split("_")[1:])
+                or (pure.name.startswith("test_") and pure.suffix == ".cpp")
+                or (qemu_of is not None and f"{qemu_of}.cpp" not in runs and f"{qemu_of}_entry.inc" not in runs)):
             breaks.add(path)
     return breaks
 
@@ -473,9 +485,12 @@ def is_test_file(path):
     pure = pathlib.PurePosixPath(path)
     return "tests" in pure.parts or pure.name.startswith("test_") or pure.stem.endswith("_test")
 
-def rules_home_breaks(paths, texts):
+def rules_home_breaks(paths, texts, shared_hook=None):
     """N-RULES-HOME: a `_rules.h` that src/quest includes needs a non-test PC includer in its own directory under
-    src/runtime, and a non-test file under src/quest/ named for it."""
+    src/runtime, and a non-test file under src/quest/ named for it, or, for a stem in `shared_hook`, the file named
+    there. Returns the breaks and the `shared_hook` stems that were used."""
+    shared_hook = shared_hook or {}
+    used = set()
     included = set()
     for path in paths:
         if path.startswith("src/quest/"):
@@ -491,9 +506,13 @@ def rules_home_breaks(paths, texts):
         if not any(p.startswith("src/runtime/") and pathlib.PurePosixPath(p).parent.as_posix() == directory
                    and not is_test_file(p) and include.search(texts.get(p, "")) for p in paths):
             breaks.add(f"{header}: no non-test file in {directory}/ includes it")
-        if stem not in quest_stems:
-            breaks.add(f"{header}: no non-test file under src/quest/ is named {stem}")
-    return breaks
+        if stem in quest_stems:
+            continue
+        if stem in shared_hook and shared_hook[stem][0] in quest_stems:
+            used.add(stem)
+            continue
+        breaks.add(f"{header}: no non-test file under src/quest/ is named {stem}")
+    return breaks, used
 
 def directory_breaks(paths):
     """N-DIRS: a directory under DIRECTORY_ROOTS with a `-` in its name, the overlay ports and Go commands aside."""
@@ -788,11 +807,15 @@ class NamingTest(unittest.TestCase):
 
     def test_n_rules_home_each_quest_rules_header_has_a_pc_includer_and_a_quest_half(self):
         paths = tree_paths()
-        unlisted, stale = unlisted_and_stale(rules_home_breaks(paths, tree_texts(paths)), KNOWN_RULES_HOME_BREAKS)
+        found, used = rules_home_breaks(paths, tree_texts(paths), RULES_HOME_SHARED_HOOK)
+        unlisted, stale = unlisted_and_stale(found, KNOWN_RULES_HOME_BREAKS)
         self.assertEqual(unlisted, [], "N-RULES-HOME: a _rules.h that src/quest includes needs a non-test file in its "
                          "directory under src/runtime that includes it, and a non-test file under src/quest/ named "
                          "for it (docs/standards/naming.md)")
         self.assertEqual(stale, [], "N-RULES-HOME: a KNOWN_RULES_HOME_BREAKS entry no longer breaks the rule; delete it")
+        self.assertEqual(sorted(set(RULES_HOME_SHARED_HOOK) - used), [], "N-RULES-HOME: a RULES_HOME_SHARED_HOOK "
+                         "entry is no longer needed (its header is not included from src/quest, has a Quest file of "
+                         "its own name, or the file it names is gone); delete it")
 
     def test_n_dirs_no_directory_under_the_source_roots_has_a_hyphen(self):
         unlisted, stale = unlisted_and_stale(directory_breaks(tree_paths()), KNOWN_DIRECTORY_BREAKS)
@@ -816,8 +839,15 @@ class NamingTest(unittest.TestCase):
                          {"tools: package-release (dir) ~ package_release (file)"})
         self.assertEqual(role_breaks(["src/runtime/patch/x_core.h", "src/quest/a/b_quest.cpp",
                                       "src/runtime/tests/test_x.cpp", "src/quest/a/c_test.cpp",
-                                      "src/runtime/patch/z_quest.h", "src/quest/a/d_win.cpp"]),
-                         {"src/runtime/patch/x_core.h", "src/quest/a/b_quest.cpp", "src/runtime/tests/test_x.cpp"})
+                                      "src/runtime/patch/z_quest.h", "src/quest/a/d_win.cpp",
+                                      "src/quest/a/hw_android_common.h", "src/quest/a/quest_config.h",
+                                      "src/quest/a/e_thunk.inc", "src/quest/a/check/e_thunk.want",
+                                      "src/quest/a/callback_thunk.h",
+                                      "src/quest/tests/m_qemu.cpp", "src/quest/a/m_entry.inc",
+                                      "src/quest/tests/pb_qemu.cpp", "src/quest/tests/run_qemu.sh"]),
+                         {"src/runtime/patch/x_core.h", "src/quest/a/b_quest.cpp", "src/runtime/tests/test_x.cpp",
+                          "src/runtime/patch/z_quest.h", "src/quest/a/d_win.cpp", "src/quest/a/hw_android_common.h",
+                          "src/quest/a/e_thunk.inc", "src/quest/a/check/e_thunk.want", "src/quest/tests/pb_qemu.cpp"})
         self.assertEqual(directory_breaks(["src/modules/token-auth/a.cpp",
                                            "src/quest/vcpkg-overlay-ports/yaml-cpp/a.cpp",
                                            "tools/cmd/content-pack-build/main.go"]),
@@ -826,12 +856,25 @@ class NamingTest(unittest.TestCase):
                                             "src/quest/c/x.cpp"],
                                            {"src/quest/c/x.cpp": '#include "runtime/patch/x_rules.h"\n',
                                             "src/runtime/patch/x.cpp": '#include "runtime/patch/x_rules.h"\n'}),
-                         set())
+                         (set(), set()))
+        shared = {"w": ("v", "w's hook is v's")}
+        w_tree = ["src/runtime/patch/w_rules.h", "src/runtime/patch/v.cpp", "src/quest/c/v.cpp"]
+        w_texts = {"src/quest/c/v.cpp": '#include "runtime/patch/w_rules.h"\n',
+                   "src/runtime/patch/v.cpp": '#include "runtime/patch/w_rules.h"\n'}
+        self.assertEqual(rules_home_breaks(w_tree, w_texts, shared), (set(), {"w"}))
+        self.assertEqual(rules_home_breaks(w_tree, w_texts),
+                         ({"src/runtime/patch/w_rules.h: no non-test file under src/quest/ is named w"}, set()))
+        # The file the exception names is gone: the header breaks the rule and the exception is unused.
+        u_tree = ["src/runtime/patch/w_rules.h", "src/runtime/patch/v.cpp", "src/quest/c/u.cpp"]
+        u_texts = {"src/quest/c/u.cpp": '#include "runtime/patch/w_rules.h"\n',
+                   "src/runtime/patch/v.cpp": '#include "runtime/patch/w_rules.h"\n'}
+        self.assertEqual(rules_home_breaks(u_tree, u_texts, shared),
+                         ({"src/runtime/patch/w_rules.h: no non-test file under src/quest/ is named w"}, set()))
         self.assertEqual(rules_home_breaks(["src/runtime/patch/y_rules.h", "src/quest/c/y.cpp",
                                             "src/runtime/patch/test_y.cpp"],
                                            {"src/quest/c/y.cpp": '#include "runtime/patch/y_rules.h"\n',
                                             "src/runtime/patch/test_y.cpp": '#include "runtime/patch/y_rules.h"\n'}),
-                         {"src/runtime/patch/y_rules.h: no non-test file in src/runtime/patch/ includes it"})
+                         ({"src/runtime/patch/y_rules.h: no non-test file in src/runtime/patch/ includes it"}, set()))
         self.assertEqual(unlisted_and_stale({"x"}, {"y"}), (["x"], ["y"]))
         self.assertEqual(combat_names(["src/quest/combat/bvh.h", "src/quest/combat/bvh_targets.h",
                                        "src/quest/combat/bvh_core.h", "src/quest/combat/mutants.d/bvh_2.sh",

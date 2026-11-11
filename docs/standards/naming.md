@@ -56,7 +56,7 @@ that docs and config examples carry are written out in `tools/tests/test_naming.
 
 Markdown. A file name is kebab-case, except the root scaffolding names that tools and GitHub look for by
 exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, and
-the like) and the date prefixes and ADR numbers already in the tree and a component's doc, which carries the component's name exactly (see "Directories"). A heading is a descriptive phrase in
+the like), the date prefixes and ADR numbers already in the tree, and a component's doc, which carries the component's name exactly (see "Directories"). A heading is a descriptive phrase in
 sentence case, as in `docs/standards/` and `docs/adr/` (an ADR's H1 is `ADR NNNN: <phrase>`).
 
 ## The read contract at the top of an ADR
@@ -127,8 +127,8 @@ events and its config key, so a grep for the name finds all of it.
   in place.
 - A config key that a released `vX.Y.Z` tag reads is renamed only with a former-key step: the old key is no longer
   read, and finding it writes one Warning that names the new key and says the old value was not applied, the same rule
-  ADR 0046 rule 4 sets for a former switch file. The step goes with the rename; an issue marked `KNOWN-WRONG` tracks
-  its removal.
+  ADR 0046 rule 4 sets for a former switch file. The step goes with the rename, and its removal is tracked by an issue
+  that a `KNOWN-WRONG #<issue>` marker at the old key names.
 - Two names in one directory MUST NOT be equal once case, `_` and `-` are ignored (`table_step.cpp` beside
   `tablestep.cpp`, `tools/package-release/` beside `tools/package_release.py`): each reads as a typo of the other. Files
   that share a stem and differ in extension (`music.h`, `music.cpp`) are one name.
@@ -153,12 +153,14 @@ the name and has to make sense as one.
   each has to be part of a name that says what the file holds.
 - `_entry.inc` is the only suffix for an assembly entry. `_thunk.inc` is not a role suffix (`thunk` is the manager's
   C++ wrapper, `callback_thunk.h`).
-- A file MUST NOT carry the platform in its stem (`_quest`, `_win`, `_pc`, `_android`): the directory names the
-  platform, and includes are path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of
-  one component. A suffix that names a binary format or a binary's role (`_pe`, `_elf`, `_host`) is a word, not a
-  platform.
+- A file MUST NOT carry the platform in its stem after the stem's first word (`ui_text_quest`, `crash_report_win_common`,
+  `hwdump_android`; the words `quest`, `win`, `pc`, `android`): the directory names the platform, and includes are
+  path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one component. A stem
+  whose first word is a platform word (`quest_config`, `android_main`) names a thing of that platform, not one half of
+  a component, and is left to review. A suffix that names a binary format or a binary's role (`_pe`, `_elf`, `_host`)
+  is a word, not a platform.
 - A test is named for the stem it tests. A C++ test is `<stem>_test.cpp`; a freestanding qemu test is
-  `<stem>_qemu.cpp`; a Python test is `test_<stem>.py` and a Go test `<stem>_test.go`, as their test runners require.
+  `<stem>_qemu.cpp`, where `<stem>` is the stem of a file the test runs (its `<stem>.cpp` or `<stem>_entry.inc`); a Python test is `test_<stem>.py` and a Go test `<stem>_test.go`, as their test runners require.
 
 ### Placement
 
@@ -188,10 +190,10 @@ the name and has to make sense as one.
 - **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
   removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
   only shrinks, and an entry that no longer collides fails the test until it is removed.
-- **N-ROLES.** No stem ends in `_core` or `_thunk` in `src/`; no stem under `src/quest/` ends in `_quest` and none under
-  `src/runtime/` ends in `_win` or `_pc`; no C++ file under `src/` is named `test_<stem>.cpp`. Known breaks:
-  `KNOWN_ROLE_BREAKS`, same form; an entry MAY be a glob (`src/runtime/tests/test_*.cpp`), so one marker covers a
-  directory that a single rename unit fixes.
+- **N-ROLES.** Under `src/`: no stem ends in `_core`; no `.inc` file, and no frame check (`.want`) of one, has a stem
+  that ends in `_thunk`; no stem has `quest`, `win`, `pc` or `android` as a word after its first; no C++ file is named
+  `test_<stem>.cpp`; and every `<stem>_qemu.cpp` names a stem that has a `<stem>.cpp` or a `<stem>_entry.inc` in the
+  tree. Known breaks: `KNOWN_ROLE_BREAKS`, same form, one entry per file.
 - **N-COMBAT.** Every file in `src/quest/combat/`, `src/quest/combat/mutants.d/`, `src/quest/combat/check/` and
   `docs/quest/combat/` (its `adr/` aside, and the scaffolding names `CMakeLists.txt`, `README.md`, `mutants.sh`) has a stem that is a name in `COMBAT_NAMES` (the components and the area's infrastructure), optionally with a
   role suffix from the table (or, for a mutant file, `_<n>`). A new module is added to `COMBAT_NAMES` in the change
@@ -199,12 +201,15 @@ the name and has to make sense as one.
   today, each marked `KNOWN-WRONG #<issue>`; the rename table of that issue gives each one's proposed name.
 - **N-RULES-HOME.** Every `src/runtime/**/<x>_rules.h` that a file under `src/quest/` includes has a non-test file under
   `src/runtime/` that includes it in the same directory, and a non-test file under `src/quest/` whose stem is `<x>`.
-  A component whose hook is shared with another component's file on both platforms is listed with the
-  reason (`lobby_failure_message`: its hook is the lobby-full hook of `lobby_full_backoff`). Known breaks: same form.
+  A component whose hook is shared with another component's file on both platforms has no Quest file of its own
+  name; it is listed in `RULES_HOME_SHARED_HOOK` with that file and the reason (`lobby_failure_message`: its hook is
+  the lobby-full hook of `lobby_full_backoff`). That list is an allowed exception, not a break: its entries carry no
+  `KNOWN-WRONG` marker, and an entry whose header no longer needs it fails the test. Known breaks: same form.
 - **N-DIRS.** No directory under `src/`, `sdk/`, `installer/` or `tools/` has a `-` in its name, the two kinds above
-  aside. Known breaks: `KNOWN_DIR_BREAKS`, same form.
+  aside. Known breaks: `KNOWN_DIRECTORY_BREAKS`, same form.
 
-`tools/check_known_wrong.py` already requires every `KNOWN-WRONG #<n>` marker to name an open issue. The review checks
+`tools/check_known_wrong.py` requires every `KNOWN-WRONG #<n>` marker to name an issue, and with `--online` an open
+one. The review checks
 what no test reads: that a word is whole, that an abbreviation passes its test, and that one component has one name
 across platforms where its files do not include a shared header.
 
