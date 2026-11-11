@@ -820,4 +820,31 @@ constexpr uintptr_t SPINWAIT_WAIT_FOR_VALUE = 0x1500ED8;
 /// Global spin iteration limit read by CSpinWait::WaitForValue
 constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 
+// ============================================================================
+// Level-load state the join hold reads (validated, not hooked; docs/reference/join-hold.md)
+// ============================================================================
+
+/// Address: CncaGameSpace::LoadLevel (0x1404FE050, 2322 bytes). The name is ReVault's record for this function (source:
+/// imported); the reconstruction row for it is marked stale in ReVault. The binary has no symbol for it.
+/// Logs "[LEVELLOAD] Loading level '%s'" (string 0x1417207A0, code reference 0x1404FE0F4) and
+/// "[LEVELLOAD] Finished loading level '%s' in %llu ms" (string 0x1417207F8, code reference 0x1404FE8E6), both inside it.
+/// Called by the game-space init fiber step at 0x14050B390.
+constexpr uintptr_t CNCAGAMESPACE_LOAD_LEVEL = 0x4FE050;
+
+/// Address: NRadEngine::CGameLevelResource::Enable (0x1404ED4B0, 1422 bytes). The name is a reconstruction row at
+/// confidence M ("[Quest: confirmed]"); the binary has no symbol for it.
+/// Logs "[LEVELLOAD] Enabling level '%s'" (string 0x141720928, code reference 0x1404ED4FD).
+/// Its only recorded caller is EnableGameSpace (0x1404EF130).
+constexpr uintptr_t CGAMELEVELRESOURCE_ENABLE = 0x4ED4B0;
+
+/// Address: CR15NetGame::EnableGameSpaces (0x140161940, 947 bytes). The binary has no symbol for it: the name is the
+/// Quest symbol of the function that matches it structurally (an inference; docs/reference/join-hold.md).
+/// The function logs no line of its own. It writes the lobby owner flag "user[%llu]|spawned" (string
+/// 0x1416DB338, code reference 0x140161C16 inside it). Its only code reference is the queue thunk 0x14013C660 (a jump
+/// to this address), which CR15NetGame::SetGameState pushes when the NetGame enters state 9 ("in game").
+/// Its return is the level-set-complete marker the join hold uses (a chosen point; docs/reference/join-hold.md).
+/// EnableGameSpace (0x1404EF130) calls Enable only for the entry of the sorted array at Game+0x1F90 whose key matches
+/// the gamespace's value at +0x58.
+constexpr uintptr_t CR15NETGAME_ENABLE_GAME_SPACES = 0x161940;
+
 }  // namespace nevr_patch_addresses
