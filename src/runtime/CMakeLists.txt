@@ -1341,15 +1341,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main nevr_core ws2_32)
     gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
 
+    # #2374: test_registration_answer.cpp (the refusal and close-before-answer lines) rides in this executable.
     add_executable(test_session_unregister
       tests/test_session_unregister.cpp
+      tests/test_registration_answer.cpp
       server/session_unregister.cpp
       server/server_context.cpp
       server/protobuf_transport.cpp
       server/websocket_client.cpp
       server/websocket_frame.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_session_unregister.cpp server/session_unregister.cpp server/server_context.cpp
+    set_source_files_properties(tests/test_session_unregister.cpp tests/test_registration_answer.cpp server/session_unregister.cpp server/server_context.cpp
       server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_session_unregister PRIVATE NEVR_TEST_HOOKS)

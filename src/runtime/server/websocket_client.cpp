@@ -157,6 +157,8 @@ VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallb
 
 VOID WebSocketClient::SetReceiveObserver(MessageCallback callback) { receiveObserver_ = callback; }
 
+VOID WebSocketClient::SetCloseObserver(CloseCallback callback) { closeObserver_ = std::move(callback); }
+
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
 VOID WebSocketClient::SetBearerTokenRefresher(BearerTokenRefresher refresher) {
@@ -231,6 +233,8 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
     case ix::WebSocketMessageType::Open:
       if (s_wsHasConnectedOnce) ++s_wsReconnectCount;
       s_wsHasConnectedOnce = true;
+      openedAt_ = std::chrono::steady_clock::now();
+      opened_ = true;
       Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Connected to ServerDB reconnect_count=%u", s_wsReconnectCount);
       connected_.store(true);
       FlushPendingMessages();
@@ -246,6 +250,13 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
         Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
       }
       connected_.store(false);
+      if (opened_) {
+        opened_ = false;
+        if (closeObserver_) {
+          const auto openFor = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - openedAt_);
+          closeObserver_(static_cast<int>(msg->closeInfo.code), static_cast<uint64_t>(openFor.count()));
+        }
+      }
       break;
 
     case ix::WebSocketMessageType::Error:
