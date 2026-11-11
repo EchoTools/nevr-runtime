@@ -11,8 +11,8 @@ import (
 
 func TestTheTwoModulesAreNormalRowsAfterTheRefreshRateAndTheBoosterNeedsLevelname(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname}`)
-	before(t, table, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname}`, `Module{"boosterpool", nullptr, &BoosterPoolNormal}`)
+	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd}`)
+	before(t, table, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd}`, `Module{"boosterpool", nullptr, &BoosterPoolNormal, nullptr, nullptr, &boosterpool::NoteEnd}`)
 	rows := body(t, table, "ModuleResult BoosterPoolNormal()")
 	if !strings.Contains(rows, "levelname::Installed()") || !strings.Contains(rows, "g_config.levelname.on") {
 		t.Errorf("the booster pool's row does not ask for levelname's install and the key: %s", rows)
