@@ -1062,8 +1062,6 @@ void TheBotsRowTellsTheModuleWhetherThisIsADevelopmentBuild() {
   rmdir(dir);
 }
 
-// The five modules of #2187 switched off by their key are off, not failed: each alone, then all five. The phase line counts them in `off`
-// and nowhere else, and names each one `off`.
 // The bullet-velocity guard (#1737 row 031) switched off by its key is off, not failed, and its row reads the key the configuration step set.
 void TheBulletVelocityGuardSwitchedOffByItsKeyIsCountedOff() {
   nevr_quest::combat::bullet_velocity_guard::ResetForTest();
@@ -1085,6 +1083,8 @@ void TheBulletVelocityGuardSwitchedOffByItsKeyIsCountedOff() {
   Done();
 }
 
+// The five modules of #2187 switched off by their key are off, not failed: each alone, then all five. The phase line counts them in `off`
+// and nowhere else, and names each one `off`.
 void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
   struct Case {
     const char* name;

@@ -30,9 +30,18 @@ at 0x210ccc4 (the three words of `bullet_velocity_guard_targets.h`, which the in
 `bullet_velocity_guard_pinned_test` checks against the store file). A zero vector gives 1/0 and a NaN direction; a non-finite component gives a
 non-finite one.
 
-The velocity is the fifth argument (x4, `const C3Vector&`). FireBulletLocal (ELF 0x210bff8) passes its own velocity argument there, by address,
-with the bullet's spawn record in x2, its transform in x3, two zero words in w5 and w6 and a float from its weapon record in s0 (the libr15
-reconstruction of FireBulletLocal, VA 0x220bff8, its call at 0x220c2a0).
+The velocity is the fifth argument (x4, `const C3Vector&`). At FireBulletLocal's call (ELF 0x210c2a0, VA 0x220c2a0) x4 is the address of
+FireBulletLocal's own by-value velocity parameter (`C3Vector dir`, arriving in s0..s2 and spilled to its stack): `&dir`, with the bullet's handle
+in w1, its spawn record in x2, the record's transform in x3, two zero words in w5 and w6 and the float at its weapon record's +0x70 in s0
+(the libr15 reconstruction of `CR15NetAutoTargetCS::FireBulletLocal`, VA 0x220bff8). FireBulletLocal reads `dir` and never writes it between its
+entry and that call.
+
+The guard and dronemuzzle see the same vector. dronemuzzle's continuation acts only on that one call (its entry compares the return address with
+FireBulletLocal's, ELF 0x210c2a4), and skips on dronekill's shot velocity, which dronekill copies from the same by-value parameter on entry to
+FireBulletLocal and passes on unchanged (`FireInScope` in `src/quest/combat/dronekill.cpp`: `ShotFrame frame{velocity, remote}`, then
+`real(cs, handle, velocity, remote)`). So when the guard skips FireBullet on that call, the continuation's own test skips too, and it never writes
+to a record FireBullet did not fill. A future hook that changed the velocity between FireBulletLocal's entry and its FireBullet call would break
+that agreement; none exists in this tree.
 
 The rule (`nevr_combat::bullet_velocity_guard::Skips`): skip when the vector is null, when x² + y² + z² is not above 1e-6f (|v| at most about 1e-3 m/s: the float 1e-3f squared is just above 1e-6f, so a speed of exactly 1e-3f passes), or when
 that sum is not finite (a NaN or infinite component, or an overflow). A skipped call returns 0 without calling FireBullet; every other call reaches
