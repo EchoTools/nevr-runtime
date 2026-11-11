@@ -3,6 +3,8 @@
 // lock, the upload count or the queue lock pointer, and those words lie in .bss; each direct bl reaches the function pinned for it;
 // each call on the path from CEngine::Resize reaches a PLT stub whose JUMP_SLOT names the pinned callee; every named function is
 // its .dynsym symbol's address.
+// The reads the doc leans on beyond the lock and the count: the kind of each destroy, the gctx and currframe words both waits read,
+// the two early returns that skip a wait, and the five calls FlushGPU makes between its lock release and its currframe store.
 #include <elf.h>
 #include <sys/mman.h>
 
@@ -26,6 +28,7 @@ using namespace sentinel;
 namespace tq = nevr_quest::texture_quality::targets;
 using nevr_quest::combat::pinned::AddImmediate;
 using nevr_quest::combat::pinned::LdrXOffset;
+using nevr_quest::combat::pinned::MovImmediate;
 
 struct LoadedElf {
   std::vector<char> bytes;  // the file, for the program and section headers
@@ -127,6 +130,16 @@ std::uint64_t BlTarget(std::uint32_t word, std::uint64_t pc) {
   return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
 }
 
+// `cbz xN, target`: the register and the target at pc (imm19 in bits 5-23, sign-extended, times 4).
+bool IsCbzX(std::uint32_t word) { return (word & 0xff000000U) == 0xb4000000U; }
+std::uint32_t Rt(std::uint32_t word) { return word & 0x1fU; }
+std::uint32_t Rn(std::uint32_t word) { return (word >> 5) & 0x1fU; }
+std::uint64_t CbzTarget(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = static_cast<std::int64_t>((word >> 5) & 0x7ffffU);
+  if ((imm & (1 << 18)) != 0) imm -= (1 << 19);
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
+}
+
 bool CheckWord(const LoadedElf& elf, const nevr_quest::combat::pinned::Word& w) {
   std::uint32_t have = 0;
   const bool readable = WordAt(elf, w.vaddr, &have);
@@ -159,6 +172,15 @@ int main(int argc, char** argv) {
   // Every named word is the file's word at its address.
   for (const nevr_quest::combat::pinned::Word& w : tq::kWords) QCHECK(CheckWord(elf, w));
   for (const nevr_quest::combat::pinned::Word& w : tq::kDisplayDestroyCalls) QCHECK(CheckWord(elf, w));
+  // Each destroy is called with kind 0xe in w0, set by the instruction right before its bl.
+  QCHECK(sizeof(tq::kDisplayDestroyKinds) / sizeof(tq::kDisplayDestroyKinds[0]) == sizeof(tq::kDisplayDestroyCalls) / sizeof(tq::kDisplayDestroyCalls[0]));
+  for (std::size_t i = 0; i < sizeof(tq::kDisplayDestroyKinds) / sizeof(tq::kDisplayDestroyKinds[0]); ++i) {
+    const nevr_quest::combat::pinned::Word& k = tq::kDisplayDestroyKinds[i];
+    QCHECK(CheckWord(elf, k));
+    QCHECK((k.word & 0x7f800000U) == 0x52800000U && Rt(k.word) == 0);  // mov w0,#imm
+    QCHECK(MovImmediate(k.word) == tq::kDestroyKind);
+    QCHECK(k.vaddr + 4 == tq::kDisplayDestroyCalls[i].vaddr);
+  }
 
   // The lock, the count and the queue lock pointer lie in .bss: the game writes them at run time.
   QCHECK(InBss(elf, tq::kUploadLockVaddr, tq::kUploadLockBytes));
@@ -182,6 +204,26 @@ int main(int argc, char** argv) {
   QCHECK(LdrXOffset(tq::kImageEndSubmitted.word) == tq::kSlotSubmittedOffset);
   // The GPU frame FlushGPU stores is the one the deferred-destroy body compares.
   QCHECK(LdrXOffset(tq::kFlushGpuFrameStore.word) == LdrXOffset(tq::kGpuFrameLoad.word));
+
+  // The GPU frame is read and stored through the gctx and the currframe that the same two pointer words give: in each function the
+  // register the gctx load fills is the base of the 0xb70 access, and the currframe is the value stored (FlushGPU) or compared (body).
+  QCHECK(Rt(tq::kFlushGctxLoad.word) == Rn(tq::kFlushGpuFrameStore.word));
+  QCHECK(Rt(tq::kFlushCurrframeDeref.word) == Rt(tq::kFlushGpuFrameStore.word));
+  QCHECK(Rt(tq::kFlushCurrframeLoad.word) == Rn(tq::kFlushCurrframeDeref.word));
+  QCHECK(Rn(tq::kFlushGctxLoad.word) == Rt(tq::kFlushGctxLoad.word));  // adrp x19; ldr x19,[x19,#imm]
+  QCHECK(Rt(tq::kBodyGctxLoad.word) == Rn(tq::kGpuFrameLoad.word));
+  QCHECK(Rt(tq::kBodyCurrframeLoad.word) == Rn(tq::kBodyCurrframeDeref.word));
+  QCHECK(tq::kBodyCurrframeDeref.vaddr < tq::kGpuFrameLoad.vaddr);  // read before the compare that uses it
+  // Each wait is skipped on a null input: the cbz target is the function's epilogue word.
+  QCHECK(IsCbzX(tq::kFlushNullReturn.word) && Rt(tq::kFlushNullReturn.word) == Rt(tq::kFlushObjectLoad.word));
+  QCHECK(CbzTarget(tq::kFlushNullReturn.word, tq::kFlushNullReturn.vaddr) == tq::kFlushEpilogue.vaddr);
+  QCHECK(IsCbzX(tq::kBodyNullReturn.word) && Rt(tq::kBodyNullReturn.word) == 1);  // x1, the handle
+  QCHECK(CbzTarget(tq::kBodyNullReturn.word, tq::kBodyNullReturn.vaddr) == tq::kBodyEpilogue.vaddr);
+  // FlushGPU's indirect call: blr of the register loaded from gctx + 0xf8.
+  QCHECK(Rt(tq::kFlushIndirectLoad.word) == Rn(tq::kFlushIndirectCall.word) && LdrXOffset(tq::kFlushIndirectLoad.word) == 0xf8);
+  QCHECK(Rn(tq::kFlushIndirectLoad.word) == Rt(tq::kFlushGctxLoad.word));
+  QCHECK(tq::kFlushLockRelease.vaddr < tq::kFlushCalls[0].site && tq::kFlushCalls[3].site < tq::kFlushIndirectCall.vaddr &&
+         tq::kFlushIndirectCall.vaddr < tq::kFlushGpuFrameStore.vaddr);
 
   // Each direct bl reaches the function pinned for it.
   for (const tq::Branch& b : tq::kBranches) {
@@ -207,7 +249,7 @@ int main(int argc, char** argv) {
 
   // The path from CEngine::Resize: each call is a bl to a PLT stub (adrp x16; ldr x17,[x16,#off]) whose slot is the JUMP_SLOT of the
   // pinned callee, and the callee's symbol is the pinned function.
-  for (const tq::PltCall& c : tq::kResizePath) {
+  const auto checkCall = [&](const tq::PltCall& c) {
     QCHECK(CheckWord(elf, nevr_quest::combat::pinned::Word{c.what, c.site, c.word}));
     QCHECK(IsBl(c.word));
     QCHECK(BlTarget(c.word, c.site) == c.stub);
@@ -224,7 +266,10 @@ int main(int argc, char** argv) {
     QCHECK(slot.slotVaddr == c.slot);
     Elf64_Sym sym;
     QCHECK(DynamicSymbol(elf, c.callee, &sym) && sym.st_value == c.calleeVaddr);
-  }
+  };
+  for (const tq::PltCall& c : tq::kResizePath) checkCall(c);
+  // FlushGPU's four calls after it gives the lock back go through one stub to one callee.
+  for (const tq::PltCall& c : tq::kFlushCalls) checkCall(c);
 
   if (quest_test::Failures() == 0) std::printf("texture_quality_pinned_test: ok (%s)\n", buildId);
   return quest_test::Failures() == 0 ? 0 : 1;

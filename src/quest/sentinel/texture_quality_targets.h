@@ -1,4 +1,4 @@
-/* The pinned words of the live eye-buffer change's deadlock (U15a under #1737): the upload lock and the upload count that a
+/* The pinned words of the live eye-buffer change's deadlock under #1737: the upload lock and the upload count that a
  * CEngine::Resize waits on, the functions that take and give back an upload slot, and the call path from CEngine::Resize to the
  * wait. Nothing here is hooked or written; a later look-driven Resize reads the two words first (texture_quest2, not in the tree
  * yet). Checked against the store libr15 by src/quest/tests/texture_quality_pinned_test.cpp (the hooks-pinned group, which needs
@@ -25,17 +25,33 @@
  * from the oldest slot and returns at once, decrementing nothing, when that slot's submitted word is 0 (cbz at 0x18ebbc8).
  * The wait: the immediate path of the deferred-destroy body 0x1888a98 (taken when CGS::currframe equals the GPU frame, gctx +
  * 0xb70) takes the upload lock and calls the reaper until the count reads 0, holding the lock throughout (0x1888ad4..0x1888b50);
- * CGS::FlushGPU 0x18e08cc does the same (0x18e08f4..0x18e093c) and then stores currframe into gctx + 0xb70 (0x18e0988).
+ * CGS::FlushGPU 0x18e08cc does the same (0x18e08f4..0x18e093c), gives the lock back at 0x18e093c (stlr wzr), makes five calls with
+ * no lock held (four bl to the PLT stub 0xf2b750, whose JUMP_SLOT is CGRawInterfaceVK::SubmitPendingTemporaryCommandBuffers, then
+ * an indirect call through gctx + 0xf8) and stores currframe into gctx + 0xb70 (0x18e0988). Both waits read the same gctx word
+ * (0x370f360, a pointer: the loaded value is the gctx) and the same currframe word (0x3729558, a pointer dereferenced once).
  * So a Resize that reaches either wait while a slot is taken and not yet submitted (between an Upload and its End, on another
  * thread) spins with the lock held, and that End waits for the lock: neither returns.
+ * Each wait is skipped when its input is null: FlushGPU returns with no lock and no currframe store when gctx + 0xb50 is 0 (cbz at
+ * 0x18e08e0), and the deferred-destroy body returns on a null handle before it reads currframe (cbz x1 at 0x1888aa8). So one
+ * Resize reaches the upload lock up to five times, not always five.
  *
  * The path from CEngine::Resize (each call is a bl; a call through the PLT names the stub, whose JUMP_SLOT names the callee):
  *   CEngine::Resize 0x2ac093c: bl at 0x2ac09c0 to stub 0xf3a4d0 (slot 0x36f4950) -> CCanvasDisplay::Resize 0x25edfb4
  *   CCanvasDisplay::Resize: bl at 0x25edfd0 to stub 0xf394b0 (slot 0x36f4140) -> CCanvas::BeforeResize 0x25edc0c
  *     CCanvas::BeforeResize: bl at 0x25edc14 to stub 0xef36c0 (slot 0x36d1248) -> CGS::FlushGPU 0x18e08cc   (first wait)
  *   CCanvasDisplay::Resize: bl at 0x25edff0 to stub 0xf402a0 (slot 0x36f7838) -> CGDisplay::Resize 0x1834748
- *     CGDisplay::Resize: four direct bl to 0x1888a98 (kind 0xe) at 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8   (four more waits;
- *     FlushGPU has just made currframe equal the GPU frame, so each takes the immediate path)
+ *     CGDisplay::Resize: four direct bl to 0x1888a98 at 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8, each after `mov w0,#0xe` (the
+ *     kind, at 0x1834880, 0x18348ac, 0x18348d0, 0x18348f4)   (up to four more waits; FlushGPU has just made currframe equal the
+ *     GPU frame, so each takes the immediate path)
+ *
+ * What stays open after a pre-Resize check of the count and the lock. FlushGPU gives the lock back at 0x18e093c and the five calls
+ * that follow hold none; each of the four destroys takes the lock again (the body's ldaxr at 0x1888ae8) and gives it back at
+ * 0x1888b50, with CGDisplay::Resize's own code between them. An Upload that takes a slot between any two of those takes (count
+ * becomes 1, its submitted word 0) makes the next take spin on a count the reaper cannot lower until that End runs, and the End
+ * needs the lock the spinner holds: the deadlock again. The window therefore runs from the read of the two words to the fourth
+ * destroy's lock take, which is most of the Resize; the time from the read to FlushGPU's first take is only the start of it. A
+ * check before the Resize narrows the exposure and does not close it; a guard has to be designed around the whole Resize, not a
+ * gap before the lock. (Inferred: the reaper, the allocator, Upload, End and CGDisplay::Resize between the takes are not read whole.)
  *
  * The second lock path. The deferred-destroy body's other branch (0x1888b04, currframe not the GPU frame) takes a different lock,
  * the one the pointer word 0x379b478 (.bss) names, for a constant-time append to the deferred queue (a CMemBlock resize when it is
@@ -43,8 +59,9 @@
  * word is not shown (ReVault lists two reads, 0x18848d4 and 0x1888b08, and no write).
  *
  * Not shown: which thread runs CGUploader::Upload during a level load (its callers are the CGBuffer initializers that upload
- * initial data, through 0x182bdf0), so that the deadlock needs two threads is read from the code, not observed; and that reading
- * the two words before a Resize closes the window (an upload can take a slot after the read and before FlushGPU's lock).
+ * initial data, through 0x182bdf0), so that the deadlock needs two threads is read from the code, not observed; what the four
+ * SubmitPendingTemporaryCommandBuffers calls and the call through gctx + 0xf8 do (none is read, and each is a stretch with no
+ * lock held); and what CGDisplay::Resize does between the destroys (not read).
  */
 #pragma once
 
@@ -181,6 +198,54 @@ inline constexpr nevr_quest::combat::pinned::Word kFlushCountLoad{"ldr x8,[x21,#
 inline constexpr nevr_quest::combat::pinned::Word kFlushLockRelease{"stlr wzr,[x20] (FlushGPU: give the lock back)", 0x18e093cULL, 0x889ffe9fU};
 inline constexpr nevr_quest::combat::pinned::Word kFlushGpuFrameStore{"str x8,[x19,#0xb70] (FlushGPU: GPU frame = currframe)", 0x18e0988ULL, 0xf905ba68U};
 
+// CGDisplay::Resize: the kind each of the four destroys is called with (`mov w0,#0xe`, the instruction before each bl).
+inline constexpr std::uint32_t kDestroyKind = 0xe;
+inline constexpr nevr_quest::combat::pinned::Word kDisplayDestroyKinds[] = {
+    {"mov w0,#0xe (CGDisplay::Resize, first view)", 0x1834880ULL, 0x528001c0U},
+    {"mov w0,#0xe (CGDisplay::Resize, second view)", 0x18348acULL, 0x528001c0U},
+    {"mov w0,#0xe (CGDisplay::Resize, third view)", 0x18348d0ULL, 0x528001c0U},
+    {"mov w0,#0xe (CGDisplay::Resize, fourth view)", 0x18348f4ULL, 0x528001c0U},
+};
+
+// The two words both waits read: the gctx pointer word (0x370f360) and the currframe pointer word (0x3729558), through the same
+// adrp + ldr in FlushGPU and in the deferred-destroy body. kGctxPointerVaddr holds the gctx; the offsets 0xb70 (GPU frame) and 0xb50
+// are read from it.
+inline constexpr std::uint64_t kGctxPointerVaddr = 0x370f360ULL;
+inline constexpr std::uint64_t kCurrframePointerVaddr = 0x3729558ULL;
+inline constexpr nevr_quest::combat::pinned::Word kFlushGctxPage{"adrp x19,0x370f000 (FlushGPU: the gctx word's page)", 0x18e08d4ULL, 0xf000f173U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushGctxLoad{"ldr x19,[x19,#0x360] (FlushGPU: the gctx)", 0x18e08d8ULL, 0xf941b273U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushCurrframePage{"adrp x8,0x3729000 (FlushGPU: the currframe word's page)", 0x18e097cULL, 0xb000f248U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushCurrframeLoad{"ldr x8,[x8,#0x558] (FlushGPU: the currframe pointer)", 0x18e0980ULL, 0xf942ad08U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushCurrframeDeref{"ldr x8,[x8] (FlushGPU: currframe)", 0x18e0984ULL, 0xf9400108U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyCurrframePage{"adrp x9,0x3729000 (destroy: the currframe word's page)", 0x1888aacULL, 0xb000f509U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyGctxPage{"adrp x8,0x370f000 (destroy: the gctx word's page)", 0x1888ab0ULL, 0xf000f428U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyCurrframeLoad{"ldr x9,[x9,#0x558] (destroy: the currframe pointer)", 0x1888ab4ULL, 0xf942ad29U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyGctxLoad{"ldr x8,[x8,#0x360] (destroy: the gctx)", 0x1888ab8ULL, 0xf941b108U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyCurrframeDeref{"ldr x9,[x9] (destroy: currframe)", 0x1888ac4ULL, 0xf9400129U};
+
+// The early returns that skip a wait: FlushGPU on a null gctx + 0xb50, the deferred-destroy body on a null handle. Each branch's target
+// is the function's epilogue word.
+inline constexpr nevr_quest::combat::pinned::Word kFlushObjectLoad{"ldr x8,[x19,#0xb50] (FlushGPU: the object it flushes)", 0x18e08dcULL, 0xf945aa68U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushNullReturn{"cbz x8,0x18e098c (FlushGPU: return on a null object, no lock)", 0x18e08e0ULL, 0xb4000568U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushEpilogue{"ldp x19,x30,[sp,#0x10] (FlushGPU: the epilogue)", 0x18e098cULL, 0xa9417bf3U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyNullReturn{"cbz x1,0x1888be4 (destroy: return on a null handle, no lock)", 0x1888aa8ULL, 0xb40009e1U};
+inline constexpr nevr_quest::combat::pinned::Word kBodyEpilogue{"ldp x19,x30,[sp,#0x30] (destroy: the epilogue)", 0x1888be4ULL, 0xa9437bf3U};
+
+// FlushGPU's five calls between the lock's release (kFlushLockRelease) and the currframe store: four bl to one PLT stub, then an
+// indirect call through gctx + 0xf8.
+inline constexpr nevr_quest::combat::pinned::Word kFlushIndirectLoad{"ldr x8,[x19,#0xf8] (FlushGPU: the indirect callee)", 0x18e0970ULL, 0xf9407e68U};
+inline constexpr nevr_quest::combat::pinned::Word kFlushIndirectCall{"blr x8 (FlushGPU: the fifth call)", 0x18e0978ULL, 0xd63f0100U};
+inline constexpr PltCall kFlushCalls[] = {
+    {"CGS::FlushGPU -> SubmitPendingTemporaryCommandBuffers (1)", 0x18e0948ULL, 0x97d92b82U, 0xf2b750ULL, 0x36ed290ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK36SubmitPendingTemporaryCommandBuffersEjj", 0x1889e0cULL},
+    {"CGS::FlushGPU -> SubmitPendingTemporaryCommandBuffers (2)", 0x18e0954ULL, 0x97d92b7fU, 0xf2b750ULL, 0x36ed290ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK36SubmitPendingTemporaryCommandBuffersEjj", 0x1889e0cULL},
+    {"CGS::FlushGPU -> SubmitPendingTemporaryCommandBuffers (3)", 0x18e0960ULL, 0x97d92b7cU, 0xf2b750ULL, 0x36ed290ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK36SubmitPendingTemporaryCommandBuffersEjj", 0x1889e0cULL},
+    {"CGS::FlushGPU -> SubmitPendingTemporaryCommandBuffers (4)", 0x18e096cULL, 0x97d92b79U, 0xf2b750ULL, 0x36ed290ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK36SubmitPendingTemporaryCommandBuffersEjj", 0x1889e0cULL},
+};
+
 // Every word the test checks against the file (the path's call words are in kResizePath and kDisplayDestroyCalls).
 inline constexpr nevr_quest::combat::pinned::Word kWords[] = {
     kGpuFrameLoad,      kFrameBranch,        kLockPage,          kLockAdd,           kLockExclusive,       kLockStore,
@@ -192,6 +257,9 @@ inline constexpr nevr_quest::combat::pinned::Word kWords[] = {
     kEndLockPage,       kEndLockAdd,         kEndLockExclusive,  kEndSubmitted,      kEndLockRelease,      kImageEndLockPage,
     kImageEndLockAdd,   kImageEndSubmitted,  kFlushLockPage,     kFlushLockAdd,      kFlushLockExclusive,  kFlushCountPage,
     kFlushCountLoad,    kFlushLockRelease,   kFlushGpuFrameStore,
+    kFlushGctxPage,     kFlushGctxLoad,      kFlushCurrframePage, kFlushCurrframeLoad, kFlushCurrframeDeref, kBodyCurrframePage,
+    kBodyGctxPage,      kBodyCurrframeLoad,  kBodyGctxLoad,      kBodyCurrframeDeref, kFlushObjectLoad,     kFlushNullReturn,
+    kFlushEpilogue,     kBodyNullReturn,     kBodyEpilogue,      kFlushIndirectLoad,  kFlushIndirectCall,
 };
 
 // An adrp and the add or ldr that completes it name one data word; the test decodes each pair and checks the word it names.
@@ -215,6 +283,10 @@ inline constexpr AddressPair kAddressPairs[] = {
     {kImageEndLockPage, kImageEndLockAdd, false, kUploadLockVaddr},
     {kFlushLockPage, kFlushLockAdd, false, kUploadLockVaddr},
     {kFlushCountPage, kFlushCountLoad, true, kUploadCountVaddr},
+    {kFlushGctxPage, kFlushGctxLoad, true, kGctxPointerVaddr},
+    {kBodyGctxPage, kBodyGctxLoad, true, kGctxPointerVaddr},
+    {kFlushCurrframePage, kFlushCurrframeLoad, true, kCurrframePointerVaddr},
+    {kBodyCurrframePage, kBodyCurrframeLoad, true, kCurrframePointerVaddr},
 };
 
 // A direct bl and the function it reaches.

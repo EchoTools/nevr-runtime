@@ -3,7 +3,7 @@
 Design record for the question the Quest 2 step-down (#1737) depends on: can the texture-quality live apply
 (`src/quest/sentinel/texture_menu_hook.h`, a `CEngine::Resize` on the render thread) run while a level load uploads data? ADR 0015
 (`docs/adr/0015-quest-texture-quality.md`) lists the live apply in a match as not established. kotorvr/echoquest-combat's
-`afk_texres.cpp` header reports a hang in that case (a lead only; nothing is taken from it). This page contains no code. The words it
+afk_texres.cpp header reports a hang in that case (a lead only; nothing is taken from it). This page contains no code. The words it
 names are pinned in `src/quest/sentinel/texture_quality_targets.h` and checked against the store libr15 by
 `src/quest/tests/texture_quality_pinned_test.cpp` (`just test-quest-hooks-pinned`).
 
@@ -36,7 +36,7 @@ Measured. Each step is a `bl`; a call through the PLT names the stub, and the st
 | `CCanvasDisplay::Resize` | 0x25edfd0 | stub 0xf394b0, slot 0x36f4140 | `CCanvas::BeforeResize` 0x25edc0c |
 | `CCanvas::BeforeResize` | 0x25edc14 | stub 0xef36c0, slot 0x36d1248 | `CGS::FlushGPU` 0x18e08cc |
 | `CCanvasDisplay::Resize` | 0x25edff0 | stub 0xf402a0, slot 0x36f7838 | `CGDisplay::Resize` 0x1834748 |
-| `CGDisplay::Resize` | 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8 | direct | deferred-destroy body 0x1888a98 (kind 0xe) |
+| `CGDisplay::Resize` | 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8 | direct, each after `mov w0,#0xe` (0x1834880, 0x18348ac, 0x18348d0, 0x18348f4) | deferred-destroy body 0x1888a98 (kind 0xe) |
 
 `CEngine::Resize` is the function the live apply's engine resize slot must hold (`pinned::kEngineResize`, the same address; the test
 checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawInterfaceVK::DeferredDestroy(VkBuffer_T*)` (0x1888a8c,
@@ -44,15 +44,19 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
-canvas needs a resize (its reconstruction). So one Resize reaches the upload lock five times: once in `FlushGPU`, then once in each
-of the four deferred destroys.
+canvas needs a resize (its reconstruction). So one Resize reaches the upload lock up to five times: once in `FlushGPU`, then once in each
+of the four deferred destroys. Each can be skipped: `FlushGPU` returns with no lock and no `currframe` store when gctx + 0xb50 is 0
+(`ldr x8,[x19,#0xb50]` at 0x18e08dc, `cbz x8` at 0x18e08e0 to the epilogue at 0x18e098c), and the destroy body returns on a null handle before it
+reads `currframe` (`cbz x1` at 0x1888aa8 to the epilogue at 0x1888be4). The test pins both branches and their targets.
 
 ### The wait in the deferred-destroy body (0x1888a98)
 
 Measured, read whole.
 
-- 0x1888ac4..0x1888ad0: `CGS::currframe` is compared with the GPU frame (gctx + 0xb70); when they differ the body takes the queue
-  path (below).
+- 0x1888aa8: a null handle (x1) returns at once, before any lock.
+- 0x1888aac..0x1888ad0: `CGS::currframe` is compared with the GPU frame (gctx + 0xb70); when they differ the body takes the queue
+  path (below). Both come through pointer words: the gctx from 0x370f360 (`adrp` 0x1888ab0, `ldr` 0x1888ab8) and `currframe` from
+  0x3729558 (`adrp` 0x1888aac, `ldr` 0x1888ab4, then `ldr x9,[x9]` at 0x1888ac4).
 - Equal: 0x1888ad4/0x1888ad8 (`adrp`/`add`) form the upload lock's address; 0x1888ae0..0x1888af4 take it.
 - 0x1888b34/0x1888b38 read the count; while it is not 0, 0x1888b40..0x1888b4c call the reaper 0x18ebb48 with 32 and read it again.
 - 0x1888b50 gives the lock back, and the body then branches to 0x1884fa4 with the kind and the handle (that function is not read
@@ -62,9 +66,14 @@ The lock is held for the whole wait.
 
 ### The wait in FlushGPU (0x18e08cc)
 
-Inferred from its pinned words (no reconstruction yet). 0x18e08f4/0x18e08f8 form the upload lock's address and 0x18e0910 takes it;
-0x18e0920/0x18e0924 read the count, and the loop to 0x18e0938 calls the reaper with 32 until it is 0; 0x18e093c gives the lock back.
-0x18e0988 stores `currframe` into gctx + 0xb70, the word the deferred-destroy body compares, so the four destroys that follow in
+Inferred from its pinned words (no reconstruction yet; queued in NEEDED.tsv). 0x18e08d4/0x18e08d8 load the gctx from the same pointer
+word 0x370f360 the body reads, and 0x18e08e0 returns with no lock when gctx + 0xb50 is 0. 0x18e08f4/0x18e08f8 form the upload lock's
+address and 0x18e0910 takes it; 0x18e0920/0x18e0924 read the count, and the loop to 0x18e0938 calls the reaper with 32 until it is 0;
+0x18e093c gives the lock back (`stlr wzr,[x20]`, pinned). Five calls follow with no lock held: four `bl` to the PLT stub 0xf2b750
+(0x18e0948, 0x18e0954, 0x18e0960, 0x18e096c; its JUMP_SLOT 0x36ed290 is
+`CGRawInterfaceVK::SubmitPendingTemporaryCommandBuffers`, checked by the test, and what it does is not read) and a `blr` through
+gctx + 0xf8 (0x18e0978). 0x18e0988 stores `currframe` (the same pointer word 0x3729558 the body reads, `adrp` 0x18e097c, `ldr`
+0x18e0980, deref 0x18e0984) into gctx + 0xb70, the word the deferred-destroy body compares, so the four destroys that follow in
 `CGDisplay::Resize` take the immediate path and wait again.
 
 ### Other waits on the same count
@@ -112,10 +121,15 @@ lists two reads of 0x379b478 (0x18848d4, 0x1888b08) and no write: who sets the p
 
 ## What this means for the Quest 2 step-down
 
-Inferred. A look-driven Resize is safe to start when no upload slot is taken (count 0 at 0x379b400) and no thread holds the upload
-lock (0 at 0x379b780). Reading the two words without taking the lock does not close the window: an `Upload` can take a slot after the
-read and before `FlushGPU` takes the lock. The check narrows the window to the time between the read and the lock; it does not remove
-it. The game's own Resize (a display change) has the same exposure.
+Inferred. A look-driven Resize is safe to start only if no upload slot is taken (count 0 at 0x379b400) and no thread holds the upload
+lock (0 at 0x379b780) for the whole Resize, and reading the two words first cannot ensure that. `FlushGPU` gives the lock back at
+0x18e093c and makes five calls with none held, and the deferred-destroy body takes it again in each of the four destroys (0x1888ae8)
+and gives it back (0x1888b50). An `Upload` that takes a slot between any two takes leaves a slot with its submitted word 0, so the
+next take spins on a count the reaper cannot lower until that `End` runs, and the `End` needs the lock the spinner holds. The window
+therefore runs from the read to the fourth destroy's lock take: most of the Resize, not the short time to `FlushGPU`'s first take.
+The check narrows the exposure and does not close it. A guard has to be designed around the whole Resize (what can run an `Upload`
+while it runs), not around a gap before the lock. Not read: `CGDisplay::Resize` between the destroys, and the five calls above.
+The game's own Resize (a display change) has the same exposure.
 
 ## Not shown
 
@@ -126,3 +140,5 @@ it. The game's own Resize (a display change) has the same exposure.
   both `CGUploader::Upload` and both `End`. Each is queued for a byte-checked reconstruction; until then their behaviour beyond the
   pinned words is inferred.
 - Who writes the queue lock pointer at 0x379b478.
+- What `SubmitPendingTemporaryCommandBuffers` and the call through gctx + 0xf8 do in `FlushGPU`, and what `CGDisplay::Resize` runs
+  between its four destroys.
