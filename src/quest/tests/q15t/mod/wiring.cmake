@@ -1,7 +1,7 @@
 # plugin.cpp's wiring of the modules: (1) every option on against a fake image (names, levels, return value, tick count);
 # (2) the capability matrix, one plugin.cpp per option. Module objects are compiled once, with the plugin's own flags.
 if(NOT Q15T_ARM64)
-  set(_wmods plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap gamespace fxtrail voipdrop custctx droneguard peerclamp levelname boosterpool)
+  set(_wmods plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap gamespace levelname boosterpool)
   set(_wsources "")
   foreach(m IN LISTS _wmods)
     list(APPEND _wsources "${Q15T_PLUGIN_SRC}/${m}.cpp")
@@ -13,7 +13,7 @@ if(NOT Q15T_ARM64)
   add_dependencies(mod_wiring nevr_q15t_wiring_modules)
 endif()
 
-set(_wall Q15T_FXTRAIL=1 Q15T_VOIPDROP=1 Q15T_CUSTCTX=1 Q15T_DRONEGUARD=1 Q15T_PEERCLAMP=1 Q15T_LEVELNAME=1)
+set(_wall Q15T_LEVELNAME=1)
 set(_wslots)
 set(_wbuild "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\"")
 set(_winclude "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h")
@@ -25,6 +25,8 @@ function(wiring_program program)
 endfunction()
 
 wiring_program(wiring_test ${_wall} ${_wslots} ${_wbuild})
+# (1a) the pair's own off switch: `levelname.off` in the data directory is a choice (INFO status=off), and neither slot is touched
+wiring_program(wiring_levelname_off WIRING_LEVELNAME_OFF ${_wall} ${_wslots} ${_wbuild})
 # (1b) no module on: no module of the plugin registers a game tick, so InitEx installs none, and it still registers the script libraries once
 wiring_program(wiring_no_tick WIRING_NO_TICK ${_wslots} ${_wbuild})
 # capability matrix: <label> <expect ALTERS_GAMEPLAY> <expect NETWORK> <defines>...; nothing else on
@@ -33,9 +35,4 @@ function(wiring_caps label alters network)
   wiring_program(wiring_caps_${id} WIRING_CAPS_ONLY "WIRING_LABEL=\"${label}\"" EXPECT_ALTERS=${alters} EXPECT_NETWORK=${network} ${ARGN} ${_wslots})
 endfunction()
 wiring_caps(none 0 0)
-foreach(c FXTRAIL VOIPDROP CUSTCTX)
-  wiring_caps(${c} 0 0 Q15T_${c}=1)
-endforeach()
-foreach(c DRONEGUARD PEERCLAMP LEVELNAME)
-  wiring_caps(${c} 1 0 Q15T_${c}=1)
-endforeach()
+wiring_caps(LEVELNAME 1 0 Q15T_LEVELNAME=1)

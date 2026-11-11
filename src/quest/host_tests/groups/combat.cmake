@@ -33,6 +33,10 @@ set(_ctables src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/qu
 set(_cmods src/quest/combat/gunconnect.cpp src/quest/combat/aibots.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp)
 # The wrist HUD, the shield colour and the combat level answer they read (#2186): the table names them, so every program that links combat_install.cpp takes them.
 set(_cwrist src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp)
+# The crash and timing guards (#2178): the table names them, so every program that links combat_install.cpp takes them. They read the combat level
+# answer (combat_scope.cpp, above) where they change a value.
+set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
+             src/quest/combat/peerclamp.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -42,7 +46,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
@@ -54,7 +58,7 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
 # and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
 # and the pins in the real libr15.
 nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
@@ -87,7 +91,7 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
@@ -99,7 +103,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # plugin's refusal.
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   INCS src/quest/plugins/q15t/src
-  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
@@ -111,7 +115,7 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
-      src/quest/combat/combat_install.cpp ${_cwrist} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/combat_install.cpp ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
       src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp ${_ctables})
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
@@ -153,6 +157,22 @@ nevr_ht_test(headset_gates_library_name_test GROUP combat ${_cf} TIMEOUT 120 OBJ
 # Which of the three gates a run installs, from the four `combat:` keys.
 nevr_ht_test(combat_gates_test GROUP combat NOEXC TIMEOUT 120
   SRC src/quest/tests/combat_gates_test.cpp)
+# The crash and timing guards (#2178): each module's real handler through the real thunk, installed by the real GotHook into the slot of a libr15 image
+# built in memory, against a model of the game's objects and a stand-in for the game's function. The three that act by level (fxtrail, peerclamp and
+# custctx's pool refusal) read the real combat level answer, refreshed through the tick against a model of the game's gamespace tables; each shows an
+# arena level and the combat lobby reading nothing and scanning no level (by count), a stale answer not believed, and a scope that cannot change refusing the
+# install. voipdrop and droneguard act in every level (crash-only guards of code arena shares) and ask nothing of the scope.
+set(_cscope_srcs src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+nevr_ht_test(fxtrail_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/fxtrail_test.cpp src/quest/combat/fxtrail.cpp ${_cscope_srcs})
+nevr_ht_test(voipdrop_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/voipdrop_test.cpp src/quest/combat/voipdrop.cpp)
+nevr_ht_test(custctx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/custctx_test.cpp src/quest/combat/custctx.cpp ${_cscope_srcs})
+nevr_ht_test(droneguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/droneguard_test.cpp src/quest/combat/droneguard.cpp)
+nevr_ht_test(peerclamp_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/peerclamp_test.cpp src/quest/combat/peerclamp.cpp ${_cscope_srcs})
 # The particle-renderer gate (#2188, #1631; docs/adr/0046): the decision from `combat.pfx`, the gate that reads off until the install step has
 # decided, the install line, the plugin's `pfx.off` file not read and warned about, and the scope: open on a combat map only, shut on every Echo Arena
 # level, lobby and transition, against a fake CR15Game read by process_vm_readv. The module installs no hook and registers no tick.

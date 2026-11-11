@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter and the two combat.shieldgamma keys. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -371,6 +371,27 @@ combat:
   # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
   # the default, with a warning that names the key. Read once at launch. Default (absent): true.
   # dronemuzzle: false
+
+  # The crash and timing guards of the combat modules (src/quest/combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h). Quest only;
+  # each runs where the combat modules run (see `force`), and each is on unless it says `false`. Booleans, read once at launch; a value that is not a
+  # boolean keeps the default, with a warning in the sentinel log that names the key. The plugin's `fxtrail.off`, `voipdrop.off` and `custctx.off`
+  # files are no longer read; one found in the files folder's q15t directory is a warning that names the key. The sentinel log lines
+  # `combat_<module>_install` and `combat_<module>_stats` say what was installed and what each guard caught.
+  # fxtrail: a bullet whose trail effect has no instance ends its trail, so the bullet can be freed. Acts only while a combat map is loaded.
+  # fxtrail: false
+  # voipdrop: a voice packet whose receiver table needs a page that cannot be allocated is dropped instead of crashing the game. Acts in every level.
+  # voipdrop: false
+  # custctx: three guards on the lobby cosmetics renderer (a destroy of a context that is being loaded, a draw table that cannot grow, a load on
+  # a nearly full render-target layout pool). The destroy and draw-table guards act in every level; the pool refusal acts only while a combat map or
+  # the combat lobby is loaded.
+  # custctx: false
+  # droneguard: the drone's follow update is skipped while its target is null instead of crashing the game. Acts in every level.
+  # droneguard: false
+  # droneguard_stage1: also skips the update when the drone's cached player no longer resolves. Needs droneguard. Default (absent): false.
+  # droneguard_stage1: true
+  # peerclamp: a peer's last-received stamp above the broadcaster's "now" is pulled down to "now" before the game's timeout loop, so a new game
+  # server peer is not dropped as timed out. Acts only while a combat map or the combat lobby is loaded.
+  # peerclamp: false
 
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard

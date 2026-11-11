@@ -13,12 +13,15 @@ add_library(nevr_quest_combat STATIC
   combat_level.cpp
   combat_scope.cpp
   combat_tick.cpp
+  custctx.cpp
   decals.cpp
   dronekill.cpp
+  droneguard.cpp
   dronemuzzle.cpp
   ec.cpp
   ecfx.cpp
   equip_refire.cpp
+  fxtrail.cpp
   gamespace.cpp
   gunconnect.cpp
   headset_gates.cpp
@@ -30,6 +33,7 @@ add_library(nevr_quest_combat STATIC
   memsys.cpp
   meshstep.cpp
   music.cpp
+  peerclamp.cpp
   pfx.cpp
   pfxtev.cpp
   powerboost.cpp
@@ -40,6 +44,7 @@ add_library(nevr_quest_combat STATIC
   shieldgamma.cpp
   table_step.cpp
   tablestep.cpp
+  voipdrop.cpp
   wallfire.cpp
   weapon_arm.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
