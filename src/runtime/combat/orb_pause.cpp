@@ -35,13 +35,14 @@ std::uint64_t NodeHook(void* thread) {
 }
 
 std::uint64_t Accessor(void* ctx, std::uint64_t field, void* out) {
+  const auto engine = reinterpret_cast<AccessorFn>(g_accessor);
   void* module = g_module.load();
+  // No script, so no field id to compare: the engine's call only. Comparing with an id of 0 would act on field 0.
+  if (module == nullptr) return engine(ctx, field, out);
   std::uint32_t spawn_field = 0;
-  if (module != nullptr) {
-    std::memcpy(&spawn_field, static_cast<std::uint8_t*>(module) + kSpawnAccessFieldIdRva, sizeof spawn_field);
-  }
+  std::memcpy(&spawn_field, static_cast<std::uint8_t*>(module) + kSpawnAccessFieldIdRva, sizeof spawn_field);
   const rules::RulesState rules(g_mailbox.load());
-  return ReadField(reinterpret_cast<AccessorFn>(g_accessor), spawn_field, t_in_node > 0, rules, ctx, field, out);
+  return ReadField(engine, spawn_field, t_in_node > 0, rules, ctx, field, out);
 }
 
 }  // namespace

@@ -227,6 +227,12 @@ TEST_F(OrbPauseInstalled, WithoutTheModuleTheSlotOnlyPassesThrough) {
   box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kOn);
   EXPECT_EQ(Node(kMainLoop), kMainLoop) << "no field id to compare: the engine's value";
   EXPECT_EQ(box_[rules::kMatchLive], 0);
+  const std::uint32_t zero = 0;
+  std::memcpy(base_ + op::kSpawnAccessFieldIdRva, &zero, sizeof zero);
+  EXPECT_EQ(Node(kMainLoop), kMainLoop) << "field 0 is not taken for spawn_access";
+  EXPECT_EQ(box_[rules::kMatchLive], 0);
+  g_value = kMainLoop;
+  EXPECT_EQ(RaxCaller(), 0x55u) << "the engine's result";
 }
 
 TEST_F(OrbPauseInstalled, EachChangeIsLoggedOnce) {
