@@ -13,10 +13,7 @@
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
 #endif
-// Gameplay and fix modules (src/<m>.{h,cpp}, docs/quest/q15t/modules/<m>.md). CMakeLists.txt owns the options and their defaults (each with the
-// reason, from the module's doc); the default HERE is 0, so a build that names no option installs none of them and the
-// perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
-// step (src/quest/combat/heaps.h, memsys.h).
+// Gameplay and fix modules: none are left in this plugin. Every one is the runtime's (src/quest/combat/<m>.{h,cpp}, docs/quest/combat/<m>.md).
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME

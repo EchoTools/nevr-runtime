@@ -17,7 +17,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 - `src/` the plugin (`src/<module>.{h,cpp}`, `plugin.cpp` installs them in the order the module docs fix).
 - `tests/` host tests: a CMake project, `src/quest/tests/q15t/CMakeLists.txt` (`just test-quest-q15t`, or `just test-quest-q15t <module>`), one `tests/mod/<module>.cmake` per module,
   `src/quest/tests/q15t/mutants.sh` and `src/quest/tests/q15t/mutants.d/` (the mutation run, about an hour, one at a time, not part of the gate).
-- `docs/quest/q15t/modules/<module>.md`: one document per module.
+- Module documents: none. Each module the plugin carried is the runtime's now, with its note in `docs/quest/combat/<module>.md`.
 - `CMakeLists.txt`: the options (defaults and the reason for each are in it), added by `src/quest/integration/CMakeLists.txt`.
 
 ## Defaults
@@ -81,5 +81,5 @@ native library directory only, so a plugin that is not in the APK is not loaded.
 - A wrapper never faults the game: on any doubt it calls the real function.
 - A wrapper on a high-fan-in function keeps counters and logs nothing per call.
 - Every address, offset and layout is a cited line of the reference build's source or a quoted disassembly word, and anything unread is
-  labelled unverified in the module's note (`docs/quest/q15t/modules/`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
+  labelled unverified in the module's note (`docs/quest/combat/<module>.md`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
   names the source file, line and commit of the citations the plugin's notes and comments carried as `afk_<file>`, `vn`, `pb` and `df` line numbers.
