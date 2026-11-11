@@ -300,6 +300,21 @@ TEST_F(ClockPauseInstalled, EveryClockStandsStillWhilePausedOrResuming) {
   }
 }
 
+TEST_F(ClockPauseInstalled, EachChangeOfTheHeldStateIsLoggedOnce) {
+  Load();
+  ExpectEveryClock(30.0f, 29.5f, rules::Pause::kOff);
+  EXPECT_EQ(Count("clock pause: clocks held"), 0) << "a match that is not paused logs nothing";
+  ExpectEveryClock(30.0f, 30.0f, rules::Pause::kOn);
+  EXPECT_EQ(Count("clock pause: clocks held from=0 to=1 paused=1 script=6fa8cc9cd721a563"), 1);
+  ExpectEveryClock(30.0f, 30.0f, rules::Pause::kResuming);
+  EXPECT_EQ(Count("clock pause: clocks held"), 1) << "resuming is still held: no new line";
+  ExpectEveryClock(30.0f, 29.5f, rules::Pause::kOff);
+  EXPECT_EQ(Count("clock pause: clocks held from=1 to=0 paused=0 script=6fa8cc9cd721a563"), 1);
+  ExpectEveryClock(30.0f, 30.0f, rules::Pause::kOn);
+  EXPECT_EQ(Count("clock pause: clocks held from=0 to=1"), 2);
+  EXPECT_EQ(Count("clock pause: clocks held"), 3) << "one line a change, none a frame";
+}
+
 TEST_F(ClockPauseInstalled, TheGameTimerAsksTheEngineWhilePaused) {
   Load();
   box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kOn);

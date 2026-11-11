@@ -16,8 +16,26 @@ using NodeFn = std::uint64_t (*)(void* node);
 void* g_original[kClockCount] = {};  // each function's trampoline while hooked
 std::atomic<volatile std::uint8_t*> g_mailbox{nullptr};
 std::atomic_bool g_registered{false};
+std::atomic<int> g_last_held{-1};  // what the last edge line said: -1 none yet, 0, 1
 
-bool HeldNow() { return Held(rules::RulesState(g_mailbox.load(std::memory_order_relaxed)).Paused()); }
+// Whether the clocks stand still now. One Info line when that changes, never per call: the clocks are asked every
+// frame. The first answer is logged only when it is "held" (from=0), so a match that never pauses logs nothing.
+bool HeldNow() {
+  const rules::Pause paused = rules::RulesState(g_mailbox.load(std::memory_order_relaxed)).Paused();
+  const bool held = Held(paused);
+  const int now = held ? 1 : 0;
+  if (g_last_held.load(std::memory_order_relaxed) != now) {
+    const int was = g_last_held.exchange(now);
+    if (was != now && (was >= 0 || now != 0)) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] clock pause: clocks held from=%d to=%d paused=%u script=%016llx (%s)", was < 0 ? 0 : was, now,
+          static_cast<unsigned>(paused), static_cast<unsigned long long>(kScript),
+          held ? "PAUSE is on or resuming: game_timer, lobbylock_timer and countdown_timer stand still"
+               : "PAUSE is off: the clocks count down again");
+    }
+  }
+  return held;
+}
 
 // node -> [node] the context (qword) -> [context+0x68] the globals (qword) -> + the clock's offset (a float).
 std::uint8_t* TimerAt(void* node, std::uint32_t timer) {
@@ -104,6 +122,7 @@ void ResetForTest() {
   g_registered = false;
   g_mailbox.store(nullptr);
   for (void*& original : g_original) original = nullptr;
+  g_last_held = -1;
 }
 #endif
 
