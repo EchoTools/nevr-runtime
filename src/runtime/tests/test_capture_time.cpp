@@ -226,6 +226,23 @@ TEST_F(CaptureTimeInstalled, TheRowHandlersWriteTAndTheCaptureTime) {
   node_[0xDB] = 0;
 }
 
+TEST_F(CaptureTimeInstalled, EachPressThatChangesTIsLoggedOnce) {
+  Load();
+  SetFloat(box_ + rules::kRoundTotal, 125.0f);
+  for (std::uint32_t rva : kReaders) Call(rva);
+  EXPECT_EQ(Count("capture time: T changed"), 0) << "a reader logs nothing";
+  EXPECT_EQ(Call(kSecondsFF50), 0u);
+  EXPECT_EQ(Count("capture time: T changed from=125 to=126 capture=6 script=6fa8cc9cd721a563"), 1);
+  node_[0xDB] = 1;
+  EXPECT_EQ(Call(kSecondsFF50), ~std::uint64_t{0});
+  node_[0xDB] = 0;
+  EXPECT_EQ(Count("capture time: T changed"), 1) << "+0xDB set: nothing written, nothing logged";
+  SetFloat(box_ + rules::kRoundTotal, 0.0f);
+  EXPECT_EQ(Call(kSecondsFF50), 0u);
+  EXPECT_EQ(Count("capture time: T changed from=2704 to=2705 capture=5"), 1) << "unset: from the maps' own 45:04";
+  EXPECT_EQ(Count("capture time: T changed"), 2);
+}
+
 TEST_F(CaptureTimeInstalled, StockAfterTheFree) {
   Load();
   sh::OnUnloading(ct::kScript, base_);
