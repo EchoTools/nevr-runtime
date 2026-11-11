@@ -206,6 +206,14 @@ int main(int argc, char** argv) {
   CheckWords(r15, sg::kWordPins, "sound symbol");
   CheckDefaultSymbol(r15);
 
+  // What a dropped post leaves undone and where the invalid-id record is made and written: the words and .rodata quads, and each function
+  // those words call through a PLT stub, by its JUMP_SLOT and its definition.
+  CheckWords(r15, sg::kDropPins, "sound drop");
+  for (const sg::Called& called : sg::kCalled) {
+    CheckSlotPin(r15, called.symbol, RelocKind::kJumpSlot, called.slot, called.symbol);
+    CheckDefinedAt(r15, called.symbol, called.fn);
+  }
+
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "sound_symbol_guard_pinned_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
