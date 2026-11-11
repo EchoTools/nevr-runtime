@@ -66,23 +66,6 @@ run no_expected     src/got_swap.cpp     "s/if (r.original != expected) {/if (fa
 run no_restore      src/got_swap.cpp     "s/mprotect(reinterpret_cast<void\*>(base), page, PROT_READ) != 0/false/"
 run no_build_check  src/plugin.cpp       "s/|| std::strcmp(id, Q15T_BUILD_ID) != 0//"
 run tick_no_vptr    src/game_tick.cpp    "s/if (vptr != g_vptr.load(std::memory_order_relaxed) || !ok) {/if (!ok) {/"
-# T-26
-run t26_no_hold        src/weapon_arm.cpp "s/if (++g_hold < kHold) return;/++g_hold;/"
-run t26_no_marker      src/weapon_arm.cpp "s/if (access(g_marker, F_OK) == 0) {/if (false) {/"
-run t26_ignore_right   src/weapon_arm.cpp "s/if (arm == 1 || prof_arm == 1) {/if (false) {/"
-run t26_ignore_profile src/weapon_arm.cpp "s/if (arm == 1 || prof_arm == 1) {/if (arm == 1) {/"
-run t26_queue_arg      src/weapon_arm.cpp "s/\*reinterpret_cast<std::uint64_t\*>(q + 0x20) = 1;/*reinterpret_cast<std::uint64_t*>(q + 0x20) = 0;/"
-run t26_always_direct  src/weapon_arm.cpp "s/if (direct != 0) {/if (true) {/"
-run t26_no_giveup      src/weapon_arm.cpp "s/if (now - g_set_at > kVerifyS) {/if (false) {/"
-run t26_marker_early   src/weapon_arm.cpp "s/    if (arm == 1) {/    if (true) {/"
-run t26_no_vptr        src/gamespace.cpp  "s/ || Rd<std::uintptr_t>(cs, \&ok3) != vptr_abs//"
-run t26_no_key         src/gamespace.cpp  "s/if (Rd<std::uint64_t>(sys + j \* 16, \&ok3) != key || !ok3) continue;/if (!ok3) continue;/"
-run t26_no_gs_link     src/gamespace.cpp  "s/ || Rd<std::uintptr_t>(cs + 0x80, \&ok3) != gs//"
-run t26_no_valid       src/weapon_arm.cpp "s/if (ok \&\& g_f.is_valid(reinterpret_cast<void\*>(found\[i\].cs), h)) {/if (ok) {/"
-run t26_off_ignored    src/weapon_arm.cpp "s/if (access(off, F_OK) == 0) {/if (false) {/"
-run t26_dir_unchecked  src/weapon_arm.cpp "s/    return access(out, W_OK) == 0;\n  }/    return true;\n  }/;0,/return access(out, W_OK) == 0;/s//return true;/"
-run t26_repeats        src/weapon_arm.cpp "s/  if (g_done) return;\n  Step/  Step/;s/^  if (g_done) return;$//"
-run t26_quiet_missing  src/weapon_arm.cpp "s/LogT26(NEVR_LOG_ERROR, \"t26 off\"/LogT26(NEVR_LOG_INFO, \"t26 off\"/"
 # module mutants: tests/mutants.d/<module>.sh, each a list of `runm <module> <name> <file> <sed>` lines
 for f in "$tests"/mutants.d/*.sh; do
   [ -e "$f" ] || continue

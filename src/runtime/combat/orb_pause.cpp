@@ -16,6 +16,9 @@ void* g_accessor = nullptr;            // the engine's function the slot held
 std::atomic<void*> g_module{nullptr};  // the script's base while the slot is replaced
 std::atomic<volatile std::uint8_t*> g_mailbox{nullptr};
 std::atomic_bool g_registered{false};
+// The last state each edge line reported: -1 none yet, 0, 1.
+std::atomic<int> g_last_live{-1};
+std::atomic<int> g_last_swap{-1};
 
 thread_local int t_in_node = 0;
 
@@ -32,13 +35,14 @@ std::uint64_t NodeHook(void* thread) {
 }
 
 std::uint64_t Accessor(void* ctx, std::uint64_t field, void* out) {
+  const auto engine = reinterpret_cast<AccessorFn>(g_accessor);
   void* module = g_module.load();
+  // No script, so no field id to compare: the engine's call only. Comparing with an id of 0 would act on field 0.
+  if (module == nullptr) return engine(ctx, field, out);
   std::uint32_t spawn_field = 0;
-  if (module != nullptr) {
-    std::memcpy(&spawn_field, static_cast<std::uint8_t*>(module) + kSpawnAccessFieldIdRva, sizeof spawn_field);
-  }
+  std::memcpy(&spawn_field, static_cast<std::uint8_t*>(module) + kSpawnAccessFieldIdRva, sizeof spawn_field);
   const rules::RulesState rules(g_mailbox.load());
-  return ReadField(reinterpret_cast<AccessorFn>(g_accessor), spawn_field, t_in_node > 0, rules, ctx, field, out);
+  return ReadField(engine, spawn_field, t_in_node > 0, rules, ctx, field, out);
 }
 
 }  // namespace
@@ -55,9 +59,28 @@ std::uint64_t ReadField(AccessorFn engine, std::uint32_t spawn_field, bool in_no
   if (in_node && static_cast<std::uint32_t>(field) == spawn_field && out != nullptr) {
     std::uint64_t value = 0;
     std::memcpy(&value, out, sizeof value);  // a qword: the node compares it in full (`cmp r8, -1`)
-    rules.SetMatchLive(Live(value));
-    const std::uint64_t acted = Acted(value, rules.Paused());
+    const bool live = Live(value);
+    rules.SetMatchLive(live);
+    const rules::Pause paused = rules.Paused();
+    const std::uint64_t acted = Acted(value, paused);
     if (acted != value) std::memcpy(out, &acted, sizeof acted);
+    const int was_live = g_last_live.exchange(live ? 1 : 0);
+    if (was_live != (live ? 1 : 0)) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] orb pause: match live from=%s to=%d script=%016llx paused=%u (the RULES mailbox +0x2F, which "
+          "VeilNet reads for TEAM READY -> PAUSE)",
+          was_live < 0 ? "unset" : (was_live != 0 ? "1" : "0"), live ? 1 : 0, static_cast<unsigned long long>(kScript),
+          static_cast<unsigned>(paused));
+    }
+    const int swap = acted != value ? 1 : 0;
+    const int was_swap = g_last_swap.exchange(swap);
+    if (was_swap != swap && (was_swap >= 0 || swap != 0)) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] orb pause: pre-match orbs %s script=%016llx paused=%u (%s)", swap != 0 ? "started" : "stopped",
+          static_cast<unsigned long long>(kScript), static_cast<unsigned>(paused),
+          swap != 0 ? "PAUSE is on: the spawn orbs give the players the pre-match orbs"
+                    : "PAUSE is off or resuming: the spawn orbs give the round's orbs");
+    }
   }
   return r;
 }
@@ -88,7 +111,11 @@ void ResetForTest() {
   g_accessor = nullptr;
   g_module.store(nullptr);
   g_mailbox.store(nullptr);
+  g_last_live = -1;
+  g_last_swap = -1;
 }
+
+void ForgetModuleForTest() { g_module.store(nullptr); }
 #endif
 
 }  // namespace nevr_combat::orb_pause

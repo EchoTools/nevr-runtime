@@ -1,0 +1,1 @@
+On the Quest combat build, the lobbies arena players use no longer hide the smoke, buff and point tac mods on a server without EC; the combat lobby and combat maps still hide them there.

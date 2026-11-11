@@ -1,3 +1,4 @@
+// KNOWN-WRONG #2168: unused: no module of the plugin registers a game tick (the last three moved into the runtime). It is removed when the fold ends.
 // A game-thread tick: a GOT wrapper on CncaGame::ExclusiveUpdateGame, called once per frame by CncaGame::Render on the
 // game thread with x0 = the CR15Game. The wrapper calls the original first, checks the object's vptr, then runs the
 // registered callbacks. Data-page hook only (the import's JUMP_SLOT).
@@ -11,8 +12,7 @@ namespace q15t {
 
 using TickFn = void (*)(std::uintptr_t game);
 
-// Up to kMaxGameTicks callbacks (16: refresh, weapon_arm, gunconnect, aibots, dronekill, dronemuzzle and powerboost can
-// all be on at once, 7); false when full. Register before InstallGameTick.
+// Up to kMaxGameTicks callbacks (16); false when full. Register before InstallGameTick.
 inline constexpr int kMaxGameTicks = 16;
 bool AddGameTick(TickFn fn);
 

@@ -284,7 +284,8 @@ if(TARGET nevr_quest_got_hook)
     login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp
     login/login_standin.cpp
-    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/ext/plugin_manifest.cpp")
   target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
   target_compile_options(nevr_quest_login PRIVATE -Wall -Wextra -Werror)

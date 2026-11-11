@@ -4,6 +4,7 @@
 #   1. the two entries (src/quest/combat/headset_gates_entry.inc) compiled for arm64 are exactly the expected instructions, in this order;
 #   2. each continuation, compiled for arm64 (-O2, as the sentinel is), loads the word the manager publishes with ldar or ldapr (a relaxed load fails);
 #   3. the freestanding program src/quest/tests/headset_gates_qemu.cpp, which includes that very text, runs under qemu-aarch64.
+# This script reads instructions and relocations; it reads no CFI. The frame sensor (tests/quest, on the built sentinel) is what checks the entries' frame description.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 : "${ANDROID_NDK_HOME:?headset_gates.sh: ANDROID_NDK_HOME must name the NDK r26d directory}"

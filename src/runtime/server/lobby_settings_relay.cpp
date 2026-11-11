@@ -8,6 +8,8 @@
 #include <nlohmann/json.hpp>
 #include <utility>
 
+#include "runtime/compat/server_features.h"
+
 namespace nevr_game_server {
 
 namespace {
@@ -119,8 +121,30 @@ std::vector<uint8_t> BuildLobbySettingsLocalEvent(const std::string& json) {
   return message;
 }
 
+namespace {
+
+// Steps 2 and 3: the local event the game's handler (0x14017de60) parses and stores at NetGame+0x63260, then the same
+// document to the peers already connected. False with `report` holding the drop when the game has no broadcaster.
+bool Deliver(const std::string& json, const LobbySettingsSinks& sinks, LobbySettingsReport* report) {
+  if (!sinks.raiseLocalEvent || !sinks.sendToPeer) {
+    report->drop = LobbySettingsDrop::kNoBroadcaster;
+    return false;
+  }
+  std::vector<uint8_t> message = BuildLobbySettingsLocalEvent(json);
+  if (!sinks.raiseLocalEvent(message.data(), message.size())) {
+    report->drop = LobbySettingsDrop::kNoBroadcaster;
+    return false;
+  }
+  std::string body = json;  // CBroadcaster::Send takes the buffer as a mutable pointer
+  uint8_t zeroItem[kLobbySettingsItemBytes] = {};
+  report->sendResult = sinks.sendToPeer(zeroItem, sizeof(zeroItem), body.data(), body.size(), kLobbySettingsAllPeers);
+  return true;
+}
+
+}  // namespace
+
 LobbySettingsReport RelayLobbySettings(const void* data, uint64_t size, const std::string& sessionId,
-                                       const LobbySettingsSinks& sinks) {
+                                       const LobbySettingsSinks& sinks, const std::vector<std::string>* features) {
   LobbySettingsReport report;
   report.wireBytes = size;
   try {
@@ -128,22 +152,13 @@ LobbySettingsReport RelayLobbySettings(const void* data, uint64_t size, const st
     if (decoded.drop != LobbySettingsDrop::kNone) {
       return Dropped(report, decoded.drop, decoded.zlibResult, sessionId);
     }
-    report.jsonBytes = decoded.json.size();
-
-    if (!sinks.raiseLocalEvent || !sinks.sendToPeer) {
-      return Dropped(report, LobbySettingsDrop::kNoBroadcaster, 0, sessionId);
+    report.serviceJson = decoded.json;
+    std::string json = std::move(decoded.json);
+    if (features != nullptr && !nevr_server_features::StateInDocument(report.serviceJson, *features, &json)) {
+      return Dropped(report, LobbySettingsDrop::kNotObject, 0, sessionId);
     }
-
-    // The local handler (0x14017de60) parses and stores the document at NetGame+0x63260; the send below
-    // carries the same document to the clients already connected.
-    std::vector<uint8_t> message = BuildLobbySettingsLocalEvent(decoded.json);
-    if (!sinks.raiseLocalEvent(message.data(), message.size())) {
-      return Dropped(report, LobbySettingsDrop::kNoBroadcaster, 0, sessionId);
-    }
-
-    uint8_t zeroItem[kLobbySettingsItemBytes] = {};
-    report.sendResult = sinks.sendToPeer(zeroItem, sizeof(zeroItem), decoded.json.data(), decoded.json.size(),
-                                         kLobbySettingsAllPeers);
+    report.jsonBytes = json.size();
+    if (!Deliver(json, sinks, &report)) return Dropped(report, report.drop, 0, sessionId);
   } catch (const std::exception&) {
     return Dropped(report, LobbySettingsDrop::kException, 0, sessionId);
   }
@@ -153,9 +168,43 @@ LobbySettingsReport RelayLobbySettings(const void* data, uint64_t size, const st
   report.level = LobbySettingsLogLevel::kInfo;
   report.line = Format(
       "[NEVR.GAMESERVER] lobby settings relayed to the game and all connected peers session_id=%s wire_bytes=%llu "
-      "json_bytes=%llu send_rc=%d",
+      "json_bytes=%llu send_rc=%d features=%s",
       SessionForLog(sessionId).c_str(), static_cast<unsigned long long>(report.wireBytes),
-      static_cast<unsigned long long>(report.jsonBytes), static_cast<int>(report.sendResult));
+      static_cast<unsigned long long>(report.jsonBytes), static_cast<int>(report.sendResult),
+      features != nullptr ? nevr_server_features::Joined(*features).c_str() : "not_stated");
+  return report;
+}
+
+LobbySettingsReport RaiseServerLobbySettings(const std::vector<std::string>& features, const std::string& serviceJson,
+                                             const std::string& sessionId, const LobbySettingsSinks& sinks) {
+  LobbySettingsReport report;
+  const std::string joined = nevr_server_features::Joined(features);
+  const auto refused = [&](LobbySettingsDrop drop) {
+    report.relayed = false;
+    report.drop = drop;
+    report.level = LobbySettingsLogLevel::kWarning;
+    report.line = Format(
+        "[NEVR.GAMESERVER] server features not stated reason=%s session_id=%s features=%s - clients of this session "
+        "keep the EchoCombat tac mods hidden",
+        LobbySettingsDropName(drop), SessionForLog(sessionId).c_str(), joined.c_str());
+    return report;
+  };
+  try {
+    std::string json;
+    if (!nevr_server_features::StateInDocument(serviceJson, features, &json)) return refused(LobbySettingsDrop::kNotObject);
+    report.jsonBytes = json.size();
+    if (!Deliver(json, sinks, &report)) return refused(report.drop);
+  } catch (const std::exception&) {
+    return refused(LobbySettingsDrop::kException);
+  }
+  report.relayed = true;
+  report.drop = LobbySettingsDrop::kNone;
+  report.level = LobbySettingsLogLevel::kInfo;
+  report.line = Format(
+      "[NEVR.GAMESERVER] server features stated in lobby settings session_id=%s features=%s json_bytes=%llu "
+      "service_keys_kept=%d send_rc=%d (every client this session accepts gets them from the game)",
+      SessionForLog(sessionId).c_str(), joined.c_str(), static_cast<unsigned long long>(report.jsonBytes),
+      serviceJson.empty() ? 0 : 1, static_cast<int>(report.sendResult));
   return report;
 }
 
