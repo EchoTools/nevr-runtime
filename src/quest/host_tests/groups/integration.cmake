@@ -100,3 +100,21 @@ nevr_ht_group(hooks-pinned)
 nevr_ht_test(got_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
   SRC src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(sound_symbol_guard_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/sound_symbol_guard_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(bullet_velocity_guard_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/bullet_velocity_guard_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(texel_buffer_guard_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/texel_buffer_guard_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(scanner_sphere_draw_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/scanner_sphere_draw_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(outline_mode_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/outline_mode_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(chassis_fork_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/chassis_fork_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
