@@ -341,7 +341,7 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | a staged plugin's `DllMain` loads the plugin's own path | checked by the filter (it holds the file); the loader's own load of it is not checked a second time |
 | late load by a full path, a link in it repointed after the check, signed-only run | the checked file loads; an unsigned-allowed run loads what the caller named |
 
-Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
+Mutants (AGENTS.md "What a landed commit carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open
 (a 65th dependency is then accepted), compare the late-load path as text instead of its final path (an 8.3 name, a `\\?\` prefix or a trailing dot
 or space then loads unchecked), let a late load go by the caller's text after the check, rewrite in an unsigned-allowed run, rewrite a bare name; each makes its row fail.

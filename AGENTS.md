@@ -25,19 +25,22 @@ These come before every other rule in this file.
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **Every action follows a documented pattern.** Before an action, name the pattern this repo documents that covers it:
+  a rule in this file, a `justfile` recipe, or a step in `RELEASING.md` or a runbook under `docs/`. An action no
+  documented pattern covers is not taken: stop, name the gap and the action it blocks, and report it.
 
 ## Commits, versions and requirement words
 
-- **Commits and PR titles** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+- **Commits** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
   `<type>[(scope)][!]: <description>`. Types: `feat` (a feature), `fix` (a bug fix), `docs`, `style`, `refactor`,
   `perf`, `test`, `build`, `ci`, `chore`, `revert`. A breaking change is marked with `!` before the colon or a
-  `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `.github/workflows/pr-title-check.yml`
-  (`tools/check_pr_title.py`) checks the PR title.
+  `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `tools/check_pr_title.py` checks a subject
+  line it is given against this form.
 - **Credit the people whose work we integrate, every time.** A commit that draws on a person's code, patch, research
   or findings carries a `Co-Authored-By` trailer for that person, alongside the house trailers: their GitHub noreply
   address, `<id>+<login>@users.noreply.github.com` (`gh api users/<login>` gives the id). Someone with no GitHub
-  account is credited by name in the commit body and in the README thanks. A squash merge keeps those trailers in the
-  merge commit message.
+  account is credited by name in the commit body and in the README thanks. The commit that lands on `main` keeps those
+  trailers.
 - **Versions** follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Tags stay `vX.Y.Z`.
 - **Requirement words** (MUST, SHALL, SHOULD, MAY and their negations) follow
   [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
@@ -68,15 +71,15 @@ tests, recipes, unit files, docs, comments and agent definitions alike:
 
 nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
-**Echo VR is one codebase built for two binaries:** echovr.exe (PC, x86-64) and libr15.so (Quest, aarch64). The game functions we hook are the same functions on both, compiled differently. So a feature is written once: one hook per game function with a per-binary table of addresses (and calling convention where it differs), and one implementation of everything above the hook (transport is libcurl on both). Before adding any file under `src/quest/` that does what a `src/runtime/` file already does, use the shared one; a Quest-only copy needs a stated platform reason in its PR, and "it's Quest" is not one. (#1598)
+**Echo VR is one codebase built for two binaries:** echovr.exe (PC, x86-64) and libr15.so (Quest, aarch64). The game functions we hook are the same functions on both, compiled differently. So a feature is written once: one hook per game function with a per-binary table of addresses (and calling convention where it differs), and one implementation of everything above the hook (transport is libcurl on both). Before adding any file under `src/quest/` that does what a `src/runtime/` file already does, use the shared one; a Quest-only copy needs a stated platform reason in its commit message, and "it's Quest" is not one. (#1598)
 
 ## For contributors
 
 The rest of this file binds every agent, a contributor's included, except the parts marked **Maintainers only**. This
 section applies to an agent working for an outside contributor, on the contributor's own machine. It adds what such an
-agent needs: what to read, what a PR carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
+agent needs: what to read, what a landed commit carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
 on yours instead. Where a step needs access only the maintainers have (the production server's logs, the
-release pipeline), do what you can without it and ask in your PR or issue. Never guess in its place.
+release pipeline), do what you can without it and ask in the issue. Never guess in its place.
 
 ### Required reading
 
@@ -85,10 +88,10 @@ Read each one before you start the kind of work it covers:
 
 | Standard | Read it before you... |
 | --- | --- |
-| `docs/standards/verification.md` | claim anything is fixed, working or verified; add or change a check in `just verify`; write a PR body |
+| `docs/standards/verification.md` | claim anything is fixed, working or verified; add or change a check in `just verify`; write a commit message |
 | `docs/standards/logging.md` | add, change or review a `Log()` call or a log tag; touch the built-in log filter; diagnose a run from its log |
 | `docs/standards/naming.md` | add any name: file, directory, type, function, namespace, macro, config key, log tag, DLL export, branch |
-| `docs/standards/planning.md` | open or edit an issue, a PR's milestone or labels, or anything on the project board |
+| `docs/standards/planning.md` | open or edit an issue, its milestone or labels, or anything on the project board |
 
 The N-rules ("The N-rules index" below) bind too. A change to a file they guard must keep them, whether or not
 `just verify` would notice.
@@ -105,11 +108,11 @@ each one gives; do the step this way on yours:
 | "Builds" and "Live game runs": the shared `nevr-builds.slice` and `nevr-live.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. Builds, verify and tests run in `nevr-builds.slice`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. If you run one build lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install" | See "Your game install" below. |
-| "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
+| "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the issue, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the issue. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
-| "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a PR. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
+| "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a branch. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
-| Merging, and "Only the agent the owner has told to merge merges PRs" | A contributor's agent never merges. The maintainers review and merge. |
+| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, take the review to its MERGE verdict and run "Landing" through step (2), then stop: push the branch to your fork and post its name and tip SHA on the issue. Never push to `main` of another remote. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
@@ -135,10 +138,10 @@ differ, and so does who makes the pristine copy:
 Everything else in "The game install" applies unchanged: the list of writers, how to point each at the copy, the
 size check, removing `_local/config.*`, every `.credentials.json*` and `plugins/*`, and the shape each script needs.
 
-### What a PR carries
+### What a landed commit carries
 
-#471 is the model: a merged PR that carries all of the items below. Most merged PRs do not yet carry all of them, but
-your PR does:
+The message of the commit that lands carries the items below; it is the evidence (see "Review, verification and
+landing"). Most commits on `main` do not yet carry all of them; a contributor's commit does:
 
 - **A search statement.** Before adding anything, show that nothing in the tree or its history already does it. State
   the commands and what they found, over files *and* history:
@@ -151,19 +154,19 @@ your PR does:
 
   "Nothing found" counts only with the pattern and the scope it ran over.
 - **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
-  what you fix. A PR that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
-  that shape (the pattern and the scope it ran over), and says for each hit: fixed in this PR, filed (`#N`), or not
+  what you fix. A commit that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  that shape (the pattern and the scope it ran over), and says for each hit: fixed in this commit, filed (`#N`), or not
   the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
 
   ```
   ## Siblings
   Shape: a socket that mints a new token on every HTTP 401, with no time gate.
   - `git grep -l "rejected the bearer token (HTTP 401)" -- src/runtime/server` (2 files):
-    websocket_client.cpp: fixed in this PR (the ServerDB socket now mints through BearerReconnectAuth);
+    websocket_client.cpp: fixed in this commit (the ServerDB socket now mints through BearerReconnectAuth);
     bearer_reconnect_auth.cpp: not the same shape (it mints at most once per 30 s).
   ```
 - **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
-  the reviewer knows what you looked at and what you left alone:
+  the review sees what was read and what was left alone:
 
   ```
   ## Symbols
@@ -171,7 +174,7 @@ your PR does:
   Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
   ```
 - **A mutant for every changed line of behaviour.** This is stricter than "A test must fail without the change" under
-  "Review, verification and merge", which every PR meets; a contributor's PR meets this as well. For every line
+  "Review, verification and landing", which every commit meets; a contributor's commit meets this as well. For every line
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
@@ -184,13 +187,13 @@ your PR does:
   - M2 `undrained_` never decremented -> FAIL test_reader_gate: TimesOutWhenReadersStay
   - restored tree: 9 tests OK
   ```
-- **Evidence on the exact tip**, as "Review, verification and merge" says: each command run on the tip SHA and its
-  result, what was not run, and the tracking issue.
-- **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
-  body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
+- **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the tip SHA and its
+  exit code, what was not run or not established, and the issue (`Closes #N` or `Refs #N`).
+- **Platform parity.** PCVR and Quest stay at parity. A commit that adds or changes player-facing behavior says in its
+  message what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
-- **A headline, when players see a change.** A PR that changes what players see adds `release-headlines/<issue-or-topic>.txt`
-  with one line, one plain sentence a player would understand about that change only, written by the PR's author
+- **A headline, when players see a change.** A commit that changes what players see adds `release-headlines/<issue-or-topic>.txt`
+  with one line, one plain sentence a player would understand about that change only, written with the change
   (`RELEASING.md`, "Write the release body"), and deletes the fragments present at the newest `vX.Y.Z` tag
   (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). The release body's player line is the files the range
   adds, or "Fixes and internal changes." when it adds none; the commits never write it. A change behind a setting that is
@@ -205,11 +208,11 @@ your PR does:
 
 ### Live rules
 
-- **The PR body ends with `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge").
-  `.github/workflows/pr-read-check.yml` fails the PR without it. On a PR from a fork, a maintainer has to approve the
-  workflow run before it runs.
-- **The PR body names the issue it resolves or advances** (`Closes #N` or `Refs #N`; see "Review, verification and
-  merge"). `.github/workflows/pr-issue-link-check.yml` fails the PR without it. The same fork rule applies.
+- **No pull requests.** Work lands on `main` from a local branch through "Landing" (see "Review, verification and
+  landing"), after a fresh-context review gives MERGE. One named exception: the nightly
+  `.github/workflows/echo-symbols-sync.yml` still opens a pull request; #2370 moves it to "Landing".
+- **The landed commit names the issue it resolves or advances** (`Closes #N` or `Refs #N`; see "Review, verification
+  and landing"). No check enforces this; the review does.
 - **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). No check
   enforces this: the scripts still default to the checkout's `echovr/`, so point every writer at the copy yourself.
 
@@ -218,7 +221,7 @@ your PR does:
 The code carries rules tagged `N<number>` in comments (`// N62: ...`) and in the `just verify` recipe, whose sensors
 name the rule they guard in their FAIL line. A green `just verify` does **not** prove you kept every one: some are
 checked by a GTest or a Python check, some only by a live run, and some by nothing. Before you change a file named
-below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the PR and why.
+below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the commit message and why.
 
 The index was built from `git grep -nE '\bN[0-9]+\b'` over `src/`, `sdk/` and `tools/`, the `verify` recipe in
 `justfile`, and the Python checks it runs. An ID cited only as history inside another rule's comment (for example N41,
@@ -367,19 +370,18 @@ a file it names.
 
 ## Branch lifecycle (every agent-created branch)
 
-**Whoever creates a branch deletes it.** Nobody else cleans up after you.
+**Whoever creates a branch deletes it.** Nothing else cleans it up.
 
-Every branch an agent creates has a documented deletion point from the moment it exists. A merged branch is scratch: the PR keeps the commits, so never keep one "for reference".
+Every branch an agent creates has a documented deletion point from the moment it exists. A landed branch is scratch: `main` keeps the commits, so never keep one "for reference".
 
-- **One branch per PR.** Name it `<seat>/<issue>-<slug>`.
+- **One branch per unit of work.** Name it `<seat>/<issue>-<slug>`.
 - **Create:** `git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
-- **Declare the end:** `git worktree lock --reason "<seat>: delete when PR #<n> merges or closes" .claude/worktrees/<branch>`, and the PR body carries the line `Branch lifecycle: deleted when this PR merges or closes.`
-- **Push only by explicit ref:** `git push origin HEAD:refs/heads/<branch>`.
-- **On merge:** the seat that created the branch removes its worktree and deletes the local and origin branch in the same turn it sees the merge. nevr-merge's `tools/reap_merged.py` is a backstop, not the plan.
-- **On close without merge:** same, the creator, same turn.
-- **No PR within 24 hours:** open one or delete the branch.
-- **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
-- **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
+- **Declare the end:** `git worktree lock --reason "<seat>: delete when it lands on main or is abandoned" .claude/worktrees/<branch>`.
+- **The branch stays local.** The one push is `main`, by explicit refspec ("Landing").
+- **On landing:** remove the worktree and delete the local branch in the same turn as the push of `main`. `tools/reap_merged.py` is a backstop, not the plan.
+- **On abandoning:** the same, in the same turn.
+- **Not landed within 24 hours:** land it or delete the branch.
+- **"Landed" means** the tip is an ancestor of `origin/main`: `git merge-base --is-ancestor <branch> origin/main` succeeds.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
 - **Remove a worktree with `just remove-worktree <absolute path>`** (`tools/remove_worktree.py`; `--dry-run` proves and changes nothing; run it from the main checkout or another worktree, never from inside the one it removes). Before it changes anything it refuses when a process has its cwd inside (a shell of your own session included), when anything is uncommitted or ignored beyond build output, when an initialised submodule has uncommitted work or a commit that is on no remote, or when a plain copy under `extern/` (what `just worktree-setup` makes) differs from the main checkout's. It runs no `git submodule deinit` and no `--force`, and leaves the shared submodule config as it found it. `tools/reap_merged.py` removes through it. A check that only prints, followed by a removal, is not the check.
 
@@ -667,11 +669,11 @@ An unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`) is looked up in th
 
 ## Continuity
 
-You are not the first agent to work here, and you won't be the last. Act like it.
+Other agents worked here before this session, and others will after it. Act like it.
 
 - **Search before you build.** The answer probably already exists in the game's disassembly, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
 - **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
-- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
+- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. Other agents work in this repo at the same time. Stop doing sequential searches when you could dispatch five agents at once.
 - **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
 - **Don't hand off what you can finish.** Writing a handoff doc is not progress. Finishing the work is progress. Handoff docs are for when the session is genuinely ending, not when the problem gets hard.
 - **Measure everything before concluding anything.** One data point is not a finding. If you measure registered component types, also measure loaded component resources. If you compare arena vs combat, compare at every layer — code registration, resource data, runtime state, rendered output. A conclusion from a single measurement is a guess. Cross-validate before declaring anything "critical."
@@ -698,15 +700,15 @@ You are not the first agent to work here, and you won't be the last. Act like it
 ## Working practices for every agent
 
 These bind every agent that works here, whatever its model or vendor. Another agent's
-worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
-Only the agent the owner has told to merge merges PRs; other agents hand off. `<agent>` below is
+worktrees, branches and scratch are theirs; do not touch them without being told to.
+Work lands on `main` through "Landing" ("Review, verification and landing"). `<agent>` below is
 your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
 - **Keep a ledger.** The file `REAP_LEDGER` names is a markdown table
-  (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, issue, PR and
-  push to another agent's branch an agent has made; the owner is your seat name. Add the row in
+  (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, and issue
+  an agent has made; the owner is your seat name. Add the row in
   the same turn you create the thing. Read the ledger before deleting anything; an item not in it
   is not yours.
 - **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
@@ -723,8 +725,8 @@ your seat name, for example `claude-main` or `codex`.
   in. A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
 - **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
   (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
-  creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the PR
-  citing it merges, unless the PR keeps it as evidence. The creator removes it, by exact path, the turn that end
+  creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the commit
+  citing it lands, unless the commit keeps it as evidence. The creator removes it, by exact path, the turn that end
   comes. A seat's summary lists what it has live there, each item with its end condition. Each directory directly
   under the root carries a `README.md` saying what it is for, whose it is and when it is removed; a tool that makes
   one writes it (`tools/lib/work_root.sh`, `tools/work_root.py`).
@@ -737,7 +739,7 @@ your seat name, for example `claude-main` or `codex`.
   of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
   worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
   a recursive removal of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
-  origin once merged) and update the ledger row.
+  origin, if it was ever pushed there) and update the ledger row.
   **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
   `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
   never the step after an unchecked one:
@@ -746,7 +748,7 @@ your seat name, for example `claude-main` or `codex`.
   just remove-worktree <absolute path> && git branch -D <branch>
   ```
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
-  remove it when its PR merges.
+  remove it when its branch lands.
 
 ### Builds
 
@@ -762,7 +764,7 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
-- **Cached builds come from one fixed, clean checkout.** The merge foreman builds in `<work root>/build-checkout/nevr-runtime`
+- **Cached builds come from one fixed, clean checkout:** `<work root>/build-checkout/nevr-runtime`
   (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
   `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes. The Quest build uses the
   launcher here as in every other checkout (see "Builds"). Nobody edits
@@ -770,39 +772,39 @@ your seat name, for example `claude-main` or `codex`.
   the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
-- **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
+- **A branch runs the quick check before it lands, not `just verify`.** The quick check is: the build (`just build`), the test
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on). The PC login test is not part of it: it runs
-  on main after the release cut ("Verification before merge"). The GTest floor is not stored:
+  on main after the release cut ("Verification before landing"). The GTest floor is not stored:
   `python3 tools/verify_gtest_floor.py` counts `TEST(` / `TEST_F(` declarations in `src/runtime/tests/*.cpp` at HEAD
-  and at the merge-base with `origin/main` (on main, the parent commit) and fails when HEAD has fewer. A PR that
-  removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. A PR that touches `src/runtime/host/exports.def`, an
+  and at the merge-base with `origin/main` (on main, the parent commit) and fails when HEAD has fewer. A change that
+  removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. A change that touches `src/runtime/host/exports.def`, an
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
-  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every PR, whatever it touches, also runs
+  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every change, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
   `test-runs/tools-tests` in the work root, `~/src/nevr-runtime-work`). A failure is reported by the test ids that run's record
-  names, never by a count alone. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
-  not run is named as not run.
-  CI runs only when started by hand.
-- **`just verify` runs only on main, after the release cut, once per cut.** A PR does not run it and a
-  reviewer does not ask for it. It is not run again for the same cut. Its log starts with
+  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its exit code in
+  the commit message; an item not run is named as not run.
+  No CI runs on a landing push except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
+- **`just verify` runs only on main, after the release cut, once per cut.** A branch does not run it and the
+  review does not ask for it. It is not run again for the same cut. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
-  `verify: OK` is the proof: a reviewer reads that log and does not run verify again. A missing HEAD line is
+  `verify: OK` is the proof: read that log; do not run verify again. A missing HEAD line is
   checked in seconds (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time),
   never by a re-run. Run verify again only for a later release cut.
 
 ### Git
 
-- **Branches are cut with `--no-track` and pushed by explicit refspec:**
-  `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
-  and compare after it; read the `->` line of every push.
-- **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
+- **Branches are cut with `--no-track`; `main` is pushed by explicit refspec:**
+  `git push origin HEAD:refs/heads/main` from the landing worktree ("Landing"). Record `git ls-remote origin main`
+  before the push and compare after it; read the `->` line of every push.
+- **Update with `git fetch` and `git rebase origin/main` on the unpushed branch** ("Landing"), never `git pull`.
 - **A contributor's fork branch is fetched with `git fetch --no-tags <fork-url> <branch>`.** Fetching a fork into the shared clone (a named remote, or a refspec that stores refs) brings the fork's tags, and a local tag that is not on origin makes the release preflight refuse (#1463).
-- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch.
-  Fix a pushed mistake with a new commit.
-- **PRs target `main`.** Do not base a PR on another feature branch.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch, and never a
+  force-push of `main`. Fix a pushed mistake with a new commit.
+- **Branches start from `origin/main`.** Do not base a branch on another feature branch.
 - **Report a mistake the moment you see it,** with the command and its output.
 
 ### The game install
@@ -901,7 +903,7 @@ your seat name, for example `claude-main` or `codex`.
       anywhere under `echovr/`, and uses a `_local/config.yaml` or a nevr-root `config.yaml` that is present as it is. It sets
       `WINEPREFIX` to
       `echovr/.wineprefix`.
-  - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
+  - **Who makes it, and reuse.** Only a human makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
     `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
     registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
@@ -921,12 +923,13 @@ your seat name, for example `claude-main` or `codex`.
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 
-### Review, verification and merge
+### Review, verification and landing
 
-- **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
-  surrounding code, reproduces what the PR claims, and reports findings with `file:line` and quoted
-  evidence. Merge only when the review is clean, or when each finding is fixed and re-verified on
-  the new tip.
+- **Review in a fresh context before landing.** Start a subagent with the diff (`git diff origin/main...HEAD`), the
+  commit message and the issue text, and nothing of the author's conclusions. Have it read the diff and the
+  surrounding code, reproduce what the commit message claims, report findings with `file:line` and quoted evidence,
+  and end with one verdict: MERGE or FIX. FIX goes back to the work; after the fix, start a new review on the new tip.
+  Only MERGE lands.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing.
 - **Name the result before the check.** Before a check, a test run or a done condition, write down the result that would
@@ -934,33 +937,29 @@ your seat name, for example `claude-main` or `codex`.
 - **Force the mechanism to prove a fix.** Plant the bug, or inject the delay or the thread hop that exposes it, and run
   once with the bug and once without; paste both outputs. "Run it N times" is neither proof nor a done condition. When a
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
-- **The PR body is the evidence.** It states each command run on the exact tip and its result, what
-  was not run, and the tracking issue. Update it whenever the base or the content changes.
-- **A PR is opened only for an existing issue, and its body names it.** The issue states the problem and its done-bar;
-  a PR without one has nothing to be checked against and nothing to close. The body carries one line for each
-  issue it resolves: `Closes #N` (or `Fixes #N`, `Resolves #N`). A PR that leaves part of an issue open, such as a
-  live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says in the body what is still open. A fix
-  that has no issue gets an issue first. There is no "no issue" form.
-  `.github/workflows/pr-issue-link-check.yml` runs `tools/check_pr_issue_link.py` on every open, edit and push and fails
-  a body that names none; it cannot tell whether the diff really resolves the issue, so the review (the first bullet
-  above) confirms that each linked issue is resolved by the diff. The merged PR's issue is then closed with the PR
-  linked (`docs/standards/planning.md`, "Hygiene rules"); an issue a merged PR fixed is never left open.
-- **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
-  `<sha>` is the PR's base commit: `git merge-base HEAD origin/<target>`, where `<target>` is the
-  branch the PR targets (usually `main`), the commit whose AGENTS.md you branched from (7 to 40 hex
-  characters of it). Fetch first (`git fetch origin <target>`); a stale `origin/<target>` can give
-  another merge-base. It is a tell that you read this file, not a security control;
-  `.github/workflows/pr-read-check.yml` runs `tools/check_pr_read_line.py` on every open, edit and
-  push, against the PR's target branch, and fails on a missing line, a line that is not last, or a
-  sha that is not that commit. The scaffold line is in `.github/pull_request_template.md`. When the
-  target moves after the PR is opened the base does not: it stays the commit you branched from until
-  you `git merge origin/<target>`, and the check then names the new merge-base, so update the line
-  (an edit to the body re-runs the check).
-- **Verification before merge.** A runtime change is tested once by its author before its PR is marked ready: the
+- **The commit message is the evidence.** It carries what "What a landed commit carries" lists: each command run on
+  the exact tip and its exit code, the mutants, what was not run or not established, and the issue. When the content
+  changes before landing, amend that commit before Landing's step (1).
+- **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its
+  done-bar. The commit message carries one line for each issue it resolves: `Closes #N` (or `Fixes #N`,
+  `Resolves #N`); GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open,
+  such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open. A fix
+  that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is
+  resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`).
+- **Landing.** In the worktree, after MERGE: (1) `git fetch origin`, then `git rebase origin/main` (the branch is
+  unpushed; a merge commit would land on `main` with git's default subject, which is not a Conventional Commit);
+  (2) rerun the tests the change touches on the result, amend their exit codes into the commit message, and send a
+  failure back to the work; (3) record `git ls-remote origin refs/heads/main`; (4) fast-forward `main` on origin from
+  the worktree by explicit refspec, `git push origin HEAD:refs/heads/main` (a push without `--force` can only
+  fast-forward); (5) record `git ls-remote origin refs/heads/main` again: it is the branch tip; (6) in the checkout
+  where `main` is checked out, `git fetch origin && git merge --ff-only origin/main`. A push rejected because `main`
+  moved goes back to step 1, with local `main` untouched. Never force-push `main`. Then delete the branch ("Branch
+  lifecycle").
+- **Verification before landing.** A runtime change is tested once before it lands: the
   quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
-  (the mechanics under "Client login test mechanics") and `just verify`. A PR never runs either, and a branch does not
-  run them again after a rebase or a merge of main into it. A red PC login run or a red `just verify` on main is a
-  red main. A red main is bisected, and the culprit is reverted or fixed by PR. Merging does not stop while main is
+  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, and does not
+  run them again after a rebase. A red PC login run or a red `just verify` on main is a
+  red main. A red main is bisected, and the culprit is reverted or fixed by a landed commit. Landing does not stop while main is
   red. Main always builds. The PC login run's log shows all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
@@ -1020,15 +1019,17 @@ your seat name, for example `claude-main` or `codex`.
   yet implemented`, `until ... lands`) names the issue that tracks it. When the fix lands, the marker goes with it.
   `tools/check_known_wrong.py` checks all four in `just test-tools`; run it with `--online` when you add or remove a
   marker, so a marker never names a closed issue.
-- **Public prose carries no hosting URLs, no chat quotes and no local paths.** A seat never publishes on its own: it
-  drafts every public post (issue, PR body or edit, comment, review, release note) and sends the text to Spritz; it
-  posts only after her approval. The reason: seats post on the owner's account, so their words are public in his name,
-  and a seat's job is the code, not communication. A PR body, issue body, comment, review and commit message is public.
-  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket),
+- **Public prose carries no hosting URLs, no chat quotes and no local paths.** Never post on your own: draft
+  every public post (issue, comment, release note), send the text to Spritz, and post it only after her approval. The
+  reason: posts go out on the owner's account, so their words are public in his name. A commit landed through
+  "Landing" is not a post and needs no approval, and neither is the issue it needs ("Work starts from an existing
+  issue"): post that issue without waiting and send its text to Spritz as posted, so the approval never holds up
+  landing. An issue body, a comment and a commit message are public.
+  Each MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket),
   except that a public download or CDN endpoint that installers must fetch from MAY be named (for example the manifest
   location in the installer verification doc); internal hosts, buckets and machines stay out. It MUST NOT contain the
   words of a person from chat or a message (quoted, or paraphrased as the reason for a change), or a local path (e.g.
-  `/home/...`, `/var/tmp/...`, `/mnt/...`, `/tmp/...`, `~/...`, `C:\...`). In findings and PR bodies, use repo-relative
+  `/home/...`, `/var/tmp/...`, `/mnt/...`, `/tmp/...`, `~/...`, `C:\...`). In findings and commit messages, use repo-relative
   paths, or `<scratch>` for scratch output. Name a design decision by its reasoning, an issue or an ADR, never by "the
   owner said" or "decided by <name>". Code and configuration that must name the host they fetch from are not prose and
   are exempt.
@@ -1045,10 +1046,12 @@ your seat name, for example `claude-main` or `codex`.
 - **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
   adversarial reviews and open design questions; a small model for search and mechanical edits.
 - **Brief them with the rules above.** Name their worktree, their own scratch subdirectory (never
-  the dispatcher's) and push refspec; forbid rebase, force-push, merging and pushing to `main`;
+  the dispatcher's); have them review and land their own work through "Landing" and forbid any other push and any
+  force-push;
   require mutation proof for tests; ask for commands run with raw output and a list of what was
   not verified.
-- **Subagents report observations, not verdicts.** Check what they claim before relying on it.
+- **Subagents report observations, not verdicts,** except the review's MERGE or FIX ("Review, verification and
+  landing"). Check what they claim before relying on it.
 
 ## Production Deployment — FORBIDDEN without explicit user approval
 
@@ -1077,7 +1080,7 @@ Spritz (metis-sprock) carries sprockee's full authority for this repo. A maintai
 > **Maintainers only.** The production server and its logs, and the display numbers, are the owner's machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
-  install"),** on main after each release cut, never on a PR ("Verification before merge"). The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A main run that does not log in is a red main.
+  install"),** on main after each release cut, never on a branch ("Verification before landing"). The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A main run that does not log in is a red main.
 - **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against a headless `Xvfb :101 -screen 0 1920x1080x24` (Xephyr opens a window on the owner's desktop, so it is only for a run the owner asks to watch), and confirm `Xvfb :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
@@ -1114,7 +1117,7 @@ When something fails, the first act is reading the failing program's **own** log
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
 - **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in the disassembly: every function the patch touches, its callers, and what each byte change does; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
-- **Prefer a hook to a byte patch.** Reconstruct the function from the disassembly, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. Where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour), the exception is a full replacement of the containing function or a checked byte patch (`nevr_checked_patch`), and the PR names the case, the reason and the measured numbers `docs/adr/0038-hot-path-rule.md` asks for.
+- **Prefer a hook to a byte patch.** Reconstruct the function from the disassembly, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. Where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour), the exception is a full replacement of the containing function or a checked byte patch (`nevr_checked_patch`), and the commit message names the case, the reason and the measured numbers `docs/adr/0038-hot-path-rule.md` asks for.
 
 ## Dependencies
 
@@ -1135,14 +1138,14 @@ When something fails, the first act is reading the failing program's **own** log
   conventional prefix, and one logical change per commit. Work by Teth or Glow Sprock is authored
   by that sister, with the same two trailers. You **SHALL** verify after each commit:
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
-- **GitHub account.** Every `gh` action a maintainer agent takes (issues, PRs, comments, reviews,
-  merges, releases) runs as the metis-sprock account.
+- **GitHub account.** Every `gh` action a maintainer agent takes (issues, comments, releases) runs as the
+  metis-sprock account.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `~/src/nevr-runtime-work/` (see "Working practices"), never `/tmp` and never in the
   repo.
-- **Verify entry point.** `just verify` is the single closed-loop gate, run on main after the release cut (a PR
+- **Verify entry point.** `just verify` is the single closed-loop gate, run on main after the release cut (a branch
   runs the quick check, see "Builds"):
   `just build` (a plain `cmake --build`, so it exits nonzero when the build fails), then `test-auth-unit` and
   `test-quest-shared`, the Python test suite and source-invariant checks. The Go system suites are
@@ -1162,7 +1165,7 @@ so that every agent reads it (it is required reading per the pre-read gate above
 **Required reading** for ANY agent writing, building, or reviewing C++
 code in a project that uses mingw-w64 cross-compilation to produce
 Windows DLLs. Read this BEFORE writing any C++ code, BEFORE touching the
-build system, and BEFORE making any PR in an adopting repo.
+build system, and BEFORE landing any change in an adopting repo.
 
 ---
 

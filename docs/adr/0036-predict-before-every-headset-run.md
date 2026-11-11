@@ -17,8 +17,8 @@ coincidence, and cannot catch a regression nobody was looking for.
 
 The rule that answers this already exists in general form. AGENTS.md "Do what was asked": "Every check carries a decision
 rule. Before any test, build or check, write down the result that would change what you do and the action it would
-trigger." AGENTS.md "Review, verification and merge": "Name the result before the check." An issue states its Falsifier
-(AGENTS.md "What a PR carries"), and `docs/standards/verification.md` asks that the discriminator be recorded in the
+trigger." AGENTS.md "Review, verification and landing": "Name the result before the check." An issue states its Falsifier
+(AGENTS.md "What a landed commit carries"), and `docs/standards/verification.md` asks that the discriminator be recorded in the
 tracking issue before the fix is attempted. The ADRs put it into practice for their first runs: ADRs 0007, 0009, 0014,
 0015, 0018 and 0020 to 0026 carry a "Prediction" section, and ADR 0019's section 11 is a table of predictions with a
 falsifier and the place each is tested (`docs/adr/0019-quest-plugin-loader.md`, "Verification and predictions").
@@ -36,7 +36,7 @@ ones ([Center for Open Science: preregistration](https://www.cos.io/initiatives/
 
 This ADR gives AGENTS.md's "decision rule" a fixed form for headset and client runs.
 
-1. **A run has a row for each check, written before it**, in the ADR, the PR body (a PR's check) or the issue (a
+1. **A run has a row for each check, written before it**, in the ADR, the commit message (a change's check) or the issue (a
    defect's falsifier), committed or posted before the run. The row holds:
    - **H**: the hypothesis, one sentence.
    - **Predict**: the exact log lines (event and fields) and values expected, per headset or platform where they differ
@@ -45,9 +45,9 @@ This ADR gives AGENTS.md's "decision rule" a fixed form for headset and client r
    - **Then**: what is done if it is refuted (back to the code, a revert, a new issue), decided before the run.
    - **Test**: the steps, the build (its version and variant, ADR 0040) and what to capture.
 
-   An issue's Falsifier (AGENTS.md "What a PR carries") serves as its row's "Refuted if". A run whose expected result
+   An issue's Falsifier (AGENTS.md "What a landed commit carries") serves as its row's "Refuted if". A run whose expected result
    AGENTS.md already states has that statement as its row: the PC login test after a release cut, whose log shows the
-   four keys, then `LOGIN SUCCESS` and `to logged in` (AGENTS.md "Verification before merge").
+   four keys, then `LOGIN SUCCESS` and `to logged in` (AGENTS.md "Verification before landing").
 2. **The result is read against the row.** The report quotes the lines the run produced and says, per row, matched or
    refuted. It never re-describes the prediction after the run, and a prediction is never edited once the run started:
    a changed prediction is a new row and a new run.

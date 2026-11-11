@@ -1,6 +1,6 @@
 ---
 name: merge-cleanup
-description: Use right after you merge a PR, or when df shows the disk tight. Removes the worktrees, local branches and origin branches whose work has landed, each one only after a proof.
+description: Use right after you land a branch on main, or when df shows the disk tight. Removes the worktrees, local branches and origin branches whose work has landed, each one only after a proof.
 ---
 
 # merge-cleanup

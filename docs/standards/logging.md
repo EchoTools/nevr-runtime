@@ -7,7 +7,7 @@ when, they appear in all capitals, as shown here.
 
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
-adding a `Log()` call, BEFORE reviewing a PR that touches logging, and
+adding a `Log()` call, BEFORE reviewing a change that touches logging, and
 BEFORE tuning the built-in log filter.
 
 ---
@@ -807,7 +807,7 @@ structured call (ADR 0027) writes as its own key.
 
 ## Hard Stops
 
-These are enforced in code review. A PR that introduces a log line
+These are enforced in code review. A change that introduces a log line
 failing any of these checks is rejected until the violation is fixed.
 
 | Problem                                      | Why It's a Stop                   | Fix                                                   |

@@ -11,9 +11,9 @@ or switch starts a release, and a release the person has not decided on does not
 **Owner.** The release owner is accountable for a release from staging until it is live and watched, or until it is
 withdrawn and cleaned up. The publish (step 4) happens on the owner's go.
 
-**Seats.** A release seat merges its own pull requests, in this repository and in the signer repository, once the pull
-request's checks are green and a fresh verifier (neither the author nor the implementer) has passed the tip with every
-finding fixed. It deletes the branch and the worktree the same turn.
+**Landing.** Release work in this repository lands like every change (AGENTS.md, "Review, verification and landing"):
+on a local branch, after the quick check and a fresh-context review's MERGE, pushed to `main` as a fast-forward; the
+branch and the worktree are deleted the same turn. Work in the signer repository follows that repository's rules.
 
 ## The flow
 
@@ -64,7 +64,7 @@ time, under the owner's go.
   without the changes since, the release is cut from a branch `release/X.Y`, made at the line's newest tag, that holds only the
   fix, and the tag sits on that branch's tip, so it is not an ancestor of `main`. v6.16.5 is the v6.16.4 commit plus
   one fix, cut from `release/6.16`; its version is the next patch of the 6.16 line. The same fix also reaches `main` through its
-  own pull request. `next_release_version.py` counts from the newest tag reachable from `origin/main`, so a patch-branch tag
+  own landed commit. `next_release_version.py` counts from the newest tag reachable from `origin/main`, so a patch-branch tag
   is not its base.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
 - **Pre-release or release:** the flag is the only difference. Promoting a pre-release
@@ -185,11 +185,11 @@ gh release view vX.Y.Z --json body --jq .body
 
 The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write
 it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
-or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
+or internal (#1444). Read the line against the landed commits' messages before publishing. The body of a published release stays
 editable ("Immutable releases"); the assets do not.
 
-**Headline files.** A pull request that changes what players see adds `release-headlines/<issue-or-topic>.txt`: one line, 1
-to 200 characters, one plain sentence a player would understand about that change only, written by the PR's author, with a
+**Headline files.** A commit that changes what players see adds `release-headlines/<issue-or-topic>.txt`: one line, 1
+to 200 characters, one plain sentence a player would understand about that change only, written with the change, with a
 full stop added if it has none (or `!` or `?`). `notes` builds the player line from the files that exist at `--rev` and not at
 `--base`, joined with one space in file-name order (at most 600 characters). A path present at the base tag is old by
 construction, whatever its content, so no earlier release's sentence rides along. A file with another name (a letter or digit,
@@ -197,9 +197,9 @@ then letters, digits, `.`, `_`, `-`, then `.txt`; `release-headlines/README.md` 
 with more than one line or a line over 200 characters, or `release-headline.txt` at the rev fails `notes` and names the file;
 a joined line over 600 fails it and names the files joined; none falls back silently. A path that already exists at the base
 tag is never read, so a new change uses a new file name (a reused name is dropped, not refused). A test
-(`tools/tests/test_release_headlines.py`) fails a PR whose tree holds `release-headline.txt`, and `notes` refuses it at the cut
+(`tools/tests/test_release_headlines.py`) fails a tree that holds `release-headline.txt`, and `notes` refuses it at the cut
 as the backstop. A successful `notes` writes one JSON line to stderr (`"event":"headlines"`, with `used`, `line`, `base` and
-`rev`). The PR that adds a fragment also deletes the fragments present at the newest `vX.Y.Z` tag
+`rev`). The commit that adds a fragment also deletes the fragments present at the newest `vX.Y.Z` tag
 (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A fragment left behind is harmless, since a path present at
 the base is never read.
 
@@ -212,7 +212,7 @@ copies it once in the packaging step, `tools/package_release.py` refuses a tree 
 signer signs each entry separately, so they differ after signing), `tools/verify_symbols.py` checks the copy through the new
 name's symbol file, and release-signer lists `install-nevr-runtime.exe` as an optional entry, so the signer must have that
 change before a build that carries the new name is signed. The old name is removed in the first release after the launcher and
-every other outside caller have confirmed they use the new one. The removal is a PR that deletes the copy in the packaging step,
+every other outside caller have confirmed they use the new one. The removal is a commit that deletes the copy in the packaging step,
 its gate in `package_release.py` and `verify_symbols.py`, the signer's optional entry and this paragraph.
 
 ## The Quest APK

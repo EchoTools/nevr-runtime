@@ -1,4 +1,4 @@
-"""AGENTS.md asks a PR that changes player-facing behavior for the other platform's status, and the PR template asks again (#942)."""
+"""AGENTS.md asks a commit that changes player-facing behavior for the other platform's status, and the PR template asks again (#942)."""
 import re
 import unittest
 from pathlib import Path
@@ -11,13 +11,13 @@ def flat(text: str) -> str:
 
 
 class PlatformParityRule(unittest.TestCase):
-    def test_agents_md_carries_the_rule_among_what_a_pr_carries(self):
+    def test_agents_md_carries_the_rule_among_what_a_landed_commit_carries(self):
         text = (ROOT / "AGENTS.md").read_text()
-        start = text.index("### What a PR carries")
+        start = text.index("### What a landed commit carries")
         end = text.index("\n### ", start + 1)
         section = flat(text[start:end])
         self.assertIn("**Platform parity.** PCVR and Quest stay at parity.", section)
-        for status in ("done in this PR", "already present (`file:line`)", "not applicable (the reason)",
+        for status in ("done in this commit", "already present (`file:line`)", "not applicable (the reason)",
                        "a linked twin issue filed in the same turn"):
             self.assertIn(status, section)
 
