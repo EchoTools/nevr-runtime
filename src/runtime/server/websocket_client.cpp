@@ -226,6 +226,8 @@ VOID WebSocketClient::RefreshBearerTokenAfterRejection() {
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Bearer token replaced after HTTP 401 refresh_count=%u", count);
 }
 
+uint32_t WebSocketClient::ReconnectCount() { return s_wsReconnectCount; }
+
 BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {

@@ -94,6 +94,10 @@ class WebSocketClient {
   using CloseCallback = std::function<VOID(int closeCode, uint64_t openMs)>;
   VOID SetCloseObserver(CloseCallback callback);
 
+  /// How many times the socket has opened again after its first open: the `reconnect_count` the Connected and
+  /// Disconnected lines carry (#2374). Written and read on the WebSocket thread.
+  static uint32_t ReconnectCount();
+
   /// <summary>
   /// Callback function type for connection state changes.
   /// Parameter: TRUE if connected, FALSE if disconnected

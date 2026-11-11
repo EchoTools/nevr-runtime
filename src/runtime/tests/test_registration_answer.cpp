@@ -1,7 +1,9 @@
 // #2374: a refused registration, and a close before any answer, leave a line an operator can find. The frames are the
 // ones the game service sends (nakama server/evr_pipeline_gameserver.go errFailedRegistration: the NEVR protobuf wrapper
-// carrying an Error with CODE_REGISTRATION_FAILED, the legacy BroadcasterRegistrationFailure, the unrequire event), built
-// as its evr.Marshal does: marker, symbol, length, payload, all little-endian, concatenated in one WebSocket payload.
+// carrying an Error with CODE_REGISTRATION_FAILED, the legacy BroadcasterRegistrationFailure) built as its evr.Marshal does:
+// marker, symbol, length, payload, all little-endian, concatenated in one WebSocket write; then, as a second write
+// (session_ws.go SendEvrUnrequire -> SendBytes(unrequireBytes)), the STcpConnectionUnrequireEvent, whose payload is the
+// event's one Unused byte (evr/common_stcpconnectionunrequireevent.go), not empty.
 #include "runtime/server/registration_answer.h"
 
 #include <gtest/gtest.h>
@@ -23,7 +25,7 @@
 namespace {
 
 constexpr uint64_t kMarker = 0xBB8CE7A278BB40F6ULL;
-constexpr uint64_t kUnrequireEvent = 0x43e6963ac76beee4ULL;  // STcpConnectionUnrequireEvent, empty payload
+constexpr uint64_t kUnrequireEvent = 0x43e6963ac76beee4ULL;  // STcpConnectionUnrequireEvent, a 1-byte payload
 constexpr char kServiceText[] = "refused-because-secret-detail-xyz";
 
 void AppendU64(std::string& out, uint64_t value) { out.append(reinterpret_cast<const char*>(&value), sizeof(value)); }
@@ -55,12 +57,14 @@ std::string SuccessWrapper() {
   return WrapperMessage(envelope);
 }
 
-// errFailedRegistration's payload: wrapper, legacy failure with the one code byte, then the unrequire event.
+// errFailedRegistration's first write: wrapper and legacy failure (one code byte) in one payload.
 std::string RefusalPayload(int protobufCode, unsigned char legacyCode) {
   return ErrorWrapper(protobufCode) +
-         EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(legacyCode))) +
-         EvrMessage(kUnrequireEvent, std::string());
+         EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(legacyCode)));
 }
+
+// Its second write: SendEvrUnrequire's separate frame, one Unused byte.
+std::string UnrequireWrite() { return EvrMessage(kUnrequireEvent, std::string(1, '\0')); }
 
 struct Lines {
   std::mutex mutex;
@@ -113,32 +117,92 @@ class RegistrationAnswerTest : public ::testing::Test {
 
 }  // namespace
 
-TEST_F(RegistrationAnswerTest, TheServicesRefusalNamesBothCodes) {
+TEST_F(RegistrationAnswerTest, TheServicesRefusalIsOneLineNamingBothCodes) {
   Open();
   Frame(RefusalPayload(4, 10));
-  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "registration refused by ServerDB source=protobuf code=4 code_name=CODE_REGISTRATION_FAILED message_bytes=33"))
-      << log.All();
-  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "registration refused by ServerDB source=legacy payload_bytes=1 code=10 code_name=Failure"))
+  Frame(UnrequireWrite());
+  Close();
+  ASSERT_EQ(log.Count(), 1u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error,
+                      "registration refused by ServerDB protobuf_code=4 protobuf_code_name=CODE_REGISTRATION_FAILED message_bytes=33 "
+                      "legacy_code=10 legacy_code_name=Failure legacy_payload_bytes=1 reconnect_count="))
       << log.All();
 }
 
 TEST_F(RegistrationAnswerTest, ALegacyRefusalAloneIsLoggedWithTheCodesName) {
   Open();
   Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(4))));
-  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "source=legacy payload_bytes=1 code=4 code_name=AccountDoesNotExist")) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "protobuf_code=none protobuf_code_name=none message_bytes=none legacy_code=4 legacy_code_name=AccountDoesNotExist legacy_payload_bytes=1"))
+      << log.All();
   EXPECT_EQ(log.Count(), 1u);
 }
 
 TEST_F(RegistrationAnswerTest, ALegacyRefusalWithNoPayloadSaysSo) {
   Open();
   Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string()));
-  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "source=legacy payload_bytes=0 code=none")) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "legacy_code=none legacy_code_name=none legacy_payload_bytes=0")) << log.All();
 }
 
-TEST_F(RegistrationAnswerTest, AProtobufErrorAloneIsARefusalWithItsNumericCode) {
+TEST_F(RegistrationAnswerTest, ARegistrationRefusalByProtobufAloneIsLoggedOnceAtTheClose) {
+  Open();
+  Frame(ErrorWrapper(4));
+  EXPECT_EQ(log.Count(), 0u) << "the line waits for the legacy code the service sends with it: " << log.All();
+  Close();
+  ASSERT_EQ(log.Count(), 1u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error,
+                      "registration refused by ServerDB protobuf_code=4 protobuf_code_name=CODE_REGISTRATION_FAILED message_bytes=33 "
+                      "legacy_code=none legacy_code_name=none legacy_payload_bytes=none"))
+      << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, TheProtobufErrorAndTheLegacyFrameInTwoWritesAreStillOneLine) {
+  Open();
+  Frame(ErrorWrapper(4));
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(10))));
+  Close();
+  ASSERT_EQ(log.Count(), 1u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "protobuf_code=4 ")) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "legacy_code=10 ")) << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, AProtobufErrorOtherThanARegistrationFailureIsNotCalledARefusal) {
   Open();
   Frame(ErrorWrapper(3));
-  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "source=protobuf code=3 code_name=CODE_BAD_INPUT")) << log.All();
+  ASSERT_EQ(log.Count(), 1u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Warning,
+                      "ServerDB error before registration was answered code=3 code_name=CODE_BAD_INPUT message_bytes=33 reconnect_count="))
+      << log.All();
+  EXPECT_EQ(log.All().find("registration refused"), std::string::npos) << log.All();
+  Close();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Warning, "closed before registration was answered")) << "it did not answer the registration: " << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, EveryTrackerLineCarriesTheReconnectCountTheDisconnectLineCarries) {
+  // The count is process-wide (WebSocketClient::ReconnectCount, the value the Connected and Disconnected lines carry), so
+  // each line is compared with the count read when it was written; the second Open must move it.
+  const auto expected = [] { return "reconnect_count=" + std::to_string(WebSocketClient::ReconnectCount()) + " "; };
+  Open();
+  const std::string first = expected();
+  Close();
+  Open();
+  const std::string second = expected();
+  EXPECT_NE(first, second) << "a second open is a reconnect";
+  Frame(ErrorWrapper(3));
+  Frame(RefusalPayload(4, 10));
+  Close();
+  ASSERT_EQ(log.Count(), 3u) << log.All();
+  const std::string all = log.All();
+  const size_t closeLine = all.find("closed before registration was answered");
+  ASSERT_NE(closeLine, std::string::npos);
+  EXPECT_NE(all.find(first, closeLine), std::string::npos) << all;
+  EXPECT_NE(all.find("ServerDB error before registration was answered"), std::string::npos);
+  size_t at = 0;
+  int withSecond = 0;
+  while ((at = all.find(second, at)) != std::string::npos) {
+    ++withSecond;
+    at += second.size();
+  }
+  EXPECT_EQ(withSecond, 2) << "the protobuf-error line and the refusal line both carry the count of their connection\n" << all;
 }
 
 TEST_F(RegistrationAnswerTest, TheServicesTextNeverReachesTheLog) {
@@ -162,6 +226,7 @@ TEST_F(RegistrationAnswerTest, ACloseWithNoAnswerSaysSoWithItsCodeAndAge) {
 TEST_F(RegistrationAnswerTest, ACloseAfterTheRefusalAddsNoSecondComplaint) {
   Open();
   Frame(RefusalPayload(4, 10));
+  Frame(UnrequireWrite());
   const size_t before = log.Count();
   Close();
   EXPECT_EQ(log.Count(), before) << log.All();
@@ -189,9 +254,10 @@ TEST_F(RegistrationAnswerTest, TheRefusalIsLoggedWithoutTheGameThreadEverDispatc
   client.SetMessageHandler([&dispatched](EchoVR::SymbolId, VOID*, UINT64) { ++dispatched; });
   Open();
   Frame(RefusalPayload(4, 10));
+  Frame(UnrequireWrite());
   Close();
   EXPECT_EQ(dispatched, 0);
-  EXPECT_EQ(log.Count(), 2u) << log.All();
+  EXPECT_EQ(log.Count(), 1u) << log.All();
 }
 
 TEST_F(RegistrationAnswerTest, TheEarlierReceiveObserverStillSeesEveryFrame) {
@@ -205,6 +271,10 @@ TEST_F(RegistrationAnswerTest, TheEarlierReceiveObserverStillSeesEveryFrame) {
   auto message = std::make_unique<ix::WebSocketMessage>(ix::WebSocketMessageType::Message, payload, payload.size(), error,
                                                         ix::WebSocketOpenInfo(), ix::WebSocketCloseInfo(), true);
   other.TestDeliverMessage(message);
+  const std::string unrequire = UnrequireWrite();
+  auto second = std::make_unique<ix::WebSocketMessage>(ix::WebSocketMessageType::Message, unrequire, unrequire.size(), error,
+                                                       ix::WebSocketOpenInfo(), ix::WebSocketCloseInfo(), true);
+  other.TestDeliverMessage(second);
   EXPECT_EQ(seen, 3);
-  EXPECT_EQ(lines.Count(), 2u);
+  EXPECT_EQ(lines.Count(), 1u);
 }

@@ -50,22 +50,22 @@ class Tracker {
  public:
   explicit Tracker(LogSink sink) : sink_(std::move(sink)) {}
 
-  // Receive thread, once per frame message. A registration success marks the connection answered; a refusal (the
-  // legacy failure, or any protobuf Error before an answer) marks it answered and writes the refusal line.
+  // Where the `reconnect_count` every line carries comes from (Attach sets it). Set before Connect().
+  void SetReconnectCount(std::function<uint32_t()> source) { reconnectCount_ = std::move(source); }
+
+  // Receive thread, once per frame message. A registration success marks the connection answered. A refusal is ONE
+  // line carrying both codes the service sends for it. The service writes the protobuf Error and the legacy failure in
+  // one WebSocket payload, protobuf first (nakama errFailedRegistration), so the protobuf code is held and the line is
+  // written when the legacy frame arrives, which completes it; a connection that closes with only the protobuf Error
+  // writes the line at the close, with the legacy fields `none`. A legacy failure alone writes at once.
   void OnFrame(EchoVR::SymbolId msgId, const void* data, size_t size) {
     if (msgId == kLegacyFailure) {
-      // Always written: the legacy frame carries the failure code the service chose (BroadcasterRegistrationFailureCode),
-      // which the protobuf Error beside it does not.
-      answered_.store(true, std::memory_order_release);
+      if (answered_.exchange(true, std::memory_order_acq_rel) && !protobufRefusal_) return;  // answered already, and no line owed
+      LegacyFailure legacy;
+      legacy.payloadBytes = size;
       const auto* bytes = static_cast<const unsigned char*>(data);
-      std::string line = "[NEVR.SERVERDB] registration refused by ServerDB source=legacy payload_bytes=" + std::to_string(size);
-      if (size >= 1 && bytes != nullptr) {
-        line += " code=" + std::to_string(bytes[0]) + " code_name=" + nevr_failure_detail::RegistrationFailureCodeName(bytes[0]);
-      } else {
-        line += " code=none code_name=none";
-      }
-      line += " — this server was not registered and cannot host a session";
-      Emit(EchoVR::LogLevel::Error, line);
+      if (size >= 1 && bytes != nullptr) legacy.code = bytes[0];
+      EmitRefusal(legacy);
       return;
     }
     if (answered_.load(std::memory_order_acquire)) return;
@@ -79,37 +79,87 @@ class Tracker {
     if (envelope.message_case() == gameservice::v1::Envelope::kGameServerRegistrationSuccess) {
       answered_.store(true, std::memory_order_release);
     } else if (envelope.message_case() == gameservice::v1::Envelope::kError) {
-      answered_.store(true, std::memory_order_release);
       const int code = static_cast<int>(envelope.error().code());
-      Emit(EchoVR::LogLevel::Error,
-           "[NEVR.SERVERDB] registration refused by ServerDB source=protobuf code=" + std::to_string(code) +
-               " code_name=" + ProtobufErrorCodeName(code) + " message_bytes=" + std::to_string(envelope.error().message().size()) +
-               " — this server was not registered and cannot host a session");
+      const size_t messageBytes = envelope.error().message().size();
+      if (code == static_cast<int>(gameservice::v1::Error::CODE_REGISTRATION_FAILED)) {
+        answered_.store(true, std::memory_order_release);
+        protobufRefusal_ = true;
+        protobufCode_ = code;
+        protobufMessageBytes_ = messageBytes;
+      } else {
+        // Not the registration's answer: the connection stays unanswered, so a close still says so.
+        Emit(EchoVR::LogLevel::Warning,
+             "[NEVR.SERVERDB] ServerDB error before registration was answered code=" + std::to_string(code) +
+                 " code_name=" + ProtobufErrorCodeName(code) + " message_bytes=" + std::to_string(messageBytes) +
+                 " reconnect_count=" + std::to_string(Reconnects()) + " (this is not the registration's answer)");
+      }
     }
   }
 
   // Receive thread, when the socket closes after it was open for afterMs. Each connection starts unanswered.
   void OnClose(int closeCode, uint64_t afterMs) {
     const bool answered = answered_.exchange(false, std::memory_order_acq_rel);
+    if (protobufRefusal_) {
+      EmitRefusal(LegacyFailure{-1, 0, false});  // the legacy frame never came: write the line with what was seen
+      return;
+    }
     if (answered) return;
     Emit(EchoVR::LogLevel::Warning,
          "[NEVR.SERVERDB] ServerDB closed before registration was answered code=" + std::to_string(closeCode) +
-             " after_ms=" + std::to_string(afterMs) + " (the service sent neither a registration success nor a refusal)");
+             " after_ms=" + std::to_string(afterMs) + " reconnect_count=" + std::to_string(Reconnects()) +
+             " (the service sent neither a registration success nor a refusal)");
   }
 
   bool Answered() const { return answered_.load(std::memory_order_acquire); }
 
  private:
+  struct LegacyFailure {
+    int code = -1;  // -1: no code byte seen
+    size_t payloadBytes = 0;
+    bool seen = true;
+  };
+
+  uint32_t Reconnects() const { return reconnectCount_ ? reconnectCount_() : 0; }
+
+  // The one refusal line. `legacy.seen` is false when only the protobuf Error arrived.
+  void EmitRefusal(LegacyFailure legacy) {
+    std::string line = "[NEVR.SERVERDB] registration refused by ServerDB ";
+    if (protobufRefusal_) {
+      line += "protobuf_code=" + std::to_string(protobufCode_) + " protobuf_code_name=" + ProtobufErrorCodeName(protobufCode_) +
+              " message_bytes=" + std::to_string(protobufMessageBytes_);
+    } else {
+      line += "protobuf_code=none protobuf_code_name=none message_bytes=none";
+    }
+    if (!legacy.seen) {
+      line += " legacy_code=none legacy_code_name=none legacy_payload_bytes=none";
+    } else if (legacy.code >= 0) {
+      line += " legacy_code=" + std::to_string(legacy.code) +
+              " legacy_code_name=" + nevr_failure_detail::RegistrationFailureCodeName(static_cast<unsigned char>(legacy.code)) +
+              " legacy_payload_bytes=" + std::to_string(legacy.payloadBytes);
+    } else {
+      line += " legacy_code=none legacy_code_name=none legacy_payload_bytes=" + std::to_string(legacy.payloadBytes);
+    }
+    line += " reconnect_count=" + std::to_string(Reconnects()) + " — this server was not registered and cannot host a session";
+    protobufRefusal_ = false;
+    Emit(EchoVR::LogLevel::Error, line);
+  }
+
   void Emit(EchoVR::LogLevel level, const std::string& line) const {
     if (sink_) sink_(level, line);
   }
   LogSink sink_;
+  std::function<uint32_t()> reconnectCount_;
   std::atomic<bool> answered_{false};
+  // Receive thread only: a protobuf registration refusal seen, its line not yet written.
+  bool protobufRefusal_ = false;
+  int protobufCode_ = 0;
+  size_t protobufMessageBytes_ = 0;
 };
 
 // The wiring the server and its test share. Set before Connect().
 // `next` is the receive observer that was set before this one (the ended-session watchdog's); it still sees every frame.
 inline void Attach(WebSocketClient& client, Tracker& tracker, WebSocketClient::MessageCallback next = nullptr) {
+  tracker.SetReconnectCount([] { return WebSocketClient::ReconnectCount(); });
   client.SetReceiveObserver([&tracker, next = std::move(next)](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     tracker.OnFrame(msgId, data, static_cast<size_t>(size));
     if (next) next(msgId, data, size);
