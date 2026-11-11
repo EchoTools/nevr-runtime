@@ -69,6 +69,7 @@
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
+#include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
@@ -422,7 +423,7 @@ float *g_rules_total = nullptr;
 //: +12 requests, +13 the value asked for.
 constexpr uint32_t RULES_BELOW_PAGE_END = 0x140;
 constexpr uint32_t CLASSIC_SHOWN = 0x11, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
-constexpr uint32_t STATION_CELLS = 0x14;        // +14..+16: equipment station cells shown per gear type
+constexpr uint32_t STATION_CELLS = nevr_combat::rules::kStationCells;  // +14..+16: equipment station cells shown per gear type
 constexpr uint64_t CLASSIC_ITEMS = 4;           // each gear list's stock items come first
 uint8_t *g_rules = nullptr;                     // the RULES mailbox
 volatile LONG g_classic = 0;                    // server: LOADOUTS (LOADOUT_*)
@@ -523,6 +524,8 @@ void RateText(uint8_t) { PageTexts(); }
 //: still, the server raises the game's own cease fire, each client sends its player back to the
 //: war room (nevt_force_respawn) and the orbs read pre_match (tools/fix_orb_pause.py, which also
 //: keeps +2F = the match is live: spawn_access past pre_match).
+// nEVR port (#600): here the orbs' pre_match and +2F are runtime/combat/orb_pause.h, hooks on the spawn point script,
+// not a patched file.
 //: +2E is a state: 0 running, 1 paused, 2 resuming. UNPAUSE does not resume at once: the server
 //: goes to 2 for RESUME_MS (the announcer counts 5..1 on every client, the orbs are the round's
 //: again so players spawn back in, but cease fire and the point / capture freezes hold), then 0.
@@ -532,7 +535,7 @@ volatile LONG g_paused = 0;                     // server: PAUSE state (0 / 1 / 
 volatile ULONGLONG g_resume_at = 0;             // server: when state 2 ends
 constexpr ULONGLONG RESUME_MS = 5000;
 enum : LONG { PAUSE_OFF = 0, PAUSE_ON = 1, PAUSE_RESUMING = 2 };
-constexpr uint32_t PAUSED_SHOWN = 0x2E, MATCH_LIVE = 0x2F;
+constexpr uint32_t PAUSED_SHOWN = nevr_combat::rules::kPausedShown, MATCH_LIVE = nevr_combat::rules::kMatchLive;  // nEVR port (#600)
 // +35h "PAUSE allowed" (client): set PAUSE_OK_DELAY_MS after the match went live (+2Fh). The
 // podium (fix_rules_pages.py) greys TEAM READY in stock fashion until then (DisableButton), and
 // enables it as PAUSE from then on; the label switches to PAUSE at the same moment. Setting it
