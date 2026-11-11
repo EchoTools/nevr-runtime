@@ -21,4 +21,13 @@ constexpr bool Expired(std::int64_t nowMs, std::int64_t lastSubmitMs, bool inVr,
   return nowMs - lastSubmitMs > static_cast<std::int64_t>(limitS) * 1000;
 }
 
+// A second look: the watchdog fires only when `Expired` held at one tick and still holds at a later one, with no submit between (the same stamp)
+// and at least kConfirmMs after the first. So the watchdog needs limit + kConfirmMs, and a pause that ends in that second (a headset put on again,
+// a system menu closed) is not a freeze. `firstStamp` and `firstSeenMs` are the stamp and the time of the first tick that saw it expired (0: none).
+inline constexpr std::int64_t kConfirmMs = 1000;
+constexpr bool Confirmed(std::int64_t firstStamp, std::int64_t firstSeenMs, std::int64_t lastSubmitMs, std::int64_t nowMs) noexcept {
+  if (firstSeenMs == 0 || firstStamp == 0 || firstStamp != lastSubmitMs) return false;
+  return nowMs - firstSeenMs >= kConfirmMs;
+}
+
 }  // namespace nevr_quest::combat::frozen_frame_exit::rules

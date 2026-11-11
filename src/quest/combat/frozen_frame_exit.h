@@ -12,20 +12,23 @@
  * The watchdog. A thread (`nevr-frozenframe`) wakes once a second on a condition variable with a CLOCK_MONOTONIC deadline (no sleep). On each wake:
  * out of VR, or no combat class in the last look (`scope::SeenCombatOrLobby()`, read without its freshness test, because a freeze also stops the
  * tick that refreshes it), it disarms (the stamp back to 0, so the next submit arms again). Otherwise, when `rules::Expired` says the time since the
- * last submit is past the limit, it reads the word and the stamp once more, and when they still say so it:
+ * last submit is past the limit, it reads the word and the stamp once more, and when they still say so it notes the gap; a later tick at least
+ * `rules::kConfirmMs` after that, on the same stamp (`rules::Confirmed`), that still says so:
  *   1. writes the Warning `combat_frozen_frame_exit` (the sentinel log writes each record as it is made, so nothing waits for a flush);
  *   2. finishes the game's activity (`quit::FinishActivity`, the end the menu's QUIT takes), when there is an activity to finish;
  *   3. waits kGraceMs for the game to end itself that way (a frozen game may not: the finish is handled on the game's main thread);
  *   4. writes the Warning `combat_frozen_frame_exit_end` and ends the process with `process_end::EndWithExitCode(kFailureExitCode, "frozen_frame")`,
  *      which writes the `android_main_returned` record and runs the before-exit step (each combat module's end line) first.
- * It fires at most once per process.
+ * It fires at most once per process. Once the process is ending (a QUIT's or FinishActivity's finish has begun, android_main returned or
+ * EndWithExitCode began, or the OS set android_app::destroyRequested) the watch is off for good: `Halt` writes `combat_frozen_frame_exit_halted`,
+ * clears the stamp, and no later submit arms it, so a shutdown that stalls past the limit is not reported as a freeze.
  *
  * Scope (D8 (a), recorded on #2377). The combat APK only: the install step is a row of the combat install table, which runs only where
  * `combat::Active()` is true, and `Watching()` is the combat scope bit (a combat map or the combat lobby, no Echo Arena level) and the module armed.
  * Arena on the same APK: `NoteSubmit` is one relaxed load and a branch per submit (the scope word has no combat bit), no clock read, no write; the
  * watchdog disarms. A release APK: the row never runs, so `NoteSubmit` reads an empty scope word and returns.
  *
- * Switch. `combat.frozen_frame_exit` (default true; upstream's recipe ships its hangwd off, #1737 G6A-045 asks for it on) and
+ * Switch. `combat.frozen_frame_exit` (default true, as upstream's hangwd is on unless its `hangwd.off` file or property turns it off; #1737 G6A-045) and
  * `combat.frozen_frame_exit_s` (10..900, default 30; anything else: the default, with the configuration step's Warning).
  *
  * Origin. The hangwd watchdog of kotorvr/echoquest-combat, runtime/native/afkxr/afk_capture.cpp (namespace hangwd: Beat in the SubmitFrame2 wrapper,
@@ -46,7 +49,9 @@
  *   fired    {"event":"combat_frozen_frame_exit","since_submit_ms":<n>,"limit_s":<n>,"scope_bits":<n>,"submits":<n>,"armed_ms":<n>,
  *             "action":"finish_activity|no_activity","msg":".."}  Warning, once
  *   end      {"event":"combat_frozen_frame_exit_end","grace_ms":<n>,"action":"end_process","msg":".."}  Warning, once, right before the exit
- *   counts   {"event":"combat_frozen_frame_exit_counts","arms":<n>,"submits":<n>,"fired":<0|1>,"joined":<0|1>,"msg":".."}  Info at the end of the
+ *   halted   {"event":"combat_frozen_frame_exit_halted","cause":"quit|process_end|destroy_requested|note_end","was_armed":<0|1>,"submits":<n>,"msg":".."}
+ *             Info, once
+ *   counts   {"event":"combat_frozen_frame_exit_counts","arms":<n>,"submits":<n>,"fired":<0|1>,"halted":<0|1>,"joined":<0|1>,"msg":".."}  Info at the end of the
  *             process (the row's end), installed only; joined 0 when the watchdog is the one ending the process
  * A submit writes no line (callback_thunk.h rule 1: NoteSubmit runs in the handler's live frame).
  *
@@ -102,6 +107,8 @@ std::int64_t LastSubmitMs() noexcept;
 std::uint64_t Submits() noexcept;
 std::uint64_t Arms() noexcept;
 bool Fired() noexcept;
+// True once the watch is off for good because the game is ending (see Tick).
+bool Halted() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 
@@ -115,6 +122,10 @@ struct Seams {
 };
 void SetSeamsForTest(const Seams& seams) noexcept;
 // The monotonic clock in ms (nullptr restores CLOCK_MONOTONIC), and the watchdog's period (0 restores kPollMs).
+// What says the game is ending (a const char* cause, or null); production reads quit, process_end and android_app::destroyRequested.
+void SetEndingCauseForTest(const char* (*cause)() noexcept) noexcept;
+// The android_app the production check reads destroyRequested from (nullptr restores process_end::CurrentApp).
+void SetAppSourceForTest(const void* (*app)() noexcept) noexcept;
 void SetClockForTest(std::int64_t (*nowMs)() noexcept) noexcept;
 void SetPollMsForTest(unsigned ms) noexcept;
 // Arms the observer without an install (no thread, no word): a submit in scope stamps.

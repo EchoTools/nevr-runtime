@@ -24,6 +24,7 @@ std::atomic<AppFn> g_app{nullptr};
 std::atomic<unsigned long long> g_finished{0};
 std::atomic<unsigned long long> g_gameUi{0};
 std::atomic<unsigned long long> g_calls{0};
+std::atomic<bool> g_finishing{false};  // a finish of the activity has begun
 
 // The Horizon OS build of this headset, read on each QUIT (QUIT is rare): ro.build.display.id and
 // ro.build.version.incremental. A host build has no system properties and reads "unknown".
@@ -67,6 +68,7 @@ void Handler(Thunk::Fn original) noexcept {
   void* const activity = current.activity;
   if (finish != nullptr && activity != nullptr) {
     g_finished.fetch_add(1, std::memory_order_acq_rel);
+    g_finishing.store(true, std::memory_order_release);
     sentinel::LogFields(sentinel::LogLevel::kInfo, "quit",
                         {{"action", "finish_activity"},
                          {"os_build", osBuild},
@@ -106,9 +108,12 @@ bool CanFinishActivity() noexcept {
   return current.finish != nullptr && current.activity != nullptr;
 }
 
+bool Finishing() noexcept { return g_finishing.load(std::memory_order_acquire); }
+
 bool FinishActivity() noexcept {
   const Finisher current = CurrentFinisher();
   if (current.finish == nullptr || current.activity == nullptr) return false;
+  g_finishing.store(true, std::memory_order_release);
   current.finish(static_cast<ANativeActivity*>(current.activity));
   return true;
 }
@@ -151,6 +156,7 @@ void ResetForTest() noexcept {
   g_finished.store(0, std::memory_order_relaxed);
   g_gameUi.store(0, std::memory_order_relaxed);
   g_calls.store(0, std::memory_order_relaxed);
+  g_finishing.store(false, std::memory_order_relaxed);
 }
 
 }  // namespace nevr_quest::quit

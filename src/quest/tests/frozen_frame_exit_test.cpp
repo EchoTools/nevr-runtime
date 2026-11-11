@@ -23,6 +23,9 @@
 
 #include "quest/combat/frozen_frame_exit_rules.h"
 #include "quest/combat/frozen_frame_exit_targets.h"
+#include "quest/sentinel/android_glue_layout.h"
+#include "quest/sentinel/process_end_hook.h"
+#include "quest/sentinel/quit_hook.h"
 #include "quest/sentinel/render_config.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
@@ -167,6 +170,16 @@ void Expired() {
   QCHECK(rules::Expired(10002, 1, true, 10) && !rules::Expired(10001, 1, true, 10));  // the limit counts from the submit, in ms
 }
 
+// The second look: the same gap seen at an earlier tick, with no submit since, at least kConfirmMs before.
+void Confirmed() {
+  QCHECK(rules::kConfirmMs == 1000);
+  QCHECK(rules::Confirmed(1000, 31001, 1000, 32001));    // exactly kConfirmMs later
+  QCHECK(!rules::Confirmed(1000, 31001, 1000, 32000));   // 1 ms short
+  QCHECK(!rules::Confirmed(1000, 0, 1000, 99999));       // no first look
+  QCHECK(!rules::Confirmed(0, 31001, 0, 99999));         // nothing armed
+  QCHECK(!rules::Confirmed(1000, 31001, 1500, 99999));   // a submit since: another gap
+}
+
 // ---- the observer ---------------------------------------------------------------------------------------------------------------------
 
 // Outside a combat level a submit reads no clock and changes nothing: no Echo Arena level, an arena level loaded beside a combat map, no level at
@@ -218,9 +231,64 @@ void NotPastTheLimitDoesNothing() {
   Finish_();
 }
 
+// The tick that first sees the gap past the limit only notes it; a tick kConfirmMs later that sees the same gap fires.
+void NeedsASecondTick() {
+  Armed();
+  g_now = 31001;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && g_steps.empty() && Lines("combat_frozen_frame_exit").empty());  // noted, not fired
+  g_now = 32000;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && g_steps.empty());  // 999 ms after the first look
+  g_now = 32001;
+  ffe::Tick();
+  QCHECK(ffe::Fired() && g_steps.size() == 3U);
+  ffe::NoteEnd();
+  Finish_();
+}
+
+// A submit between the two ticks (the pause ended) is not a freeze, and the gap that follows is counted from its own first look.
+void ASubmitBetweenTheTicksIsNotAFreeze() {
+  Armed();
+  g_now = 31001;
+  ffe::Tick();  // noted
+  g_now = 31500;
+  ffe::NoteSubmit();  // the game is drawing again
+  g_now = 32001;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && g_steps.empty());
+  g_now = 31500 + 30001;  // a new gap past the limit: noted again, not fired
+  ffe::Tick();
+  QCHECK(!ffe::Fired());
+  g_now = 31500 + 31001;
+  ffe::Tick();
+  QCHECK(ffe::Fired());
+  ffe::NoteEnd();
+  Finish_();
+}
+
+// The first look is forgotten when the gap stops being past the limit or the game leaves VR: a later expiry starts the count again.
+void ALeaveOrAnArenaLevelForgetsTheFirstLook() {
+  Armed();
+  g_now = 31001;
+  ffe::Tick();  // noted
+  PutWord(0);
+  g_now = 31500;
+  ffe::Tick();  // out of VR: disarmed, forgotten
+  PutWord(kSession);
+  ffe::NoteSubmit();  // arms again at 31500
+  g_now = 31500 + 30001;
+  ffe::Tick();
+  QCHECK(!ffe::Fired());  // a first look again, not a second
+  ffe::NoteEnd();
+  Finish_();
+}
+
 void FiresRecordBeforeFinisher() {
   Armed();
   g_now = 31001;
+  ffe::Tick();
+  g_now = 32001;
   ffe::Tick();
   QCHECK(ffe::Fired());
   QCHECK(g_recordsAtFinish == 1U);  // the record was written before the activity was finished
@@ -228,7 +296,7 @@ void FiresRecordBeforeFinisher() {
   QCHECK(fired.size() == 1U);
   if (fired.size() == 1U) {
     QCHECK(fired[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(Has(fired[0].text, "\"since_submit_ms\":30001,\"limit_s\":30,\"scope_bits\":1,\"submits\":1,\"armed_ms\":30001,\"action\":\"finish_activity\""));
+    QCHECK(Has(fired[0].text, "\"since_submit_ms\":31001,\"limit_s\":30,\"scope_bits\":1,\"submits\":1,\"armed_ms\":31001,\"action\":\"finish_activity\""));
   }
   ffe::NoteEnd();
   Finish_();
@@ -238,6 +306,8 @@ void EndsProcessAfterGrace() {
   Armed();
   g_now = 40000;
   ffe::Tick();
+  g_now = 41000;
+  ffe::Tick();
   QCHECK(g_steps == (std::vector<std::string>{"finish", "grace", "end_after_record"}));
   QCHECK(g_graceMs == ffe::kGraceMs && g_graceMs == 5000U);
   QCHECK(g_exitCode == 1 && g_reason == "frozen_frame");
@@ -245,6 +315,8 @@ void EndsProcessAfterGrace() {
   QCHECK(end.size() == 1U && end[0].level == sentinel::LogLevel::kWarn && Has(end[0].text, "\"grace_ms\":5000,\"action\":\"end_process\""));
   g_now = 90000;
   ffe::Tick();  // once per process
+  g_now = 91000;
+  ffe::Tick();
   QCHECK(g_steps.size() == 3U && Lines("combat_frozen_frame_exit").size() == 1U);
   ffe::NoteEnd();
   Finish_();
@@ -255,10 +327,143 @@ void NoActivityIsSaidAndNotFinished() {
   g_canFinish = false;
   g_now = 40000;
   ffe::Tick();
+  g_now = 41000;
+  ffe::Tick();
   QCHECK(g_steps == (std::vector<std::string>{"grace", "end_after_record"}));
   const std::vector<Line> fired = Lines("combat_frozen_frame_exit");
   QCHECK(fired.size() == 1U && Has(fired[0].text, "\"action\":\"no_activity\""));
   ffe::NoteEnd();
+  Finish_();
+}
+
+// The process is ending (a QUIT, the OS closing the game, the end step): a gap past the limit does not fire, the watch is off for good, and later
+// submits do not arm it again.
+const char* g_cause = nullptr;
+const char* Cause() noexcept { return g_cause; }
+int g_causeCalls = 0;
+const char* CauseFromTheThirdLook() noexcept { return ++g_causeCalls >= 3 ? "quit" : nullptr; }
+
+void AnEndingProcessIsNotAFreeze() {
+  for (const char* cause : {"quit", "process_end", "destroy_requested"}) {
+    Armed();
+    g_cause = cause;
+    ffe::SetEndingCauseForTest(&Cause);
+    g_now = 90000;  // far past the limit, and the gap was seen before
+    ffe::Tick();
+    g_now = 91000;
+    ffe::Tick();
+    QCHECK(!ffe::Fired() && ffe::Halted() && g_steps.empty() && ffe::LastSubmitMs() == 0);
+    const std::vector<Line> halted = Lines("combat_frozen_frame_exit_halted");
+    QCHECK(halted.size() == 1U && halted[0].level == sentinel::LogLevel::kInfo &&
+           Has(halted[0].text, std::string("\"cause\":\"") + cause + "\",\"was_armed\":1"));
+    g_cause = nullptr;  // even if the cause goes away, the watch stays off
+    ffe::NoteSubmit();
+    QCHECK(ffe::LastSubmitMs() == 0 && ffe::Arms() == 1U);
+    g_now = 200000;
+    ffe::Tick();
+    ffe::Tick();
+    QCHECK(!ffe::Fired() && Lines("combat_frozen_frame_exit_halted").size() == 1U);
+    ffe::NoteEnd();
+    QCHECK(Has(Lines("combat_frozen_frame_exit_counts")[0].text, "\"fired\":0,\"halted\":1"));
+    Finish_();
+  }
+}
+
+// The production check of the three signals, with no seam on the cause: a QUIT's (or FinishActivity's) finish, the end step, and the glue's
+// destroyRequested in the android_app the game was started with; and none of them in an ordinary run.
+ANativeActivity* g_someActivity = reinterpret_cast<ANativeActivity*>(0x1000);
+alignas(8) unsigned char g_fakeApp[0x100];
+const void* FakeApp() noexcept { return g_fakeApp; }
+const void* NoApp() noexcept { return nullptr; }
+void StubFinish(ANativeActivity*) {}
+sentinel::pinned::AndroidAppOpaque* QuitApp() noexcept { return reinterpret_cast<sentinel::pinned::AndroidAppOpaque*>(g_fakeApp); }
+void NoExit(int) noexcept {}
+void NoEnder() noexcept {}
+
+// Each production signal halts the watch with its own cause: Armed() installs with the production probe, a gap past the limit is noted by the first
+// tick, and the second would fire.
+void HaltsOn(const char* cause) {
+  g_now = 31001;
+  ffe::Tick();
+  g_now = 32001;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && ffe::Halted() && g_steps.empty());
+  const std::vector<Line> halted = Lines("combat_frozen_frame_exit_halted");
+  QCHECK(halted.size() == 1U && Has(halted[0].text, std::string("\"cause\":\"") + cause + "\""));
+}
+
+void TheProductionCheckSeesQuitProcessEndAndDestroy() {
+  // nothing ending: the watch runs and fires
+  Armed();
+  ffe::SetAppSourceForTest(&FakeApp);
+  std::memset(g_fakeApp, 0, sizeof(g_fakeApp));
+  g_now = 31001;
+  ffe::Tick();
+  g_now = 32001;
+  ffe::Tick();
+  QCHECK(ffe::Fired() && !ffe::Halted());
+  ffe::NoteEnd();
+  Finish_();
+  // a QUIT's finish (FinishActivity is the same step)
+  Armed();
+  std::memset(g_fakeApp, 0, sizeof(g_fakeApp));
+  std::memcpy(g_fakeApp + sentinel::glue::kAppActivity, &g_someActivity, sizeof(g_someActivity));
+  nevr_quest::quit::ArmForTest(&StubFinish, &QuitApp);
+  QCHECK(nevr_quest::quit::FinishActivity());
+  HaltsOn("quit");
+  ffe::NoteEnd();
+  nevr_quest::quit::ResetForTest();
+  Finish_();
+  // android_main returned or the end step began
+  Armed();
+  nevr_quest::process_end::ArmForTest(&NoEnder, 10);
+  nevr_quest::process_end::SetExitForTest(&NoExit);
+  nevr_quest::process_end::EndWithExitCode(1, "test");
+  HaltsOn("process_end");
+  ffe::NoteEnd();
+  nevr_quest::process_end::ResetForTest();
+  Finish_();
+  // the OS asked the game to close: destroyRequested set in the android_app
+  Armed();
+  ffe::SetAppSourceForTest(&FakeApp);
+  std::memset(g_fakeApp, 0, sizeof(g_fakeApp));
+  const int one = 1;
+  std::memcpy(g_fakeApp + sentinel::glue::kAppDestroyRequested, &one, sizeof(one));
+  HaltsOn("destroy_requested");
+  ffe::NoteEnd();
+  Finish_();
+  // no app yet (android_main not entered): nothing to read, no halt
+  Armed();
+  ffe::SetAppSourceForTest(&NoApp);
+  g_now = 31001;
+  ffe::Tick();
+  QCHECK(!ffe::Halted());
+  ffe::NoteEnd();
+  Finish_();
+}
+
+// The process begins to end between the second look and the fire: the last look before the record catches it.
+void AnEndBegunBeforeTheFireIsNotAFreeze() {
+  Armed();
+  g_causeCalls = 0;
+  ffe::SetEndingCauseForTest(&CauseFromTheThirdLook);
+  g_now = 31001;
+  ffe::Tick();  // look 1 at its start: not ending; the gap is noted
+  g_now = 32001;
+  ffe::Tick();  // look 2 at its start: not ending; confirmed; look 3 before the fire: ending
+  QCHECK(!ffe::Fired() && ffe::Halted() && g_steps.empty());
+  QCHECK(Lines("combat_frozen_frame_exit_halted").size() == 1U && Lines("combat_frozen_frame_exit").empty());
+  ffe::NoteEnd();
+  Finish_();
+}
+
+// The row's end is the end step: the halted record names it, and the thread is joined as before.
+void NoteEndHaltsTheWatch() {
+  Armed();
+  ffe::NoteEnd();
+  const std::vector<Line> halted = Lines("combat_frozen_frame_exit_halted");
+  QCHECK(halted.size() == 1U && Has(halted[0].text, "\"cause\":\"note_end\""));
+  QCHECK(ffe::Halted());
   Finish_();
 }
 
@@ -294,6 +499,10 @@ void LeaveBetweenTheReadsIsNotAFreeze() {
   g_onRead = [] { PutWord(0); };
   ffe::Tick();
   QCHECK(!ffe::Fired() && g_steps.empty());
+  PutWord(kSession);  // and when it is back, the gap still has to be seen twice
+  g_now = 91000;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && g_steps.empty());
   ffe::NoteEnd();
   Finish_();
 }
@@ -316,7 +525,7 @@ void NoteEndJoinsThread() {
   QCHECK(!ffe::ThreadRunningForTest());
   const std::vector<Line> counts = Lines("combat_frozen_frame_exit_counts");
   QCHECK(counts.size() == 1U && counts[0].level == sentinel::LogLevel::kInfo &&
-         Has(counts[0].text, "\"arms\":1,\"submits\":1,\"fired\":0,\"joined\":1"));
+         Has(counts[0].text, "\"arms\":1,\"submits\":1,\"fired\":0,\"halted\":1,\"joined\":1"));
   Finish_();
   Begin();  // not installed: no line
   ffe::NoteEnd();
@@ -339,10 +548,13 @@ void NoteEndWhileEndingDoesNotJoin() {
   QCHECK(Install().installed);
   ffe::NoteSubmit();
   g_now = 1000 + 30001;
+  const timespec some{0, 60000000};  // the thread ticks a dozen times and notes the gap
+  nanosleep(&some, nullptr);
+  g_now = 1000 + 31001;
   WaitFor(g_endRan);
   QCHECK(g_endRan.load() && ffe::Fired());
   const std::vector<Line> counts = Lines("combat_frozen_frame_exit_counts");
-  QCHECK(counts.size() == 1U && Has(counts[0].text, "\"fired\":1,\"joined\":0"));
+  QCHECK(counts.size() == 1U && Has(counts[0].text, "\"fired\":1,\"halted\":0,\"joined\":0"));
   Finish_();
   QCHECK(!ffe::ThreadRunningForTest());
 }
@@ -432,9 +644,17 @@ void InstallRefusesChangedWord() {
 
 int main() {
   Expired();
+  Confirmed();
   NoteSubmitOutsideScopeTouchesNothing();
   NoteSubmitInScopeStamps();
   NotPastTheLimitDoesNothing();
+  NeedsASecondTick();
+  ASubmitBetweenTheTicksIsNotAFreeze();
+  ALeaveOrAnArenaLevelForgetsTheFirstLook();
+  AnEndingProcessIsNotAFreeze();
+  AnEndBegunBeforeTheFireIsNotAFreeze();
+  NoteEndHaltsTheWatch();
+  TheProductionCheckSeesQuitProcessEndAndDestroy();
   FiresRecordBeforeFinisher();
   EndsProcessAfterGrace();
   NoActivityIsSaidAndNotFinished();

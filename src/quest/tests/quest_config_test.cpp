@@ -1397,7 +1397,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
                       // The bullet-velocity guard (#1737 row 031): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
                       {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},
-                      // The frozen-frame exit (#2377): on unless the file says false (upstream ships its hangwd off; D8 (a), the combat APK only).
+                      // The frozen-frame exit (#2377): on unless the file says false (upstream's hangwd is on by default too; D8 (a), the combat APK only).
                       {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},
                       // The sound-symbol guard (#1737): off unless the file says true (a performance guard, as upstream ships it).
                       {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, false}};

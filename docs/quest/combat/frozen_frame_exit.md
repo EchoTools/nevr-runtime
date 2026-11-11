@@ -19,9 +19,10 @@ QUIT's activity finish followed by `process_end::EndWithExitCode`. No line of up
 
 ## Switch and default
 
-- `combat.frozen_frame_exit`, bool, default **true**. Upstream ships `hangwd` off (no hangwd entry in its recipe's `on_files`); #1737 G6A-045
-  asks for it on. The departure is the scope choice D8 (a), recorded on #2377: the combat APK only, with the 30-minute no-false-exit headset
-  row passed before the first release that carries it.
+- `combat.frozen_frame_exit`, bool, default **true**. Upstream's hangwd is on by default too: its install turns it off only with a `hangwd.off`
+  file or the property `debug.echoquestcombat.hangwd` set to 0, and its wave 13 release notes list it as a feature of the build. So the default is
+  parity. What differs is the scope, the choice D8 (a) recorded on #2377: the combat APK only. The default stays on only because the headset row
+  below, including its pause cases, is the release gate for the first release that carries the module: a release is not cut until that row passes.
 - `combat.frozen_frame_exit_s`, integer seconds, 10..900, default 30 (upstream's bound and range). Anything else: the default, with the
   configuration step's Warning naming the key.
 - Which APKs: the q15t and combat variants, where `combat::Active()` is true; the row runs from the combat install table's normal step, after
@@ -34,14 +35,25 @@ QUIT's activity finish followed by `process_end::EndWithExitCode`. No line of up
    stamps the submit's `CLOCK_MONOTONIC` time; the first stamp after a disarm arms the watch.
 2. A watchdog thread, `nevr-frozenframe`, wakes once a second on a condition variable with a `CLOCK_MONOTONIC` deadline. Out of VR (the in-VR
    word is zero) or out of a combat level it puts the stamp back to zero (disarmed). Otherwise, when more than the limit has passed since the
-   stamp, it reads the word and the stamp once more, and when they still say so it fires, once per process:
+   stamp, it reads the word and the stamp once more, and when they still say so it notes the gap (its stamp and the time) and goes on. A later
+   tick at least `kConfirmMs` (1 s) after that, on the same stamp (no submit since), that still sees the gap past the limit fires, once per
+   process. So the watchdog fires at the limit plus one second at the earliest:
    1. the Warning `combat_frozen_frame_exit`;
    2. `quit::FinishActivity()`, the end the menu's QUIT takes, when there is an activity to finish;
    3. a 5 s grace for the game to end itself that way;
    4. the Warning `combat_frozen_frame_exit_end`, then `process_end::EndWithExitCode(1, "frozen_frame")`, which writes the
       `android_main_returned` record and runs each combat module's end line before `_exit(1)`.
-3. At the end of the process the row's `end` stops and joins the watchdog, unless the watchdog is the one ending the process, and writes the
-   counts line.
+3. Once the process is ending the watch is off for good: the watchdog checks at every tick (and once more before it writes the fired record)
+   whether a QUIT or `FinishActivity` has begun finishing the activity (`quit::Finishing()`), `android_main` has returned or `EndWithExitCode`
+   has begun (`process_end::Ending()`), or the OS has asked the game to close (`android_app::destroyRequested`, at the glue's offset
+   `kAppDestroyRequested`, set when the activity is destroyed). Any of them writes `combat_frozen_frame_exit_halted` once, clears the stamp and
+   keeps later submits from arming it again. So a QUIT or an OS shutdown that stalls for longer than the limit with the in-VR word still set ends
+   with the game's own exit code and no `combat_frozen_frame_exit`, instead of a false record and exit code 1. Nothing is hooked for this; the
+   `destroyRequested` word is the glue's (`src/quest/sentinel/android_glue_layout.h`), read from the app `process_end` kept, and it is set on the
+   game's thread, so an OS shutdown that stalls that thread before it handles the destroy is not seen (inferred: the glue sets it while the game
+   thread handles `APP_CMD_DESTROY`).
+4. At the end of the process the row's `end` stops and joins the watchdog, unless the watchdog is the one ending the process, writes
+   `combat_frozen_frame_exit_halted` (cause `note_end`) when none was written, and writes the counts line.
 
 The scope is read without its freshness test in the watchdog, because a freeze also stops the combat tick that refreshes it (`kStaleAfterMs`,
 `src/quest/combat/combat_scope.h`). The fire path is proven by the host test only (fake clock, finish, grace and end); no headset run has
@@ -58,7 +70,8 @@ Sentinel log, one JSON record each:
 - `combat_frozen_frame_exit`: Warning, once: `since_submit_ms`, `limit_s`, `scope_bits` (the level answer's bits: 1 combat map, 2 combat
   lobby), `submits`, `armed_ms`, `action` (`finish_activity`, `no_activity`), `msg`.
 - `combat_frozen_frame_exit_end`: Warning, once, right before the exit: `grace_ms`, `action` (`end_process`), `msg`.
-- `combat_frozen_frame_exit_counts`: Info at the end of the process, installed only: `arms`, `submits`, `fired`, `joined` (0 when the
+- `combat_frozen_frame_exit_halted`: Info, once: `cause` (`quit`, `process_end`, `destroy_requested`, `note_end`), `was_armed`, `submits`, `msg`.
+- `combat_frozen_frame_exit_counts`: Info at the end of the process, installed only: `arms`, `submits`, `fired`, `halted`, `joined` (0 when the
   watchdog is ending the process), `msg`.
 
 A submit writes no line: `NoteSubmit` runs in the submit handler's live frame (`src/quest/sentinel/callback_thunk.h` rule 1).
@@ -73,9 +86,22 @@ Not measured on a headset.
 
 ## Headset row
 
-Combat APK, 30 minutes of normal play including combat-lobby loads and at least one combat match: the `combat_frozen_frame_exit_install`
-record with `installed`, no `combat_frozen_frame_exit` record, and the `combat_frozen_frame_exit_counts` line at the end with `fired` 0. The
-row is owed before the first release that carries the module.
+Combat APK, in the combat lobby and in a combat map, each with the headset in VR:
+
+1. 30 minutes of normal play including combat-lobby loads and at least one combat match: the `combat_frozen_frame_exit_install` record with
+   `installed`, no `combat_frozen_frame_exit` record, and the `combat_frozen_frame_exit_counts` line at the end with `fired` 0.
+2. Headset off (taken off, or the proximity sensor covered) for at least 60 s, in the combat lobby and again in a combat map, then put on: no
+   `combat_frozen_frame_exit` record, and the game draws again.
+3. The system menu open (the Meta button) for at least 60 s, in the combat lobby and again in a combat map, then closed: the same result.
+4. The `combat_frozen_frame_exit_counts` line at the end of each run with `fired` 0.
+
+A pause is the false-exit case this row exists for. The in-VR word is cleared only by game code on the main thread (`UpdateTracking`, called from
+the per-frame clock update, `frozen_frame_exit_targets.h`), so a pause that blocks that thread, inside `vrapi_SubmitFrame2` too, leaves the word
+set and the watchdog counts the gap as a freeze; upstream's own comment records an unclassified 20.9 s gap in VR that it took for a pause, against
+its 30 s limit. Whether a headset-off or system-menu hold keeps the thread blocked for 60 s, or leaves the word cleared, is not known: this row
+measures it. If any of rows 2 and 3 produces a `combat_frozen_frame_exit` record, the default of `combat.frozen_frame_exit` is turned off before
+the release, or a pause signal is added, and no release that carries the module is cut with the row failing. The row is owed before the first
+release that carries the module (D8).
 
 ## What it hooks
 
@@ -92,7 +118,11 @@ Measured. The source is kotorvr/echoquest-combat, the file runtime/native/afkxr/
   flag is set. Its exit runs on the watcher thread, not in the slot handler.
 
 Upstream's own figures, not re-measured here: its comment above namespace hangwd says a cold lobby load can stall the frame
-for 7 to 11 minutes, and that clean gaps were at most 12 s.
+for 7 to 11 minutes, that the gaps measured on clean legs were at most 12 s, and that three further gaps (20.9 s, 39 s and 46 s) were
+unclassified; its closing note on the limit says the 39 s and 46 s ones were one hung run and the 20.9 s one a pause. So a pause of 20.9 s
+was seen in VR against a 30 s limit, which is the margin this module's headset row (above) tests with holds of at least 60 s. Upstream
+disarms on `LeaveVrMode`, which it wraps; here the game's own word is read, and that word is cleared only by game code on the main thread
+(see "The in-VR signal").
 
 ### The slot and its owner
 
@@ -167,7 +197,10 @@ Measured, in the disassembly of `libr15.so`. VA = ELF + 0x100000.
     the session that LeaveVrMode is given.
 - Set in `NRadEngine::CVR::UpdateTracking` (VA 0x1b71b60). The call to `vrapi_EnterVrMode` (thunk 0xff59d0) is at 0x1b71c84.
   A zero return logs the game's own line, `vrapi_EnterVrMode failed`, and leaves the word zero (decompilation).
-- Cleared in `UpdateTracking` after `vrapi_LeaveVrMode` (thunk 0xfdc2b0, call at 0x1b71cb0). The zero store is at 0x1b71cb4.
+- Cleared in `UpdateTracking` after `vrapi_LeaveVrMode` (thunk 0xfdc2b0, call at 0x1b71cb0). The zero store is at 0x1b71cb4. The path is taken
+  when `CSysJava::SessionActive()` returns 0 (call at 0x1b71c38, `cbz w0` at 0x1b71c3c) and also when it returns non-zero and
+  `CSysJava::NativeWindow()` (call at 0x1b71c40, PLT stub 0xff3120, JUMP_SLOT ELF 0x36d0f78) returns a null window (`cbz x0` at 0x1b71c44):
+  both branch to the load of the word at 0x1b71ca8. The pinned test checks the call word, the stub and slot, and both `cbz`.
 - Cleared in `NRadEngine::CVR::ShutdownGraphics` (VA 0x1b712b0). The LeaveVrMode call is at 0x1b712cc and the zero store at
   0x1b712d0.
 - The disassembly holds 67 references to the word: 3 writes (0x1b712d0, 0x1b71c88, 0x1b71cb4) and 64 reads.
@@ -177,9 +210,14 @@ Measured, section. The word is in `.bss`: the store file's section table gives `
 
 Status: pinned. `src/quest/combat/frozen_frame_exit_targets.h` pins the word's address and its place in `.bss` (from the section
 table: `.bss` 0x3761180, size 0x713b8), the writer (`adrp`, `add`, the EnterVrMode call, `str`) and both clearers (the SessionActive
-test, the LeaveVrMode calls and the zero stores in `UpdateTracking` and `ShutdownGraphics`); `src/quest/tests/frozen_frame_exit_pinned_test.cpp`
+test, the NativeWindow call and its null test, the LeaveVrMode calls and the zero stores in `UpdateTracking` and `ShutdownGraphics`); `src/quest/tests/frozen_frame_exit_pinned_test.cpp`
 checks them against the store file. `ShutdownGraphics` has a byte-checked reconstruction; `UpdateTracking` and `DoVRSubmission` are queued
 for one, so what this page says they do beyond the pinned words is read from their disassembly.
+
+Inferred. The word is cleared only by game code: `UpdateTracking` runs on the main thread, from the per-frame clock update (the call at ELF 0x11fd744 in
+`CR15Game::UpdateClock`, ELF 0x11fd724, through a PLT stub; that the stub reaches `UpdateTracking` is read from the disassembly and not pinned), so if that thread is blocked (inside `vrapi_SubmitFrame2` too) while the headset is off or the system menu is
+open, the word stays set. `UpdateTracking` has no byte-checked reconstruction (queued in NEEDED.tsv), so this rests on its disassembly and on
+the pinned words, not on a whole reconstruction. That is the false-exit path the second look and the headset row's pause cases address.
 
 Inferred, against upstream. Upstream's flag is set when EnterVrMode returns a session and cleared at LeaveVrMode. The word
 follows the same two events: `libr15.so` has one call to `vrapi_EnterVrMode` and two calls to `vrapi_LeaveVrMode`, the ones
@@ -212,6 +250,14 @@ timing.
 Decided here. The clock is CLOCK_MONOTONIC, the clock the poller already uses. The wait is a condition variable with a deadline,
 as the addendum requires.
 
+### The second look
+
+Chosen, and what it buys. The watchdog fires only when the gap is past the limit at one tick and still the same gap (the same stamp, no submit
+since) at a tick at least one second later (`rules::Confirmed`, `kConfirmMs`), after the existing double read of the word and the stamp inside each
+tick. It buys one thing: a pause that ends in the second after the limit (a headset put on again, a system menu closed) is not a freeze. It does
+not tell a long pause from a freeze: a pause that outlasts the limit by a second is still ended. The remaining protection against a long pause
+is the headset row's cases above, not this look.
+
 ## Choices
 
 The module's choices, each reversible.
@@ -228,3 +274,5 @@ The module's choices, each reversible.
 6. On the service-only file nothing holds the submit slot, so the install refuses `submit_slot_not_held` and nothing runs
    (`render_config::SubmitSlotHeld()`).
 7. The in-VR word is pinned by this module's targets header.
+8. The process-ending halt reads three existing states (QUIT's finish, `process_end`'s end step, `android_app::destroyRequested`) and hooks nothing:
+   a new hook on the activity's destroy would be a second owner of a slot the game's shutdown already crosses.

@@ -197,6 +197,26 @@ void EveryQuitLogsItsTypeOsAndCount() {
 
 }  // namespace
 
+// Finishing says a finish of the activity has begun, from a QUIT or from FinishActivity, and not before; a QUIT passed to the game's own call is not one
+// (combat/frozen_frame_exit.h halts its watch on it, #2377).
+void FinishingSaysTheActivityIsBeingFinished() {
+  Reset();
+  QCHECK(!quit::Finishing());
+  quit::ArmForTest(nullptr, &App);
+  Entry()();  // no finisher: the game's own call
+  QCHECK(g_gameUiCalls == 1 && !quit::Finishing());
+  quit::ArmForTest(&StandInFinish, &NoApp);
+  QCHECK(!quit::FinishActivity() && !quit::Finishing());  // nothing to finish
+  quit::ArmForTest(&StandInFinish, &App);
+  QCHECK(!quit::Finishing() && quit::CanFinishActivity() && !quit::Finishing());  // asking finishes nothing
+  Entry()();
+  QCHECK(g_finishCalls == 1 && quit::Finishing());
+  quit::ResetForTest();
+  QCHECK(!quit::Finishing());
+  quit::ArmForTest(&StandInFinish, &App);
+  QCHECK(quit::FinishActivity() && quit::Finishing());
+}
+
 int main() {
   WithoutTheHookQuitIsTheGamesSystemUi();
   QuitFinishesTheGamesActivity();
@@ -205,6 +225,7 @@ int main() {
   WithNoFinisherTheGameKeepsItsQuit();
   EveryQuitLogsItsTypeOsAndCount();
   FinishActivityFinishesWithoutAQuit();
+  FinishingSaysTheActivityIsBeingFinished();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "quit_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

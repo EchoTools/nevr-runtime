@@ -9,6 +9,27 @@ runm ffe_no_invr          $R "s/  if (lastSubmitMs == 0 || !inVr) return false;/
 runm ffe_no_unarmed       $R "s/  if (lastSubmitMs == 0 || !inVr) return false;/  if (!inVr) return false;/"
 runm ffe_gt_ge            $R "s/  return nowMs - lastSubmitMs > static_cast<std::int64_t>(limitS) \* 1000;/  return nowMs - lastSubmitMs >= static_cast<std::int64_t>(limitS) * 1000;/"
 runm ffe_default_limit    $R "s/kDefaultLimitS = 30;/kDefaultLimitS = 31;/"
+# the second look (rules::Confirmed and the tick that uses it)
+runm ffe_confirm_ms       $R "s/kConfirmMs = 1000;/kConfirmMs = 999;/"
+runm ffe_confirm_gt       $R "s/  return nowMs - firstSeenMs >= kConfirmMs;/  return nowMs - firstSeenMs > kConfirmMs;/"
+runm ffe_confirm_no_stamp $R "s/ || firstStamp != lastSubmitMs) return false;/ || (firstStamp != lastSubmitMs \&\& false)) return false;/"
+runm ffe_confirm_no_first $R "s/  if (firstSeenMs == 0 || firstStamp == 0/  if (firstStamp == 0/"
+runm ffe_no_second_look   $F "s/  if (!rules::Confirmed(g_firstStamp/  if (false \&\& !rules::Confirmed(g_firstStamp/"
+runm ffe_first_unrecorded $F "s/      g_firstSeenMs.store(now, std::memory_order_relaxed);/      (void)now;/"
+runm ffe_first_kept_on_new_gap $F "s/    if (g_firstStamp.load(std::memory_order_relaxed) != last || g_firstSeenMs.load(std::memory_order_relaxed) == 0) {/    if (g_firstSeenMs.load(std::memory_order_relaxed) == 0) {/"
+# the process is ending: the three production signals, the two looks in the tick, the stamp, the end step
+runm ffe_no_quit_cause    $F "s/  if (quit::Finishing()) return \"quit\";/  (void)0;/"
+runm ffe_no_end_cause     $F "s/  if (process_end::Ending()) return \"process_end\";/  (void)0;/"
+runm ffe_no_destroy_cause $F "s/    if (destroyRequested != 0) return \"destroy_requested\";/    (void)destroyRequested;/"
+runm ffe_destroy_offset   $F "s/app + sentinel::glue::kAppDestroyRequested/app + sentinel::glue::kAppActivity/"
+runm ffe_no_first_look    $F "0,/  if (const char\* cause = g_endingCause.load(std::memory_order_acquire)()) {/s//  if (const char* cause = static_cast<const char*>(nullptr)) {/"
+runm ffe_no_last_look     $F "/The game may have begun to end/{n;s/  if (const char\* cause = g_endingCause.load(std::memory_order_acquire)()) {/  if (const char* cause = static_cast<const char*>(nullptr)) {/}"
+runm ffe_halt_arms_again  $F "s/  if (g_halted.load(std::memory_order_acquire)) return;  \/\/ the game is ending: nothing arms again/  (void)g_halted;/"
+runm ffe_halt_keeps_stamp $F "/^void Halt/,/^}/{s/  g_lastSubmitMs.store(0, std::memory_order_release);/  (void)last;/}"
+runm ffe_halt_twice       $F "s/  if (g_halted.exchange(true, std::memory_order_acq_rel)) return;/  g_halted.store(true, std::memory_order_release);/"
+runm ffe_halt_info_debug  $F "s/LogLevel::kInfo, \"combat_frozen_frame_exit_halted\"/LogLevel::kDebug, \"combat_frozen_frame_exit_halted\"/"
+runm ffe_note_end_no_halt $F "s/  if (!g_fired.load(std::memory_order_acquire)) Halt(\"note_end\"/  if (false) Halt(\"note_end\"/"
+runm ffe_halted_uncounted $F "s/{\"halted\", g_halted.load(std::memory_order_acquire) ? 1 : 0},/{\"halted\", 0},/"
 # the observer: the scope gate first, the stamp, the arm count
 runm ffe_no_gate          $H "s/  if (!Watching()) return;/  if (false) return;/"
 runm ffe_no_scope         $H "s/{ return scope::SeenCombatOrLobby() \&\& detail::g_armed.load(std::memory_order_relaxed); }/{ return detail::g_armed.load(std::memory_order_relaxed); }/"
@@ -46,7 +67,7 @@ runm ffe_never_armed      $F "s/  detail::g_armed.store(true, std::memory_order_
 CI=src/quest/combat/combat_install.cpp
 runm ffe_row_ignores_switch $CI "s/return frozen_frame_exit::Install(g_config.frozenFrameExit.on, /return frozen_frame_exit::Install(true, /" quest-host-combat combat_install_test
 runm ffe_row_ignores_limit  $CI "s/return frozen_frame_exit::Install(g_config.frozenFrameExit.on, g_config.frozenFrameExitS.value,/return frozen_frame_exit::Install(g_config.frozenFrameExit.on, 30,/" quest-host-combat combat_install_test
-runm ffe_not_a_scope_reader $CI "s/ || g_config.frozenFrameExit.on;/;/" quest-host-combat combat_install_test
+runm ffe_not_a_scope_reader $CI "s/ || g_config.frozenFrameExit.on//" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm ffe_limit_range        $QC "s/kCombatFrozenFrameExitSKey, 10, 900, 30, r)/kCombatFrozenFrameExitSKey, 10, 901, 30, r)/" quest-host-shared quest_config_test
 runm ffe_key_unread         $QC "s/  r.config.combat.frozenFrameExit = ReadCombatSwitch(cfg, kCombatFrozenFrameExitKey, r);//" quest-host-shared quest_config_test

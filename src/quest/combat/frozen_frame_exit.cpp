@@ -8,6 +8,8 @@
 
 #include <cstring>
 
+#include "quest/sentinel/android_glue_layout.h"
+
 #include "quest/combat/frozen_frame_exit_rules.h"
 #include "quest/combat/frozen_frame_exit_targets.h"
 #include "quest/sentinel/hook_log.h"
@@ -28,6 +30,9 @@ std::atomic<std::int64_t> g_lastSubmitMs{0};  // the last watched submit, 0: not
 std::atomic<std::int64_t> g_armedAtMs{0};     // when the stamp went from 0 to a time
 std::atomic<std::uint64_t> g_submits{0}, g_arms{0};
 std::atomic<bool> g_fired{false};
+std::atomic<bool> g_halted{false};  // the process is ending (a QUIT, the OS closing the game, the end step): the watch is off for good
+// The watchdog's first look at an expired gap: the stamp it saw and the time (0: none yet). Read and written by the watchdog's tick only.
+std::atomic<std::int64_t> g_firstStamp{0}, g_firstSeenMs{0};
 std::atomic<bool> g_ending{false};  // the watchdog is ending the process: the row's end must not join it
 std::atomic<std::uintptr_t> g_wordAddr{0};  // the in-VR word in the running libr15, 0 before the install proved it
 std::atomic<int> g_limitS{rules::kDefaultLimitS};
@@ -48,6 +53,24 @@ std::uint64_t ReadInVrWord() noexcept {
   if (at == 0) return 0;
   return __atomic_load_n(reinterpret_cast<const std::uint64_t*>(at), __ATOMIC_RELAXED);
 }
+
+// Whether the process is ending, and why; null when it is not. QUIT's finish has begun (quit_hook), android_main returned and the end step runs
+// (process_end_hook), or the OS asked the game to close (android_app::destroyRequested, which the glue sets when the activity is destroyed).
+// Nothing is hooked for it. The destroyRequested read is of a struct the glue frees only after the game's thread has finished with it.
+const void* ProductionApp() noexcept { return process_end::CurrentApp(); }
+std::atomic<const void* (*)() noexcept> g_appSource{&ProductionApp};
+const char* ProductionEndingCause() noexcept {
+  if (quit::Finishing()) return "quit";
+  if (process_end::Ending()) return "process_end";
+  const auto* app = reinterpret_cast<const unsigned char*>(g_appSource.load(std::memory_order_acquire)());
+  if (app != nullptr) {
+    int destroyRequested = 0;
+    std::memcpy(&destroyRequested, app + sentinel::glue::kAppDestroyRequested, sizeof(destroyRequested));
+    if (destroyRequested != 0) return "destroy_requested";
+  }
+  return nullptr;
+}
+std::atomic<const char* (*)() noexcept> g_endingCause{&ProductionEndingCause};
 
 // ---- the thread ---------------------------------------------------------------------------------------------------------------
 
@@ -230,6 +253,7 @@ bool InsideLoadSegment(const sentinel::ElfImage& image, std::uint64_t vaddr, std
 }  // namespace
 
 void Stamp() noexcept {
+  if (g_halted.load(std::memory_order_acquire)) return;  // the game is ending: nothing arms again
   std::int64_t now = NowMs();
   if (now <= 0) now = 1;  // 0 means "not armed"
   if (g_lastSubmitMs.exchange(now, std::memory_order_acq_rel) == 0) {
@@ -239,9 +263,22 @@ void Stamp() noexcept {
   g_submits.fetch_add(1, std::memory_order_relaxed);
 }
 
+// The watch is off for good: the stamp is cleared and no later submit arms it (Stamp). One line, once.
+void Halt(const char* cause, std::int64_t last) noexcept {
+  if (g_halted.exchange(true, std::memory_order_acq_rel)) return;
+  g_lastSubmitMs.store(0, std::memory_order_release);
+  sentinel::LogFields(LogLevel::kInfo, "combat_frozen_frame_exit_halted",
+                      {{"cause", cause}, {"was_armed", last != 0 ? 1 : 0}, {"submits", g_submits.load(std::memory_order_relaxed)},
+                       {"msg", "the game is ending: a stall from here on is the end, not a freeze, so the watch is off and cannot end the game with exit code 1"}});
+}
+
 void Tick() noexcept {
   if (g_fired.load(std::memory_order_acquire)) return;
   std::int64_t last = g_lastSubmitMs.load(std::memory_order_acquire);
+  if (const char* cause = g_endingCause.load(std::memory_order_acquire)()) {
+    Halt(cause, last);
+    return;
+  }
   // Out of VR or out of a combat level: no limit runs, and the next submit arms again. The scope is read without its freshness test: a freeze
   // stops the tick that refreshes it.
   if (ReadInVrWord() == 0 || !scope::SeenCombatOrLobby()) {
@@ -255,6 +292,20 @@ void Tick() noexcept {
   last = g_lastSubmitMs.load(std::memory_order_acquire);
   const std::int64_t now = NowMs();
   if (!rules::Expired(now, last, inVr, limitS)) return;
+  // A second look: the first tick that sees the gap expired only notes it; a later tick fires when the same gap (the same stamp, so no submit since)
+  // still holds kConfirmMs later. A gap that ended and another that began since is a different stamp: it is noted afresh.
+  if (!rules::Confirmed(g_firstStamp.load(std::memory_order_relaxed), g_firstSeenMs.load(std::memory_order_relaxed), last, now)) {
+    if (g_firstStamp.load(std::memory_order_relaxed) != last || g_firstSeenMs.load(std::memory_order_relaxed) == 0) {
+      g_firstStamp.store(last, std::memory_order_relaxed);
+      g_firstSeenMs.store(now, std::memory_order_relaxed);
+    }
+    return;
+  }
+  // The game may have begun to end since the first read of this tick.
+  if (const char* cause = g_endingCause.load(std::memory_order_acquire)()) {
+    Halt(cause, last);
+    return;
+  }
   Fire(now - last, limitS, now);
 }
 
@@ -305,12 +356,14 @@ ModuleResult Install(bool on, int limitS, bool limitFromFile) noexcept {
 
 void NoteEnd() noexcept {
   if (!detail::g_armed.load(std::memory_order_acquire)) return;
+  if (!g_fired.load(std::memory_order_acquire)) Halt("note_end", g_lastSubmitMs.load(std::memory_order_acquire));  // the end step runs: a stall now is the end
   const bool joined = StopThread();
   if (joined) detail::g_armed.store(false, std::memory_order_release);
   sentinel::LogFields(LogLevel::kInfo, "combat_frozen_frame_exit_counts",
                       {{"arms", g_arms.load(std::memory_order_relaxed)},
                        {"submits", g_submits.load(std::memory_order_relaxed)},
                        {"fired", g_fired.load(std::memory_order_acquire) ? 1 : 0},
+                       {"halted", g_halted.load(std::memory_order_acquire) ? 1 : 0},
                        {"joined", joined ? 1 : 0},
                        {"msg", "arms: times a submit in a combat level started the watch; submits: frames seen while watched"}});
 }
@@ -319,12 +372,19 @@ std::int64_t LastSubmitMs() noexcept { return g_lastSubmitMs.load(std::memory_or
 std::uint64_t Submits() noexcept { return g_submits.load(std::memory_order_relaxed); }
 std::uint64_t Arms() noexcept { return g_arms.load(std::memory_order_relaxed); }
 bool Fired() noexcept { return g_fired.load(std::memory_order_acquire); }
+bool Halted() noexcept { return g_halted.load(std::memory_order_acquire); }
 
 void SetSeamsForTest(const Seams& seams) noexcept {
   g_canFinish.store(seams.canFinish != nullptr ? seams.canFinish : &ProductionCanFinish, std::memory_order_release);
   g_finish.store(seams.finish != nullptr ? seams.finish : &ProductionFinish, std::memory_order_release);
   g_grace.store(seams.grace != nullptr ? seams.grace : &ProductionGrace, std::memory_order_release);
   g_end.store(seams.end != nullptr ? seams.end : &ProductionEnd, std::memory_order_release);
+}
+void SetEndingCauseForTest(const char* (*cause)() noexcept) noexcept {
+  g_endingCause.store(cause != nullptr ? cause : &ProductionEndingCause, std::memory_order_release);
+}
+void SetAppSourceForTest(const void* (*app)() noexcept) noexcept {
+  g_appSource.store(app != nullptr ? app : &ProductionApp, std::memory_order_release);
 }
 void SetClockForTest(std::int64_t (*nowMs)() noexcept) noexcept { g_clock.store(nowMs, std::memory_order_release); }
 void SetPollMsForTest(unsigned ms) noexcept { g_pollMs.store(ms != 0 ? ms : kPollMs, std::memory_order_relaxed); }
@@ -346,6 +406,11 @@ void ResetForTest() noexcept {
   g_submits.store(0);
   g_arms.store(0);
   g_fired.store(false);
+  g_halted.store(false);
+  g_firstStamp.store(0);
+  g_firstSeenMs.store(0);
+  g_endingCause.store(&ProductionEndingCause);
+  g_appSource.store(&ProductionApp);
   g_wordAddr.store(0);
   g_limitS.store(rules::kDefaultLimitS);
   g_clock.store(nullptr);

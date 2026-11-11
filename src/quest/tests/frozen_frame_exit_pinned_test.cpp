@@ -214,6 +214,13 @@ int main(int argc, char** argv) {
   const std::int64_t cbzImm = static_cast<std::int64_t>((cbz >> 5) & 0x7ffffU) - (((cbz >> 23) & 1U) != 0 ? (1 << 19) : 0);
   QCHECK(static_cast<std::uint64_t>(0x1a71c3c + cbzImm * 4) == 0x1a71ca8);
   QCHECK(ffe::kCalls[3].site + 4 == 0x1a71c3c);
+  // The second way out: when SessionActive is non-zero the next call is CSysJava::NativeWindow, and a null window (`cbz x0`) jumps to the same load of the
+  // word. The call follows the SessionActive cbz, the cbz follows the call, and both cbz reach 0x1a71ca8.
+  QCHECK(ffe::kCalls[4].site == 0x1a71c3c + 4 && ffe::kCalls[4].site + 4 == 0x1a71c44);
+  const std::uint32_t cbzWindow = PinnedWordAt(0x1a71c44);
+  QCHECK((cbzWindow & 0xff000000U) == 0xb4000000U && Rd(cbzWindow) == 0);
+  const std::int64_t cbzWindowImm = static_cast<std::int64_t>((cbzWindow >> 5) & 0x7ffffU) - (((cbzWindow >> 23) & 1U) != 0 ? (1 << 19) : 0);
+  QCHECK(static_cast<std::uint64_t>(0x1a71c44 + cbzWindowImm * 4) == 0x1a71ca8);
 
   // Each call reaches a PLT stub (adrp x16; ldr x17,[x16,#off]) whose slot is the JUMP_SLOT of the named symbol.
   for (const ffe::Call& c : ffe::kCalls) {

@@ -23,6 +23,7 @@ std::atomic<EnderFn> g_ender{&EndProcess};
 std::atomic<AfterFn> g_after{nullptr};
 std::atomic<unsigned> g_budgetMs{kFlushBudgetMs};
 std::atomic<unsigned long long> g_returned{0};
+std::atomic<bool> g_ending{false};
 std::atomic<sentinel::pinned::AndroidAppOpaque*> g_app{nullptr};
 
 // The before-exit callback and the wait for it. One Shared per call, never freed: a callback that outlives
@@ -83,6 +84,7 @@ std::atomic<ExitFn> g_exit{&RawExit};
 
 // Steps 1 and 2: the line and the bounded before-exit callback. `reason` is null on the ordinary return.
 void RunAfterReturn(int exitCode, const char* reason) noexcept {
+  g_ending.store(true, std::memory_order_release);
   if (reason == nullptr) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
                         {{"action", "ending_process"}, {"exit_code", exitCode}});
@@ -116,6 +118,8 @@ void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app
 NEVR_HOOK_RECORD(kMainHook, MainThunk, &MainHandler);
 
 }  // namespace
+
+bool Ending() noexcept { return g_ending.load(std::memory_order_acquire); }
 
 sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept { return g_app.load(std::memory_order_acquire); }
 
@@ -157,6 +161,7 @@ void ResetForTest() noexcept {
   g_after.store(nullptr, std::memory_order_relaxed);
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);
   g_returned.store(0, std::memory_order_relaxed);
+  g_ending.store(false, std::memory_order_relaxed);
   g_app.store(nullptr, std::memory_order_relaxed);
   g_exit.store(&RawExit, std::memory_order_relaxed);
 }

@@ -61,6 +61,8 @@ bool InstallAt(const sentinel::GotTarget& target, FinishFn finish, AppFn app) no
 // CanFinishActivity answers the same question without finishing.
 bool CanFinishActivity() noexcept;
 bool FinishActivity() noexcept;
+// True once a QUIT or FinishActivity has begun to finish the activity: the process is ending from here on (combat/frozen_frame_exit.h reads it).
+bool Finishing() noexcept;
 
 // Test support: arms the handler without touching a GOT slot. ResetForTest clears the counts.
 void ArmForTest(FinishFn finish, AppFn app) noexcept;

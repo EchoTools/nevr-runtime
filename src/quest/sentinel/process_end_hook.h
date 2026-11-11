@@ -67,6 +67,8 @@ void EndProcess() noexcept;
 // see a failure. Callable from any thread.
 inline constexpr int kFailureExitCode = 1;
 void EndWithExitCode(int exitCode, const char* reason) noexcept;
+// True once android_main returned or EndWithExitCode began: the process ends from here on (combat/frozen_frame_exit.h reads it).
+bool Ending() noexcept;
 using ExitFn = void (*)(int exitCode) noexcept;
 void SetExitForTest(ExitFn fn) noexcept;  // null: _exit; ResetForTest restores it
 
