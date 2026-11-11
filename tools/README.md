@@ -56,3 +56,16 @@ source-invariant tests over the C++ tree and the release contract
 | `internal/testkit/` | The kit every Go test of a tool uses: `Env` (a hermetic environment), `Main` and `Fake` (fake commands that are the test binary), `WaitFor` and `WaitLines` (waits with a deadline, no sleeping), `Fifo`. |
 | `internal/runlog/` | The durable log of a Go tool: one JSON line per event (`ts` in UTC, `level`, `event`, `tool`, `run`, `pid`, then the call's fields) in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
 | `internal/policy/` | The checks of ADR 0044: `python_to_port.txt` (the Python files still to port; it only shrinks), the table of Python that stays, and the scan for `time.Sleep` used to wait. |
+
+## Go tools
+
+`go.mod` here is the one Go module of the tools (ADR 0044: tools and their tests are Go; Python only with a recorded reason).
+`just go-tools` builds `cmd/*` into `build/go-tools/`.
+
+| Path | What it is |
+| --- | --- |
+| `cmd/test-go-tools/` | Runs `go test -json` over this module, keeps the stream as `<stamp>-go.jsonl` beside the Python runner's log and names the failing tests; `just test-tools` and `just verify` run it. |
+| `cmd/levelpack/` | Turns a level export (a repacked manifest and its packages) into the resource set a level plugin embeds (`docs/reference/plugin-resources.md`): the records the game does not have, stock copies dropped, edited stock records listed and carried as overrides only when `-override` names them. The set is checked with the runtime's rules and read back before it is kept. Uses `github.com/klauspost/compress/zstd`: the standard library has no zstd. |
+| `internal/testkit/` | The kit every Go test of a tool uses: `Env` (a hermetic environment), `Main` and `Fake` (fake commands that are the test binary), `WaitFor` and `WaitLines` (waits with a deadline, no sleeping), `Fifo`. |
+| `internal/runlog/` | The durable log of a Go tool: one JSON line per event in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
+| `internal/policy/` | The checks of ADR 0044: `python_to_port.txt` (the Python files still to port; it only shrinks), the table of Python that stays, and the scan for `time.Sleep` used to wait. |
