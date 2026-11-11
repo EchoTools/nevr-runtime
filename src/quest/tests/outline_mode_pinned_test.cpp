@@ -1,6 +1,8 @@
-// Resolves the outline-mode module's pinned slots (src/quest/combat/outline_mode_targets.h) against the real libr15.so: the two
-// SetOutlineMode JUMP_SLOTs, each one's function as the file's .dynsym gives it, and the store's build ID. Nothing is executed or
-// patched. Run by `just test-quest-hooks-pinned`, which passes the store libr15.so.
+// Checks the outline-mode module's pins (src/quest/combat/outline_mode_targets.h) against the real libr15.so: the store's build ID, the
+// two SetOutlineMode JUMP_SLOTs and their functions, every pinned instruction and data word, the .dynsym values of the functions the
+// header names (the five CGVertexFormat helpers and their near namesakes among them), each PLT stub's `bl` target and JUMP_SLOT, and
+// CGComputeVertexBuffer::Bind's jump table, decoded usage by usage. Nothing is executed or patched. Run by `just test-quest-hooks-pinned`,
+// which passes the store libr15.so.
 //
 // Run: outline_mode_pinned_test <libr15.so>
 
@@ -18,6 +20,7 @@
 #include "got_hook.h"
 #include "pinned_targets.h"
 #include "quest/combat/outline_mode_targets.h"
+#include "quest/combat/pinned_words.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -98,6 +101,58 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
   return DynamicSymbol(elf, symbol, &sym) ? sym.st_value : 0;
 }
 
+// The bytes at a virtual address of the loaded file; false past the image.
+bool BytesAt(const LoadedElf& elf, std::uint64_t vaddr, void* out, std::size_t n) {
+  if (elf.mem == nullptr || vaddr + n > elf.span) return false;
+  std::memcpy(out, static_cast<const char*>(elf.mem) + vaddr, n);
+  return true;
+}
+
+// The target of a `bl` at pc: pc + imm26 * 4, imm26 sign-extended.
+std::uint64_t BlTarget(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = static_cast<std::int64_t>(word & 0x3ffffffU);
+  if ((imm & 0x2000000) != 0) imm -= 0x4000000;
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
+}
+
+// The page an `adrp` at pc names: (pc & ~0xfff) + immhi:immlo << 12, immediate sign-extended.
+std::uint64_t AdrpPage(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = (static_cast<std::int64_t>((word >> 5) & 0x7ffffU) << 2) | static_cast<std::int64_t>((word >> 29) & 3U);
+  if ((imm & (1 << 20)) != 0) imm -= (1 << 21);
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc & ~static_cast<std::uint64_t>(0xfff)) + (imm << 12));
+}
+
+// The address an `adr` at pc names: pc + immhi:immlo, sign-extended.
+std::uint64_t AdrTarget(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = (static_cast<std::int64_t>((word >> 5) & 0x7ffffU) << 2) | static_cast<std::int64_t>((word >> 29) & 3U);
+  if ((imm & (1 << 20)) != 0) imm -= (1 << 21);
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm);
+}
+
+// One pinned word: the file holds it.
+void CheckWord(const LoadedElf& elf, const nevr_quest::combat::pinned::Word& w) {
+  std::uint32_t have = 0;
+  const bool readable = BytesAt(elf, w.vaddr, &have, sizeof(have));
+  if (!readable || have != w.word) {
+    std::fprintf(stderr, "outline_mode_pinned_test: word mismatch at %#llx (%s): expected=%#x actual=%#x%s\n",
+                 static_cast<unsigned long long>(w.vaddr), w.what, w.word, have, readable ? "" : " (unreadable)");
+  }
+  QCHECK(readable && have == w.word);
+}
+
+// One function by name: .dynsym gives it the pinned value, and it is a function.
+void CheckFunction(const LoadedElf& elf, const nevr_quest::combat::pinned::Symbol& f) {
+  Elf64_Sym sym{};
+  const bool found = DynamicSymbol(elf, f.symbol, &sym);
+  if (!found || sym.st_value != f.vaddr || ELF64_ST_TYPE(sym.st_info) != STT_FUNC) {
+    std::fprintf(stderr, "outline_mode_pinned_test: %s: .dynsym value %#llx, pinned %#llx%s\n", f.symbol,
+                 static_cast<unsigned long long>(sym.st_value), static_cast<unsigned long long>(f.vaddr), found ? "" : " (absent)");
+  }
+  QCHECK(found);
+  QCHECK(sym.st_value == f.vaddr);
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_FUNC);
+}
+
 // The build ID of the file is the store's, the one pinned_targets.h names.
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
@@ -156,10 +211,92 @@ int main(int argc, char** argv) {
   CheckJumpSlot(r15, ot::SceneTarget(), ot::kPins.sceneFn, "CGScene::SetOutlineMode");
   CheckJumpSlot(r15, ot::DrawSetTarget(), ot::kPins.drawSetFn, "CGDrawDataSet::SetOutlineMode");
 
+  // Every pinned word and 8-byte record holds in the file.
+  for (const nevr_quest::combat::pinned::Word& w : ot::kWords) CheckWord(r15, w);
+  for (const nevr_quest::combat::pinned::Quad& q : ot::kQuads) {
+    std::uint64_t have = 0;
+    QCHECK(BytesAt(r15, q.vaddr, &have, sizeof(have)));
+    if (have != q.value) std::fprintf(stderr, "outline_mode_pinned_test: %s: %#llx\n", q.what, static_cast<unsigned long long>(have));
+    QCHECK(have == q.value);
+  }
+
+  // The functions, by .dynsym name: the five helpers, the two near namesakes (each at its own address, none a helper's), and the
+  // functions the words are read in. The pinned slot functions are the same check's first use.
+  for (const nevr_quest::combat::pinned::Symbol& f : ot::kHelpers) CheckFunction(r15, f);
+  for (const nevr_quest::combat::pinned::Symbol& f : ot::kNotHelpers) {
+    CheckFunction(r15, f);
+    for (const nevr_quest::combat::pinned::Symbol& h : ot::kHelpers) QCHECK(f.vaddr != h.vaddr);
+  }
+  for (const nevr_quest::combat::pinned::Symbol& f : ot::kFunctions) CheckFunction(r15, f);
+  CheckFunction(r15, {ot::kSceneSymbol, ot::kPins.sceneFn});
+  CheckFunction(r15, {ot::kDrawSetSymbol, ot::kPins.drawSetFn});
+
+  // Each word lies in the function the header says it is read in.
+  auto within = [&](const char* symbol, std::uint64_t vaddr) {
+    Elf64_Sym sym{};
+    QCHECK(DynamicSymbol(r15, symbol, &sym));
+    const bool in = vaddr >= sym.st_value && vaddr < sym.st_value + sym.st_size;
+    if (!in) std::fprintf(stderr, "outline_mode_pinned_test: %#llx is not in %s\n", static_cast<unsigned long long>(vaddr), symbol);
+    QCHECK(in);
+  };
+  for (const auto* w : {&ot::kSceneMeshCount, &ot::kScenePrimRead, &ot::kSceneDrawSetCall, &ot::kSceneDrawSetStride}) {
+    within(ot::kSceneSymbol, w->vaddr);
+  }
+  for (const auto* w : {&ot::kMeshSkinnedRead, &ot::kMeshBindCall, &ot::kMeshDrawSetInitCall, &ot::kMeshLastField}) {
+    within(ot::kMeshInitializeSymbol, w->vaddr);
+  }
+  for (const auto* w : {&ot::kBindComputeFormat, &ot::kBindCaseBaseAdr, &ot::kBindCopySize}) within(ot::kBindSymbol, w->vaddr);
+
+  // The stubs: each `bl` reaches its stub, and each stub's adrp + ldr name the JUMP_SLOT its symbol's relocation names.
+  QCHECK(BlTarget(ot::kSceneDrawSetCall.word, ot::kSceneDrawSetCall.vaddr) == ot::kDrawSetStubVaddr);
+  QCHECK(BlTarget(ot::kMeshCountUsedCall.word, ot::kMeshCountUsedCall.vaddr) == ot::kStubs[0].vaddr);
+  QCHECK(BlTarget(ot::kMeshBindCall.word, ot::kMeshBindCall.vaddr) == ot::kStubs[1].vaddr);
+  QCHECK(BlTarget(ot::kMeshDrawSetInitCall.word, ot::kMeshDrawSetInitCall.vaddr) == ot::kStubs[2].vaddr);
+  for (const ot::Stub& stub : ot::kStubs) {
+    CheckWord(r15, {"stub adrp", stub.vaddr, stub.adrpWord});
+    CheckWord(r15, {"stub ldr", stub.vaddr + 4, stub.ldrWord});
+    QCHECK(AdrpPage(stub.adrpWord, stub.vaddr) + nevr_quest::combat::pinned::LdrXOffset(stub.ldrWord) == stub.slotVaddr);
+    const GotTarget target{pinned::kLibR15, stub.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, std::nullopt};
+    const SlotResolution r = ResolveSlot(r15.image, target, kAarch64Relocs);
+    if (r.status != GotStatus::kOk || r.slotVaddr != stub.slotVaddr) {
+      std::fprintf(stderr, "outline_mode_pinned_test: %s: slot %s\n", stub.symbol, GotStatusName(r.status));
+    }
+    QCHECK_STATUS(r.status, GotStatus::kOk);
+    QCHECK(r.slotVaddr == stub.slotVaddr);
+  }
+  QCHECK(ot::kStubs[3].slotVaddr == ot::kPins.drawSetSlot);
+
+  // The merge rule: the adr names the case base, the adrp + add name the table, and the table sends usages 0, 2, 3 and 11 to the
+  // case whose `mov w1` names that usage, every other usage to the plain append.
+  QCHECK(AdrTarget(ot::kBindCaseBaseAdr.word, ot::kBindCaseBaseAdr.vaddr) == ot::kBindCaseBase);
+  QCHECK(AdrpPage(ot::kBindTablePage.word, ot::kBindTablePage.vaddr) + nevr_quest::combat::pinned::AddImmediate(ot::kBindTableOffset.word) ==
+         ot::kBindJumpTable);
+  std::uint8_t table[ot::kBindJumpTableSize] = {};
+  QCHECK(BytesAt(r15, ot::kBindJumpTable, table, sizeof(table)));
+  for (std::size_t usage = 0; usage <= ot::kMaxCaseUsage; ++usage) {
+    const std::uint64_t target = ot::kBindCaseBase + 4ULL * table[usage];
+    const ot::MergeCase* replaced = nullptr;
+    for (const ot::MergeCase& c : ot::kMergeCases) {
+      if (c.usage == usage) replaced = &c;
+    }
+    if (replaced != nullptr) {
+      if (target != replaced->caseVaddr) std::fprintf(stderr, "outline_mode_pinned_test: usage %zu -> %#llx\n", usage,
+                                                      static_cast<unsigned long long>(target));
+      QCHECK(target == replaced->caseVaddr);
+      CheckWord(r15, replaced->usageArg);
+    } else {
+      if (target != ot::kBindAppendAsIs) std::fprintf(stderr, "outline_mode_pinned_test: usage %zu -> %#llx, not the plain append\n",
+                                                      usage, static_cast<unsigned long long>(target));
+      QCHECK(target == ot::kBindAppendAsIs);
+    }
+  }
+  // usage 0's `mov w1,wzr` is `orr w1,wzr,wzr`: no immediate to decode, so its word is the check.
+  QCHECK(ot::kMergeCases[0].usage == 0 && ot::kMergeCases[0].usageArg.word == 0x2a1f03e1U);
+
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "outline_mode_pinned_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
-  std::printf("outline_mode_pinned_test: the outline-mode slots resolve in the real libr15\n");
+  std::printf("outline_mode_pinned_test: the outline-mode slots, words, functions, stubs and merge table hold in the real libr15\n");
   return 0;
 }
