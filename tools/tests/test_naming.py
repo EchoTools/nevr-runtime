@@ -505,6 +505,7 @@ def directory_breaks(paths):
 COMBAT_DIRECTORIES = ("src/quest/combat", "src/quest/combat/mutants.d", "src/quest/combat/check", "docs/quest/combat")
 COMBAT_SCAFFOLDING = frozenset({"CMakeLists.txt", "README.md", "mutants.sh"})
 COMBAT_ROLE_SUFFIXES = ("_rules", "_targets", "_entry")
+# netgame: the game's own class NRadEngine::NRadGame::CR15NetGame, spelled as the game spells it
 COMBAT_NAMES = frozenset({
     "combat_active",
     "combat_install",
