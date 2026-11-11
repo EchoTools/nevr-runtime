@@ -1,0 +1,1 @@
+On PC, the podium terminal's RULES button can be pressed in combat private matches.

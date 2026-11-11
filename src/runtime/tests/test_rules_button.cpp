@@ -7,6 +7,8 @@
 // standing in for the engine's, which writes the game's own flag byte (a Combat match: arena 0, combat 1). The two bytes
 // are adjacent in a test buffer with nonzero bytes around them, as +0x169 and +0x16A are.
 //
+// The first read of each flag on each load is logged once, with the engine's byte and the one written.
+//
 // NOT shown by these tests: the shipped script's bytes in a run, and the RULES button pressed in a Combat match.
 
 #include <gtest/gtest.h>
@@ -150,6 +152,39 @@ TEST_F(RulesButtonInstalled, StockAfterTheFree) {
   Call(kCombatCopy, data_ + 0x16A);
   EXPECT_EQ(data_[0x169], 0) << "the game's own: a Combat match is not Arena";
   EXPECT_EQ(data_[0x16A], 1);
+}
+
+TEST_F(RulesButtonInstalled, EachLoadLogsEachFlagsFirstReadOnce) {
+  Load();
+  Call(kArenaCopy, data_ + 0x169);
+  Call(kArenaCopy, data_ + 0x169);
+  Call(kCombatCopy, data_ + 0x16A);
+  Call(kCombatCopy, data_ + 0x16A);
+  Call(kOtherRead, data_ + 0x100);
+  EXPECT_EQ(Count("rules button: first read on this load field=matchisarena engine=0 written=1 "
+                  "script=d4653fc2065e8184"), 1);
+  EXPECT_EQ(Count("rules button: first read on this load field=matchiscombat engine=1 written=0 "
+                  "script=d4653fc2065e8184"), 1);
+  EXPECT_EQ(Count("rules button: first read"), 2) << "one line a flag, not one a read; another field logs nothing";
+  EXPECT_EQ(data_[0x169], 1) << "still written after the first read";
+  EXPECT_EQ(data_[0x16A], 0);
+  // The game frees the script and loads it again at the same base: a new load, a new line.
+  sh::OnUnloading(rb::kScript, base_);
+  sh::OnLoaded(rb::kScript, base_);
+  Call(kArenaCopy, data_ + 0x169);
+  Call(kArenaCopy, data_ + 0x169);
+  EXPECT_EQ(Count("rules button: first read on this load field=matchisarena"), 2);
+  EXPECT_EQ(Count("rules button: first read on this load field=matchiscombat"), 1) << "not read on this load yet";
+}
+
+TEST_F(RulesButtonInstalled, WithoutTheModuleTheSlotOnlyPassesThrough) {
+  Load();
+  rb::ForgetModulesForTest();
+  const std::uint32_t zero = 0;
+  std::memcpy(base_ + rb::kArenaFieldIdRva, &zero, sizeof zero);
+  EXPECT_EQ(Call(kArenaCopy, data_ + 0x169), 0x55u) << "the engine's answer";
+  EXPECT_EQ(data_[0x169], 0) << "field 0 is not taken for matchisarena: the engine's byte";
+  EXPECT_EQ(Count("rules button: first read"), 0);
 }
 
 TEST_F(RulesButtonInstalled, RegisteringTwiceAddsTheSlotsOnce) {
