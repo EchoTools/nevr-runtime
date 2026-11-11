@@ -60,6 +60,7 @@ std::uint64_t g_scanBase = 0;
 
 using namespace nevr_quest::combat::ec;
 using namespace nevr_quest::combat::ec::core;
+using namespace ::nevr_ec;  // the shared rules (runtime/patch/ec_rules.h), as ec.cpp has them
 namespace pinned = sentinel::pinned;
 using combat_test::Image;
 using sentinel::LogLevel;
@@ -88,6 +89,12 @@ static bool HasLine(const char* needle, int level = -1) {
   const LogLevel want = level == 1 ? LogLevel::kInfo : level == 2 ? LogLevel::kWarn : LogLevel::kError;
   for (const auto& l : g_lines)
     if (l.text.find(needle) != std::string::npos && (level < 0 || l.level == want)) return true;
+  return false;
+}
+// a summary record (event combat_ec_sum) that carries `needle`
+static bool HasSumLine(const char* needle) {
+  for (const auto& l : g_lines)
+    if (l.text.find("\"event\":\"combat_ec_sum\"") != std::string::npos && l.text.find(needle) != std::string::npos) return true;
   return false;
 }
 
@@ -425,7 +432,8 @@ static void CoreTests() {
   bad = p;
   bad.type = 'Z';
   CHECK(!Ours(&bad, 16, &out), "unknown type accepted");
-  for (char t : {'H', 'A', 'V', 'P', 'T', 'O', 'K', 'M'}) {
+  // #2358: every type EchoCombat v2.0.0's wire carries, match control's C L R G included (a PC server relays G and L to every client)
+  for (char t : {'H', 'A', 'V', 'P', 'T', 'O', 'K', 'M', 'C', 'L', 'R', 'G'}) {
     bad = p;
     bad.type = static_cast<uint8_t>(t);
     CHECK(Ours(&bad, 16, &out), "type %c not known", t);
@@ -497,7 +505,7 @@ static void CoreTests() {
   Packet m = {kMagic, 'M', {0, 0, 0}, 1, kMagic2};
   st.Handle(page, m, 9);
   st.Handle(page, m, 9);
-  CHECK(st.medi == 2, "every M counts, resends too");
+  CHECK(st.medi == 1, "#2358: an M counts once per id, as EchoCombat v2.0.0 takes it (a resend does nothing): %llu", static_cast<unsigned long long>(st.medi));
   State st1;  // step 1: T only
   st1.types = 4;
   Packet v = {kMagic, 'V', {0, 0, 0}, 500, kMagic2};
@@ -622,9 +630,26 @@ static void ListTests() {
   g_list.count = 3;
   TacModsFor(t8, L, false, true, &cnt, 1);
   CHECK(t8.full == 3, "a new gen must forget the full count: full %llu", (unsigned long long)t8.full);
-  // the count that moved between the read and the write is left alone: simulate with a CAS expectation mismatch
-  // (TacModsFor reads then compare-exchanges; here the count is changed by a second look inside the same call: not reproducible
-  // single-threaded, so the compare-exchange is covered by the mutant that replaces it with a plain store)
+  // #2358: the count that moved between the read and the write is left alone (the shared write is a compare-and-swap): a reader that
+  // moves the count right after reading it stands for the game writing in between
+  {
+    BuildList(7, true);
+    struct MovingReader {
+      std::uintptr_t countAt;
+      bool moved;
+      bool Read(std::uintptr_t a, void* out, std::size_t n) {
+        std::memcpy(out, reinterpret_cast<const void*>(a), n);
+        if (a == countAt && !moved) {
+          moved = true;
+          g_list.count = 6;
+        }
+        return true;
+      }
+    } mover{L + 0x10, false};
+    TacList tm;
+    CHECK(::nevr_ec::TacModsFor(tm, mover, L, false, true, &cnt, 0, false, true) == 0 && g_list.count == 6,
+          "a count the game moved since the read was overwritten: %llu", static_cast<unsigned long long>(g_list.count));
+  }
   // HideSettled
   CHECK(!HideSettled(1999, 0) && HideSettled(2000, 0), "settle is exactly 2000 ms");
 }
@@ -675,6 +700,24 @@ static void WrapperTests() {
   g_in.push_back(Plain(16));
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16, "a 16-byte foreign datagram swallowed");
+  // #2358: both magics and a type the wire does not carry is the game's; a PC server's match control ('G') is ours, taken out, nothing done
+  g_in.clear();
+  g_in_next = 0;
+  g_recv_calls = 0;
+  g_in.push_back(Veil('X', 21));
+  fl = sizeof from;
+  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1, "an unknown type was taken out");
+  g_in.clear();
+  g_in_next = 0;
+  g_recv_calls = 0;
+  g_in.push_back(Veil('G', 22));
+  g_in.push_back(Plain(31));
+  fl = sizeof from;
+  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 31 && g_recv_calls == 2 && StatsNow().consumed == 1 &&
+            StatsNow().tokens == 0,
+        "a G from a PC server reached the game: calls %d", g_recv_calls);
+  ResetAll();
+  InstallOk();
   // ours: a first-time T is consumed; the real recvfrom is called again and the NEXT datagram is returned
   g_in.clear();
   g_in_next = 0;
@@ -712,6 +755,11 @@ static void WrapperTests() {
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 257 && g_in_next == 257,
         "a flood of ours pinned the call: %d real calls, %zu consumed", g_recv_calls, g_in_next);
+  // D3, counted (#2358): the 257th of ours is handed to the game and counted, in the stats and in the summary (written by Step, at most every 10 s)
+  CHECK(StatsNow().capped == 1, "the datagram past the per-call cap was not counted");
+  AdvanceMs(10000);
+  Step(g_now100);
+  CHECK(HasSumLine("\"capped\":1"), "the summary does not carry the datagram the cap passed on");
   g_in.clear();
   g_in_next = 0;
   // from != null and fromlen == null: passes untouched (the game asked for the sender but gave no length)
