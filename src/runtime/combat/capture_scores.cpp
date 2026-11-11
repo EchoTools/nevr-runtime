@@ -49,9 +49,43 @@ void SetCharge(std::uint8_t* globals, rules::Team team) {
   std::memcpy(globals + (team == rules::Team::kBlue ? kBlueCharge : kOrangeCharge), &points, sizeof points);
 }
 
+// The starting scores the last edge line said, as the two floats' bits (blue low, orange high); all ones: none yet.
+constexpr std::uint64_t kNoneYet = ~std::uint64_t{0};
+std::atomic<std::uint64_t> g_last_scores{kNoneYet};
+
+std::uint64_t ScoreBits(float blue, float orange) {
+  std::uint32_t b = 0, o = 0;
+  std::memcpy(&b, &blue, sizeof b);
+  std::memcpy(&o, &orange, sizeof o);
+  return (std::uint64_t{o} << 32) | b;
+}
+
+// One Info line when the published starting scores change. The publish nodes run on each -/+ press and at match
+// start, not per frame; the first scores are logged only when one is not 0, so a match with none logs nothing.
+void LogPublished(const rules::RulesState& rules) {
+  const float blue = rules.StartScore(rules::Team::kBlue);
+  const float orange = rules.StartScore(rules::Team::kOrange);
+  const std::uint64_t now = ScoreBits(blue, orange);
+  const std::uint64_t was = g_last_scores.exchange(now);
+  if (was == now || (was == kNoneYet && blue == 0.0f && orange == 0.0f)) return;
+  float was_blue = 0, was_orange = 0;
+  if (was != kNoneYet) {
+    const auto b = static_cast<std::uint32_t>(was), o = static_cast<std::uint32_t>(was >> 32);
+    std::memcpy(&was_blue, &b, sizeof b);
+    std::memcpy(&was_orange, &o, sizeof o);
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.COMBAT] capture scores: starting scores changed from blue=%g orange=%g to blue=%g orange=%g script=%016llx "
+      "(the RULES page's starting points; each team's capture point points start there next round)",
+      static_cast<double>(was_blue), static_cast<double>(was_orange), static_cast<double>(blue),
+      static_cast<double>(orange), static_cast<unsigned long long>(kModeScript));
+}
+
 template <std::size_t I>
 std::uint64_t Publish(void* node) {
-  CopyScores(GlobalsOfNode(node), Rules());
+  const rules::RulesState rules = Rules();
+  CopyScores(GlobalsOfNode(node), rules);
+  LogPublished(rules);
   return g_publish[I](node);
 }
 
@@ -80,6 +114,15 @@ std::uint64_t Initializer(void* context) {
   std::uint8_t* globals = GlobalsOfContext(context);
   SetCharge(globals, rules::Team::kBlue);
   SetCharge(globals, rules::Team::kOrange);
+  // Once per round (the initializer runs when the script is set up for one): what the round starts from.
+  const float blue = Rules().StartScore(rules::Team::kBlue);
+  const float orange = Rules().StartScore(rules::Team::kOrange);
+  if (blue != 0.0f || orange != 0.0f) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.COMBAT] capture scores: round starts with blue=%g orange=%g script=%016llx (each team's capture point "
+        "points, from the RULES page, not the stock 0)",
+        static_cast<double>(blue), static_cast<double>(orange), static_cast<unsigned long long>(kPointScript));
+  }
   return r;
 }
 
@@ -171,6 +214,7 @@ void ResetForTest() {
   g_mailbox.store(nullptr);
   for (NodeFn& f : g_publish) f = nullptr;
   g_blue_reset = g_orange_reset = g_dispatcher = g_initializer = g_blue_progress = g_orange_progress = nullptr;
+  g_last_scores = kNoneYet;
 }
 #endif
 

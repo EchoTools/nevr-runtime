@@ -243,6 +243,36 @@ TEST_F(CaptureScoresInstalled, EachPublishNodeCopiesTheStartingScores) {
   }
 }
 
+TEST_F(CaptureScoresInstalled, EachChangeOfTheScoresAndEachRoundStartIsLogged) {
+  Load();
+  const auto publish = [&](std::int32_t blue, std::int32_t red) {
+    std::memcpy(globals_ + cs::kBlueScore, &blue, sizeof blue);
+    std::memcpy(globals_ + cs::kRedScore, &red, sizeof red);
+    Call(mode_, kPublishRvas[0], node_);
+  };
+  publish(0, 0);
+  EXPECT_EQ(Count("capture scores: starting scores changed"), 0) << "no starting score: nothing logged";
+  publish(10, 20);
+  publish(10, 20);
+  EXPECT_EQ(Count("capture scores: starting scores changed from blue=0 orange=0 to blue=10 orange=20 "
+                  "script=6fa8cc9cd721a563"),
+            1);
+  publish(12, 20);
+  EXPECT_EQ(Count("capture scores: starting scores changed from blue=10 orange=20 to blue=12 orange=20"), 1);
+  publish(12, 3);
+  EXPECT_EQ(Count("capture scores: starting scores changed from blue=12 orange=20 to blue=12 orange=3"), 1)
+      << "orange alone changed";
+  EXPECT_EQ(Count("capture scores: starting scores changed"), 3) << "one line a change, none a press that changes nothing";
+  Call(point_, 0x1CDE0, context_);
+  EXPECT_EQ(Count("capture scores: round starts with blue=12 orange=3 script=b7d10bcffcb2a780"), 1);
+  SetStarts(0.0f, 5.0f);
+  Call(point_, 0x1CDE0, context_);
+  EXPECT_EQ(Count("capture scores: round starts with blue=0 orange=5"), 1) << "orange alone";
+  SetStarts(0.0f, 0.0f);
+  Call(point_, 0x1CDE0, context_);
+  EXPECT_EQ(Count("capture scores: round starts"), 2) << "a round from the stock 0 logs nothing";
+}
+
 TEST_F(CaptureScoresInstalled, EverythingThatZeroesATeamsPointsLoadsItsStartingScore) {
   Load();
   EXPECT_EQ(Count("script hooks installed script=b7d10bcffcb2a780"), 1);
