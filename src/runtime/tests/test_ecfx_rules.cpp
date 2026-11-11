@@ -171,6 +171,30 @@ TEST_F(EcfxDrain, ABoomUsesUpItsNodesTurn) {
   EXPECT_EQ(runs[0].kind, fx::kSound);
 }
 
+// A refused word uses up its node's turn too (v2.0.0 marks the node before any check, EC 445): the node's burst waits for the next drain.
+TEST_F(EcfxDrain, ARefusedWordUsesUpItsNodesTurn) {
+  Put(0, 0x100, kE0 | fx::kCharge | 0x4);  // a stray flag bit: refused
+  Put(1, 0x100, kE1 | fx::kBurst);
+  EXPECT_EQ(Drain(1000), 0);
+  EXPECT_EQ(c.refused, 1);
+  EXPECT_TRUE(Empty(0));
+  EXPECT_EQ(q[2], 0x100u) << "the node's burst waits for the next drain";
+  EXPECT_EQ(Drain(1010), 1);
+  EXPECT_EQ(runs[0].kind, fx::kBurst);
+}
+
+// A repeated sound uses up its node's turn (EC 445 before the sound check, EC 450): the node's second sound is neither run nor freed.
+TEST_F(EcfxDrain, ARepeatedSoundUsesUpItsNodesTurn) {
+  Put(0, 0x100, kE3 | fx::kSound);
+  EXPECT_EQ(Drain(1000), 1);  // the wall's sound plays: its 3 s start
+  Put(0, 0x100, kE3 | fx::kSound);
+  Put(1, 0x100, kE3 | fx::kSound);
+  EXPECT_EQ(Drain(1010), 0);
+  EXPECT_EQ(c.sound, 1) << "one repeat freed this drain";
+  EXPECT_TRUE(Empty(0));
+  EXPECT_EQ(q[2], 0x100u) << "the node's second sound waits for the next drain";
+}
+
 // The lowest kind is looked for in the slots after this one (EC 442, j = i + 1): an earlier slot of the same node, written by a
 // running entry after the drain passed it, waits for the next drain.
 TEST_F(EcfxDrain, TheLowestKindIsLookedForAfterTheSlotOnly) {
@@ -309,6 +333,29 @@ TEST(BurstThenCount, AFlushWritesThePendingCountAfterTenSecondsOfQuiet) {
   EXPECT_EQ(l.total, 4u);
   EXPECT_EQ(l.sinceLine, 2u);
   EXPECT_EQ(b.Flush(30000).verdict, nevr::BurstThenCount::Verdict::kCounted) << "nothing pending: nothing to write";
+}
+
+// Final: the count no line covers yet, whatever the time (the last line a process writes, at its stop).
+TEST(BurstThenCount, FinalWritesThePendingCountAtOnce) {
+  nevr::BurstThenCount b{1, 10000};
+  b.Event(1000);  // written
+  b.Event(1001);  // capped
+  b.Event(1002);
+  b.Event(1003);
+  const auto l = b.Final(1004);
+  EXPECT_EQ(l.verdict, nevr::BurstThenCount::Verdict::kCount) << "1 ms after the last event";
+  EXPECT_EQ(l.total, 4u);
+  EXPECT_EQ(l.sinceLine, 2u);
+  EXPECT_FALSE(b.Pending());
+  EXPECT_EQ(b.Final(1005).verdict, nevr::BurstThenCount::Verdict::kCounted) << "nothing pending: nothing to write";
+}
+
+// A burst of 0: the first event is the cap line, every later one is counted (the host log's dropped-line counts).
+TEST(BurstThenCount, ABurstOfZeroStartsWithTheCapLine) {
+  nevr::BurstThenCount b{0, 10000};
+  EXPECT_EQ(b.Event(1000).verdict, nevr::BurstThenCount::Verdict::kCapped);
+  EXPECT_EQ(b.Event(1001).verdict, nevr::BurstThenCount::Verdict::kCounted);
+  EXPECT_TRUE(b.Pending());
 }
 
 TEST(BurstThenCount, NothingIsFlushedWhileEveryEventWasWritten) {

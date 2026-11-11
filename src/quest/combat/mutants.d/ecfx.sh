@@ -56,5 +56,16 @@ runm lb_written        $B "s#^    written_ = total_;##"
 runm lb_last_line      $B "s#^    lastLine_ = nowMs;#    lastLine_ = nowMs - everyMs_;#"
 runm lb_last_event     $B "s#^    lastEvent_ = nowMs;##"
 runm lb_since          $B "s#return Wrote(Verdict::kCount, nowMs, total_ - written_);\$#return Wrote(Verdict::kCount, nowMs, total_);#"
+# N2: a refused word and a repeated sound use up their node's turn (EC 445 before the checks)
+runm ecfx_refused_turn $C "s#^        ++c->refused;#        ++c->refused; --nran;#"
+runm ecfx_sound_turn   $C "s#^          ++c->sound;#          ++c->sound; --nran;#"
+# combat_ecfx_sum: the run's totals and its level (Warning once an entry was not run)
+runm ecfx_sum_ran      $F "s#^      ++g_totals.ran;#      (void)0;#"
+runm ecfx_sum_notrun   $F "s#^      ++g_totals.notRun;#      (void)0;#"
+runm ecfx_sum_boom     $F "/^  g_totals.boom += c.boom;\$/d"
+runm ecfx_sum_sound    $F "/^  g_totals.sound += c.sound;\$/d"
+runm ecfx_sum_refused  $F "/^  g_totals.refused += c.refused;\$/d"
+runm ecfx_sum_stale    $F "/^  g_totals.stale += c.stale;\$/d"
+runm ecfx_sum_level    $F "s#g_totals.notRun ? LogLevel::kWarn : LogLevel::kInfo#LogLevel::kInfo#"
 # off by its key is counted off on the phase line (combat_install_test)
 runm ecfx_off_not_counted $F "s#  return {ok, token, !on};#  return {ok, token, false};#" quest-host-combat combat_install_test

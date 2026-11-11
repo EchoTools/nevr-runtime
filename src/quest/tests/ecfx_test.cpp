@@ -236,6 +236,35 @@ static void RuleTests() {
     CHECK(n == 1 && run[0].kind == kSound, "the node's sound did not run on the next drain");
     std::memset(g_q, 0, sizeof g_q);
   }
+  // a refused word uses up its node's turn too (EC 445 marks the node before any check): the node's burst waits for the next drain
+  {
+    std::memset(g_q, 0, sizeof g_q);
+    Drain dr;
+    Put(0, 0x100, kE0 | 0 | 0x4);  // a stray flag bit: refused
+    Put(1, 0x100, kE1 | 1);
+    c = Counts();
+    n = PlanInto(dr, Ents(), 9200, run, &c);
+    CHECK(n == 0 && c.refused == 1 && g_q[2] == 0x100, "the refused word did not use up its node's turn: n %d", n);
+    c = Counts();
+    n = PlanInto(dr, Ents(), 9210, run, &c);
+    CHECK(n == 1 && run[0].kind == kBurst, "the node's burst did not run on the next drain");
+    std::memset(g_q, 0, sizeof g_q);
+  }
+  // a repeated sound uses up its node's turn (EC 445 before the sound check, EC 450): the node's second sound waits
+  {
+    std::memset(g_q, 0, sizeof g_q);
+    Drain ds;
+    Put(0, 0x100, kE3 | 3);
+    c = Counts();
+    n = PlanInto(ds, Ents(), 9300, run, &c);
+    CHECK(n == 1, "the wall's first sound did not play");
+    Put(0, 0x100, kE3 | 3);
+    Put(1, 0x100, kE3 | 3);
+    c = Counts();
+    n = PlanInto(ds, Ents(), 9310, run, &c);
+    CHECK(n == 0 && c.sound == 1 && g_q[2] == 0x100, "the repeated sound did not use up its node's turn: n %d sound %d", n, c.sound);
+    std::memset(g_q, 0, sizeof g_q);
+  }
   // the lowest kind is looked for after the slot only (EC 442): a passed slot of the node, written by a running entry, waits
   {
     std::memset(g_q, 0, sizeof g_q);
@@ -466,6 +495,54 @@ static void FullTests(const char* path) {
   (void)free_slots;
 }
 
+// combat_ecfx_sum (#2349): its totals are the effects of the whole run, and its level is Warning once an entry was not run.
+static void SumTest(const char* path) {
+  ec::ResetForTest();
+  ecfx::ResetForTest();
+  ec::SetNoThreadForTest(true);
+  ecfx::SetNoThreadForTest(true);
+  void* lib = dlopen(path, RTLD_NOW);
+  CHECK(lib != nullptr, "cannot load the stand-in lib: %s", dlerror());
+  if (lib == nullptr) return;
+  const uint64_t e0 = reinterpret_cast<uint64_t>(dlsym(lib, "re33_ecent_ac4e93_17900"));
+  const uint64_t e2 = reinterpret_cast<uint64_t>(dlsym(lib, "re33_ecent_ac4e93_17b00"));
+  const uint64_t e3 = reinterpret_cast<uint64_t>(dlsym(lib, "re33_ecent_ac4e93_17b60"));
+  CHECK(Attach() == Status::kOn, "the sum test's attach");
+  static uint64_t holder = 0;
+  const uint64_t ctx = reinterpret_cast<uint64_t>(&holder);
+  Tick();  // the gate opens
+  g_lines.clear();
+  QPut(0, ctx, e0 | kCharge);
+  Tick();  // record 1: ran 1
+  QPut(0, ctx, e0 | kCharge);
+  Tick(600);  // record 2: stale 1
+  for (int i = 0; i < 95; ++i) {  // records 3 to 97: boom 95; the 97th is the cap record
+    QPut(0, ctx, e2 | kBoom);
+    Tick(400);
+  }
+  CHECK(CountLines("\"event\":\"combat_ecfx_lines\"") == 1, "no cap record after 97 records");
+  for (int i = 0; i < 25; ++i) {  // 25 more booms, 400 ms apart: the 25th is 10 s after the cap record, and writes the count
+    QPut(0, ctx, e2 | kBoom);
+    Tick(400);
+  }
+  CHECK(HasLine("\"event\":\"combat_ecfx_sum\",\"records\":122,\"since_last\":25,\"ran\":1,\"not_run\":0,\"boom_freed\":120,\"sound_repeats\":0,"
+                "\"refused\":0,\"stale_freed\":1", 1),
+        "no Info combat_ecfx_sum with the run's totals");
+  const uint64_t local = reinterpret_cast<uint64_t>(&LocalEntry);  // the rule hands it over; the dladdr check does not run it
+  SetEntryForTest(kCharge, local);
+  QPut(0, ctx, local | kCharge);
+  Tick(10);  // record 123: not run, counted
+  SetEntryForTest(kCharge, e0);
+  QPut(0, ctx, e0 | kCharge | 0x4);
+  Tick(10);  // record 124: a stray flag bit, refused
+  QPut(0, ctx, e3 | kSound);
+  Tick(10);  // record 125: a sound whose wall cannot be read ([ctx] is 0), freed as a repeat
+  for (int i = 0; i < 25; ++i) Tick(400);  // 10 s of quiet: the pending count is flushed
+  CHECK(HasLine("\"event\":\"combat_ecfx_sum\",\"records\":125,\"since_last\":3,\"ran\":1,\"not_run\":1,\"boom_freed\":120,"
+                "\"sound_repeats\":1,\"refused\":1,\"stale_freed\":1", 2),
+        "no Warning combat_ecfx_sum with the run's totals once an entry was not run");
+}
+
 static void MissingTests(const char* path) {
   ec::ResetForTest();
   ecfx::ResetForTest();
@@ -535,6 +612,7 @@ int main(int argc, char** argv) {
     RuleTests();
     SwitchTest();
     FullTests(argv[2]);
+    SumTest(argv[2]);
     SlotsFullTest(argv[2]);
   } else {
     MissingTests(argv[2]);

@@ -82,7 +82,8 @@ func TestTheRefusalWarningsSayWhenTheyStopAndCount(t *testing.T) {
 }
 
 // The follow update's fault Warnings, a sibling of the shape: the first 5, the cap line, then the count; flushed on every follow update,
-// the early return included, and one atomic load when there is nothing to say.
+// the early return included. Arena pays nothing: the follow update runs every frame in every level, so the call is guarded at its call
+// sites by the fault it has in hand or one relaxed load of the pending flag, and FaultLines is not entered when there is nothing to say.
 func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 	t.Parallel()
 	src := code(t, dronefix)
@@ -93,11 +94,12 @@ func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 		t.Error("the follow update's fault Warnings stop at 5 again, with no count")
 	}
 	ordered(t, "FaultLines", body(t, src, "void FaultLines("),
-		"if (!faulted && !g_fault_lines_pending.load(std::memory_order_relaxed)) return;",
 		"AcquireSRWLockExclusive(&g_fault_lines_lock);",
 		"const nevr::BurstThenCount::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);",
 		"g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);",
 		"ReleaseSRWLockExclusive(&g_fault_lines_lock);",
+		"ReportFaults(l, cs);")
+	ordered(t, "ReportFaults", body(t, src, "void ReportFaults("),
 		"if (l.verdict == V::kWrite)",
 		"LogWarning(\"follow update faulted and was contained",
 		"else if (l.verdict == V::kCapped)",
@@ -107,11 +109,67 @@ func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 	update := body(t, src, "void __fastcall Hooked_FollowUpdate(")
 	ordered(t, "Hooked_FollowUpdate", update,
 		"Log(\"follow update skipped: no orbit target set yet (cs %p)\", (void *)cs);",
-		"FaultLines(false, cs);",
+		"if (g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(false, cs);",
 		"return;",
 		"const bool faulted = !CallGuarded(cs);",
 		"if (faulted) InterlockedIncrement(&g_faults);",
-		"FaultLines(faulted, cs);")
+		"if (faulted || g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(faulted, cs);")
+	if got := strings.Count(update, "FaultLines("); got != 2 {
+		t.Errorf("Hooked_FollowUpdate calls FaultLines %d times, want 2, each behind its guard:\n%s", got, update)
+	}
+}
+
+// The host log's own cap, the third sibling: a Debug or Info line past its cap is counted, the first one says so, the count follows at
+// most every 10 s, flushed with DRONE on and at Stop. Never dropped with no count (#2349, logging.md Rule 5).
+func TestTheHostLogCapCountsWhatItDoesNotWrite(t *testing.T) {
+	t.Parallel()
+	src := code(t, dronefix)
+	if strings.Contains(src, "further %s lines are dropped") {
+		t.Error("LogLine drops lines past its cap with no count again")
+	}
+	if !strings.Contains(src, "nevr::BurstThenCount g_dropped_lines[2] = {{0, 10000}, {0, 10000}};") {
+		t.Error("the host log's dropped lines no longer have their budget (no burst, the count every 10 s)")
+	}
+	ordered(t, "LogLine", body(t, src, "void LogLine("),
+		"if (n > cap) {",
+		"DroppedLine(debug, cap);",
+		"return;")
+	ordered(t, "DroppedLine", body(t, src, "void DroppedLine("),
+		"AcquireSRWLockExclusive(&g_dropped_lock);",
+		"g_dropped_lines[debug ? 0 : 1].Event(now);",
+		"g_dropped_pending.store(g_dropped_lines[0].Pending() || g_dropped_lines[1].Pending(), std::memory_order_relaxed);",
+		"ReleaseSRWLockExclusive(&g_dropped_lock);",
+		"ReportDropped(debug, cap, l);")
+	ordered(t, "ReportDropped", body(t, src, "void ReportDropped("),
+		"if (l.verdict == V::kCapped)",
+		"later %s lines are counted, not written",
+		"else if (l.verdict == V::kCount)",
+		"lines over the cap: %llu not written in all (%llu since the last line)",
+		"PluginLogFields(NEVR_LOG_WARNING, note, {});")
+	ordered(t, "FlushDropped", body(t, src, "void FlushDropped("),
+		"if (!final && !g_dropped_pending.load(std::memory_order_relaxed)) return;",
+		"final ? g_dropped_lines[0].Final(now) : g_dropped_lines[0].Flush(now)",
+		"final ? g_dropped_lines[1].Final(now) : g_dropped_lines[1].Flush(now)",
+		"ReportDropped(true, kDebugCap, debugLine);",
+		"ReportDropped(false, kInfoCap, infoLine);")
+	droneOn := body(t, body(t, src, "void __fastcall Hooked_FollowUpdate("), "if (g_drone_on) {")
+	if !strings.Contains(droneOn, "FlushDropped(false);") {
+		t.Errorf("the dropped-line count is no longer flushed from the DRONE-on block:\n%s", droneOn)
+	}
+}
+
+// Stop writes every count no line covers yet and the run's NEUTRON refusal totals: the follow faults, the refusals and the dropped
+// lines, then the unhooked line, which the Info cap cannot drop.
+func TestStopWritesTheCountsAndTheRefusalTotals(t *testing.T) {
+	t.Parallel()
+	stop := body(t, code(t, dronefix), "void Stop()")
+	ordered(t, "Stop", stop,
+		"ReportFaults(g_fault_lines.Final(now), 0);",
+		"g_wall_lines.Final(now)",
+		"ReportWallRefusals(wall, fx::Counts(), refused, nowall);",
+		"FlushDropped(true);",
+		"unhooked (%ld updates skipped, %ld faults contained, %llu NEUTRON effects refused, %llu sounds with no wall)",
+		"PluginLogFields(NEVR_LOG_INFO, line, {});")
 }
 
 // The Quest's ran and drain records, the other sibling: the first 96 in all, the cap record, then the count; no record path writes

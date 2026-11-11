@@ -58,7 +58,7 @@ namespace nevr_combat::dronefix {  // nEVR port: one namespace per file
 constexpr const char *kCatModule = "dronefix";  // nEVR port
 NEVR_DEFINE_PLUGIN_LOG("[DroneFix]")
 
-constexpr const char *kLogName = "DroneFix";   // names the plugin in its log-cap Warning
+constexpr const char *kLogName = "DroneFix";   // names the plugin in its log-cap Warnings
 
 namespace {
 
@@ -126,13 +126,53 @@ SRWLOCK g_fault_lines_lock = SRWLOCK_INIT;            // nEVR port: the fault Wa
 nevr::BurstThenCount g_fault_lines{5, 10000};
 
 // One line through nEVR's host log. Debug and Info are counted apart, so a burst of Debug lines
-// never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap, and the
-// first line past either cap writes one Warning that says so. A Warning or an Error is always
-// written.
+// never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap. A line past
+// either cap is counted, not written (nEVR port, #2349): the first says so in a Warning, then the
+// count follows at most every 10 s, flushed with DRONE on and at Stop (nevr::BurstThenCount with no
+// burst of its own: the cap is the burst). A Warning or an Error is always written.
 constexpr LONG kDebugCap = 5000;
 constexpr LONG kInfoCap = 20000;
 volatile LONG g_logged_debug = 0;
 volatile LONG g_logged_info = 0;
+SRWLOCK g_dropped_lock = SRWLOCK_INIT;
+nevr::BurstThenCount g_dropped_lines[2] = {{0, 10000}, {0, 10000}};  // [0] Debug, [1] Info
+std::atomic<bool> g_dropped_pending{false};
+
+void ReportDropped(bool debug, LONG cap, const nevr::BurstThenCount::Line &l) {
+    using V = nevr::BurstThenCount::Verdict;
+    char note[200];
+    if (l.verdict == V::kCapped)
+        snprintf(note, sizeof(note), "%s log cap reached: later %s lines are counted, not written (cap %ld); the count follows at most every 10 s",
+                 kLogName, debug ? "Debug" : "Info", static_cast<long>(cap));
+    else if (l.verdict == V::kCount)
+        snprintf(note, sizeof(note), "%s %s lines over the cap: %llu not written in all (%llu since the last line)", kLogName,
+                 debug ? "Debug" : "Info", static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
+    else
+        return;
+    PluginLogFields(NEVR_LOG_WARNING, note, {});
+}
+
+void DroppedLine(bool debug, LONG cap) {
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_dropped_lock);
+    const nevr::BurstThenCount::Line l = g_dropped_lines[debug ? 0 : 1].Event(now);
+    g_dropped_pending.store(g_dropped_lines[0].Pending() || g_dropped_lines[1].Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_dropped_lock);
+    ReportDropped(debug, cap, l);
+}
+
+// The dropped-line counts no line covers yet: once none has come for 10 s, or (final) at once.
+void FlushDropped(bool final) {
+    if (!final && !g_dropped_pending.load(std::memory_order_relaxed)) return;
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_dropped_lock);
+    const nevr::BurstThenCount::Line debugLine = final ? g_dropped_lines[0].Final(now) : g_dropped_lines[0].Flush(now);
+    const nevr::BurstThenCount::Line infoLine = final ? g_dropped_lines[1].Final(now) : g_dropped_lines[1].Flush(now);
+    g_dropped_pending.store(g_dropped_lines[0].Pending() || g_dropped_lines[1].Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_dropped_lock);
+    ReportDropped(true, kDebugCap, debugLine);
+    ReportDropped(false, kInfoCap, infoLine);
+}
 
 void LogLine(uint32_t level, const char *fmt, va_list args) {
     if (level < NEVR_LOG_WARNING) {
@@ -140,12 +180,7 @@ void LogLine(uint32_t level, const char *fmt, va_list args) {
         LONG cap = debug ? kDebugCap : kInfoCap;
         LONG n = InterlockedIncrement(debug ? &g_logged_debug : &g_logged_info);
         if (n > cap) {
-            if (n == cap + 1) {
-                char note[160];
-                snprintf(note, sizeof(note), "%s log cap reached: further %s lines are dropped (cap %ld)",
-                         kLogName, debug ? "Debug" : "Info", static_cast<long>(cap));
-                PluginLogFields(NEVR_LOG_WARNING, note, {});
-            }
+            DroppedLine(debug, cap);
             return;
         }
     }
@@ -747,16 +782,11 @@ void DroneHitsDue();
 
 // nEVR port: the follow update's fault Warnings (#2349). The first 5 faults are each a Warning, then one that says the later
 // ones are counted, then the count at most every 10 s and once none has come for 10 s (nevr::BurstThenCount); his `<= 5` stopped
-// without a count. With no fault and nothing pending this is one atomic load: the follow update runs every frame.
+// without a count. The follow update runs every frame in every level, arena included, so its call sites enter FaultLines only on a
+// fault or with a count pending: with neither, the follow update pays one relaxed load and one branch.
 std::atomic<bool> g_fault_lines_pending{false};
 
-void FaultLines(bool faulted, uintptr_t cs) {
-    if (!faulted && !g_fault_lines_pending.load(std::memory_order_relaxed)) return;
-    const ULONGLONG now = GetTickCount64();
-    AcquireSRWLockExclusive(&g_fault_lines_lock);
-    const nevr::BurstThenCount::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);
-    g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);
-    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+void ReportFaults(const nevr::BurstThenCount::Line &l, uintptr_t cs) {
     using V = nevr::BurstThenCount::Verdict;
     if (l.verdict == V::kWrite)
         LogWarning("follow update faulted and was contained (cs %p, target system %p, index %u)", (void *)cs,
@@ -769,6 +799,15 @@ void FaultLines(bool faulted, uintptr_t cs) {
                    static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
 }
 
+void FaultLines(bool faulted, uintptr_t cs) {
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_fault_lines_lock);
+    const nevr::BurstThenCount::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);
+    g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+    ReportFaults(l, cs);
+}
+
 void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     if (g_drone_on) {                                             // nEVR port: the drone's per-frame work, with DRONE on
     TickFrame();
@@ -778,16 +817,17 @@ void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     KillTestDue();
     DeathFxDue();
     WallFxDue();
+    FlushDropped(false);                                          // nEVR port: a pending dropped-line count goes out (#2349)
     }
     if (*(uintptr_t *)(cs + TARGET_BODY_SYSTEM) == 0) {
         if (InterlockedIncrement(&g_skipped) == 1)
             Log("follow update skipped: no orbit target set yet (cs %p)", (void *)cs);
-        FaultLines(false, cs);                                    // nEVR port: a pending fault count still goes out
+        if (g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(false, cs);  // nEVR port: a pending fault count still goes out
         return;
     }
     const bool faulted = !CallGuarded(cs);
     if (faulted) InterlockedIncrement(&g_faults);
-    FaultLines(faulted, cs);
+    if (faulted || g_fault_lines_pending.load(std::memory_order_relaxed)) FaultLines(faulted, cs);
 }
 
 // Each drone's last gun state (by actor), so the port follows it whatever the drone's
@@ -1845,7 +1885,24 @@ void Stop() {
     Real_Disable = nullptr;
     Real_EnableComp = nullptr;
     Real_Death = nullptr;
-    Log("unhooked (%ld updates skipped, %ld faults contained)", g_skipped, g_faults);
+    // nEVR port (#2349): every count no line covers yet goes out now, then the totals, in a line the Info cap cannot drop
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_fault_lines_lock);
+    ReportFaults(g_fault_lines.Final(now), 0);
+    g_fault_lines_pending.store(false, std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_fault_lines_lock);
+    AcquireSRWLockExclusive(&g_wall_lines_lock);
+    const nevr::BurstThenCount::Line wall = g_wall_lines.Final(now);
+    g_wall_lines_pending.store(false, std::memory_order_relaxed);
+    const uint64_t refused = g_wall_refused_total, nowall = g_wall_nowall_total;
+    ReleaseSRWLockExclusive(&g_wall_lines_lock);
+    ReportWallRefusals(wall, fx::Counts(), refused, nowall);
+    FlushDropped(true);
+    char line[256];
+    snprintf(line, sizeof(line), "unhooked (%ld updates skipped, %ld faults contained, %llu NEUTRON effects refused, %llu sounds with no wall)",
+             static_cast<long>(g_skipped), static_cast<long>(g_faults), static_cast<unsigned long long>(refused),
+             static_cast<unsigned long long>(nowall));
+    PluginLogFields(NEVR_LOG_INFO, line, {});
 }
 
 }  // namespace nevr_combat::dronefix

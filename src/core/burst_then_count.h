@@ -3,7 +3,8 @@
 // every frame is neither logged every time nor silenced after a cap. The first `burst` events are each written. The next one writes one
 // line that says the later ones are counted, not logged. After it, a count line goes out on the first event at least `everyMs` after the
 // last line, and `Flush`, called from a path that runs on its own (a frame or a tick), writes the count once no event has come for
-// `everyMs`. So a log shows how many there were, whether it was 17 or a million. The counts are the caller's to print (`Line`).
+// `everyMs`; `Final`, at the process's stop, writes it at once. So a log shows how many there were, whether it was 17 or a million.
+// The counts are the caller's to print (`Line`).
 //
 // No clock and no lock: the caller passes the time and calls it from one thread, or holds its own lock. Header-only and dependency-free,
 // so PC (runtime/combat/dronefix.cpp) and Quest (quest/combat/ecfx.cpp) use the same budget. Tests: runtime/tests/test_ecfx_rules.cpp
@@ -47,6 +48,12 @@ class BurstThenCount {
   // No event: the count of the events no line covers yet, once none has come for everyMs.
   Line Flush(uint64_t nowMs) {
     if (total_ > written_ && nowMs - lastEvent_ >= everyMs_) return Wrote(Verdict::kCount, nowMs, total_ - written_);
+    return {Verdict::kCounted, total_, 0};
+  }
+
+  // The count of the events no line covers yet, whatever the time: for the last line a process writes (its stop).
+  Line Final(uint64_t nowMs) {
+    if (total_ > written_) return Wrote(Verdict::kCount, nowMs, total_ - written_);
     return {Verdict::kCounted, total_, 0};
   }
 
