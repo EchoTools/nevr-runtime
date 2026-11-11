@@ -1695,7 +1695,7 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   if (role == nevr_socket_role::Role::Matchmaker) {
     remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
     const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
-        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
+        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " format=evr stripped from the URL: ", remoteUrl);
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   }
   remote->setUrl(remoteUrl);
@@ -2199,11 +2199,12 @@ void InstallWebSocketBridge() {
               // disconnects and B2/N54 nulls that callback, all matchmaker
               // server→game message routing silently dies.
               loginRemote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
-                  [pairPtr, gameWsPtr, connIdx, framesNoted = std::make_shared<std::atomic<bool>>(false),
+                  [pairPtr, gameWsPtr, connIdx,
                    remoteAddress = static_cast<const ix::WebSocket*>(loginRemote.get())](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
-                        NoteServiceFrame(framesNoted, connIdx, rmsg->str);
+                        // No `service frames` line here: this remote is the login connection's (opened with
+                        // format=evr), and its own callback writes that line for it.
                         ix::WebSocket* target = nullptr;
                         std::shared_ptr<ix::WebSocket> keep;  // holds the target alive across the send
                         int targetConn = -1;

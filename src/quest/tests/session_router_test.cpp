@@ -3472,12 +3472,11 @@ void TestServiceFramesLineIsWrittenOncePerRemote() {
   const CaseScope scope("service frames line");
   Rig rig(WithLogin(kLogin));
   OpenThree(rig);
-  const RemoteId login = SessionRemote(rig);
-  rig.router->OnRemoteOpen(login);
-  rig.router->OnRemoteFrame(login, Msg(kSymSomething, "a"), true);
-  rig.router->OnRemoteFrame(login, Msg(kSymSomething, "b"), true);
+  const RemoteId session = SessionRemote(rig);  // config, login and matchmaker share it; game 1 (conn 0, config) opened it
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "a"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "b"), true);
   const std::vector<std::string> lines = RecordLines(rig.logs, "service frames");
-  QCHECK(lines.size() == 1);
   QCHECK(lines.size() == 1 && lines[0] == "service frames conn=0 role=config format=evr");
 }
 
@@ -3485,9 +3484,9 @@ void TestServiceFramesLineNamesAFrameWithoutTheMarkerUnknown() {
   const CaseScope scope("service frames line unknown");
   Rig rig(WithLogin(kLogin));
   OpenThree(rig);
-  const RemoteId login = SessionRemote(rig);
-  rig.router->OnRemoteOpen(login);
-  rig.router->OnRemoteFrame(login, std::string("\x0a\x04proto-bytes", 14), true);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, std::string("\x0a\x04proto-bytes", 14), true);
   const std::vector<std::string> lines = RecordLines(rig.logs, "service frames");
   QCHECK(lines.size() == 1 && lines[0] == "service frames conn=0 role=config format=unknown");
 }

@@ -3974,6 +3974,22 @@ TEST_F(RolesByPathTest, TheFirstServiceFrameOfEachConnectionNamesItsFormatOnce) 
   EXPECT_TRUE(has("[NEVR.WS] service frames conn=1 role=login format=evr")) << lines[1];
 }
 
+// #568 (A3): a matchmaker that shares the login session's remote writes no `service frames` line of its own: that remote
+// is the login connection's, which wrote its line once. Failure caught: the login connection's frames reported as a
+// matchmaker's (conn=2), indistinguishable from a matchmaker connection of its own.
+TEST_F(RolesByPathTest, AMatchmakerSharingTheLoginSessionWritesNoServiceFramesLine) {
+  GameSocket login, matchmaker;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  matchmaker.Send(nevr_evr_codec::kSymDocumentRequest);
+  ASSERT_TRUE(matchmaker.WaitForFrames(1));  // the reply goes to the newest connection on the shared remote
+  const std::vector<std::string> lines = LogLinesContaining("service frames conn=");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("service frames conn=1 role=login format=evr"), std::string::npos) << lines[0];
+}
+
 // #568 (A3): a first service frame that does not start with the EVR marker is named `unknown`, never `evr`, and is
 // still forwarded to the game. Failure caught: a form claimed for a frame the bridge cannot show is EVR.
 TEST_F(RolesByPathTest, AServiceFrameWithoutTheEvrMarkerIsNamedUnknown) {
