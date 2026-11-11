@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -764,9 +765,50 @@ TEST(BroadcasterAddress, UnknownFamilyReportsFamilyAndRawBytes) {
   EXPECT_EQ(address.text, "abcd0000000000000000000000000000");
 }
 
-TEST(BroadcasterAddress, ZeroSlotIsNotIpv4) {
+TEST(BroadcasterAddress, ZeroSlotReadsAsIpv4ZeroAsBefore) {
   const auto address = nevr_game_server::ReadBroadcasterAddress(EchoVR::AddressInfo{});
-  EXPECT_FALSE(address.isIpv4);
+  EXPECT_TRUE(address.isIpv4);
   EXPECT_EQ(address.family, 0);
-  EXPECT_TRUE(address.text.empty());
+  EXPECT_EQ(address.text, "0.0.0.0");
+}
+
+namespace {
+
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_lines;
+void CaptureLine(EchoVR::LogLevel level, const CHAR* message) { g_lines.emplace_back(level, message); }
+
+class BroadcasterInternalIpLog : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    g_lines.clear();
+    SetBootLogSink(&CaptureLine);
+  }
+  void TearDown() override { SetBootLogSink(nullptr); }
+};
+
+}  // namespace
+
+TEST_F(BroadcasterInternalIpLog, Ipv4SlotReturnsTheAddressAndLogsNothing) {
+  sockaddr_in sin{};
+  sin.sin_family = AF_INET;
+  sin.sin_addr.S_un.S_addr = htonl(0xC0A80107);
+  EXPECT_EQ(nevr_game_server::BroadcasterInternalIp(SlotWith(&sin, sizeof(sin)), "registration"), "192.168.1.7");
+  EXPECT_TRUE(g_lines.empty());
+}
+
+TEST_F(BroadcasterInternalIpLog, ZeroSlotReturnsZeroAddressAndLogsNothing) {
+  EXPECT_EQ(nevr_game_server::BroadcasterInternalIp(EchoVR::AddressInfo{}, "registration"), "0.0.0.0");
+  EXPECT_TRUE(g_lines.empty());
+}
+
+TEST_F(BroadcasterInternalIpLog, Ipv6SlotFallsBackAndLogsOneWarningNamingFamilyAndAddress) {
+  sockaddr_in6 sin6{};
+  sin6.sin6_family = AF_INET6;
+  ASSERT_EQ(inet_pton(AF_INET6, "2001:db8::1", &sin6.sin6_addr), 1);
+  EXPECT_EQ(nevr_game_server::BroadcasterInternalIp(SlotWith(&sin6, sizeof(sin6)), "registration"), "");
+  ASSERT_EQ(g_lines.size(), 1u);
+  EXPECT_EQ(g_lines[0].first, EchoVR::LogLevel::Warning);
+  EXPECT_NE(g_lines[0].second.find("site=registration"), std::string::npos) << g_lines[0].second;
+  EXPECT_NE(g_lines[0].second.find("family=23"), std::string::npos) << g_lines[0].second;
+  EXPECT_NE(g_lines[0].second.find("address=2001:db8::1"), std::string::npos) << g_lines[0].second;
 }

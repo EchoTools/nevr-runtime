@@ -330,7 +330,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 
   // Resolve IP addresses and apply UPnP / config overrides
-  std::string internalIp = BroadcasterInternalIp(broadcaster->data->addr, "registration");
+  std::string internalIp = nevr_game_server::BroadcasterInternalIp(broadcaster->data->addr, "registration");
   std::string externalIp;  // empty = let UPnP fill it, or falls back to internalIp
 
   NevrUPnPConfig upnpCfg = {};

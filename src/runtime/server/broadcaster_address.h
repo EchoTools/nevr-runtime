@@ -8,20 +8,22 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 #include "abi/echovr.h"
+#include "core/logging.h"
 
 namespace nevr_game_server {
 
 struct BroadcasterAddress {
   uint16_t family = 0;  // sa_family_t of the slot (2 = AF_INET, 23 = AF_INET6 on Windows)
-  bool isIpv4 = false;
+  bool isIpv4 = false;  // family AF_INET, or 0: an unset slot, read as IPv4 as the registration always has
   // Dotted quad when isIpv4. Otherwise the slot's own address as text: RFC 5952 form for AF_INET6,
-  // 16 hex bytes from sa_data for any other family. Empty when the slot is all zero.
+  // the 16 bytes after the family, in hex, for any other family. Empty when those bytes are all zero.
   std::string text;
 };
 
@@ -31,7 +33,7 @@ inline BroadcasterAddress ReadBroadcasterAddress(const EchoVR::AddressInfo& slot
   std::memcpy(bytes, slot.raw, sizeof(bytes));
   std::memcpy(&out.family, bytes, sizeof(out.family));
 
-  if (out.family == AF_INET) {
+  if (out.family == AF_INET || out.family == 0) {
     uint32_t ip = 0;
     std::memcpy(&ip, bytes + offsetof(sockaddr_in, sin_addr), sizeof(ip));
     char buf[16];
@@ -56,6 +58,20 @@ inline BroadcasterAddress ReadBroadcasterAddress(const EchoVR::AddressInfo& slot
   }
   if (any) out.text = hex;
   return out;
+}
+
+// The broadcaster's own address as the registration's default internal IP. A slot of a nonzero
+// family other than AF_INET is named in a Warning with its family and address, and yields an empty
+// string, so the config or UPnP override decides the address (the registration then carries none if
+// neither is set). Family 0, an unset slot, reads as IPv4 and logs nothing, as before.
+inline std::string BroadcasterInternalIp(const EchoVR::AddressInfo& slot, const char* site) {
+  const BroadcasterAddress address = ReadBroadcasterAddress(slot);
+  if (address.isIpv4) return address.text;
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.GAMESERVER] broadcaster address is not IPv4 site=%s family=%u address=%s"
+      " — registration uses the config or UPnP address, none if unset",
+      site, static_cast<unsigned>(address.family), address.text.empty() ? "none" : address.text.c_str());
+  return std::string();
 }
 
 }  // namespace nevr_game_server

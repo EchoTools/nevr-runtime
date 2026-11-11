@@ -45,16 +45,3 @@ inline std::string GuidToUuidString(const GUID& guid) {
            guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
   return buf;
 }
-
-// The broadcaster's own address as the registration's default internal IP. A slot that is not IPv4 is
-// named in a Warning with its family and address, and yields an empty string so the config/UPnP
-// override (or nothing, which the caller's registration line shows) decides the address.
-inline std::string BroadcasterInternalIp(const EchoVR::AddressInfo& slot, const char* site) {
-  const nevr_game_server::BroadcasterAddress address = nevr_game_server::ReadBroadcasterAddress(slot);
-  if (address.isIpv4) return address.text;
-  Log(EchoVR::LogLevel::Warning,
-      "[NEVR.GAMESERVER] broadcaster address is not IPv4 site=%s family=%u address=%s"
-      " — registration uses the config or UPnP address, none if unset",
-      site, static_cast<unsigned>(address.family), address.text.empty() ? "none" : address.text.c_str());
-  return std::string();
-}
