@@ -217,4 +217,42 @@ inline InstallPlan PlanInstall(bool isServer, const char* text) {
   return out;
 }
 
+/// The two game functions the hold detours: site 0 is CR15NetGame::EnableGameSpaces, site 1 is CncaGameSpace::LoadLevel.
+constexpr std::size_t kHookSites = 2;
+
+enum class ArmOutcome { kArmed, kPrologueMismatch, kDetourFailed };
+
+/// Arms both detours through `hooker` (Matches(site), Attach(site), Retire(site)). Every prologue is checked first, so a
+/// mismatch attaches nothing. The gate needs both detours, so when the second fails to attach the first, which did go
+/// in, is removed (Retire): a detour left behind would run for nothing and the game would not be as it was.
+template <typename Hooker>
+inline ArmOutcome ArmHooks(Hooker& hooker) {
+  bool allMatch = true;
+  for (std::size_t site = 0; site < kHookSites; ++site) {
+    if (!hooker.Matches(site)) allMatch = false;
+  }
+  if (!allMatch) return ArmOutcome::kPrologueMismatch;
+  for (std::size_t site = 0; site < kHookSites; ++site) {
+    if (!hooker.Attach(site)) {
+      for (std::size_t done = 0; done < site; ++done) hooker.Retire(done);
+      return ArmOutcome::kDetourFailed;
+    }
+  }
+  return ArmOutcome::kArmed;
+}
+
+/// Hands a due release to `sink` (Forwarded(held, waitedMs, reason), Dropped(held, waitedMs, reason)). With
+/// `canForward` false nothing is sent to the game, so each accept is reported as dropped and none as released.
+template <typename Sink>
+inline void Deliver(const Release& due, std::uint64_t nowMs, bool canForward, Sink& sink) {
+  for (const Held& held : due.accepts) {
+    const std::uint64_t waited = nowMs - held.arrivedMs;
+    if (canForward) {
+      sink.Forwarded(held, waited, due.reason);
+    } else {
+      sink.Dropped(held, waited, due.reason);
+    }
+  }
+}
+
 }  // namespace nevr_join_hold

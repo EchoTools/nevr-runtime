@@ -91,29 +91,70 @@ void LogDropped(std::size_t dropped, const char* cause, const char* sessionId) {
       dropped, cause, Show(sessionId));
 }
 
-bool HookOne(std::uint64_t rva, const std::array<std::uint8_t, 8>& prologue, void** original, PVOID detour,
-             const char* name) {
-  const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress);
-  void* address = reinterpret_cast<void*>(base + rva);
-  if (!nevr::ValidatePrologue(address, prologue.data(), prologue.size())) {
+// The real hooker for ArmHooks: site 0 is EnableGameSpaces, site 1 is LoadLevel.
+struct Site {
+  std::uint64_t rva;
+  const std::array<std::uint8_t, 8>* prologue;
+  const char* name;
+  void** original;
+  PVOID detour;
+};
+
+class GameHooker {
+ public:
+  bool Matches(std::size_t site) {
+    const Site& s = kSites[site];
+    const void* address = AddressOf(s);
+    if (nevr::ValidatePrologue(address, s.prologue->data(), s.prologue->size())) return true;
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=prologue_mismatch expected=%s actual=%s "
-        "(accepts are forwarded at once)",
-        name, static_cast<unsigned long long>(0x140000000ULL + rva), HexBytes(prologue.data(), prologue.size()).c_str(),
-        HexBytes(address, prologue.size()).c_str());
+        "(no detour was installed; accepts are forwarded at once)",
+        s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
+        HexBytes(s.prologue->data(), s.prologue->size()).c_str(), HexBytes(address, s.prologue->size()).c_str());
     return false;
   }
-  *original = address;
-  if (!PatchDetour(original, detour, name)) {
+
+  bool Attach(std::size_t site) {
+    const Site& s = kSites[site];
+    void* address = AddressOf(s);
+    *s.original = address;
+    if (PatchDetour(s.original, s.detour, s.name)) return true;
+    *s.original = nullptr;
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=detour_failed expected=%s actual=%s (accepts "
-        "are forwarded at once)",
-        name, static_cast<unsigned long long>(0x140000000ULL + rva), HexBytes(prologue.data(), prologue.size()).c_str(),
-        HexBytes(address, prologue.size()).c_str());
+        "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=detour_failed expected=%s actual=%s "
+        "(accepts are forwarded at once)",
+        s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
+        HexBytes(s.prologue->data(), s.prologue->size()).c_str(), HexBytes(address, s.prologue->size()).c_str());
     return false;
   }
-  return true;
-}
+
+  // Removes a detour Attach installed (MH_RemoveHook disables it, with the other threads frozen, and writes the game's
+  // bytes back). When it is gone, the pointer a detour still running calls through goes back to the game's own
+  // function, since the trampoline it held is freed. When it is not, the detour stays and keeps its trampoline.
+  void Retire(std::size_t site) {
+    const Site& s = kSites[site];
+    void* address = AddressOf(s);
+    const MH_STATUS status = PatchRetire(address);
+    const bool gone = status == MH_OK || status == MH_ERROR_NOT_CREATED;
+    if (gone) *s.original = address;  // a detour that stays installed keeps its trampoline: the real address is hooked
+    Log(gone ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] join hold hook %s name=%s va=0x%llX status=%s (the other detour failed, so the hold is not "
+        "armed%s)",
+        gone ? "removed" : "NOT removed", s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
+        MH_StatusToString(status), gone ? "" : "; this detour stays installed and passes every call through");
+  }
+
+ private:
+  static void* AddressOf(const Site& s) {
+    return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress) + s.rva);
+  }
+
+  static inline const Site kSites[kHookSites] = {
+      {nevr_patch_addresses::CR15NETGAME_ENABLE_GAME_SPACES, &kEnableGameSpacesPrologue, "EnableGameSpaces",
+       reinterpret_cast<void**>(&g_originalEnableGameSpaces), reinterpret_cast<PVOID>(&EnableGameSpacesDetour)},
+      {nevr_patch_addresses::CNCAGAMESPACE_LOAD_LEVEL, &kLoadLevelPrologue, "LoadLevel",
+       reinterpret_cast<void**>(&g_originalLoadLevel), reinterpret_cast<PVOID>(&LoadLevelDetour)}};
+};
 
 }  // namespace
 
@@ -124,35 +165,10 @@ void Install(bool isServer) {
     Log(line.warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.text.c_str());
   if (plan.timeoutMs == 0) return;
 
-  // Both prologues are checked before either detour goes in, so a mismatch leaves the game untouched.
-  const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress);
-  const struct {
-    std::uint64_t rva;
-    const std::array<std::uint8_t, 8>* prologue;
-    const char* name;
-  } sites[] = {{nevr_patch_addresses::CR15NETGAME_ENABLE_GAME_SPACES, &kEnableGameSpacesPrologue, "EnableGameSpaces"},
-               {nevr_patch_addresses::CNCAGAMESPACE_LOAD_LEVEL, &kLoadLevelPrologue, "LoadLevel"}};
-  bool allMatch = true;
-  for (const auto& s : sites) {
-    const void* address = reinterpret_cast<const void*>(base + s.rva);
-    if (!nevr::ValidatePrologue(address, s.prologue->data(), s.prologue->size())) {
-      allMatch = false;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=prologue_mismatch expected=%s actual=%s "
-          "(accepts are forwarded at once)",
-          s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
-          HexBytes(s.prologue->data(), s.prologue->size()).c_str(), HexBytes(address, s.prologue->size()).c_str());
-    }
-  }
-  if (!allMatch) return;
-
-  const bool enableOk = HookOne(nevr_patch_addresses::CR15NETGAME_ENABLE_GAME_SPACES, kEnableGameSpacesPrologue,
-                                reinterpret_cast<void**>(&g_originalEnableGameSpaces),
-                                reinterpret_cast<PVOID>(&EnableGameSpacesDetour), "EnableGameSpaces");
-  const bool loadOk = enableOk && HookOne(nevr_patch_addresses::CNCAGAMESPACE_LOAD_LEVEL, kLoadLevelPrologue,
-                                          reinterpret_cast<void**>(&g_originalLoadLevel),
-                                          reinterpret_cast<PVOID>(&LoadLevelDetour), "LoadLevel");
-  if (!loadOk) return;  // an EnableGameSpaces detour alone never arms the gate: g_active stays false
+  // Both prologues are checked before either detour goes in, so a mismatch leaves the game untouched; a detour that
+  // fails after its prologue matched has the other one removed again (ArmHooks).
+  GameHooker hooker;
+  if (ArmHooks(hooker) != ArmOutcome::kArmed) return;  // g_active stays false: the gate is never used
 
   {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -191,19 +207,27 @@ void ReleaseDue(void* broadcaster, const char* sessionId) {
     due = g_gate.TakeDue(now);
     g_queued.store(g_gate.QueueSize(), std::memory_order_release);
   }
-  for (const Held& held : due.accepts) {
-    const std::uint64_t waited = now - held.arrivedMs;
-    const bool timeout = due.reason == ReleaseReason::kTimeout;
-    Log(timeout ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-        "[NEVR.GAMESERVER] join hold released accept count=%zu after_ms=%llu reason=%s session=%s%s", held.entrants,
-        static_cast<unsigned long long>(waited), ReleaseReasonName(due.reason), Show(sessionId),
-        timeout ? " (the levels were not seen enabled; the accept is forwarded anyway)" : "");
-    if (broadcaster != nullptr && EchoVR::BroadcasterReceiveLocalEvent != nullptr) {
+  struct Sink {
+    void* broadcaster;
+    const char* sessionId;
+    void Forwarded(const Held& held, std::uint64_t waited, ReleaseReason reason) const {
+      const bool timeout = reason == ReleaseReason::kTimeout;
+      Log(timeout ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] join hold released accept count=%zu after_ms=%llu reason=%s session=%s%s", held.entrants,
+          static_cast<unsigned long long>(waited), ReleaseReasonName(reason), Show(sessionId),
+          timeout ? " (the levels were not seen enabled; the accept is forwarded anyway)" : "");
       EchoVR::BroadcasterReceiveLocalEvent(static_cast<EchoVR::Broadcaster*>(broadcaster),
                                            Sym::LobbyAcceptPlayersSuccessV2, "SNSLobbyAcceptPlayersSuccessv2",
                                            const_cast<std::uint8_t*>(held.bytes.data()), held.bytes.size());
     }
-  }
+    void Dropped(const Held& held, std::uint64_t waited, ReleaseReason reason) const {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.GAMESERVER] join hold dropped accept count=%zu after_ms=%llu reason=%s session=%s (no broadcaster or "
+          "send function to forward it to; the accept was not delivered)",
+          held.entrants, static_cast<unsigned long long>(waited), ReleaseReasonName(reason), Show(sessionId));
+    }
+  } sink{broadcaster, sessionId};
+  Deliver(due, now, broadcaster != nullptr && EchoVR::BroadcasterReceiveLocalEvent != nullptr, sink);
 }
 
 void OnSessionCreate(const char* sessionId) {

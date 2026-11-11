@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace {
 
@@ -227,6 +228,80 @@ TEST(JoinHoldPlan, OutOfRangeWarnsAndClamps) {
   p = PlanInstall(true, "5000");
   EXPECT_EQ(p.timeoutMs, 5000u);
   EXPECT_TRUE(p.lines.empty());
+}
+
+// A hooker that records what the install asked of it. `matches` and `attach` say what each site answers.
+struct FakeHooker {
+  bool matches[kHookSites] = {true, true};
+  bool attach[kHookSites] = {true, true};
+  std::vector<std::string> calls;
+  bool Matches(std::size_t site) {
+    calls.push_back("match" + std::to_string(site));
+    return matches[site];
+  }
+  bool Attach(std::size_t site) {
+    calls.push_back("attach" + std::to_string(site));
+    return attach[site];
+  }
+  void Retire(std::size_t site) { calls.push_back("retire" + std::to_string(site)); }
+};
+
+TEST(JoinHoldArm, BothHooksInArmsAndRetiresNothing) {
+  FakeHooker h;
+  EXPECT_EQ(ArmHooks(h), ArmOutcome::kArmed);
+  EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1", "attach0", "attach1"}));
+}
+
+TEST(JoinHoldArm, AMismatchOnEitherSiteInstallsNothing) {
+  FakeHooker h;
+  h.matches[1] = false;
+  EXPECT_EQ(ArmHooks(h), ArmOutcome::kPrologueMismatch);
+  EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1"}));  // both are checked and reported, none attached
+}
+
+TEST(JoinHoldArm, TheFirstDetourFailingLeavesNothingToRetire) {
+  FakeHooker h;
+  h.attach[0] = false;
+  EXPECT_EQ(ArmHooks(h), ArmOutcome::kDetourFailed);
+  EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1", "attach0"}));
+}
+
+TEST(JoinHoldArm, TheSecondDetourFailingRemovesTheFirst) {
+  FakeHooker h;
+  h.attach[1] = false;
+  EXPECT_EQ(ArmHooks(h), ArmOutcome::kDetourFailed);
+  EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1", "attach0", "attach1", "retire0"}));
+}
+
+// What ReleaseDue does with a due release: forwards it, or says it dropped it.
+struct FakeSink {
+  std::vector<std::string> events;
+  void Forwarded(const Held& h, std::uint64_t waited, ReleaseReason) {
+    events.push_back("fwd" + std::to_string(h.entrants) + "@" + std::to_string(waited));
+  }
+  void Dropped(const Held& h, std::uint64_t waited, ReleaseReason) {
+    events.push_back("drop" + std::to_string(h.entrants) + "@" + std::to_string(waited));
+  }
+};
+
+Release TwoDue() {
+  Release r;
+  r.reason = ReleaseReason::kSettled;
+  r.accepts.push_back(Accept(100, 1, 2));
+  r.accepts.push_back(Accept(150, 2, 3));
+  return r;
+}
+
+TEST(JoinHoldDeliver, ForwardsInOrderWhenThereIsABroadcaster) {
+  FakeSink sink;
+  Deliver(TwoDue(), 400, true, sink);
+  EXPECT_EQ(sink.events, (std::vector<std::string>{"fwd2@300", "fwd3@250"}));
+}
+
+TEST(JoinHoldDeliver, NothingForwardedIsReportedAsDroppedNeverAsReleased) {
+  FakeSink sink;
+  Deliver(TwoDue(), 400, false, sink);
+  EXPECT_EQ(sink.events, (std::vector<std::string>{"drop2@300", "drop3@250"}));
 }
 
 }  // namespace

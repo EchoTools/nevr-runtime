@@ -34,10 +34,17 @@ The gate (`src/runtime/server/join_hold_rules.h`, `Gate`):
 
 A session whose levels are already loaded calls no `LoadLevel`; its accepts wait for the timeout.
 
-Both prologues are checked before either detour goes in; a mismatch logs `join hold not armed` (Warning, expected and actual bytes) and
-leaves the game untouched. This is not `ServerFatal`: the hold is optional.
+Both prologues are checked before either detour goes in. A mismatch on either logs `join hold not armed ... reason=prologue_mismatch`
+(Warning, expected and actual bytes), attaches nothing and leaves the game untouched. If a detour then fails to attach after its prologue
+matched (`reason=detour_failed`), the detour that did go in is removed again (`PatchRetire`: the record in HookGuard first, then
+`MH_RemoveHook`, which writes the game's bytes back) and logs `join hold hook removed` (Info). If that removal fails, the Warning
+`join hold hook NOT removed` says the detour stays installed: it only forwards to the game's own function and feeds a gate no one
+uses (`g_active` is false), so the game behaves as stock, but its bytes are hooked. Either way the hold is not armed and accepts
+are forwarded at once. This is not `ServerFatal`: the hold is optional.
 
 Per accept, the `EnableGameSpaces` return and each release, `[NEVR.GAMESERVER] join hold ...` lines carry counts and the session id.
+A release logs `released accept` only when the accept was handed to the game. With no broadcaster or no send function it logs the
+Warning `dropped accept` instead, with the entrant count, and nothing was delivered.
 
 ## The three functions
 
@@ -99,6 +106,10 @@ The name in row 3 rests on structure, not on a PC symbol. The offsets (NetGame+0
 - How the matchmaker or ServerDB session start reaches `LobbyJoinAcceptedCB`. `src/runtime/server` was not traced past `BeginMultiplayerLobby`.
 - Whether a dedicated server reaches `WaitOnLevelLoads` (0x140128B90) with game flag bit 1 set, through vslot 43 (0x140128590).
 - The patch code that `PatchEnableServer` uses to write the flag bits (step 2).
+- Whether a `longjmp` out of `LoadLevel` (the game's crash recovery) can leave the gate's load count above zero. The detour counts the exit
+  after the original returns, so such a load is never counted done. The count stays up, and a later session's accepts wait for the
+  timeout (`join_hold_ms`) before they are released, one timeout late; the timeout resets the count and disarms the gate, and the next
+  session create arms it again. No live run has produced this case [I].
 
 ## Candidates not used
 
