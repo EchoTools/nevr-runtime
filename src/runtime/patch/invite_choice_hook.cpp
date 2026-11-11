@@ -15,6 +15,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/menu_press.h"
 
 // CncaGameSpace::SendComponentEvent (echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
 // R8D = flags. The game's own code reads the event at once (word 0 on entry, word 2 as the sender), so the observer
@@ -49,6 +50,13 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
     std::memcpy(out, reinterpret_cast<const void*>(address), length);
     return true;
   };
+  // #1857: what every call carries (symbol, owner, component), so the plugin manager's press hook can filter on a press on
+  // its own card. Debug: the calls are about one per click (#906 measured 18 in 112 s), and an operator does not need them.
+  nevr_invite_choices::Event press;
+  const nevr_menu_press::Sender sender =
+      nevr_menu_press::ReadPress(reader, static_cast<std::uintptr_t>(space), event, &press);
+  Log(EchoVR::LogLevel::Debug, "%s", nevr_menu_press::PressLine(press, sender, seen).c_str());
+
   nevr_invite_choices::Event e;
   const nevr_invite_choices::Read read =
       nevr_invite_choices::ReadEvent(reader, static_cast<std::uintptr_t>(space), event, &e);

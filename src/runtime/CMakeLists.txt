@@ -1780,6 +1780,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_invite_choices PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_choices DISCOVERY_MODE PRE_TEST)
 
+    # #1857: what a main-menu card press looks like as a component event (patch/menu_press.h): header only, pure.
+    add_executable(test_menu_press tests/test_menu_press.cpp)
+    set_source_files_properties(tests/test_menu_press.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_menu_press PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_menu_press PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_menu_press DISCOVERY_MODE PRE_TEST)
+
     # #896, #906, docs/adr/0017: the UI text writer (patch/ui_text.h): header only, pure.
     add_executable(test_ui_text tests/test_ui_text.cpp)
     set_source_files_properties(tests/test_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
