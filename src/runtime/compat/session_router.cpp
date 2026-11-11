@@ -9,6 +9,7 @@
 
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/server_features.h"
+#include "runtime/compat/service_frames.h"
 
 namespace nevr_session_router {
 
@@ -1123,6 +1124,12 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
     if (rit == remoteTable_.end()) {
       ++droppedRemoteFrames_;
       return;
+    }
+    if (!rit->second.framesNoted) {
+      // Once per remote, at its first frame (#568): which wire form the service speaks on this connection.
+      rit->second.framesNoted = true;
+      Log(fx, LogLevel::Info,
+          nevr_service_frames::FormatLine(rit->second.ownerConn, RoleName(rit->second.request.role), frame));
     }
     if (frame.size() > options_.limits.maxFrameBytes) {
       Log(fx, LogLevel::Error,

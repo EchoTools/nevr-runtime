@@ -3465,6 +3465,33 @@ void TestAnswerRecordsMatchTheGoldenLines() {
   QCHECK(delivered.size() == 2 && delivered[0].id == 3 && delivered[1].id == 3);  // both answers reached the game
 }
 
+// #568 (A3): the first frame the service sends on a connection writes one `service frames` line, naming the connection, its
+// role and the wire form; the second writes none. A frame without the EVR marker is `unknown`. Failure caught: no line, a
+// line per frame, or a form guessed for a frame that is not EVR.
+void TestServiceFramesLineIsWrittenOncePerRemote() {
+  const CaseScope scope("service frames line");
+  Rig rig(WithLogin(kLogin));
+  OpenThree(rig);
+  const RemoteId login = SessionRemote(rig);
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnRemoteFrame(login, Msg(kSymSomething, "a"), true);
+  rig.router->OnRemoteFrame(login, Msg(kSymSomething, "b"), true);
+  const std::vector<std::string> lines = RecordLines(rig.logs, "service frames");
+  QCHECK(lines.size() == 1);
+  QCHECK(lines.size() == 1 && lines[0] == "service frames conn=0 role=config format=evr");
+}
+
+void TestServiceFramesLineNamesAFrameWithoutTheMarkerUnknown() {
+  const CaseScope scope("service frames line unknown");
+  Rig rig(WithLogin(kLogin));
+  OpenThree(rig);
+  const RemoteId login = SessionRemote(rig);
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnRemoteFrame(login, std::string("\x0a\x04proto-bytes", 14), true);
+  const std::vector<std::string> lines = RecordLines(rig.logs, "service frames");
+  QCHECK(lines.size() == 1 && lines[0] == "service frames conn=0 role=config format=unknown");
+}
+
 // The records are off unless the wiring turns them on: the same answers write no lobby record and reach the game.
 void TestNoRecordsWithoutTheOption() {
   const CaseScope scope("lobby records off");
@@ -3805,6 +3832,8 @@ int main() {
   TestRelabelToMatchmakerChecksTheCap();
   TestAnswerRecordsMatchTheGoldenLines();
   TestNoRecordsWithoutTheOption();
+  TestServiceFramesLineIsWrittenOncePerRemote();
+  TestServiceFramesLineNamesAFrameWithoutTheMarkerUnknown();
   TestAnAnswerNamesAJoinAsItsRequest();
   TestASuccessInAnotherLobbyClearsTheServersStatement();
   TestAnAnswerWithNoRequestAndNoPartyNamesNone();

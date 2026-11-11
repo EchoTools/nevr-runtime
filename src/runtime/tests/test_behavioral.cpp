@@ -3953,6 +3953,27 @@ TEST_F(RolesByPathTest, AFirstFrameThatMatchesTheRoleOrNamesNoneIsNotLogged) {
   EXPECT_TRUE(LogLinesContaining("first frame contradicts the socket's role").empty());
 }
 
+// #568 (A3): each connection's first service frame writes one `service frames` line naming its role and the wire form,
+// and a second frame on the same connection writes none. Failure caught: no line (the matchmaker's form stays an
+// assumption), a line per frame, or the line naming another connection's role.
+TEST_F(RolesByPathTest, TheFirstServiceFrameOfEachConnectionNamesItsFormatOnce) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForFrames(1));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForFrames(2));
+  const std::vector<std::string> lines = LogLinesContaining("service frames conn=");
+  ASSERT_EQ(lines.size(), 2U);
+  const auto has = [&lines](const char* text) {
+    return std::any_of(lines.begin(), lines.end(), [text](const std::string& l) { return l.find(text) != std::string::npos; });
+  };
+  EXPECT_TRUE(has("[NEVR.WS] service frames conn=0 role=config format=evr")) << lines[0];
+  EXPECT_TRUE(has("[NEVR.WS] service frames conn=1 role=login format=evr")) << lines[1];
+}
+
 // A socket with no recognised request target keeps the connect order when nothing says otherwise:
 // config, then login.
 TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
@@ -4097,6 +4118,19 @@ TEST_F(RolesByPathTest, EveryAdmissionNamesTheRoutingPath) {
   EXPECT_NE(lines[0].find("path=legacy game=0"), std::string::npos) << lines[0];
   EXPECT_EQ(LogLinesContaining("path=router").size(), 0U);
   EXPECT_FALSE(LogLinesContaining("network.session_router=legacy").empty());
+}
+
+// The same line through the router path (#568, A3): written by the router at the remote's first frame.
+TEST_F(RouterConfigTest, TheRouterNamesTheFormatOfTheFirstServiceFrameOnce) {
+  GameSocket config;
+  Admit(config, "/config");
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForFrames(1));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForFrames(2));
+  const std::vector<std::string> lines = LogLinesContaining("service frames conn=");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("service frames conn=0 role=config format=evr"), std::string::npos) << lines[0];
 }
 
 // C1: a /config socket in config mode is taken by the router, and its request is answered.

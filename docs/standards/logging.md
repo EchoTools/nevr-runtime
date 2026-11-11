@@ -107,7 +107,7 @@ for row.
 
 | Tag                   | Component                                     |
 | --------------------- | --------------------------------------------- |
-| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection)  |
+| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection); the session router's lines on PC and Quest; one Info `service frames conn=<n> role=<config\|login\|matchmaker> format=<evr\|unknown>` line per service connection at its first frame (`compat/service_frames.h`, #568): `evr` when the frame starts with the EVR marker, `unknown` otherwise (the bridge does not decode a protobuf Envelope, so it never says `protobuf`); written once per connection by the PC bridge's own path and by the router, never per frame |
 | `[NEVR.GAMESERVER]`   | GameServerLib (lobby registration, sessions)  |
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |

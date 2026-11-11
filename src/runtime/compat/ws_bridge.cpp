@@ -9,6 +9,7 @@
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/socket_role.h"
 #include "runtime/compat/session_router.h"
+#include "runtime/compat/service_frames.h"
 #include "runtime/compat/session_router_mode.h"
 #include "runtime/compat/ws_session_transport.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -202,6 +203,14 @@ static const char* ConnLabel(int connIdx) {
     case 1:  return "login";
     default: return connIdx >= 2 ? "matchmaker" : "unknown";
   }
+}
+
+// The `service frames` line (service_frames.h, #568): written once per connection, at the first frame the service
+// sends it. `noted` is the connection's own flag, held by its remote callback.
+static void NoteServiceFrame(const std::shared_ptr<std::atomic<bool>>& noted, int connIdx, const std::string& frame) {
+  if (noted->exchange(true)) return;
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] %s",
+      nevr_service_frames::FormatLine(connIdx, ConnLabel(connIdx), frame).c_str());
 }
 
 // Name of a remote websocket's ready state, for log lines.
@@ -1674,8 +1683,8 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
           connIdx, ConnLabel(connIdx));
     }
   }
-  // Matchmaker: pnsradmatchmaking uses protobuf, not EchoVR
-  // binary. Strip format=evr so the server uses default protobuf handling.
+  // Matchmaker: strip format=evr so the server uses its default handling for the connection. What the service then
+  // sends on it is not assumed here: the `service frames` line (service_frames.h) names the form of its first frame.
   // Issue #116: format=evr is routinely the FIRST query param here: a configured
   // socket_uri such as "wss://host/ws?format=evr&token=..." already
   // carries it before the credentials block above appends
@@ -2190,10 +2199,11 @@ void InstallWebSocketBridge() {
               // disconnects and B2/N54 nulls that callback, all matchmaker
               // server→game message routing silently dies.
               loginRemote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
-                  [pairPtr, gameWsPtr, connIdx,
+                  [pairPtr, gameWsPtr, connIdx, framesNoted = std::make_shared<std::atomic<bool>>(false),
                    remoteAddress = static_cast<const ix::WebSocket*>(loginRemote.get())](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
+                        NoteServiceFrame(framesNoted, connIdx, rmsg->str);
                         ix::WebSocket* target = nullptr;
                         std::shared_ptr<ix::WebSocket> keep;  // holds the target alive across the send
                         int targetConn = -1;
@@ -2270,12 +2280,14 @@ void InstallWebSocketBridge() {
                 // outlives the enclosing scope, so a reference would dangle (N123).
                 // remoteAddress: only compared, never dereferenced (capturing the shared_ptr would be a cycle).
                 [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken, refusalKey = prepared.refusalKey,
+                 framesNoted = std::make_shared<std::atomic<bool>>(false),
                  remoteAddress = static_cast<const ix::WebSocket*>(remote.get())](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open:
                       HandleRemoteOpen(pairPtr, connIdx, discordId, accountName, bearerToken);
                       break;
                     case ix::WebSocketMessageType::Message: {
+                      NoteServiceFrame(framesNoted, connIdx, rmsg->str);
                       ObserveSocialFrames("server->game", connIdx, rmsg->str);
                       // First message's symbol (marker@0, symbol@8, length@16), for the decodes below.
                       const uint64_t rsym = nevr_evr_codec::FirstSymbol(rmsg->str);
