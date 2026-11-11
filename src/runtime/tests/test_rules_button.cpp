@@ -171,6 +171,8 @@ TEST_F(RulesButtonInstalled, EachLoadLogsEachFlagsFirstReadOnce) {
   // The game frees the script and loads it again at the same base: a new load, a new line.
   sh::OnUnloading(rb::kScript, base_);
   sh::OnLoaded(rb::kScript, base_);
+  Call(kOtherRead, data_ + 0x100);
+  EXPECT_EQ(Count("rules button: first read"), 2) << "another field through the arena slot is not its first read";
   Call(kArenaCopy, data_ + 0x169);
   Call(kArenaCopy, data_ + 0x169);
   EXPECT_EQ(Count("rules button: first read on this load field=matchisarena"), 2);
