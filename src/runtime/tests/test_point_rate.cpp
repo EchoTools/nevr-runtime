@@ -273,6 +273,31 @@ TEST_F(PointRateInstalled, ThePointsRiseAtTheRateAndStandStillWhilePaused) {
   EXPECT_EQ(Call(kBlue), 13.0f) << "stock after the free, paused or not";
 }
 
+TEST_F(PointRateInstalled, EachChangeOfHowThePointsRiseIsLoggedOnce) {
+  Load();
+  Call(kBlue);
+  Call(kOrange);
+  EXPECT_EQ(Count("point rate: points rise changed"), 0) << "the stock rate, not paused: nothing logged";
+  Set(rules::Pause::kOff, 8);
+  Call(kBlue);
+  Call(kOrange);
+  Call(kBlue);
+  EXPECT_EQ(Count("point rate: points rise changed from rate=0 held=0 to rate=8 held=0 paused=0 script=b7d10bcffcb2a780"),
+            1);
+  Set(rules::Pause::kOn, 8);
+  Call(kBlue);
+  EXPECT_EQ(Count("point rate: points rise changed from rate=8 held=0 to rate=8 held=1 paused=1 script=b7d10bcffcb2a780"),
+            1);
+  Set(rules::Pause::kResuming, 8);
+  Call(kBlue);
+  EXPECT_EQ(Count("point rate: points rise changed from rate=8 held=1 to rate=8 held=1 paused=2"), 0)
+      << "resuming is still held: no new line";
+  Set(rules::Pause::kOff, 0);
+  Call(kOrange);
+  EXPECT_EQ(Count("point rate: points rise changed from rate=8 held=1 to rate=0 held=0 paused=0"), 1);
+  EXPECT_EQ(Count("point rate: points rise changed"), 3) << "one line a change, none a frame";
+}
+
 TEST_F(PointRateInstalled, TheFrameTimeIsReadAsAQword) {
   Load();
   SetFloat(pr::kRequired, 1e9f);

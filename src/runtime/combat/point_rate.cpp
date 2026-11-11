@@ -41,11 +41,34 @@ T Read(const std::uint8_t* at) {
   return v;
 }
 
+// What the last edge line said, as (held << 8) | rate: -1 none yet.
+std::atomic<int> g_last_state{-1};
+
+// One Info line when how the points rise changes (held by PAUSE, or POINT RATE), never per call: the expressions run
+// every frame. The first state is logged only when it acts, so a match at the stock rate that never pauses logs nothing.
+void LogChange(rules::Pause paused, std::uint8_t rate) {
+  const int held = paused != rules::Pause::kOff ? 1 : 0;
+  const int now = (held << 8) | rate;
+  if (g_last_state.load(std::memory_order_relaxed) == now) return;
+  const int was = g_last_state.exchange(now);
+  if (was == now || (was < 0 && !Acts(paused, rate))) return;
+  const int was_held = was < 0 ? 0 : was >> 8;
+  const int was_rate = was < 0 ? 0 : was & 0xff;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.COMBAT] point rate: points rise changed from rate=%d held=%d to rate=%u held=%d paused=%u script=%016llx (%s)",
+      was_rate, was_held, static_cast<unsigned>(rate), held, static_cast<unsigned>(paused),
+      static_cast<unsigned long long>(kScript),
+      held != 0   ? "PAUSE is on or resuming: a held point's points stand still"
+      : rate != 0 ? "POINT RATE in quarters: 4 is the stock rate"
+                  : "the stock rate");
+}
+
 template <std::size_t I>
 float Expression(void* node) {
   const rules::RulesState rules(g_mailbox.load(std::memory_order_relaxed));
   const rules::Pause paused = rules.Paused();
   const std::uint8_t rate = rules.PointRate();
+  LogChange(paused, rate);
   if (!Acts(paused, rate)) return g_original[I](node);
   float stock = 0;
   {
@@ -128,6 +151,7 @@ void ResetForTest() {
   g_module.store(nullptr);
   g_mailbox.store(nullptr);
   for (ExpressionFn& original : g_original) original = nullptr;
+  g_last_state = -1;
 }
 #endif
 
