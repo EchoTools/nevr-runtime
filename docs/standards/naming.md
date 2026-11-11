@@ -148,7 +148,7 @@ the name and has to make sense as one.
 - `<name>_rules.h` is the only suffix for the decisions, whether one platform uses them or both. A component has at most one
   `<name>_rules.h`. `<name>_core.h` is not a role suffix.
 - `hook` is a word, not a role. The platform half that holds a component's hook is the bare name on both platforms
-  (`src/runtime/patch/splash_skip.cpp`, `src/quest/sentinel/ui_texture_mips.cpp`). A component whose name is a hook
+  (`src/runtime/patch/ui_texture_mips.cpp`, `src/quest/sentinel/ui_texture_mips.cpp`). A component whose name is a hook
   mechanism keeps the word (`got_hook`, `dll_load_hook`). `swap`, `layout`, `policy`, `model` and `check` are words too:
   each has to be part of a name that says what the file holds.
 - `_entry.inc` is the only suffix for an assembly entry. `_thunk.inc` is not a role suffix (`thunk` is the manager's
@@ -195,8 +195,8 @@ the name and has to make sense as one.
 - **N-COMBAT.** Every file in `src/quest/combat/`, `src/quest/combat/mutants.d/`, `src/quest/combat/check/` and
   `docs/quest/combat/` (its `adr/` aside, and the scaffolding names `CMakeLists.txt`, `README.md`, `mutants.sh`) has a stem that is a name in `COMBAT_NAMES` (the components and the area's infrastructure), optionally with a
   role suffix from the table (or, for a mutant file, `_<n>`). A new module is added to `COMBAT_NAMES` in the change
-  that creates it, where the review applies the name rule. The names that break the rule today are in the list with a
-  `KNOWN-WRONG #<issue>` marker.
+  that creates it, where the review applies the name rule. `COMBAT_NAMES` holds the names that pass, and `KNOWN_COMBAT_BREAKS` holds the stems that break the rule
+  today, each marked `KNOWN-WRONG #<issue>`; the rename table of that issue gives each one's proposed name.
 - **N-RULES-HOME.** Every `src/runtime/**/<x>_rules.h` that a file under `src/quest/` includes has a non-test file under
   `src/runtime/` that includes it in the same directory, and a non-test file under `src/quest/` whose stem is `<x>`.
   A component whose hook is shared with another component's file on both platforms is listed with the
