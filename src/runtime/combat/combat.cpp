@@ -183,7 +183,6 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     // PAUSE also holds Combat's clocks (clock_pause.h), read from the same mailbox.
     // POINT RATE and PAUSE also set how fast a capture point's points rise (point_rate.h), from the same mailbox.
     // The RULES page's starting scores reach the capture points through the same mailbox (capture_scores.h).
-    // PAUSE also holds Combat's clocks (clock_pause.h), read from the same mailbox.
     if (veilnet::MatchControlStarted()) {
       orb_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       clock_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
@@ -191,7 +190,6 @@ void Install(std::uintptr_t gameBase, bool isServer) {
       capture_scores::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       capture_time::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       unlock_time::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
-      clock_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's

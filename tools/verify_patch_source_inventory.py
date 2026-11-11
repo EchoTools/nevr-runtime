@@ -57,6 +57,8 @@ EXPECTED_PATCH_SOURCES = (
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
+    "patch/resource_set_registry.cpp",  # #2161
+    "patch/resource_sets.cpp",  # #2161
     "patch/server_bots.cpp",
     "patch/server_frame_wait.cpp",  # #2109
     "patch/server_team_size.cpp",

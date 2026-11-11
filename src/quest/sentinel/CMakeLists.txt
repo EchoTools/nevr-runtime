@@ -125,7 +125,8 @@ add_library(ovrplatformloader SHARED
 # The #1737 measurement probe, only in a build configured with NEVR_QUEST_PERF_PROBE=ON (src/quest/CMakeLists.txt).
 if(NEVR_QUEST_PERF_PROBE)
   target_sources(ovrplatformloader PRIVATE perf_probe_hook.cpp)
-  set_source_files_properties(perf_probe_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  # set_property, so the wiring tests keep finding the sentinel's one set_source_files_properties list of -fno-exceptions sources
+  set_property(SOURCE perf_probe_hook.cpp PROPERTY COMPILE_OPTIONS "-fno-exceptions")
 endif()
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
