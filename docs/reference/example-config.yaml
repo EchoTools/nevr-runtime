@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -381,6 +381,13 @@ combat:
   # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
   # the default, with a warning that names the key. Read once at launch. Default (absent): true.
   # dronemuzzle: false
+
+  # Quest only. A boolean. A FireBullet call whose velocity is null, at most about 1e-3 m/s or not finite is not made: FireBullet would divide by
+  # zero and store a NaN direction (src/quest/combat/bullet_velocity_guard.h). Every other shot reaches the game's function unchanged; it acts
+  # in every level. The sentinel log line `combat_bullet_velocity_guard_install` says what was installed, `combat_bullet_velocity_guard_skip`
+  # names each skipped shot (the first 10, then a count) and `combat_bullet_velocity_guard_total` counts them at the end. `false` installs
+  # nothing. A value that is not a boolean keeps the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # bullet_velocity_guard: false
 
   # The crash and timing guards of the combat modules (src/quest/combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h). Quest only;
   # each runs where the combat modules run (see `force`), and each is on unless it says `false`. Booleans, read once at launch; a value that is not a

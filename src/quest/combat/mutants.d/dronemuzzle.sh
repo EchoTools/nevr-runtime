@@ -37,9 +37,10 @@ runm dm_tp_quiet src/quest/combat/dronemuzzle.cpp "s/    sentinel::LogFields(Log
 # F6: the bullet record
 runm dm_fire_no_next  src/quest/combat/dronemuzzle.cpp "s/  if (next == nullptr) return 0;\$/  if (false) return 0;/"
 runm dm_fire_after    src/quest/combat/dronemuzzle.cpp "s/  const std::uint64_t r = next(bcs, handle, gun, damage, quat, vel, remote, flag);/  std::uint64_t r = 0; (void)next;/;$NOWARN"
-runm dm_fire_v2       src/quest/combat/dronemuzzle.cpp "s/ || !(v2 > 1e-6f) || !std::isfinite(v2)) return r;/ || !std::isfinite(v2)) return r;/"
-runm dm_fire_finite   src/quest/combat/dronemuzzle.cpp "s/ || !(v2 > 1e-6f) || !std::isfinite(v2)) return r;/ || !(v2 > 1e-6f)) return r;/"
-runm dm_fire_v2_thr   src/quest/combat/dronemuzzle.cpp "s/!(v2 > 1e-6f)/!(v2 > 1e-2f)/"
+runm dm_fire_v2       src/runtime/combat/bullet_velocity_guard_rules.h "s/  return !(v2 > kMinSpeedSquared) || !(v2 <= kMaxFinite);/  return !(v2 <= kMaxFinite);/"
+runm dm_fire_finite   src/runtime/combat/bullet_velocity_guard_rules.h "s/  return !(v2 > kMinSpeedSquared) || !(v2 <= kMaxFinite);/  return !(v2 > kMinSpeedSquared);/"
+runm dm_fire_v2_thr   src/runtime/combat/bullet_velocity_guard_rules.h "s/kMinSpeedSquared = 1e-6f;/kMinSpeedSquared = 1e-2f;/"
+runm dm_fire_rule_gone src/quest/combat/dronemuzzle.cpp "s/  if (::nevr_combat::bullet_velocity_guard::Skips(v)) return r;/  if (v == nullptr) return r;/"
 runm dm_fire_no_probe src/quest/combat/dronemuzzle.cpp "s/  if (!SafeRead(rec + kRecSpawn, p, sizeof p) || !SafeRead(rec + kRecShooterVel, probe, sizeof probe) ||/  if (!SafeRead(rec + kRecSpawn, p, sizeof p) ||/;s/^      !SafeRead(rec + kRecShooterPos, probe, sizeof probe))\$/      false)/;$NOWARN"
 runm dm_fire_probe_vel src/quest/combat/dronemuzzle.cpp "s/ || !SafeRead(rec + kRecShooterVel, probe, sizeof probe) ||/ ||/"
 runm dm_fire_vel_off  src/quest/combat/dronemuzzle.cpp "s/kRecShooterVel = 0x11c,/kRecShooterVel = 0x120,/"

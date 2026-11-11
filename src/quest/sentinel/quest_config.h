@@ -241,6 +241,7 @@ struct CombatConfig {
   CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
   CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
   CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
+  CombatSwitch bulletVelocityGuard{true, Source::kAbsent};  // `combat.bullet_velocity_guard`: a FireBullet call with no usable velocity is not made (combat/bullet_velocity_guard.h)
   CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)
   CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
   CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)

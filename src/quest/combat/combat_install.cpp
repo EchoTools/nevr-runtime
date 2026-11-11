@@ -7,6 +7,7 @@
 
 #include "quest/combat/aibots.h"
 #include "quest/combat/boosterpool.h"
+#include "quest/combat/bullet_velocity_guard.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_scope.h"
@@ -112,6 +113,7 @@ ModuleResult EcNormal() noexcept {
 ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
 ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
 ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult BulletVelocityGuardNormal() noexcept { return bullet_velocity_guard::Install(g_config.bulletVelocityGuard.on); }
 ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 
 ModuleResult GatesNormal() noexcept {
@@ -182,6 +184,9 @@ constexpr std::array kModules{
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
     // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
     Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill, &dronekill::NoteEnd},
+    // bullet_velocity_guard (#1737 row 031): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
+    // that slot must stay the newest hook there (a later install is refused slot_held_by_entry), so the guard installs first and the entry calls it.
+    Module{"bullet_velocity_guard", nullptr, &BulletVelocityGuardNormal, "combat.bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, &bullet_velocity_guard::NoteEnd},
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
     // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},

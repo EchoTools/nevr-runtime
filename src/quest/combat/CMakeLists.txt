@@ -8,6 +8,7 @@
 add_library(nevr_quest_combat STATIC
   aibots.cpp
   boosterpool.cpp
+  bullet_velocity_guard.cpp
   bvh.cpp
   combat_active.cpp
   combat_install.cpp
