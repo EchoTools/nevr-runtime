@@ -33,6 +33,9 @@ set(_ctables src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/qu
 set(_cmods src/quest/combat/gunconnect.cpp src/quest/combat/aibots.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp)
 # The wrist HUD, the shield colour and the combat level answer they read (#2186): the table names them, so every program that links combat_install.cpp takes them.
 set(_cwrist src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp)
+# The frozen-frame exit (#2377): the table names it, so every program that links combat_install.cpp takes it, and the two sentinel files it ends
+# a frozen game with (the QUIT's activity finish and process_end's exit).
+set(_cffe src/quest/combat/frozen_frame_exit.cpp src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp)
 # The crash and timing guards (#2178): the table names them, so every program that links combat_install.cpp takes them. They read the combat level
 # answer (combat_scope.cpp, above) where they change a value.
 # levelname and its companion boosterpool (#2181): the table names them, so every program that links combat_install.cpp takes them.
@@ -40,7 +43,7 @@ set(_clevelname src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp)
 # The script redirect's row (#2189): the combat module and the host registry it registers with; every program that links combat_install.cpp takes both.
 set(_credirect src/quest/combat/script_redirect.cpp src/quest/plugin/script_redirect.cpp)
 set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
-             src/quest/combat/peerclamp.cpp)
+             src/quest/combat/peerclamp.cpp ${_cffe})
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -332,3 +335,10 @@ nevr_ht_test(music_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident
 # resolves the three relocations and the 34 code words in the real libr15.
 nevr_ht_test(sensorwd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sensorwd_test.cpp src/quest/combat/sensorwd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The frozen-frame exit (#2377, combat/frozen_frame_exit.h): the rule's table, the submit observer (no clock read and no write outside a combat level,
+# a stamp inside one), and the watchdog against a libr15 image built in memory holding the pinned words and the in-VR word, the real combat tick and
+# level answer, a fake clock and fake finish, grace and end steps: the record before the finish, the end after the grace with exit code 1, once; a
+# null word or an arena level disarming; a leave from VR between the two reads not a freeze; the end step joining the thread unless the watchdog
+# is ending the process; and the install's refusals. frozen_frame_exit_pinned_test (hooks-pinned) checks the pins against the store libr15.
+nevr_ht_test(frozen_frame_exit_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/frozen_frame_exit_test.cpp ${_cffe} ${_cscope_srcs})

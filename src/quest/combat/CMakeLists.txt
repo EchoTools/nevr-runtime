@@ -23,6 +23,7 @@ add_library(nevr_quest_combat STATIC
   ec.cpp
   ecfx.cpp
   equip_refire.cpp
+  frozen_frame_exit.cpp
   fxtrail.cpp
   gamespace.cpp
   gunconnect.cpp

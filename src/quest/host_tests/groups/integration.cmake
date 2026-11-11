@@ -121,3 +121,6 @@ nevr_ht_test(chassis_fork_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS $
 nevr_ht_test(texture_quality_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
   SRC src/quest/tests/texture_quality_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+nevr_ht_test(frozen_frame_exit_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
+  SRC src/quest/tests/frozen_frame_exit_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
+      src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)

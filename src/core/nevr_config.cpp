@@ -271,7 +271,8 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
                   "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "impactsnd", "impactsnd_write", "decals",
                   "decals_flip_u", "decals_flip_v", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard", "music", "sensorwd", "ec", "ec_words",
                   "ecfx", "powerboost_stage", "dronekill", "dronemuzzle", "bullet_velocity_guard", "gunconnect", "aibots", "aibots_scenario", "weapon_arm", "hudmeter", "shieldgamma_gamma",
-                  "shieldgamma_tube_mirror", "fxtrail", "voipdrop", "custctx", "droneguard", "droneguard_stage1", "peerclamp"}},
+                  "shieldgamma_tube_mirror", "fxtrail", "voipdrop", "custctx", "droneguard", "droneguard_stage1", "peerclamp", "frozen_frame_exit",
+                  "frozen_frame_exit_s"}},
   });
   return kSections;
 }

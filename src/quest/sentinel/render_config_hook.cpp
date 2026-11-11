@@ -14,6 +14,7 @@
 
 #include "hook_install.h"
 #include "clock_levels_hook.h"
+#include "quest/combat/frozen_frame_exit.h"
 #include "quest/combat/refresh_rate.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
@@ -106,8 +107,12 @@ float OnGetSystemPropertyFloat(SystemFloatThunk::Fn original, const OvrJavaOpaqu
   return result;
 }
 
+// Before the original, the frozen-frame exit's stamp (ADR 0039: that module is an input of this slot's owner, not a second hook on it): a
+// submit that blocks inside VrApi then counts as frozen. NoteSubmit is one relaxed load and a branch outside a combat level, and writes no
+// line (callback_thunk.h rule 1: it runs in this handler's live frame).
 int OnSubmitFrame(SubmitFrameThunk::Fn original, OvrMobileOpaque* ovr,
                   const OvrSubmitFrameDescriptionOpaque* description) noexcept {
+  combat::frozen_frame_exit::NoteSubmit();
   g_frames.fetch_add(1, std::memory_order_relaxed);
   return original(ovr, description);
 }
@@ -434,6 +439,7 @@ bool InstallImpl(texture_quality::Level level, bool fromConfig, InstallFn instal
       if (i < kSlotCount - 1) sentinel::MarkRenderConfigSlotOwned(kShared[i], true);
     }
   }
+  detail::g_submitSlotHeld.store(status[kSlotCount - 1] == sentinel::GotStatus::kOk, std::memory_order_release);
   const bool all = installed == kSlotCount;
   sentinel::LogFields(all ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "render_config_install",
                       {{"result", all ? "installed" : (installed == 0 ? "not_installed" : "partial")},
@@ -547,6 +553,7 @@ void ResetForTest() noexcept {
   g_foveationLevel.store(kUnset);
   g_foveationDynamic.store(kUnset);
   g_frames.store(0);
+  detail::g_submitSlotHeld.store(false);
   g_textureName.store("stock");
   g_textureFromConfig.store(false);
   g_textureReplacesSize.store(false);

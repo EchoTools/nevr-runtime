@@ -1,13 +1,81 @@
 # Frozen-frame exit
 
-Design record for the frame-submit owner, the in-VR signal and the timer source. The component is deferred under #1737.
-This page contains no code.
+A combat game whose frames stop for `combat.frozen_frame_exit_s` seconds (default 30) while the headset is in VR is ended, so the player
+lands in Home instead of a frozen view (#2377, #1737 row G6A-045). The module is `src/quest/combat/frozen_frame_exit.h`; its pins are
+`src/quest/combat/frozen_frame_exit_targets.h`, checked by `src/quest/tests/frozen_frame_exit_pinned_test.cpp`; its host test is
+`src/quest/tests/frozen_frame_exit_test.cpp`.
 
 ## Status of each statement
 
 - Measured: read in this repository's tree, or in the disassembly of `libr15.so`, with the file, line or address given.
 - Inferred: derived from measured facts. The step of the inference is named.
-- Open: not decided here. The list is under "Open choices" at the end.
+- Chosen: a reversible choice of the implementing unit, with its reason, under "Choices" at the end.
+
+## Origin
+
+The hangwd watchdog of kotorvr/echoquest-combat, runtime/native/afkxr/afk_capture.cpp (namespace `hangwd`), read as text and rebuilt on this
+tree's owners: the frame submit is the render-configuration hook's, VR mode is the game's own word (no VrApi mode hook), and the end is the
+QUIT's activity finish followed by `process_end::EndWithExitCode`. No line of upstream's code is copied.
+
+## Switch and default
+
+- `combat.frozen_frame_exit`, bool, default **true**. Upstream ships `hangwd` off (no hangwd entry in its recipe's `on_files`); #1737 G6A-045
+  asks for it on. The departure is the scope choice D8 (a), recorded on #2377: the combat APK only, with the 30-minute no-false-exit headset
+  row passed before the first release that carries it.
+- `combat.frozen_frame_exit_s`, integer seconds, 10..900, default 30 (upstream's bound and range). Anything else: the default, with the
+  configuration step's Warning naming the key.
+- Which APKs: the q15t and combat variants, where `combat::Active()` is true; the row runs from the combat install table's normal step, after
+  `scope`. Its switch is one of the readers that keep the `scope` row on (`ScopeNormal()` in `src/quest/combat/combat_install.cpp`).
+
+## What it does
+
+1. Each frame submit, the render-configuration hook's `OnSubmitFrame` calls `frozen_frame_exit::NoteSubmit()` before the original. Outside a
+   combat map or the combat lobby (`scope::SeenCombatOrLobby()` false) or when the module is not installed it returns at once. Otherwise it
+   stamps the submit's `CLOCK_MONOTONIC` time; the first stamp after a disarm arms the watch.
+2. A watchdog thread, `nevr-frozenframe`, wakes once a second on a condition variable with a `CLOCK_MONOTONIC` deadline. Out of VR (the in-VR
+   word is zero) or out of a combat level it puts the stamp back to zero (disarmed). Otherwise, when more than the limit has passed since the
+   stamp, it reads the word and the stamp once more, and when they still say so it fires, once per process:
+   1. the Warning `combat_frozen_frame_exit`;
+   2. `quit::FinishActivity()`, the end the menu's QUIT takes, when there is an activity to finish;
+   3. a 5 s grace for the game to end itself that way;
+   4. the Warning `combat_frozen_frame_exit_end`, then `process_end::EndWithExitCode(1, "frozen_frame")`, which writes the
+      `android_main_returned` record and runs each combat module's end line before `_exit(1)`.
+3. At the end of the process the row's `end` stops and joins the watchdog, unless the watchdog is the one ending the process, and writes the
+   counts line.
+
+The scope is read without its freshness test in the watchdog, because a freeze also stops the combat tick that refreshes it (`kStaleAfterMs`,
+`src/quest/combat/combat_scope.h`). The fire path is proven by the host test only (fake clock, finish, grace and end); no headset run has
+forced a freeze.
+
+## Log lines
+
+Sentinel log, one JSON record each:
+
+- `combat_frozen_frame_exit_install`: `result` (`installed`, `off`, `refused`), `status` (`ok`, `off_config`, `scope_not_live`,
+  `submit_slot_not_held`, `word_unreadable` with `why`, `pinned_word_mismatch` with `pin`, `vaddr`, `found`, `expected`,
+  `thread_not_started` with `errno`), `limit_s`, `limit_source` (`config`, `default`), `scope` (`combat_or_lobby`), `msg`. Info for installed
+  and off, Error for a refusal.
+- `combat_frozen_frame_exit`: Warning, once: `since_submit_ms`, `limit_s`, `scope_bits` (the level answer's bits: 1 combat map, 2 combat
+  lobby), `submits`, `armed_ms`, `action` (`finish_activity`, `no_activity`), `msg`.
+- `combat_frozen_frame_exit_end`: Warning, once, right before the exit: `grace_ms`, `action` (`end_process`), `msg`.
+- `combat_frozen_frame_exit_counts`: Info at the end of the process, installed only: `arms`, `submits`, `fired`, `joined` (0 when the
+  watchdog is ending the process), `msg`.
+
+A submit writes no line: `NoteSubmit` runs in the submit handler's live frame (`src/quest/sentinel/callback_thunk.h` rule 1).
+
+## Arena cost
+
+Measured in the code. On the combat APK in an Echo Arena level, in an arena lobby or out of any level, `NoteSubmit` is one relaxed load of
+the scope word and a branch per submit; no clock read, no write (the host test counts the clock reads: zero). The watchdog wakes once a
+second, reads the in-VR word and the scope word, and disarms. A release APK never runs the row, so its scope word stays empty and the same
+load and branch is all a submit pays. Inside a combat level a submit adds one clock read (vDSO), one atomic exchange and one atomic increment.
+Not measured on a headset.
+
+## Headset row
+
+Combat APK, 30 minutes of normal play including combat-lobby loads and at least one combat match: the `combat_frozen_frame_exit_install`
+record with `installed`, no `combat_frozen_frame_exit` record, and the `combat_frozen_frame_exit_counts` line at the end with `fired` 0. The
+row is owed before the first release that carries the module.
 
 ## What it hooks
 
@@ -56,18 +124,18 @@ Inferred. Rule 9 names slots that arena's scripts call. The engine calls this sl
 is the same kind of slot. The step is that `DoVRSubmission` runs in arena; that was not measured per level.
 
 Decided here. Any observer added to `OnSubmitFrame` asks combat scope first, and outside a combat level it does nothing else.
-Which predicate it asks is open (item 1). Whether the existing frame count moves behind that test or stays with a stated reason
-is open (item 4).
+The predicate is `scope::SeenCombatOrLobby()` (Choices, item 1); the existing frame count stays where it is, with its reason
+(Choices, item 4).
 
 ### The route an observer takes
 
 Measured. ADR 0039, Decision 2, gives a module that observes a call two routes. It may give the owner an input, either a setting
 the owner reads or "a request through an interface the owner offers". It may also "observe the call through a handler in the
-manager's chain (ADR 0034) that changes neither the arguments nor the result". This page chooses neither. Which route is open
-(item 2).
+manager's chain (ADR 0034) that changes neither the arguments nor the result". The module takes the first: an input of the owner
+(Choices, item 2).
 
-Measured. Upstream calls `Beat` before the original call, in the `vrapi_SubmitFrame2` wrapper. Where the observer sits relative
-to the original call in this tree is open with item 2.
+Measured. Upstream calls `Beat` before the original call, in the `vrapi_SubmitFrame2` wrapper. `OnSubmitFrame` calls `NoteSubmit()`
+before the original too (`src/quest/sentinel/render_config_hook.cpp`).
 
 Measured. `src/quest/sentinel/callback_thunk.h` rule 1 reads, in full:
 
@@ -85,8 +153,8 @@ The reason is in the code. A non-service-side GOT target accepts only its own bu
 (`src/quest/sentinel/got_hook.cpp`, `BuildIdAccepted`). The alias returns the patched ID only for the verified file
 (`src/quest/integration/libr15_attach_step.cpp`, `BuildIdAliasForPlugins`). On that file nothing holds the slot.
 
-Inferred, by the same reading. A component that took the slot would not be service-side, so it would be refused as well. What
-the component does on that file is open (item 6).
+Inferred, by the same reading. A component that took the slot would not be service-side, so it would be refused as well. The
+module takes no slot; on that file it refuses `submit_slot_not_held` (Choices, item 6).
 
 ### The in-VR signal
 
@@ -104,12 +172,14 @@ Measured, in the disassembly of `libr15.so`. VA = ELF + 0x100000.
   0x1b712d0.
 - The disassembly holds 67 references to the word: 3 writes (0x1b712d0, 0x1b71c88, 0x1b71cb4) and 64 reads.
 
-Inferred, section. The word is in `.bss`. Measured: a read at VA 0x38a33f0 returns "Requested VA maps beyond the end of the
-binary content", so the word has no file bytes. Inferred from that, and from the `.bss` range that
-`docs/quest/combat/impactsnd.md` gives for `libr15.so` (ELF 0x3761180 to 0x37d2538, which contains 0x37a33f0). No ELF section
-table was read, so the section name is an inference, not a measurement.
+Measured, section. The word is in `.bss`: the store file's section table gives `.bss` at ELF 0x3761180, size 0x713b8 (to 0x37d2538),
+`SHT_NOBITS`, which contains 0x37a33f0, and the pinned test checks it.
 
-Status: a disassembly lead. Nothing pins the word and no pinned test checks it.
+Status: pinned. `src/quest/combat/frozen_frame_exit_targets.h` pins the word's address and its place in `.bss` (from the section
+table: `.bss` 0x3761180, size 0x713b8), the writer (`adrp`, `add`, the EnterVrMode call, `str`) and both clearers (the SessionActive
+test, the LeaveVrMode calls and the zero stores in `UpdateTracking` and `ShutdownGraphics`); `src/quest/tests/frozen_frame_exit_pinned_test.cpp`
+checks them against the store file. `ShutdownGraphics` has a byte-checked reconstruction; `UpdateTracking` and `DoVRSubmission` are queued
+for one, so what this page says they do beyond the pinned words is read from their disassembly.
 
 Inferred, against upstream. Upstream's flag is set when EnterVrMode returns a session and cleared at LeaveVrMode. The word
 follows the same two events: `libr15.so` has one call to `vrapi_EnterVrMode` and two calls to `vrapi_LeaveVrMode`, the ones
@@ -142,19 +212,19 @@ timing.
 Decided here. The clock is CLOCK_MONOTONIC, the clock the poller already uses. The wait is a condition variable with a deadline,
 as the addendum requires.
 
-## Open choices
+## Choices
 
-Not decided here. The implementing unit decides each.
+The module's choices, each reversible.
 
-1. The scope predicate an observer asks: `scope::SeenCombatOrLobby()` or `scope::SeenCombatMap()`. Upstream's comment ties its
-   stall to a cold lobby load.
-2. The route under ADR 0039, Decision 2: a request to the slot's owner through an interface the owner offers, or a handler in
-   the manager's chain (ADR 0034). Also where the observer sits relative to the original call.
-3. How the in-VR word is read. Either a pinned read of the 64-bit word, which needs its own `*_targets.h` pin and a pinned test,
-   and for a word in `.bss` with no file value, a check that its address lies in `.bss` and a pin of the instruction that writes
-   it. Or hooks on the two VrApi mode slots, `vrapi_EnterVrMode` (VA 0x37d23d0) and `vrapi_LeaveVrMode` (VA 0x37c5840), each a
-   slot in `hook_budget.h`.
-4. Whether the existing frame count in `OnSubmitFrame` moves behind the scope test, or stays with a reason written beside it.
-5. The APK scope: the combat APK only, or every APK.
-6. What the component does on the service-only file.
-7. Whether, and when, the in-VR word is pinned.
+1. The scope predicate: `scope::SeenCombatOrLobby()`, unchecked for freshness. Upstream's comment ties its stall to a cold lobby load, so the
+   combat lobby is in scope; the freshness test is left out because a freeze stops the tick that keeps the answer fresh.
+2. The route under ADR 0039, Decision 2: an input of the slot's owner. `OnSubmitFrame` calls `NoteSubmit()` before the original, upstream's
+   place for `Beat`, so a submit that blocks inside VrApi counts as frozen. No second handler joins the slot.
+3. The in-VR word is read, not hooked: one aligned 8-byte atomic load at `image.base + 0x37a33f0`, after the install checked the patched
+   libr15's build ID, that the word lies in a `PT_LOAD` segment, and the pinned words. No VrApi mode slot is taken (no `hook_budget.h` row).
+4. The existing frame count in `OnSubmitFrame` stays where it is: it feeds the `render_config` line's `frames` field on every level, which is
+   that line's purpose (ADR 0022), and it is one relaxed increment. The new observer sits behind the scope test.
+5. The APK scope: the combat APK only (D8 (a), #2377).
+6. On the service-only file nothing holds the submit slot, so the install refuses `submit_slot_not_held` and nothing runs
+   (`render_config::SubmitSlotHeld()`).
+7. The in-VR word is pinned by this module's targets header.

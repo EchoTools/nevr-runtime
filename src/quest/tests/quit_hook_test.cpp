@@ -113,6 +113,38 @@ void WithNoFinisherTheGameKeepsItsQuit() {
   QCHECK(quit::CurrentCounts().game_ui == 1);
 }
 
+// FinishActivity is the QUIT's end without a QUIT (combat/frozen_frame_exit.h ends a frozen game with it): it finishes the activity the
+// install armed, writes no line and counts no QUIT; with no app, no activity or no finisher it finishes nothing, says so and calls nothing.
+// The QUIT handler behaves as before (the cases above).
+std::vector<std::string> g_finishLines;
+void CaptureFinishLine(sentinel::LogLevel /*level*/, const char* line) { g_finishLines.emplace_back(line); }
+void FinishActivityFinishesWithoutAQuit() {
+  Reset();
+  g_finishLines.clear();
+  sentinel::SetLogSink(&CaptureFinishLine);
+  QCHECK(!quit::CanFinishActivity() && !quit::FinishActivity());  // nothing armed: no finisher
+  quit::ArmForTest(&StandInFinish, &App);
+  QCHECK(quit::CanFinishActivity());
+  QCHECK(g_finishCalls == 0);  // asking finishes nothing
+  QCHECK(quit::FinishActivity());
+  QCHECK(g_finishCalls == 1 && g_finished == &g_activity && g_gameUiCalls == 0);
+  QCHECK(quit::CurrentCounts().finished == 0 && quit::CurrentCounts().game_ui == 0);  // not a QUIT
+  QCHECK(g_finishLines.empty());                                                       // the caller logs
+  quit::ArmForTest(&StandInFinish, &NoApp);
+  QCHECK(!quit::CanFinishActivity() && !quit::FinishActivity() && g_finishCalls == 1);
+  SetAppActivity(nullptr);
+  quit::ArmForTest(&StandInFinish, &App);
+  QCHECK(!quit::CanFinishActivity() && !quit::FinishActivity() && g_finishCalls == 1);
+  SetAppActivity(&g_activity);
+  quit::ArmForTest(nullptr, &App);
+  QCHECK(!quit::CanFinishActivity() && !quit::FinishActivity() && g_finishCalls == 1);
+  sentinel::SetLogSink(nullptr);
+  // The QUIT handler still finishes through the same pair, and counts its QUIT.
+  quit::ArmForTest(&StandInFinish, &App);
+  Entry()();
+  QCHECK(g_finishCalls == 2 && quit::CurrentCounts().finished == 1);
+}
+
 // Every QUIT writes one "quit" line before anything else runs: the action taken, the type libr15 sends (the pinned
 // constant, the only type a CVR::ShowSystemUI call has), the Horizon OS build and the call count (#1276).
 std::vector<std::string> g_lines;
@@ -172,6 +204,7 @@ int main() {
   WithNoActivityTheGameKeepsItsQuit();
   WithNoFinisherTheGameKeepsItsQuit();
   EveryQuitLogsItsTypeOsAndCount();
+  FinishActivityFinishesWithoutAQuit();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "quit_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

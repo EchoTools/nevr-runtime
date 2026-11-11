@@ -92,6 +92,8 @@ constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  //
 constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
 constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
 constexpr const char* kCombatBulletVelocityGuardKey = "combat.bullet_velocity_guard";  // Quest only (default true, #1737 row 031)
+constexpr const char* kCombatFrozenFrameExitKey = "combat.frozen_frame_exit";      // Quest only (default true, #2377)
+constexpr const char* kCombatFrozenFrameExitSKey = "combat.frozen_frame_exit_s";   // Quest only (an integer 10..900, default 30, #2377)
 constexpr const char* kCombatFxtrailKey = "combat.fxtrail";                      // Quest only (default true, #2178)
 constexpr const char* kCombatVoipdropKey = "combat.voipdrop";                    // Quest only (default true, #2178)
 constexpr const char* kCombatCustctxKey = "combat.custctx";                      // Quest only (default true, #2178)
@@ -579,6 +581,8 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
   r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
   r.config.combat.bulletVelocityGuard = ReadCombatSwitch(cfg, kCombatBulletVelocityGuardKey, r);
+  r.config.combat.frozenFrameExit = ReadCombatSwitch(cfg, kCombatFrozenFrameExitKey, r);
+  r.config.combat.frozenFrameExitS = ReadCombatInt(cfg, kCombatFrozenFrameExitSKey, 10, 900, 30, r);
   r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);
   r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);
   r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);

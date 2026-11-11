@@ -60,9 +60,11 @@ bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept;
 // _exit(0).
 void EndProcess() noexcept;
 
-// The end of a process that failed before the game could run (the first-run data step): the same two steps as the
-// return path (the `android_main_returned` line, here with the exit code and a `reason`, then the before-exit callback
-// for at most kFlushBudgetMs), then _exit(exitCode). The code is nonzero, so the launcher and `adb` see a failure.
+// The end of a process that failed: before the game could run (the first-run data step, reason from that step), or
+// with its frames stopped in VR (combat/frozen_frame_exit.h, reason `frozen_frame`, from its watchdog thread). The same
+// two steps as the return path (the `android_main_returned` line, here with the exit code and a `reason`, then the
+// before-exit callback for at most kFlushBudgetMs), then _exit(exitCode). The code is nonzero, so the launcher and `adb`
+// see a failure. Callable from any thread.
 inline constexpr int kFailureExitCode = 1;
 void EndWithExitCode(int exitCode, const char* reason) noexcept;
 using ExitFn = void (*)(int exitCode) noexcept;

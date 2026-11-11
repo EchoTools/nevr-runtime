@@ -19,6 +19,7 @@
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/frozen_frame_exit.h"
 #include "quest/combat/fxtrail.h"
 #include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
@@ -66,9 +67,14 @@ ModuleResult RefreshRateNormal() noexcept {
 // reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
-                         g_config.peerclamp.on || g_config.custctx.on;
+                         g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
+}
+// The frozen-frame exit (#2377, D8 (a): the combat APK only, this table's row): its key, and the limit with whether the file gave it.
+ModuleResult FrozenFrameExitNormal() noexcept {
+  return frozen_frame_exit::Install(g_config.frozenFrameExit.on, g_config.frozenFrameExitS.value,
+                                    g_config.frozenFrameExitS.source == nevr_quest::Source::kFile);
 }
 ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
 ModuleResult ShieldgammaNormal() noexcept {
@@ -162,6 +168,10 @@ constexpr std::array kModules{
     // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
     // module that reads it.
     Module{"scope", nullptr, &ScopeNormal},
+    // frozen_frame_exit (#2377): reads the combat level answer, so right after the scope's row; the render-configuration hook it observes is
+    // installed by the constructor sequence, long before this step.
+    Module{"frozen_frame_exit", nullptr, &FrozenFrameExitNormal, "combat.frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit,
+           &frozen_frame_exit::NoteEnd},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.

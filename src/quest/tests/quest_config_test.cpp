@@ -1394,7 +1394,9 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
                       {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
                       // The bullet-velocity guard (#1737 row 031): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
-                      {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true}};
+                      {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},
+                      // The frozen-frame exit (#2377): on unless the file says false (upstream ships its hangwd off; D8 (a), the combat APK only).
+                      {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
@@ -1539,6 +1541,32 @@ void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
   }
 }
 
+// combat.frozen_frame_exit_s (#2377): an integer 10..900. Absent: 30, not from the file. An integer in the range: that limit, from the file. A value
+// that is not an integer, or one outside 10..900, keeps 30 with a Warning that names the key.
+void CombatFrozenFrameExitSIsAnIntegerFromTenTo900() {
+  const std::string key = "combat.frozen_frame_exit_s";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  frozen_frame_exit: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
+  }
+  for (int limit : {10, 45, 900}) {
+    const LoadResult r = Load(Full(), "combat:\n  frozen_frame_exit_s: " + std::to_string(limit) + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.frozenFrameExitS.value == limit && r.config.combat.frozenFrameExitS.source == Source::kFile);
+  }
+  for (const char* value : {"9", "901", "0", "-30"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  frozen_frame_exit_s: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=out_of_range", LogLevel::kWarn));
+  }
+  for (const char* value : {"thirty", "30.5", "true", "[30]"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  frozen_frame_exit_s: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
+  }
+}
+
 // The crash and timing guards' keys (#2178, combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h): each on unless the file says false (the
 // droneguard's second stage is off unless it says true), so a launch with no file, an empty section, or a value nobody meant keeps the shipped guards. A boolean is the file's word, whichever it is; anything else keeps on, from the
 // default, with one Warning that names the key and not the value. The keys are on the schema, so the file is not rejected for them.
@@ -1594,6 +1622,7 @@ void CombatCrashGuardKeysDefaultAsShippedAndTheFileDecides() {
 
 int main() {
   CombatPowerboostStageIsAnIntegerFromZeroToThree();
+  CombatFrozenFrameExitSIsAnIntegerFromTenTo900();
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();
