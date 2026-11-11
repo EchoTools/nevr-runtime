@@ -10,7 +10,8 @@ installs only when levelname did (`needs_levelname` otherwise). The plugin's kil
 
 Origins: the rule is the reference build's G7 (`qcp_patches.py:386` of its tools, pinned in `docs/audits/2026-11-05-q15t-origin-citations.md`, section 5, the row for
 `levelname.cpp:13`); it rewrote the `tbnz` branch target into a code cave. The companion is the reference build's word row
-`booster_pool.plain_name` (`tbz` to `b` at 0x2110f40, stock `0x36f8012a`, replacement `0x14000009`; the record pins no line for it). Both are reached
+`booster_pool.plain_name` (`tbz` to `b` at 0x2110f40, stock `0x36f8012a`, replacement `0x14000009`; upstream pins it in the tools directory of `kotorvr/echoquest-combat`: `qcp_patches.py:380` (`LOWSPEC_BOOSTER_PATTERN`) and
+`:407-408` (the G7 booster patch)). Both are reached
 here through the dynamic relocations instead of a code write, in our own code.
 
 ## Stock function (the disassembly, `instructions`)
