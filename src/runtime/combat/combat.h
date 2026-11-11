@@ -7,6 +7,8 @@
 // and its feature stays off. Logs under [NEVR.COMBAT] (docs/standards/logging.md).
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace nevr_combat {
 
@@ -18,5 +20,10 @@ void Install(std::uintptr_t gameBase, bool isServer);
 /// Registers the balance values' transform of the stock mp_weapon_settings (balance_merge.h). Call where the resource
 /// transforms register (after InstallResourceOverride). It reads combat.balance at the first load it is asked about.
 void RegisterBalance();
+
+/// The features this process states to the clients that join it (runtime/compat/server_features.h, #2333): EchoCombat
+/// when VeilNet started, and MEDIGUN when combat.medigun is on and it started. Empty before Install and when nothing
+/// started. A server puts them in its ServerDB registration and in the lobby settings document it gives the game.
+std::vector<std::string> ServerFeatures();
 
 }  // namespace nevr_combat

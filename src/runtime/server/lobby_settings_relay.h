@@ -93,11 +93,22 @@ struct LobbySettingsReport {
   int32_t sendResult = 0;
   LobbySettingsLogLevel level = LobbySettingsLogLevel::kInfo;
   std::string line;  // the finished log line, tag included; carries no document text
+  std::string serviceJson;  // the service's document as decoded (empty when none), for LobbySettingsRecord::json
 };
 
-/// Runs the sequence above for one frame. `sessionId` is the active lobby session ("" when none).
+/// Runs the sequence above for one frame. `sessionId` is the active lobby session ("" when none). With `features`
+/// set, the document the game and the peers get is the service's with the server's own key set to them
+/// (runtime/compat/server_features.h StateInDocument, #2333): every other key stays as the service wrote it.
 LobbySettingsReport RelayLobbySettings(const void* data, uint64_t size, const std::string& sessionId,
-                                       const LobbySettingsSinks& sinks);
+                                       const LobbySettingsSinks& sinks,
+                                       const std::vector<std::string>* features = nullptr);
+
+/// The server's own document, for a session the service sends none for (#2333): {"nevr_server":{"features":[...]}},
+/// raised and sent exactly as a relayed one (steps 2 and 3 above). The game keeps it at NetGame+0x63260 and hands it to
+/// every peer it accepts in this session. `serviceJson` is the service's document of this session when one was
+/// relayed ("" when none), so raising ours never takes the service's keys away.
+LobbySettingsReport RaiseServerLobbySettings(const std::vector<std::string>& features, const std::string& serviceJson,
+                                             const std::string& sessionId, const LobbySettingsSinks& sinks);
 
 /// What the context remembers about the last document relayed, so that a session which never receives one is
 /// visible in the log at its end instead of silently inheriting the previous session's.
@@ -106,6 +117,7 @@ struct LobbySettingsRecord {
   uint64_t wireBytes = 0;
   uint64_t jsonBytes = 0;
   std::string sessionId;  // the session that was active when the document arrived; "" when none was
+  std::string json;       // the service's document as it arrived (before the server's key was set), #2333
 };
 
 /// The Info line for the record being dropped at a session boundary. `reason` is "session_start" or "session_end".

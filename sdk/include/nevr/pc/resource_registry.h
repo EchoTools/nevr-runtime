@@ -102,6 +102,7 @@ inline void DeregisterResourceOverrides(const void* start, const void* end) {
     if (detail::g_fnDeregister) detail::g_fnDeregister(start, end);
 }
 
+// A fixed override serves every load of its resource, so the host has nothing to re-arm; the call only logs (#2343).
 inline void ResetResourceOverrides() {
     std::call_once(detail::g_resRegOnce, detail::ResolveResourceExports);
     if (detail::g_fnReset) detail::g_fnReset();

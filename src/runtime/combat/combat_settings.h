@@ -9,7 +9,7 @@
 //                                                (log/collapse_format_rules.h) are the runtime's own and run anyway
 //   DRONE                 combat.drone           on
 //   OVERCHARGE            combat.overcharge      on
-//   MEDIGUN               combat.medigun         off (and a client follows its server's answer)
+//   MEDIGUN               combat.medigun         off (a client shows it only on a server whose lobby settings state echocombat_medigun, #2333)
 //   UMBRAL VEIL + net     combat.veil            on
 //   match control         combat.match_control   on (needs combat.veil: it rides the combat net)
 //   balance values        combat.balance         on

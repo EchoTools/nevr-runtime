@@ -60,6 +60,13 @@ constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Que
 constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
+constexpr const char* kCombatHudmeterKey = "combat.hudmeter";                          // Quest only (default true, #2186)
+constexpr const char* kCombatShieldGammaKey = "combat.shieldgamma_gamma";              // Quest only (default FALSE, #2186: a test switch upstream)
+constexpr const char* kCombatShieldTubeMirrorKey = "combat.shieldgamma_tube_mirror";   // Quest only (default true, #2186)
+constexpr const char* kCombatGunconnectKey = "combat.gunconnect";            // Quest only (default true, #2185)
+constexpr const char* kCombatAibotsKey = "combat.aibots";                    // Quest only (default true, #2185)
+constexpr const char* kCombatAibotsScenarioKey = "combat.aibots_scenario";  // Quest only (default: RandomAttack, #2185)
+constexpr const char* kCombatWeaponArmKey = "combat.weapon_arm";            // Quest only (default true, #2185)
 constexpr const char* kCombatImpactsndKey = "combat.impactsnd";            // Quest only (default true, #2183)
 constexpr const char* kCombatImpactsndWriteKey = "combat.impactsnd_write";  // Quest only (default true, #2183)
 constexpr const char* kCombatDecalsKey = "combat.decals";                  // Quest only (default true, #2183: upstream fxdecal.on; inert without decals.bin)
@@ -78,6 +85,12 @@ constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only
 constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
 constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
 constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
+constexpr const char* kCombatFxtrailKey = "combat.fxtrail";                      // Quest only (default true, #2178)
+constexpr const char* kCombatVoipdropKey = "combat.voipdrop";                    // Quest only (default true, #2178)
+constexpr const char* kCombatCustctxKey = "combat.custctx";                      // Quest only (default true, #2178)
+constexpr const char* kCombatDroneguardKey = "combat.droneguard";                // Quest only (default true, #2178)
+constexpr const char* kCombatDroneguardStage1Key = "combat.droneguard_stage1";   // Quest only (default FALSE, #2178)
+constexpr const char* kCombatPeerclampKey = "combat.peerclamp";                  // Quest only (default true, #2178)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -437,6 +450,13 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
+  r.config.combat.hudmeter = ReadCombatSwitch(cfg, kCombatHudmeterKey, r);
+  r.config.combat.shieldgammaGamma = ReadCombatSwitch(cfg, kCombatShieldGammaKey, r, /*fallback=*/false);
+  r.config.combat.shieldgammaTubeMirror = ReadCombatSwitch(cfg, kCombatShieldTubeMirrorKey, r);
+  r.config.combat.gunconnect = ReadCombatSwitch(cfg, kCombatGunconnectKey, r);
+  r.config.combat.aibots = ReadCombatSwitch(cfg, kCombatAibotsKey, r);
+  r.config.combat.aibotsScenario = ReadCombatText(cfg, kCombatAibotsScenarioKey, r);
+  r.config.combat.weaponArm = ReadCombatSwitch(cfg, kCombatWeaponArmKey, r);
   r.config.combat.impactsnd = ReadCombatSwitch(cfg, kCombatImpactsndKey, r);
   r.config.combat.impactsndWrite = ReadCombatSwitch(cfg, kCombatImpactsndWriteKey, r);
   r.config.combat.decals = ReadCombatSwitch(cfg, kCombatDecalsKey, r);
@@ -455,6 +475,12 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
   r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
   r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
+  r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);
+  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);
+  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);
+  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);
+  r.config.combat.droneguardStage1 = ReadCombatSwitch(cfg, kCombatDroneguardStage1Key, r, /*fallback=*/false);
+  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);
   r.config.plugins = cfg.Plugins();
 }
 

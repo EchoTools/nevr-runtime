@@ -28,23 +28,35 @@
 #include "login_title_hook.h"
 #include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
+#include "quest/combat/aibots_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/custctx_targets.h"
 #include "quest/combat/decals_targets.h"
-#include "quest/combat/ec_targets.h"
+#include "quest/combat/droneguard_targets.h"
+#include "quest/combat/fxtrail_targets.h"
 #include "quest/combat/dronekill_targets.h"
 #include "quest/combat/dronemuzzle_targets.h"
+#include "quest/combat/ec_targets.h"
+#include "quest/combat/gamespace_targets.h"
+#include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/music_targets.h"
+#include "quest/combat/peerclamp_targets.h"
 #include "quest/combat/sensorwd_targets.h"
 #include "quest/combat/heaps_targets.h"
+#include "quest/combat/hudmeter_targets.h"
 #include "quest/combat/impactsnd_targets.h"
 #include "quest/combat/instmodel_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/voipdrop_targets.h"
 #include "quest/combat/wallfire_targets.h"
 #include "quest/combat/meshstep_targets.h"
 #include "quest/combat/shaderstep_targets.h"
+#include "quest/combat/shieldgamma_targets.h"
 #include "quest/combat/tablestep_targets.h"
+#include "quest/combat/netgame_targets.h"
 #include "quest/combat/powerboost_targets.h"
+#include "quest/combat/weapon_arm_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/combat/sendguard_targets.h"
@@ -409,6 +421,73 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
   QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
 }
 
+// The crash and timing guards' pins (#2178, src/quest/combat/{fxtrail,voipdrop,custctx,droneguard,peerclamp}_targets.h) against the real libr15: each
+// JUMP_SLOT resolves at its pin and alone, names a function defined at the pinned address, and every pinned code word is the one in the file (the modules'
+// own check, `pinned::FirstFailure`, run over the mapped file).
+void CheckGuardWords(const LoadedElf& elf, const char* what, const nevr_quest::combat::pinned::Pins& pins) {
+  nevr_quest::combat::pinned::Failure failure;
+  if (nevr_quest::combat::pinned::FirstFailure(reinterpret_cast<std::uintptr_t>(elf.mem), &pins, 1, &failure)) {
+    std::fprintf(stderr, "libr15 %s word '%s' at %#llx is %#llx, pinned %#llx\n", what, failure.what, static_cast<unsigned long long>(failure.vaddr),
+                 static_cast<unsigned long long>(failure.have), static_cast<unsigned long long>(failure.want));
+    QCHECK(false);
+  }
+}
+
+void CheckGuardSlot(const LoadedElf& elf, const char* symbol, std::uint64_t slot, std::uint64_t fn, const char* what) {
+  CheckTarget(elf, GotTarget{pinned::kLibR15, symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, slot}, what);
+  CheckDefinedAt(elf, symbol, fn);
+}
+
+void CheckRealCrashGuards(const LoadedElf& elf) {
+  namespace fx = nevr_quest::combat::fxtrail;
+  namespace vd = nevr_quest::combat::voipdrop;
+  namespace cc = nevr_quest::combat::custctx;
+  namespace dg = nevr_quest::combat::droneguard;
+  namespace pc = nevr_quest::combat::peerclamp;
+  CheckGuardSlot(elf, fx::kEffectTimeSymbol, fx::kEffectTimeSlotVaddr, fx::kEffectTimeVaddr, "libr15 CParticleEffectCS::EffectTime JUMP_SLOT");
+  CheckGuardWords(elf, "fxtrail", fx::kWordPins);
+  CheckGuardSlot(elf, vd::kReceiveVoipSymbol, vd::kReceiveVoipSlotVaddr, vd::kReceiveVoipVaddr, "libr15 CR15NetVoipReceiverCS::ReceiveVoip JUMP_SLOT");
+  CheckGuardWords(elf, "voipdrop", vd::kWordPins);
+  CheckGuardSlot(elf, cc::kLoadSymbol, cc::kPins.slotLoad, cc::kPins.fnLoad, "libr15 CR15NetCustomizationRenderer::LoadMeshData JUMP_SLOT");
+  CheckGuardSlot(elf, cc::kDestroySymbol, cc::kPins.slotDestroy, cc::kPins.fnDestroy, "libr15 CR15NetCustomizationRenderer::DestroyContext JUMP_SLOT");
+  CheckGuardSlot(elf, cc::kGrowSymbol, cc::kPins.slotGrow, cc::kPins.fnGrow, "libr15 CTableXT<SR15NetCustomDrawData>::Grow JUMP_SLOT");
+  CheckDefinedAt(elf, cc::kResizeSymbol, cc::kPins.fnResize);
+  CheckGuardWords(elf, "custctx", cc::kWordPins);
+  CheckGuardSlot(elf, dg::kFollowSymbol, dg::kFollowSlotVaddr, dg::kFollowVaddr, "libr15 CR15NetFollowPlayerCS::Follow JUMP_SLOT");
+  CheckDefinedAt(elf, dg::kRefreshCacheSymbol, dg::kRefreshCacheVaddr);
+  CheckDefinedAt(elf, dg::kIsValidSymbol, dg::kIsValidVaddr);
+  CheckGuardWords(elf, "droneguard", dg::kWordPins);
+  CheckGuardWords(elf, "droneguard stage 1", dg::kIdxWordPins);
+  CheckGuardSlot(elf, pc::kCleanupSymbol, pc::kCleanupSlotVaddr, pc::kCleanupVaddr, "libr15 SBroadcasterData::CleanupPeers JUMP_SLOT");
+  CheckGuardWords(elf, "peerclamp", pc::kWordPins);
+}
+
+// The wrist HUD and shield colour modules' pins (src/quest/combat/hudmeter_targets.h, shieldgamma_targets.h, #2186) against the real libr15: each
+// JUMP_SLOT resolves at its pin and names the function defined at the pinned address, and every pinned code word (Enter's and Update's first
+// instruction, and the instructions that load the data layout the handlers read) is the one in the file.
+void CheckRealWristHudAndShieldColour(const LoadedElf& elf) {
+  namespace hud = nevr_quest::combat::hudmeter;
+  namespace sg = nevr_quest::combat::shieldgamma;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hud::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hud::kSlotVaddr},
+              "libr15 CSetCanvasElementAttributesNode::Enter JUMP_SLOT");
+  CheckDefinedAt(elf, hud::kSymbol, hud::kFnVaddr);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, sg::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, sg::kSlotVaddr},
+              "libr15 CSetMaterialPropertyNode::Update JUMP_SLOT");
+  CheckDefinedAt(elf, sg::kSymbol, sg::kFnVaddr);
+  const auto check = [mem](const char* what, std::uint64_t vaddr, std::uint32_t pinnedWord) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + vaddr, sizeof(have));
+    if (have != pinnedWord) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx is %#x, not the pinned %#x\n", what, static_cast<unsigned long long>(vaddr), have, pinnedWord);
+      QCHECK(false);
+    }
+  };
+  for (const auto& w : hud::kWords) check(w.what, w.vaddr, w.word);
+  for (const auto& w : sg::kWords) check(w.what, w.vaddr, w.word);
+  QCHECK(hud::kWords[0].vaddr == hud::kFnVaddr && sg::kWords[0].vaddr == sg::kFnVaddr);  // the first word of each is the function's own first instruction
+}
+
 // The four resource table-step modules' pins (src/quest/combat/{meshstep,instmodel,shaderstep,tablestep}_targets.h, #2177) against the real libr15:
 // the two JUMP_SLOTs resolve at their pins and name the constructors defined at the pinned addresses, the two factory words (ABS64, checked in
 // CheckRealAbs64Words) name the two factory functions defined at the pinned addresses, and every pinned code word is the one in the file.
@@ -551,6 +630,62 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The pins of gun connect, practice AI bots and the gun hand default (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
+// net game step they share, netgame_targets.h) against the real libr15: every function and object the modules call or read is defined at its pinned
+// address (the vtables the gun and equipment systems carry as their first word included), and every pinned code word is the one in the file.
+void CheckRealGunsAndBots(const LoadedElf& elf) {
+  namespace gt = nevr_quest::combat::gunconnect::targets;
+  namespace at = nevr_quest::combat::aibots::targets;
+  namespace wt = nevr_quest::combat::weapon_arm::targets;
+  namespace ng = nevr_quest::combat::netgame;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckDefinedAt(elf, gt::kConnectSymbol, gt::kConnectVaddr);
+  CheckDefinedAt(elf, gt::kHasTagSymbol, gt::kHasTagVaddr);
+  CheckDefinedAt(elf, gt::kTagCombatSymbol, gt::kTagCombatVaddr);
+  CheckDefinedAt(elf, gt::kGunCsVtableSymbol, gt::kGunCsVtableVaddr);
+  CheckDefinedAt(elf, ng::kNetGameMTSymbol, ng::kNetGameMTVaddr);
+  CheckDefinedAt(elf, ng::kUserActorSymbol, ng::kUserActorVaddr);
+  CheckDefinedAt(elf, at::kEnableSymbol, at::kEnableVaddr);
+  CheckDefinedAt(elf, at::kScenariosSymbol, at::kScenariosVaddr);
+  CheckDefinedAt(elf, at::kConnectBotSymbol, at::kConnectBotVaddr);
+  CheckDefinedAt(elf, at::kUpdateExpressionSymbol, at::kUpdateExpressionVaddr);
+  for (const auto* pin : {&wt::kClientProfile, &wt::kTString, &wt::kJsonInt, &wt::kIsValid, &wt::kGetArm, &wt::kSetArm, &wt::kInvoke, &wt::kQueue}) {
+    CheckDefinedAt(elf, pin->symbol, pin->vaddr);
+  }
+  CheckDefinedAt(elf, wt::kEquipCsVtableSymbol, wt::kEquipCsVtableVaddr);
+  QCHECK(gt::kGunCsVptrVaddr == 0x3696050 && wt::kEquipCsVptrVaddr == 0x3698200);  // the values an object's first word carries in the reference build
+  const struct {
+    const char* what;
+    nevr_quest::combat::pinned::Pins pins;
+  } lists[] = {{"gunconnect", gt::kPins},
+               {"gunconnect (ExclusiveUpdateConnect)", gt::kConnectPins},
+               {"aibots", at::kPins},
+               {"weapon_arm", wt::kPins},
+               {"netgame", ng::kPins},
+               {"gamespace", nevr_quest::combat::gamespace::targets::kPins}};
+  for (const auto& list : lists) {
+    for (std::size_t i = 0; i < list.pins.wordCount; ++i) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + list.pins.words[i].vaddr, sizeof(have));
+      if (have != list.pins.words[i].word) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#x, pinned %#x\n", list.what, list.pins.words[i].what, static_cast<unsigned long long>(list.pins.words[i].vaddr), have,
+                     list.pins.words[i].word);
+        QCHECK(false);
+      }
+    }
+    for (std::size_t i = 0; i < list.pins.quadCount; ++i) {
+      std::uint64_t have = 0;
+      std::memcpy(&have, mem + list.pins.quads[i].vaddr, sizeof(have));
+      if (have != list.pins.quads[i].value) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#llx, pinned %#llx\n", list.what, list.pins.quads[i].what, static_cast<unsigned long long>(list.pins.quads[i].vaddr),
+                     static_cast<unsigned long long>(have), static_cast<unsigned long long>(list.pins.quads[i].value));
+        QCHECK(false);
+      }
+    }
+  }
+  QCHECK(at::kEnableFirstWord == at::kWords[0].word);
+}
+
 // The EC client's pins (src/quest/combat/ec_targets.h, #2187) against the real files: libr15's five JUMP_SLOTs resolve at their pins and the four
 // libr15 functions are defined where the pins say; in each of the three log libraries the WriteLogV JUMP_SLOT resolves at its pin, WriteLog and
 // WriteLogV are defined at the pinned addresses, WriteLog's 25 words are the pinned body with that library's own `bl`, the `bl` reaches the pinned
@@ -567,6 +702,10 @@ void CheckRealEc(const LoadedElf& r15, const LoadedElf& ovr, const LoadedElf& ra
               "libr15 NR15::UnloadEquipmentConfig JUMP_SLOT");
   CheckDefinedAt(r15, ec::kReloadSymbol, ec::kPins.reloadFn);
   CheckDefinedAt(r15, ec::kUnloadSymbol, ec::kPins.unloadFn);
+  // #2333: the GLOB_DAT word BeginMultiplayer registers CR15NetGame::LobbySettingsCB(SMsg) from, and the function it holds
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kLobbySettingsSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, ec::kPins.lobbySettingsSlot},
+              "libr15 ec lobby settings callback");
+  CheckDefinedAt(r15, ec::kLobbySettingsSymbol, ec::kPins.lobbySettingsFn);
   const LoadedElf* const elfs[ec::kLogLibs] = {&r15, &ovr, &rad};
   const char* const stockIds[ec::kLogLibs] = {pinned::kLibR15StockBuildId, pinned::kPnsovrBuildId, pinned::kPnsradBuildId};
   for (std::size_t i = 0; i < ec::kLogLibs; ++i) {
@@ -1055,8 +1194,11 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealWristHudAndShieldColour(r15);
+  CheckRealCrashGuards(r15);
   CheckRealTableSteps(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealGunsAndBots(r15);
   CheckRealEc(r15, ovr, rad);
   CheckRealPowerboost(r15);
   CheckRealDrones(r15);

@@ -1,6 +1,6 @@
 # Combat module `ec` and `ecfx`: the EC network client, EC's spare page, the tac-mod store and hide, NEUTRON effects
 
-Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, `ecfx.{h,cpp}`, `ecfx_core.h`; the page `src/quest/sentinel/ec_page.{h,cpp}`.
+Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, `ecfx.{h,cpp}`, `ecfx_core.h` (the drain's rules are `src/runtime/patch/ecfx_rules.h`, shared with PC); the page `src/quest/sentinel/ec_page.{h,cpp}`.
 Tests: `src/quest/tests/ec_test.cpp`, `ec_page_test.cpp` (with `ec_page_shim.cpp`, `ec_page_libr15.cpp`, `ec_page_script.cpp`, `ec_page_other.cpp`),
 `ecfx_test.cpp` (with `ecfx_wall_stub.cpp`), the `CheckRealEc` part of `got_pinned_test.cpp`, `TestExportAllowlist` and
 `TestEcPageIsAnExportedDataPage` in `tests/quest/elf_groundtruth_test.go`. Mutants: `src/quest/combat/mutants.d/ec.sh`, `ecfx.sh`.
@@ -89,10 +89,15 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
 
 - **The net pair**, both or none (a refused sendto removes the recvfrom hook). A datagram of exactly 16 bytes with both magics ("ECVL", "VEIL")
   and a known type, not peeked, is the EC network's and is not handed to the game: recvfrom is called again with the same arguments (a
-  non-blocking socket gives the game the next datagram or EAGAIN). One call swallows at most 256 in a row. 'A' counts only from the current
-  server; 'K' and the carried types come from any sender, de-duplicated by id (a ring of 32); 'M' is counted.
+  non-blocking socket gives the game the next datagram or EAGAIN). One call swallows at most 256 in a row. 'K' and the
+  carried types come from any sender, de-duplicated by id (a ring of 32); 'A' (a server of an older build answering the hello) and 'M' are
+  counted and open nothing.
+- **The server's statement** (#2333): `CR15NetGame::LobbySettingsCB(SMsg)` (its GLOB_DAT word, which `BeginMultiplayer` registers) reads the
+  `nevr_server` key of the lobby settings the server gives its clients (`src/runtime/compat/server_features.h`). A server that states
+  `echocombat` opens the gate the tac-mod hide follows; any other document, or none, keeps it closed. A session in another lobby clears it
+  (`src/runtime/compat/session_router.cpp`).
 - **The thread**, on a combat map or the combat lobby every 5 ms: the use counters become 'V' / 'P' / 'T' / 'O' packets sent twice to the server
-  (the busiest sendto destination of the last second), the hello 'H' every 2 s, the page's +0x40 word, the summary every 10 s.
+  (the busiest sendto destination of the last second), the hello 'H' every 2 s (the server relays only to clients that said hello), the page's +0x40 word (the server states EchoCombat), the summary every 10 s.
 - **The selected tac mod**: the line `[NSUSER] sent profile update: %s` carries the profile json; its `ability` names the tac mod, and a known EC
   one is stored at +0xe80 (with `equip`; `noequip` logs only).
 - **The hide** (with `hide`, the gear gate in): on a server that does not answer, once the selection has been still for 2000 ms, the tac-mod list's
@@ -103,8 +108,11 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
   calls up to four callbacks (`ec::OnNetTick`): ecfx and powerboost hang there. A first-time 'K' goes to `ec::OnDroneKilled`'s handler (dronekill).
 - **ecfx**: once the wall library `libac4e9374a146d3a4.so` is loaded (looked for once a second by its own thread, quietly), its four entries
   `re33_ecent_ac4e93_17900` / `_17700` / `_17b00` / `_17b60` are resolved and re-checked by `dladdr` (name and exact start) before each call; on
-  the net tick the queue is drained (one entry per ctx, the lowest kind first; BOOM is the server's and is never run; a repeated sound inside
-  3000 ms is refused; a queue not drained for over 500 ms is freed unrun), and the gate +0xe20 opens only after the first drain.
+  the net tick the queue is drained (one entry per ctx, the lowest kind first, each run as the drain reaches its slot and its slot freed after
+  it returns; BOOM is the server's and is never run; a repeated sound inside 3000 ms, a sound whose wall cannot be read, an entry of 0 or with
+  bit 2 or 3 set, and an entry that is not the wall library's for its kind are freed unrun; a queue not drained for over 500 ms is freed
+  unrun), and the gate +0xe20 opens only after the first drain. The rules are `src/runtime/patch/ecfx_rules.h`, which PC's
+  `src/runtime/combat/dronefix.cpp` drains through too, with the exact-entry check off (#2349).
 
 ## Arena
 
@@ -145,24 +153,27 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
 ## Lines (sentinel log)
 
     {"event":"combat_ec_install","result":"installed|partial|refused|off","reason":"..","net":"..","gear_gate":"..","writelogv_libr15":"..","writelogv_pnsovr":"..","writelogv_pnsrad":"..","consequence":".."}
-    {"event":"combat_ec_hook","hook":"recvfrom|sendto|writelogv|reload_equipment_config|unload_equipment_config","module":"..","symbol":"..","status":".."}
+    {"event":"combat_ec_hook","hook":"recvfrom|sendto|lobby_settings_cb|writelogv|reload_equipment_config|unload_equipment_config","module":"..","symbol":"..","status":".."}
+    {"event":"combat_ec_lobby_settings","statement":"stated|not_stated|malformed","features":"..","dropped":<n>,"bytes":<n>,"changed":0|1,"msg":".."}
     {"event":"combat_ec_page","page":"0x..","global_lookup":"0x..","reopened_global":0|1,"state":"visible|invisible|other","msg":".."}
     {"event":"combat_ec_words","source":"default|config","types_mask":"0x..","hide_write":0|1,"equip_store":0|1,"loctoken_s":<n>}
     {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_game","level":"0x..","msg":".."}
     {"event":"combat_ec_platform","lib":"libpnsovr|libpnsrad","status":"..","msg":".."}
-    {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_answer","state":"seen|lost"}
+    {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
     combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
     (48 each per process, kill 16), combat_ec_sum (every 10 s, 60 in all), combat_ec_legacy_switch (Warning)
-    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (96 in all)
+    combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (the first 96),
+    combat_ecfx_lines (once: later ones are counted), combat_ecfx_sum (the counts, at most every 10 s and after 10 s quiet)
 
 ## Headset row
 
 On a combat APK built at a tag after #2187 (or a development APK of the tree repacked with the `combat` variant word):
-`combat_ec_install` with the five libr15 hooks by name `installed` and `combat_ec_platform` `installed` for libpnsovr and libpnsrad once they load;
+`combat_ec_install` with the six libr15 hooks by name `installed` and `combat_ec_platform` `installed` for libpnsovr and libpnsrad once they load;
 `combat_ec_page` `visible` (`ec: page published`); `combat_ec_scope` `in_scope:1` on a combat map and `in_scope:0` in an arena match; in a combat
-match with EC on the server, `combat_ec_server` and `combat_ec_answer` `seen` (`ec: answer seen`); with the wall library, `combat_ecfx_attach`
+match on a server that states EchoCombat, `combat_ec_lobby_settings` `stated` with `features` naming `echocombat`, then `combat_ec_server` and
+`combat_ec_server_features` `stated`; with the wall library, `combat_ecfx_attach`
 `on` and `combat_ecfx_gate`. **Falsified by** `combat_ec_install` not `installed`/`partial`, `combat_ec_page` `invisible` or `other` (or an EC
-script's `RE33_EC_BASE_MISSING`), no `combat_ec_answer` `seen` on an EC server, or any EC datagram (`combat_ec_used`, a hello) while
+script's `RE33_EC_BASE_MISSING`), no `combat_ec_server_features` `stated` on a server whose registration carries `echocombat`, or any EC datagram (`combat_ec_used`, a hello) while
 `in_scope` is 0.
 
 Lobby row: in a shared lobby (`mpl_lobby_b`, `_b2`, `_b_social`, `_b_arena`) `combat_ec_scope` `in_scope:0`, no `combat_ec_used` and no hello; and, on a

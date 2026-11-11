@@ -1,4 +1,4 @@
-// Host test of POWER BOOST (src/quest/combat/powerboost.cpp + powerboost_core.h, rows R51..R56, #2187): the real thunks and the real entry,
+// Host test of POWER BOOST (src/quest/combat/powerboost.cpp + src/runtime/patch/powerboost_rules.h, rows R51..R56, #2187): the real thunks and the real entry,
 // installed by the real GotHook into the five words of a libr15 image built in memory (combat_libr15_image.h), and called through the slots;
 // the engine functions are fakes that record their arguments. The arm64 entry cannot run on this x86 host (src/quest/combat/check/powerboost.sh
 // runs it under qemu); its continuation (ConeAt) is tested directly here.
@@ -29,11 +29,11 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/safe_read.h"
-#include "quest/combat/powerboost_core.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/q15t/key_hog.h"
 #include "quest/tests/test_check.h"
+#include "runtime/patch/powerboost_rules.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
 namespace {
@@ -336,9 +336,9 @@ int main() {
   void* node = reinterpret_cast<void*>(0x5000);
   void* cs = reinterpret_cast<void*>(0xc0);
   const pb::Fns fns = Fns();
-  using namespace pb::pbcore;
+  using namespace nevr_powerboost;  // the shared rules (#2339); the PC GTest is runtime/tests/test_powerboost_rules.cpp
 
-  // ---- the marker decode (powerboost_core.h)
+  // ---- the marker decode (runtime/patch/powerboost_rules.h): v2.0.0's rounding, held inside the band
   {
     struct T {
       float amount;
@@ -350,7 +350,13 @@ int main() {
         {999999.0f, 0, 0, 0, 0, 0},          {5000000.0f, 0, 0, 0, 0, 0},   {5999999.0f, 0, 0, 0, 0, 0},
         {7000000.0f, 0, 0, 0, 0, 0},         {1e9f, 0, 0, 0, 0, 0},         {-1250030.0f, 0, 0, 0, 0, 0},
         {std::nanf(""), 0, 0, 0, 0, 0},      {INFINITY, 0, 0, 0, 0, 0},     {1000000.0f, 1, 0, 0, 0, 0},
+        {1020009.75f, 1, 0, 20010, 20, 10},  {3020009.75f, 1, 1, 20010, 20, 10}, {1999999.75f, 4, 0, 0, 0, 0},
+        {1999999.25f, 1, 0, 999999, 999, 999}, {3999999.75f, 4, 1, 0, 0, 0}, {6999999.5f, 3, 0, 1000000, 0, 0},
     };
+    for (const float bad : {std::nanf(""), INFINITY, -INFINITY}) {  // a radius that is not finite carries no angle (#2339)
+      volatile float r = bad;
+      CHECK(ConeAngle(r) == 0 && BubbleOf(ConeAngle(r)) == Bubble::kNeither, "ConeAngle(%g) = %d", (double)bad, ConeAngle(r));
+    }
     for (const T& c : t) {
       const Marker m = Decode(c.amount);
       CHECK(m.kind == c.kind && m.rez == c.rez && m.v == c.v && m.drPermille == c.dr && m.seconds == c.s, "Decode(%g): kind %d rez %d v %u dr %u s %u",
@@ -590,6 +596,31 @@ int main() {
     HealSlot()(cs, 1, 5500000.0f, 1);
     HealSlot()(cs, 1, 7500000.0f, 1);
     CHECK(g_heals.size() == 2, "non-marker amounts swallowed");
+    // an amount that rounds out of its band is declined: not a heal, not held, not sent, and the swallow line says so
+    g_heals.clear();
+    g_lines.clear();
+    g_node_heals = true;
+    NodeData dd = Data(1999999.75f, 5);
+    NodeSlot()(node, dd.b);
+    g_node_heals = false;
+    HealSlot()(cs, 0x10001, 2999999.75f, 5);
+    QueuedSlot()(cs, 0x10001, 1999999.75f, 5);
+    CHECK(g_heals.empty() && g_sends.empty(), "a declined amount reached Heal or was sent: %zu heals %zu sends", g_heals.size(), g_sends.size());
+    CHECK(Count({Ev("marker").c_str(), "\"kind\":4,", "\"amount\":", "\"passed_on\":0,"}) == 1 && EventsWith("swallow", "\"kind\":4,") >= 2,
+          "declined lines: %zu", g_lines.size());
+    CHECK(EventsWith("swallow", "\"where\":\"queued heal\"") == 1 && Count({Ev("swallow").c_str(), "\"where\":\"queued heal\"", "declined: its value rounds out of its band"}) == 1,
+          "the queued decline has no reason of its own");
+    CHECK(Count({Ev("swallow").c_str(), "\"where\":\"queued heal\"", "the server owns the buffs"}) == 0, "the queued decline took the link reason");
+    QueuedSlot()(cs, 1, 1.0f, 1);
+    CHECK(g_sends.empty() && g_heals.size() == 1, "a declined amount was held and sent");
+    // stage 1 (swallow off) swallows no marker: the game's Heal takes the declined amount as a heal, and the line says so
+    pb::SwallowForTest(false);
+    g_heals.clear();
+    g_lines.clear();
+    HealSlot()(cs, 0x10001, 1999999.75f, 5);
+    CHECK(g_heals.size() == 1 && Count({Ev("marker").c_str(), "\"kind\":4,", "\"passed_on\":1,"}) == 1 && Count({Ev("marker").c_str(), "\"passed_on\":0,"}) == 0,
+          "stage 1: the declined amount's line does not say it reached Heal: %zu heals %zu lines", g_heals.size(), g_lines.size());
+    pb::SwallowForTest(true);
   }
   // the node mark is per thread: a marker relayed by the server on another thread while this thread is inside the node's Enter is not the
   // node's own heal. It is swallowed as a relayed one ("heal", nothing held), and the node's own direct heal on this thread is still held.
@@ -776,6 +807,13 @@ int main() {
     SetPos(g_body_b, 100, 100, 130);  // 30 m ahead: out of range, but not inside any cone of an angle above 180
     std::memcpy(g_rec + 0x38, &big, 4);
     CHECK(pb::ConeAtForTest(&tb, g_frame, dcs) == g_body_b, "an angle above 180 was filtered");
+    // MEDIGUN's band (501..590) is PC's: the Quest leaves that bubble to the game, as it does a radius that is not finite (#2339)
+    const float medi = 15.0f + 545.0f / 100000.0f, nanRadius = std::nanf("");
+    SetPos(g_body_b, 100, 100, 130);  // 30 m ahead: past floor(radius) = 15 m, so a cone would reject it
+    std::memcpy(g_rec + 0x38, &medi, 4);
+    CHECK(pb::ConeAtForTest(&tb, g_frame, dcs) == g_body_b, "a MEDIGUN-band bubble was filtered");
+    std::memcpy(g_rec + 0x38, &nanRadius, 4);
+    CHECK(pb::ConeAtForTest(&tb, g_frame, dcs) == g_body_b, "a NaN radius was filtered");
     std::memcpy(g_rec + 0x38, &radius, 4);
     // unreadable frame / radius pointer / record: the real body, nothing queued
     CHECK(pb::ConeAtForTest(&tb, nullptr, dcs) == g_body_b, "unreadable frame: not the real body");

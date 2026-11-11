@@ -17,7 +17,8 @@
  * L352-359), L682-689, L1683-1686.
  *
  * Lines (sentinel log): `combat_ecfx_install`, `combat_ecfx_waiting`, `combat_ecfx_attach`, `combat_ecfx_gate`, `combat_ecfx_ran`,
- * `combat_ecfx_drain`, `combat_ecfx_legacy_switch`.
+ * `combat_ecfx_drain`, `combat_ecfx_legacy_switch`. The ran and drain records: the first 96 in all, then `combat_ecfx_lines` (later ones
+ * are counted), then `combat_ecfx_sum` with the counts at most every 10 s and once none has come for 10 s (#2349).
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */

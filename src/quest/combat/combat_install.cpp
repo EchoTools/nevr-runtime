@@ -5,30 +5,41 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/aibots.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/custctx.h"
 #include "quest/combat/decals.h"
+#include "quest/combat/droneguard.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/fxtrail.h"
+#include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/hudmeter.h"
 #include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
 #include "quest/combat/music.h"
+#include "quest/combat/peerclamp.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shieldgamma.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
+#include "quest/combat/voipdrop.h"
 #include "quest/combat/wallfire.h"
+#include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -46,10 +57,33 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+// The scope's refresh is a look at the game's tables four times a second in every level, arena included, so it is registered only when a module that
+// reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
+ModuleResult ScopeNormal() noexcept {
+  const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
+                         g_config.peerclamp.on || g_config.custctx.on;
+  if (!anyReader) return {false, "off_config", /*off=*/true};
+  return scope::InstallNormal();
+}
+ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
+ModuleResult ShieldgammaNormal() noexcept {
+  return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
+}
 ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshstep.on); }
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
+
+// The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
+ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
+ModuleResult AibotsNormal() noexcept {
+  aibots::Switches switches;
+  switches.on = g_config.aibots.on;
+  switches.scenario = g_config.aibotsScenario.source == nevr_quest::Source::kFile ? g_config.aibotsScenario.text : nullptr;
+  switches.devBuild = DevBuild();
+  return aibots::Install(switches);
+}
+ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config.weaponArm.on); }
 
 ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
 ModuleResult DecalsNormal() noexcept {
@@ -94,6 +128,12 @@ ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
 ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
 ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
+// The crash and timing guards (#2178). fxtrail, peerclamp and custctx read the combat level answer, so their switches are readers of the scope row above.
+ModuleResult FxtrailNormal() noexcept { return fxtrail::Install(g_config.fxtrail.on); }
+ModuleResult VoipdropNormal() noexcept { return voipdrop::Install(g_config.voipdrop.on); }
+ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx.on); }
+ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
+ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -106,6 +146,9 @@ constexpr std::array kModules{
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
+    // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
+    // module that reads it.
+    Module{"scope", nullptr, &ScopeNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
@@ -131,6 +174,11 @@ constexpr std::array kModules{
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
     // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},
+    // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
+    // callbacks, so they come after the tick's row; before the gates, which the plugin installed after all its modules.
+    Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
+    Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
+    Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
@@ -142,9 +190,26 @@ constexpr std::array kModules{
     Module{"wallfire", nullptr, &WallfireNormal, "combat.wallfire", &nevr_quest::CombatConfig::wallfire},
     // sendguard: the script-event guard, installed after the modules that hook the tick and before the decisions (#2179).
     Module{"sendguard", nullptr, &SendguardNormal, "combat.sendguard", &nevr_quest::CombatConfig::sendguard, &sendguard::NoteEnd},
+    // The crash and timing guards (#2178), in the plugin's order: fxtrail, voipdrop, custctx, droneguard, peerclamp. They hook the game's own slots and
+    // read the scope's answer where they change a value (fxtrail, peerclamp, custctx's pool refusal), so they come after the scope's row; each writes its
+    // counts at the end of the process. droneguard_stage1 is a switch of droneguard's with no step of its own: its row exists so the switch is one
+    // generated `combat_config_switch` record.
+    Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd},
+    Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd},
+    Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd},
+    Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd},
+    Module{"droneguard_stage1", nullptr, nullptr, "combat.droneguard_stage1", &nevr_quest::CombatConfig::droneguardStage1},
+    Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
+    // hudmeter, then shieldgamma (#2186): the plugin installed both after its crash guards and before levelname and sensorwd. Both read the combat level
+    // answer (combat_scope.h), so they come after the scope's row. shieldgamma_gamma and shieldgamma_tube_mirror are switches of shieldgamma's with no step of
+    // their own: each row exists so the switch is one generated `combat_config_switch` record.
+    Module{"hudmeter", nullptr, &HudmeterNormal, "combat.hudmeter", &nevr_quest::CombatConfig::hudmeter},
+    Module{"shieldgamma", nullptr, &ShieldgammaNormal},
+    Module{"shieldgamma_gamma", nullptr, nullptr, "combat.shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma},
+    Module{"shieldgamma_tube_mirror", nullptr, nullptr, "combat.shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror},
     // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
     // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
     Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},

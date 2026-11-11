@@ -58,7 +58,7 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
    facts come from the identity step (ADR 0031 decision 4), not from a module's own reads.
 4. **Switches are `config.yaml` keys** under a `combat:` section, one per module and one per option, each defaulting to the shipped
    behaviour, parsed by `quest_config`, logged once with value and source (`combat_config`). A module's switch file stops being read in
-   the change that moves the module, and a former switch file found is a Warning. Files that are player state (the new-profile gun-hand
+   the change that moves the module, and a former switch file found is a Warning. Files that are player state (the gun-hand default
    markers under `files/q15t`) stay where they are.
 5. **The folded modules run in the q15t and combat variants only.** The packaging step writes the APK's variant word (ADR 0040 rule 1);
    the sentinel reads it before its first line, writes it in that line beside the build kind (`nevr_build::kIsDev`, unchanged), and
