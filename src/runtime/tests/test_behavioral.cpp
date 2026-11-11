@@ -3974,6 +3974,19 @@ TEST_F(RolesByPathTest, TheFirstServiceFrameOfEachConnectionNamesItsFormatOnce) 
   EXPECT_TRUE(has("[NEVR.WS] service frames conn=1 role=login format=evr")) << lines[1];
 }
 
+// #568 (A3): a first service frame that does not start with the EVR marker is named `unknown`, never `evr`, and is
+// still forwarded to the game. Failure caught: a form claimed for a frame the bridge cannot show is EVR.
+TEST_F(RolesByPathTest, AServiceFrameWithoutTheEvrMarkerIsNamedUnknown) {
+  remote_.SetLoginReplyFrame(std::string("\x0a\x04proto-bytes", 14));
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));  // the frame reached the game unchanged in count
+  ASSERT_TRUE(WaitForLogLines("service frames conn=", 1));
+  const std::vector<std::string> lines = LogLinesContaining("service frames conn=");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("[NEVR.WS] service frames conn=1 role=login format=unknown"), std::string::npos) << lines[0];
+}
+
 // A socket with no recognised request target keeps the connect order when nothing says otherwise:
 // config, then login.
 TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
