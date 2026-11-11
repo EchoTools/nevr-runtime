@@ -253,6 +253,7 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_dronemuzzle_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_early_quit_feature_flags.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_early_quit_lockout.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_ec_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_ecfx_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_equipment_refire.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_error_dialog_depth.cpp",  # KNOWN-WRONG #2363
@@ -396,6 +397,7 @@ KNOWN_ROLE_BREAKS = frozenset({
 KNOWN_RULES_HOME_BREAKS = frozenset({
     "src/runtime/patch/dronekill_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/dronemuzzle_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
+    "src/runtime/patch/ec_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/ecfx_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/equipment_refire_rules.h: no non-test file under src/quest/ is named equipment_refire",  # KNOWN-WRONG #2363
     "src/runtime/patch/lobby_failure_message_rules.h: no non-test file under src/quest/ is named lobby_failure_message",  # KNOWN-WRONG #2363: its hook is the lobby-full hook of lobby_full_backoff
