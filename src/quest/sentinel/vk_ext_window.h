@@ -34,6 +34,10 @@
  * answers a requested name with the requester's wrapper (after publishing the real function where the request said) and every other
  * name with the driver's function. With no request (every APK where no requester registers) the game gets the driver's
  * vkGetDeviceProcAddr, as before. The first lookup of vkGetDeviceProcAddr closes the table: a later request is refused (kSealed).
+ * One device: the wrapper overwrites each request's published real function on every lookup, so with a second VkDevice the real function is
+ * the last device's lookup and the first device's calls would reach it. The pinned fill passes one device (`ldr x0,[x29,#0xb50]`, word
+ * 0xf945aba0, at ELF 0x18de8a4 and 0x18de930 in the store libr15). A requester serves one device and fails safe on a second
+ * (texel_buffer_guard.h, "One device").
  *
  * Logging, after the driver has answered and never while game code is on the stack: one `vk_ext_window` line per
  * property call that carries a buffer (the first kMaxLoggedCalls), saying what was done and why, and one

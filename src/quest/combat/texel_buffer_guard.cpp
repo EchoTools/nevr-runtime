@@ -103,24 +103,36 @@ constexpr int kMade = 1;
 constexpr int kOff = 2;
 std::mutex g_makeLock;
 std::atomic<int> g_viewState{kNotMade};
-void* g_device = nullptr;              // written before g_viewState becomes kMade
 UpdateFn g_update = nullptr;           // the driver's vkUpdateDescriptorSets, written before kMade
 vk::Handle g_views[kMaxDescriptors];   // kMaxDescriptors copies of the view, written before kMade
 
 std::atomic<std::uint64_t> g_layouts{0}, g_sets{0}, g_bindings{0}, g_unknown{0}, g_skipped{0}, g_otherDevice{0}, g_tableFull{0};
-std::atomic<bool> g_firstSaid{false}, g_fullSaid{false};
+std::atomic<bool> g_firstSaid{false}, g_fullSaid{false}, g_deviceSaid{false};
+
+// The one device the guard serves: the first non-null device either wrapper is called with. vk_ext_window publishes the driver's function
+// on every lookup, so with a second VkDevice the real function would be the last device's, and the first device's calls would reach it; the
+// pinned fill passes one device (vk_ext_window.h). A call with another device turns the guard off for the process.
+std::atomic<void*> g_firstDevice{nullptr};
 
 template <typename Fn>
 Fn Lookup(LookupFn lookup, void* owner, const char* name) noexcept {
   return lookup != nullptr ? reinterpret_cast<Fn>(lookup(owner, name)) : nullptr;
 }
 
-bool MadeFailed(const char* step, vk::Result result, const char* why) noexcept {
-  sentinel::LogFields(LogLevel::kWarn, "combat_texel_buffer_guard_zero_view",
-                      {{"result", "failed"}, {"step", step}, {"vk_result", result}, {"bytes", 0}, {"memory_type", -1},
-                       {"msg", why}});
+// A step failed. `result` is the driver's answer for a step that called the driver; a step that made no driver call that failed (a missing
+// entry point, no usable memory type) has none, and the line then carries no `vk_result`.
+bool MadeFailed(const char* step, const vk::Result* result, const char* why) noexcept {
+  if (result != nullptr) {
+    sentinel::LogFields(LogLevel::kWarn, "combat_texel_buffer_guard_zero_view",
+                        {{"result", "failed"}, {"step", step}, {"vk_result", *result}, {"bytes", 0}, {"memory_type", -1}, {"msg", why}});
+  } else {
+    sentinel::LogFields(LogLevel::kWarn, "combat_texel_buffer_guard_zero_view",
+                        {{"result", "failed"}, {"step", step}, {"bytes", 0}, {"memory_type", -1}, {"msg", why}});
+  }
   return false;
 }
+bool MadeFailed(const char* step, vk::Result result, const char* why) noexcept { return MadeFailed(step, &result, why); }
+bool MadeFailed(const char* step, const char* why) noexcept { return MadeFailed(step, static_cast<const vk::Result*>(nullptr), why); }
 
 // The zeroed buffer and its view, with the game's `device` (g_makeLock held). Every object comes from the driver's own functions, reached
 // through the lookups the game's own lookups returned.
@@ -140,7 +152,7 @@ bool Make(void* device) noexcept {
   const auto memoryProperties = Lookup<MemoryPropertiesFn>(gipa, instance, "vkGetPhysicalDeviceMemoryProperties");
   if (instance == nullptr || createBuffer == nullptr || requirements == nullptr || allocateMemory == nullptr || bindMemory == nullptr ||
       mapMemory == nullptr || createView == nullptr || update == nullptr || enumerate == nullptr || memoryProperties == nullptr) {
-    return MadeFailed("entry_points", vk::kSuccess, kOffMsg);
+    return MadeFailed("entry_points", kOffMsg);
   }
   // The memory types are the physical device's. The game's device was made on the one the instance lists; more than one, and which is
   // the game's is not known here, so the guard does not guess.
@@ -164,7 +176,7 @@ bool Make(void* device) noexcept {
   vk::PhysicalDeviceMemoryProperties props{};
   memoryProperties(physical, &props);
   const int type = PickMemoryType(props, needs.memoryTypeBits);
-  if (type < 0 || needs.size < kZeroBufferBytes) return MadeFailed("memory_type", vk::kSuccess, kOffMsg);
+  if (type < 0 || needs.size < kZeroBufferBytes) return MadeFailed("memory_type", kOffMsg);
   vk::MemoryAllocateInfo allocation{};
   allocation.sType = vk::kStructureTypeMemoryAllocateInfo;
   allocation.allocationSize = needs.size;
@@ -190,7 +202,6 @@ bool Make(void* device) noexcept {
 
   for (vk::Handle& v : g_views) v = view;
   g_update = update;
-  g_device = device;
   sentinel::LogFields(LogLevel::kInfo, "combat_texel_buffer_guard_zero_view",
                       {{"result", "made"}, {"step", "done"}, {"vk_result", vk::kSuccess}, {"bytes", needs.size}, {"memory_type", type},
                        {"msg", "a zeroed uniform texel buffer view is made: a new set's unwritten uniform texel bindings read zeros"}});
@@ -205,8 +216,10 @@ bool EnsureZeroView(void* device) noexcept {
   const int again = g_viewState.load(std::memory_order_acquire);
   if (again != kNotMade) return again == kMade;
   const bool made = Make(device);
-  g_viewState.store(made ? kMade : kOff, std::memory_order_release);
-  return made;
+  // A second device may have turned the guard off while the view was made: kOff stays.
+  int expected = kNotMade;
+  g_viewState.compare_exchange_strong(expected, made ? kMade : kOff, std::memory_order_acq_rel);
+  return made && expected == kNotMade;
 }
 
 void NoteSetWritten(std::uint32_t writes) noexcept {
@@ -245,10 +258,6 @@ void WriteNewSets(void* device, const vk::DescriptorSetAllocateInfo& info, const
       continue;
     }
     if (!EnsureZeroView(device)) return;
-    if (device != g_device) {
-      g_otherDevice.fetch_add(1, std::memory_order_relaxed);
-      return;
-    }
     for (std::uint32_t k = 0; k < picks.n; ++k) {
       if (pending == kWriteBatch) flush();
       vk::WriteDescriptorSet& w = writes[pending++];
@@ -273,6 +282,23 @@ void WriteNewSets(void* device, const vk::DescriptorSetAllocateInfo& info, const
   }
 }
 
+// Whether `device` is the one the guard serves (g_firstDevice). The first device is taken; a call with another one turns the guard off for the
+// process (one Warning), and this call and every later one are the driver's. A null device is not served and does not turn anything off.
+bool ServesDevice(void* device, const char* entry) noexcept {
+  if (device == nullptr) return false;
+  void* expected = nullptr;
+  if (g_firstDevice.compare_exchange_strong(expected, device, std::memory_order_acq_rel) || expected == device) return true;
+  g_otherDevice.fetch_add(1, std::memory_order_relaxed);
+  g_viewState.store(kOff, std::memory_order_release);
+  if (!g_deviceSaid.exchange(true, std::memory_order_acq_rel)) {
+    sentinel::LogFields(LogLevel::kWarn, "combat_texel_buffer_guard_second_device",
+                        {{"entry", entry}, {"sets", g_sets.load(std::memory_order_relaxed)},
+                         {"msg", "a second VkDevice called the guard's wrapper, and the driver's function the wrapper reaches is the last device's lookup, "
+                                 "not necessarily this device's: the guard is off for this process and every call is the driver's"}});
+  }
+  return false;
+}
+
 }  // namespace
 
 vk::Result CreateDescriptorSetLayout(void* device, const vk::DescriptorSetLayoutCreateInfo* info, const void* allocator,
@@ -280,6 +306,7 @@ vk::Result CreateDescriptorSetLayout(void* device, const vk::DescriptorSetLayout
   const auto real = reinterpret_cast<CreateLayoutFn>(g_realCreateLayout.load(std::memory_order_acquire));
   if (real == nullptr) return vk::kErrorInitializationFailed;  // unreachable: the wrapper is handed out after the store
   const vk::Result result = real(device, info, allocator, layout);
+  if (!ServesDevice(device, kCreateLayoutName)) return result;
   if (result != vk::kSuccess || info == nullptr || layout == nullptr || g_viewState.load(std::memory_order_acquire) == kOff) return result;
   const LayoutPicks picks = PickBindings(info);
   LayoutTable::Put put;
@@ -304,6 +331,7 @@ vk::Result AllocateDescriptorSets(void* device, const vk::DescriptorSetAllocateI
   const auto real = reinterpret_cast<AllocateFn>(g_realAllocate.load(std::memory_order_acquire));
   if (real == nullptr) return vk::kErrorInitializationFailed;  // unreachable: the wrapper is handed out after the store
   const vk::Result result = real(device, info, sets);
+  if (!ServesDevice(device, kAllocateName)) return result;
   if (result != vk::kSuccess || info == nullptr || sets == nullptr || info->pSetLayouts == nullptr ||
       g_viewState.load(std::memory_order_acquire) == kOff) {
     return result;
@@ -329,7 +357,7 @@ ModuleResult Early(bool on) noexcept {
   if (create == window::RequestStatus::kOk) g_requested.store(true, std::memory_order_release);
   if (allocate != window::RequestStatus::kOk) {
     const char* reason = window::RequestStatusName(allocate);
-    sentinel::LogFields(LogLevel::kError, "combat_texel_buffer_guard_install",
+    sentinel::LogFields(LogLevel::kWarn, "combat_texel_buffer_guard_install",
                         {{"result", "refused"}, {"reason", reason}, {"names", kNames}, {"owner", "vk_ext_window"},
                          {"msg", "vk_ext_window refused the request, so no new set gets the zeroed view"}});
     return {false, reason};
@@ -377,7 +405,8 @@ void ResetForTest() noexcept {
     g_table.Clear();
   }
   g_viewState.store(kNotMade);
-  g_device = nullptr;
+  g_firstDevice.store(nullptr);
+  g_deviceSaid.store(false);
   g_update = nullptr;
   for (vk::Handle& v : g_views) v = 0;
   for (auto* a : {&g_layouts, &g_sets, &g_bindings, &g_unknown, &g_skipped, &g_otherDevice, &g_tableFull}) a->store(0);

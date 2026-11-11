@@ -53,30 +53,47 @@ uniform texel buffers). The memory types are read from the instance's physical d
 that fails turns the guard off for the process: one Warning names the step and the driver's result, and every later call is the driver's,
 unchanged. Nothing the guard makes is destroyed (it lives as long as the process).
 
+## One device
+
+`vk_ext_window`'s `vkGetDeviceProcAddr` wrapper publishes the driver's function for a requested name on every lookup (it overwrites the word each
+time). With a second `VkDevice` the published function would be the last lookup's, so the first device's calls would reach another device's
+function. The pinned fill passes one device: both `vkGetDeviceProcAddr` calls in `CGS::Initialize` load `x0` from `[x29,#0xb50]` (`ldr x0,[x29,#0xb50]`, word 0xf945aba0, at
+ELF 0x18de8a4 and 0x18de930 in the store libr15, read from the file; not a pinned word in `texel_buffer_guard_targets.h`). The guard serves the first non-null device either wrapper is called with. A call with
+another device turns the guard off for the process: one Warning (`combat_texel_buffer_guard_second_device`), nothing is written from then on and
+every call is the driver's. The guard cannot repair the function the lookup published; it stops writing views and recording layouts. A null device
+is passed to the driver and neither served nor counted as a second device.
+
 ## Log lines (sentinel log)
 
 - `combat_texel_buffer_guard_install`: `result` (`requested|off_config|refused`), `reason` (`ok`, `off_config`, or the request status: `sealed`,
-  `full`, `duplicate`, `null`), `names`, `owner` `vk_ext_window`, `msg`. Info, Error for a refusal.
+  `full`, `duplicate`, `null`), `names`, `owner` `vk_ext_window`, `msg`. Info, Warning for a refusal (the guard is off and the game runs).
 - `vk_ext_window_device_lookup` (written by `vk_ext_window`): once, when the game first asks for `vkGetDeviceProcAddr`: `result` (`wrapped` with a
   request, `real` without), `requests`.
 - `vk_ext_window_device_function` (written by `vk_ext_window`): Info, once per requested name the first time the game takes it: `name`,
   `requester`.
 - `combat_texel_buffer_guard_zero_view`: `result` (`made|failed`), `step` (`done`, or the failed step: `entry_points`, `physical_device`,
   `create_buffer`, `memory_type`, `allocate_memory`, `bind_memory`, `map_memory`, `create_view`), `vk_result`, `bytes`, `memory_type`. Info when
-  made, Warning when a step failed.
+  made, Warning when a step failed. `vk_result` is the driver's answer; a step that failed without a driver call (`entry_points`, `memory_type`)
+  has none and the line omits the field.
 - `combat_texel_buffer_guard_first`: Info, once: `sets` and `bindings` of the first allocation the guard wrote into.
 - `combat_texel_buffer_guard_count`: Debug, each time the sets written reach a power of two: `sets`, `bindings`, `unknown_layouts` (new sets whose
-  layout the table has no entry for: no uniform texel binding, or not recorded), `skipped_flags` (layouts left alone), `other_device`.
+  layout the table has no entry for: no uniform texel binding, or not recorded), `skipped_flags` (layouts left alone), `other_device` (wrapper calls with a device other than the first).
+- `combat_texel_buffer_guard_second_device`: Warning, once: `entry` (the wrapper a second device called), `sets` (written until then). The guard is
+  off for the process.
 - `combat_texel_buffer_guard_table_full`: Warning, once: `capacity`.
 - `combat_texel_buffer_guard_end`: at the end of the process (the row's end step), when the requests were registered: `wrapped` (1 when the game
   took both wrappers), the counts above and `layouts`, `table_full`. Info, Warning when `wrapped` is 0.
 
 ## Arena cost and arena behaviour (arena and combat share the APK)
 
-- **Behaviour.** The guard acts in every level: README rule 9's exception for a default the game replaces before any read. The view is written
-  only into a binding of a set the game has just allocated and has not yet written; the game's own write replaces it. The only read that sees it is
-  a read of a binding the game never wrote, which without the guard reads whatever the driver left there (the fault the reference build records).
-  Every other read sees what the game wrote, as before. A gate on the level answer (`scope::SeenCombatOrLobby()`) is not used: the layouts are
+- **Behaviour.** The guard acts in every level: README rule 9's exception for a default for a value the API leaves undefined until written.
+  The API rule: Vulkan leaves a descriptor of a newly allocated set undefined until `vkUpdateDescriptorSets` writes it, and a draw may only use valid
+  descriptors (the specification's descriptor-set and draw valid-usage rules; quoted from memory, not re-read in this tree). The view is written
+  only into a binding of a set the game has just allocated; the game's own write replaces it. The game may read a binding before it writes it (that is
+  the fault the reference build records), so the exception does not rest on the write coming first. The only effect: a read of a binding the game
+  has not written yet, or never writes, gets zeros instead of whatever the driver left there (possibly a stale descriptor from a recycled pool).
+  A read of a binding the game wrote sees what the game wrote, as before. In arena that is a behaviour change for such a read, from undefined to
+  zeros; the specification leaves the read undefined, so this is acceptable. A gate on the level answer (`scope::SeenCombatOrLobby()`) is not used: the layouts are
   created at load, before any level answer exists, so a gated guard would still record them in every level, and when the fault happens against
   the level answer is not measured, so a gate that lags a level change could leave it in place.
 - **Cost.** Per layout created: one walk of its bindings and one table write under a mutex. Per allocation: the driver call, one table look-up per

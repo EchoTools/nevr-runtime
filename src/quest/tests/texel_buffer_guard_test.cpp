@@ -73,6 +73,7 @@ vk::Result g_layoutResult = vk::kSuccess;
 vk::Result g_allocateResult = vk::kSuccess;
 vk::Handle g_nextLayout = 0x1000;
 std::uint32_t g_physicalCount = 1;
+std::uint32_t g_memoryTypeBits = 0x0e;  // the buffer's allowed memory types: 1, 2 and 3
 struct SeenWrite {
   vk::WriteDescriptorSet write;
   std::vector<vk::Handle> views;
@@ -123,7 +124,7 @@ vk::Result FakeCreateBuffer(void*, const vk::BufferCreateInfo* info, const void*
 void FakeRequirements(void*, vk::Handle buffer, vk::MemoryRequirements* out) {
   g_calls.push_back("requirements");
   QCHECK(buffer == kBuffer);
-  *out = vk::MemoryRequirements{tb::kZeroBufferBytes, 256, 0x0e};  // types 1, 2 and 3 allowed
+  *out = vk::MemoryRequirements{tb::kZeroBufferBytes, 256, g_memoryTypeBits};
 }
 vk::Result FakeAllocateMemory(void*, const vk::MemoryAllocateInfo* info, const void*, vk::Handle* out) {
   g_memoryInfo = *info;
@@ -139,7 +140,9 @@ vk::Result FakeMap(void*, vk::Handle memory, std::uint64_t offset, std::uint64_t
   *out = g_mapped;
   return Step("map_memory");
 }
+void (*g_duringView)() = nullptr;  // runs inside vkCreateBufferView: another thread's call arriving while the view is made
 vk::Result FakeCreateView(void*, const vk::BufferViewCreateInfo* info, const void*, vk::Handle* out) {
+  if (g_duringView != nullptr) g_duringView();
   g_viewInfo = *info;
   *out = kView;
   return Step("create_view");
@@ -212,6 +215,8 @@ void Reset() {
   g_allocateResult = vk::kSuccess;
   g_nextLayout = 0x1000;
   g_physicalCount = 1;
+  g_memoryTypeBits = 0x0e;
+  g_duringView = nullptr;
   g_bufferInfo = {};
   g_memoryInfo = {};
   g_viewInfo = {};
@@ -441,7 +446,8 @@ void RequestAfterTheLookupIsRefused() {
   QCHECK(!r.installed && !r.off && std::strcmp(r.status, "sealed") == 0);
   const std::vector<std::string> install = LinesFor("combat_texel_buffer_guard_install");
   QCHECK(install.size() == 1 && Field(install[0], "result") == "refused" && Field(install[0], "reason") == "sealed");
-  if (install.size() == 1) QCHECK(LevelIs(install[0], "error"));
+  // The feature is off as a consequence and the game runs: Warning, not Error (docs/standards/logging.md, Level Guidelines).
+  if (install.size() == 1) QCHECK(LevelIs(install[0], "warn"));
 }
 
 void AllocateNoTexelPassesThrough() {
@@ -583,24 +589,93 @@ void ManyWritesAreBatched() {
   if (w.size() == 80) QCHECK(w[79].write.dstSet == 0x9000 + 19 * 0x10 && w[79].write.dstBinding == 4);
 }
 
-void OtherDevicePassesCounted() {
+// A second VkDevice (the guard serves the first non-null one: vk_ext_window publishes the driver's function on every lookup, so the real
+// function would be the last device's): the guard is off for the process, with one Warning, and every call is the driver's.
+void SecondDeviceOnAllocateTurnsTheGuardOff() {
   const Game g = Started();
   const vk::Handle texel = MakeLayout(g, {Binding(3, 4, 1)});
   Allocate(g, {texel});  // the view is made with kDevice
+  QCHECK(CallCount("update") == 1 && tb::ZeroViewMade());
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  vk::Result r = 99;
+  Allocate(g, {texel}, &r, kOtherDevice);
+  QCHECK(r == vk::kSuccess);  // the driver's answer
   QCHECK(CallCount("update") == 1);
-  Allocate(g, {texel}, nullptr, kOtherDevice);
-  QCHECK(CallCount("update") == 1);
+  QCHECK(tb::TurnedOff() && !tb::ZeroViewMade());
   QCHECK(tb::CurrentCounts().otherDevice == 1);
+  Allocate(g, {texel});                      // the first device's calls are the driver's now
+  Allocate(g, {texel}, nullptr, kOtherDevice);
+  sentinel::SetLogSink(previous);
+  QCHECK(CallCount("update") == 1);
+  QCHECK(CallCount("allocate") == 4);        // every call reached the driver
+  QCHECK(tb::CurrentCounts().otherDevice == 2);
+  const std::vector<std::string> said = LinesFor("combat_texel_buffer_guard_second_device");
+  QCHECK(said.size() == 1);  // once
+  if (said.size() == 1) {
+    QCHECK(LevelIs(said[0], "warn") && Field(said[0], "entry") == "vkAllocateDescriptorSets" && Field(said[0], "sets") == "1");
+  }
+  MakeLayout(g, {Binding(3, 4, 1)});  // off: a later layout is not recorded
+  QCHECK(tb::CurrentCounts().layouts == 1);
+}
+
+void SecondDeviceOnLayoutCreateTurnsTheGuardOffBeforeTheViewExists() {
+  const Game g = Started();
+  const vk::Handle texel = MakeLayout(g, {Binding(3, 4, 1)});
+  const std::vector<vk::DescriptorSetLayoutBinding> bindings = {Binding(3, 4, 1)};
+  const vk::DescriptorSetLayoutCreateInfo info = LayoutInfo(bindings);
+  vk::Handle out = 0;
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  QCHECK(g.createLayout(kOtherDevice, &info, nullptr, &out) == vk::kSuccess && out != 0);
+  Allocate(g, {texel});
+  sentinel::SetLogSink(previous);
+  QCHECK(tb::TurnedOff());
+  QCHECK(CallCount("create_layout") == 2 && CallCount("allocate") == 1);
+  QCHECK(CallCount("create_buffer") == 0 && CallCount("update") == 0);  // the view was never made, nothing was written
+  QCHECK(tb::CurrentCounts().layouts == 1 && tb::CurrentCounts().otherDevice == 1);
+  const std::vector<std::string> said = LinesFor("combat_texel_buffer_guard_second_device");
+  QCHECK(said.size() == 1);
+  if (said.size() == 1) QCHECK(Field(said[0], "entry") == "vkCreateDescriptorSetLayout" && Field(said[0], "sets") == "0");
+}
+
+Game g_midGame;
+void SecondDeviceCreatesALayout() {
+  const std::vector<vk::DescriptorSetLayoutBinding> bindings = {Binding(3, 4, 1)};
+  const vk::DescriptorSetLayoutCreateInfo info = LayoutInfo(bindings);
+  vk::Handle out = 0;
+  g_midGame.createLayout(kOtherDevice, &info, nullptr, &out);
+}
+// The view's making finishes after a second device turned the guard off: off stays, and no write is made.
+void ASecondDeviceDuringTheViewsMakingKeepsTheGuardOff() {
+  const Game g = Started();
+  g_midGame = g;
+  const vk::Handle texel = MakeLayout(g, {Binding(3, 4, 1)});
+  g_duringView = &SecondDeviceCreatesALayout;
+  Allocate(g, {texel});
+  g_duringView = nullptr;
+  QCHECK(tb::TurnedOff() && !tb::ZeroViewMade());
+  QCHECK(CallCount("update") == 0);
+  Allocate(g, {texel});
+  QCHECK(CallCount("update") == 0);
+}
+
+void ANullDeviceIsPassedAndTurnsNothingOff() {
+  const Game g = Started();
+  const vk::Handle texel = MakeLayout(g, {Binding(3, 4, 1)});
+  Allocate(g, {texel}, nullptr, nullptr);
+  QCHECK(!tb::TurnedOff() && CallCount("update") == 0 && tb::CurrentCounts().otherDevice == 0);
+  Allocate(g, {texel});  // a null device did not become the first device
+  QCHECK(!tb::TurnedOff() && CallCount("update") == 1);
 }
 
 void ZeroViewFailureTurnsOff() {
   const char* const steps[] = {"create_buffer", "allocate_memory", "bind_memory", "map_memory", "create_view", "lookup:vkCreateBufferView",
-                               "physical_devices"};
+                               "physical_devices", "memory_type"};
   for (const char* step : steps) {
     const Game g = Started();
     const vk::Handle texel = MakeLayout(g, {Binding(3, 4, 1)});
     g_failStep = step;
     if (std::strcmp(step, "physical_devices") == 0) g_physicalCount = 2;
+    if (std::strcmp(step, "memory_type") == 0) g_memoryTypeBits = 0x03;  // only device-local types: none the guard can map
     sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
     vk::Result r = 99;
     Allocate(g, {texel}, &r);
@@ -621,6 +696,9 @@ void ZeroViewFailureTurnsOff() {
                                                                                  : step;
       if (Field(failed[0], "step") != want) std::fprintf(stderr, "step %s: line says %s\n", step, Field(failed[0], "step").c_str());
       QCHECK(Field(failed[0], "step") == want);
+      // A step that made no driver call that failed has no driver result: the line omits `vk_result` rather than say 0 (a success) beside `failed`.
+      const bool noDriverResult = want == "entry_points" || want == "memory_type";
+      QCHECK((Field(failed[0], "vk_result") == "<absent>") == noDriverResult);
     }
     // Off: a later layout is not recorded.
     MakeLayout(g, {Binding(3, 4, 1)});
@@ -684,7 +762,10 @@ int main() {
   FlaggedAndOversizeLayoutsSkippedAndCounted();
   AReusedHandleWithNoTexelBindingGetsNoWrite();
   ManyWritesAreBatched();
-  OtherDevicePassesCounted();
+  SecondDeviceOnAllocateTurnsTheGuardOff();
+  SecondDeviceOnLayoutCreateTurnsTheGuardOffBeforeTheViewExists();
+  ASecondDeviceDuringTheViewsMakingKeepsTheGuardOff();
+  ANullDeviceIsPassedAndTurnsNothingOff();
   ZeroViewFailureTurnsOff();
   TableFullWarnsOnce();
   EndSaysWrappedOrNot();
