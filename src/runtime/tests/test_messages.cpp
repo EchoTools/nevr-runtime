@@ -297,22 +297,23 @@ TEST(MessagesEndpoint, RefusalsNameTheFieldTheReasonAndTheEndpoint) {
     EXPECT_FALSE(ParseEndpoint(c.endpoint, ip1, ip2, port)) << c.endpoint;
     EXPECT_NE(CapturedLog().find(c.reason), std::string::npos) << c.endpoint << " log: " << CapturedLog();
     EXPECT_NE(CapturedLog().find(c.field), std::string::npos) << c.endpoint << " log: " << CapturedLog();
-    EXPECT_NE(CapturedLog().find(std::string("endpoint=") + c.endpoint), std::string::npos)
+    EXPECT_NE(CapturedLog().find(std::string("endpoint=\"") + c.endpoint + "\""), std::string::npos)
         << c.endpoint << " log: " << CapturedLog();
   }
 }
 
 TEST(MessagesEndpoint, RemoteTextIsEscapedNotPrintableAndBackslashAsHex) {
-  EXPECT_EQ(nevr_remote_text::Escape("plain 10.0.0.1:80"), "plain 10.0.0.1:80");
-  EXPECT_EQ(nevr_remote_text::Escape(std::string("a\nb\x01\x7f\xff\\c", 8)), "a\\x0ab\\x01\\x7f\\xff\\x5cc");
-  EXPECT_EQ(nevr_remote_text::Escape(""), "");
+  EXPECT_EQ(nevr_remote_text::Escape("plain 10.0.0.1:80"), "\"plain 10.0.0.1:80\"");
+  EXPECT_EQ(nevr_remote_text::Escape(std::string("a\nb\x01\x7f\xff\\c", 8)), "\"a\\x0ab\\x01\\x7f\\xff\\x5cc\"");
+  EXPECT_EQ(nevr_remote_text::Escape(""), "\"\"");
+  EXPECT_EQ(nevr_remote_text::Escape("a\"b"), "\"a\\x22b\"");
 }
 
 TEST(MessagesEndpoint, RemoteTextIsCappedAtSixtyFourBytesBeforeEscaping) {
   const std::string longText(200, 'a');
-  EXPECT_EQ(nevr_remote_text::Escape(longText), std::string(64, 'a'));
+  EXPECT_EQ(nevr_remote_text::Escape(longText), "\"" + std::string(64, 'a') + "\"");
   // 65th byte is dropped; a control byte inside the cap costs four characters, not one byte.
-  EXPECT_EQ(nevr_remote_text::Escape(std::string(63, 'b') + "\n" + "tail"), std::string(63, 'b') + "\\x0a");
+  EXPECT_EQ(nevr_remote_text::Escape(std::string(63, 'b') + "\n" + "tail"), "\"" + std::string(63, 'b') + "\\x0a\"");
 }
 
 TEST(MessagesEndpoint, ARefusedEndpointIsLoggedEscapedCappedAndWithItsLength) {
@@ -322,10 +323,59 @@ TEST(MessagesEndpoint, ARefusedEndpointIsLoggedEscapedCappedAndWithItsLength) {
   const std::string hostile = std::string("evil\r\nINJECTED\x01") + std::string(100, 'z');
   EXPECT_FALSE(ParseEndpoint(hostile, ip1, ip2, port));
   const std::string& log = CapturedLog();
-  EXPECT_NE(log.find("endpoint=evil\\x0d\\x0aINJECTED\\x01" + std::string(64 - 15, 'z') + " "), std::string::npos) << log;
+  EXPECT_NE(log.find("endpoint=\"evil\\x0d\\x0aINJECTED\\x01" + std::string(64 - 15, 'z') + "\" "), std::string::npos) << log;
   EXPECT_NE(log.find("endpoint_len=" + std::to_string(hostile.size())), std::string::npos) << log;
   EXPECT_EQ(log.find('\r'), std::string::npos);
   EXPECT_EQ(std::count(log.begin(), log.end(), '\n'), 1) << log;
+}
+
+TEST(MessagesEndpoint, APeerCannotForgeLogFieldsWithSpacesQuotesOrEquals) {
+  ScopedCapturedLog capture;
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0;
+  const std::string forged = "x\" reason=ok endpoint_len=3 family=ipv4 y=";
+  EXPECT_FALSE(ParseEndpoint(forged, ip1, ip2, port));
+  // The peer's text is one quoted value; outside it the line has each field once.
+  const size_t open = CapturedLog().find("endpoint=\"");
+  ASSERT_NE(open, std::string::npos) << CapturedLog();
+  const size_t close = CapturedLog().find('"', open + 10);
+  ASSERT_NE(close, std::string::npos) << CapturedLog();
+  const std::string log = CapturedLog().substr(0, open) + CapturedLog().substr(close + 1);
+  auto count = [&](const std::string& needle) {
+    size_t n = 0;
+    for (size_t at = log.find(needle); at != std::string::npos; at = log.find(needle, at + 1)) ++n;
+    return n;
+  };
+  EXPECT_EQ(count(" reason="), 1U) << log;
+  EXPECT_EQ(count(" endpoint_len="), 1U) << log;
+  EXPECT_EQ(count(" family="), 1U) << log;
+  EXPECT_NE(CapturedLog().find("endpoint=\"x\\x22 reason=ok endpoint_len=3 family=ipv4 y=\" endpoint_len=" +
+                              std::to_string(forged.size())),
+            std::string::npos)
+      << CapturedLog();
+}
+
+TEST(MessagesEndpoint, ABadPortLineCarriesTheFamilyAndQuotesThePortText) {
+  ScopedCapturedLog capture;
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0;
+  EXPECT_FALSE(ParseEndpoint("10.0.0.1:203.0.113.9:8 0=x", ip1, ip2, port));
+  EXPECT_NE(CapturedLog().find("reason=bad_port family=ipv4 port_str=\"8 0=x\" port_len=5"), std::string::npos)
+      << CapturedLog();
+}
+
+TEST(MessagesEncoding, SessionSuccessWithBadEncoderSettingsNamesTheReason) {
+  ScopedGameLogger logger;
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_game_mode(1);
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  message.set_server_encoder_flags(MakeEncoderFlags(32, 7, 32));
+  message.set_client_encoder_flags(MakeEncoderFlags());
+  std::string reason;
+  EXPECT_EQ(EncodeLobbySessionSuccessV5(message, &reason).size(), 0U);
+  EXPECT_EQ(reason, "bad_encoder_settings");
 }
 
 TEST(MessagesEndpoint, AValidEndpointWritesNoLine) {

@@ -63,8 +63,8 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
 //          bytes clientMacKey (size from encoder flags)
 //          bytes clientEncKey
 //          bytes clientRandomKey
-// On a failure `failureReason` (when given) gets the token: bad_lobby_id, bad_group_id, not_ipv4, bad_address
-// or bad_port.
+// On a failure `failureReason` (when given) gets the token: bad_lobby_id, bad_group_id, not_ipv4, bad_address,
+// bad_port or bad_encoder_settings.
 EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg,
                                            std::string* failureReason = nullptr);
 

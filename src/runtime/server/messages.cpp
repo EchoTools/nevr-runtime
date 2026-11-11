@@ -277,7 +277,7 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
     const std::string shownPort = nevr_remote_text::Escape(portStr);
     const std::string shown = nevr_remote_text::Escape(endpointStr);
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port parse failed field=port reason=bad_port port_str=%s port_len=%zu"
+        "[NEVR.GAMESERVER] ParseEndpoint port parse failed field=port reason=bad_port family=ipv4 port_str=%s port_len=%zu"
         " endpoint=%s endpoint_len=%zu — lobby session success message NOT sent",
         shownPort.c_str(), portStr.size(), shown.c_str(), endpointStr.size());
     return false;
@@ -286,7 +286,7 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
     if (reason) *reason = "bad_port";
     const std::string shown = nevr_remote_text::Escape(endpointStr);
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port out of range field=port reason=bad_port port=%lu max=%u"
+        "[NEVR.GAMESERVER] ParseEndpoint port out of range field=port reason=bad_port family=ipv4 port=%lu max=%u"
         " endpoint=%s endpoint_len=%zu — lobby session success message NOT sent",
         portVal, UINT16_MAX, shown.c_str(), endpointStr.size());
     return false;
@@ -414,6 +414,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // Validate encoder settings before forwarding to game (N2)
   if (!ValidatePacketEncoderSettings(serverSettings, "server") ||
       !ValidatePacketEncoderSettings(clientSettings, "client")) {
+    if (failureReason) *failureReason = "bad_encoder_settings";
     return {};
   }
 

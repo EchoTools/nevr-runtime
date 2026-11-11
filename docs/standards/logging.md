@@ -348,10 +348,12 @@ retry counts, and stable event markers. A URL is logged whole, through
 are written as %XX so one URL is one line). A network address that parsed
 (an IP, a port, an endpoint of them) is a value and is logged as it is. Text
 from a peer that did not parse, such as an endpoint the decoder refused, is raw
-remote text: it is logged escaped and capped, through `nevr_remote_text::Escape`
-(`src/core/remote_text.h`): at most 64 bytes of it, each byte that is not
-printable ASCII (and each backslash) written as `\xNN`, with its full length
-beside it (`endpoint_len=<n>`, so a cut value says so). Preserve the original
+remote text: it is logged through `nevr_remote_text::Escape`
+(`src/core/remote_text.h`) as a quoted value (Rule 15): at most 64 bytes of it,
+inside double quotes, each non-printable byte, each backslash and each double
+quote written as `\xNN`, so the text cannot end its own field or start another,
+with its full length beside it (`endpoint_len=<n>`, so a cut value says so).
+Preserve the original
 response and request bytes for protocol handling; this rule changes diagnostics
 only.
 
