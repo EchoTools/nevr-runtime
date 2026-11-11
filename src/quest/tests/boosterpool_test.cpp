@@ -15,6 +15,7 @@
 
 #include <sys/mman.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -213,14 +214,16 @@ void AnyOtherNameIsUntouched() {
 void AnArenaCallMakesNoReadAfterTheFirstAndNoScan() {
   Begin();
   QCHECK(InstallWithFakes().installed);
-  nevr_quest::combat::ResetSafeReadCallCount();
-  nevr_quest::combat::level::ResetScanCallCountForTest();
+  std::atomic<std::uint64_t> reads{0};
+  nevr_quest::combat::SetReadCounterForTest(&reads);
+  const std::uint64_t scans0 = nevr_quest::combat::level::ScanCalls();
   CallSlot(kSt, kPlain ^ 1);
-  QCHECK(nevr_quest::combat::SafeReadCallCount() == 1);  // the plain name, once
-  nevr_quest::combat::ResetSafeReadCallCount();
+  QCHECK(reads.load() == 1);  // the plain name, once
+  reads.store(0);
   for (int i = 0; i < 1000; ++i) CallSlot(kSt, 0x1000 + static_cast<std::uint64_t>(i));
-  QCHECK(nevr_quest::combat::SafeReadCallCount() == 0);
-  QCHECK(nevr_quest::combat::level::ScanCallCountForTest() == 0);
+  QCHECK(reads.load() == 0);
+  QCHECK(nevr_quest::combat::level::ScanCalls() == scans0);
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   End();
 }
 

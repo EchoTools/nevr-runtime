@@ -5,20 +5,43 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/aibots.h"
 #include "quest/combat/boosterpool.h"
+#include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/custctx.h"
+#include "quest/combat/decals.h"
+#include "quest/combat/droneguard.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
+#include "quest/combat/fxtrail.h"
+#include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/hudmeter.h"
+#include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/levelname.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
+#include "quest/combat/music.h"
+#include "quest/combat/peerclamp.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
+#include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shieldgamma.h"
+#include "quest/combat/sendguard.h"
+#include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
+#include "quest/combat/voipdrop.h"
+#include "quest/combat/wallfire.h"
+#include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -36,6 +59,18 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+// The scope's refresh is a look at the game's tables four times a second in every level, arena included, so it is registered only when a module that
+// reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
+ModuleResult ScopeNormal() noexcept {
+  const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
+                         g_config.peerclamp.on || g_config.custctx.on;
+  if (!anyReader) return {false, "off_config", /*off=*/true};
+  return scope::InstallNormal();
+}
+ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
+ModuleResult ShieldgammaNormal() noexcept {
+  return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
+}
 ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshstep.on); }
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
@@ -46,6 +81,37 @@ ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.s
 ModuleResult LevelNameNormal() noexcept { return levelname::Install(g_config.levelname.on); }
 ModuleResult BoosterPoolNormal() noexcept { return boosterpool::Install(g_config.levelname.on, levelname::Installed()); }
 
+// The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
+ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
+ModuleResult AibotsNormal() noexcept {
+  aibots::Switches switches;
+  switches.on = g_config.aibots.on;
+  switches.scenario = g_config.aibotsScenario.source == nevr_quest::Source::kFile ? g_config.aibotsScenario.text : nullptr;
+  switches.devBuild = DevBuild();
+  return aibots::Install(switches);
+}
+ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config.weaponArm.on); }
+
+ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
+ModuleResult DecalsNormal() noexcept {
+  decals::Switches switches;
+  switches.on = g_config.decals.on;
+  switches.flipU = g_config.decalsFlipU.on;
+  switches.flipV = g_config.decalsFlipV.on;
+  return decals::Install(switches);
+}
+
+ModuleResult EcNormal() noexcept {
+  ec::Switches switches;
+  switches.on = g_config.ec.on;
+  switches.words = g_config.ecWords.source == nevr_quest::Source::kFile ? g_config.ecWords.text : nullptr;
+  return ec::Install(switches);
+}
+ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
+ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
+ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
+
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
   switches.perm = g_config.gatePerm.on;
@@ -54,11 +120,31 @@ ModuleResult GatesNormal() noexcept {
   switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
   return headset_gates::Install(switches);
 }
+ModuleResult BvhNormal() noexcept {
+  bvh::Switches switches;
+  switches.bvh = g_config.bvh.on;
+  switches.gate = g_config.bvhGate.on;
+  switches.touch = g_config.bvhTouch.on;
+  return bvh::Install(switches);
+}
+ModuleResult WallfireNormal() noexcept {
+  return wallfire::Install(g_config.wallfire.on);
+}
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
+ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
+ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
+ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
+// The crash and timing guards (#2178). fxtrail, peerclamp and custctx read the combat level answer, so their switches are readers of the scope row above.
+ModuleResult FxtrailNormal() noexcept { return fxtrail::Install(g_config.fxtrail.on); }
+ModuleResult VoipdropNormal() noexcept { return voipdrop::Install(g_config.voipdrop.on); }
+ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx.on); }
+ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
+ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
+//   sendguard is installed where the plugin installed it: in the normal phase after the modules that hook the tick, before the two decisions.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
 //   before android_main reads the sizes.
 constexpr std::array kModules{
@@ -67,21 +153,78 @@ constexpr std::array kModules{
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
+    // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
+    // module that reads it.
+    Module{"scope", nullptr, &ScopeNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
     Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    // impactsnd (#2183) sits where the plugin installed it, after meshstep and before the other table steps; it acts only in combat levels (impactsnd.h).
+    // impactsnd_write, decals_flip_u and decals_flip_v are switches of their module's with no step of their own (as bvh_gate and bvh_touch below): each
+    // row exists so the switch is one generated `combat_config_switch` record.
+    Module{"impactsnd", nullptr, &ImpactsndNormal, "combat.impactsnd", &nevr_quest::CombatConfig::impactsnd},
+    Module{"impactsnd_write", nullptr, nullptr, "combat.impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite},
     Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
-    // levelname, then boosterpool (#2181): the plugin installed the pair together, the level name first.
-    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname},
-    Module{"boosterpool", nullptr, &BoosterPoolNormal},
-    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
+    // decals (#2183): last of the plugin's table steps; its Shutdown handler chains above impactsnd's, so impactsnd's row comes first. It acts only in combat
+    // levels (decals.h).
+    Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
+    Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
+    Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
+    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
+    Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
+    Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
+    // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill},
+    Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
+    Module{"powerboost", nullptr, &PowerboostNormal},
+    // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
+    // callbacks, so they come after the tick's row; before the gates, which the plugin installed after all its modules.
+    Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
+    Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
+    Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
+    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
+    // the scope the tick refreshes.
+    // bvh_gate and bvh_touch are switches of bvh's with no step of their own: their rows exist so each switch is one generated `combat_config_switch` record.
+    Module{"bvh", nullptr, &BvhNormal, "combat.bvh", &nevr_quest::CombatConfig::bvh},
+    Module{"bvh_gate", nullptr, nullptr, "combat.bvh_gate", &nevr_quest::CombatConfig::bvhGate},
+    Module{"bvh_touch", nullptr, nullptr, "combat.bvh_touch", &nevr_quest::CombatConfig::bvhTouch},
+    Module{"wallfire", nullptr, &WallfireNormal, "combat.wallfire", &nevr_quest::CombatConfig::wallfire},
+    // sendguard: the script-event guard, installed after the modules that hook the tick and before the decisions (#2179).
+    Module{"sendguard", nullptr, &SendguardNormal, "combat.sendguard", &nevr_quest::CombatConfig::sendguard, &sendguard::NoteEnd},
+    // The crash and timing guards (#2178), in the plugin's order: fxtrail, voipdrop, custctx, droneguard, peerclamp. They hook the game's own slots and
+    // read the scope's answer where they change a value (fxtrail, peerclamp, custctx's pool refusal), so they come after the scope's row; each writes its
+    // counts at the end of the process. droneguard_stage1 is a switch of droneguard's with no step of its own: its row exists so the switch is one
+    // generated `combat_config_switch` record.
+    Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd},
+    Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd},
+    Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd},
+    Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd},
+    Module{"droneguard_stage1", nullptr, nullptr, "combat.droneguard_stage1", &nevr_quest::CombatConfig::droneguardStage1},
+    Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
+    // hudmeter, then shieldgamma (#2186): the plugin installed both after its crash guards and before levelname and sensorwd. Both read the combat level
+    // answer (combat_scope.h), so they come after the scope's row. shieldgamma_gamma and shieldgamma_tube_mirror are switches of shieldgamma's with no step of
+    // their own: each row exists so the switch is one generated `combat_config_switch` record.
+    Module{"hudmeter", nullptr, &HudmeterNormal, "combat.hudmeter", &nevr_quest::CombatConfig::hudmeter},
+    Module{"shieldgamma", nullptr, &ShieldgammaNormal},
+    Module{"shieldgamma_gamma", nullptr, nullptr, "combat.shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma},
+    Module{"shieldgamma_tube_mirror", nullptr, nullptr, "combat.shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror},
+    // levelname, then boosterpool (#2181): the plugin installed the pair together, the level name first, after shieldgamma and before sensorwd. The bot
+    // gate (above) reads the LoadLevelName word levelname takes at each bot call, not at install, so its row may come first.
+    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname},
+    Module{"boosterpool", nullptr, &BoosterPoolNormal},
+    // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
+    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},
+    Module{"music", nullptr, &MusicNormal, "combat.music", &nevr_quest::CombatConfig::music},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -116,49 +259,62 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (!g_inactiveSaid.exchange(true, std::memory_order_acq_rel)) WriteSkipped(phase);
     return outcome;
   }
-  char results[320];
-  results[0] = '\0';
-  std::size_t used = 0;
-  bool truncated = false;
   for (std::size_t i = 0; i < count; ++i) {
     const Module& module = table[i];
     const InstallFn fn = phase == Phase::kEarly ? module.early : module.normal;
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
-    if (result.installed) {
+    const char* outcomeName = "failed";
+    if (result.off) {
+      ++outcome.off;
+      outcomeName = "off";
+    } else if (result.installed) {
       ++outcome.installed;
+      outcomeName = "installed";
     } else {
       ++outcome.failed;
     }
-    const int wrote = std::snprintf(results + used, sizeof(results) - used, "%s%s=%s", used == 0 ? "" : " ", module.name,
-                                    result.status != nullptr ? result.status : "unset");
-    if (wrote < 0 || static_cast<std::size_t>(wrote) >= sizeof(results) - used) {
-      truncated = true;  // the counts are exact; the list is cut where it stopped fitting
-      results[used] = '\0';
-    } else {
-      used += static_cast<std::size_t>(wrote);
-    }
+    // One record per module, as its step returns (N17: each outcome by name). A list of every module on the phase line grows with the table
+    // and stops fitting one 768-byte sentinel line, so the phase line keeps the counts and the consequence, and each outcome is its own record.
+    sentinel::LogFields(result.installed || result.off ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install_module",
+                        {{"phase", PhaseName(phase)}, {"module", module.name}, {"outcome", outcomeName},
+                         {"status", result.status != nullptr ? result.status : "unset"}});
   }
   outcome.ran = true;
   char msg[160];
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s", outcome.installed, outcome.modules,
+    char off[80] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key or with nothing to act on", outcome.off, outcome.off == 1 ? "its" : "their");
+    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
-                       {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"msg", msg}});
   return outcome;
+}
+
+const Module* ShippedModules(std::size_t* count) noexcept {
+  *count = kModules.size();
+  return kModules.data();
 }
 
 Outcome InstallEarly() noexcept { return RunPhase(Phase::kEarly, kModules.data(), kModules.size()); }
 
 Outcome InstallNormal() noexcept { return RunPhase(Phase::kNormal, kModules.data(), kModules.size()); }
+
+void RunEnd(const Module* table, std::size_t count) noexcept {
+  if (!Active() || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  // nothing was installed
+  for (std::size_t i = 0; i < count; ++i) {
+    if (table[i].end != nullptr) table[i].end();
+  }
+}
+
+void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }
 
 void NoteNormalNotStarted(const char* reasonToken) noexcept {
   if (!Active()) return;  // combat does not run here: nothing was owed
@@ -193,6 +349,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
                         {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
   }
+  // The two keys of the EC modules and POWER BOOST that are not a boolean (#2187): the EC client's words (a text, its own `combat_ec_words` line
+  // says what was read) and POWER BOOST's stage (an integer).
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "ec"}, {"key", "combat.ec_words"}, {"on", config.ec.on ? 1 : 0}, {"source", source(config.ecWords.source)}});
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", "powerboost"}, {"key", "combat.powerboost_stage"}, {"stage", config.powerboostStage.value},
+                       {"on", config.powerboostStage.value > 0 ? 1 : 0}, {"source", source(config.powerboostStage.source)}});
   // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
                       {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},

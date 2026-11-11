@@ -12,6 +12,7 @@ namespace {
 std::atomic<int> g_variant{static_cast<int>(build_variant::Variant::kNone)};
 std::atomic<int> g_state{0};  // 0: not resolved; 1: resolved
 std::atomic<int> g_active{0};
+std::atomic<int> g_dev{0};
 std::atomic<int> g_reason{static_cast<int>(Reason::kUnresolved)};
 
 }  // namespace
@@ -67,6 +68,7 @@ void Resolve(bool devBuild, bool forceAsked) noexcept {
   if (!g_state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
   const build_variant::Variant variant = static_cast<build_variant::Variant>(g_variant.load(std::memory_order_acquire));
   const Decision decision = Decide(variant, devBuild, forceAsked);
+  g_dev.store(devBuild ? 1 : 0, std::memory_order_release);
   g_active.store(decision.active ? 1 : 0, std::memory_order_release);
   g_reason.store(static_cast<int>(decision.reason), std::memory_order_release);
   const char* consequence =
@@ -94,11 +96,14 @@ build_variant::Variant RecordedVariant() noexcept {
 
 bool Active() noexcept { return g_active.load(std::memory_order_acquire) != 0; }
 
+bool DevBuild() noexcept { return g_dev.load(std::memory_order_acquire) != 0; }
+
 Reason ActiveReason() noexcept { return static_cast<Reason>(g_reason.load(std::memory_order_acquire)); }
 
 void ResetForTest() noexcept {
   g_variant.store(static_cast<int>(build_variant::Variant::kNone), std::memory_order_release);
   g_active.store(0, std::memory_order_release);
+  g_dev.store(0, std::memory_order_release);
   g_reason.store(static_cast<int>(Reason::kUnresolved), std::memory_order_release);
   g_state.store(0, std::memory_order_release);
 }

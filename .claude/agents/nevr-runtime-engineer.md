@@ -52,8 +52,9 @@ feels risky":
    gate harness and walk it gate by gate: orient → measure/verify-first →
    decision gates on the invariants → spec-before-code (2 review passes) →
    the quick check on the PR's tip → file findings as GitHub issues + commit as
-   AGENTS.md "Commit and verification conventions" says (author Andrew Bates, unsigned,
-   one `Co-Authored-By: <agent name> <agents@sprock.io>` trailer). The skill is the
+   AGENTS.md "Commit and verification conventions" says (author Spritz Metis Sprock, unsigned,
+   a `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a `Co-Authored-By: Andrew Bates
+   <a@sprock.io>` trailer, and a credit trailer for anyone whose work is integrated). The skill is the
    procedure; this primer is the repo knowledge it operates on. Passing a gate
    without its verification action is skipping the gate.
 
@@ -114,8 +115,8 @@ returns nothing). A defect you find and do not fix gets a GitHub issue in the sa
 written as a falsifiable claim: Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md
 "What a PR carries"). The `N<number>` rules are tags in code comments and in the
 `just verify` recipe, indexed in AGENTS.md "The N-rules index". The highest tag in
-`src`, `tools` and `justfile` on origin/main is **N146**
-(`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`). Read the
+`src`, `tools` and `justfile` on origin/main is **N151**
+(`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`; `N802` in that list is a Python lint code in two `# noqa` comments, not a rule). Read the
 rule's comment at the site before changing a file the index guards. Anything asserting
 a ledger of N-entries, "N119 is OPEN", or that the tags stop near N92 or N120 is a
 stale snapshot.
@@ -181,7 +182,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 ## Modules vs plugins — the distinction that causes hangs
 
-- **MODULES are statically linked into BugSplat64.dll.** `src/runtime/lifecycle/boot.cpp`
+- **MODULES are statically linked into nevr-runtime.dll.** `src/runtime/lifecycle/boot.cpp`
   declares `platform_compat_Init` and `token_auth_Init` (and the `_ApiVersion` /
   `_Shutdown` entry points), calls them in that order (`platform_compat` → `token_auth`;
   the load order is load-bearing), and registers each with `RegisterStaticModule`
@@ -202,7 +203,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   continues. A plugin that re-hooks an address the runtime already owns is also
   `ServerFatal` (N84).
 - **JSONL structured logging is BUILT IN — NOT a plugin.** It lives in
-  `src/runtime/log/builtin_filter.cpp`, inside `BugSplat64.dll`. There is
+  `src/runtime/log/builtin_filter.cpp`, inside `nevr-runtime.dll`. There is
   nothing to deploy and no plugins directory is required for it.
   **Do NOT "restore" `log_filter.dll` to fix a logging problem — that plugin
   CAUSES the outage it looks like it would fix.** The loader refuses it by name
@@ -293,7 +294,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   (`src/runtime/lifecycle/config.cpp`) for stock-engine keys only; it is optional, and
   when none is found the runtime supplies a built-in game config. Absence logs, it is
   not fatal.
-- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 31 entries), e.g.
+- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 36 entries), e.g.
   `nevr_socket_uri` → `services.socket_uri`, `nevr_http_uri` → `auth.http_uri`,
   `matchingservice_host` → `services.matchmaking`, `nevr_serverdb_uri` →
   `services.serverdb_uri`, `external_ip` → `network.external_ip`, `upnp` →

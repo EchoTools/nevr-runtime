@@ -58,13 +58,15 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
    facts come from the identity step (ADR 0031 decision 4), not from a module's own reads.
 4. **Switches are `config.yaml` keys** under a `combat:` section, one per module and one per option, each defaulting to the shipped
    behaviour, parsed by `quest_config`, logged once with value and source (`combat_config`). A module's switch file stops being read in
-   the change that moves the module, and a former switch file found is a Warning. Files that are player state (the new-profile gun-hand
+   the change that moves the module, and a former switch file found is a Warning. Files that are player state (the gun-hand default
    markers under `files/q15t`) stay where they are.
 5. **The folded modules run in the q15t and combat variants only.** The packaging step writes the APK's variant word (ADR 0040 rule 1);
    the sentinel reads it before its first line, writes it in that line beside the build kind (`nevr_build::kIsDev`, unchanged), and
    `combat::Active()` is true for `q15t` and `combat`. Modules folded from q15t install only when it is true; a development build may
    force it with `combat.force`, a release build may not. Combat-area code that ships to every APK (`match_tags`, `equip_refire`) is outside this gate
    and says so in its header. The combat code is compiled into every sentinel, so the release loader asset serves every variant.
+   The `arena` variant (the store APK with the release's loader and no plugin, listed in the manifest beside the combat APK, #2298) is
+   no combat variant: `combat::Active()` is false for it, and a release build cannot force it.
 6. **Install moments are the plugin's.** Modules that must precede `android_main` install in a constructor step after Attach and before
    the clock hook; the rest install in a post-load action of their own, right after the normal plugin pass when there is one, at the
    first post-load call.

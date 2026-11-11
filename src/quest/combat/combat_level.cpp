@@ -9,7 +9,6 @@ namespace nevr_quest::combat::level {
 
 namespace {
 
-std::atomic<std::uint64_t> g_scanCalls{0};  // calls of Scan (ScanCallCountForTest)
 constexpr std::uint64_t kCombatLevels[4] = {0x43e2da7914642604ULL, 0x42670f2bed45703cULL, 0xdf5ca7b7dfa383d4ULL, 0x43e2da7a0c623a19ULL};
 constexpr std::uint64_t kCombatLobby = 0xcb9977f7fc2b4526ULL;  // mpl_lobby_b_combat
 constexpr std::uint64_t kEchoArenaLevels[4] = {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL, 0x3f20b99c97955721ULL};
@@ -57,6 +56,7 @@ const char* LevelName(std::uint64_t level) noexcept {
 namespace {
 
 std::atomic<void (*)()> g_seam{nullptr};
+std::atomic<std::uint64_t> g_scans{0};
 
 void Between() noexcept {
   if (const auto seam = g_seam.load(std::memory_order_acquire)) seam();
@@ -122,13 +122,12 @@ void ScanLoaded(Loaded& out, std::uintptr_t game) noexcept {
 
 }  // namespace
 
+std::uint64_t ScanCalls() noexcept { return g_scans.load(std::memory_order_relaxed); }
+
 void SetScanSeamForTest(void (*seam)()) noexcept { g_seam.store(seam, std::memory_order_release); }
 
-std::uint64_t ScanCallCountForTest() noexcept { return g_scanCalls.load(std::memory_order_relaxed); }
-void ResetScanCallCountForTest() noexcept { g_scanCalls.store(0, std::memory_order_relaxed); }
-
 Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
-  g_scanCalls.fetch_add(1, std::memory_order_relaxed);
+  g_scans.fetch_add(1, std::memory_order_relaxed);
   Loaded out;
   if (inFlight) ScanInFlight(out, game);
   Between();

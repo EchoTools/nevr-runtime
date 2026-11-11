@@ -1,5 +1,7 @@
 // Walks CR15Game's two gamespace tables (build 4987566) for component systems. Game thread only; every read is a
-// SafeRead, so a stale or half-built table is a skipped entry, never a fault. (q15t the source build's gunconnect FindCs.)
+// SafeRead, so a stale or half-built table is a skipped entry, never a fault. (The reference build's gunconnect FindCs.)
+//
+// KNOWN-WRONG #2168: unused: no module of the plugin reads this (the last readers moved into the runtime). It is removed when the fold ends.
 #pragma once
 
 #include <cstdint>

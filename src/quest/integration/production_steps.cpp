@@ -274,6 +274,7 @@ nevr_quest_login::BuildInfo ThisBuild() {
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;
+  build.plugin_report = [] { return nevr_quest::plugin::LoginReport(); };
   return build;
 }
 
@@ -417,6 +418,7 @@ void OnGameProcessEnd() noexcept {
   InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   nevr_quest::integration::NoteCombatNotStarted(nevr_quest::plugin::reason::kGameExitedFirst);  // writes nothing unless combat runs here and its step never ran
+  nevr_quest::integration::NoteCombatProcessEnd();  // the combat modules' final counts; nothing unless combat runs here and its step ran
   ReportAndroidMainReturned();
 }
 

@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -280,15 +281,17 @@ void AnUnreadableGameNeverFaults() {
 void AnArenaLevelLoadMakesNoReadAndNoScan() {
   Begin();
   QCHECK(InstallWithFakes().installed);
-  nevr_quest::combat::ResetSafeReadCallCount();
-  nevr_quest::combat::level::ResetScanCallCountForTest();
+  std::atomic<std::uint64_t> reads{0};
+  nevr_quest::combat::SetReadCounterForTest(&reads);
+  const std::uint64_t scans0 = nevr_quest::combat::level::ScanCalls();
   for (const std::uint64_t arena : {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL, 0x3f20b99c97955721ULL}) {  // mpl_arena_a, _a_lowspec, _b, mpl_tutorial_a
     for (std::size_t slot = 0; slot < 4; ++slot) QCHECK(CallSlot(slot, g_game, arena) == (arena ^ 0xa5a5ULL));  // the original's answer, untouched
   }
-  QCHECK(nevr_quest::combat::SafeReadCallCount() == 0);
-  QCHECK(nevr_quest::combat::level::ScanCallCountForTest() == 0);
+  QCHECK(reads.load() == 0);
+  QCHECK(nevr_quest::combat::level::ScanCalls() == scans0);
   CallSlot(0, g_game, kGlobalMp);  // the control: global_mp does read (the flags word, once), so the counter can move
-  QCHECK(nevr_quest::combat::SafeReadCallCount() == 1);
+  QCHECK(reads.load() == 1);
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   End();
 }
 

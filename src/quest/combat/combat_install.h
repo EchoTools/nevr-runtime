@@ -12,16 +12,22 @@
  * combat's, and a step that is reached anyway writes one `skipped` line and runs no module function. The sequence does not reach them in
  * that case (it skips `install_combat_early` and asks for no post-load action), so the line is the second line of defence, not the first.
  *
- * The table. Each phase runs one registration table, in the table's order: `Modules()` in combat_install.cpp. A module registers one
+ * The table. Each phase runs one registration table, in the table's order: `kModules` in combat_install.cpp (`ShippedModules()` hands it to a test). A module registers one
  * function per phase it has a step in, or null for none, at the position the q15t plugin installed it (plugin.cpp's order: decals after
  * impactsnd, wallfire after bvh, the net-tick modules after ec, and so on); the order is explicit, never the order of a directory or a
  * link. A function is `noexcept`, returns whether the module installed and a fixed status token, and writes the module's own lines
  * itself (`combat_<module>_*`).
  *
- * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
- *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":1,
- *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
- * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
+ * The lines (sentinel log), N17: each module's outcome by name, and one aggregate. Each module with a step in the phase writes one record as
+ * its function returns, in the table's order, Info, or Warning when it failed:
+ *   {"event":"combat_install_module","phase":"early|normal","module":"<name>","outcome":"installed|failed|off","status":"<token>"}
+ * and then the phase writes its line, one per phase per process:
+ *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe|arena","active":1,
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"msg":"..."}
+ * The outcomes are records of their own, not a list on the phase line: one sentinel line is 768 bytes, and a list of every module outgrows it.
+ * `modules` = `installed` + `failed` + `off`: a module switched off by its key, or with nothing to act on (decals without a decals.bin), is counted
+ * in `off` and nowhere else.
+ * `active` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
  * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
@@ -49,13 +55,19 @@ enum class Phase { kEarly, kNormal };
 const char* PhaseName(Phase phase) noexcept;  // "early", "normal"
 
 // What one module's install function answers: whether it installed, and a fixed token for the line (never a value).
+// `off` is a module that is switched off by its `combat:` key, or has nothing to act on (decals without a decals.bin): nothing was installed and
+// nothing is wrong, so it is neither installed nor failed (`installed` is false) and the phase line counts it apart.
 struct ModuleResult {
   bool installed;
   const char* status;
+  bool off = false;
 };
 using InstallFn = ModuleResult (*)() noexcept;
+// A module's step at the end of the process (the game's android_main returned): the counts it kept, written once.
+using EndFn = void (*)() noexcept;
 
-// One row of the registration table: the module's name (its `combat_<module>_*` events) and its step in each phase, null for none.
+// One row of the registration table: the module's name (its `combat_<module>_*` events), its step in each phase and its step at the end of
+// the process, null for none.
 // A module whose switch is reported as its own `combat_config_switch` record names its `config.yaml` key and the member that holds it.
 struct Module {
   const char* name;
@@ -63,6 +75,7 @@ struct Module {
   InstallFn normal;
   const char* switchKey = nullptr;                                          // e.g. "combat.meshstep"; null: reported on the `combat_config` line
   nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
+  EndFn end = nullptr;
 };
 
 // What a phase did. `ran` is false when it did not run (combat is off in this process, or the phase already ran or was ended).
@@ -71,7 +84,11 @@ struct Outcome {
   std::size_t modules = 0;    // the modules that have a step in this phase
   std::size_t installed = 0;
   std::size_t failed = 0;
+  std::size_t off = 0;        // switched off by their `combat:` key, or with nothing to act on: not installed, not failed
 };
+
+// The shipped registration table (the host test reads it to pin each module's row).
+const Module* ShippedModules(std::size_t* count) noexcept;
 
 // The two steps, over the shipped table. Each runs at most once per process.
 Outcome InstallEarly() noexcept;
@@ -85,6 +102,12 @@ namespace reason {
 inline constexpr const char* kPostLoadHookUnavailable = "post_load_hook_unavailable";  // the hook that makes the moment cannot be live
 inline constexpr const char* kGameExitedFirst = "game_exited_first";                    // the game's android_main returned before it
 }  // namespace reason
+
+// The end of the process: each module with an end step writes its own line, once. Writes nothing when combat is off in this process
+// or when the normal step never ran (no module was installed).
+void NoteProcessEnd() noexcept;
+// The same over `table[0..count)` (the host test drives it with fakes).
+void RunEnd(const Module* table, std::size_t count) noexcept;
 
 // Ends the normal step as `not_started` with `reason`: one record, and the step never runs afterwards. Writes nothing when combat is off
 // in this process, when the normal step already ran, or when it was already ended.
