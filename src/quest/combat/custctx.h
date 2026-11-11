@@ -13,8 +13,9 @@
  *  R32 DestroyContext: the guard runs the game's destroy only for a live context with no load in flight and no destroy already running. Every other
  *      destroy is dropped (answer 0): the destroy of a context being loaded, being destroyed on another thread, or at an address no live context holds
  *      (a stale second destroy). A null context goes to the game's function, which returns at once. More than kMax (256) contexts at once: the
- *      overflow is untracked, so its load goes to the game's function but its destroy is dropped as "no context holds this address", one
- *      Warning once.
+ *      overflow context's load goes to the game's function but is not tracked (`untracked` in the stats line), so its destroy is dropped and the
+ *      game's destroy is not run for it; that destroy's `why` is "untracked: its load found the table full (256 contexts)" (the last 64 overflow contexts are
+ *      remembered; a destroy of any other unknown address, or a second destroy of the same one, is "not live: no context holds this address"). One Warning, once.
  *  R33 CTableXT<SR15NetCustomDrawData>::Grow: the guard does Grow's resize itself (CMemBlock::Resize, called by its exported address, keep 1) and checks
  *      it. A table that would be written through NULL (the resize failed, an add of 0, or room left but the data NULL) is made a consistent empty one and
  *      Grow is given a spare element that is in no table: that player's cosmetics are not drawn. The spare is a fresh 64-aligned element, or, when that
@@ -50,7 +51,8 @@
  *             "pool_refusal":"combat_map_or_lobby|off_scope_not_live","layout_margin":64,"consequence":".."}  Info for installed and off, Error for refused
  *             (+ `which` and the hook's status for slot_refused, `rollback` the status of the first removal; pinned_word_mismatch: "pin" (the word's name),
  *             "vaddr", "found", "expected")
- *   loads    {"event":"combat_custctx_loads","loads":<n>,"layouts_used":<n>,"layouts_capacity":<n>}  Info at every 32nd load, at most 32 lines
+ *   loads    {"event":"combat_custctx_loads","loads":<n>,"pool_read":1,"layouts_used":<n>,"layouts_capacity":<n>}  Info at every 32nd load, at most 32 lines;
+ *            when the pool was not read for that load: {"loads":<n>,"pool_read":0,"msg":".."} with no layouts fields
  *   refused  {"event":"combat_custctx_load_refused","layouts_used":..,"layouts_capacity":..,"refused":<n>,"consequence":".."}  Info for the first 16 refusals
  *            and every 50th
  *   dropped  {"event":"combat_custctx_dropped","ctx":"0x..","why":"..","dropped":<n>,"consequence":".."}  Info, the first 16; then
@@ -58,7 +60,9 @@
  *   draw     {"event":"combat_custctx_draw_failure","entries":..,"bytes":..,"in_use":..,"why":"..","failure":<n>,"consequence":".."}  Warning, the first 16;
  *            then {"event":"combat_custctx_draw_failures_total","failures":<n>} Warning at every 50th, at most 16
  *   full     {"event":"combat_custctx_full","max":256,"consequence":".."}  Warning, once
- *   stats    {"event":"combat_custctx_stats","loads":..,"loads_refused":..,"destroys_dropped":..,"grow_failures":..,"final":0|1,"consequence":".."}
+ *   cap      {"event":"combat_custctx_log_cap","lines":"loads|load_refused|dropped|drops_total|draw_failure|draw_failures_total","cap":<n>,"msg":".."}  Warning, once per
+ *            kind, written by the first line over its cap (line_budget.h); the counts go on in the stats line
+ *   stats    {"event":"combat_custctx_stats","loads":..,"loads_refused":..,"destroys_dropped":..,"grow_failures":..,"untracked":..,"final":0|1,"consequence":".."}
  *            Debug every kStatsEvery loads (a power of two), Info once at the end of the process when the guards are installed
  *   legacy   {"event":"combat_custctx_legacy_switch","key":"combat.custctx","file":"custctx.off","consequence":".."}  Warning
  *

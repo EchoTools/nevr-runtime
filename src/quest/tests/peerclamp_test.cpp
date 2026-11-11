@@ -424,6 +424,12 @@ void TheClampLinesAreCappedAndTotalsAreWrittenEvery100th() {
     hook(g_bd);
   }
   QCHECK(Lines("combat_peerclamp_clamped_total").size() == 8U && pc::CurrentStats().clamped == 1000 && Lines("combat_peerclamp_clamped").size() == 16U);
+  const std::vector<Line> caps = Lines("combat_peerclamp_log_cap");
+  QCHECK(caps.size() == 2U);  // the 17th clamp said the first-clamp lines stopped, the 9th total said the totals stopped, each once
+  if (caps.size() == 2U) {
+    QCHECK(caps[0].level == sentinel::LogLevel::kWarn && Has(caps[0].text, "\"lines\":\"clamped\",\"cap\":16") && Has(caps[0].text, "combat_peerclamp_stats"));
+    QCHECK(Has(caps[1].text, "\"lines\":\"clamped_total\",\"cap\":8") && Has(caps[1].text, "no further"));
+  }
   End();
 }
 

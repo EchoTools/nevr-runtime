@@ -33,8 +33,6 @@ runm vd_not_counted     $F "s/g_dropped.fetch_add(1, std::memory_order_relaxed) 
 runm vd_lines_cap       $H "s/kDropLines = 16;/kDropLines = 17;/"
 runm vd_total_every     $H "s/kTotalEvery = 50;/kTotalEvery = 49;/"
 runm vd_total_cap       $H "s/kTotalLines = 16;/kTotalLines = 17;/"
-runm vd_no_total        $F "s/  } else if (n % kTotalEvery == 0 \&\& /  } else if (false \&\& /"
-runm vd_no_line_cap     $F "s/  if (n <= kDropLines) {/  if (true) {/"
 runm vd_dropped_level   $F "s/sentinel::LogLevel::kInfo, \"combat_voipdrop_dropped\"/sentinel::LogLevel::kDebug, \"combat_voipdrop_dropped\"/"
 runm vd_total_level     $F "s/sentinel::LogLevel::kInfo, \"combat_voipdrop_dropped_total\"/sentinel::LogLevel::kDebug, \"combat_voipdrop_dropped_total\"/"
 runm vd_page_bytes_zero $F "s/{{\"n\", n}, {\"page_bytes\", pageBytes},/{{\"n\", n}, {\"page_bytes\", pageBytes + 1},/"
@@ -94,3 +92,14 @@ runm vd_row_key            $CI "s/\"combat.voipdrop\", \&nevr_quest/\"combat.voi
 runm vd_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.voipdrop.on;/" quest-host-combat combat_install_test
 # (kTable, kFreeHead, kPageBytes, kPageBlock and kVtAlloc are tied to the pinned words by static_assert in voipdrop_targets.h: a changed one fails the build)
 runm vd_vtfree_off        $T "s/kVtFree = 0x38;/kVtFree = 0x30;/"
+# every cap says when it stops (line_budget.h is judged here and by the other lists through the notice each test asserts)
+LB=src/quest/combat/line_budget.h
+runm vd_drop_cap_ignored    $F "s/  if (LineBudget(\&g_dropLines, kDropLines,/  if (true || LineBudget(\&g_dropLines, kDropLines,/"
+runm lb_notice_off_by_one   $LB "s/  if (n == cap + 1) {/  if (n == cap) {/"
+runm lb_notice_every_time   $LB "s/  if (n == cap + 1) {/  if (n > cap) {/"
+runm lb_budget_off_by_one   $LB "s/  return n <= cap;/  return n < cap;/"
+runm lb_budget_always       $LB "s/  return n <= cap;/  return true;/"
+runm lb_notice_quiet        $LB "s/sentinel::LogLevel::kWarn, event,/sentinel::LogLevel::kInfo, event,/"
+runm lb_cap_field           $LB "s/{\"cap\", cap}/{\"cap\", cap + 1}/"
+
+runm vd_total_cap_ignored   $F "s/             LineBudget(\&g_totals, kTotalLines,/             LineBudget(\&g_totals, 1000000,/"

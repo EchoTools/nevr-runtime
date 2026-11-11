@@ -11,6 +11,7 @@
 
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -31,7 +32,7 @@ Pins g_pins = kPins;
 Fns g_fns{};
 std::atomic<unsigned> g_drops{0}, g_dropLines{0}, g_dropTotals{0};
 std::atomic<unsigned> g_fails{0}, g_failLines{0}, g_failTotals{0}, g_spareNext{0};
-std::atomic<unsigned> g_loads{0}, g_loadsLines{0}, g_refused{0};
+std::atomic<unsigned> g_loads{0}, g_loadsLines{0}, g_refused{0}, g_refusedLines{0}, g_refusedTotals{0}, g_untracked{0};
 std::atomic<bool> g_fullLogged{false};
 void* g_spares[kSpares];  // set at install, before the first slot changes: elements for when the memalign fails too
 std::atomic<int (*)(void**, std::size_t, std::size_t)> g_memalign{nullptr};
@@ -56,6 +57,10 @@ struct Entry {
   std::uint8_t live, dying;
 };
 Entry g_tab[kMax];  // under g_mu; ctx == nullptr = free
+// The contexts whose load found the table full: their destroy is dropped with a why of its own (an address in no table is otherwise a stale second destroy).
+// Under g_mu. More than kOverflow of them at once are counted (`untracked`) and their destroys give the stale why.
+constexpr unsigned kOverflow = 64;
+const void* g_over[kOverflow];
 
 constexpr const char* kInstalledConsequence =
     "in a combat map or lobby loads are refused on a nearly full layout pool, a destroy runs only for a live context with no load in flight, and a draw table that "
@@ -90,32 +95,55 @@ void Release(Entry* e) noexcept {
   if (e != nullptr && e->live == 0 && e->dying == 0) e->ctx = nullptr;
 }
 
+// The overflow list, under g_mu. Remember: this context's load found the table full. Forget: true when it was in the list (and is not any more).
+void RememberOverflow(const void* ctx) noexcept {
+  const void** freeSlot = nullptr;
+  for (const void*& o : g_over) {
+    if (o == ctx) return;
+    if (o == nullptr && freeSlot == nullptr) freeSlot = &o;
+  }
+  if (freeSlot != nullptr) *freeSlot = ctx;
+}
+bool ForgetOverflow(const void* ctx) noexcept {
+  for (const void*& o : g_over) {
+    if (o == ctx) {
+      o = nullptr;
+      return true;
+    }
+  }
+  return false;
+}
+
 void LogStats(bool final) noexcept {
   sentinel::LogFields(final ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, "combat_custctx_stats",
                       {{"loads", g_loads.load(std::memory_order_relaxed)},
                        {"loads_refused", g_refused.load(std::memory_order_relaxed)},
                        {"destroys_dropped", g_drops.load(std::memory_order_relaxed)},
                        {"grow_failures", g_fails.load(std::memory_order_relaxed)},
+                       {"untracked", g_untracked.load(std::memory_order_relaxed)},
                        {"final", final ? 1 : 0},
                        {"consequence", "loads is every LoadMeshData call, loads_refused those refused for a nearly full layout pool, destroys_dropped the "
-                                       "destroys not passed on and grow_failures the draw tables made empty; their rates over the run's time are the "
-                                       "call rates of the three guarded functions"}});
+                                       "destroys not passed on, grow_failures the draw tables made empty and untracked the loads that found the 256-context "
+                                       "table full (their destroys are dropped); their rates over the run's time are the call rates of the three guarded "
+                                       "functions"}});
 }
 
 void Full() noexcept {
   if (!g_fullLogged.exchange(true, std::memory_order_relaxed)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_custctx_full",
-                        {{"max", kMax}, {"consequence", "more contexts than the table tracks: the overflow gets the game's behaviour, logged once"}});
+                        {{"max", kMax}, {"consequence", "more contexts than the table tracks (256): an overflow context's load goes to the game's function but is not tracked, so its destroy is dropped "
+                                      "and the game's destroy is not run for it; counted as `untracked` in combat_custctx_stats, logged once"}});
   }
 }
 
 // The layout pool's free slots (a racy hint: the pool only changes on the render and load threads). Any unreadable word: not low.
-bool RtLow(std::uint64_t* used, std::uint32_t* cap) noexcept {
+bool RtLow(std::uint64_t* used, std::uint32_t* cap, bool* read) noexcept {
   bool ok = true;
   const auto pool = SafeRead<std::uintptr_t>(g_base + g_pins.rtPool, &ok);  // a null or unreadable pool pointer fails the reads below too
   const auto c = SafeRead<std::uint32_t>(pool + kPoolCapacityOffset, &ok);
   const auto fr = SafeRead<std::uint64_t>(pool + kPoolFreeOffset, &ok);
   if (!ok) return false;
+  *read = true;
   *cap = c;
   *used = c - fr;
   return fr < kLayoutMargin;
@@ -123,9 +151,10 @@ bool RtLow(std::uint64_t* used, std::uint32_t* cap) noexcept {
 
 // Whether the pool is low, in a combat map or the combat lobby only: the answer is believed only while its look is fresh (combat_scope.h `LookIsFresh`: a tick
 // that stopped makes a true answer false after kStaleAfterMs). Not inlined into the handler: its reads would give the handler's arena path a frame.
-[[gnu::noinline]] bool PoolIsLowInScope(std::uint64_t* used, std::uint32_t* cap) noexcept {
+// `*read` is set when the pool's words were read (the loads line says so; `used` and `cap` mean something only then).
+[[gnu::noinline]] bool PoolIsLowInScope(std::uint64_t* used, std::uint32_t* cap, bool* read) noexcept {
   if (!scope::LookIsFresh()) return false;
-  return RtLow(used, cap);
+  return RtLow(used, cap, read);
 }
 
 std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* model) noexcept {
@@ -136,25 +165,40 @@ std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* m
     e->dying = 0;
     ++e->inflight;
     tracked = true;
+    ForgetOverflow(ctx);
+  } else {
+    RememberOverflow(ctx);
   }
   pthread_mutex_unlock(&g_mu);
-  if (!tracked) Full();
+  if (!tracked) {
+    g_untracked.fetch_add(1, std::memory_order_relaxed);
+    Full();
+  }
   std::uint64_t used = 0;
   std::uint32_t cap = 0;
+  bool poolRead = false;
   // The pool refusal acts only while a combat map or the combat lobby is loaded; in an arena match the load reaches the game's function as it is,
   // and no pool word is read. (The trap fires only when no slot is free; the margin below is not read from the game.)
-  const bool low = scope::SeenCombatOrLobby() && PoolIsLowInScope(&used, &cap);
+  const bool low = scope::SeenCombatOrLobby() && PoolIsLowInScope(&used, &cap, &poolRead);
   const unsigned loads = g_loads.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (loads % kLoadsEvery == 0 && g_loadsLines.fetch_add(1, std::memory_order_relaxed) < kLoadsLines) {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_loads",
-                        {{"loads", loads}, {"layouts_used", used}, {"layouts_capacity", cap}});
+  if (loads % kLoadsEvery == 0 &&
+      LineBudget(&g_loadsLines, kLoadsLines, "custctx", "loads", "no further loads lines are written; the stats line still counts every load")) {
+    if (poolRead) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_loads",
+                          {{"loads", loads}, {"pool_read", 1}, {"layouts_used", used}, {"layouts_capacity", cap}});
+    } else {  // the pool was not read for this load (not a combat level, or a stale answer): there is no usage to report
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_loads",
+                          {{"loads", loads}, {"pool_read", 0},
+                           {"msg", "the layout pool was not read for this load (no combat level is loaded, or its answer is stale), so no usage is reported"}});
+    }
   }
   // A full pool is a deliberate trap (WriteLog + brk) in CGRenderTargetState::Initialize on this load's new mesh entries: fail the load
   // instead, as LoadMeshData does when a resource is missing (CreateContext then destroys the empty context, answers NULL).
   std::uint64_t result = 1;
   if (low) {
     const unsigned n = g_refused.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= kDropLines || n % kTotalEvery == 0) {
+    if (LineBudget(&g_refusedLines, kDropLines, "custctx", "load_refused", "further refusals are written every 50th, up to 16 of those; the stats line counts every one") ||
+        (n % kTotalEvery == 0 && LineBudget(&g_refusedTotals, kTotalLines, "custctx", "load_refused_every_50th", "no further refusal lines are written; the stats line still counts every one"))) {
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_load_refused",
                           {{"layouts_used", used},
                            {"layouts_capacity", cap},
@@ -176,14 +220,15 @@ std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* m
 
 void Drop(const void* ctx, const char* why) noexcept {
   const unsigned n = g_drops.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (g_dropLines.fetch_add(1, std::memory_order_relaxed) < kDropLines) {
+  if (LineBudget(&g_dropLines, kDropLines, "custctx", "dropped", "further drops are summarised every 50th, up to 16 of those; the stats line counts every one")) {
     char c[19];
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_dropped",
                         {{"ctx", sentinel::HexString(c, reinterpret_cast<std::uintptr_t>(ctx))},
                          {"why", why},
                          {"dropped", n},
                          {"consequence", "the game's destroy was not run for this context"}});
-  } else if (n % kTotalEvery == 0 && g_dropTotals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_dropTotals, kTotalLines, "custctx", "drops_total", "no further drop totals are written; the stats line still counts every drop")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_drops_total", {{"dropped", n}});
   }
 }
@@ -195,7 +240,7 @@ std::uint64_t DestroyHandler(DestroyThunk::Fn original, void* self, void* ctx) n
   pthread_mutex_lock(&g_mu);
   Entry* e = Find(ctx);
   if (e == nullptr) {
-    why = "not live: no context holds this address";
+    why = ForgetOverflow(ctx) ? "untracked: its load found the table full (256 contexts)" : "not live: no context holds this address";
   } else if (e->inflight != 0) {
     why = "its LoadMeshData is running";
   } else if (e->dying != 0) {
@@ -231,7 +276,7 @@ void* Spare(GrowThunk::Fn original, DrawTable* t, const DrawTable& was, std::uin
   t->capacity = 0;
   t->count = 0;
   const unsigned n = g_fails.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (g_failLines.fetch_add(1, std::memory_order_relaxed) < kDropLines) {
+  if (LineBudget(&g_failLines, kDropLines, "custctx", "draw_failure", "further draw failures are summarised every 50th, up to 16 of those; the stats line counts every one")) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_custctx_draw_failure",
                         {{"entries", add},
                          {"bytes", wanted},
@@ -239,7 +284,8 @@ void* Spare(GrowThunk::Fn original, DrawTable* t, const DrawTable& was, std::uin
                          {"why", why},
                          {"failure", n},
                          {"consequence", "no memory for cosmetic draw entries: this player's cosmetics are skipped"}});
-  } else if (n % kTotalEvery == 0 && g_failTotals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_failTotals, kTotalLines, "custctx", "draw_failures_total", "no further draw failure totals are written; the stats line still counts every failure")) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_custctx_draw_failures_total", {{"failures", n}});
   }
   // Grow itself builds the element in a one-slot table of ours; the slot is never freed (a resource load may still point into it), the table
@@ -422,7 +468,8 @@ void ResetForTest() noexcept {
   pthread_mutex_unlock(&g_mu);
   g_drops = g_dropLines = g_dropTotals = 0;
   g_fails = g_failLines = g_failTotals = g_spareNext = 0;
-  g_loads = g_loadsLines = g_refused = 0;
+  g_loads = g_loadsLines = g_refused = g_refusedLines = g_refusedTotals = g_untracked = 0;
+  std::memset(g_over, 0, sizeof(g_over));
   g_fullLogged = false;
   FreeSpares();
   g_fns = Fns{};

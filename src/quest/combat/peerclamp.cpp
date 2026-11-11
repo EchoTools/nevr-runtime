@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "quest/combat/combat_scope.h"
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -24,7 +25,7 @@ std::atomic<std::uint64_t> g_inScope{0};
 std::atomic<std::uint64_t> g_walked{0};
 std::atomic<std::uint64_t> g_clamped{0};
 std::atomic<std::uint64_t> g_capped{0};
-std::atomic<unsigned> g_totals{0};
+std::atomic<unsigned> g_totals{0}, g_clampLines{0};
 std::atomic<bool> g_capLogged{false};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 
@@ -47,7 +48,7 @@ void LogStats(bool final) noexcept {
 
 // Written before the game's function is called, from a frame that holds no game frame above it.
 void LogClamp(std::uint64_t n, std::uint32_t idx, std::uint64_t stamp, std::uint64_t now, std::uint64_t sent) noexcept {
-  if (n <= kClampLines) {
+  if (LineBudget(&g_clampLines, kClampLines, "peerclamp", "clamped", "further clamps are summarised every 100th, up to 8 of those; combat_peerclamp_stats counts every one")) {
     char stampText[24];
     char nowText[24];
     char diffText[24];
@@ -59,7 +60,8 @@ void LogClamp(std::uint64_t n, std::uint32_t idx, std::uint64_t stamp, std::uint
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_peerclamp_clamped",
                         {{"n", n}, {"idx", idx}, {"stamp", stampText}, {"now", nowText}, {"diff", diffText}, {"sent", sentText},
                          {"consequence", "a peer's last-received stamp was above now and is now now, so the timeout loop does not read it as 2^64 us of silence"}});
-  } else if (n % kTotalEvery == 0 && g_totals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_totals, kTotalLines, "peerclamp", "clamped_total", "no further clamp totals are written; combat_peerclamp_stats still counts every clamp")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_peerclamp_clamped_total", {{"clamps", n}});
   }
 }
@@ -210,6 +212,7 @@ void ResetForTest() noexcept {
   g_clamped.store(0);
   g_capped.store(0);
   g_totals.store(0);
+  g_clampLines.store(0);
   g_capLogged.store(false);
   g_lookup.store(nullptr);
 }

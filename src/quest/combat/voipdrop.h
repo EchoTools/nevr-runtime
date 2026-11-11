@@ -14,8 +14,8 @@
  * Arena (same APK). It acts in EVERY level, on purpose: it is a guard against a crash in voice code that arena and combat share, and a level answer (combat_scope.h) would leave
  * the crash in place (and could lag a level change); it asks nothing of it and is not a reader of the scope row. It changes what the game does only where the game would otherwise fault: that packet is dropped. Every
  * other packet reaches the stock function with the same arguments, so an arena match with free memory sees no change. Cost in arena: per voice packet received,
- * one plain 4-byte load of the free head (about 3 ns added on the host; the game dereferences the receiver on every path that reaches the table, so the load is as safe as
- * the stock call) and two relaxed atomic increments in the common case (plus the thunk's own counter); the allocator probe (a never-faulting read of the page size,
+ * one plain 4-byte load of the free head (about 3 ns added on the host; the game dereferences the receiver on every path that reaches the table but can return before that (0x22c3260), so on that path
+ * this is a load the stock function would not make; `self` being a valid receiver is inferred, not shown, see voipdrop.cpp) and two relaxed atomic increments in the common case (plus the thunk's own counter); the allocator probe (a never-faulting read of the page size,
  * three game calls and the restore) only when the head is -1. When the head stays -1 (the live speakers fill every page exactly) each packet pays one allocate and one
  * free on the allocator: `probed` against `packets` in `combat_voipdrop_stats` shows whether that is a steady state. The host cost of the common path is in docs/quest/combat/voipdrop.md; not measured on a
  * headset, and the packet rate is not known: `combat_voipdrop_stats` counts it.
@@ -41,6 +41,8 @@
  *            build_id_mismatch, pinned_word_mismatch, export_missing, slot_refused)
  *   dropped  {"event":"combat_voipdrop_dropped","n":<count>,"page_bytes":<n>,"consequence":".."}  Info, the first kDropLines drops
  *   total    {"event":"combat_voipdrop_dropped_total","n":<count>,"consequence":".."}  Info, every kTotalEvery-th drop after them, at most kTotalLines
+ *   cap      {"event":"combat_voipdrop_log_cap","lines":"dropped|dropped_total","cap":16|8,"msg":".."}  Warning, once per kind, written by the first line over its cap
+ *            (line_budget.h); the counts go on in the stats line
  *   stats    {"event":"combat_voipdrop_stats","packets":<n>,"probed":<n>,"dropped":<n>,"final":0|1,"consequence":".."}  Debug every kStatsEvery packets,
  *            Info once at the end of the process when the guard is installed (packets = every packet that reached the handler, probed = those that
  *            needed a page, dropped = those dropped)

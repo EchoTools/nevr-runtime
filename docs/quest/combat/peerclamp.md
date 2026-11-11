@@ -74,6 +74,7 @@ table by a fingerprint.
   for a refusal (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `invalid_unreadable`, `scope_not_live`, `slot_refused`).
 - `combat_peerclamp_clamped`: Info, the first 16 clamps (`n`, `idx`, `stamp`, `now`, `diff`, `sent`); then `combat_peerclamp_clamped_total` (`clamps`) at every 100th clamp, at most 8.
 - `combat_peerclamp_walk_capped`: Warning, once (`entries` 4096).
+- `combat_peerclamp_log_cap`: Warning, once per kind (`clamped`, `clamped_total`), written by the first line over its cap, saying where the count goes on (the stats line, never capped).
 - `combat_peerclamp_stats`: `calls`, `in_scope`, `walked`, `clamped`, `capped`, `final`; Debug every 4096 in-scope calls, Info once at the end of the process when the guard is
   installed.
 

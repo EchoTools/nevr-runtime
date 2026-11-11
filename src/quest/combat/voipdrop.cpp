@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -20,7 +21,7 @@ Fns g_f{};  // set before the slot is swapped, read-only after
 std::atomic<std::uint64_t> g_packets{0};
 std::atomic<std::uint64_t> g_probed{0};
 std::atomic<std::uint64_t> g_dropped{0};
-std::atomic<unsigned> g_totals{0};
+std::atomic<unsigned> g_totals{0}, g_dropLines{0};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 
 using AllocFn = void* (*)(void* allocator, std::uint32_t bytes);
@@ -65,11 +66,12 @@ bool PageAvailable(std::uintptr_t cs, std::uint32_t bytes) noexcept {
 
 // Written instead of the call to the game's function, so no game frame is live above it.
 void LogDrop(std::uint32_t pageBytes, std::uint64_t n) noexcept {
-  if (n <= kDropLines) {
+  if (LineBudget(&g_dropLines, kDropLines, "voipdrop", "dropped", "further drops are summarised every 50th, up to 16 of those; combat_voipdrop_stats counts every one")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_voipdrop_dropped",
                         {{"n", n}, {"page_bytes", pageBytes},
                          {"consequence", "no memory for a voice table page: the packet was dropped, so that speaker is silent until memory returns"}});
-  } else if (n % kTotalEvery == 0 && g_totals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_totals, kTotalLines, "voipdrop", "dropped_total", "no further drop totals are written; combat_voipdrop_stats still counts every drop")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_voipdrop_dropped_total",
                         {{"n", n}, {"consequence", "voice packets dropped so far for want of a table page"}});
   }
@@ -77,9 +79,12 @@ void LogDrop(std::uint32_t pageBytes, std::uint64_t n) noexcept {
 
 void ReceiveHandler(ReceiveVoipThunk::Fn original, void* self, std::uint64_t handle, const void* event, const void* data, std::uint32_t bytes) noexcept {
   const std::uint64_t seen = g_packets.fetch_add(1, std::memory_order_relaxed) + 1;
-  // The free head is one plain 4-byte load from the receiver: the game dereferences the same object on every path that reaches the table
-  // (ReceiveVoip loads [self+0xb8] right after its first early return), so this load is as safe as the stock call and costs a few ns, not a
-  // system call. A null receiver goes to the game's function untouched. The rare page-size read and the allocator probe keep the never-faulting read.
+  // The free head is one plain 4-byte load from the receiver, not a system call. ReceiveVoip dereferences `self` on every path that reaches the table
+  // (`ldr [self+0xb8]` at 0x22c3264), but it can return before that: `cbz x8` on a global at 0x22c3260 returns first when the global is null. On that path the
+  // stock function never touches `self` and this load is one it would not make. `self` is the receiver component system the game passes as `this`, a valid object
+  // wherever the game calls ReceiveVoip (an inference: nothing here proves it), so the load is not expected to fault; a non-null but unreadable `self` would fault
+  // here and would not in the stock function on that early-return path. A null receiver goes to the game's function untouched. The rare page-size read and the
+  // allocator probe keep the never-faulting read.
   const auto cs = reinterpret_cast<std::uintptr_t>(self);
   const std::int32_t head = self != nullptr ? *reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead) : 0;
   if (head == -1) {  // the next packet needs a fresh page
@@ -192,6 +197,7 @@ void ResetForTest() noexcept {
   g_probed.store(0);
   g_dropped.store(0);
   g_totals.store(0);
+  g_dropLines.store(0);
   g_lookup.store(nullptr);
 }
 

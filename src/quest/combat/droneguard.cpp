@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -29,7 +30,39 @@ struct Snap {  // the span [cs+0x140, cs+0x194)
 EngineFns g_f{};
 std::atomic<bool> g_idxOn{false};
 std::atomic<unsigned> g_skips{0}, g_totals{0}, g_idxSkips{0}, g_idxTotals{0}, g_stateLines{0};
-std::atomic<bool> g_skipping{false}, g_idxSkipping{false};
+// The lines written of each kind (a budget each, line_budget.h).
+std::atomic<unsigned> g_skipLines{0}, g_targetSetLines{0}, g_idxSkipLines{0}, g_idxResolvedLines{0};
+
+// The components whose follow update is being skipped right now, one table for the null-target runs and one for the stage-1 runs: a run belongs to the component
+// (a drone with no target skipped every frame beside a drone with one is one run, not a line a frame). A table that is full keeps counting and writes no run line.
+constexpr unsigned kRunSlots = 16;
+struct RunTable {
+  std::atomic<std::uintptr_t> cs[kRunSlots];
+  // True when `c` was not in a run and now is (the caller writes the first-skip line).
+  bool Begin(std::uintptr_t c) noexcept {
+    std::atomic<std::uintptr_t>* freeSlot = nullptr;
+    for (auto& slot : cs) {
+      const std::uintptr_t v = slot.load(std::memory_order_relaxed);
+      if (v == c) return false;
+      if (v == 0 && freeSlot == nullptr) freeSlot = &slot;
+    }
+    if (freeSlot == nullptr) return false;
+    std::uintptr_t none = 0;
+    return freeSlot->compare_exchange_strong(none, c, std::memory_order_relaxed);
+  }
+  // True when `c` was in a run and now is not (the caller writes the run-ended line).
+  bool End(std::uintptr_t c) noexcept {
+    for (auto& slot : cs) {
+      std::uintptr_t v = c;
+      if (slot.load(std::memory_order_relaxed) == c && slot.compare_exchange_strong(v, 0, std::memory_order_relaxed)) return true;
+    }
+    return false;
+  }
+  void Clear() noexcept {
+    for (auto& slot : cs) slot.store(0, std::memory_order_relaxed);
+  }
+};
+RunTable g_skipRuns, g_idxRuns;
 std::atomic<std::uint64_t> g_state{~0ULL};  // no real key has bits above 41 set
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 
@@ -74,7 +107,7 @@ void StateLine(std::uintptr_t cs, const Snap& s) noexcept {
   const std::uint64_t key = s.idx | (static_cast<std::uint64_t>(s.flags) << 32) | (static_cast<std::uint64_t>(s.target != 0) << 40) |
                             (static_cast<std::uint64_t>(s.sys != 0) << 41);
   if (g_state.exchange(key, std::memory_order_relaxed) == key) return;
-  if (g_stateLines.fetch_add(1, std::memory_order_relaxed) >= kStateLines) return;
+  if (!LineBudget(&g_stateLines, kStateLines, "droneguard", "state", "further state lines are not written; the stats line still counts every call and skip")) return;
   char c[19];
   char raw[16];
   char fl[8];
@@ -100,24 +133,31 @@ const char* IdxSkip(std::uintptr_t cs) noexcept {
   return nullptr;
 }
 
+// The first skip of a component's run, and every kTotalEvery-th skip of the process (at most kTotalLines of them).
 void LogSkipRun(std::uintptr_t cs, unsigned n) noexcept {
-  if (!g_skipping.exchange(true, std::memory_order_relaxed)) {
-    char c[19];
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_skip",
-                        {{"cs", sentinel::HexString(c, cs)},
-                         {"consequence", "the follow target is null: this component's follow update is skipped, as the game's would fault on it"}});
-  } else if (n % kTotalEvery == 0 && g_totals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  if (g_skipRuns.Begin(cs)) {
+    if (LineBudget(&g_skipLines, kRunLines, "droneguard", "skip", "further first-skip lines are not written; combat_droneguard_skips and the stats line count the skips")) {
+      char c[19];
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_skip",
+                          {{"cs", sentinel::HexString(c, cs)},
+                           {"consequence", "the follow target is null: this component's follow update is skipped, as the game's would fault on it"}});
+    }
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_totals, kTotalLines, "droneguard", "skips", "no further skip totals are written; the stats line still counts every skip")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_skips", {{"skips", n}});
   }
 }
 
 void LogIdxSkipRun(std::uintptr_t cs, const char* why, unsigned n) noexcept {
-  if (!g_idxSkipping.exchange(true, std::memory_order_relaxed)) {
-    char c[19];
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_skip",
-                        {{"why", why}, {"cs", sentinel::HexString(c, cs)},
-                         {"consequence", "the followed player's cache is stale: this component's follow update is skipped"}});
-  } else if (n % kTotalEvery == 0 && g_idxTotals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {
+  if (g_idxRuns.Begin(cs)) {
+    if (LineBudget(&g_idxSkipLines, kRunLines, "droneguard", "idx_skip", "further first-skip lines are not written; combat_droneguard_idx_skips and the stats line count the skips")) {
+      char c[19];
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_skip",
+                          {{"why", why}, {"cs", sentinel::HexString(c, cs)},
+                           {"consequence", "the followed player's cache is stale: this component's follow update is skipped"}});
+    }
+  } else if (n % kTotalEvery == 0 &&
+             LineBudget(&g_idxTotals, kTotalLines, "droneguard", "idx_skips", "no further idx skip totals are written; the stats line still counts every skip")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_skips", {{"idx_skips", n}});
   }
 }
@@ -138,7 +178,8 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
     LogSkipRun(cs, n);
     return;
   }
-  if (g_skipping.exchange(false, std::memory_order_relaxed)) {
+  if (g_skipRuns.End(cs) &&
+      LineBudget(&g_targetSetLines, kRunLines, "droneguard", "target_set", "further target-set lines are not written; the stats line still counts every skip")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_target_set", {{"skips", g_skips.load(std::memory_order_relaxed)}});
   }
   if (g_idxOn.load(std::memory_order_relaxed)) {
@@ -147,7 +188,8 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
       LogIdxSkipRun(cs, why, n);
       return;
     }
-    if (g_idxSkipping.exchange(false, std::memory_order_relaxed)) {
+    if (g_idxRuns.End(cs) &&
+        LineBudget(&g_idxResolvedLines, kRunLines, "droneguard", "idx_resolved", "further idx-resolved lines are not written; the stats line still counts every skip")) {
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_resolved", {{"idx_skips", g_idxSkips.load(std::memory_order_relaxed)}});
     }
   }
@@ -278,8 +320,12 @@ void ResetForTest() noexcept {
   g_idxSkips.store(0);
   g_idxTotals.store(0);
   g_stateLines.store(0);
-  g_skipping.store(false);
-  g_idxSkipping.store(false);
+  g_skipRuns.Clear();
+  g_idxRuns.Clear();
+  g_skipLines.store(0);
+  g_targetSetLines.store(0);
+  g_idxSkipLines.store(0);
+  g_idxResolvedLines.store(0);
   g_state.store(~0ULL);
   g_lookup.store(nullptr);
 }

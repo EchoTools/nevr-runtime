@@ -394,8 +394,9 @@ void FinishedContextsLeaveTheTable() {
   End();
 }
 
-// More than 256 live contexts: the game's behaviour for the overflow, one Warning.
-void MoreThan256LiveContextsGetTheGamesBehaviour() {
+// More than 256 live contexts: the overflow context's load goes to the game's function but is not tracked, so its destroy is dropped; the Warning says exactly
+// that, once, the stats line counts the untracked loads, and the dropped destroy has a why of its own, not a stale second destroy's.
+void MoreThan256LiveContextsLoadUntrackedAndTheirDestroyIsDropped() {
   Installed();
   for (int i = 0; i < 256; ++i) hLoad(nullptr, Ctx(i), nullptr);
   QCHECK(Lines("combat_custctx_full").empty() && g_loadCalls == 256);
@@ -404,13 +405,44 @@ void MoreThan256LiveContextsGetTheGamesBehaviour() {
   QCHECK(g_loadCalls == 258);  // an untracked load went to the real function
   const std::vector<Line> full = Lines("combat_custctx_full");
   QCHECK(full.size() == 1U && full[0].level == sentinel::LogLevel::kWarn && Has(full[0].text, "\"max\":256"));
+  if (full.size() == 1U) {
+    QCHECK(Has(full[0].text, "load goes to the game's function but is not tracked") && Has(full[0].text, "its destroy is dropped") && !Has(full[0].text, "gets the game's behaviour"));
+  }
   hDestroy(nullptr, Ctx(256));
   QCHECK(g_destroyCalls == 0);  // a destroy of an untracked context is dropped
+  QCHECK(CountLines("combat_custctx_dropped", "\"why\":\"untracked: its load found the table full (256 contexts)\"") == 1);
+  hDestroy(nullptr, Ctx(999));  // an address no load named: a stale second destroy, with its own why
+  QCHECK(CountLines("combat_custctx_dropped", "\"why\":\"not live: no context holds this address\"") == 1);
+  QCHECK(CountLines("combat_custctx_dropped", "\"why\":\"untracked: its load found the table full (256 contexts)\"") == 1);
+  hDestroy(nullptr, Ctx(256));  // the second destroy of the same overflow context is a stale one
+  QCHECK(CountLines("combat_custctx_dropped", "\"why\":\"not live: no context holds this address\"") == 2);
   hDestroy(nullptr, Ctx(0));
   QCHECK(g_destroyCalls == 1);
   hLoad(nullptr, Ctx(256), nullptr);
   hDestroy(nullptr, Ctx(256));
-  QCHECK(g_destroyCalls == 2);  // a freed entry was reused
+  QCHECK(g_destroyCalls == 2);  // a freed entry was reused, and the context is tracked now
+  hDestroy(nullptr, Ctx(256));  // tracked and destroyed, no longer remembered as an overflow: a stale second destroy again
+  QCHECK(CountLines("combat_custctx_dropped", "\"why\":\"not live: no context holds this address\"") == 3 &&
+         CountLines("combat_custctx_dropped", "\"why\":\"untracked: its load found the table full (256 contexts)\"") == 1);
+  cc::NoteEnd();
+  const std::vector<Line> stats = Lines("combat_custctx_stats");
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"untracked\":2") && Has(stats[0].text, "\"destroys_dropped\":4"));
+  End();
+}
+
+// An overflow context that is later tracked (its load found a free entry) is no longer remembered as an overflow: its second destroy is a stale one.
+void AnOverflowContextThatIsLaterTrackedIsNoLongerRemembered() {
+  Installed();
+  for (int i = 0; i < 256; ++i) hLoad(nullptr, Ctx(i), nullptr);
+  hLoad(nullptr, Ctx(256), nullptr);  // untracked: remembered
+  hDestroy(nullptr, Ctx(0));          // frees an entry
+  hLoad(nullptr, Ctx(256), nullptr);  // tracked now
+  const int before = g_destroyCalls;
+  hDestroy(nullptr, Ctx(256));
+  QCHECK(g_destroyCalls == before + 1);
+  hDestroy(nullptr, Ctx(256));
+  QCHECK(g_destroyCalls == before + 1 && CountLines("combat_custctx_dropped", "\"why\":\"not live: no context holds this address\"") == 1 &&
+         CountLines("combat_custctx_dropped", "untracked") == 0);
   End();
 }
 
@@ -419,10 +451,14 @@ void TheDropLinesAreCapped() {
   Installed();
   for (int i = 0; i < 49; ++i) hDestroy(nullptr, Ctx(1));
   QCHECK(CountLines("combat_custctx_dropped") == 16 && CountLines("combat_custctx_drops_total") == 0);
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"dropped\",\"cap\":16") == 1);  // the 17th drop said the lines stopped, once
   hDestroy(nullptr, Ctx(1));
   QCHECK(CountLines("combat_custctx_drops_total", "\"dropped\":50") == 1);
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"dropped\"") == 1);
   for (int i = 0; i < 850; ++i) hDestroy(nullptr, Ctx(1));
   QCHECK(CountLines("combat_custctx_drops_total") == 16);
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"drops_total\",\"cap\":16") == 1);  // and so did the 17th total
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"dropped\"") == 1 && Lines("combat_custctx_log_cap").size() == 2U);
   End();
 }
 
@@ -465,6 +501,7 @@ void ALoadOnANearlyFullLayoutPoolIsRefused() {
     if (n <= 16 || n % 50 == 0) ++want;
   }
   QCHECK(CountLines("combat_custctx_load_refused") == want);
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"load_refused\",\"cap\":16") == 1 && CountLines("combat_custctx_log_cap", "load_refused_every_50th") == 0);
   End();
 }
 
@@ -563,9 +600,36 @@ void TheLoadsLineIsWrittenEvery32ndLoad() {
   SetPool(100);
   for (int i = 0; i < 33 * 32; ++i) hLoad(nullptr, Ctx(1), nullptr);
   QCHECK(CountLines("combat_custctx_loads") == 32);  // every 32nd load, at most 32
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"loads\",\"cap\":32") == 1);  // the 33rd said they stopped, once
   const std::vector<Line> loads = Lines("combat_custctx_loads");
-  QCHECK(!loads.empty() && loads[0].level == sentinel::LogLevel::kInfo && Has(loads[0].text, "\"loads\":32,\"layouts_used\":412,\"layouts_capacity\":512"));
+  QCHECK(!loads.empty() && loads[0].level == sentinel::LogLevel::kInfo && Has(loads[0].text, "\"loads\":32,\"pool_read\":1,\"layouts_used\":412,\"layouts_capacity\":512"));
   End();
+}
+
+// The loads line holds what its names say: when the pool was not read for the load (an arena level, no level, a stale answer) it says `pool_read` 0 and leaves
+// `layouts_used` and `layouts_capacity` out, not 0 and 0.
+void TheLoadsLineLeavesOutThePoolItDidNotRead() {
+  struct Case {
+    const char* what;
+    bool combat;
+    bool stale;
+  };
+  const Case cases[] = {{"an Echo Arena level", false, false}, {"a combat map whose tick stopped", true, true}};
+  for (const Case& c : cases) {
+    Installed();
+    world::Levels(c.combat ? std::initializer_list<const char*>{"mpl_combat_dyson"} : std::initializer_list<const char*>{"mpl_arena_a"});
+    if (c.stale) world::TheTickStops();
+    SetPool(100);
+    g_reads = 0;
+    for (int i = 0; i < 32; ++i) hLoad(nullptr, Ctx(1), nullptr);
+    const std::vector<Line> loads = Lines("combat_custctx_loads");
+    QCHECK(loads.size() == 1U && g_reads.load() == 0);
+    if (loads.size() == 1U) {
+      if (!Has(loads[0].text, "\"loads\":32,\"pool_read\":0")) std::fprintf(stderr, "custctx loads line: %s\n", c.what);
+      QCHECK(Has(loads[0].text, "\"loads\":32,\"pool_read\":0") && !Has(loads[0].text, "layouts_used") && !Has(loads[0].text, "layouts_capacity"));
+    }
+    End();
+  }
 }
 
 // R33: Grow.
@@ -699,6 +763,7 @@ void WhenTheAllocationFailsTheInstallTimeSparesAreUsed() {
     hGrow(&g_tbl);
   }
   QCHECK(CountLines("combat_custctx_draw_failures_total") == 16);
+  QCHECK(CountLines("combat_custctx_log_cap", "\"lines\":\"draw_failure\",\"cap\":16") == 1 && CountLines("combat_custctx_log_cap", "\"lines\":\"draw_failures_total\",\"cap\":16") == 1);
   cc::SetMemalignForTest(nullptr);
   End();
 }
@@ -966,12 +1031,14 @@ int main() {
   TheThunksTakeTheSlotsAndTheLineSaysSo();
   TheLiveContextTableDecidesWhichDestroysRun();
   FinishedContextsLeaveTheTable();
-  MoreThan256LiveContextsGetTheGamesBehaviour();
+  MoreThan256LiveContextsLoadUntrackedAndTheirDestroyIsDropped();
+  AnOverflowContextThatIsLaterTrackedIsNoLongerRemembered();
   TheDropLinesAreCapped();
   ALoadOnANearlyFullLayoutPoolIsRefused();
   TheRefusalIsScopedToACombatMapOrLobby();
   WithAScopeThatCannotChangeTheRefusalIsOffAndTheRestInstalls();
   TheLoadsLineIsWrittenEvery32ndLoad();
+  TheLoadsLineLeavesOutThePoolItDidNotRead();
   GrowResizesWhenThereIsNoRoomAndChecksIt();
   WhenTheAllocationFailsTheInstallTimeSparesAreUsed();
   AWorkingAllocatorGivesAFreshElementEachTime();

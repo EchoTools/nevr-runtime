@@ -46,6 +46,8 @@
  *   clamped  {"event":"combat_peerclamp_clamped","n":<clamp count>,"idx":<entry>,"stamp":"..","now":"..","diff":"..","sent":"..","consequence":".."}  Info,
  *            the first kClampLines of the process, then {"event":"combat_peerclamp_clamped_total","clamps":<n>} at every kTotalEvery-th clamp, at most kTotalLines
  *   capped   {"event":"combat_peerclamp_walk_capped","entries":4096,"consequence":".."}  Warning, once
+ *   cap      {"event":"combat_peerclamp_log_cap","lines":"clamped|clamped_total","cap":16|8,"msg":".."}  Warning, once per kind, written by the first line over its cap
+ *            (line_budget.h); the counts go on in the stats line
  *   stats    {"event":"combat_peerclamp_stats","calls":<n>,"in_scope":<n>,"walked":<entries>,"clamped":<n>,"capped":<n>,"final":0|1,
  *             "consequence":".."}  Debug every kStatsEvery in-scope calls, Info once at the end of the process when installed
  *

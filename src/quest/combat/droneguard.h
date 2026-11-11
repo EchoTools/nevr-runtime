@@ -42,10 +42,13 @@
  *   stage1    {"event":"combat_droneguard_stage1","result":"on|null_half_only","reason":"ok|pinned_word_mismatch|engine_functions_missing",...}  Info / Error
  *   state     {"event":"combat_droneguard_state","target":"set|0","handle_sys":"set|0","idx_unresolved":"yes|no","raw190":"%08x","flags16c":"%02x","cs":"0x.."}
  *             Info, on the first call and on every change of (index word, flags byte, target null, handle system null), at most kStateLines
- *   skip      {"event":"combat_droneguard_skip","cs":"0x..",...}  Info, the first skip of a run of skips; {"event":"combat_droneguard_skips","skips":<n>}  Info, every
- *             kTotalEvery skips, at most kTotalLines; {"event":"combat_droneguard_target_set","skips":<n>}  Info, when the target arrives after skips
+ *   skip      {"event":"combat_droneguard_skip","cs":"0x..",...}  Info, the first skip of a component's run of skips (a run belongs to the component, up to
+ *             16 at once), at most kRunLines in a process; {"event":"combat_droneguard_skips","skips":<n>}  Info, every
+ *             kTotalEvery skips, at most kTotalLines; {"event":"combat_droneguard_target_set","skips":<n>}  Info, when a component's target arrives after skips, at most kRunLines in a process
  *   idx skip  {"event":"combat_droneguard_idx_skip","why":"idx ffff|handle-sys 0|refused but cached","cs":"0x.."}, {"event":"combat_droneguard_idx_skips","idx_skips":<n>},
  *             {"event":"combat_droneguard_idx_resolved","idx_skips":<n>}  Info, as above
+ *   cap       {"event":"combat_droneguard_log_cap","lines":"state|skip|skips|target_set|idx_skip|idx_skips|idx_resolved","cap":<n>,"msg":".."}  Warning, once per
+ *             kind, written by the first line over its cap (line_budget.h); the counts go on in the stats line
  *   stats     {"event":"combat_droneguard_stats","calls":<n>,"skips":<n>,"idx_skips":<n>,"final":0|1,"consequence":".."}  Debug every kStatsEvery calls, Info once at
  *             the end of the process when the guard is installed
  *
@@ -66,6 +69,7 @@ inline constexpr unsigned kStatsEvery = 16384;  // a Debug stats line every this
 inline constexpr unsigned kTotalEvery = 600;    // a skip total every this many skips
 inline constexpr unsigned kTotalLines = 8;      // at most this many totals of each kind
 inline constexpr unsigned kStateLines = 16;     // at most this many state lines
+inline constexpr unsigned kRunLines = 8;        // at most this many lines of each run kind (skip, target_set, idx_skip, idx_resolved) in a process
 
 // The two words the install pins: the slot and the function it must hold. The host test supplies a stand-in's address.
 struct Pins {

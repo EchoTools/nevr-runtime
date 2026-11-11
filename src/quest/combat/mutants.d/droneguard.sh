@@ -16,7 +16,6 @@ runm dg_no_original       $D "s/^  original(self, handle);\$/  (void)original;/"
 # the state line
 runm dg_state_every       $D "s/  if (g_state.exchange(key, std::memory_order_relaxed) == key) return;/  g_state.store(key);/"
 runm dg_state_cap         $H "s/kStateLines = 16;/kStateLines = 17;/"
-runm dg_state_no_cap      $D "s/  if (g_stateLines.fetch_add(1, std::memory_order_relaxed) >= kStateLines) return;/  (void)g_stateLines;/"
 runm dg_key_idx           $D "s/const std::uint64_t key = s.idx |/const std::uint64_t key = 0 |/"
 runm dg_key_flags         $D "s/(static_cast<std::uint64_t>(s.flags) << 32)/0/"
 runm dg_key_target        $D "s/(static_cast<std::uint64_t>(s.target != 0) << 40)/0/"
@@ -24,13 +23,9 @@ runm dg_key_sys           $D "s/(static_cast<std::uint64_t>(s.sys != 0) << 41)/0
 runm dg_state_unresolved  $D "s/(s.idx \& 0xffff) == 0xffff ? \"yes\" : \"no\"/s.idx == 0xffff ? \"yes\" : \"no\"/"
 runm dg_state_level       $D "s/sentinel::LogLevel::kInfo, \"combat_droneguard_state\"/sentinel::LogLevel::kDebug, \"combat_droneguard_state\"/"
 # the skip lines and totals
-runm dg_first_every       $D "s/  if (!g_skipping.exchange(true, std::memory_order_relaxed)) {/  if (true) {/"
-runm dg_first_never       $D "s/  if (!g_skipping.exchange(true, std::memory_order_relaxed)) {/  if (false) {/"
 runm dg_total_every       $H "s/kTotalEvery = 600;/kTotalEvery = 599;/"
 runm dg_total_lines       $H "s/kTotalLines = 8;/kTotalLines = 9;/"
-runm dg_total_no_cap      $D "s/ \&\& g_totals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {/) {/"
 runm dg_skip_uncounted    $D "s/const unsigned n = g_skips.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned n = g_skips.fetch_add(0, std::memory_order_relaxed) + 1;/"
-runm dg_no_target_set     $D "s/  if (g_skipping.exchange(false, std::memory_order_relaxed)) {/  if (false) {/"
 runm dg_target_set_skips  $D "s/\"combat_droneguard_target_set\", {{\"skips\", g_skips.load(std::memory_order_relaxed)}}/\"combat_droneguard_target_set\", {{\"skips\", 0}}/"
 # stage 1
 runm dg_idx_ignored       $D "s/  if (g_idxOn.load(std::memory_order_relaxed)) {/  if (false) {/"
@@ -45,11 +40,7 @@ runm dg_idx_sys0          $D "s/  if (s.sys == 0) return \"handle-sys 0\";/  (vo
 runm dg_idx_valid         $D "s/  if (!g_f.isValid(reinterpret_cast<const void\*>(s.target), s.idx)) return \"refused but cached\";/  (void)0;/"
 runm dg_valid_target      $D "s/isValid(reinterpret_cast<const void\*>(s.target), s.idx)/isValid(reinterpret_cast<const void*>(s.sys), s.idx)/"
 runm dg_valid_idx         $D "s/isValid(reinterpret_cast<const void\*>(s.target), s.idx)/isValid(reinterpret_cast<const void*>(s.target), s.idx \& 0xffff)/"
-runm dg_idx_first_every   $D "s/  if (!g_idxSkipping.exchange(true, std::memory_order_relaxed)) {/  if (true) {/"
-runm dg_idx_no_resolved   $D "s/    if (g_idxSkipping.exchange(false, std::memory_order_relaxed)) {/    if (false) {/"
 runm dg_idx_resolved_n    $D "s/\"combat_droneguard_idx_resolved\", {{\"idx_skips\", g_idxSkips.load(std::memory_order_relaxed)}}/\"combat_droneguard_idx_resolved\", {{\"idx_skips\", 0}}/"
-runm dg_idx_total_every   $D "s/} else if (n % kTotalEvery == 0 \&\& g_idxTotals/} else if (n % 601 == 0 \&\& g_idxTotals/"
-runm dg_idx_total_no_cap  $D "s/ \&\& g_idxTotals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {/) {/"
 runm dg_idx_uncounted     $D "s/const unsigned n = g_idxSkips.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned n = g_idxSkips.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm dg_idx_why_lost      $D "s/{{\"why\", why}, {\"cs\"/{{\"why\", why ? \"idx ffff\" : \"idx ffff\"}, {\"cs\"/"
 # stage 1 preconditions: its words, both functions, the exact addresses
@@ -115,3 +106,20 @@ runm dg_row_key            $CI "s/\"combat.droneguard\", \&nevr_quest/\"combat.d
 # droneguard asks nothing of the scope: it is not a reader of the scope row
 runm dg_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.droneguard.on;/" quest-host-combat combat_install_test
 # (kOffTarget and kOffHandleIdx are tied to the pinned words by static_assert in droneguard_targets.h: a changed one fails the build)
+# the run of skips belongs to the component, and each kind of run line has a cap that says so (review F1)
+runm dg_run_shared          $D "s/  bool Begin(std::uintptr_t c) noexcept {/  bool Begin(std::uintptr_t c) noexcept {\n    if (c != 0) return true;/"
+runm dg_run_end_always      $D "s/  bool End(std::uintptr_t c) noexcept {/  bool End(std::uintptr_t c) noexcept {\n    if (c != 0) return true;/"
+runm dg_run_end_never       $D "s/  bool End(std::uintptr_t c) noexcept {/  bool End(std::uintptr_t c) noexcept {\n    if (c != 0) return false;/"
+runm dg_run_slots_one       $D "s/constexpr unsigned kRunSlots = 16;/constexpr unsigned kRunSlots = 1;/"
+runm dg_idx_run_shared      $D "s/  if (g_idxRuns.Begin(cs)) {/  if (true) {/"
+runm dg_idx_run_end_always  $D "s/    if (g_idxRuns.End(cs) \&\&/    if (true \&\&/"
+runm dg_skip_cap_ignored    $D "s/    if (LineBudget(\&g_skipLines, kRunLines,/    if (true || LineBudget(\&g_skipLines, kRunLines,/"
+runm dg_idx_skip_cap_ignored $D "s/    if (LineBudget(\&g_idxSkipLines, kRunLines,/    if (true || LineBudget(\&g_idxSkipLines, kRunLines,/"
+runm dg_state_cap_ignored   $D "s/  if (!LineBudget(\&g_stateLines, kStateLines, \"droneguard\", \"state\", \"[^\"]*\")) return;/  if (g_stateLines.fetch_add(1, std::memory_order_relaxed) >= kStateLines) return;/"
+runm dg_totals_budget_ignored $D "s/             LineBudget(\&g_totals, kTotalLines, \"droneguard\", \"skips\", \"[^\"]*\")) {/             g_totals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {/"
+runm dg_run_lines_const     $H "s/kRunLines = 8; /kRunLines = 9; /"
+
+runm dg_set_cap_ignored     $D "s/      LineBudget(\&g_targetSetLines, kRunLines,/      LineBudget(\&g_targetSetLines, 1000000,/"
+runm dg_idx_set_cap_ignored $D "s/        LineBudget(\&g_idxResolvedLines, kRunLines,/        LineBudget(\&g_idxResolvedLines, 1000000,/"
+runm dg_run_begin_never    $D "s/  bool Begin(std::uintptr_t c) noexcept {/  bool Begin(std::uintptr_t c) noexcept {\n    if (c != 0) return false;/"
+runm dg_idx_totals_budget_ignored $D "s/             LineBudget(\&g_idxTotals, kTotalLines, \"droneguard\", \"idx_skips\", \"[^\"]*\")) {/             g_idxTotals.fetch_add(1, std::memory_order_relaxed) < kTotalLines) {/"

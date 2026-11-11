@@ -49,13 +49,14 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
   call). It reads the layout pool (the pointer word in the image at 0x379b2c0, `+0x84` capacity u32, `+0x30` free count u64); with fewer than 64 free
   slots the load is refused: the handler answers 1, the stock failure value (CreateContext then destroys the empty context and answers NULL, which its
   caller checks), and `combat_custctx_load_refused` is written (the first 16, then every 50th). Otherwise the game's function runs. An unreadable or
-  null pool pointer never refuses. Every 32nd load (at most 32 lines) writes `combat_custctx_loads` with the pool use.
+  null pool pointer never refuses. Every 32nd load (at most 32 lines) writes `combat_custctx_loads`; with `pool_read` 1 it carries `layouts_used` and `layouts_capacity`, and when the pool was not read for that load (no combat level, or a stale answer) it says `pool_read` 0 and carries neither.
 - **R32 DestroyContext.** A null context goes to the game's function (it returns at once). Otherwise, under the mutex, the game's function runs only for
   a context that is live, with no load in flight and not already being destroyed; the entry is freed when the destroy returns (so a finished context
   leaves the table). Every other destroy is dropped (answers 0) with `combat_custctx_dropped` (`why`: no context holds the address, its LoadMeshData is
   running, already being destroyed; the first 16, then `combat_custctx_drops_total` every 50th, at most 16). A dropped destroy changes nothing; the
-  caller clears its own slot. More than 256 contexts tracked: the overflow is untracked (the game's behaviour for its load, its later destroy dropped as
-  unknown), one Warning. The mutex is never held across a game call.
+  caller clears its own slot. More than 256 contexts tracked: the overflow context's load goes to the game's function but is not tracked (counted as `untracked` in the stats line), so its destroy
+  is dropped and the game's destroy is not run for it (the context leaks); that destroy's `why` is `untracked: its load found the table full (256 contexts)` (the last 64 such
+  contexts are remembered; past that, or after the first such destroy, a destroy of the address gives the stale why). One Warning, `combat_custctx_full`. The mutex is never held across a game call.
 - **R33 Grow.** One read of the 0x38-byte table header. No room (count >= capacity): `add = (step < capacity) ? capacity : step`,
   `CMemBlock::Resize(table, (capacity + add) * 0x9718, 1)` is called here and checked (the data word is read again); on success capacity += add and the
   game's Grow runs (it then only adds the element). Add 0, a NULL data after the resize, or room left but `data == NULL` (a torn-down table): the table is
@@ -79,8 +80,8 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
   (`RegisterRTLayout` 0x19829bc: `ldr w3,[x8,#0x84]`, `ldr x9,[x8,#0x30]`, `sub x10,x3,x9`, `cmp x10,x3`, `b.cc` ok, else `brk`). In a combat map or lobby the margin of 64 free
   slots stays; it is a margin and is not read from the binary.
 - **Cost.** Per cosmetic load (per player join or lobby change): one mutex lock and unlock pair around a scan of the 256-entry table, three never-faulting
-  reads for the pool state, one counter. Per destroy: the same lock and scan. Per draw-table Grow: one read of the table header. The call rates are not known:
-  `combat_custctx_stats` counts loads, refused loads, dropped destroys and Grow failures, Debug at every 1024th load and Info at the end of the process, so
+  reads for the pool state (only in a combat map or the combat lobby with a fresh answer; an arena load reads no pool word), one counter. Per destroy: the same lock and scan. Per draw-table Grow: one read of the table header. The call rates are not known:
+  `combat_custctx_stats` counts loads, refused loads, dropped destroys, Grow failures and untracked loads, Debug at every 1024th load and Info at the end of the process, so
   a headset run gives them (ADR 0038). Host numbers (x86-64, -O2, 2,000,000 loads (100,000 in a combat map) through the installed thunk on a libr15 image built in memory, stand-ins for the game's functions, a roomy pool, three runs, a scratch benchmark that is not committed, on a machine with nothing else running): an unhooked slot 1.3 to 1.4 ns; a load in an Echo Arena level 18.9 to 20.3 ns (the mutex pair and the scan of the table, no pool read); a load in a combat map 1.36 to 1.49 us (the three pool reads and the clock read). Grow with room (one read of the table header) and a destroy were not re-measured on the merged tip: Grow with room was 0.6 us and a destroy within the noise of the load beside it on the earlier host run. Per ADR 0038 a combat-map load of 1.5 us times its rate per frame has to stay under 10 us, which holds up to six loads a frame; the rate is what the headset run reads from `combat_custctx_stats`. Not measured on a headset.
 
 ## Gate: no file hash
@@ -96,7 +97,9 @@ unreadable page, and pins the table by a fingerprint.
   (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `export_missing`, `spare_alloc_failed`, `already_installed`, `slot_refused` with `which`, `hook`, `rollback`).
 - `combat_custctx_loads`, `combat_custctx_load_refused`, `combat_custctx_dropped`, `combat_custctx_drops_total`, `combat_custctx_draw_failure`,
   `combat_custctx_draw_failures_total`, `combat_custctx_full`: the capped lines above.
-- `combat_custctx_stats`: `loads`, `loads_refused`, `destroys_dropped`, `grow_failures`, `final`.
+- `combat_custctx_log_cap`: Warning, once per kind (`loads`, `load_refused`, `dropped`, `drops_total`, `draw_failure`, `draw_failures_total`), written by the first line over that kind's
+  cap; it says where the count goes on (the stats line, which is never capped).
+- `combat_custctx_stats`: `loads`, `loads_refused`, `destroys_dropped`, `grow_failures`, `untracked`, `final`.
 - `combat_custctx_legacy_switch`: Warning, when the plugin's `custctx.off` is found.
 
 ## Prediction (written before any headset run)
@@ -126,3 +129,9 @@ missing until the next load.
   that a load registers about one layout per mesh entry (the basis of the margin of 64, which is not read from the binary), and whether a stock arena lobby ever comes within 63 slots
   of the cap (nothing measures it, which is why the refusal is not in arena). The
   bodies read here are Grow's and RegisterRTLayout's words, the PLT stubs and the function sizes, not LoadMeshData's or DestroyContext's bodies.
+- **Read in the disassembly (revault, `libr15.so`, disassembly VA = ELF vaddr + 0x100000):** the xrefs to `DestroyContext`'s PLT stub (disassembly 0xfd5820, ELF 0xed5820, the stub the pins
+  name) are nine calls, at 0x1349278, 0x134965c, 0x2212bd0, 0x221359c, 0x222a980, 0x222a9cc, 0x222aa08, 0x222aa40 and 0x2233960; so the guard sees every call of the game's destroy.
+  The renderer's `Shutdown` (disassembly 0x1349254) loops over an array of 8-byte entries at `this+0xbf8`, a u16 count at `this+0xdf8`, calling that stub on each (the call at
+  0x1349278), then zeroes the count.
+  **Inferred, not read:** that the array holds at most 64 contexts (0xdf8 - 0xbf8 = 0x200 bytes of 8-byte entries, so the count field follows the 64th entry), so the 256-entry
+  table is never full in a normal session; that a context created before the install does not occur; and that nothing destroys a context outside these nine calls.

@@ -47,7 +47,7 @@ runm pc_scope_not_counted $P "s/g_inScope.fetch_add(1, std::memory_order_relaxed
 runm pc_lines             $H "s/kClampLines = 16;/kClampLines = 17;/"
 runm pc_total_every       $H "s/kTotalEvery = 100;/kTotalEvery = 101;/"
 runm pc_total_lines       $H "s/kTotalLines = 8;/kTotalLines = 9;/"
-runm pc_no_total          $P "s/  } else if (n % kTotalEvery == 0 \&\& /  } else if (false \&\& /"
+runm pc_no_total          $P "s/  } else if (n % kTotalEvery == 0 \&\&\$/  } else if (false \&\&/"
 runm pc_not_counted       $P "s/g_clamped.fetch_add(1, std::memory_order_relaxed) + 1/g_clamped.fetch_add(0, std::memory_order_relaxed) + 1/"
 runm pc_diff              $P "s/static_cast<unsigned long long>(stamp - now));/static_cast<unsigned long long>(now - stamp));/"
 runm pc_line_idx          $P "s/{{\"n\", n}, {\"idx\", idx},/{{\"n\", n}, {\"idx\", idx + 1},/"
@@ -107,3 +107,6 @@ runm pc_live_after_pins    $P "s/  if (!scope::Live()) return Refused(\"scope_no
 runm pc_reader_unlisted    $CI "s/g_config.peerclamp.on || //" quest-host-combat combat_install_test
 runm pc_row_member         $CI "s/\"combat.peerclamp\", \&nevr_quest::CombatConfig::peerclamp,/\"combat.peerclamp\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
 runm pc_row_key            $CI "s/\"combat.peerclamp\", \&nevr_quest/\"combat.peerclamps\", \&nevr_quest/" quest-host-combat combat_install_test
+# every cap says when it stops (review, line_budget.h)
+runm pc_clamp_cap_ignored   $P "s/  if (LineBudget(\&g_clampLines, kClampLines,/  if (true || LineBudget(\&g_clampLines, kClampLines,/"
+runm pc_total_cap_ignored   $P "s/             LineBudget(\&g_totals, kTotalLines,/             LineBudget(\&g_totals, 1000000,/"

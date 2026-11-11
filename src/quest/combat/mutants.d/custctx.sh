@@ -12,13 +12,13 @@ runm cc_load_keeps_dying   $F "/    e->live = 1;/{n;s/    e->dying = 0;/    (voi
 runm cc_kmax_low           $F "s/kMax = 256/kMax = 255/"
 runm cc_kmax_high          $F "s/kMax = 256/kMax = 257/"
 runm cc_full_every_time    $F "s/  if (!g_fullLogged.exchange(true, std::memory_order_relaxed)) {/  if (true) {/"
-runm cc_untracked_silent   $F "s/  if (!tracked) Full();/  if (!tracked \&\& false) Full();/"
+runm cc_untracked_silent   $F "s/^    Full();\$/    if (g_untracked.load() == 0xffffffffU) Full();/"
 runm cc_full_quiet         $F "s/sentinel::LogLevel::kWarn, \"combat_custctx_full\"/sentinel::LogLevel::kInfo, \"combat_custctx_full\"/"
 runm cc_load_original_args $F "s/    result = original(self, ctx, model);/    result = original(self, model, ctx);/"
 runm cc_load_result        $F "s/    result = original(self, ctx, model);/    original(self, ctx, model);/"
 # R32 DestroyContext
 runm cc_null_guard         $F "s/  if (ctx == nullptr) return original(self, ctx);.*/  (void)self;/"
-runm cc_unknown_runs       $F "s/    why = \"not live: no context holds this address\";/    tracked = false;/"
+runm cc_unknown_runs       $F "s/    why = ForgetOverflow(ctx) ? .*;/    why = nullptr;/"
 runm cc_inflight_runs      $F "s/  } else if (e->inflight != 0) {/  } else if (false) {/"
 runm cc_dying_runs         $F "s/  } else if (e->dying != 0) {/  } else if (false) {/"
 runm cc_no_dying_set       $F "s/    e->dying = 1;/    e->dying = 0;/"
@@ -47,8 +47,8 @@ runm cc_rt_pool_const      $T "s/0x124893cULL, 0x11dc30cULL, 0x379b2c0ULL}/0x124
 runm cc_rt_pool_ignored    $F "s/SafeRead<std::uintptr_t>(g_base + g_pins.rtPool, \&ok)/SafeRead<std::uintptr_t>(g_base + kPins.rtPool + 8, \&ok)/"
 runm cc_rt_every           $F "s/kLoadsEvery = 32/kLoadsEvery = 31/"
 runm cc_rt_lines           $F "s/kLoadsLines = 32/kLoadsLines = 31/"
-runm cc_rt_refuse_log      $F "s/    if (n <= kDropLines || n % kTotalEvery == 0) {/    if (n <= kDropLines) {/"
-runm cc_rt_refuse_every    $F "s/    if (n <= kDropLines || n % kTotalEvery == 0) {/    if (true) {/"
+runm cc_rt_refuse_log      $F "s/(n % kTotalEvery == 0 \&\& LineBudget(\&g_refusedTotals, kTotalLines,/(n % kTotalEvery == 0 \&\& LineBudget(\&g_refusedTotals, 0,/"
+runm cc_rt_refuse_every    $F "s/(n % kTotalEvery == 0 \&\& LineBudget(\&g_refusedTotals/(true \&\& LineBudget(\&g_refusedTotals/"
 runm cc_rt_not_counted     $F "s/g_refused.fetch_add(1, std::memory_order_relaxed) + 1;/g_refused.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm cc_loads_not_counted  $F "s/const unsigned loads = g_loads.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned loads = g_loads.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm cc_loads_level        $F "s/sentinel::LogLevel::kInfo, \"combat_custctx_loads\"/sentinel::LogLevel::kDebug, \"combat_custctx_loads\"/"
@@ -80,7 +80,7 @@ runm cc_spare_modulo       $F "s/g_spareNext.fetch_add(1, std::memory_order_rela
 runm cc_spare_no_fallback  $F "s/  if (slot == nullptr) slot = g_spares\[/  if (false) slot = g_spares[/"
 runm cc_spare_align        $F "s/Memalign(\&slot, 64, kDrawSize)/Memalign(\&slot, 64, kDrawSize + 1)/"
 runm cc_fail_not_counted   $F "s/g_fails.fetch_add(1, std::memory_order_relaxed) + 1;/g_fails.fetch_add(0, std::memory_order_relaxed) + 1;/"
-runm cc_fail_total_every   $F "s/  } else if (n % kTotalEvery == 0 \&\& g_failTotals/  } else if (n % 51 == 0 \&\& g_failTotals/"
+runm cc_fail_total_every   $F "s/  } else if (n % kTotalEvery == 0 \&\&\$/  } else if (n % 51 == 0 \&\&/"
 runm cc_fail_quiet         $F "s/sentinel::LogLevel::kWarn, \"combat_custctx_draw_failure\"/sentinel::LogLevel::kDebug, \"combat_custctx_draw_failure\"/"
 runm cc_fail_in_use        $F "s/{\"in_use\", was.count}/{\"in_use\", was.capacity}/"
 # install: all or none
@@ -154,8 +154,8 @@ runm cc_scope_map_only     $F "s/scope::SeenCombatOrLobby() \&\& PoolIsLowInScop
 runm cc_scoped_always_true  $F "s/  const bool scoped = scope::Live();/  const bool scoped = true;/"
 
 # arena pays nothing, by count (the test counts SafeRead calls and level scans on every arena level): a pool read or a scan before the scope test is killed
-runm cc_reads_before_scope $F "s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/  const bool low = (RtLow(\&used, \&cap), false) || (scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap));/"
-runm cc_scan_before_scope  $F "s/^#include \"quest\/combat\/safe_read.h\"/#include \"quest\/combat\/safe_read.h\"\n#include \"quest\/combat\/combat_level.h\"/; s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/  (void)level::Scan(0);\n  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/"
+runm cc_reads_before_scope $F "s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap, \&poolRead);/  bool rr = false;\n  const bool low = (RtLow(\&used, \&cap, \&rr), false) || (scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap, \&poolRead));/"
+runm cc_scan_before_scope  $F "s/^#include \"quest\/combat\/safe_read.h\"/#include \"quest\/combat\/safe_read.h\"\n#include \"quest\/combat\/combat_level.h\"/; s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap, \&poolRead);/  (void)level::Scan(0);\n  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap, \&poolRead);/"
 # a true answer older than kStaleAfterMs is not believed
 runm cc_stale_believed     $F "s/  if (!scope::LookIsFresh()) return false;//"
 # the install does not wait for the scope: the destroy and Grow guards need no level
@@ -164,3 +164,18 @@ runm cc_install_needs_scope $F "s/  const bool scoped = scope::Live();/  if (!sc
 runm cc_reader_unlisted    $CI "s/ || g_config.custctx.on//" quest-host-combat combat_install_test
 runm cc_row_member         $CI "s/\"combat.custctx\", \&nevr_quest::CombatConfig::custctx,/\"combat.custctx\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
 runm cc_row_key            $CI "s/\"combat.custctx\", \&nevr_quest/\"combat.custctxs\", \&nevr_quest/" quest-host-combat combat_install_test
+# the 256-context cap says what happens and counts what follows; the loads line holds what its names say; every cap says when it stops (review F2, F3)
+runm cc_untracked_not_counted $F "s/    g_untracked.fetch_add(1, std::memory_order_relaxed);/    (void)g_untracked;/"
+runm cc_overflow_not_kept   $F "s/    RememberOverflow(ctx);/    RememberOverflow(nullptr);/"
+runm cc_overflow_not_cleared $F "s/    ForgetOverflow(ctx);\$/    (void)ctx;/"
+runm cc_overflow_why_stale  $F "s/ForgetOverflow(ctx) ? \"untracked: its load found the table full (256 contexts)\" : \"not live: no context holds this address\"/(ForgetOverflow(ctx), \"not live: no context holds this address\")/"
+runm cc_overflow_kept_after_destroy $F "s/      o = nullptr;/      (void)o;/"
+runm cc_overflow_why_always $F "s/ForgetOverflow(ctx) ? \"untracked: its load found the table full (256 contexts)\" : \"not live: no context holds this address\"/\"untracked: its load found the table full (256 contexts)\"/"
+runm cc_pool_read_not_set   $F "s/  \*read = true;/  *read = false;/"
+runm cc_pool_read_always    $F "s/    if (poolRead) {/    if (true) {/"
+runm cc_loads_cap_ignored   $F "s/      LineBudget(\&g_loadsLines, kLoadsLines,/      LineBudget(\&g_loadsLines, 1000000,/"
+runm cc_refused_cap_ignored $F "s/    if (LineBudget(\&g_refusedLines, kDropLines,/    if (true || LineBudget(\&g_refusedLines, kDropLines,/"
+runm cc_drop_cap_ignored    $F "s/  if (LineBudget(\&g_dropLines, kDropLines,/  if (true || LineBudget(\&g_dropLines, kDropLines,/"
+runm cc_drop_total_cap_ignored $F "s/             LineBudget(\&g_dropTotals, kTotalLines,/             LineBudget(\&g_dropTotals, 1000000,/"
+runm cc_fail_cap_ignored    $F "s/  if (LineBudget(\&g_failLines, kDropLines,/  if (true || LineBudget(\&g_failLines, kDropLines,/"
+runm cc_fail_total_cap_ignored $F "s/             LineBudget(\&g_failTotals, kTotalLines,/             LineBudget(\&g_failTotals, 1000000,/"

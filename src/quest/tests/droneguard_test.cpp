@@ -49,6 +49,7 @@ using FollowFn = void (*)(void*, std::uint64_t);
 // ---- the fake engine ------------------------------------------------------------------------------------------------------------
 
 alignas(16) std::uint8_t g_cs[0x200];
+alignas(16) std::uint8_t g_cs2[0x200];  // a second follow component
 void Put64(std::size_t off, std::uint64_t v) { std::memcpy(g_cs + off, &v, 8); }
 void Put32(std::size_t off, std::uint32_t v) { std::memcpy(g_cs + off, &v, 4); }
 
@@ -217,6 +218,7 @@ void ANullTargetIsNeverFollowedAndIsCounted() {
   QCHECK(totals.size() == 1U && Has(totals[0].text, "\"skips\":600}"));
   for (int i = 0; i < 600 * 9; ++i) hook(g_cs, 1);
   QCHECK(Lines("combat_droneguard_skips").size() == 8U);
+  QCHECK(Lines("combat_droneguard_log_cap").size() == 1U && Has(Lines("combat_droneguard_log_cap")[0].text, "\"lines\":\"skips\",\"cap\":8"));  // the 9th total said they stopped
   QCHECK(g_realCalls == 0);
   End();
 }
@@ -238,6 +240,70 @@ void TheTargetArrivingEndsTheRunOfSkips() {
   Put64(0x140, 0);
   hook(g_cs, 7);
   QCHECK(Lines("combat_droneguard_skip").size() == 1U);
+  End();
+}
+
+// The run of skips belongs to the component: a drone with no target skipped every frame beside a drone whose target is set, both called every frame, is one
+// skip line and no target-set line (not two lines every frame), and the same for stage 1's idx pair.
+void TwoComponentsEachCalledEveryFrameWriteOneSkipLineAndNoTargetSetLine() {
+  const FollowFn hook = Installed(false);
+  World(kTarget);
+  std::memcpy(g_cs2, g_cs, sizeof(g_cs));  // the second component: target set
+  World(0);                                // the first: no target
+  for (int frame = 0; frame < 1000; ++frame) {
+    hook(g_cs, 1);
+    hook(g_cs2, 2);
+  }
+  QCHECK(g_realCalls == 1000 && dg::CurrentStats().skips == 1000);
+  QCHECK(Lines("combat_droneguard_skip").size() == 1U && Lines("combat_droneguard_target_set").empty());
+  End();
+  const FollowFn staged = Installed(true);
+  World(kTarget);
+  std::memcpy(g_cs2, g_cs, sizeof(g_cs));
+  for (int frame = 0; frame < 1000; ++frame) {
+    g_afterIdx = 0x0007ffff;  // the refresh leaves the first component's index unresolved
+    staged(g_cs, 1);
+    g_afterIdx = 0x00070003;  // and the second's resolved
+    staged(g_cs2, 2);
+  }
+  QCHECK(dg::CurrentStats().idxSkips == 1000);
+  QCHECK(Lines("combat_droneguard_idx_skip").size() == 1U && Lines("combat_droneguard_idx_resolved").empty());
+  End();
+}
+
+// Two components with no target, each skipped every frame, each start a run of their own: two skip lines, not one.
+void TwoComponentsWithNoTargetEachWriteTheirOwnSkipLine() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  std::memcpy(g_cs2, g_cs, sizeof(g_cs));
+  for (int frame = 0; frame < 100; ++frame) {
+    hook(g_cs, 1);
+    hook(g_cs2, 2);
+  }
+  QCHECK(Lines("combat_droneguard_skip").size() == 2U && dg::CurrentStats().skips == 200 && g_realCalls == 0);
+  End();
+}
+
+// A component that flaps between a null target and a set one every frame cannot write a line a frame: each kind of run line has a cap, the first attempt over it
+// writes one Warning that says so, and the counts go on in the stats line.
+void AFlappingComponentIsCappedAndTheCapSaysSo() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  for (int frame = 0; frame < 1000; ++frame) {
+    Put64(0x140, frame % 2 == 0 ? 0 : kTarget);
+    hook(g_cs, 1);
+  }
+  QCHECK(Lines("combat_droneguard_skip").size() == 8U && Lines("combat_droneguard_target_set").size() == 8U);
+  const std::vector<Line> cap = Lines("combat_droneguard_log_cap");
+  int skipCap = 0, setCap = 0, stateCap = 0;
+  for (const Line& l : cap) {
+    QCHECK(l.level == sentinel::LogLevel::kWarn && Has(l.text, "not written"));
+    skipCap += Has(l.text, "\"lines\":\"skip\",\"cap\":8") ? 1 : 0;
+    setCap += Has(l.text, "\"lines\":\"target_set\",\"cap\":8") ? 1 : 0;
+    stateCap += Has(l.text, "\"lines\":\"state\",\"cap\":16") ? 1 : 0;
+  }
+  QCHECK(cap.size() == 3U && skipCap == 1 && setCap == 1 && stateCap == 1);  // each kind says once that it stopped (the state line flaps with the target too)
+  QCHECK(dg::CurrentStats().skips == 500);  // every skip is still counted
   End();
 }
 
@@ -273,6 +339,7 @@ void TheStateLineFollowsTheCacheAndIsCapped() {
     hook(g_cs, 1);
   }
   QCHECK(count() == 16U);
+  QCHECK(Lines("combat_droneguard_log_cap").size() == 1U && Has(Lines("combat_droneguard_log_cap")[0].text, "\"lines\":\"state\",\"cap\":16"));  // the 17th change said so, once
   End();
 }
 
@@ -378,6 +445,25 @@ void TheIdxSkipTotalsAreEvery600thAtMostEight() {
   QCHECK(totals.size() == 1U && Has(totals[0].text, "\"idx_skips\":600"));
   for (int i = 0; i < 600 * 9; ++i) hook(g_cs, 1);
   QCHECK(Lines("combat_droneguard_idx_skips").size() == 8U);
+  QCHECK(Lines("combat_droneguard_log_cap").size() == 1U && Has(Lines("combat_droneguard_log_cap")[0].text, "\"lines\":\"idx_skips\",\"cap\":8"));  // the 9th total said they stopped
+  End();
+}
+
+// Stage 1's run lines are capped like the null half's: a component flapping between a refused cache and a resolved one writes at most 8 of each, and says so once.
+void AFlappingCacheIsCappedAndTheCapSaysSo() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  for (int frame = 0; frame < 1000; ++frame) {
+    g_afterIdx = frame % 2 == 0 ? 0x0007ffff : 0x00070003;
+    hook(g_cs, 1);
+  }
+  QCHECK(Lines("combat_droneguard_idx_skip").size() == 8U && Lines("combat_droneguard_idx_resolved").size() == 8U);
+  int skipCap = 0, resolvedCap = 0;
+  for (const Line& l : Lines("combat_droneguard_log_cap")) {
+    skipCap += Has(l.text, "\"lines\":\"idx_skip\",\"cap\":8") ? 1 : 0;
+    resolvedCap += Has(l.text, "\"lines\":\"idx_resolved\",\"cap\":8") ? 1 : 0;
+  }
+  QCHECK(skipCap == 1 && resolvedCap == 1 && dg::CurrentStats().idxSkips == 500);
   End();
 }
 
@@ -611,6 +697,9 @@ int main() {
   ASetTargetReachesTheGamesFollowUntouched();
   ANullTargetIsNeverFollowedAndIsCounted();
   TheTargetArrivingEndsTheRunOfSkips();
+  TwoComponentsEachCalledEveryFrameWriteOneSkipLineAndNoTargetSetLine();
+  TwoComponentsWithNoTargetEachWriteTheirOwnSkipLine();
+  AFlappingComponentIsCappedAndTheCapSaysSo();
   TheStateLineFollowsTheCacheAndIsCapped();
   ANullSystemGoesToFollow();
   AHealthyPlayerIsRefreshedThenChecked();
@@ -618,6 +707,7 @@ int main() {
   ARefusedIndexIsSkippedUntilThePlayerResolves();
   ACacheThatTurnsUnreadableAfterTheRefreshGoesToFollow();
   TheIdxSkipTotalsAreEvery600thAtMostEight();
+  AFlappingCacheIsCappedAndTheCapSaysSo();
   StageOneWithoutItsFunctionsLeavesTheNullHalfOnly();
   AChangedStageOneWordLeavesTheNullHalfOnlyAndNamesIt();
   TheEnginesExportsMustBeAtTheirPinnedAddresses();

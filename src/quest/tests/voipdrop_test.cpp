@@ -305,13 +305,22 @@ void TheDropLinesAreCappedAndCounted() {
   Installed();
   World(-1, 0x80000);
   g_allocOk = false;
-  for (int i = 0; i < 49; ++i) Slot()(g_cs, 1, kEvent, kData, 1);
+  for (int i = 0; i < 16; ++i) Slot()(g_cs, 1, kEvent, kData, 1);
+  QCHECK(Lines("combat_voipdrop_dropped").size() == 16U && Lines("combat_voipdrop_log_cap").empty());  // inside the cap nothing is said
+  for (int i = 0; i < 33; ++i) Slot()(g_cs, 1, kEvent, kData, 1);
   QCHECK(Lines("combat_voipdrop_dropped").size() == 16U && Lines("combat_voipdrop_dropped_total").empty());
+  QCHECK(Lines("combat_voipdrop_log_cap").size() == 1U);  // the 17th drop said the first-drop lines stopped, once
   Slot()(g_cs, 1, kEvent, kData, 1);
   std::vector<Line> totals = Lines("combat_voipdrop_dropped_total");
   QCHECK(totals.size() == 1U && Has(totals[0].text, "\"n\":50,") && totals[0].level == sentinel::LogLevel::kInfo);
   for (int i = 0; i < 850; ++i) Slot()(g_cs, 1, kEvent, kData, 1);
   QCHECK(Lines("combat_voipdrop_dropped_total").size() == 16U);
+  const std::vector<Line> caps = Lines("combat_voipdrop_log_cap");
+  QCHECK(caps.size() == 2U);  // and the 17th total said the totals stopped, once
+  if (caps.size() == 2U) {
+    QCHECK(caps[0].level == sentinel::LogLevel::kWarn && Has(caps[0].text, "\"lines\":\"dropped\",\"cap\":16") && Has(caps[0].text, "combat_voipdrop_stats"));
+    QCHECK(Has(caps[1].text, "\"lines\":\"dropped_total\",\"cap\":16") && Has(caps[1].text, "no further"));
+  }
   QCHECK(vd::CurrentStats().dropped == 900 && g_realCalls == 0);
   QCHECK(Lines("combat_voipdrop_dropped").size() == 16U);
   vd::NoteEnd();  // the end line carries what was dropped

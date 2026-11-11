@@ -33,8 +33,8 @@ The crash (reference build :1-14): the drone's actor carries a follow component 
 loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTransform` unchecked.
 
 - **Stage 0 (the null half).** The handler (a `CallbackThunk` on the slot, installed by the hook manager) reads the four fields it needs (`[cs+0x140]`, `+0x188`, `+0x190`, `+0x16c`) with plain loads: `Follow` loads `[cs+0xc8]` as its first data access (0x2149784,
-  disassembly), so the game dereferences the same object on every call and the loads are as safe as the stock call. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a run (then a total every 600th skip, at
-  most 8). Target set: if a run of skips was in progress one `combat_droneguard_target_set`, then the game's function with the same two arguments. Every call also feeds the
+  disassembly), so the game dereferences the same object on every call and the loads are as safe as the stock call. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a component's run (a run belongs to the component: up to 16 components are followed at once, so a drone with no target
+  beside a drone with one is one run and one line, not a line a frame; at most 8 such lines in a process, then a total every 600th skip, at most 8). Target set: if that component was in a run of skips one `combat_droneguard_target_set` (at most 8 in a process), then the game's function with the same two arguments. Every call also feeds the
   read-only `combat_droneguard_state` line: the first call and each change of (raw index word, flag byte at +0x16c, target null, handle system null), at most 16 lines. A
   null `cs` goes to the game's function (an unreadable non-null one faults in `Follow` itself, with or without the guard).
 - **Stage 1 (the idx guard, `combat.droneguard_stage1`).** After the null test: `RefreshCache(cs+0x148)`, read the cache again, then skip when the u16 `[cs+0x190]` is 0xffff
@@ -71,6 +71,7 @@ fingerprint.
   (`off|on|null_half_only`), `consequence`. Info for installed and off, Error for refused. The table's status for an installed guard whose stage 1 was asked and is not available is `installed_null_half`.
 - `combat_droneguard_stage1`: `result` `on|null_half_only`, `reason`; Info for on, Error otherwise.
 - `combat_droneguard_state`, `combat_droneguard_skip`, `combat_droneguard_skips`, `combat_droneguard_target_set`, `combat_droneguard_idx_skip`, `combat_droneguard_idx_skips`, `combat_droneguard_idx_resolved`: Info, capped as above.
+- `combat_droneguard_log_cap`: Warning, once per kind (`state`, `skip`, `skips`, `target_set`, `idx_skip`, `idx_skips`, `idx_resolved`), written by the first line over its cap, saying where the count goes on (the stats line, never capped).
 - `combat_droneguard_stats`: `calls`, `skips`, `idx_skips`, `final`; Debug every 16384 calls, Info once at the end of the process when the guard is installed.
 
 ## Prediction (written before any headset run)
