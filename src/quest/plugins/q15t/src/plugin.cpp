@@ -47,49 +47,6 @@ bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->
 // Every compiled-in module, by name, for the init line.
 constexpr char kCompiledModules[] = "";
 
-// A module that could not even be attempted (an engine export is missing, a module it needs is not in).
-[[maybe_unused]] void ReportModuleRefused(const char* module, const char* reason) {
-  using namespace q15t;
-  const NevrLogField f[] = {{"module", module}, {"status", "not_installed"}, {"reason", reason}, {"real_resolved", "0"}};
-  Log(NEVR_LOG_ERROR, "module install FAILED", f, 4);
-}
-
-// A module with no install of its own (its work resolves on the first game tick): its registration is its install.
-[[maybe_unused]] void ReportModuleTick(const char* module, bool registered, bool* want_tick) {
-  using namespace q15t;
-  const NevrLogField f[] = {{"module", module},
-                            {"status", registered ? "tick_registered" : "not_installed"},
-                            {"reason", registered ? "resolves on the first game tick" : "game tick table full"},
-                            {"real_resolved", "0"}};
-  Log(registered ? NEVR_LOG_INFO : NEVR_LOG_ERROR, registered ? "module install" : "module install FAILED", f, 4);
-  if (registered) *want_tick = true;
-}
-
-// A tick for a module whose install went through. A full table is an ERROR naming the module.
-[[maybe_unused]] void AddModuleTick(const char* module, q15t::TickFn fn, bool* want_tick) {
-  using namespace q15t;
-  if (AddGameTick(fn)) {
-    *want_tick = true;
-    return;
-  }
-  const NevrLogField f[] = {{"module", module}, {"status", "no_tick"}, {"reason", "game tick table full"}, {"real_resolved", "0"}};
-  Log(NEVR_LOG_ERROR, "module install FAILED", f, 4);
-}
-
-// The first install that did not go through, for modules that report several hooks.
-[[maybe_unused]] q15t::InstallResult FirstFailure(bool ok, const q15t::InstallResult* hooks, int n) {
-  if (ok) {
-    q15t::InstallResult r;
-    r.status = q15t::SwapStatus::kOk;
-    return r;
-  }
-  for (int i = 0; i < n; ++i)
-    if (hooks[i].status != q15t::SwapStatus::kOk) return hooks[i];
-  q15t::InstallResult r;
-  r.reason = "rolled_back";
-  return r;
-}
-
 }  // namespace
 
 NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
