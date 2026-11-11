@@ -39,7 +39,17 @@ std::uint64_t PageHook(void* node) {
   const std::uint64_t r = g_original[I](node);
   const float written = Read<float>(at);
   std::memcpy(at, &clock, sizeof clock);
-  if (kPages[I].writes && r == 0) rules.SetRoundTime(written, CaptureOf(written));
+  if (kPages[I].writes && r == 0) {
+    rules.SetRoundTime(written, CaptureOf(written));
+    // One Info line per press that changes T (the writing functions run on a podium press, not per frame).
+    if (written != page) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] capture time: T changed from=%g to=%g capture=%g script=%016llx (the RULES page's time rows, "
+          "in seconds: unlock * 60 + capture; the capture point's times follow it, the match clock does not)",
+          static_cast<double>(page), static_cast<double>(written), static_cast<double>(CaptureOf(written)),
+          static_cast<unsigned long long>(kScript));
+    }
+  }
   return r;
 }
 
