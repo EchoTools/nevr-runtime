@@ -1,6 +1,6 @@
 # Combat module `ec` and `ecfx`: the EC network client, EC's spare page, the tac-mod store and hide, NEUTRON effects
 
-Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, `ecfx.{h,cpp}`, `ecfx_core.h` (the drain's rules are `src/runtime/patch/ecfx_rules.h`, shared with PC); the page `src/quest/sentinel/ec_page.{h,cpp}`.
+Code: `src/quest/combat/ec.{h,cpp}`, `ec_core.h`, `ec_targets.h`, the rules shared with PC `src/runtime/patch/ec_rules.h` (#2358), `ecfx.{h,cpp}`, `ecfx_core.h` (the drain's rules are `src/runtime/patch/ecfx_rules.h`, shared with PC); the page `src/quest/sentinel/ec_page.{h,cpp}`.
 Tests: `src/quest/tests/ec_test.cpp`, `ec_page_test.cpp` (with `ec_page_shim.cpp`, `ec_page_libr15.cpp`, `ec_page_script.cpp`, `ec_page_other.cpp`),
 `ecfx_test.cpp` (with `ecfx_wall_stub.cpp`), the `CheckRealEc` part of `got_pinned_test.cpp`, `TestExportAllowlist` and
 `TestEcPageIsAnExportedDataPage` in `tests/quest/elf_groundtruth_test.go`. Mutants: `src/quest/combat/mutants.d/ec.sh`, `ecfx.sh`.
@@ -88,10 +88,12 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
 ## Behaviour
 
 - **The net pair**, both or none (a refused sendto removes the recvfrom hook). A datagram of exactly 16 bytes with both magics ("ECVL", "VEIL")
-  and a known type, not peeked, is the EC network's and is not handed to the game: recvfrom is called again with the same arguments (a
-  non-blocking socket gives the game the next datagram or EAGAIN). One call swallows at most 256 in a row. 'K' and the
-  carried types come from any sender, de-duplicated by id (a ring of 32); 'A' (a server of an older build answering the hello) and 'M' are
-  counted and open nothing.
+  and a known type (every type EchoCombat v2.0.0's wire carries: H A V P T O K M and match control's C L R G), not peeked, is the EC
+  network's and is not handed to the game: recvfrom is called again with the same arguments (a non-blocking socket gives the game the next
+  datagram or EAGAIN). One call swallows at most 256 in a row. 'K', 'M' and the carried types come from any sender, de-duplicated by id
+  (a ring of 32, which an 'M' takes a slot of, as on PC); 'A' (a server of an older build answering the hello) and a first-time 'M' are
+  counted and open nothing; C L R G are taken out and ignored. These rules are `src/runtime/patch/ec_rules.h`, which PC's
+  `src/runtime/combat/veilnet.cpp` follows too.
 - **The server's statement** (#2333): `CR15NetGame::LobbySettingsCB(SMsg)` (its GLOB_DAT word, which `BeginMultiplayer` registers) reads the
   `nevr_server` key of the lobby settings the server gives its clients (`src/runtime/compat/server_features.h`). A server that states
   `echocombat` opens the gate the tac-mod hide follows; any other document, or none, keeps it closed. A session in another lobby clears it
@@ -196,5 +198,5 @@ reference build's; the code refuses an implausible list and re-checks the three 
 
 The q15t plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h`, ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
 afk_ec_core.h, afk_ecfx.cpp, afk_ecfx_core.h (pinned `1357409` in docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-211).
-The EC network rules are EchoCombat 1.1.7's VeilNet (plugin/veilnet.cpp), the NEUTRON deferral its DroneFix (plugin/dronefix.cpp
-L332-409, L682-689, L1683-1686), EchoCombat `c14c3e0a`.
+The EC network rules are EchoCombat v2.0.0's VeilNet (plugin/veilnet.cpp), shared with PC in `src/runtime/patch/ec_rules.h`. The NEUTRON
+deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686), EchoCombat `c14c3e0a`.

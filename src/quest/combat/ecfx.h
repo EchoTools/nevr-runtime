@@ -1,4 +1,4 @@
-/* NEUTRON effects (#2187, docs/quest/combat/ec.md): the client half of EC 1.1.7's NEUTRON effects deferral. The queue-mode wall library (game
+/* NEUTRON effects (#2187, docs/quest/combat/ec.md): the client half of EchoCombat v2.0.0's NEUTRON effects deferral. The queue-mode wall library (game
  * content generated on the device: libac4e9374a146d3a4.so) queues {tp, entry | kind} on re33_ec_page at +0xda0 instead of running a NEUTRON
  * effect inside its own node, but only while the u32 at +0xe20 is non-zero. This module is the only writer of +0xe20: it drains the queue on
  * the EC client's net tick (ec::OnNetTick) and opens the gate (fail closed) only after the four entries are resolved, the tick is registered
@@ -13,7 +13,7 @@
  *
  * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 54, 61, 210-211). The q15t plugin's
  * `ecfx.cpp` / `ecfx_core.h`, a port of the reference build's `runtime/native/afkxr/afk_ecfx.cpp` and `afk_ecfx_core.h` (at `1357409`), whose
- * rules are EchoCombat 1.1.7's NEUTRON effects deferral in DroneFix, `plugin/dronefix.cpp` at `c14c3e0a` L332-409 (WallFxDue L374-409, SoundAgain
+ * rules are EchoCombat v2.0.0's NEUTRON effects deferral in DroneFix, `plugin/dronefix.cpp` at `c14c3e0a` L332-409 (WallFxDue L374-409, SoundAgain
  * L352-359), L682-689, L1683-1686.
  *
  * Lines (sentinel log): `combat_ecfx_install`, `combat_ecfx_waiting`, `combat_ecfx_attach`, `combat_ecfx_gate`, `combat_ecfx_ran`,

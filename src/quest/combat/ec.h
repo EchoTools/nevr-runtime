@@ -39,10 +39,9 @@
  *
  * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-209). The q15t plugin's
  * `ec.cpp` / `ec_core.h`, a port of the reference build's `runtime/native/afkxr/afk_ec.cpp` (at `1357409`: the slots :99,102, the platform
- * libraries :123-127,419-448) and `afk_ec_core.h` (:20-33 the page layout, :162-170,247 the tac mods). Its network rules are EchoCombat 1.1.7's
- * VeilNet, `plugin/veilnet.cpp` (EchoCombat `b0e850fd` numbering: L65-100 the page offsets, token life, magics, timeout and packet, L146-237 tokens,
- * dedupe and server pick, L316-330 the client branch, L363-409 the list hide, L440-456 the use watcher, L508-545 the selected tac mod; `c14c3e0a`
- * L377-381 and L402-405 the keep-whole rule). The pins, the hidden page with its exported alias, the WriteLogV hooks and the scope are ours.
+ * libraries :123-127,419-448) and `afk_ec_core.h` (:20-33 the page layout, :162-170,247 the tac mods). Its network rules are EchoCombat v2.0.0's
+ * VeilNet, `plugin/veilnet.cpp`, shared with PC in `src/runtime/patch/ec_rules.h` (the header cites the lines it follows). The pins, the hidden
+ * page with its exported alias, the WriteLogV hooks and the scope are ours.
  *
  * Lines (sentinel log, events `combat_ec_*`; the per-kind caps are in ec.cpp): install, hook, page, words, legacy_switch, scope, server,
  * answer, used, token, kill, sel, tacmods, skip, prelude, loc, wall, sum, platform.
@@ -100,7 +99,8 @@ void Step(std::uint64_t now100) noexcept;
 void OnModuleLoaded(const char* name, void* handle) noexcept;
 
 struct Stats {
-  std::uint64_t sends, passed, consumed;  // sendto calls, datagrams passed to the game, EC network datagrams consumed (in scope)
+  std::uint64_t sends, passed, consumed, capped;  // sendto calls, datagrams passed to the game, EC network datagrams consumed (in scope),
+                                                  // EC datagrams past the per-call cap (passed to the game, and counted)
   std::uint64_t answers, tokens, dropped, kills, medi;
   bool answered;  // the current server states EchoCombat in its lobby settings (#2333, runtime/compat/server_features.h)
   bool haveServer;

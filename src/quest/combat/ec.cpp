@@ -30,6 +30,7 @@ namespace {
 
 namespace pinned = sentinel::pinned;
 using namespace core;
+using namespace ::nevr_ec;  // the shared rules (runtime/patch/ec_rules.h)
 using sentinel::LogLevel;
 
 // ---- the thunks: one per slot (callback_thunk.h, "One thunk per hooked slot") ----
@@ -61,7 +62,7 @@ constexpr unsigned kStepUs = 5000;            // the thread's period in scope
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 State g_st;  // under g_mu
-std::atomic<std::uint64_t> g_sends{0}, g_passed{0}, g_consumed{0};
+std::atomic<std::uint64_t> g_sends{0}, g_passed{0}, g_consumed{0}, g_capped{0};
 std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0};
 std::atomic<DroneKilledFn> g_droneKilled{nullptr};
 constexpr int kNetTicks = 4;
@@ -140,11 +141,6 @@ ssize_t SendHandler(SendThunk::Fn real, int fd, const void* buf, size_t len, int
   return SendInScope(real, fd, buf, len, flags, to, tolen);
 }
 
-// The real recvfrom; a datagram of exactly 16 bytes with both magics and a known type that was not peeked is ours and is NOT returned:
-// the real recvfrom is called again with the same arguments (a non-blocking socket gives the game the next datagram or EAGAIN, a blocking
-// one waits as the game's own call would). Everything else, MSG_PEEK, and a call with from != null and fromlen == null pass through.
-constexpr int kMaxConsumePerCall = 256;
-
 void LogKill(std::uint32_t drone, bool handled) noexcept {
   if (g_killLines.fetch_add(1, std::memory_order_relaxed) >= 16) return;
   sentinel::LogFields(LogLevel::kInfo, "combat_ec_kill",
@@ -159,6 +155,11 @@ void LogToken(std::uint8_t type, std::uint32_t id, std::uint64_t tokens) noexcep
   sentinel::LogFields(LogLevel::kInfo, "combat_ec_token", {{"type", t}, {"id", sentinel::HexString(idText, id)}, {"tokens", tokens}});
 }
 
+// The real recvfrom; a datagram the shared rules take out (ec_rules.h TakeOut: exactly 16 bytes with both magics and a known type, not
+// peeked, into a buffer that holds it, at most kMaxConsumePerCall in one call) is ours and is NOT returned: the real recvfrom is called
+// again with the same arguments (a non-blocking socket gives the game the next datagram or EAGAIN, a blocking one waits as the game's own
+// call would). Everything else, MSG_PEEK, and a call with from != null and fromlen == null pass through. A datagram of ours past the cap
+// passes through and is counted (ec_rules.h Capped; the sum record's capped).
 __attribute__((noinline)) ssize_t RecvInScope(RecvThunk::Fn real, int fd, void* buf, size_t len, int flags, sockaddr* from,
                                               socklen_t* fromlen) noexcept {
   for (int consumed = 0;; ++consumed) {
@@ -171,8 +172,10 @@ __attribute__((noinline)) ssize_t RecvInScope(RecvThunk::Fn real, int fd, void* 
     Packet p;
     // len: a MSG_TRUNC call can return 16 into a shorter buffer. consumed: one call never swallows more than kMaxConsumePerCall of the
     // network's datagrams in a row; past that the next one passes through to the game untouched.
-    if ((flags & MSG_PEEK) || fl == nullptr || len < sizeof(Packet) || consumed >= kMaxConsumePerCall || !Ours(buf, static_cast<long>(n), &p)) {
+    if (!TakeOut(buf, static_cast<long>(n), len, (flags & MSG_PEEK) != 0, fl != nullptr, consumed, &p)) {
       if (n >= 0) g_passed.fetch_add(1, std::memory_order_relaxed);
+      if (Capped(buf, static_cast<long>(n), len, (flags & MSG_PEEK) != 0, fl != nullptr, consumed))
+        g_capped.fetch_add(1, std::memory_order_relaxed);  // past kMaxConsumePerCall: handed to the game, and counted (the sum record)
       // only the game's own socket (CR15NetGame::UpdateBroadcaster), and only on the thread that received a datagram of the current server
       // on it (an fd number can be reused)
       if (fd == g_gameFd.load(std::memory_order_relaxed)) {
@@ -436,7 +439,7 @@ struct Loop {
   TacList tacList;
   int listWas = 0;
   bool keepWas = false;
-  std::uint64_t selWas = 0, selChangedMs = 0;
+  SelectionSettle settle;  // a cut waits till the selection is still (ec_rules.h)
   Dest logged = {};
   bool answered = false, pageAns = false;
   int lines = 0, summaries = 0, locLines = 0;
@@ -754,15 +757,12 @@ void Step(std::uint64_t now100) noexcept {
     // one of ours selected = the list stays whole (with the hide word only; +e80 is 0 with `noequip`)
     const std::uint64_t sel = Load64(page + kEquipSel);
     const bool keep = g_hideWrite && !ans && OurSelected(sel);
-    if (sel != L.selWas) {
-      L.selWas = sel;
-      L.selChangedMs = nowMs;  // SFD-1: a cut waits till the selection is still
-    }
+    const bool settled = L.settle.Look(sel, nowMs);
     {
       bool ok = true;
       const auto list = SafeRead<std::uintptr_t>(g_tacListWord.load(std::memory_order_acquire), &ok);
       g_gear.Lock();
-      if (ok) r = TacModsFor(L.tacList, list, ans, g_hideWrite, &count, g_gear.gen.load(std::memory_order_relaxed), keep, HideSettled(nowMs, L.selChangedMs));
+      if (ok) r = TacModsFor(L.tacList, list, ans, g_hideWrite, &count, g_gear.gen.load(std::memory_order_relaxed), keep, settled);
       g_gear.Unlock();
     }
     if (keep != L.keepWas) {
@@ -839,8 +839,9 @@ void Step(std::uint64_t now100) noexcept {
         answers = g_st.answers;
       }
       sentinel::LogFields(LogLevel::kInfo, "combat_ec_sum",
-                          {{"sendto", g_sends.load()}, {"passed", g_passed.load()}, {"consumed", g_consumed.load()}, {"A", answers},
-                           {"tokens", tokens}, {"dropped", dropped}, {"K", kills}, {"server", haveDest ? "seen" : "none"}});
+                          {{"sendto", g_sends.load()}, {"passed", g_passed.load()}, {"consumed", g_consumed.load()},
+                           {"capped", g_capped.load()}, {"A", answers}, {"tokens", tokens}, {"dropped", dropped}, {"K", kills},
+                           {"server", haveDest ? "seen" : "none"}});
     }
   }
 }
@@ -850,6 +851,7 @@ Stats StatsNow() noexcept {
   s.sends = g_sends.load();
   s.passed = g_passed.load();
   s.consumed = g_consumed.load();
+  s.capped = g_capped.load();
   {
     LockG l;
     s.answers = g_st.answers;
@@ -916,6 +918,7 @@ void ResetForTest() noexcept {
   g_sends = 0;
   g_passed = 0;
   g_consumed = 0;
+  g_capped = 0;
   g_killLines = 0;
   g_tokenLines = 0;
   g_selLines = 0;
