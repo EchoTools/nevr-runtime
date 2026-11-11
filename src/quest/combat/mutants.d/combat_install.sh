@@ -11,3 +11,6 @@ runm ci_record_no_status    $CI "s/{\"status\", result.status != nullptr ? resul
 runm ci_record_wrong_phase  $CI "s/{{\"phase\", PhaseName(phase)}, {\"module\", module.name}/{{\"phase\", \"normal\"}, {\"module\", module.name}/"
 runm ci_record_no_name      $CI "s/{\"module\", module.name}, {\"outcome\", outcomeName}/{\"module\", \"\"}, {\"outcome\", outcomeName}/"
 runm ci_phase_list_back     $CI "s/{\"off\", outcome.off}, {\"msg\", msg}});/{\"off\", outcome.off}, {\"msg\", msg}, {\"results_truncated\", 0}});/"
+# refresh_rate refuses (tick_table_full) only in a run where a module's key is off: the off-key tests pin installed and failed exactly, so a
+# count that only sums them would let this through
+runm ci_off_runs_refresh_full $CI 's/^  return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);$/  if (!g_config.ec.on || !g_config.ecfx.on || !g_config.dronekill.on || !g_config.dronemuzzle.on || g_config.powerboostStage.value == 0 || !g_config.music.on || !g_config.sensorwd.on || !g_config.impactsnd.on) return {false, "tick_table_full"};\n&/'

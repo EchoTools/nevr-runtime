@@ -46,6 +46,7 @@
 #include "runtime/patch/early_quit_lockout.h"
 #include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/lobby_full_backoff.h"
+#include "runtime/patch/lobby_settings_hook.h"
 #include "runtime/patch/queued_join_log.h"
 #include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
@@ -407,6 +408,10 @@ static VOID InitializeAfterGameImageGuard() {
   // [NEVR.MATCH]: what the client did with a lobby session success and what became of a join the game queued (#2163,
   // queued_join_log.h).
   nevr_queued_join_log::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // What the current server runs (EchoCombat, MEDIGUN), read from the lobby settings it gives its clients (#2333,
+  // lobby_settings_hook.h).
+  nevr_lobby_settings_hook::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // The runtime version on the menu's versions panel (menu_version_label.h).
   nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));

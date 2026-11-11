@@ -165,6 +165,23 @@ void FinishPlugins(const char* reasonToken) noexcept {
   }
 }
 
+std::vector<PluginManifestEntry> LoginReport(bool* busy) noexcept {
+  if (busy != nullptr) *busy = false;
+  try {
+    if (Instance() == nullptr) return {};
+    std::unique_lock<std::mutex> lock(Instance()->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      if (busy != nullptr) *busy = true;
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "plugin_runtime", {{"step", "login_report"}, {"status", "busy"}});
+      return {};
+    }
+    return Instance()->loader.Report();
+  } catch (const std::exception& error) {
+    Contained("login_report", error);
+    return {};
+  }
+}
+
 void RefreshMainLevel() noexcept {
   try {
     if (Instance() == nullptr) return;

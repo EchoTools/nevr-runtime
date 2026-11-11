@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/nevr_config.h"
+#include "runtime/ext/plugin_manifest.h"
 
 namespace nevr_quest::plugin {
 
@@ -33,6 +34,11 @@ void RunNormalPlugins() noexcept;
 // Writes the game's main level into the contexts the loaders already handed out (Loader::RefreshMainLevel, #1106). Called once
 // per NetGame::Update from the frame dispatcher, so it never waits: when a pass holds the loader this frame does nothing.
 void RefreshMainLevel() noexcept;
+
+// The login's `nevr_plugins` report (Loader::Report). Called from the login's compose phase, on the game's pump thread, so
+// it never waits: a pass holding the loader (a plugin's init on another thread) gives an empty report this attempt, and
+// `busy` says so. Nothing planned is an empty report too.
+std::vector<PluginManifestEntry> LoginReport(bool* busy = nullptr) noexcept;
 
 // Ends every entry still pending as `not_started`, with `reasonToken` (a plugin_plan.h reason token). Safe to call more than
 // once and with nothing planned.
