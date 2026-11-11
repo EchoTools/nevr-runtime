@@ -229,6 +229,7 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_callback_unregistration.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_checked_patch.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_cli_check.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_clock_pause.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_clock_skew.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_cmdline_strip.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_cmdline_waiver.cpp",  # KNOWN-WRONG #2363
@@ -248,9 +249,11 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_deadlock_monitor.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_dll_load_hook.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_dot_script.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_dronekill_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_dronemuzzle_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_early_quit_feature_flags.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_early_quit_lockout.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_ecfx_rules.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_equipment_refire.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_error_dialog_depth.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_evr_codec.cpp",  # KNOWN-WRONG #2363
@@ -314,6 +317,7 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_nevr_config.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_nevr_config_set.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_nevr_root.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_orb_pause.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_parse_endpoint.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_party_follow_dedup.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_party_leave_check.cpp",  # KNOWN-WRONG #2363
@@ -341,6 +345,7 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_resource_registry.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_return_to_lobby_hold.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_return_to_lobby_queue.cpp",  # KNOWN-WRONG #2363
+    "src/runtime/tests/test_rules_button.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_run_log_record.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_runtime_abi.cpp",  # KNOWN-WRONG #2363
     "src/runtime/tests/test_runtime_export_guard.cpp",  # KNOWN-WRONG #2363
@@ -389,7 +394,9 @@ KNOWN_ROLE_BREAKS = frozenset({
     "src/runtime/tests/test_xpid_patch.cpp",  # KNOWN-WRONG #2363
 })
 KNOWN_RULES_HOME_BREAKS = frozenset({
+    "src/runtime/patch/dronekill_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/dronemuzzle_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
+    "src/runtime/patch/ecfx_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
     "src/runtime/patch/equipment_refire_rules.h: no non-test file under src/quest/ is named equipment_refire",  # KNOWN-WRONG #2363
     "src/runtime/patch/lobby_failure_message_rules.h: no non-test file under src/quest/ is named lobby_failure_message",  # KNOWN-WRONG #2363: its hook is the lobby-full hook of lobby_full_backoff
     "src/runtime/patch/powerboost_rules.h: no non-test file in src/runtime/patch/ includes it",  # KNOWN-WRONG #2363
