@@ -498,6 +498,106 @@ def directory_breaks(paths):
                 breaks.add(name)
     return breaks
 
+# N-COMBAT (docs/standards/naming.md, "What checks it"): a file of the combat area carries a component's name or the
+# area's infrastructure name (COMBAT_NAMES), or it is a break of the rule today (KNOWN_COMBAT_BREAKS, each named by the
+# rename table of #2363: the rows whose proposed name differs from today's name). Both lists carry KNOWN-WRONG #2363
+# where they name a break, and the break list only shrinks.
+COMBAT_DIRECTORIES = ("src/quest/combat", "src/quest/combat/mutants.d", "src/quest/combat/check", "docs/quest/combat")
+COMBAT_SCAFFOLDING = frozenset({"CMakeLists.txt", "README.md", "mutants.sh"})
+COMBAT_ROLE_SUFFIXES = ("_rules", "_targets", "_entry")
+COMBAT_NAMES = frozenset({
+    "combat_active",
+    "combat_install",
+    "combat_level",
+    "combat_scope",
+    "combat_tick",
+    "decals",
+    "headset_gates",
+    "heaps",
+    "legacy_switch",
+    "line_budget",
+    "match_tags",
+    "music",
+    "netgame",
+    "pinned_words",
+    "refresh_rate",
+    "safe_read",
+    "table_step",
+    "thread_word",
+    "weapon_arm",
+})
+KNOWN_COMBAT_BREAKS = frozenset({
+    "aibots",  # KNOWN-WRONG #2363
+    "bvh",  # KNOWN-WRONG #2363
+    "bvh_core",  # KNOWN-WRONG #2363
+    "combat_gates",  # KNOWN-WRONG #2363
+    "custctx",  # KNOWN-WRONG #2363
+    "decals_core",  # KNOWN-WRONG #2363
+    "droneguard",  # KNOWN-WRONG #2363
+    "dronekill",  # KNOWN-WRONG #2363
+    "dronekill_b",  # KNOWN-WRONG #2363
+    "dronekill_c",  # KNOWN-WRONG #2363
+    "dronekill_core",  # KNOWN-WRONG #2363
+    "dronekill_d",  # KNOWN-WRONG #2363
+    "dronekill_e",  # KNOWN-WRONG #2363
+    "dronekill_f",  # KNOWN-WRONG #2363
+    "dronemuzzle",  # KNOWN-WRONG #2363
+    "ec",  # KNOWN-WRONG #2363
+    "ec_core",  # KNOWN-WRONG #2363
+    "ecfx",  # KNOWN-WRONG #2363
+    "ecfx_core",  # KNOWN-WRONG #2363
+    "equip_refire",  # KNOWN-WRONG #2363
+    "fxtrail",  # KNOWN-WRONG #2363
+    "gamespace",  # KNOWN-WRONG #2363
+    "gunconnect",  # KNOWN-WRONG #2363
+    "hudmeter",  # KNOWN-WRONG #2363
+    "impactsnd",  # KNOWN-WRONG #2363
+    "instmodel",  # KNOWN-WRONG #2363
+    "memsys",  # KNOWN-WRONG #2363
+    "meshstep",  # KNOWN-WRONG #2363
+    "peerclamp",  # KNOWN-WRONG #2363
+    "pfx",  # KNOWN-WRONG #2363
+    "pfxtev",  # KNOWN-WRONG #2363
+    "powerboost",  # KNOWN-WRONG #2363
+    "powerboost_core",  # KNOWN-WRONG #2363
+    "powerboost_thunk",  # KNOWN-WRONG #2363
+    "sendguard",  # KNOWN-WRONG #2363
+    "sensorwd",  # KNOWN-WRONG #2363
+    "shaderstep",  # KNOWN-WRONG #2363
+    "shieldgamma",  # KNOWN-WRONG #2363
+    "tablestep",  # KNOWN-WRONG #2363
+    "voipdrop",  # KNOWN-WRONG #2363
+    "wallfire",  # KNOWN-WRONG #2363
+})
+
+
+def combat_names(paths):
+    """N-COMBAT: the name of each direct file of a combat directory: its stem less a role suffix, or less the `_<n>`
+    index of a mutant file. A file of docs/quest/combat is named by its stem."""
+    names = set()
+    for path in paths:
+        pure = pathlib.PurePosixPath(path)
+        directory = pure.parent.as_posix()
+        if directory not in COMBAT_DIRECTORIES or pure.name in COMBAT_SCAFFOLDING:
+            continue
+        stem = pure.stem
+        if directory.endswith("/mutants.d"):
+            stem = re.sub(r"_\d+$", "", stem)
+        elif not directory.startswith("docs/"):
+            for suffix in COMBAT_ROLE_SUFFIXES:
+                if stem.endswith(suffix):
+                    stem = stem[:-len(suffix)]
+                    break
+        names.add(stem)
+    return names
+
+
+def combat_unlisted_and_stale(paths, names, breaks):
+    """N-COMBAT: the combat names that neither list gives, and the break entries that name no combat file."""
+    found = combat_names(paths)
+    return sorted(found - names - breaks), sorted(breaks - found)
+
+
 def unlisted_and_stale(found, known):
     """The breaks that no entry of `known` lists, and the entries that name no break."""
     return sorted(set(found) - known), sorted(known - set(found))
@@ -690,6 +790,12 @@ class NamingTest(unittest.TestCase):
                          "name; rename it (docs/standards/naming.md)")
         self.assertEqual(stale, [], "N-DIRS: a KNOWN_DIRECTORY_BREAKS entry names no directory with a hyphen; delete it")
 
+    def test_n_combat_every_combat_file_is_named_or_a_known_break(self):
+        unlisted, stale = combat_unlisted_and_stale(tree_paths(), COMBAT_NAMES, KNOWN_COMBAT_BREAKS)
+        self.assertEqual(unlisted, [], "N-COMBAT: a file of the combat area has a name in neither COMBAT_NAMES nor "
+                         "KNOWN_COMBAT_BREAKS; name it by its component's name (docs/standards/naming.md)")
+        self.assertEqual(stale, [], "N-COMBAT: a KNOWN_COMBAT_BREAKS entry names no file of the combat area; delete it")
+
     def test_the_name_checks_report_a_planted_break_and_a_stale_entry(self):
         # The checks on small synthetic trees: each reports the break it names and no other, and the comparison
         # reports a break no entry lists and an entry that names no break.
@@ -717,6 +823,16 @@ class NamingTest(unittest.TestCase):
                                             "src/runtime/patch/test_y.cpp": '#include "runtime/patch/y_rules.h"\n'}),
                          {"src/runtime/patch/y_rules.h: no non-test file in src/runtime/patch/ includes it"})
         self.assertEqual(unlisted_and_stale({"x"}, {"y"}), (["x"], ["y"]))
+        self.assertEqual(combat_names(["src/quest/combat/bvh.h", "src/quest/combat/bvh_targets.h",
+                                       "src/quest/combat/bvh_core.h", "src/quest/combat/mutants.d/bvh_2.sh",
+                                       "src/quest/combat/mutants.d/bvh_core.sh",
+                                       "src/quest/combat/headset_gates_entry.inc",
+                                       "src/quest/combat/check/powerboost_thunk.want",
+                                       "docs/quest/combat/bvh.md", "docs/quest/combat/adr/0001.md",
+                                       "src/quest/combat/CMakeLists.txt", "src/quest/combat/sub/x.h"]),
+                         {"bvh", "bvh_core", "headset_gates", "powerboost_thunk"})
+        self.assertEqual(combat_unlisted_and_stale(["src/quest/combat/x.h", "src/quest/combat/y.h"],
+                                                   frozenset({"x"}), frozenset({"z"})), (["y"], ["z"]))
 
 if __name__ == "__main__":
     unittest.main()
