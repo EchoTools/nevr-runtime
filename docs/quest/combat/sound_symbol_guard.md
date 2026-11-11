@@ -22,7 +22,7 @@ names the key.
 Why off. The guard's default was to follow whether a dropped post's alternative can fault. It can in the code: OutputError, which Play3DSound
 calls with PostSoundEvent's status, has a path that calls through a null record when the record at that status is incomplete. But it is not shown
 to be reached on this path: whether CErrorDb::AddError ever answers a status whose record is incomplete, and whether the CConsoleStream
-constructor (upstream's crash frame, return 0x11d1cac) can fault, are open (both are rows of the port2 NEEDED list). With no fault shown the guard
+constructor (upstream's crash frame, return 0x11d1cac) can fault, are open (neither function is reconstructed yet). With no fault shown the guard
 is a performance guard: it saves a failed post, its error record and OutputError's callstack and console write, which upstream measured at about
 4 ms a print and 230 posts a second for symbol 0. Upstream ships it off too (`fxsndguard.on` is not among the recipe's switch files). A player
 opts in with `sound_symbol_guard: true`.
@@ -54,9 +54,13 @@ The gate. A post is dropped only when all three hold:
    not established, reach Play3DSound whatever the symbol (counted `kept_other_caller`).
 
 A dropped post returns 0 without calling Play3DSound: Play3DSound's own answer when audio is disabled (`mov w0, wzr` at 0x134b488). PlaySound
-reads any answer but -1 as a start (`cmn w0, #1; b.ne` at 0x1706990) and prints nothing; the bullet site ignores the answer. Returning -1 would
-make PlaySound print "Sound failed to play" for every drop. Every post that is not dropped reaches Play3DSound with the same four arguments
-(the whole x1 register included), and its answer is returned.
+branches on the answer with `cmn w0, #1; b.ne` at 0x1706990: the branch is taken for any answer but -1 and goes to PlaySound's epilogue
+(0x1706a04), and the fall-through for -1 loads the string "Sound failed to play from node %llx in %s." (.rodata 0x2c4e2dc). That PlaySound
+therefore treats 0 as a start and prints nothing is read from those words; it is inferred, because PlaySound is not reconstructed (reconstruction
+pending). The same inference covers what a 0 does to PlaySound's returned handle: its playing id is then 0, Wwise's invalid id, where a failed
+post would give -1 (`bfi x8, x0, #32` at 0x1706a14), the same value the game already returns when audio is disabled. The bullet site ignores the
+answer. Returning -1 would make PlaySound print "Sound failed to play" for every drop. Every post that is not dropped reaches Play3DSound with
+the same four arguments (the whole x1 register included), and its answer is returned.
 
 ## Log lines (sentinel log)
 
