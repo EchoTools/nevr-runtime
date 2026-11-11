@@ -13,7 +13,7 @@
 namespace nevr_join_hold {
 
 /// How long after the last level-load activity the gate waits before it opens (a dated figure: the Enabling lines
-/// follow the state switch within this window in the one run read; docs/reference/join-hold.md "Live-run row owed").
+/// follow the state switch within this window in the one run read; docs/reference/join-hold.md "Live-run row").
 constexpr std::uint64_t kSettleMs = 200;
 
 /// network.join_hold_ms: 0 is off. A value from 1 to kMinHoldMs - 1 is raised to kMinHoldMs and one above kMaxHoldMs
