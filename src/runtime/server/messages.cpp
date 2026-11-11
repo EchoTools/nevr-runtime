@@ -13,6 +13,7 @@
 #include <cstring>
 
 #include "abi/echovr_functions.h"
+#include "core/remote_text.h"
 #include "gameservice/v1/gameservice.pb.h"
 
 // Logging wrapper for game's log system
@@ -188,10 +189,11 @@ AddrKind ClassifyAddress(const std::string& text, struct in_addr* v4) {
 bool RefuseEndpoint(const std::string& endpointStr, const char* field, const char* reason, const char* family,
                     std::string* reasonOut) {
   if (reasonOut) *reasonOut = reason;
+  const std::string shown = nevr_remote_text::Escape(endpointStr);
   Log(EchoVR::LogLevel::Warning,
-      "[NEVR.GAMESERVER] ParseEndpoint refused field=%s reason=%s family=%s endpoint=%s"
+      "[NEVR.GAMESERVER] ParseEndpoint refused field=%s reason=%s family=%s endpoint=%s endpoint_len=%zu"
       " — lobby session success message NOT sent",
-      field, reason, family, endpointStr.c_str());
+      field, reason, family, shown.c_str(), endpointStr.size());
   return false;
 }
 
@@ -272,18 +274,21 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
   unsigned long portVal = strtoul(portStr.c_str(), &endptr, 10);
   if (errno != 0 || endptr == portStr.c_str() || *endptr != '\0') {
     if (reason) *reason = "bad_port";
+    const std::string shownPort = nevr_remote_text::Escape(portStr);
+    const std::string shown = nevr_remote_text::Escape(endpointStr);
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port parse failed field=port reason=bad_port port_str=%s endpoint=%s"
-        " — lobby session success message NOT sent",
-        portStr.c_str(), endpointStr.c_str());
+        "[NEVR.GAMESERVER] ParseEndpoint port parse failed field=port reason=bad_port port_str=%s port_len=%zu"
+        " endpoint=%s endpoint_len=%zu — lobby session success message NOT sent",
+        shownPort.c_str(), portStr.size(), shown.c_str(), endpointStr.size());
     return false;
   }
   if (portVal > UINT16_MAX) {
     if (reason) *reason = "bad_port";
+    const std::string shown = nevr_remote_text::Escape(endpointStr);
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port out of range field=port reason=bad_port port=%lu max=%u endpoint=%s"
-        " — lobby session success message NOT sent",
-        portVal, UINT16_MAX, endpointStr.c_str());
+        "[NEVR.GAMESERVER] ParseEndpoint port out of range field=port reason=bad_port port=%lu max=%u"
+        " endpoint=%s endpoint_len=%zu — lobby session success message NOT sent",
+        portVal, UINT16_MAX, shown.c_str(), endpointStr.size());
     return false;
   }
   port = static_cast<uint16_t>(portVal);

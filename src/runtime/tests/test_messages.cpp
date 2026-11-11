@@ -2,6 +2,7 @@
 
 #include <type_traits>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdarg>
@@ -11,6 +12,7 @@
 #include <winsock2.h>
 
 #include "abi/echovr_functions.h"
+#include "core/remote_text.h"
 #include "gameservice/v1/gameservice.pb.h"
 #include "runtime/server/messages.h"
 #include "runtime/server/session_success_dispatch.h"
@@ -298,6 +300,32 @@ TEST(MessagesEndpoint, RefusalsNameTheFieldTheReasonAndTheEndpoint) {
     EXPECT_NE(CapturedLog().find(std::string("endpoint=") + c.endpoint), std::string::npos)
         << c.endpoint << " log: " << CapturedLog();
   }
+}
+
+TEST(MessagesEndpoint, RemoteTextIsEscapedNotPrintableAndBackslashAsHex) {
+  EXPECT_EQ(nevr_remote_text::Escape("plain 10.0.0.1:80"), "plain 10.0.0.1:80");
+  EXPECT_EQ(nevr_remote_text::Escape(std::string("a\nb\x01\x7f\xff\\c", 8)), "a\\x0ab\\x01\\x7f\\xff\\x5cc");
+  EXPECT_EQ(nevr_remote_text::Escape(""), "");
+}
+
+TEST(MessagesEndpoint, RemoteTextIsCappedAtSixtyFourBytesBeforeEscaping) {
+  const std::string longText(200, 'a');
+  EXPECT_EQ(nevr_remote_text::Escape(longText), std::string(64, 'a'));
+  // 65th byte is dropped; a control byte inside the cap costs four characters, not one byte.
+  EXPECT_EQ(nevr_remote_text::Escape(std::string(63, 'b') + "\n" + "tail"), std::string(63, 'b') + "\\x0a");
+}
+
+TEST(MessagesEndpoint, ARefusedEndpointIsLoggedEscapedCappedAndWithItsLength) {
+  ScopedCapturedLog capture;
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0;
+  const std::string hostile = std::string("evil\r\nINJECTED\x01") + std::string(100, 'z');
+  EXPECT_FALSE(ParseEndpoint(hostile, ip1, ip2, port));
+  const std::string& log = CapturedLog();
+  EXPECT_NE(log.find("endpoint=evil\\x0d\\x0aINJECTED\\x01" + std::string(64 - 15, 'z') + " "), std::string::npos) << log;
+  EXPECT_NE(log.find("endpoint_len=" + std::to_string(hostile.size())), std::string::npos) << log;
+  EXPECT_EQ(log.find('\r'), std::string::npos);
+  EXPECT_EQ(std::count(log.begin(), log.end(), '\n'), 1) << log;
 }
 
 TEST(MessagesEndpoint, AValidEndpointWritesNoLine) {

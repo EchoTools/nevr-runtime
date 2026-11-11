@@ -2,6 +2,7 @@
 #include "runtime/server/registration_metadata.h"
 #include "runtime/server/telemetry_game_type.h"
 #include "core/hex_dump.h"
+#include "core/remote_text.h"
 #include "core/curl_global.h"
 #include <atomic>
 #include <chrono>
@@ -217,10 +218,12 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       std::string failureReason;
       if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch,
                                                       &failureReason)) {
+        const std::string shownLobby = nevr_remote_text::Escape(sessionSuccess.lobby_id());
+        const std::string shownEndpoint = nevr_remote_text::Escape(sessionSuccess.endpoint());
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 lobby=%s reason=%s endpoint=%s"
-            " — the session success was not delivered to the game",
-            sessionSuccess.lobby_id().c_str(), failureReason.c_str(), sessionSuccess.endpoint().c_str());
+            " endpoint_len=%zu — the session success was not delivered to the game",
+            shownLobby.c_str(), failureReason.c_str(), shownEndpoint.c_str(), sessionSuccess.endpoint().size());
       }
       break;
     }
