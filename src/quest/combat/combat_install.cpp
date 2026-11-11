@@ -38,6 +38,7 @@
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/script_redirect.h"
 #include "quest/combat/shieldgamma.h"
+#include "quest/combat/sound_symbol_guard.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
@@ -67,7 +68,7 @@ ModuleResult RefreshRateNormal() noexcept {
 // reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
-                         g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on;
+                         g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -120,6 +121,7 @@ ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
 ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
 ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
 ModuleResult BulletVelocityGuardNormal() noexcept { return bullet_velocity_guard::Install(g_config.bulletVelocityGuard.on); }
+ModuleResult SoundSymbolGuardNormal() noexcept { return sound_symbol_guard::Install(g_config.soundSymbolGuard.on); }
 ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 
 ModuleResult GatesNormal() noexcept {
@@ -197,6 +199,9 @@ constexpr std::array kModules{
     // bullet_velocity_guard (#1737 row 031): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
     // that slot must stay the newest hook there (a later install is refused slot_held_by_entry), so the guard installs first and the entry calls it.
     Module{"bullet_velocity_guard", nullptr, &BulletVelocityGuardNormal, "combat.bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, &bullet_velocity_guard::NoteEnd},
+    // sound_symbol_guard (#1737): a caller-aware thunk on Play3DSound's slot (no other hook there); it reads the combat level answer, so after `scope`,
+    // and its switch is one of ScopeNormal()'s readers.
+    Module{"sound_symbol_guard", nullptr, &SoundSymbolGuardNormal, "combat.sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, &sound_symbol_guard::NoteEnd},
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
     // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},

@@ -62,6 +62,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/sensorwd.cpp", 3, 0},
     {"combat/shaderstep.cpp", 1, 0},
     {"combat/shieldgamma.cpp", 1, 0},
+    {"combat/sound_symbol_guard.cpp", 1, 0},
     {"combat/tablestep.cpp", 1, 0},
     {"combat/voipdrop.cpp", 1, 0},
     {"combat/wallfire.cpp", 1, 0},

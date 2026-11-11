@@ -47,6 +47,7 @@ add_library(nevr_quest_combat STATIC
   sensorwd.cpp
   shaderstep.cpp
   shieldgamma.cpp
+  sound_symbol_guard.cpp
   table_step.cpp
   tablestep.cpp
   voipdrop.cpp

@@ -24,7 +24,8 @@ set(_cf NOEXC PTHREAD DL INCS ${_csent})
 # The EC client and what it brings into a program that links the registration table (#2187): its NEUTRON effects, the sentinel's page and
 # the module-loaded observer table it registers with, and the two drone modules whose rows sit beside them (dronekill registers with the EC client).
 set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp
-         src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/bullet_velocity_guard.cpp)
+         src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/bullet_velocity_guard.cpp
+         src/quest/combat/sound_symbol_guard.cpp)
 # The resource table-step modules (#2177) and what they share. combat_install.cpp's table names them, so every program that links it takes them,
 # and they read the game's levels through the combat tick and the level answer (table_step.cpp), which those programs already link.
 set(_ctables src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/quest/combat/shaderstep.cpp src/quest/combat/tablestep.cpp
@@ -293,6 +294,12 @@ nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/bullet_velocity_guard_test.cpp src/quest/combat/bullet_velocity_guard.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp
       src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp src/quest/tests/ec_stub.cpp)
+# The sound-symbol guard (#1737): the rule, and the real handler through the real caller-aware thunk installed by the real GotHook into Play3DSound's
+# JUMP_SLOT of a libr15 image built in memory, called from three sites (two stand in for PlaySound's and the bullet site's); the combat level answer it
+# reads, the arena path, the refusals over every pinned word and record, the switch, the lines and the arena-path cost.
+nevr_ht_test(sound_symbol_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/sound_symbol_guard_test.cpp src/quest/combat/sound_symbol_guard.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp)
 # The impact sounds (#2183, docs/adr/0046; moved from the q15t plugin's impactsnd): the real handlers through the two thunks, installed by the real
 # GotHook into the load JUMP_SLOT and the Shutdown vtable word (ABS64) of a libr15 image built in memory, against a fake impact table, a fake loader and
 # Shutdown, a fake clock and a fake CR15Game that says which level is loaded. Every assertion of the plugin's test about the table, the loaders, the tick and

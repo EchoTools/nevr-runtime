@@ -244,6 +244,7 @@ struct CombatConfig {
   CombatSwitch frozenFrameExit{true, Source::kAbsent};  // `combat.frozen_frame_exit`: a combat game whose frames stop in VR ends (combat/frozen_frame_exit.h)
   CombatInt frozenFrameExitS{30, Source::kAbsent};       // `combat.frozen_frame_exit_s`: its limit in seconds, 10..900, default 30
   CombatSwitch bulletVelocityGuard{true, Source::kAbsent};  // `combat.bullet_velocity_guard`: a FireBullet call with no usable velocity is not made (combat/bullet_velocity_guard.h)
+  CombatSwitch soundSymbolGuard{false, Source::kAbsent};  // `combat.sound_symbol_guard`: in a combat level, a sound post that can only fail is not made (combat/sound_symbol_guard.h; default OFF, a performance guard)
   CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)
   CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
   CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)
