@@ -310,8 +310,9 @@ TEST_F(ClockPauseInstalled, EachChangeOfTheHeldStateIsLoggedOnce) {
   EXPECT_EQ(Count("clock pause: clocks held"), 1) << "resuming is still held: no new line";
   ExpectEveryClock(30.0f, 29.5f, rules::Pause::kOff);
   EXPECT_EQ(Count("clock pause: clocks held from=1 to=0 paused=0 script=6fa8cc9cd721a563"), 1);
-  ExpectEveryClock(30.0f, 30.0f, rules::Pause::kOn);
-  EXPECT_EQ(Count("clock pause: clocks held from=0 to=1"), 2);
+  ExpectEveryClock(30.0f, 30.0f, rules::Pause::kResuming);
+  EXPECT_EQ(Count("clock pause: clocks held from=0 to=1 paused=2 script=6fa8cc9cd721a563"), 1)
+      << "straight to the resume countdown: held, with PAUSE's own value";
   EXPECT_EQ(Count("clock pause: clocks held"), 3) << "one line a change, none a frame";
 }
 
