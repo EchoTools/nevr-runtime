@@ -448,6 +448,13 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 }
 
 VOID GameServerLib::EndSession() {
+  // IServerLib::EndSession: the game calls it from CNSLobby::EndSession (echovr.exe 0x140607e00), after LeaveSession
+  // has disconnected every peer, so no match is left to simulate (#2109).
+  EndServerSession(nevr_server_timestep::SessionEndCause::kGameEnded);
+}
+
+void GameServerLib::EndServerSession(nevr_server_timestep::SessionEndCause cause) {
+  const std::string endingSessionId = m_context->GetSessionState().lobbySessionId;
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
     return nevr_game_server::SendProtobufEnvelope(*m_wsClient, envelope);
   };
@@ -465,6 +472,12 @@ VOID GameServerLib::EndSession() {
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling end of session");
+
+  // #2109: the game's own end leaves nothing to simulate, so the server goes back to the idle step. A shutdown does not
+  // write the step: the process is exiting.
+  if (nevr_server_timestep::IdlesAfterSessionEnd(cause, endingSessionId, endingSessionId)) {
+    ApplyServerIdleTimestep(nevr_server_timestep::SessionEndCauseName(cause), endingSessionId);
+  }
 }
 
 VOID GameServerLib::LockPlayerSessions() {

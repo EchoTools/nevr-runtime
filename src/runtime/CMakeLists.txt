@@ -131,6 +131,8 @@ set(PATCHES_SOURCES
     "patch/server_bots.cpp"
     # #1422: a server's match team size (pure logic in server_team_size.h).
     "patch/server_team_size.cpp"
+    # #2109: a server's frame wait: raw pings answered as they arrive (pure logic in server_frame_wait.h).
+    "patch/server_frame_wait.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
@@ -275,6 +277,9 @@ set(PATCHES_HEADERS
     "patch/server_bots_install.h"
     "patch/server_team_size.h"
     "patch/server_team_size_install.h"
+    "patch/server_frame_wait.h"
+    "patch/server_frame_wait_env.h"
+    "patch/server_frame_wait_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
@@ -1146,6 +1151,16 @@ if(BUILD_TESTING)
     target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
+
+    # #2109: a server's frame wait (raw pings answered as they arrive, never an early return) and the overrun delta-time
+    # patch's site and gate, driven on a fake clock and a fake socket (header-only patch/server_frame_wait.h), and the
+    # Env the server runs it on over a real UDP socket on the loopback (patch/server_frame_wait_env.h).
+    add_executable(test_server_frame_wait tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp)
+    set_source_files_properties(tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_frame_wait PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_frame_wait PRIVATE GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_server_frame_wait DISCOVERY_MODE PRE_TEST)
 
     # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
     add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp

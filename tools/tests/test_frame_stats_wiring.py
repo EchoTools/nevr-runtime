@@ -161,7 +161,9 @@ class LivenessRowTest(unittest.TestCase):
         self.assertRegex(header, r"kBroadcasterReceiveLocal,\s*kOvrGetPerfStats,(\s*k\w+,)*\s*kCount")
         cpp = strip_comments(read("src/runtime/hook/hook_liveness.cpp"))
         self.assertIn('{"ovr_GetPerfStats", "PCVR session only", false},', cpp)
-        self.assertEqual(cpp.count(", true}"), 1, "a second guaranteedAbsentOnServer row would be swallowed")
+        # #2109: no row is guaranteed absent on a server now (CPrecisionSleep::Wait runs on its paced frames); at most
+        # one may be, because the notice for such a row is one shared flag.
+        self.assertLessEqual(cpp.count(", true}"), 1, "a second guaranteedAbsentOnServer row would be swallowed")
 
     def test_the_hook_marks_its_liveness_id(self):
         self.assertIn("Mark(nevr_hook_liveness::kOvrGetPerfStats)", strip_comments(read("src/runtime/frame/frame_stats.cpp")))

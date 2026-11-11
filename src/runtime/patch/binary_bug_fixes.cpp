@@ -24,7 +24,9 @@
  * 0d. CPrecisionSleep::Wait — cached high-res timer (BUG #11, #12, High)
  *     Original: creates/destroys kernel timer each frame (180 kernel
  *     transitions/sec at 90fps) with standard-res timer. Fix: persistent
- *     high-res waitable timer created once at init.
+ *     high-res waitable timer created once at init. On a server it is the
+ *     frame wait (#2109, patch/server_frame_wait.h): raw pings answered as
+ *     they arrive, never an early return.
  *
  * 0e. CSpinWait::WaitForValue — corrected backoff (BUG #14, High)
  *     Original: sleep_ms starts at 10 and decrements to 0 (maximum CPU
@@ -62,6 +64,7 @@
 #include "runtime/lifecycle/cli.h"              // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
 #include "runtime/patch/http_port_scan.h"       // HTTP session API port scan (#1511)
+#include "runtime/patch/server_frame_wait_install.h"  // #2109: a server's frame wait
 #endif
 
 /* --------------------------------------------------------------------
@@ -306,12 +309,16 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * Timer precision improves from ~15.6ms to ~0.5ms on Windows 10 1803+.
  * Falls back to standard timer on older Windows.
  *
- * No other hook chains on this function (N26): server_timing's Init has no
- * call sites, so no WSAPoll-based event-driven recv hook is installed on top.
- * This hook is the only owner of CPrecisionSleep::Wait.
+ * No other hook chains on this function (N26): this hook is its only owner.
  *
- * Note it does NOT run in server mode at all (N86, measured: zero entries over a
- * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
+ * Who calls it: CClock::UpdateAndPace (0x1400cf4b7) when the clock is paced (mode
+ * bit 0x10) and the frame ended inside its step, and CncaGame::RunMainLoop's frame
+ * cap (0x14050bf50). A server's clock has been paced since #511 (mode bits 0x18), so
+ * on a server this is the frame wait: every frame that ends inside its step comes
+ * here, on the game loop thread, and nevr_server_frame_wait::Wait serves it (#2109).
+ * N86's "zero entries on a server" was measured before #511, when the server's clock
+ * was not paced. Per-frame work is still driven from GetTimeMicroseconds (N86): a
+ * frame that overruns its step never waits.
  * -------------------------------------------------------------------- */
 
 using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk, void* unk2);
@@ -333,16 +340,23 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
-    // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as
-    // "CLIENT ONLY — never runs on a server"), so a hard-coded
-    // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
-    // was running on a server. The shared dispatcher derives the flags and gives
-    // the client path the rate limit and re-entrancy guard the server path has.
+    // This path runs on a client and, since #511 paced the server's clock, on every
+    // server frame that ends inside its step, so a hard-coded host flag would be wrong
+    // for one of them: the shared dispatcher derives the flags from g_isServer and
+    // gives this path the rate limit and re-entrancy guard the GetTimeMicroseconds path has.
     nevr_frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
         SwitchToThread();
         return;
+    }
+
+    // #2109: a server's frame wait answers raw pings as they arrive and never returns early, on any thread (the overrun
+    // delta-time patch depends on that). False only when the frame wait is not active; the patch is not in then, and
+    // the wait below, which can end early, is said once.
+    if (g_isServer) {
+        if (nevr_server_frame_wait::Wait(microseconds)) return;
+        nevr_server_frame_wait::NoteFallbackWait(microseconds);
     }
 
     if (s_cached_timer != NULL) {
@@ -812,6 +826,14 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
         diagNetGameHostCheckStatus);
 
     g_initialized = (installed > 0);
+#endif
+}
+
+bool nevr_binary_bug_fixes::FrameWaitOwned() {
+#ifdef _WIN32
+    return s_origPrecisionSleepWait != nullptr;
+#else
+    return false;
 #endif
 }
 

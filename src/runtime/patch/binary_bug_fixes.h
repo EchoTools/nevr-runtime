@@ -11,4 +11,8 @@ namespace nevr_binary_bug_fixes {
 
     void Init(uintptr_t base_addr);
     void Shutdown();
+
+    /// #2109: whether the runtime's CPrecisionSleep::Wait hook is installed, so every wait goes through it
+    /// (patch/server_frame_wait.h relies on that for its never-early guarantee).
+    bool FrameWaitOwned();
 }

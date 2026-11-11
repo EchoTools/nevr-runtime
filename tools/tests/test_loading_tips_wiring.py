@@ -99,7 +99,9 @@ class LivenessRowTest(unittest.TestCase):
             r'\{"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false\},\s*'
             r'\{"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false\},')
         guaranteed_absent = re.findall(r'\{"[^"]*", "[^"]*", true[},]', cpp)  # third field: guaranteedAbsentOnServer
-        self.assertEqual(len(guaranteed_absent), 1)
+        # #2109: CPrecisionSleep::Wait was the one row; a server's paced clock (#511) waits there every frame, so no
+        # row is guaranteed absent on a server now.
+        self.assertEqual(len(guaranteed_absent), 0)
 
 
 if __name__ == "__main__":
