@@ -19,6 +19,7 @@
 #include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/orb_pause.h"
+#include "runtime/combat/rules_button.h"
 #include "runtime/combat/rules_state.h"
 #include "runtime/combat/script_guard.h"
 #include "runtime/combat/shared_magazine.h"
@@ -181,6 +182,8 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
     // game-mode script, installed when it loads (team_ready.h). It needs nothing of VeilNet's.
     if (at(Group::kMatchControl).on) team_ready::Register();
+    // The podium's RULES button is pressable in Combat (rules_button.h); it too needs nothing of VeilNet's.
+    if (at(Group::kMatchControl).on) rules_button::Register();
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
     // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
