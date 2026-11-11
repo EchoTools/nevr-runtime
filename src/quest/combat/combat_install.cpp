@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "quest/combat/aibots.h"
+#include "quest/combat/boosterpool.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_scope.h"
@@ -24,6 +25,7 @@
 #include "quest/combat/hudmeter.h"
 #include "quest/combat/impactsnd.h"
 #include "quest/combat/instmodel.h"
+#include "quest/combat/levelname.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
 #include "quest/combat/music.h"
@@ -73,6 +75,11 @@ ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshs
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
+
+// levelname and boosterpool are one feature behind one key (combat.levelname); the booster's substitution is right only while levelname's level
+// is the loaded one, so it asks whether levelname installed.
+ModuleResult LevelNameNormal() noexcept { return levelname::Install(g_config.levelname.on); }
+ModuleResult BoosterPoolNormal() noexcept { return boosterpool::Install(g_config.levelname.on, levelname::Installed()); }
 
 // The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
 ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
@@ -210,6 +217,10 @@ constexpr std::array kModules{
     Module{"shieldgamma", nullptr, &ShieldgammaNormal},
     Module{"shieldgamma_gamma", nullptr, nullptr, "combat.shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma},
     Module{"shieldgamma_tube_mirror", nullptr, nullptr, "combat.shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror},
+    // levelname, then boosterpool (#2181): the plugin installed the pair together, the level name first, after shieldgamma and before sensorwd. The bot
+    // gate (above) reads the LoadLevelName word levelname takes at each bot call, not at install, so its row may come first.
+    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd},
+    Module{"boosterpool", nullptr, &BoosterPoolNormal, nullptr, nullptr, &boosterpool::NoteEnd},
     // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
     // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
     Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},

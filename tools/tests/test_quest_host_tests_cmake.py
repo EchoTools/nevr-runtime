@@ -60,6 +60,7 @@ PROGRAMS = {
     ),
     "combat": (
         "aibots_test",
+        "boosterpool_test",
         "bvh_core_test",
         "bvh_test",
         "combat_active_test",
@@ -86,6 +87,7 @@ PROGRAMS = {
         "hudmeter_test",
         "impactsnd_test",
         "instmodel_test",
+        "levelname_test",
         "match_tag_default_test",
         "memsys_test",
         "meshstep_test",

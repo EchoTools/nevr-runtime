@@ -1377,7 +1377,7 @@ MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "work
 def library_bytes(name: str) -> bytes:
     """A synthetic library as the build writes it: random bytes, the same on every run, and the config marker the real library
     carries (src/quest/plugins/q15t/src/plugin.cpp) with the libr15 build ID it was built for."""
-    marker = f"q15t-config levelname=1 build_id={BUILD_ID}".encode()
+    marker = f"q15t-config build_id={BUILD_ID}".encode()
     return random.Random(name).randbytes(4096) + b"\0" + marker + b"\0"
 
 
@@ -1705,7 +1705,7 @@ class VariantLibraries(VariantCase):
 
     def test_a_library_with_no_config_marker_or_no_build_id_is_a_failure_of_the_build_step(self) -> None:
         for name, data in (("no marker", b"\x7fELF" + b"x" * 100),
-                           ("no build id", b"q15t-config ec_words=[types=VPTO] levelname=1\0")):
+                           ("no build id", b"q15t-config ec_words=[types=VPTO]\0")):
             with self.subTest(name):
                 self.log.unlink(missing_ok=True)
                 fake = Fake(self.root)
@@ -1769,7 +1769,7 @@ class VariantLibraries(VariantCase):
 
     def test_a_library_in_the_marker_of_a_prefix_of_the_id_is_read_whole(self) -> None:
         fake = Fake(self.root)
-        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] levelname=1 build_id=" + BUILD_ID.encode() + b"\0rest"
+        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] build_id=" + BUILD_ID.encode() + b"\0rest"
         self.assertEqual(self.run_timer(fake), 0)
         [record] = self.libraries()
         self.assertEqual(record["libr15_build_id"], BUILD_ID)

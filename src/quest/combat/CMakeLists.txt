@@ -7,6 +7,7 @@
 # warnings-as-errors flags its siblings use. The sentinel links this target; --exclude-libs keeps it out of the export set.
 add_library(nevr_quest_combat STATIC
   aibots.cpp
+  boosterpool.cpp
   bvh.cpp
   combat_active.cpp
   combat_install.cpp
@@ -29,6 +30,7 @@ add_library(nevr_quest_combat STATIC
   hudmeter.cpp
   impactsnd.cpp
   instmodel.cpp
+  levelname.cpp
   match_tags.cpp
   memsys.cpp
   meshstep.cpp

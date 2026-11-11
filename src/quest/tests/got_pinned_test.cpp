@@ -26,6 +26,7 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/boosterpool_targets.h"
 #include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/aibots_targets.h"
@@ -47,6 +48,7 @@
 #include "quest/combat/hudmeter_targets.h"
 #include "quest/combat/impactsnd_targets.h"
 #include "quest/combat/instmodel_targets.h"
+#include "quest/combat/levelname_targets.h"
 #include "quest/combat/memsys_targets.h"
 #include "quest/combat/voipdrop_targets.h"
 #include "quest/combat/wallfire_targets.h"
@@ -630,6 +632,85 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The slot a PLT stub jumps through, decoded from the stub's own three words (`adrp x16, page; ldr x17, [x16, #off]; add ...; br x17`): the page the adrp
+// names plus the ldr's scaled offset. 0 when the first two words are not that shape.
+std::uint64_t PltStubSlot(const LoadedElf& elf, std::uint64_t stub) {
+  std::uint32_t adrp = 0, ldr = 0;
+  std::memcpy(&adrp, static_cast<const unsigned char*>(elf.mem) + stub, sizeof(adrp));
+  std::memcpy(&ldr, static_cast<const unsigned char*>(elf.mem) + stub + 4, sizeof(ldr));
+  if ((adrp & 0x9f00001fU) != 0x90000010U || (ldr & 0xffc003ffU) != 0xf9400211U) return 0;  // adrp x16 / ldr x17, [x16, #imm]
+  std::int64_t imm = static_cast<std::int64_t>(((adrp >> 5) & 0x7ffffU) << 2 | ((adrp >> 29) & 3U));
+  if ((imm & 0x100000) != 0) imm -= 0x200000;  // sign-extend the 21-bit page offset
+  return ((stub & ~0xfffULL) + static_cast<std::uint64_t>(imm << 12)) + static_cast<std::uint64_t>(((ldr >> 10) & 0xfffU) * 8);
+}
+
+// `adrp xN` at `adrpAt` followed by `ldr xM, [xN, #imm]` at `adrpAt + 4`: the address the pair loads from. 0 when it is not that shape.
+std::uint64_t AdrpLdrAddress(const LoadedElf& elf, std::uint64_t adrpAt) {
+  std::uint32_t adrp = 0, ldr = 0;
+  std::memcpy(&adrp, static_cast<const unsigned char*>(elf.mem) + adrpAt, sizeof(adrp));
+  std::memcpy(&ldr, static_cast<const unsigned char*>(elf.mem) + adrpAt + 4, sizeof(ldr));
+  if ((adrp & 0x9f000000U) != 0x90000000U || (ldr & 0xffc00000U) != 0xf9400000U || ((ldr >> 5) & 0x1fU) != (adrp & 0x1fU)) return 0;
+  std::int64_t imm = static_cast<std::int64_t>(((adrp >> 5) & 0x7ffffU) << 2 | ((adrp >> 29) & 3U));
+  if ((imm & 0x100000) != 0) imm -= 0x200000;
+  return ((adrpAt & ~0xfffULL) + static_cast<std::uint64_t>(imm << 12)) + static_cast<std::uint64_t>(((ldr >> 10) & 0xfffU) * 8);
+}
+
+// True when [vaddr, vaddr + size) lies in a writable PT_LOAD of the file (the game's data: mapped for the life of the process).
+bool InWritableLoad(const LoadedElf& elf, std::uint64_t vaddr, std::uint64_t size) {
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type == PT_LOAD && (ph.p_flags & PF_W) != 0 && vaddr >= ph.p_vaddr && vaddr + size <= ph.p_vaddr + ph.p_memsz) return true;
+  }
+  return false;
+}
+
+// The global_mp level-name and booster-pool modules' pins (src/quest/combat/levelname_targets.h, boosterpool_targets.h) against the real libr15: the
+// four vtable words are ABS64 relocations naming CR15Game::LoadLevelName (CheckRealAbs64Words checks them one by one), the symbol is defined at the
+// address the words hold, the plain function's stub jumps through the JUMP_SLOT of the symbol defined at the pinned address, every pinned code word
+// is the one in the file, and the booster's slot, Append's stub and the plain name's address are where AllocateExclusive's own code reads them.
+void CheckRealLevelNameAndBoosterPool(const LoadedElf& elf) {
+  namespace ln = nevr_quest::combat::levelname::targets;
+  namespace bp = nevr_quest::combat::boosterpool::targets;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckDefinedAt(elf, ln::kSymbol, ln::kFnVaddr);
+  for (std::size_t i = 0; i < ln::kSlotCount; ++i) {
+    const GotTarget word{pinned::kLibR15, ln::kSymbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, ln::kSlots[i]};
+    const SlotResolution at = ResolveSlot(elf.image, word, kAarch64Relocs);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == ln::kSlots[i] && at.restoreReadOnly);
+    std::uint64_t value = 0;  // the word holds the function's own address in the file (the loader adds the base)
+    std::memcpy(&value, mem + ln::kSlots[i], sizeof(value));
+    QCHECK(value == 0 || value == ln::kFnVaddr);
+  }
+  CheckTarget(elf, GotTarget{pinned::kLibR15, ln::kPlainSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ln::kPlainSlotVaddr},
+              "libr15 CncaGame::LoadLevelName JUMP_SLOT");
+  CheckDefinedAt(elf, ln::kPlainSymbol, ln::kPlainFnVaddr);
+  QCHECK(PltStubSlot(elf, ln::kPlainStubVaddr) == ln::kPlainSlotVaddr);  // the stub the module calls is the PLT stub of that slot
+  for (const ln::PinnedWord& w : ln::kCodeWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 levelname %s: the word at %#llx is %#x, not the pinned %#x\n", w.what, static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+
+  CheckTarget(elf, GotTarget{pinned::kLibR15, bp::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, bp::kSlotVaddr},
+              "libr15 CncaGameSpace::AllocatePooledActor JUMP_SLOT");
+  CheckDefinedAt(elf, bp::kSymbol, bp::kFnVaddr);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, bp::kAppendSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, bp::kAppendSlotVaddr},
+              "libr15 CSymbol64::Append JUMP_SLOT");
+  QCHECK(PltStubSlot(elf, bp::kStubVaddr) == bp::kSlotVaddr);
+  QCHECK(PltStubSlot(elf, bp::kAppendStubVaddr) == bp::kAppendSlotVaddr);
+  QCHECK(AdrpLdrAddress(elf, 0x2110f38) == bp::kPlainNameVaddr);  // AllocateExclusive loads the plain name from there
+  QCHECK(InWritableLoad(elf, bp::kPlainNameVaddr, sizeof(std::uint64_t)));
+  QCHECK(bp::kAllocateExclusiveVaddr == DynamicSymbolValue(elf, "_ZN10NRadEngine8NRadGame16CR15NetBoosterCS17AllocateExclusiveEv"));
+  for (const bp::PinnedWord& w : bp::kCodeWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 boosterpool %s: the word at %#llx is %#x, not the pinned %#x\n", w.what, static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
 // The pins of gun connect, practice AI bots and the gun hand default (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
 // net game step they share, netgame_targets.h) against the real libr15: every function and object the modules call or read is defined at its pinned
 // address (the vtables the gun and equipment systems carry as their first word included), and every pinned code word is the one in the file.
@@ -1194,6 +1275,7 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealLevelNameAndBoosterPool(r15);
   CheckRealWristHudAndShieldColour(r15);
   CheckRealCrashGuards(r15);
   CheckRealTableSteps(r15);

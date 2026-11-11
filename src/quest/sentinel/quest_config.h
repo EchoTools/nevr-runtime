@@ -48,6 +48,8 @@
 // pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
 // value. They only matter in the q15t and combat APKs, where the modules run.
 //
+// `combat.levelname` (#2181) is a boolean, true when absent, read the same way: `false` leaves the game's cut global level (combat/levelname.h) and, with it,
+// the booster pool's companion (combat/boosterpool.h).
 // `combat.meshstep`, `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false`
 // leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default because the upstream build the
 // community combat port ships turns the same change on (`--resource-table-step-1`, in its wave-2 recipe).
@@ -193,6 +195,7 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch levelname{true, Source::kAbsent};              // `combat.levelname`: global_mp keeps its plain name, with the booster pool's companion (combat/levelname.h, boosterpool.h)
   CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
   CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
   CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)

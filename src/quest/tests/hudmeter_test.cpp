@@ -399,7 +399,7 @@ void TheModuleFollowsTheLevelBothWays() {
 void TheSwitchOffInstallsNothing() {
   Begin(/*scopeLive=*/false);
   const nevr_quest::combat::ModuleResult r = hud::InstallAt(&Lookup, false);
-  QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off") == 0);
   QCHECK(!Hooked() && *g_image.Slot(hud::kSlotVaddr) == reinterpret_cast<void*>(g_image.Base() + hud::kFnVaddr));
   QCHECK(tick::Count() == 0 && !scope::Live());  // a module that is off asks nothing of the scope
   QCHECK(Count("combat_hudmeter_install", "\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);

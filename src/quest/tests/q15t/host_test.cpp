@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "got_swap.h"
-#include "module_switch.h"
 #include "nevr/plugin_interface.h"
 
 extern "C" {

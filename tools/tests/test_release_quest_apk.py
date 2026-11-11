@@ -527,7 +527,7 @@ class BuildQuestQ15t(unittest.TestCase):
     removed before the checks run."""
 
     ID = "0123456789abcdef0123456789abcdef01234567"
-    MARKER = "q15t-config levelname=1 build_id={id}"
+    MARKER = "q15t-config build_id={id}"
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -572,7 +572,7 @@ class BuildQuestQ15t(unittest.TestCase):
         self.assertEqual(list(self.out.glob("*.so")), [], "no library in build/quest-q15t after a refusal")
 
     def test_a_library_without_the_shipped_defaults_is_refused_and_not_copied(self):
-        result = self.build(marker=self.MARKER.format(id=self.ID).replace(" levelname=1", ""))
+        result = self.build(marker=self.MARKER.format(id=self.ID).replace("q15t-config ", ""))  # the build id alone, no marker
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not carry the shipped defaults", result.stderr)
         self.assertEqual(list(self.out.glob("*.so")), [])

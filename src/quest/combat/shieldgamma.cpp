@@ -100,7 +100,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool gamma, bool tubeMirror
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_shieldgamma_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"gamma", 0}, {"tube_mirror", 0},
                          {"msg", "combat.shieldgamma_gamma and combat.shieldgamma_tube_mirror are both false: nothing is installed and the game's colours stand"}});
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (!scope::Live()) return Refused("scope_not_live", "the combat level answer cannot change (the tick or its refresh is not installed), so the module is not installed", gamma, tubeMirror);
   g_gamma.store(gamma, std::memory_order_relaxed);  // before the thunk is installed, never changed after it

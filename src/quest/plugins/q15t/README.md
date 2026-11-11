@@ -17,14 +17,16 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 - `src/` the plugin (`src/<module>.{h,cpp}`, `plugin.cpp` installs them in the order the module docs fix).
 - `tests/` host tests: a CMake project, `src/quest/tests/q15t/CMakeLists.txt` (`just test-quest-q15t`, or `just test-quest-q15t <module>`), one `tests/mod/<module>.cmake` per module,
   `src/quest/tests/q15t/mutants.sh` and `src/quest/tests/q15t/mutants.d/` (the mutation run, about an hour, one at a time, not part of the gate).
-- `docs/quest/q15t/modules/<module>.md`: one document per module.
+- Module documents: none. Each module the plugin carried is the runtime's now, with its note in `docs/quest/combat/<module>.md`.
 - `CMakeLists.txt`: the options (defaults and the reason for each are in it), added by `src/quest/integration/CMakeLists.txt`.
 
 ## Defaults
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- No gameplay module is left in this plugin: every one is the runtime's (`src/quest/combat/`), as the rows below say.
+- levelname and its companion boosterpool are the runtime's (`src/quest/combat/levelname.h`, `src/quest/combat/boosterpool.h`), switched together by
+  the `combat:` key `levelname` (on by default) in `config.yaml`; the plugin's `levelname.off` file is no longer read.
 - Gun connect, the practice AI bots and the gun hand default are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
   `weapon_arm.h`). Their switches are the `combat:` keys `gunconnect`, `aibots`, `aibots_scenario` and `weapon_arm` in `config.yaml`, each on by default; no kill file
   or data file switches any of them. The marker files of the gun hand stay in this plugin's data directory, `files/q15t` (player state).
@@ -35,8 +37,8 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   switches are the `combat:` keys `bvh`, `bvh_gate`, `bvh_touch` and `wallfire` in `config.yaml` (all on by default); no kill file switches either.
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
-  `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed
-  (it reads the game's LoadLevelName slot).
+  `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where levelname is installed, and levelname is the
+  runtime's too (`src/quest/combat/levelname.h`, switch `combat.levelname`; it takes the slot the gate reads).
 - `ec` and `ecfx` (the EC network client and NEUTRON effects) are the runtime's (`src/quest/combat/ec.h`), with the `combat:` keys `ec`,
   `ec_words` and `ecfx` in `config.yaml`; the plugin's `ec.on`, `ec.off`, `ec_preset*.on` and `neutronfx.on` files are no longer read.
 - POWER BOOST is not this plugin's: the runtime owns its five words (`src/quest/combat/powerboost.h`). Its switch is the `combat:` key
@@ -79,5 +81,5 @@ native library directory only, so a plugin that is not in the APK is not loaded.
 - A wrapper never faults the game: on any doubt it calls the real function.
 - A wrapper on a high-fan-in function keeps counters and logs nothing per call.
 - Every address, offset and layout is a cited line of the reference build's source or a quoted disassembly word, and anything unread is
-  labelled unverified in the module's note (`docs/quest/q15t/modules/`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
+  labelled unverified in the module's note (`docs/quest/combat/<module>.md`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
   names the source file, line and commit of the citations the plugin's notes and comments carried as `afk_<file>`, `vn`, `pb` and `df` line numbers.

@@ -60,6 +60,7 @@ constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Que
 constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
+constexpr const char* kCombatLevelNameKey = "combat.levelname";                       // Quest only (default true, #2181)
 constexpr const char* kCombatHudmeterKey = "combat.hudmeter";                          // Quest only (default true, #2186)
 constexpr const char* kCombatShieldGammaKey = "combat.shieldgamma_gamma";              // Quest only (default FALSE, #2186: a test switch upstream)
 constexpr const char* kCombatShieldTubeMirrorKey = "combat.shieldgamma_tube_mirror";   // Quest only (default true, #2186)
@@ -450,6 +451,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
+  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r);
   r.config.combat.hudmeter = ReadCombatSwitch(cfg, kCombatHudmeterKey, r);
   r.config.combat.shieldgammaGamma = ReadCombatSwitch(cfg, kCombatShieldGammaKey, r, /*fallback=*/false);
   r.config.combat.shieldgammaTubeMirror = ReadCombatSwitch(cfg, kCombatShieldTubeMirrorKey, r);

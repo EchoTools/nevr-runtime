@@ -315,7 +315,7 @@ void TheModuleActsInACombatLevelAsThePluginDid() {
 void BothSwitchesOffInstallNothing() {
   Begin(/*scopeLive=*/false);
   const nevr_quest::combat::ModuleResult r = sg::InstallAt(&Lookup, false, false);
-  QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off") == 0);
   QCHECK(!Hooked() && *g_image.Slot(sg::kSlotVaddr) == reinterpret_cast<void*>(g_image.Base() + sg::kFnVaddr));
   QCHECK(Count("combat_shieldgamma_install", "\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1 && g_lines.size() == 1U);
   QCHECK(tick::Count() == 0 && !scope::Live());

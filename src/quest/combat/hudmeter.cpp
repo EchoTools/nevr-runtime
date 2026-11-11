@@ -126,7 +126,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_hudmeter_install",
                         {{"result", "off"}, {"reason", "off_config"},
                          {"msg", "combat.hudmeter is false: the wrist HUD's heat fill is the game's own (0 x 0 on the Quest)"}});
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (!scope::Live()) return Refused("scope_not_live", "the combat level answer cannot change (the tick or its refresh is not installed), so the module is not installed");
   Thunk::Arm(kHudmeterHook);

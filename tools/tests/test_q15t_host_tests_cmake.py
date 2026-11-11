@@ -35,16 +35,12 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 HOST_TESTS = frozenset(
     [
         "core.host_test",
-        "boosterpool.boosterpool_test",
         "game_tick.game_tick_test",
-        "levelname.levelname_test",
         "script_redirect.script_redirect_test",
         "thread_word.thread_word_test",
         "wiring.wiring_test",
-        "wiring.wiring_levelname_off",
         "wiring.wiring_no_tick",
         "wiring.wiring_caps_none",
-        "wiring.wiring_caps_LEVELNAME",
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack

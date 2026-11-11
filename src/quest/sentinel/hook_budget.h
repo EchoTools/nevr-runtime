@@ -34,6 +34,7 @@ struct HookBudgetRow {
 inline constexpr std::size_t kGrowthHeadroom = 32;
 
 inline constexpr HookBudgetRow kHookBudget[] = {
+    {"combat/boosterpool.cpp", 1, 0},
     {"combat/bvh.cpp", 6, 0},
     {"combat/combat_tick.cpp", 1, 0},
     {"combat/custctx.cpp", 3, 0},
@@ -49,6 +50,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/hudmeter.cpp", 1, 0},
     {"combat/impactsnd.cpp", 2, 0},
     {"combat/instmodel.cpp", 1, 0},
+    {"combat/levelname.cpp", 4, 0},
     {"combat/match_tags.cpp", 2, 0},
     {"combat/memsys.cpp", 2, 0},
     {"combat/meshstep.cpp", 1, 0},

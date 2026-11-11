@@ -1267,7 +1267,7 @@ void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
   }
 }
 
-// The refresh-rate rule's three keys (#2172, combat/refresh_rate.h): each on unless the file says false, so a launch with no file, an empty
+// The refresh-rate rule's three keys (#2172, combat/refresh_rate.h) and `combat.levelname` (#2181): each on unless the file says false, so a launch with no file, an empty
 // section, or a value nobody meant keeps the rule running. A boolean is the file's word, whichever it is; anything else keeps on, from the
 // default, with one Warning that names the key and not the value. The keys are on the schema, so the file is not rejected for them.
 void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
@@ -1279,6 +1279,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
                       {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      {"levelname", &nevr_quest::CombatConfig::levelname, true},  // #2181: global_mp keeps its plain name (combat/levelname.h)
                       // #2186: shieldgamma_gamma is OFF by default (a test switch upstream), the other two are on
                       {"hudmeter", &nevr_quest::CombatConfig::hudmeter, true},
                       {"shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma, false},

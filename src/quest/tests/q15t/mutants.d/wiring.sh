@@ -1,15 +1,7 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
-runm wiring wire_caps_levelname src/plugin.cpp "s/if (Q15T_LEVELNAME) caps |=/if (false) caps |=/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
-runm wiring wire_failure_quiet     src/plugin.cpp "s/Log(ok || off ? NEVR_LOG_INFO : NEVR_LOG_ERROR,/Log(NEVR_LOG_INFO,/"
-runm wiring wire_off_is_error      src/plugin.cpp "s/const bool off = !ok \&\& (std::strcmp(r.reason, \"off\") == 0 || std::strcmp(r.reason, \"off_file\") == 0);/const bool off = false;/"
-runm wiring wire_off_file_error    src/plugin.cpp "s/ || std::strcmp(r.reason, \"off_file\") == 0//"
-runm wiring wire_reason_blank      src/plugin.cpp "s/const char\* reason = r.reason\[0\] != 0 || ok ? r.reason : StatusName(r.status);/const char* reason = r.reason;/"
-runm wiring wire_name_blank        src/plugin.cpp "s/{\"module\", module},/{\"module\", \"\"},/"
-runm wiring wire_status_hidden     src/plugin.cpp "s/{\"status\", off ? \"off\" : StatusName(r.status)},/{\"status\", \"\"},/"
-runm wiring wire_modules_unlisted  src/plugin.cpp "s/{\"modules\", kCompiledModules}};/{\"modules\", \"\"}};/"
-runm wiring wire_levelname_off_ignored src/plugin.cpp "s/ \&\& !ModuleSwitchPresent(\"levelname.off\")//"
-runm wiring wire_drop_levelname    src/plugin.cpp "s/^    ReportModule(\"levelname\", InstallLevelName(base));//"
+runm wiring wire_caps_gameplay     src/plugin.cpp "s/uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;/uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE | NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;/"
+runm wiring wire_modules_named     src/plugin.cpp "s/constexpr char kCompiledModules\[\] = \"\";/constexpr char kCompiledModules[] = \"levelname \";/"
 # the tick table (tests/game_tick_test.cpp)
 runm game_tick tick_max_8          src/game_tick.h   "s/inline constexpr int kMaxGameTicks = 16;/inline constexpr int kMaxGameTicks = 8;/"
 runm game_tick tick_max_17         src/game_tick.h   "s/inline constexpr int kMaxGameTicks = 16;/inline constexpr int kMaxGameTicks = 17;/"

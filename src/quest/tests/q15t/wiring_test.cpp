@@ -1,6 +1,6 @@
-// Host test of plugin.cpp's module wiring (every module option ON) against a fake game image in
-// which only the tick slot and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
-// and by name, and InitEx must still return 0 with hooks swapped. Real code, real mprotect, real /proc/self/maps.
+// Host test of plugin.cpp's wiring against a fake game image that holds the pinned values of the words levelname and boosterpool hook. The plugin
+// has no module left (levelname and boosterpool are the runtime's, src/quest/combat/, #2181): InitEx must name none, install none, leave those
+// words as it found them (one owner per slot) and still return 0. Real code, real mprotect, real /proc/self/maps.
 // Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NevrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
 #include <sys/mman.h>
 #include <unistd.h>
@@ -12,7 +12,6 @@
 #include <string>
 #include <vector>
 
-#include "module_switch.h"
 #include "nevr/plugin_interface.h"
 
 extern "C" {
@@ -148,19 +147,6 @@ int main() {
   *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
   mprotect(p, kImage, PROT_READ);
 
-  // The data directory the kill file is looked for in is a directory of this test's. With WIRING_LEVELNAME_OFF it holds `levelname.off`, the pair's own off
-  // switch: a choice, so INFO status=off for both modules and neither slot touched, not an ERROR.
-  char dir[] = "/tmp/q15t_wiring_XXXXXX";
-  if (mkdtemp(dir) == nullptr) std::abort();
-  const std::string off_file = std::string(dir) + "/levelname.off";
-#if defined(WIRING_LEVELNAME_OFF)
-  constexpr bool kPairOff = true;
-  if (FILE* f = std::fopen(off_file.c_str(), "w")) std::fclose(f);
-#else
-  constexpr bool kPairOff = false;
-#endif
-  q15t::SetModuleSwitchDirForTest(dir);
-
   NevrGameContext ctx{};
   ctx.base_addr = base;
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
@@ -170,11 +156,11 @@ int main() {
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
 
   const uint32_t caps = NevrPluginGetCapabilities();
-  CHECK((caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0, "caps 0x%x: ALTERS_GAMEPLAY missing with every module on", caps);
+  CHECK((caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) == 0, "caps 0x%x: ALTERS_GAMEPLAY set, and no module of the plugin changes the game", caps);
   CHECK((caps & NEVR_PLUGIN_CAP_NETWORK) == 0, "caps 0x%x: NETWORK set, and no module of the plugin sends (the EC client is the runtime's)", caps);
 
   const int rc = NevrPluginInitEx(&ctx, "");
-  CHECK(rc == 0, "InitEx returned %d with hooks swapped and modules refusing; the loader would dlclose a live plugin", rc);
+  CHECK(rc == 0, "InitEx returned %d; the loader would dlclose the plugin", rc);
   // the runtime owns the clock levels and the refresh rate (#2000): the plugin leaves both slots alone
   CHECK(w[2] == reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the plugin wrote the clock slot");
   CHECK(w[3] == reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate), "the plugin wrote the refresh-rate slot");
@@ -184,34 +170,22 @@ int main() {
   CHECK(CountLines("powerboost") == 0, "the plugin logs a powerboost line: %s", FindLine("powerboost").c_str());
   CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
-  // every compiled module is named in the init record
-  const char* kAll[] = {"levelname", "boosterpool"};
+  // levelname and boosterpool are the runtime's (#2181): the init record names no module, the plugin writes no module record, and the five
+  // words both hook keep the game's values, so on a q15t-variant APK the runtime's combat rows are their one owner.
   const std::string init = FindLine("q15t init");
-  for (const char* m : kAll) {
-    CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
-    const int ok = CountLines(std::string("module install module=") + m + " ");
-    const int bad = CountLines(std::string("module install FAILED module=") + m + " ");
-    CHECK(ok + bad == 1, "module %s: %d install lines + %d FAILED lines, want exactly one record", m, ok, bad);
-  }
-
-  // what must have installed, been switched off, or refused, on this image
-  for (const char* m : kAll) {
-    CHECK(CountLines(std::string("module install module=") + m + (kPairOff ? " status=off" : " status=ok"), 1) == 1,
-          "module %s did not report status=%s at INFO", m, kPairOff ? "off" : "ok");
-  }
-  // what the installs did to the image
-  CHECK((w_slot(base, 0x362ef90) != base + 0x1202ecc) == !kPairOff, "levelname: its slot %s", kPairOff ? "was swapped with levelname.off present" : "was not swapped");
-  CHECK((w_slot(base, 0x36cd1f8) != base + 0x18037c4) == !kPairOff, "boosterpool: its GOT slot %s", kPairOff ? "was swapped with levelname.off present" : "was not swapped");
-  // no module of the plugin registers a game tick (gunconnect, aibots and weapon_arm are the runtime's): the plugin installs none and
-  // writes no tick record, and the tick slot is the one the host passed.
+  CHECK(!init.empty() && init.find("modules= ") == std::string::npos && init.substr(init.size() - 8) == "modules=", "q15t init names a module: %s", init.c_str());
+  CHECK(CountLines("module install") == 0, "the plugin wrote a module record: %s", FindLine("module install").c_str());
+  CHECK(CountLines("levelname") == 0 && CountLines("boosterpool") == 0, "the plugin names levelname or boosterpool: %s%s",
+        FindLine("levelname").c_str(), FindLine("boosterpool").c_str());
+  for (uintptr_t s : kLevelNameSlots)
+    CHECK(w_slot(base, s) == base + 0x1202ecc, "the plugin wrote levelname's word at %#lx", static_cast<unsigned long>(s));
+  CHECK(w_slot(base, 0x36cd1f8) == base + 0x18037c4, "the plugin wrote boosterpool's GOT slot");
+  // no module of the plugin registers a game tick: the plugin installs none and writes no tick record, and the tick slot is the one the host passed.
   CHECK(CountLines("game tick callbacks") == 0, "the plugin logged a tick table: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook=CncaGame::ExclusiveUpdateGame") == 0, "the plugin installed the game tick: %s", FindLine("hook=CncaGame::ExclusiveUpdateGame").c_str());
   CHECK(w[4] == reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was written");
-  CHECK(CountLines("module install FAILED") == 0, "%d FAILED lines, want 0", CountLines("module install FAILED"));
 
-  std::remove(off_file.c_str());
-  rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (2 modules named, both %s, no refusal, no game tick, InitEx returned 0)\n", kPairOff ? "off by levelname.off" : "installed");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (no module named or installed, levelname's and boosterpool's words untouched, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

@@ -29,6 +29,7 @@
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/levelname.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -155,10 +156,17 @@ void SetLevelname(bool installed) {
 }
 
 // A libr15 holding the pinned words and both slots holding the game's functions (the stand-ins); the gates' ranges are the test's sections.
-void Build() {
+// `withLevelname`: the image also holds the four ABS64 words of CR15Game::LoadLevelName that the runtime's levelname hooks (levelname_targets.h), each
+// holding the stock function, so the runtime's own levelname can be installed on the same image the gates read.
+void Build(bool withLevelname = false) {
   g_pins = hg::kPins;
-  g_image.Build({{hg::kPartySymbol, g_pins.partySlot, false, false, g_pins.partyFn},
-                 {hg::kHeadsetSymbol, g_pins.headsetSlot, false, false, g_pins.headsetFn}});
+  std::vector<combat_test::Reloc> relocs = {{hg::kPartySymbol, g_pins.partySlot, false, false, g_pins.partyFn},
+                                            {hg::kHeadsetSymbol, g_pins.headsetSlot, false, false, g_pins.headsetFn}};
+  namespace ln = nevr_quest::combat::levelname::targets;
+  if (withLevelname) {
+    for (const std::uint64_t slot : ln::kSlots) relocs.push_back({ln::kSymbol, slot, false, false, ln::kFnVaddr, /*abs64=*/true});
+  }
+  g_image.Build(relocs);
   const std::uintptr_t base = g_image.Base();
   // The real functions are not in the image, so the pins hold the stand-ins' offsets, and the ranges are the test's sections'.
   g_pins.partyFn = reinterpret_cast<std::uintptr_t>(&PartyReal) - base;
@@ -173,6 +181,9 @@ void Build() {
   *g_image.Slot(g_pins.partySlot) = reinterpret_cast<void*>(&PartyReal);
   *g_image.Slot(g_pins.headsetSlot) = reinterpret_cast<void*>(&HeadsetReal);
   SetLevelname(true);
+  if (withLevelname) {
+    for (const std::uint64_t slot : ln::kSlots) g_image.Put<std::uintptr_t>(slot, base + ln::kFnVaddr);  // the stock function in all four
+  }
   hg::SetImageLookupForTest(&Lookup);
   hg::SetPinsForTest(&g_pins);
 }
@@ -657,7 +668,7 @@ void TheInstallLineNamesEachGateAndWhy() {
     hg::Switches sw;
     sw.perm = sw.bots = sw.link = false;
     const nevr_quest::combat::ModuleResult r = hg::Install(sw);
-    QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
+    QCHECK(!r.installed && r.off && std::strcmp(r.status, "off") == 0);
     const std::vector<Line> install = Lines("combat_gates_install");
     QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
     if (install.size() == 1U) {
@@ -689,6 +700,40 @@ void TheBotGateNeedsLevelnameInstalledInTheGame() {
   QCHECK(!scoped.empty() && Has(scoped[0].text, "\"reason\":\"levelname_not_installed\""));
   const hg::Stats s = hg::CurrentStats();
   QCHECK(s.botsGated == 2 && s.botsScopedOut == 2);
+  End();
+}
+
+// levelname moved into the runtime (#2181) and the bot gate still sees it: the gate reads CR15Game's LoadLevelName vtable word and acts where it is not
+// the stock function, so the runtime's levelname must install into that very word. This installs the real levelname (levelname::InstallAt, the four words,
+// the real GotHook) on the image the gates read: the gate answers once it is in, keeps the game's choice before it and after it is taken out, and keeps it
+// with `combat.levelname` off (the module installs nothing then). The two modules' pins are the same word and the same stock function.
+void TheBotGateSeesTheRuntimesLevelname() {
+  namespace ln = nevr_quest::combat::levelname;
+  QCHECK(hg::kPins.levelNameSlot == ln::targets::kSlots[0] && hg::kPins.levelNameStock == ln::targets::kFnVaddr);
+  constexpr const char* kNoLegacyDir = "/nonexistent-levelname-legacy-dir";
+  Begin();
+  ln::ResetForTest();
+  ln::SetImageLookupForTest(&Lookup);
+  nevr_quest::combat::legacy::SetDirectoryForTest(kNoLegacyDir);
+  Build(/*withLevelname=*/true);
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  const HeadFn head = HeadSlot();
+  const std::uintptr_t stock = g_image.Base() + ln::targets::kFnVaddr;
+  QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) == stock);
+  QCHECK(HeadCallerBots(head) == kRealKind);  // levelname not in: the cut level loads, the combat bot is not in it
+  // combat.levelname off: the module installs nothing, the word stays the game's, the gate keeps the game's choice
+  QCHECK(!ln::InstallAt(&Lookup, /*on=*/false).installed);
+  QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) == stock && HeadCallerBots(head) == kRealKind);
+  // combat.levelname on: the real hook takes the slot the gate reads
+  QCHECK(ln::InstallAt(&Lookup, /*on=*/true).installed);
+  QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) != stock);
+  QCHECK(HeadCallerBots(head) == hg::kNotQuest);
+  ln::ResetForTest();  // the hook out again: the word is the stock function and the gate leaves the game's choice
+  QCHECK(g_image.Get<std::uintptr_t>(hg::kPins.levelNameSlot) == stock && HeadCallerBots(head) == kRealKind);
+  const hg::Stats s = hg::CurrentStats();
+  QCHECK(s.botsGated == 1 && s.botsScopedOut == 3);
+  ln::SetImageLookupForTest(nullptr);
   End();
 }
 
@@ -819,6 +864,7 @@ int main() {
   AnEmptyRangeGatesNothing();
   TheBotGateActsOnlyWhereACombatMapOrLobbyIsLoaded();
   TheBotGateNeedsLevelnameInstalledInTheGame();
+  TheBotGateSeesTheRuntimesLevelname();
   TheRangeIsHalfOpen();
   AGateInstalledAboveAnOlderHandlerKeepsAnswering();
   ALaterHandlerCannotJoinAboveAGateAndTheGateKeepsAnswering();
