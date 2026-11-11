@@ -19,7 +19,7 @@
  * CConsoleStream through a PLT stub, inside OutputError (0x11d1b38, 1268 bytes). It is not a faulting instruction: a crash that logs +0x11d1cac is
  * a return from that call, so the fault is inside a callee.
  *
- * What a post dropped before Play3DSound leaves undone (U3a). Play3DSound (this, w1 symbol, w2 emitter id, s0 volume) has these exits:
+ * What a post dropped before Play3DSound leaves undone. Play3DSound (this, w1 symbol, w2 emitter id, s0 volume) has these exits:
  * audio disabled -> `mov w0, wzr` at 0x134b488, return 0, nothing touched; emitter id not found -> `mov w0, #-1` at 0x134b62c (reached from
  * 0x134b530 and 0x134b558 without reading the emitter); no free sound (0x134b588, the "max sounds" line), a null sound (0x134b5ac) or a post
  * that OutputError reports (`cbnz w0` at 0x134b5fc, after DestroySoundNoLock at 0x134b658) -> `ldrb w8, [x20, #0xbc]` and a bit-0 test
@@ -46,14 +46,14 @@
  * 0x1706fd4, the bullet site 0x21230d0, TriggerSingle 0x24bd5ac, CSendAmbientSoundActionNode::Enter 0x272575c (`llvm-objdump -d` of the
  * whole file; no relocation other than the JUMP_SLOT names Play3DSound). Which emitter the five not named above post on is not established.
  * Read from the instruction words; the whole-function reconstructions of CreateEmitterNoLock, InitSoundCI, CR15NetBulletCS::Initialize,
- * TriggerSingle and RemoveSound are requested (port2 NEEDED list), so "no other writer of entry+4 / of the bullet table" is not established.
+ * TriggerSingle and RemoveSound are not reconstructed (reconstruction pending), so "no other writer of entry+4 / of the bullet table" is not established.
  *
- * Where the "not a valid wwise identifier" text is made, and where it is written (U3a). CWwiseEngine::PostSoundEvent (0x2549264, through
+ * Where the "not a valid wwise identifier" text is made, and where it is written. CWwiseEngine::PostSoundEvent (0x2549264, through
  * the PLT stub 0xf00000 that Play3DSound calls at 0x134b5e8) posts the event; when the post returns 0 (`cbz w0` 0x25492d0, and again after
  * the wait at 0x25493c8) it sets the playing id to -1 (0x25493cc/0x25493d8) and, when the symbol has no debug name (`cbz x0` 0x25493fc,
  * as in a final build), calls CErrMsg::CreateAndAddError with line 0x51 (0x254947c), the format at .rodata 0x31ec568 ("Error %s. It is
  * not a valid wwise identifier or registered sound symbol. ...", `add x3, x3, #0x568` 0x2549474) and the error type CSymbol64
- * 0x0f986c58c7b3d4fb, the .rodata quad at 0x31ec4f0 (`add x8, x8, #0x4f4` 0x25493f0, `ldr x2, [x8]` 0x25493f8), and returns its status.
+ * 0x0f986c58c7b3d4fb, the .rodata quad at 0x31ec4f0, loaded by `add x8, x8, #0x4f4` (0x25493f0; it makes 0x31ec4f4), `and x8, x8, #~7` (0x25493f4; it aligns that down to 0x31ec4f0) and `ldr x2, [x8]` (0x25493f8), and returns its status.
  * So 0x0f986c58c7b3d4fb is the error record's type key, not a sound symbol: no CSoundSymbol of that value (or of its low word
  * 0xc7b3d4fb) is posted on this path. The text says only that PostEvent returned 0, for any symbol whose bank is not loaded or that no
  * bank defines. Play3DSound passes the status to OutputError(status, 8) (`bl` 0xf4e4c0 at 0x134b5f0); OutputError returns 0 at once for
@@ -62,11 +62,11 @@
  * record at env+0x40008+(status-1)*0x18. When that record is incomplete it takes a null record (`mov x20, xzr` 0x11d1d5c) and still calls
  * through it (`ldr x8, [x20]` at 0x11d1ddc on the JSON path and 0x11d1ee4 on the text path): a null dereference inside OutputError. So
  * OutputError has a fault path on a non-zero status; whether CErrorDb::AddError ever returns a status whose record is incomplete, and
- * whether the CConsoleStream constructor can fault, are not established (both requested in the port2 NEEDED list). Decompilations read:
+ * whether the CConsoleStream constructor can fault, are not established (both not reconstructed, reconstruction pending). Decompilations read:
  * the reconstructions of Play3DSound (0x144b468), OutputError (0x12d1b38), PostSoundEvent (0x2649264) and CreateAndAddError (0x12ce4dc)
  * in the project's reconstruction tree (disassembly VAs), each checked here against the store file's words above.
  *
- * Whether the three symbols are events of the store build's banks (U3a). The symbol reaches Wwise unchanged: Play3DSound passes its w1
+ * Whether the three symbols are events of the store build's banks. The symbol reaches Wwise unchanged: Play3DSound passes its w1
  * masked to 32 bits (`and x1, x21, #0xffffffff` 0x134b5d8), PostSoundEvent hands it to PostWwiseEvent (0x294b500) as the event id
  * (`mov w0, w20` 0x25492a8), which passes it on as it is (the reconstruction of 0x2a4b500); that Wwise then matches it against the
  * HIRC event ids of the loaded banks is the Wwise SDK's AkUniqueID contract, an inference. tools/cmd/wwise-events read the two stock
@@ -131,7 +131,7 @@ inline constexpr pinned::Word kWords[] = {
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
 inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
 
-// What a dropped post leaves undone, and where the invalid-id text is made and written (the header comment's U3a paragraphs): Play3DSound's
+// What a dropped post leaves undone, and where the invalid-id text is made and written (the paragraphs "What a post dropped before Play3DSound leaves undone" and "Where the not-a-valid-wwise-identifier text is made" above): Play3DSound's
 // exits and its emitter-bit tests, the bit's writer, the emitters of PlaySound, the bullet site and TriggerSingle, and PlaySound's handling
 // of the result.
 inline constexpr pinned::Word kDropWords[] = {

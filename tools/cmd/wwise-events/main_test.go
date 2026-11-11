@@ -127,6 +127,31 @@ func TestMalformedHIRCIsMarked(t *testing.T) {
 	}
 }
 
+// A HIRC chunk whose objects do not fill its body (trailing bytes after the counted objects) is marked malformed; a chunk they
+// fill exactly is not.
+func TestHIRCWithTrailingBytesIsMarked(t *testing.T) {
+	bkhd := append(append(u32(134), u32(0x66666666)...), make([]byte, 12)...)
+	build := func(trailing int) []byte {
+		hirc := append(u32(1), object(hircEventType, 5, 9)...)
+		hirc = append(hirc, make([]byte, trailing)...)
+		return append(chunk("BKHD", bkhd), chunk("HIRC", hirc)...)
+	}
+	banks, err := Scan(bytes.NewReader(build(3)), "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(banks) != 1 || !banks[0].Malformed || banks[0].Events != 1 {
+		t.Fatalf("trailing bytes: banks = %+v", banks)
+	}
+	banks, err = Scan(bytes.NewReader(build(0)), "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(banks) != 1 || banks[0].Malformed || banks[0].Events != 1 {
+		t.Fatalf("exact fit: banks = %+v", banks)
+	}
+}
+
 func env(dir string) func(string) string {
 	return func(k string) string {
 		if k == "XDG_STATE_HOME" {
