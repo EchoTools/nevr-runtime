@@ -32,8 +32,26 @@ using State = ::nevr_ec::BasicState<int>;
 
 // QUEST-ONLY word: u32, 1 while the CURRENT server states EchoCombat in its lobby settings (#2333, runtime/compat/server_features.h), else 0
 constexpr std::uint32_t kQuestEcServer = 0x040;
-// the drone block: +18 u32 = node steps the 221a prelude saw
-constexpr std::uint32_t kDroneBlock = 0xd60, kDroneSteps = 0x18;
+// The drone block (page+0xd60): four words that the 221a drone library's prelude (lib221a0a3a2e56d247.so; kotorvr/echoquest-combat at c5a67e8,
+// libsrc/221a0a3a2e56d247) writes. Each comment gives the store measured in our build of that library (build-quest-combat-libs; llvm-objdump
+// of the NDK) and the PC constant of the same word, by symbol name in src/runtime/combat/dronefix.cpp. The arm64 check
+// src/quest/combat/check/drone_explosion_page.sh asserts these stores and the two entry symbols against this header.
+// The drone's sound key, 0x5b8cc538e22ad937, is CSymbol64("ncaPhysics") (sdk/include/nevr/symbol_hash.h). The upstream and PC's
+// DRONE_SOUND both call it the drone's sound key. Not established: which script is the drone script, the symbol the sound entry uses
+// (0xc8c33e48297612b6 in the lifted source), and the PC kDamageable branch. See docs/quest/combat/drone_explosion.md.
+constexpr std::uint32_t kDroneBlock = 0xd60;
+// +0x18 (page+0xd78): the counter of node steps the prelude saw. Store: 8b84 `add x8, x0, #0xd78`, then 8bb4 `ldaxr w9, [x8]`,
+// `add w9, w9, #1`, `stlxr w10, w9, [x8]`. PC: none (DEATH_TOKEN_RVA's comment names +00 count, +08 expiry, +10 shown, not +18).
+constexpr std::uint32_t kDroneSteps = 0x18;
+// +0x20 (page+0xd80): the context of the last drone node. Store: 8c0c `str x19, [x0]` through the window address `add x1, x9, #0x20`
+// (8bd0); x19 is loaded from the stack (8bf8 `ldr x19, [sp, #0x28]`). PC: DEATH_TOKEN_RVA + 0x20 in DroneCtx.
+constexpr std::uint32_t kDroneCtx = 0x20;
+// +0x28 (page+0xd88): the spawn entry, re33_ecent_221a0a_13720 (0xb8d0). Store: 8c60 `str x19, [x0]` through `add x1, x9, #0x28`
+// (8c28), x19 = 0xb8d0. PC: DEATH_TOKEN_RVA + 0x28, slot 0, in SpawnDeathFx.
+constexpr std::uint32_t kDroneSpawn = 0x28;
+// +0x30 (page+0xd90): the sound entry, re33_ecent_221a0a_13920 (0xbb14). Store: 8cb8 `str x19, [x0]` through `add x1, x9, #0x30`
+// (8c7c), x19 = 0xbb14. PC: slot 1 of the DEATH_TOKEN_RVA + 0x28 table in SpawnDeathFx (its loop runs over two slots).
+constexpr std::uint32_t kDroneSoundFn = 0x30;
 // the EQUIP block's +10 u32 = guarded nodes skipped (+14 is the server flag, never set by a client)
 constexpr std::uint32_t kEquipSkips = 0xe90;
 
