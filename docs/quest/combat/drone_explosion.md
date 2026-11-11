@@ -50,7 +50,7 @@ counter at +0x18 has no PC constant.
 - The symbol the sound entry uses. The lifted source of `re33_ecent_221a0a_13920` loads `0xc8c33e48297612b6`. That value is not
   `CSymbol64("POINT")`, which is `0xe32dc7cad6864aa4`; the upstream calls the entry "POINT's sound" without a symbol.
 - The PC kDamageable branch: that the PC enable-enter hook (`Hooked_EnableEnter` in `dronefix.cpp`) takes the damageable branch for
-  `dk::kDamageable` the way the upstream's `afk_dronekill.cpp` does.
+  `dk::kDamageable` the way kotorvr/echoquest-combat's afk_dronekill.cpp does.
 - That the context at +0x20 is the drone node's context at run time. The lifted source (`rbx = rcx` at entry) and the stack slot give it;
   no run of the library was made.
 - Whether the key `0x5b8cc538e22ad937` is used in the drone's graph as a sound system or as the physics system its name gives. The name is
