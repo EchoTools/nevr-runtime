@@ -91,6 +91,10 @@ EncodedMessage EncodeLobbySmiteEntrant(uint64_t playerId);
 // Helper: Parse UUID string to GUID
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid);
 
+// An address as a log value: the real text when it parses as IPv4 or IPv6, else Escape()d remote text.
+// *family (optional) becomes "ipv4", "ipv6" or "unknown".
+std::string AddressForLog(const std::string& text, const char** family = nullptr);
+
 // Helper: Parse endpoint string "internalIP:externalIP:port" to binary format
 // Only IPv4 fits the wire format; a refusal logs a Warning and sets *reason (not_ipv4, bad_address, bad_port).
 bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_t& externalIP, uint16_t& port,

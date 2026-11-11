@@ -232,6 +232,15 @@ bool SplitAddressPair(const std::string& head, std::string& internalStr, std::st
 
 }  // namespace
 
+// An address as a log value: a text that parses as IPv4 or IPv6 (bracketed or not) is the real value, unquoted;
+// anything else is remote text and goes through nevr_remote_text::Escape (Rule 4). *family, when given, is
+// set to ipv4, ipv6 or unknown.
+std::string AddressForLog(const std::string& text, const char** family) {
+  const AddrKind kind = ClassifyAddress(text, nullptr);
+  if (family) *family = kind == AddrKind::Ipv4 ? "ipv4" : kind == AddrKind::Ipv6 ? "ipv6" : "unknown";
+  return kind == AddrKind::Invalid ? nevr_remote_text::Escape(text) : text;
+}
+
 // Helper: Parse endpoint string "internalIP:externalIP:port" to components.
 // A refusal logs a Warning with the field, the reason (not_ipv4, bad_address, bad_port), the family and the
 // endpoint as received, and puts the reason token in *reason when given.
@@ -547,7 +556,15 @@ EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegist
     result.data.push_back(static_cast<uint8_t>((addr.s_addr >> 16) & 0xFF));
     result.data.push_back(static_cast<uint8_t>((addr.s_addr >> 24) & 0xFF));
   } else {
-    // Invalid IP, write zeros
+    // The game's own field is 4 bytes, so a non-IPv4 address is written as zeros. Say so: the
+    // operator would otherwise see a server that registered with 0.0.0.0 and no reason.
+    const std::string& external = msg.external_ip_address();
+    const char* family = "unknown";
+    const std::string shown = AddressForLog(external, &family);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] registration success external address is not IPv4 server_id=%llu family=%s"
+        " external_ip_address=%s external_ip_address_len=%zu — the game's 4-byte field is written as 0.0.0.0",
+        static_cast<unsigned long long>(msg.server_id()), family, shown.c_str(), external.size());
     for (int i = 0; i < 4; i++) {
       result.data.push_back(0);
     }

@@ -188,6 +188,11 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("lobby_id().c_str()", block)
         self.assertIn("nevr_remote_text::Escape(sessionSuccess.lobby_id())", block)
         self.assertIn("nevr_remote_text::Escape(sessionSuccess.endpoint())", block)
+        # The registration-success line logs the external address through AddressForLog (a parsed address as is,
+        # anything else escaped with its length), never the raw text.
+        reg = gameserver.split("case gameservice::v1::Envelope::kGameServerRegistrationSuccess:", 1)[1].split("case gameservice", 1)[0]
+        self.assertIn("AddressForLog(regSuccess.external_ip_address())", reg)
+        self.assertNotIn("regSuccess.external_ip_address().c_str()", reg)
 
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()

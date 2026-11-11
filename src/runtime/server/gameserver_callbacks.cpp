@@ -121,8 +121,11 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
   switch (envelope.message_case()) {
     case gameservice::v1::Envelope::kGameServerRegistrationSuccess: {
       const auto& regSuccess = envelope.game_server_registration_success();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s",
-          static_cast<unsigned long long>(regSuccess.server_id()), regSuccess.external_ip_address().c_str());
+      const std::string shownIp = AddressForLog(regSuccess.external_ip_address());
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s ip_len=%zu",
+          static_cast<unsigned long long>(regSuccess.server_id()), shownIp.c_str(),
+          regSuccess.external_ip_address().size());
       self->GetContext().SetRegistered(true);
 
       // Encode protobuf to binary format and forward to game

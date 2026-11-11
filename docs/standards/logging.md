@@ -776,7 +776,7 @@ structured call (ADR 0027) writes as its own key.
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
-| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
+| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s ip_len=%zu"` | Already compliant — carries server_id and ip (an address that parses as IPv4 or IPv6 as written, anything else through `Escape`) with its length |
 | State transition | `"[NETGAME] Logging in..."` | `"[NEVR.PATCH] netgame state from=%s to=%s"` |
 | Crash dump | `"=== CRASH DUMP ==="` | `"[NEVR.CRASH] exception code=0x%08lX name=%s rip=0x%llX"` |
 

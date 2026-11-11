@@ -199,6 +199,84 @@ TEST(MessagesEncoding, RegistrationSuccessHasExpectedFixedLayout) {
   EXPECT_EQ(ReadLe64(encoded.data, 12), 0U);
 }
 
+TEST(MessagesEncoding, RegistrationSuccessWithAnIpv6AddressWritesZerosAndWarns) {
+  ScopedCapturedLog capture;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(0x1122334455667788ULL);
+  message.set_external_ip_address("2001:db8::1");
+  const EncodedMessage encoded = EncodeRegistrationSuccess(message);
+
+  ASSERT_EQ(encoded.size(), 20U);
+  ExpectRepeatedBytesAt(encoded.data, 8, 4, 0);
+  EXPECT_NE(CapturedLog().find("server_id=1234605616436508552"), std::string::npos) << CapturedLog();
+  EXPECT_NE(CapturedLog().find("family=ipv6"), std::string::npos) << CapturedLog();
+  EXPECT_NE(CapturedLog().find("external_ip_address=2001:db8::1 "), std::string::npos) << CapturedLog();
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithABracketedIpv6AddressIsIpv6) {
+  ScopedCapturedLog capture;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("[2001:db8::1]");
+  const EncodedMessage encoded = EncodeRegistrationSuccess(message);
+
+  ASSERT_EQ(encoded.size(), 20U);
+  ExpectRepeatedBytesAt(encoded.data, 8, 4, 0);
+  EXPECT_NE(CapturedLog().find("family=ipv6"), std::string::npos) << CapturedLog();
+  EXPECT_NE(CapturedLog().find("external_ip_address=[2001:db8::1] "), std::string::npos) << CapturedLog();
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithAnInvalidAddressWritesZerosAndWarns) {
+  ScopedCapturedLog capture;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("not-an-ip");
+  const EncodedMessage encoded = EncodeRegistrationSuccess(message);
+
+  ASSERT_EQ(encoded.size(), 20U);
+  ExpectRepeatedBytesAt(encoded.data, 8, 4, 0);
+  EXPECT_NE(CapturedLog().find("family=unknown"), std::string::npos) << CapturedLog();
+  EXPECT_NE(CapturedLog().find("external_ip_address=\"not-an-ip\" external_ip_address_len=9"),
+            std::string::npos)
+      << CapturedLog();
+}
+
+TEST(MessagesEncoding, RegistrationSuccessEscapesAnInvalidAddressAndStatesItsLength) {
+  ScopedCapturedLog capture;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("a\nb\"" + std::string(100, 'x'));
+  (void)EncodeRegistrationSuccess(message);
+
+  EXPECT_NE(CapturedLog().find("external_ip_address=\"a\\x0ab\\x22" + std::string(60, 'x') +
+                               "\" external_ip_address_len=104"),
+            std::string::npos)
+      << CapturedLog();
+}
+
+TEST(MessagesEncoding, RegistrationSuccessWithAnIpv4AddressLogsNothing) {
+  ScopedCapturedLog capture;
+  gameservice::v1::GameServerRegistrationSuccessMessage message;
+  message.set_server_id(7);
+  message.set_external_ip_address("203.0.113.9");
+  (void)EncodeRegistrationSuccess(message);
+
+  EXPECT_TRUE(CapturedLog().empty()) << CapturedLog();
+}
+
+TEST(MessagesEncoding, AddressForLogKeepsAParsedAddressRealAndEscapesTheRest) {
+  const char* family = nullptr;
+  EXPECT_EQ(AddressForLog("203.0.113.9", &family), "203.0.113.9");
+  EXPECT_STREQ(family, "ipv4");
+  EXPECT_EQ(AddressForLog("2001:db8::1", &family), "2001:db8::1");
+  EXPECT_STREQ(family, "ipv6");
+  EXPECT_EQ(AddressForLog("[2001:db8::1]", &family), "[2001:db8::1]");
+  EXPECT_STREQ(family, "ipv6");
+  EXPECT_EQ(AddressForLog("a b\"", &family), "\"a b\\x22\"");
+  EXPECT_STREQ(family, "unknown");
+  EXPECT_EQ(AddressForLog("203.0.113.9"), "203.0.113.9");
+}
+
 TEST(MessagesEncoding, LobbySessionStartV4CarriesFixedFieldsAndSettingsPayload) {
   GUID lobbyId = {};
   GUID groupId = {};
