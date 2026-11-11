@@ -1,4 +1,4 @@
-# dronekill (part 6 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# dronekill (part 6 of 7): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
 runm dk_hl_gen src/quest/combat/dronekill.cpp "s/  if (e\[1\] != static_cast<std::uint16_t>(handle >> 16)) return false;/  (void)0;/" quest-host-combat dronekill_test
 runm dk_hl_mask src/quest/combat/dronekill.cpp "s/!SafeRead(idx + (handle \& 0xffff) \* 4ull, e, sizeof e)) return false;/!SafeRead(idx + handle * 4ull, e, sizeof e)) return false;/" quest-host-combat dronekill_test
 runm dk_hl_slot src/quest/combat/dronekill.cpp "s/  \*slot_out = e\[0\];/  *slot_out = e[1];/" quest-host-combat dronekill_test

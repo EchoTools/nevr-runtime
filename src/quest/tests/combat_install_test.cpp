@@ -349,14 +349,14 @@ void ALongTableWritesEveryModuleRecordAndAWholePhaseLine() {
 }
 
 // The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps with impactsnd and its write-switch row
-// after the first and decals with its two flip-switch rows after the last, ec, ecfx, dronekill, dronemuzzle and powerboost, gunconnect, aibots and weapon_arm (#2185), the gates, bvh with
+// after the first and decals with its two flip-switch rows after the last, ec, ecfx, dronekill with its explosion switch row (#1737), dronemuzzle and powerboost, gunconnect, aibots and weapon_arm (#2185), the gates, bvh with
 // its two switch rows, wallfire, sendguard, pfx, pfxtev, sensorwd and music in the normal phase. Rows are found by name, so a module that moves in
 // adds its row without
 // renumbering this test; the order the plugin installed them in is checked between the named rows.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 48);
+  QCHECK(count == 49);
   const auto at = [&](const char* name) -> std::size_t {
     for (std::size_t i = 0; i < count; ++i) {
       if (std::strcmp(table[i].name, name) == 0) return i;
@@ -377,6 +377,14 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
   // there; a normal step with its switch and its end
   const std::size_t bvg = at("bullet_velocity_guard");
   QCHECK(dronekill < bvg && bvg + 2 == dronemuzzle);
+  // the drone explosion's switch (#1737): a switch-only row right after dronekill's, which DronekillNormal reads
+  const std::size_t dkx = at("dronekill_explosion");
+  QCHECK(dkx == dronekill + 1 && dkx < bvg);
+  if (dkx < count) {
+    QCHECK(table[dkx].early == nullptr && table[dkx].normal == nullptr && table[dkx].end == nullptr && table[dkx].switchKey != nullptr &&
+           std::strcmp(table[dkx].switchKey, "combat.dronekill_explosion") == 0 &&
+           table[dkx].switchMember == &nevr_quest::CombatConfig::dronekillExplosion);
+  }
   // the sound-symbol guard (#1737): directly after the bullet-velocity guard's row, after the combat level answer's row it reads; a normal step with
   // its switch and its end
   const std::size_t ssg = at("sound_symbol_guard");
@@ -713,7 +721,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   // levelname's (#2181), the watchdog's and the combat music's (#2184), then the two keys of the EC client and POWER BOOST that are not a boolean (#2187)
   const char* const order[] = {"frozen_frame_exit", "meshstep",      "impactsnd",     "impactsnd_write", "tablestep", "instmodel", "shaderstep",
                                "decals",        "decals_flip_u", "decals_flip_v",   "ec",        "ecfx",      "dronekill",
-                               "bullet_velocity_guard", "sound_symbol_guard", "dronemuzzle",   "gunconnect",    "aibots",          "weapon_arm", "bvh",           "bvh_gate",        "bvh_touch", "wallfire",  "sendguard",
+                               "dronekill_explosion", "bullet_velocity_guard", "sound_symbol_guard", "dronemuzzle",   "gunconnect",    "aibots",          "weapon_arm", "bvh",           "bvh_gate",        "bvh_touch", "wallfire",  "sendguard",
                                "fxtrail",       "voipdrop",      "custctx",         "droneguard", "droneguard_stage1", "peerclamp",
                                "hudmeter",      "shieldgamma_gamma", "shieldgamma_tube_mirror", "levelname", "sensorwd", "music"};
   constexpr std::size_t kSwitches = sizeof(order) / sizeof(order[0]);

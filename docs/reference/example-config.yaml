@@ -377,6 +377,13 @@ combat:
   # warning that names the key. Read once at launch. Default (absent): true.
   # dronekill: false
 
+  # Quest only. A boolean. A combat drone that dies explodes on this client (docs/quest/combat/drone_explosion.md): one the server says died at
+  # once, one whose time ran out with the first system its script turns off held back until 2.5 s after its explosion. It needs dronekill
+  # (above) and acts only in a combat map. The sentinel log lines `combat_dronekill_explosion` and `combat_dronekill_hold` say what it did.
+  # `false` leaves the drone's end to the game. A value that is not a boolean keeps the default, with a warning that names the key. Read once at
+  # launch. Default (absent): true.
+  # dronekill_explosion: false
+
   # Quest only. A boolean. A combat drone's bullets leave its gun, not its root (src/quest/combat/dronemuzzle.h). It needs dronekill (above):
   # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
   # the default, with a warning that names the key. Read once at launch. Default (absent): true.

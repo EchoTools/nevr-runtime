@@ -47,6 +47,9 @@ constexpr uint64_t kNcaModel = 0x38EE951A26FB816Aull;       // ncaModel (EC 75)
 constexpr uint64_t kGun = 0x72F91FFFA17C3C8Cull;            // its gun (EC 76)
 constexpr uint64_t kSatellite = 0x106C63A2927B7A4Dull;      // its satellite (EC 77)
 constexpr uint64_t kPort = 0x45B09F0FA9F7FA33ull;           // its port (EC 80)
+// CSymbol64("ncaPhysics") (docs/quest/combat/drone_explosion.md): the first system the drone script turns off at its end; upstream
+// labels it the sound system (EC's DRONE_SOUND). Which of the two the drone's graph uses it for is not established.
+constexpr uint64_t kNcaPhysics = 0x5B8CC538E22AD937ull;
 
 // ---- the chase (EC 1083-1086)
 constexpr float kChaseSpeed = 7.0f;      // m/s at most
@@ -285,5 +288,70 @@ template <class CompX = None, class GroupX = None> struct Groups {
         return false;
     }
 };
+
+// ---- the drone's explosion (EC's DeathFx queue; PC dronefix.cpp QueueDeathFx / DeathFxDue / ExpiredDamageable, the Quest's dronekill.cpp)
+// A dead drone's explosion runs at the next per-frame update, outside any script node. An expiry (the drone's own end) holds the first
+// system its script turns off (kNcaPhysics) back, and turns it off kFxSoundHoldMs after the explosion was spawned; a shot-down drone's
+// explosion holds nothing.
+constexpr int kFxSlots = 8;                  // explosions queued at once (EC's g_fx[8])
+constexpr int kFxHeld = 8;                   // held components per explosion (EC's DeathFx::sound[8])
+constexpr uint64_t kFxSoundHoldMs = 2500;    // the explosion's sound, then the held components off (EC's FX_SOUND_HOLD_MS)
+
+// Ctx: the caller's explosion context (PC: the node context; Quest: the context, its group and index). Held: a held component.
+template <class Ctx, class Held> struct FxQueue {
+    struct Slot { bool used = false, spawned = false; uint64_t at = 0; Ctx ctx{}; int nheld = 0; Held held[kFxHeld]; };
+    Slot s[kFxSlots];
+
+    // the first free slot takes it (at most kFxHeld held components kept); false: all kFxSlots are taken, nothing was queued and the
+    // caller turns its held components off now
+    bool Queue(const Ctx& ctx, const Held* held, int nheld, uint64_t now) {
+        for (Slot& x : s) {
+            if (x.used) continue;
+            x = Slot{};
+            x.used = true;
+            x.ctx = ctx;
+            x.at = now;
+            x.nheld = nheld < 0 ? 0 : nheld < kFxHeld ? nheld : kFxHeld;
+            for (int i = 0; i < x.nheld; ++i) x.held[i] = held[i];
+            return true;
+        }
+        return false;
+    }
+    // What is due at now: each explosion not yet spawned goes to spawn (its clock restarts at now); a slot with nothing held, or spawned
+    // kFxSoundHoldMs or more ago, hands its held components to off and is freed. Returns the explosions written to spawn (at most
+    // spawnCap); *nOff = the components written to off (at most offCap; the rest of a full off list are dropped with the slot).
+    int Due(uint64_t now, Ctx* spawn, int spawnCap, Held* off, int offCap, int* nOff) {
+        int n = 0, m = 0;
+        for (Slot& x : s) {
+            if (!x.used) continue;
+            if (!x.spawned) {
+                if (n >= spawnCap) continue;
+                spawn[n++] = x.ctx;
+                x.spawned = true;
+                x.at = now;
+            }
+            if (now - x.at >= kFxSoundHoldMs || !x.nheld) {
+                for (int i = 0; i < x.nheld && m < offCap; ++i) off[m++] = x.held[i];
+                x = Slot{};
+            }
+        }
+        *nOff = m;
+        return n;
+    }
+    bool Any() const {
+        for (const Slot& x : s) if (x.used) return true;
+        return false;
+    }
+    void Clear() { for (Slot& x : s) x = Slot{}; }
+};
+
+// The expiry: the first-system off opens it; the damageable's off closes it. Then a drone that was alive, with an explosion context, has
+// its explosion queued with the held components; any other (already dead: shot down, its explosion then; or no context) has them off
+// now. An expiry no damageable off closed within kFxSoundHoldMs of its opening lets them go (off) all the same: nothing stays held.
+enum class ExpiryAction { kQueue, kOffNow };
+inline ExpiryAction OnDamageableOff(bool alive, bool open, bool haveCtx) {
+    return alive && open && haveCtx ? ExpiryAction::kQueue : ExpiryAction::kOffNow;
+}
+inline bool ExpiryLetGo(bool open, uint64_t opened, uint64_t now) { return open && now - opened >= kFxSoundHoldMs; }
 
 }  // namespace nevr_dronekill

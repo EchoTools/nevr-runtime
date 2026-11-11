@@ -19,8 +19,10 @@
 #include "quest/combat/dronekill_core.h"
 #include "quest/combat/line_budget.h"
 #include "quest/combat/ec.h"
+#include "quest/combat/ec_core.h"
 #include "quest/combat/safe_read.h"
 #include "quest/combat/thread_word.h"
+#include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 
@@ -69,7 +71,7 @@ std::uintptr_t g_base = 0, g_cmp_plt = 0;
 Fns g_fns{};
 bool g_cmp_ok = false;
 std::atomic<bool> g_installed{false};
-bool g_kill = false, g_lockon = false, g_gun = false, g_chase = false, g_shot = false;
+bool g_kill = false, g_lockon = false, g_gun = false, g_chase = false, g_shot = false, g_explosion = false;
 std::atomic<bool> g_shot_swapped{false};
 
 // The scope (dronekill.h, "Arena"): written by the tick only, read by every handler with one relaxed load.
@@ -83,6 +85,8 @@ TouchTable g_touch;      // under g_mu
 GunTable g_guns;         // under g_mu
 ChaseTable g_chases;     // under g_mu
 void* g_aux_space = nullptr;  // under g_mu: the game space of the three tables above
+FxQueue g_fx;            // under g_mu: the explosions due (#1737)
+OffRetries g_offs;       // under g_mu: held components due to go off, retried while their game space defers the disable
 std::atomic<bool> g_any_due{false};  // written under g_mu only, read without it
 
 std::atomic<std::uintptr_t> g_vt[kVtCache] = {};      // vtables whose Component slots were checked: low bit 1 = the read shapes
@@ -107,6 +111,9 @@ std::atomic<int> g_lines{0}, g_notes{0}, g_off_lines{0}, g_k_lines{0}, g_f357_li
 std::atomic<std::uint32_t> g_enter_drone{0}, g_enter_other{0}, g_fires{0}, g_attacks{0}, g_ticks{0}, g_due_runs{0};
 std::atomic<std::uint32_t> g_expired{0};  // drone ends the D11 rule saw (the stats record's expired)
 std::atomic<unsigned> g_expired_lines{0};  // the expired lines the budget has counted
+std::atomic<std::uint32_t> g_explosions{0}, g_held{0};  // explosions run, first-system offs held (the stats record)
+std::atomic<unsigned> g_fx_lines{0}, g_fx_skip_lines{0}, g_hold_lines{0};
+constexpr unsigned kFxLines = 64, kFxSkipLines = 16, kHoldLines = 64;
 
 // What the scope line reports: each hook's thunk calls when the scope last changed, and when.
 std::uint64_t g_scopeSince[kHookCount] = {};
@@ -117,6 +124,7 @@ const Calls* g_test_calls = nullptr;
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<const Fns*> g_fnsOverride{nullptr};
+std::atomic<bool (*)(std::uintptr_t, EntryInfo*)> g_entryInfo{nullptr};
 
 std::uint64_t NowMs() noexcept {
   if (g_clock_ms != nullptr) return g_clock_ms();
@@ -299,11 +307,230 @@ void LogStats(bool final) noexcept {
   sentinel::LogFields(final ? LogLevel::kInfo : LogLevel::kDebug, "combat_dronekill_stats",
                       {{"enter_drone", s.enter_drone}, {"enter_other", s.enter_other}, {"fires", s.fires}, {"attacks", s.attacks},
                        {"ticks", s.ticks}, {"due_runs", s.due_runs}, {"capturing", s.capturing}, {"expired", s.expired},
-                       {"final", final ? 1 : 0},
-                       {"consequence", "enter_drone and enter_other are the drone and the other node Enters in a combat map, fires the drone's shots, "
-                                       "attacks its AttackTarget calls, ticks the frame ticks, due_runs the ticks with components due, capturing the drone "
-                                       "Enters in flight now, expired the drone ends that found their group; their rates over the run's time are the call rates "
-                                       "of the hooks"}});
+                       {"explosions", s.explosions}, {"held", s.held}, {"final", final ? 1 : 0},
+                       {"consequence", "the counts dronekill.h names (Stats): drone and other Enters in a combat map, drone shots, AttackTarget "
+                                       "calls, frame ticks, ticks with work due, Enters in flight, drone ends, explosions run and offs held; over "
+                                       "the run's time they are the hooks' call rates"}});
+}
+
+// ---- the explosion (#1737, dronekill.h "The explosion") ----
+int OffOne(const Comp& c, const char** why) noexcept;
+
+// The EC page's drone block word at `off` (ec_core.h); 0 = unreadable.
+std::uint64_t PageWord(std::uint32_t off) noexcept {
+  std::uint64_t w = 0;
+  if (!SafeRead(reinterpret_cast<std::uintptr_t>(sentinel::EcPage()) + ec::core::kDroneBlock + off, &w, sizeof w)) return 0;
+  return w;
+}
+
+const char* HoldMsg(const char* step) noexcept {
+  if (std::strcmp(step, "held") == 0) return "a drone's first-system off is held back: it goes off 2.5 s after the drone's explosion";
+  if (std::strcmp(step, "let_go") == 0) return "no damageable off came within 2.5 s of a hold: the held component goes off now";
+  if (std::strcmp(step, "released") == 0) return "a held component went off (or was found gone)";
+  if (std::strcmp(step, "lost") == 0) return "a held component's game space never let it go off within 2 s: it was left to the game";
+  return "a drone's first-system off was not held: the game's own Enter ran at once";
+}
+void HoldLine(LogLevel level, const char* step, std::uint32_t index, int group, const char* why, int ctxMatch = -1) noexcept {
+  if (!LineBudget(&g_hold_lines, kHoldLines, "dronekill", "hold", "no further hold lines are written; the stats line counts the holds")) return;
+  sentinel::LogFields(level, "combat_dronekill_hold",
+                      {{"index", index & 0xffff}, {"group", group}, {"step", step}, {"why", why}, {"ctx_match", ctxMatch}, {"msg", HoldMsg(step)}});
+}
+void SkipLine(std::uint32_t index, int group, const char* reason, std::uintptr_t entry = 0) noexcept {
+  if (!LineBudget(&g_fx_skip_lines, kFxSkipLines, "dronekill", "explosion_skipped",
+                  "no further explosion_skipped lines are written; the stats line counts the explosions run")) return;
+  char e[19];
+  sentinel::LogFields(LogLevel::kWarn, "combat_dronekill_explosion_skipped",
+                      {{"index", index & 0xffff}, {"group", group}, {"reason", reason}, {"entry", sentinel::HexString(e, entry)},
+                       {"msg", "a dead drone's explosion was not run: the drone goes without it"}});
+}
+
+// The hold (dronekill.h): the first-system off of the drone whose group is the only live one. True = held (the caller does not run the
+// real Enter); false = not resolved (the caller runs the real Enter at once, as the game would).
+__attribute__((noinline)) bool TryHold(const NodeData& d) noexcept {
+  int live = 0, number = 0;
+  std::uint32_t index = 0;
+  bool already = false;
+  std::uint64_t actor = 0, space = 0, gctx = 0;
+  pthread_mutex_lock(&g_mu);
+  if (const Group* g = g_table.SoleLive(&live)) {
+    number = g->x.number;
+    index = g->handle;
+    already = g->x.holdOpen;
+    actor = g->actor;
+    space = g->n > 0 ? g->comps[0].x.space : 0;
+    gctx = g->x.ctx;
+  }
+  pthread_mutex_unlock(&g_mu);
+  if (number == 0) {
+    HoldLine(LogLevel::kDebug, "not_held", 0, 0, live == 0 ? "no_live_group" : "ambiguous");
+    return false;
+  }
+  if (already) {
+    HoldLine(LogLevel::kDebug, "not_held", index, number, "already_held");
+    return false;
+  }
+  void* const system = space != 0 && g_fns.find != nullptr ? g_fns.find(reinterpret_cast<const void*>(space), d.system) : nullptr;
+  if (system == nullptr) {
+    HoldLine(LogLevel::kDebug, "not_held", index, number, "no_system");
+    return false;
+  }
+  std::uintptr_t component = 0;
+  if (!g_cmp_ok || !ComponentShape(system, &component)) {
+    HoldLine(LogLevel::kDebug, "not_held", index, number, "no_shape");
+    return false;
+  }
+  const std::uint32_t handle = static_cast<std::uint32_t>(CallComponent(component, system, actor, d.component));
+  if ((handle & 0xffff) == 0xffff) {
+    HoldLine(LogLevel::kDebug, "not_held", index, number, "no_component");
+    return false;
+  }
+  std::uintptr_t owner = 0;
+  SafeRead(reinterpret_cast<std::uintptr_t>(system) + kSysOwner, &owner, sizeof owner);
+  Comp c;
+  c.system = reinterpret_cast<std::uint64_t>(system);
+  c.handle = handle;
+  c.at = NowMs();
+  c.actor = actor;
+  c.x.sysSym = d.system;
+  c.x.compSym = d.component;
+  c.x.space = space;
+  c.x.owner = owner;
+  bool held = false;
+  pthread_mutex_lock(&g_mu);
+  if (Group* g = g_table.ByNumber(number); g != nullptr && g->used && !g->dead && !g->x.holdOpen) {
+    g->x.holdOpen = true;
+    g->x.holdAt = c.at;
+    g->x.held = c;
+    g_any_due.store(true, std::memory_order_release);
+    held = true;
+  }
+  pthread_mutex_unlock(&g_mu);
+  if (!held) {
+    HoldLine(LogLevel::kDebug, "not_held", index, number, "group_changed");
+    return false;
+  }
+  g_held.fetch_add(1, std::memory_order_relaxed);
+  HoldLine(LogLevel::kDebug, "held", index, number, "ok", PageWord(ec::core::kDroneCtx) == gctx ? 1 : 0);
+  return true;
+}
+
+// What a damageable off or a 'K' decided about a group's explosion and hold (under g_mu); the lines are written after the lock.
+struct FxOutcome {
+  const char* skipped = nullptr;  // explosion_skipped's reason
+  const char* released = nullptr; // the held component handed to the off list: why
+  bool direct = false;            // the off list was full: the caller turns `held` off itself
+  Comp held{};
+  int group = 0;
+  std::uint32_t index = 0;
+};
+
+// A held component goes to the off list, or (full) back to the caller.
+void ReleaseLocked(Group& g, const char* why, std::uint64_t now, FxOutcome* out) noexcept {
+  g.x.holdOpen = false;
+  out->released = why;
+  if (!g_offs.Add(g.x.held, g.x.number, g.handle, now)) {
+    out->direct = true;
+    out->held = g.x.held;
+  }
+  g_any_due.store(true, std::memory_order_release);
+}
+
+// The damageable's off (the drone's end), after the shared D11 rule marked the group dead: the expiry rule (dronekill_rules.h).
+FxOutcome ExpiryLocked(std::uint64_t system, std::uint32_t handle, bool alive, std::uint64_t now) noexcept {
+  FxOutcome out;
+  const int s = g_table.t.Find(system, handle);
+  if (s < 0) return out;
+  Group& g = g_table.t.g[s];
+  out.group = g.x.number;
+  out.index = handle;
+  if (!g.x.holdOpen) return out;  // no hold: the game's own end, no explosion (the expiry is not open)
+  switch (::nevr_dronekill::OnDamageableOff(alive, g.x.holdOpen, g.x.ctx != 0)) {
+    case ::nevr_dronekill::ExpiryAction::kQueue: {
+      const FxHeld h{g.x.held, g.x.number, handle};
+      if (g_fx.Queue(FxCtx{g.x.ctx, g.x.number, handle, false, true}, &h, 1, now)) {
+        g.x.holdOpen = false;
+        g_any_due.store(true, std::memory_order_release);
+        return out;
+      }
+      out.skipped = "queue_full";
+      ReleaseLocked(g, "queue_full", now, &out);
+      return out;
+    }
+    case ::nevr_dronekill::ExpiryAction::kOffNow:
+      if (alive) out.skipped = "no_context";
+      ReleaseLocked(g, alive ? "no_context" : "dead", now, &out);
+      return out;
+  }
+  return out;
+}
+
+// A 'K' on a live group (marked dead by the shared kill rule): its explosion, holding nothing; an open hold goes off now.
+FxOutcome KilledLocked(Group& g, std::uint64_t now) noexcept {
+  FxOutcome out;
+  out.group = g.x.number;
+  out.index = g.handle;
+  if (g.x.holdOpen) ReleaseLocked(g, "killed", now, &out);
+  if (g.x.ctx == 0) {
+    out.skipped = "no_context";
+  } else if (g_fx.Queue(FxCtx{g.x.ctx, g.x.number, g.handle, true, false}, nullptr, 0, now)) {
+    g_any_due.store(true, std::memory_order_release);
+  } else {
+    out.skipped = "queue_full";
+  }
+  return out;
+}
+
+void FxOutcomeLines(const FxOutcome& o) noexcept {
+  if (o.skipped != nullptr) SkipLine(o.index, o.group, o.skipped);
+  if (o.released == nullptr) return;
+  const char* why = o.released;
+  if (o.direct) {  // the off list was full: off now, from here (Enter itself disables from a script node)
+    const char* r = "";
+    const int k = OffOne(o.held, &r);
+    why = k == 0 ? "off_now" : k == 2 ? "deferred_lost" : r;
+  }
+  HoldLine(o.direct && std::strcmp(why, "off_now") != 0 ? LogLevel::kWarn : LogLevel::kDebug, "released", o.index, o.group, why);
+}
+
+using EntryFn = void (*)(void* ctx);
+
+bool DladdrInfo(std::uintptr_t fn, EntryInfo* out) {
+  Dl_info di{};
+  if (dladdr(reinterpret_cast<void*>(fn), &di) == 0 || di.dli_fname == nullptr) return false;
+  out->fname = di.dli_fname;
+  out->fbase = reinterpret_cast<std::uintptr_t>(di.dli_fbase);
+  return true;
+}
+bool EntryOk(std::uintptr_t fn, std::uint64_t offset) noexcept {
+  bool (*info)(std::uintptr_t, EntryInfo*) = g_entryInfo.load(std::memory_order_acquire);
+  if (info == nullptr) info = &DladdrInfo;
+  EntryInfo e{nullptr, 0};
+  return info(fn, &e) && EntryAt(fn, e.fname, e.fbase, ec::core::kDroneLib, offset);
+}
+
+// One explosion at the tick: the drone library's spawn and sound entries with the context kept at the release, its state word at +0x18
+// zeroed round each and put back after both (PC SpawnDeathFx).
+void RunExplosion(const FxCtx& f) noexcept {
+  const std::uintptr_t spawn = PageWord(ec::core::kDroneSpawn), sound = PageWord(ec::core::kDroneSoundFn);
+  if (spawn == 0 || sound == 0) return SkipLine(f.index, f.group, "no_entry");
+  if (!EntryOk(spawn, ec::core::kDroneSpawnEntry)) return SkipLine(f.index, f.group, "foreign_entry", spawn);
+  if (!EntryOk(sound, ec::core::kDroneSoundEntry)) return SkipLine(f.index, f.group, "foreign_entry", sound);
+  std::uint64_t saved = 0;
+  if (f.ctx == 0 || !SafeRead(static_cast<std::uintptr_t>(f.ctx) + 0x18, &saved, sizeof saved)) return SkipLine(f.index, f.group, "no_context");
+  auto* const state = reinterpret_cast<volatile std::uint64_t*>(static_cast<std::uintptr_t>(f.ctx) + 0x18);
+  void* const ctx = reinterpret_cast<void*>(static_cast<std::uintptr_t>(f.ctx));
+  *state = 0;  // before the spawn entry
+  reinterpret_cast<EntryFn>(spawn)(ctx);
+  *state = 0;  // before the sound entry
+  reinterpret_cast<EntryFn>(sound)(ctx);
+  *state = saved;  // after both
+  g_explosions.fetch_add(1, std::memory_order_relaxed);
+  if (!LineBudget(&g_fx_lines, kFxLines, "dronekill", "explosion", "no further explosion lines are written; the stats line counts the explosions")) return;
+  sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_explosion",
+                      {{"index", f.index & 0xffff}, {"group", f.group}, {"reason", f.killed ? "killed" : "expired"},
+                       {"sound_delay_ms", f.held ? static_cast<unsigned>(kFxSoundHoldMs) : 0u}, {"entries", 2},
+                       {"msg", f.held ? "a drone that ran out exploded; its held component goes off 2.5 s from now"
+                                      : "a drone that was shot down exploded"}});
 }
 
 // CEnableComponentNode::Enter in a combat map (EnterHandler below is the hook).
@@ -321,6 +548,7 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
   }
   const std::uint32_t drones = g_enter_drone.fetch_add(1, std::memory_order_relaxed) + 1;
   if ((drones & (kStatsEvery - 1)) == 0) LogStats(false);
+  if (g_explosion && !d.enable && d.system == kNcaPhysics && TryHold(d)) return;  // held: the real Enter is not run (dronekill.h)
   Capture cap;
   Capture* const outer = CurrentCapture();  // a drone Enter inside a drone Enter keeps its own capture
   g_capturing.fetch_add(1, std::memory_order_relaxed);
@@ -411,16 +639,35 @@ __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, con
   }
   Joined j{0, 0, false, false};
   if (d.enable) {
+    const std::uint64_t page_ctx = d.system == kDamageable ? PageWord(ec::core::kDroneCtx) : 0;  // the release's node context (explosion)
+    FxHeld open[kGroups];  // the holds open before a release, which may reuse their group's slot or clear the table
+    int nopen = 0;
     pthread_mutex_lock(&g_mu);  // DK-5: table operations only
+    if (d.system == kDamageable) {
+      for (const Group& g : g_table.t.g) {
+        if (g.used && g.x.holdOpen) open[nopen++] = FxHeld{g.x.held, g.x.number, g.handle};
+      }
+    }
     j = g_table.On(reinterpret_cast<std::uint64_t>(system), d.system, d.component, handle, NowMs(), cap.actor,
                    reinterpret_cast<std::uint64_t>(cap.space), owner);
+    if (d.system == kDamageable) {
+      if (Group* g = g_table.ByNumber(j.group)) g->x.ctx = page_ctx;
+      for (int i = 0; i < nopen; ++i) {  // a hold the release took away goes off at the next tick: nothing stays held
+        const Group* g = g_table.ByNumber(open[i].group);
+        if ((g == nullptr || !g->x.holdOpen) && g_offs.Add(open[i].c, open[i].group, open[i].index, NowMs()))
+          g_any_due.store(true, std::memory_order_release);
+      }
+    }
     if (j.again && g_kill) g_any_due.store(true, std::memory_order_release);  // R3: off again at the next tick
     pthread_mutex_unlock(&g_mu);
   }
   if (!d.enable && d.system == kDamageable) {  // D11 (#2359): the drone's damageable went off, which is the drone's end: its group is dead
+    FxOutcome fx;
     pthread_mutex_lock(&g_mu);
     const int dead = g_table.Off(reinterpret_cast<std::uint64_t>(system), handle);
+    if (g_explosion) fx = ExpiryLocked(reinterpret_cast<std::uint64_t>(system), handle, dead != 0, NowMs());
     pthread_mutex_unlock(&g_mu);
+    FxOutcomeLines(fx);
     if (dead != 0) {
       g_expired.fetch_add(1, std::memory_order_relaxed);
       if (LineBudget(&g_expired_lines, kExpiredLines, "dronekill", "expired",
@@ -757,6 +1004,51 @@ void ChaseTick(std::uint64_t now) noexcept {
   }
 }
 
+// The explosion's due work at the tick (#1737): holds that ran out go to the off list, the queue's explosions run and its held components go
+// to the off list, then each held component on the list goes off (OffOne; a deferring game space is retried up to kDueMs).
+void FxTick(std::uint64_t now) noexcept {
+  FxCtx spawn[kFxSlots];
+  FxHeld off[kFxSlots * kFxHeld];
+  Comp let[kGroups];
+  int letN[kGroups];
+  std::uint32_t letI[kGroups];
+  OffRetry work[kOffRetries + kFxSlots * kFxHeld + kGroups];
+  int nwork = 0, noff = 0;
+  pthread_mutex_lock(&g_mu);
+  const int nlet = g_table.LetGo(now, let, letN, letI, kGroups);
+  const int nspawn = g_fx.Due(now, spawn, kFxSlots, off, kFxSlots * kFxHeld, &noff);
+  for (auto& r : g_offs.r) {
+    if (r.used) work[nwork++] = r;
+  }
+  g_offs.Clear();
+  pthread_mutex_unlock(&g_mu);
+  for (int i = 0; i < nlet; ++i) {
+    HoldLine(LogLevel::kDebug, "let_go", letI[i], letN[i], "no_damageable_off");
+    work[nwork++] = OffRetry{let[i], letN[i], letI[i], now, true};
+  }
+  for (int i = 0; i < noff; ++i) work[nwork++] = OffRetry{off[i].c, off[i].group, off[i].index, now, true};
+  for (int i = 0; i < nspawn; ++i) RunExplosion(spawn[i]);
+  OffRetry keep[kOffRetries + kFxSlots * kFxHeld + kGroups];
+  int nkeep = 0;
+  for (int i = 0; i < nwork; ++i) {
+    const char* why = "";
+    const int k = OffOne(work[i].c, &why);
+    if (k == 2 && now - work[i].since < kDueMs) {
+      keep[nkeep++] = work[i];
+      continue;
+    }
+    if (k == 2) HoldLine(LogLevel::kWarn, "lost", work[i].index, work[i].group, "invoke_immediate_0");
+    else HoldLine(LogLevel::kDebug, "released", work[i].index, work[i].group, k == 0 ? "off" : why);
+  }
+  int lost = 0;
+  pthread_mutex_lock(&g_mu);
+  for (int i = 0; i < nkeep; ++i) {
+    if (!g_offs.Add(keep[i].c, keep[i].group, keep[i].index, keep[i].since)) ++lost;
+  }
+  pthread_mutex_unlock(&g_mu);
+  if (lost != 0) HoldLine(LogLevel::kWarn, "lost", 0, 0, "off_list_full");
+}
+
 // The due work (the reference build ran it at the end of each recvfrom on the game's own socket); here once per frame on the game thread.
 // Nothing but one atomic load while nothing is due.
 __attribute__((noinline)) void TickBody() noexcept {
@@ -794,8 +1086,10 @@ __attribute__((noinline)) void TickBody() noexcept {
   }
   if (g_lockon) TouchTick(now, tid);
   if (g_chase) ChaseTick(now);
+  if (g_explosion) FxTick(now);
   pthread_mutex_lock(&g_mu);
-  if (!g_table.AnyDue() && !g_touch.AnyDue() && !g_chases.AnyDue()) g_any_due.store(false, std::memory_order_release);
+  if (!g_table.AnyDue() && !g_touch.AnyDue() && !g_chases.AnyDue() && !g_fx.Any() && !g_offs.Any() && !g_table.AnyHold())
+    g_any_due.store(false, std::memory_order_release);
   pthread_mutex_unlock(&g_mu);
   if ((expired != 0 || (waiting != 0 && off == 0 && skipped == 0)) && Allow(g_off_lines, kOffLineCap, "off")) {
     sentinel::LogFields(LogLevel::kWarn, "combat_dronekill_tick",
@@ -827,6 +1121,8 @@ __attribute__((noinline)) void RefreshScope(std::uintptr_t game) noexcept {
     g_guns.Clear();
     g_chases.Clear();
     g_aux_space = nullptr;
+    g_fx.Clear();    // the level is gone: its explosions and holds with it (the held components' game space is unloaded)
+    g_offs.Clear();
     g_any_due.store(false, std::memory_order_release);
     pthread_mutex_unlock(&g_mu);
   }
@@ -932,6 +1228,7 @@ Result InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Words& wo
   g_gun = words.gun;
   g_chase = words.chase;
   g_shot = words.shot;
+  g_explosion = words.explosion;
   if (g_chase && (fns.l2w == nullptr || fns.primary == nullptr || fns.resolve == nullptr || fns.set_vel == nullptr || fns.local == nullptr)) {
     sentinel::LogFields(LogLevel::kError, "combat_dronekill_chase_off",
                         {{"why", "a function chase calls is not resolved"}, {"consequence", "drones do not chase; the other rules install"}});
@@ -1011,10 +1308,10 @@ Result InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Words& wo
   out.ok = true;
   out.status = "installed";
   out.comparatorOk = g_cmp_ok;
-  out.needsTick = g_kill || g_lockon || g_chase;
+  out.needsTick = g_kill || g_lockon || g_chase || g_explosion;
   sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"kill", g_kill ? 1 : 0}, {"lockon", g_lockon ? 1 : 0}, {"gun", g_gun ? 1 : 0},
-                       {"chase", g_chase ? 1 : 0}, {"shot", g_shot ? 1 : 0}, {"fire_bullet_local", want_fire ? "hooked" : "not_hooked"},
+                       {"chase", g_chase ? 1 : 0}, {"shot", g_shot ? 1 : 0}, {"explosion", g_explosion ? 1 : 0}, {"fire_bullet_local", want_fire ? "hooked" : "not_hooked"},
                        {"attack_target", want_attack ? "hooked" : "not_hooked"}, {"component_lookups", g_cmp_ok ? "on" : "off"},
                        {"consequence", "the drone rules act while a combat map is loaded; in every other level each hook only calls the game's function"}});
   return out;
@@ -1070,6 +1367,7 @@ void OnKilled(std::uint32_t index) noexcept {
   const std::uint32_t tid = Tid();
   int group = 0, comps = 0, live_n = 0;
   std::uint32_t live[kGroups];
+  FxOutcome fx;
   pthread_mutex_lock(&g_mu);
   if (g_kill) {
     if (Group* g = g_table.Killed(index, NowMs(), true)) {
@@ -1077,6 +1375,7 @@ void OnKilled(std::uint32_t index) noexcept {
       comps = g->n;
       if (g->x.due) g_any_due.store(true, std::memory_order_release);
       if (g_gun) HideGunOnKill(g_guns);  // M4: EchoCombat Shutdown's SetGun(DRONE_ACTOR, 0): the drone symbol's state, hidden (D4)
+      if (g_explosion) fx = KilledLocked(*g, NowMs());  // #1737: a shot-down drone explodes (a second 'K' finds no live group)
     }
   } else if (Group* g = g_table.Killed(index)) {
     group = g->x.number;
@@ -1084,6 +1383,7 @@ void OnKilled(std::uint32_t index) noexcept {
   }
   live_n = g_table.Live(live, kGroups);
   pthread_mutex_unlock(&g_mu);
+  FxOutcomeLines(fx);
   if (!Allow(g_k_lines, kKLineCap, "k")) return;
   sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_k",
                       {{"index", index & 0xffff}, {"tid", tid}, {"group", group}, {"components", comps}, {"live_groups", live_n},
@@ -1104,7 +1404,7 @@ bool ShotActive() noexcept { return g_shot_swapped.load(std::memory_order_acquir
 
 Stats CurrentStats() noexcept {
   return {g_enter_drone.load(), g_enter_other.load(), g_fires.load(), g_attacks.load(), g_ticks.load(), g_due_runs.load(),
-          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load()};
+          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load(), g_explosions.load(), g_held.load()};
 }
 
 void NoteEnd() noexcept {
@@ -1129,6 +1429,7 @@ void SetShotForTest(const float* v3, int remote) noexcept {
 }
 void SetShotActiveForTest(bool active) noexcept { g_shot_swapped.store(active); }
 void SetScopeForTest(bool inCombat) noexcept { g_inScope.store(inCombat); }
+void SetEntryInfoForTest(bool (*info)(std::uintptr_t fn, EntryInfo* out)) noexcept { g_entryInfo.store(info, std::memory_order_release); }
 
 void ResetForTest() noexcept {
   for (sentinel::GotHook& hook : g_hooks) hook.Forget();
@@ -1140,7 +1441,7 @@ void ResetForTest() noexcept {
   g_fns = Fns{};
   g_cmp_ok = false;
   g_installed.store(false);
-  g_kill = g_lockon = g_gun = g_chase = g_shot = false;
+  g_kill = g_lockon = g_gun = g_chase = g_shot = g_explosion = false;
   g_shot_swapped.store(false);
   g_inScope.store(false);
   g_capturing.store(0);
@@ -1150,6 +1451,8 @@ void ResetForTest() noexcept {
   g_guns = GunTable();
   g_chases = ChaseTable();
   g_aux_space = nullptr;
+  g_fx.Clear();
+  g_offs.Clear();
   g_any_due.store(false);
   pthread_mutex_unlock(&g_mu);
   for (auto& c : g_vt) c.store(0);
@@ -1161,6 +1464,10 @@ void ResetForTest() noexcept {
   for (std::atomic<int>* n : {&g_lines, &g_notes, &g_off_lines, &g_k_lines, &g_f357_lines, &g_chase_lines}) n->store(0);
   for (std::atomic<std::uint32_t>* n : {&g_enter_drone, &g_enter_other, &g_fires, &g_attacks, &g_ticks, &g_due_runs, &g_expired}) n->store(0);
   g_expired_lines.store(0);
+  g_explosions.store(0);
+  g_held.store(0);
+  for (std::atomic<unsigned>* n : {&g_fx_lines, &g_fx_skip_lines, &g_hold_lines}) n->store(0);
+  g_entryInfo.store(nullptr);
   for (std::uint64_t& s : g_scopeSince) s = 0;
   g_scopeSinceMs = 0;
   g_clock_ms = nullptr;

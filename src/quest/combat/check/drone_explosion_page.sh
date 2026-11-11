@@ -8,7 +8,9 @@
 #   2. the counter at kDroneBlock + kDroneSteps is a ldaxr / stlxr pair on its address;
 #   3. three 8-byte stores through the window write (the address in x1, `add x1, xB, #off`, then a bl, then `str xV, [x0]`), in address
 #      order: the context (kDroneCtx; its value is loaded from the stack), the spawn entry (kDroneSpawn) and the sound entry (kDroneSoundFn);
-#   4. the spawn and sound values are the addresses of the library's symbols re33_ecent_221a0a_13720 and re33_ecent_221a0a_13920, loaded by adrp + add.
+#   4. the spawn and sound values are the addresses of the library's symbols re33_ecent_221a0a_13720 and re33_ecent_221a0a_13920, loaded by adrp + add;
+#   5. those addresses are kDroneSpawnEntry and kDroneSoundEntry, and neither symbol is in the dynamic symbol table (dronekill checks an entry by
+#      its library and offset, because dladdr cannot name a local symbol).
 # It reads the disassembly and the symbol table; it runs nothing.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -180,9 +182,21 @@ if spawn_target != SPAWN_ENTRY:
 if sound_target != SOUND_ENTRY:
     die("the sound store (+0x%x) holds 0x%x, not re33_ecent_221a0a_13920 (0x%x)" % (SOUND, sound_target, SOUND_ENTRY))
 
+# 5. the offsets dronekill checks, and why it checks offsets
+if const("kDroneSpawnEntry") != SPAWN_ENTRY:
+    die("kDroneSpawnEntry is 0x%x, re33_ecent_221a0a_13720 is at 0x%x" % (const("kDroneSpawnEntry"), SPAWN_ENTRY))
+if const("kDroneSoundEntry") != SOUND_ENTRY:
+    die("kDroneSoundEntry is 0x%x, re33_ecent_221a0a_13920 is at 0x%x" % (const("kDroneSoundEntry"), SOUND_ENTRY))
+dynamic = subprocess.run([nm, "-D", "--defined-only", lib], capture_output=True, text=True)
+if dynamic.returncode != 0:
+    die("llvm-nm -D could not read " + lib)
+for suffix in ("re33_ecent_221a0a_13720EPv", "re33_ecent_221a0a_13920EPv"):
+    if any(line.split()[-1].endswith(suffix) for line in dynamic.stdout.splitlines() if line.split()):
+        die("%s is in the dynamic symbol table: dladdr can name it, so check it by name" % suffix)
+
 print("drone_explosion_page: the prelude stores the drone block (page+0x%x) as the header says: counter +0x%x, "
       "context +0x%x (stored from the stack), spawn +0x%x -> re33_ecent_221a0a_13720 (0x%x), "
-      "sound +0x%x -> re33_ecent_221a0a_13920 (0x%x); library %s"
+      "sound +0x%x -> re33_ecent_221a0a_13920 (0x%x); both entries are local symbols at kDroneSpawnEntry and kDroneSoundEntry; library %s"
       % (BLOCK, STEPS, CTX, SPAWN, SPAWN_ENTRY, SOUND, SOUND_ENTRY, lib))
 PY
 

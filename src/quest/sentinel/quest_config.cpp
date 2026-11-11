@@ -90,6 +90,7 @@ constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only
 constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
 constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
 constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
+constexpr const char* kCombatDronekillExplosionKey = "combat.dronekill_explosion";  // Quest only (default true, #1737)
 constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
 constexpr const char* kCombatBulletVelocityGuardKey = "combat.bullet_velocity_guard";  // Quest only (default true, #1737 row 031)
 constexpr const char* kCombatSoundSymbolGuardKey = "combat.sound_symbol_guard";  // Quest only (default FALSE, #1737)
@@ -580,6 +581,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);
   r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
   r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
+  r.config.combat.dronekillExplosion = ReadCombatSwitch(cfg, kCombatDronekillExplosionKey, r);
   r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
   r.config.combat.bulletVelocityGuard = ReadCombatSwitch(cfg, kCombatBulletVelocityGuardKey, r);
   r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);

@@ -263,8 +263,8 @@ constexpr uintptr_t DEATH_RVA = 0xccf3a0;                        // CR15NetDamag
 constexpr uint8_t DEATH_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10 };
 //: the drone death token (fix_drone_fx.py's DEATH_TOKEN_RVA): +00 count, +08 expiry, +10 shown
 constexpr uintptr_t DEATH_TOKEN_RVA = 0x2104D60;
-//: the system the drone's script turns off first when its lifetime ends (all of it): its sound
-constexpr uint64_t DRONE_SOUND = 0x5B8CC538E22AD937ull;
+// the system the drone's script turns off first when its lifetime ends (all of it): dk::kNcaPhysics, which upstream calls its
+// sound (nEVR port: the shared constant, #1737)
 // (test) each deployed drone killed on the server this long after release, as a hit to 0
 // health does (own-team bullets can't hit own ordnance, so it can't be shot alone); 0 = off
 constexpr ULONGLONG KILL_TEST_MS = 0;
@@ -383,24 +383,16 @@ struct Comp { void *system; uint32_t index; };
 // node's Execute overwrites the running node's per-thread storage, and every client in a
 // match crashed when a drone's lifetime ran out). An expiry also holds back the drone's
 // sound system going off (`sound`) until its explosion's sound has played.
-struct DeathFx { void *ctx; ULONGLONG at; bool spawned; int nsound; Comp sound[8]; };
-DeathFx g_fx[8];
+// nEVR port: the queue and its timing are the shared rule (runtime/patch/dronekill_rules.h FxQueue: dk::kFxSlots slots,
+// dk::kFxHeld held components each, dk::kFxSoundHoldMs), which the Quest's dronekill.cpp runs too (#1737).
+dk::FxQueue<void *, Comp> g_fx;
 SRWLOCK g_fx_lock = SRWLOCK_INIT;
-constexpr ULONGLONG FX_SOUND_HOLD_MS = 2500;                      // the explosion's sound, then the sound system off
 
 void QueueDeathFx(void *ctx, const Comp *sound, int nsound) {
     AcquireSRWLockExclusive(&g_fx_lock);
-    DeathFx *f = nullptr;
-    for (auto &x : g_fx) if (!x.ctx) { f = &x; break; }
-    if (f) {
-        *f = {};
-        f->ctx = ctx;
-        f->at = GetTickCount64();
-        f->nsound = nsound < 8 ? nsound : 8;
-        memcpy(f->sound, sound, sizeof(Comp) * f->nsound);
-    }
+    const bool queued = g_fx.Queue(ctx, sound, nsound, GetTickCount64());
     ReleaseSRWLockExclusive(&g_fx_lock);
-    if (!f) {                                                     // (8 at once: no explosion, sound off now)
+    if (!queued) {                                                // (8 at once: no explosion, sound off now)
         for (int i = 0; i < nsound; ++i) Real_Disable(sound[i].system, sound[i].index, 1);
         LogWarning("drone explosion queue full: skipped");
     }
@@ -509,24 +501,12 @@ void WallFxDue() {
 }
 
 void DeathFxDue() {
-    void *spawn[8];
-    int nspawn = 0;
-    Comp off[64];
+    void *spawn[dk::kFxSlots];
+    Comp off[dk::kFxSlots * dk::kFxHeld];
     int noff = 0;
     ULONGLONG now = GetTickCount64();
     AcquireSRWLockExclusive(&g_fx_lock);
-    for (auto &f : g_fx) {
-        if (!f.ctx) continue;
-        if (!f.spawned) {
-            spawn[nspawn++] = f.ctx;
-            f.spawned = true;
-            f.at = now;
-        }
-        if (now - f.at >= FX_SOUND_HOLD_MS || !f.nsound) {
-            for (int i = 0; i < f.nsound && noff < 64; ++i) off[noff++] = f.sound[i];
-            f = {};
-        }
-    }
+    const int nspawn = g_fx.Due(now, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff);   // nEVR port: shared rule
     ReleaseSRWLockExclusive(&g_fx_lock);
     for (int i = 0; i < nspawn; ++i) SpawnDeathFx(spawn[i]);
     for (int i = 0; i < noff; ++i) Real_Disable(off[i].system, off[i].index, 1);
@@ -641,7 +621,7 @@ bool Shutdown(uint8_t *dcs, uint32_t didx, const char *why) {
 }
 
 // The drone's own end (its lifetime, 20 s): its script turns off its sound system
-// (DRONE_SOUND) first, then its damageable and the rest, on the script's thread. The sound
+// (dk::kNcaPhysics) first, then its damageable and the rest, on the script's thread. The sound
 // system's disables are held back (t_expiry, Hooked_Disable); the damageable's names the
 // drone (ExpiredDamageable): still alive -> its explosion is queued, with the held-back
 // sound system to go off after it; already dead (shot down: its explosion was then) -> the
@@ -674,7 +654,7 @@ void ExpiredDamageable(void *system, uint32_t index) {            // (Hooked_Dis
         if (g >= 0 && g_groups.g[g].x.ctx) e.ctx = g_groups.g[g].x.ctx;
         ReleaseSRWLockShared(&g_drones_lock);
     }
-    if (alive && !g_is_server && e.open && e.ctx) {
+    if (dk::OnDamageableOff(alive && !g_is_server, e.open, e.ctx != nullptr) == dk::ExpiryAction::kQueue) {   // nEVR port: shared rule
         QueueDeathFx(e.ctx, e.sound, e.nsound);
         Log("drone %u expired after %.1f s, explosion", index & 0xffff, age / 1000.0);
     } else {
@@ -921,15 +901,15 @@ void __fastcall Hooked_EnableEnter(void *node, const uint64_t *data) {
         LogDebug("[test] drone script: %s %016llx/%016llx", (uint32_t)data[4] ? "on " : "off", data[2], data[3]);
 #endif
     if (data[0] == dk::kDroneActor && !(uint32_t)data[4] && Real_EnableComp && Real_Disable
-        && (data[2] == DRONE_SOUND || data[2] == dk::kDamageable)) {
-        if (data[2] == DRONE_SOUND) {                       // the end begins: this node's context
+        && (data[2] == dk::kNcaPhysics || data[2] == dk::kDamageable)) {
+        if (data[2] == dk::kNcaPhysics) {                       // the end begins: this node's context
             for (int i = 0; i < t_expiry.nsound; ++i)        // (an unfinished one before: let it go)
                 Real_Disable(t_expiry.sound[i].system, t_expiry.sound[i].index, 1);
             t_expiry = {};
             t_expiry.open = true;
             t_expiry.ctx = DroneCtx(node);
         }
-        t_expiry_step = data[2] == DRONE_SOUND ? 1 : 2;
+        t_expiry_step = data[2] == dk::kNcaPhysics ? 1 : 2;
         Real_EnableEnter(node, data);
         t_expiry_step = 0;
         return;

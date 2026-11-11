@@ -240,6 +240,7 @@ struct CombatConfig {
   CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
   CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
   CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
+  CombatSwitch dronekillExplosion{true, Source::kAbsent};  // `combat.dronekill_explosion`: a dead drone's explosion; needs dronekill (docs/quest/combat/drone_explosion.md)
   CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
   CombatSwitch frozenFrameExit{true, Source::kAbsent};  // `combat.frozen_frame_exit`: a combat game whose frames stop in VR ends (combat/frozen_frame_exit.h)
   CombatInt frozenFrameExitS{30, Source::kAbsent};       // `combat.frozen_frame_exit_s`: its limit in seconds, 10..900, default 30

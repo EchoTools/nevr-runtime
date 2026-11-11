@@ -1392,6 +1392,8 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"ecfx", &nevr_quest::CombatConfig::ecfx, true},
                       // The drone modules (#2187): on unless the file says false.
                       {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
+                      // The drone explosion (#1737): on unless the file says false (the reference build ships dronefx.on).
+                      {"dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion, true},
                       {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
                       // The bullet-velocity guard (#1737 row 031): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
                       {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},

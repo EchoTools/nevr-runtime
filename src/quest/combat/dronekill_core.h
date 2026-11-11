@@ -25,6 +25,10 @@ using ::nevr_dronekill::kNcaModel;
 using ::nevr_dronekill::kGun;
 using ::nevr_dronekill::kSatellite;
 using ::nevr_dronekill::kPort;
+using ::nevr_dronekill::kNcaPhysics;   // the first system the drone script turns off at its end (the explosion's hold, #1737)
+using ::nevr_dronekill::kFxSlots;
+using ::nevr_dronekill::kFxHeld;
+using ::nevr_dronekill::kFxSoundHoldMs;
 using ::nevr_dronekill::kGroups;
 using ::nevr_dronekill::kGuns;
 using ::nevr_dronekill::kGroupComps;
@@ -156,8 +160,11 @@ inline MaskAt MaskOffsets(const uint32_t* en) { return MaskAt{ Imm12(en[3]) * 8,
 // number, overflow count and due bits. The table itself (release, join, pending, swallow, kill pick, dead marking) is
 // runtime/patch/dronekill_rules.h, the one definition PC calls too.
 struct QComp { uint64_t sysSym = 0, compSym = 0, space = 0, owner = 0; };
-struct QGroup { int number = 0, overflow = 0; uint32_t due = 0; uint64_t dueMs = 0; };
 using Comp = ::nevr_dronekill::Comp<QComp>;
+// The explosion (#1737, docs/quest/combat/drone_explosion.md): ctx = the EC page's kDroneCtx word read at the group's release (0 = none);
+// holdOpen = the drone's first-system off (kNcaPhysics) was held back at holdAt, and `held` is that component, turned off later.
+struct QGroup { int number = 0, overflow = 0; uint32_t due = 0; uint64_t dueMs = 0;
+                uint64_t ctx = 0; bool holdOpen = false; uint64_t holdAt = 0; Comp held{}; };
 using Group = ::nevr_dronekill::Group<QComp, QGroup>;
 // group 0 = none (the component went to the pending list); again = R3: a dead group's component, due again
 struct Joined { int group; int pendingJoined; bool pending; bool again; };
@@ -269,7 +276,66 @@ struct Table {
         for (const auto& g : t.g) if (g.used && !g.dead && g.actor == actor) return true;
         return false;
     }
+
+    // The explosion's hold (#1737). The first-system off arrives before Enter has looked its actor up, so the group it belongs to is
+    // known only when exactly one group is live: that group, else null (*live = the live groups counted).
+    Group* SoleLive(int* live) {
+        Group* one = nullptr;
+        int n = 0;
+        for (auto& g : t.g) if (g.used && !g.dead) { ++n; one = &g; }
+        *live = n;
+        return n == 1 ? one : nullptr;
+    }
+    bool AnyHold() const {
+        for (const auto& g : t.g) if (g.used && g.x.holdOpen) return true;
+        return false;
+    }
+    // the open holds no damageable off closed within kFxSoundHoldMs (ExpiryLetGo): closed, their components written to out (at most cap)
+    // (numbers, indexes: each one's group number and damageable index)
+    int LetGo(uint64_t nowMs, Comp* out, int* numbers, uint32_t* indexes, int cap) {
+        int n = 0;
+        for (auto& g : t.g) {
+            if (!g.used || !::nevr_dronekill::ExpiryLetGo(g.x.holdOpen, g.x.holdAt, nowMs) || n >= cap) continue;
+            g.x.holdOpen = false;
+            numbers[n] = g.x.number;
+            indexes[n] = g.handle;
+            out[n++] = g.x.held;
+        }
+        return n;
+    }
 };
+
+// The explosion queue's payload on the Quest (the shared FxQueue, runtime/patch/dronekill_rules.h): the context, the group's log number
+// and damageable index, and why it exploded.
+// held: a component waits for this explosion (sound_delay_ms in its line).
+struct FxCtx { uint64_t ctx = 0; int group = 0; uint32_t index = 0; bool killed = false, held = false; };
+struct FxHeld { Comp c; int group = 0; uint32_t index = 0; };  // index: the drone's damageable handle
+using FxQueue = ::nevr_dronekill::FxQueue<FxCtx, FxHeld>;
+
+// A held component due to go off, retried at each tick while its game space defers the disable (OffOne's wait), at most kDueMs.
+constexpr int kOffRetries = 16;
+struct OffRetry { Comp c; int group = 0; uint32_t index = 0; uint64_t since = 0; bool used = false; };  // index: the damageable's
+struct OffRetries {
+    OffRetry r[kOffRetries];
+    bool Add(const Comp& c, int group, uint32_t index, uint64_t nowMs) {
+        for (auto& x : r) if (!x.used) { x.c = c; x.group = group; x.index = index; x.since = nowMs; x.used = true; return true; }
+        return false;
+    }
+    bool Any() const {
+        for (const auto& x : r) if (x.used) return true;
+        return false;
+    }
+    void Clear() { for (auto& x : r) x = OffRetry(); }
+};
+
+// An explosion entry word is the drone library's entry when it points into the library named `lib` at exactly `offset` from its base
+// (dladdr's dli_fname and dli_fbase): ec_core.h kDroneLib, kDroneSpawnEntry, kDroneSoundEntry. Those entries are local symbols, so dladdr
+// gives no name to check.
+inline bool EntryAt(uint64_t fn, const char* fname, uint64_t fbase, const char* lib, uint64_t offset) {
+    if (!fn || !fname || !fbase || fn < fbase || fn - fbase != offset) return false;
+    const char* slash = strrchr(fname, '/');
+    return strcmp(slash ? slash + 1 : fname, lib) == 0;
+}
 
 // F3 (the source build's tools section 2; upstream): the drone's R14TouchInteract stays on until
 // the drone's first shot. By effect: the script's own disable runs (Enter untouched), the record is RE-ON (on again at

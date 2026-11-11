@@ -176,11 +176,11 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
 ## Lines (sentinel log)
 
 - `combat_dronekill_hook` `{"hook":"<name>","status":"installed|<GotStatus>"}`: Info when installed, Error otherwise. Plus the manager's own `got_hook` line.
-- `combat_dronekill_install`: `"result":"installed"` with the five words, `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
+- `combat_dronekill_install`: `"result":"installed"` with the five words, `explosion` (`combat.dronekill_explosion`), `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
   `component_lookups`; `"result":"off"` (`off_config`); `"result":"refused"` with `reason` (the status token), `why` and the consequence (Error).
 - `combat_dronekill_link`: the kill feed is registered with ec. `combat_dronekill_tick_first`: the frame tick runs.
 - `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change.
-- `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`).
+- `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"explosions":n,"held":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`); `explosions` and `held` are the drone explosion's (docs/quest/combat/drone_explosion.md, with its own lines).
 - `combat_dronekill_expired` `{"index":n,"group":n,"tid":n}`: Info, the drone's end: its damageable went off while its group was live. A drone that K killed and then ends writes none and is not counted. The first 16 of a run.
 - `combat_dronekill_log_cap` `{"lines":"expired","cap":16}`: Warning, once, written by the drone end past the cap; the stats record goes on counting.
 - `combat_dronekill_function` (Error: a function missing or not at its pin), `combat_dronekill_comparator` (Warning), `combat_dronekill_chase_off` (Error).

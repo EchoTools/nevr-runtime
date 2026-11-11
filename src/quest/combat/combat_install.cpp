@@ -119,7 +119,11 @@ ModuleResult EcNormal() noexcept {
 }
 ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
 ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
-ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronekillNormal() noexcept {
+  dronekill::Words words;
+  words.explosion = g_config.dronekillExplosion.on;  // #1737: the drone explosion rides on dronekill (docs/quest/combat/drone_explosion.md)
+  return dronekill::Install(g_config.dronekill.on, words);
+}
 ModuleResult BulletVelocityGuardNormal() noexcept { return bullet_velocity_guard::Install(g_config.bulletVelocityGuard.on); }
 ModuleResult SoundSymbolGuardNormal() noexcept { return sound_symbol_guard::Install(g_config.soundSymbolGuard.on); }
 ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
@@ -196,6 +200,8 @@ constexpr std::array kModules{
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
     // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
     Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill, &dronekill::NoteEnd},
+    // dronekill_explosion (#1737): a switch of dronekill's with no step of its own (as impactsnd_write), read by DronekillNormal.
+    Module{"dronekill_explosion", nullptr, nullptr, "combat.dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion},
     // bullet_velocity_guard (#1737 row 031): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
     // that slot must stay the newest hook there (a later install is refused slot_held_by_entry), so the guard installs first and the entry calls it.
     Module{"bullet_velocity_guard", nullptr, &BulletVelocityGuardNormal, "combat.bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, &bullet_velocity_guard::NoteEnd},

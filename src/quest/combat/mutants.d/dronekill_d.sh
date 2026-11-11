@@ -2,7 +2,7 @@
 NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n#pragma GCC diagnostic ignored "-Wunused-function"\n#pragma GCC diagnostic ignored "-Wunused-but-set-parameter"'
 # a per-thread word shared by every thread (the mutants of the per-thread state)
 SHARED_WORD='struct SharedWord { int Create() noexcept { return 0; } std::uintptr_t Get() const noexcept { return v; } void Set(std::uintptr_t x) noexcept { v = x; } std::uintptr_t v = 0; }'
-# dronekill (part 4 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# dronekill (part 4 of 7): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
 # a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
 runm dc_chase_dist_out src/runtime/patch/dronekill_rules.h "s/if (distOut) \*distOut = dist;/(void)distOut;/" quest-host-combat dronekill_test
 runm dc_chase_above_y src/runtime/patch/dronekill_rules.h "s/q\[1\] + kChaseAbove - p\[1\]/q[1] - p[1]/" quest-host-combat dronekill_test

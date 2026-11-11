@@ -2,7 +2,7 @@
 NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n#pragma GCC diagnostic ignored "-Wunused-function"\n#pragma GCC diagnostic ignored "-Wunused-but-set-parameter"'
 # a per-thread word shared by every thread (the mutants of the per-thread state)
 SHARED_WORD='struct SharedWord { int Create() noexcept { return 0; } std::uintptr_t Get() const noexcept { return v; } void Set(std::uintptr_t x) noexcept { v = x; } std::uintptr_t v = 0; }'
-# dronekill (part 5 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# dronekill (part 5 of 7): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
 runm dk_chase_fb_h src/quest/combat/dronekill.cpp "s/      const DkTransfQ them = g_fns.l2w(reinterpret_cast<void\*>(t_xf), xf_h);/      const DkTransfQ them = g_fns.l2w(reinterpret_cast<void*>(t_xf), body_h);/" quest-host-combat dronekill_test
 runm dk_chase_me_h src/quest/combat/dronekill.cpp "s/    const DkTransfQ me = g_fns.l2w(reinterpret_cast<void\*>(transforms), xf);/    const DkTransfQ me = g_fns.l2w(reinterpret_cast<void*>(transforms), phys_h);/" quest-host-combat dronekill_test
 runm dk_chase_primary src/quest/combat/dronekill.cpp "s/      const DkPhTarget t = g_fns.primary(reinterpret_cast<void\*>(t_phys), body_h);/      const DkPhTarget t = g_fns.primary(reinterpret_cast<void*>(t_phys), xf_h);/" quest-host-combat dronekill_test

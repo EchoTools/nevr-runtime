@@ -11,6 +11,19 @@
  * the read shapes of dronekill_core.h match), CTransformCS::ComputeLocalToWorldTransfQ, CPhysicsCS::PrimaryBody / SetWorldVelocity,
  * CPhTarget::ResolveBody, CR15NetPhysicsCS::IsLocallyControlled. Game memory is read through combat/safe_read.h.
  *
+ * The explosion (#1737, docs/quest/combat/drone_explosion.md; `explosion`, the key `combat.dronekill_explosion`). A dead drone explodes on this
+ * client: a 'K' queues its explosion; its own end (the script turns kNcaPhysics off, then its damageable) queues it too, and the first of those
+ * offs is held back and turned off kFxSoundHoldMs after the explosion. The explosion runs at the tick (the game thread, outside any script node):
+ * the drone library's two entries, whose addresses its prelude stores on the EC page (ec_core.h kDroneSpawn, kDroneSoundFn), each checked
+ * to be that library's entry at its built offset, are called with the context kept at the drone's release, its state word at +0x18 zeroed
+ * round each and put back after both (PC dronefix.cpp SpawnDeathFx). The hold skips the real Enter of that one off node. That Enter, for a
+ * disable, turns the resolved component off (vtable +0x210) now or through its game space's deferred queue (owner +0x368): a ReVault read of
+ * CEnableComponentNode::Enter (ELF 0x273b700, VA 0x283b700); the proven reconstruction does not hold that function yet, so that Enter has no
+ * other effect is pending its reconstruction, which is requested. So the hold is made only when the component is resolved: exactly one
+ * drone group is live (Enter has not looked its actor up yet, so the group cannot be told otherwise) and that group's actor has the
+ * component; otherwise the real Enter runs at once, which is the game's own behaviour. The held component goes off through the same
+ * stage-1 path as a kill's (OffOne), and never stays held: with no damageable off within kFxSoundHoldMs of the hold it goes off then.
+ *
  * The kill feed. The EC client hands each first-time 'K' datagram (a drone's health ran out on the server) to OnKilled: the install registers it
  * with ec::OnDroneKilled (ec.h). Without an EC server no 'K' arrives and `kill` never fires; lock-on, gun, chase and shot do not need it.
  *
@@ -41,6 +54,12 @@
  *   stats    {"event":"combat_dronekill_stats","enter_drone":n,..,"expired":n,"final":0|1}  Debug every kStatsEvery drone Enters, Info at the process end
  *   expired  {"event":"combat_dronekill_expired","index":n,"group":n,"tid":n,..}  Info per drone end that found a live group, the first 16 of a run
  *   log_cap  {"event":"combat_dronekill_log_cap","lines":"expired","cap":16,..}  Warning, once, at the drone end past the cap
+ *   explosion          {"event":"combat_dronekill_explosion","index":n,"group":n,"reason":"killed|expired","sound_delay_ms":2500|0,"entries":2,..}
+ *                      Info per explosion run, the first 64 of a run (then one log_cap line; the stats line keeps counting)
+ *   explosion_skipped  {"event":"combat_dronekill_explosion_skipped","index":n,"reason":"queue_full|no_entry|foreign_entry|no_context",..}
+ *                      Warning per explosion not run, the first 16
+ *   hold               {"event":"combat_dronekill_hold","index":n,"group":n,"step":"held|released|let_go|not_held|lost",..}  Debug, the first 64
+ *                      (lost: Warning, a held component whose game space never let it go off within kDueMs)
  * and the acting lines (`combat_dronekill_component`, `_release`, `_off`, `_k`, `_touch`, `_gun`, `_chase`, `_note`), each capped per kind with a
  * `combat_dronekill_cap` line when the cap is reached.
  *
@@ -59,6 +78,7 @@ namespace nevr_quest::combat::dronekill {
 // The five rules (the reference build's TEST words; all on, as its QA file).
 struct Words {
   bool kill = true, lockon = true, gun = true, chase = true, shot = true;
+  bool explosion = true;  // `combat.dronekill_explosion` (#1737): a dead drone's explosion, and its first-system off held for it
 };
 
 struct DkC3 {  // C3Vector: an HFA, passed in s0-s2
@@ -132,6 +152,8 @@ struct Stats {
   std::uint32_t enter_drone, enter_other, fires, attacks, ticks, due_runs;
   std::uint32_t capturing;  // drone Enters in flight now (0 between calls)
   std::uint32_t expired;    // drone ends the D11 rule saw: a drone's damageable went off and found its group
+  std::uint32_t explosions; // explosions run (both entries called)
+  std::uint32_t held;       // first-system offs held back for an explosion
 };
 Stats CurrentStats() noexcept;
 // The process end (combat_install's table step): the final stats record, when the module is installed.
@@ -156,6 +178,12 @@ void SetInstallForTest(sentinel::ImageLookup lookup, const Pins* pins, const Fns
 void SetShotForTest(const float* v3, int remote) noexcept;
 void SetShotActiveForTest(bool active) noexcept;  // what ShotActive answers
 void SetScopeForTest(bool inCombat) noexcept;     // what InCombatScope answers until the next refresh
+// What the explosion asks of an entry word (dladdr in production): the test answers with its own library name and base.
+struct EntryInfo {
+  const char* fname;
+  std::uintptr_t fbase;
+};
+void SetEntryInfoForTest(bool (*info)(std::uintptr_t fn, EntryInfo* out)) noexcept;  // null = dladdr
 void ResetForTest() noexcept;
 
 }  // namespace nevr_quest::combat::dronekill

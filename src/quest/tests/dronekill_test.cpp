@@ -28,7 +28,9 @@
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronekill_core.h"
+#include "quest/combat/ec_core.h"
 #include "quest/combat/safe_read.h"
+#include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/ec_stub.h"
@@ -1005,6 +1007,7 @@ static Words Only(bool kill, bool lockon, bool gun, bool chase, bool shot) {
   w.gun = gun;
   w.chase = chase;
   w.shot = shot;
+  w.explosion = false;  // the explosion (#1737) is TestExplosion's: Only names the five rules alone
   return w;
 }
 
@@ -1252,7 +1255,9 @@ static void TestEnterOther() {
 }
 
 static void TestDroneEnterKill() {
-  Result r = Reset(Words{});
+  Words w;
+  w.explosion = false;  // this test's sound OFF Enters are the game's alone; the explosion's hold of that off is TestExplosion's
+  Result r = Reset(w);
   CHECK(r.ok, "install");
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
@@ -2509,6 +2514,333 @@ static void TestStatsPeriodic() {
         "no Debug stats line at %u drone Enters", kStatsEvery);
 }
 
+// ================================================================ the explosion (#1737, dronekill.h "The explosion")
+// The drone library's two entries are the fakes below; the entry check's dladdr answer is FakeEntryInfo (the library's name and base);
+// the page words are written on the stand-in EC page (ec_stub.cpp). The context's state word at +0x18 is 0x5151; each entry records it
+// and writes its own (the module puts the saved one back after both).
+namespace ecc = nevr_quest::combat::ec::core;
+alignas(16) static uint8_t g_fxctx[0x40];
+struct EntryCall {
+  const char* which;
+  void* ctx;
+  uint64_t state;
+};
+static std::vector<EntryCall> g_entry_calls;
+static void EntryRecord(const char* which, void* ctx) {
+  uint64_t st = 0;
+  memcpy(&st, static_cast<uint8_t*>(ctx) + 0x18, 8);
+  g_entry_calls.push_back({which, ctx, st});
+  const uint64_t mine = 0x7777;
+  memcpy(static_cast<uint8_t*>(ctx) + 0x18, &mine, 8);
+}
+static void FakeSpawnEntry(void* ctx) { EntryRecord("spawn", ctx); }
+static void FakeSoundEntry(void* ctx) { EntryRecord("sound", ctx); }
+static int g_entry_mode = 0;  // 0: the drone library at the built offsets; 1: another library; 2: 4 bytes past the entry's start; 3: no answer
+static bool FakeEntryInfo(uintptr_t fn, EntryInfo* out) {
+  if (g_entry_mode == 3) return false;
+  const uintptr_t off = fn == reinterpret_cast<uintptr_t>(&FakeSpawnEntry)   ? ecc::kDroneSpawnEntry
+                        : fn == reinterpret_cast<uintptr_t>(&FakeSoundEntry) ? ecc::kDroneSoundEntry
+                                                                             : 0x40;
+  out->fname = g_entry_mode == 1 ? "/data/app/x/lib/arm64/libac4e9374a146d3a4.so" : "/data/app/x/lib/arm64/lib221a0a3a2e56d247.so";
+  out->fbase = fn - off - (g_entry_mode == 2 ? 4 : 0);
+  return true;
+}
+static void SetPage(uint32_t off, uint64_t v) { memcpy(sentinel::EcPage() + ecc::kDroneBlock + off, &v, 8); }
+static uint64_t CtxState() {
+  uint64_t v = 0;
+  memcpy(&v, g_fxctx + 0x18, 8);
+  return v;
+}
+static void ArmExplosion() {
+  g_entry_calls.clear();
+  g_entry_mode = 0;
+  SetEntryInfoForTest(&FakeEntryInfo);
+  memset(g_fxctx, 0, sizeof g_fxctx);
+  W64(g_fxctx, 0x18, 0x5151);
+  SetPage(ecc::kDroneCtx, reinterpret_cast<uintptr_t>(g_fxctx));
+  SetPage(ecc::kDroneSpawn, reinterpret_cast<uintptr_t>(&FakeSpawnEntry));
+  SetPage(ecc::kDroneSoundFn, reinterpret_cast<uintptr_t>(&FakeSoundEntry));
+}
+// the damageable takes `handle` (a second drone is another damageable handle of the same system)
+static void DamageableHandle(uint32_t handle) {
+  g_comps[0].handle = handle;
+  g_idxtab[(handle & 0xffff) * 2] = static_cast<uint16_t>(handle & 0xffff);
+}
+static void Release(uint32_t handle = kDmgHandle) {
+  DamageableHandle(handle);
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+}
+static void EndOf(uint32_t handle = kDmgHandle) {
+  DamageableHandle(handle);
+  ND end = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&end);
+}
+static const uint32_t kNcaHandle = 0x00060006;  // the world's kSound system and component (kSound is kNcaPhysics)
+// the first-system off: true when the real Enter ran
+static bool FirstOff() {
+  const size_t before = g_enters.size();
+  ND first = Drone(dk::kNcaPhysics, dk::kNcaPhysics, 0);
+  CallEnter(&first);
+  return g_enters.size() != before;
+}
+static int NcaOffs() {
+  int n = 0;
+  for (const DisCall& d : g_dis) n += d.sys == g_snd && d.handle == kNcaHandle && !d.enable ? 1 : 0;
+  return n;
+}
+static Words NoExplosion() {
+  Words w;
+  w.explosion = false;
+  return w;
+}
+
+static void TestExplosion() {
+  CHECK(dk::kNcaPhysics == kSound, "the world's sound system is not kNcaPhysics");
+  {  // KQueuesOneExplosion, CtxStateSavedZeroedRestored, SecondKQueuesNothing
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    OnKilled(0xabcd0011u);
+    CHECK(g_entry_calls.empty(), "the explosion ran on the 'K' thread, not at the tick");
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2, "a 'K' ran %zu entries at the tick, want 2", g_entry_calls.size());
+    CHECK(g_entry_calls.size() == 2 && std::strcmp(g_entry_calls[0].which, "spawn") == 0 && std::strcmp(g_entry_calls[1].which, "sound") == 0 &&
+              g_entry_calls[0].ctx == g_fxctx && g_entry_calls[1].ctx == g_fxctx,
+          "the entries: spawn then sound, with the release's context");
+    CHECK(g_entry_calls.size() == 2 && g_entry_calls[0].state == 0 && g_entry_calls[1].state == 0, "the state word was not 0 at an entry");
+    CHECK(CtxState() == 0x5151, "the state word was not put back: 0x%llx", static_cast<unsigned long long>(CtxState()));
+    CHECK(HasLine("combat_dronekill_explosion ") && HasLine("reason=killed") && HasLine("sound_delay_ms=0") && HasLine("entries=2"), "the explosion line");
+    CHECK(CurrentStats().explosions == 1, "explosions %u", CurrentStats().explosions);
+    OnKilled(0xabcd0011u);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2, "a second 'K' for the same drone ran the explosion again");
+    Dump("explosion: K");
+  }
+  {  // ExpiryAliveFiresExplosionThenHeldOffAt2500
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    ND on = Drone(kSound, kSound, 1);
+    CallEnter(&on);
+    CHECK(!FirstOff(), "the first-system off of the only live drone ran the real Enter (not held)");
+    CHECK(HasLine("combat_dronekill_hold ") && HasLine("step=held") && HasLine("ctx_match=1"), "the hold line");
+    CHECK(CurrentStats().held == 1, "held %u", CurrentStats().held);
+    EndOf();
+    CHECK(NcaOffs() == 0 && g_entry_calls.empty(), "the damageable off turned the held component off or exploded on the script's thread");
+    const uint64_t t0 = g_ms;
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2 && HasLine("reason=expired") && HasLine("sound_delay_ms=2500"), "the expiry's explosion at the tick");
+    CHECK(NcaOffs() == 0, "the held component went off with the explosion");
+    g_ms = t0 + 2499;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 0, "the held component went off 2499 ms after the explosion");
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1, "the held component did not go off 2500 ms after the explosion (%d)", NcaOffs());
+    CHECK(HasLine("step=released") && HasLine("why=off"), "the release line");
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1, "the held component went off twice");
+    Dump("explosion: expiry");
+  }
+  {  // ExpiryDeadReleasesHeldNow: with the kill word off a 'K' marks the group dead and queues nothing; its end then has the held off now
+    Words w;
+    w.kill = false;
+    CHECK(Reset(w).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    OnKilled(0xabcd0011u);
+    EndOf();
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "a dead drone's end exploded");
+    CHECK(NcaOffs() == 1, "a dead drone's held component did not go off at the next tick");
+    CHECK(HasLine("why=dead"), "the released line names the dead drone");
+  }
+  {  // a 'K' on a drone whose first-system off is held: the explosion with nothing held, the held component off at the tick
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    OnKilled(0xabcd0011u);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2 && HasLine("reason=killed"), "the kill's explosion");
+    CHECK(NcaOffs() == 1 && HasLine("why=killed"), "the held component did not go off at the kill's tick");
+  }
+  {  // HoldLetGoWithoutDamageableAt2500
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    const uint64_t t0 = g_ms;
+    CHECK(!FirstOff(), "not held");
+    g_ms = t0 + 2499;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 0, "let go at 2499 ms");
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1 && HasLine("step=let_go"), "a hold no damageable off closed was not let go at 2500 ms");
+    EndOf();
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "an end after the let-go exploded (the expiry was closed)");
+  }
+  {  // UnresolvableRunsRealEnter: no live group, two live groups, no such component
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    CHECK(FirstOff() && g_enters.size() == 1, "with no live drone the real Enter was not run once");
+    CHECK(HasLine("step=not_held") && HasLine("why=no_live_group"), "the not_held line (no live group)");
+    Release(kDmgHandle);
+    Release(0x00050012);
+    g_lines.clear();
+    CHECK(FirstOff(), "with two live drones the real Enter did not run");
+    CHECK(HasLine("why=ambiguous"), "the not_held line (two live drones)");
+    CHECK(CurrentStats().held == 0, "held with two live drones");
+  }
+  {
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    g_comps[1].sym = 0x1234;  // the drone's ncaPhysics component is not there
+    CHECK(FirstOff(), "an unresolved component did not run the real Enter");
+    CHECK(HasLine("why=no_component"), "the not_held line (no component)");
+    EndOf();
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "an end with no hold exploded");
+  }
+  {  // the key off: the real Enter runs, nothing is queued
+    CHECK(Reset(NoExplosion()).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(FirstOff(), "with the explosion off the first-system off was held");
+    OnKilled(0xabcd0011u);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty() && !HasLine("combat_dronekill_hold"), "with the explosion off an explosion ran");
+    CHECK(HasLine("explosion=0"), "the install line does not say explosion=0");
+  }
+  {  // ForeignEntryRefused: another library, and 4 bytes past the entry's start; the held component still goes off on time
+    for (int mode : {1, 2, 3}) {
+      CHECK(Reset(Words{}).ok, "install");
+      ArmExplosion();
+      g_entry_mode = mode;
+      Release();
+      CHECK(!FirstOff(), "not held");
+      EndOf();
+      const uint64_t t0 = g_ms;
+      Tick(GameAddress());
+      CHECK(g_entry_calls.empty(), "mode %d: a foreign entry was called", mode);
+      CHECK(HasLine("combat_dronekill_explosion_skipped") && HasLine("reason=foreign_entry"), "mode %d: no foreign_entry line", mode);
+      g_ms = t0 + 2500;
+      Tick(GameAddress());
+      CHECK(NcaOffs() == 1, "mode %d: the held component did not go off on time", mode);
+    }
+  }
+  {  // NoEntry: the page holds no entry
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    SetPage(ecc::kDroneSpawn, 0);
+    Release();
+    OnKilled(0xabcd0011u);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty() && HasLine("reason=no_entry"), "no_entry");
+  }
+  {  // NoContextSkipped: the page held no context at the release
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    SetPage(ecc::kDroneCtx, 0);
+    Release();
+    OnKilled(0xabcd0011u);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty() && HasLine("reason=no_context"), "no_context at a kill");
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    SetPage(ecc::kDroneCtx, 0);
+    Release();
+    CHECK(!FirstOff(), "not held");
+    EndOf();
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty() && HasLine("reason=no_context") && NcaOffs() == 1, "no_context at an end: the held component off now");
+  }
+  {  // QueueFullReleasesNow: eight shot-down drones wait at once; a ninth that runs out has its held component off now
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    for (uint32_t i = 0; i < 8; ++i) {
+      Release(0x00050011 + i);
+      OnKilled(0x11 + i);
+    }
+    Release(0x00050020);
+    CHECK(!FirstOff(), "the ninth drone's first-system off was not held");
+    EndOf(0x00050020);
+    CHECK(HasLine("reason=queue_full"), "no queue_full line");
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1 && HasLine("why=queue_full"), "the held component of a full queue did not go off at the tick");
+    CHECK(g_entry_calls.size() == 16, "the eight queued explosions: %zu entries", g_entry_calls.size());
+  }
+  {  // a game space that defers the disable (owner +0x368 = 0): the held component waits, goes off once it may, and is given up after 2 s
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    const uint64_t t0 = g_ms;
+    CHECK(!FirstOff(), "not held");
+    SetFlag(0);
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 0, "the held component went off while its game space defers the disable");
+    g_ms = t0 + 2600;
+    SetFlag(1);
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1, "the held component did not go off once its game space let it");
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    const uint64_t t1 = g_ms;
+    CHECK(!FirstOff(), "not held");
+    SetFlag(0);
+    g_ms = t1 + 2500;
+    Tick(GameAddress());
+    g_ms = t1 + 2500 + 1999;
+    Tick(GameAddress());
+    CHECK(!HasLine("step=lost"), "given up before 2 s");
+    g_ms = t1 + 2500 + 2000;
+    Tick(GameAddress());
+    CHECK(HasLine("step=lost") && NcaOffs() == 0, "a held component that never could go off was not given up at 2 s");
+    g_ms += 100;
+    SetFlag(1);
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 0, "a held component was tried again after it was given up");
+  }
+  {  // a release that reuses the slot of a group with an open hold: that hold's component goes off at the next tick
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    Release();
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1, "a hold whose group a release took over stayed held");
+  }
+  {  // the level changes before the tick: the queued explosion goes with it (its context belongs to the unloaded level)
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    OnKilled(0xabcd0011u);
+    LoadLevels({"mpl_arena_a"});
+    Tick(GameAddress());
+    CHECK(!InCombatScope(), "the arena level did not end the scope");
+    LoadLevels({"mpl_combat_dyson"});
+    for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
+    CHECK(InCombatScope(), "the combat level did not start the scope again");
+    Release();
+    CHECK(!FirstOff(), "not held");  // due work again: a tick that runs the explosion queue
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "an explosion queued before the level changed ran after it");
+  }
+  {  // out of a combat map: the first-system off is the game's alone
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    SetScopeForTest(false);
+    CHECK(FirstOff(), "out of scope the first-system off was held");
+  }
+}
+
 int main() {
   sentinel::SetLogSink(&Sink);
   TestCore();
@@ -2533,6 +2865,7 @@ int main() {
   TestLockOn();
   TestFire();
   TestChase();
+  TestExplosion();
   TestArenaLevelsAreLeftAlone();
   TestScopeEndsAtTheLevelChange();
   TestProductionStep();
