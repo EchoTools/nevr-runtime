@@ -11,7 +11,6 @@
 #include "runtime/lifecycle/server_bringup.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/ext/plugin_loader.h"
-#include "runtime/combat/gear_trace.h"
 #include "core/globals.h"
 #include "core/login_session.h"
 #include "core/logging.h"
@@ -109,7 +108,6 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
     s_prevState = static_cast<uint32_t>(state);
   }
-  nevr_gear_trace::OnNetGameState(static_cast<int32_t>(fromState), static_cast<int32_t>(state));
 
   if (nevr_server_bringup::BeginsMultiplayer(g_isServer != FALSE, static_cast<EchoVR::NetGameState>(fromState),
                                              state)) {

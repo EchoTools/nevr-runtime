@@ -48,7 +48,6 @@
 #include "runtime/patch/lobby_full_backoff.h"
 #include "runtime/patch/lobby_settings_hook.h"
 #include "runtime/patch/queued_join_log.h"
-#include "runtime/combat/gear_trace.h"
 #include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
@@ -413,9 +412,6 @@ static VOID InitializeAfterGameImageGuard() {
   // What the current server runs (EchoCombat, MEDIGUN), read from the lobby settings it gives its clients (#2333,
   // lobby_settings_hook.h).
   nevr_lobby_settings_hook::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-
-  // [NEVR.COMBAT] gear: whether a server's balance settings outlive its session (measure only, gear_trace.h).
-  nevr_gear_trace::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // The runtime version on the menu's versions panel (menu_version_label.h).
   nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
