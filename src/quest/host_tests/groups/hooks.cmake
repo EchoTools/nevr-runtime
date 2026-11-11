@@ -300,7 +300,8 @@ nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core
       src/quest/combat/tablestep.cpp src/quest/combat/table_step.cpp src/quest/combat/gunconnect.cpp src/quest/combat/aibots.cpp
       src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
       src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp src/quest/combat/impactsnd.cpp src/quest/combat/decals.cpp
-      src/quest/combat/powerboost.cpp src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp
+      src/quest/combat/powerboost.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp
+      src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp
       src/quest/integration/module_observers.cpp src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp)
 # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
 # FillResourceFileRequest that fills a request the way the pinned function does.

@@ -1279,6 +1279,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
                       {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // #2186: shieldgamma_gamma is OFF by default (a test switch upstream), the other two are on
+                      {"hudmeter", &nevr_quest::CombatConfig::hudmeter, true},
+                      {"shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma, false},
+                      {"shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror, true},
+
                       // the headset gates' four keys (#2180, combat/headset_gates.h): the same rule, each on by default
                       {"gate_perm", &nevr_quest::CombatConfig::gatePerm, true},
                       {"gate_bots", &nevr_quest::CombatConfig::gateBots, true},

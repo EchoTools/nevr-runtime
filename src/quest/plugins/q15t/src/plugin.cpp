@@ -10,13 +10,11 @@
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
 #include "game_tick.h"
-#include "hudmeter.h"
 #include "levelname.h"
 #include "boosterpool.h"
 #include "peerclamp.h"
 #include "plugin_log.h"
 #include "script_redirect.h"
-#include "shieldgamma.h"
 #include "module_switch.h"
 #include "voipdrop.h"
 
@@ -44,12 +42,6 @@
 #endif
 #ifndef Q15T_PEERCLAMP
 #define Q15T_PEERCLAMP 0
-#endif
-#ifndef Q15T_HUDMETER
-#define Q15T_HUDMETER 0
-#endif
-#ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
-#define Q15T_SHIELDGAMMA 0
 #endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
@@ -97,12 +89,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_PEERCLAMP
     "peerclamp "
-#endif
-#if Q15T_HUDMETER
-    "hudmeter "
-#endif
-#if Q15T_SHIELDGAMMA
-    "shieldgamma "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -177,8 +163,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), hudmeter and
-  // shieldgamma (what is drawn).
+  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
@@ -223,12 +208,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_PEERCLAMP
   ReportModule("peerclamp", InstallPeerClamp(base));
-#endif
-#if Q15T_HUDMETER
-  ReportModule("hudmeter", InstallHudmeter(base));
-#endif
-#if Q15T_SHIELDGAMMA
-  ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
 #endif
 #if Q15T_LEVELNAME
   if (levelname_on) {

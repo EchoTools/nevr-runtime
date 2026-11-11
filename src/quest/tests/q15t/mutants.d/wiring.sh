@@ -3,7 +3,6 @@ for _m in DRONEGUARD PEERCLAMP LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
 runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_PEERCLAMP) caps/if (Q15T_PEERCLAMP || Q15T_FXTRAIL) caps/"
-runm wiring wire_caps_over_hudmeter src/plugin.cpp "s/if (Q15T_DRONEGUARD) caps/if (Q15T_DRONEGUARD || Q15T_HUDMETER) caps/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
 runm wiring wire_failure_quiet     src/plugin.cpp "s/Log(ok || off ? NEVR_LOG_INFO : NEVR_LOG_ERROR,/Log(NEVR_LOG_INFO,/"
 runm wiring wire_off_is_error      src/plugin.cpp "s/const bool off = !ok \&\& (std::strcmp(r.reason, \"off\") == 0 || std::strcmp(r.reason, \"off_file\") == 0);/const bool off = false;/"
@@ -17,9 +16,6 @@ runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\
 runm wiring wire_drop_custctx      src/plugin.cpp "s/^  ReportModule(\"custctx\", InstallCustCtx(base));//"
 runm wiring wire_drop_droneguard   src/plugin.cpp "s/^  ReportModule(\"droneguard\", InstallDroneGuard(base));//"
 runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp\", InstallPeerClamp(base));//"
-runm wiring wire_drop_hudmeter     src/plugin.cpp "s/^  ReportModule(\"hudmeter\", InstallHudmeter(base));//"
-runm wiring wire_drop_shieldgamma  src/plugin.cpp "s/^  ReportModule(\"shieldgamma\", InstallShieldGamma.*//"
-runm wiring wire_shield_bits       src/plugin.cpp "s/(Q15T_SHIELDGAMMA \& 1) != 0, (Q15T_SHIELDGAMMA \& 2) != 0/(Q15T_SHIELDGAMMA \& 2) != 0, (Q15T_SHIELDGAMMA \& 1) != 0/"
 runm wiring wire_drop_levelname    src/plugin.cpp "s/^    ReportModule(\"levelname\", InstallLevelName(base));//"
 # the tick table (tests/game_tick_test.cpp)
 runm game_tick tick_max_8          src/game_tick.h   "s/inline constexpr int kMaxGameTicks = 16;/inline constexpr int kMaxGameTicks = 8;/"

@@ -193,6 +193,9 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
+  CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
+  CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)
   // The three modules of #2185, each on unless the file says false (upstream's shipped build has all three on): gun connect, practice AI bots and
   // the gun hand default.
   CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)

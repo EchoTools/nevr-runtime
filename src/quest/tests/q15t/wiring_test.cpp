@@ -1,4 +1,4 @@
-// Host test of plugin.cpp's module wiring (every module option ON, Q15T_SHIELDGAMMA=2) against a fake game image in
+// Host test of plugin.cpp's module wiring (every module option ON) against a fake game image in
 // which only the tick slot and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
 // and by name, and InitEx must still return 0 with hooks swapped. Real code, real mprotect, real /proc/self/maps.
 // Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NevrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
@@ -182,7 +182,7 @@ int main() {
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",
-                        "hudmeter", "shieldgamma", "levelname", "boosterpool"};
+                        "levelname", "boosterpool"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -199,8 +199,7 @@ int main() {
     const char* reason;  // the reason token the record must carry
   };
   const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
-                              {"peerclamp", "word_pin_mismatch"}, {"hudmeter", "unexpected_original"},
-                              {"shieldgamma", "unexpected_original"}};
+                              {"peerclamp", "word_pin_mismatch"}};
   for (const char* m : kInstalled)
     CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
   for (const char* m : kOff)
@@ -212,9 +211,6 @@ int main() {
           line.c_str());
     CHECK(line.find(" status=") != std::string::npos, "module %s: ERROR line has no status: %s", r.module, line.c_str());
   }
-  // shieldgamma is built with the bitmask 2: the tube mirror on, the gamma off
-  CHECK(FindLine("shieldgamma: OFF").find("gamma=0 tube_mirror=1") != std::string::npos, "shieldgamma bitmask 2 must mean mirror only: %s",
-        FindLine("shieldgamma: OFF").c_str());
   // what the installs did to the image
   CHECK(w_slot(base, q15t::kFxTrailSlot) == 0, "fxtrail was off: its slot must be untouched");
   CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
@@ -224,7 +220,7 @@ int main() {
   CHECK(CountLines("game tick callbacks") == 0, "the plugin logged a tick table: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook=CncaGame::ExclusiveUpdateGame") == 0, "the plugin installed the game tick: %s", FindLine("hook=CncaGame::ExclusiveUpdateGame").c_str());
   CHECK(w[4] == reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was written");
-  CHECK(CountLines("module install FAILED") == 6, "%d FAILED lines, want 6", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 4, "%d FAILED lines, want 4", CountLines("module install FAILED"));
 
   std::remove(off_file.c_str());
   rmdir(dir);
