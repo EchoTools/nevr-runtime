@@ -29,6 +29,7 @@
 #include "runtime/combat/shared_magazine.h"
 #include "runtime/combat/station_cells.h"
 #include "runtime/combat/team_ready.h"
+#include "runtime/combat/unlock_time.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/game_image_guard.h"
@@ -188,6 +189,7 @@ void Install(std::uintptr_t gameBase, bool isServer) {
       point_rate::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       capture_scores::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
       capture_time::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      unlock_time::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
     }
 
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
