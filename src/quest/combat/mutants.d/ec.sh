@@ -1,44 +1,58 @@
-# ec: each rule of src/quest/combat/ec.cpp, ec_core.h, ec_targets.h and sentinel/ec_page.cpp removed or bent once; src/quest/tests/ec_test.cpp
-# (and, for the page, ec_page_test) must fail on every one. Sourced by ../mutants.sh, which defines `runm <name> <file> <sed> [<dir> <target>]`.
+# ec: each rule of src/runtime/patch/ec_rules.h (the EC network rules shared with PC, #2358), src/quest/combat/ec.cpp, ec_core.h, ec_targets.h
+# and sentinel/ec_page.cpp removed or bent once; src/quest/tests/ec_test.cpp (and, for the page, ec_page_test) must fail on every one. Sourced
+# by ../mutants.sh, which defines `runm <name> <file> <sed> [<dir> <target>]`. PC's GTest (test_ec_rules) drives the same header under Wine;
+# its hand mutants are not part of this list.
+R=src/runtime/patch/ec_rules.h
 C=src/quest/combat/ec_core.h
 E=src/quest/combat/ec.cpp
 T=src/quest/combat/ec_targets.h
 P=src/quest/sentinel/ec_page.cpp
-# the pure rules (ec_core.h)
-runm ec_ours_len        $C "s#if (n != static_cast<long>(sizeof(Packet))) return false;#if (n < 0) return false;#"
-runm ec_no_magic2       $C "s# \&\& out->magic2 == kMagic2##"
-runm ec_token_restart   $C "s#if (now100 >= __atomic_load_n(expiry, __ATOMIC_SEQ_CST)) __atomic_store_n(count, 0u, __ATOMIC_SEQ_CST);#;#"
-runm ec_a_counted       $C "s#      ++answers;#      ;#"
-runm ec_dedupe_carried  $C "s#else if (Carried(p.type) \&\& FirstTime(p.id)) {#else if (Carried(p.type)) {#"
-runm ec_k_index         $C "s#return (p.id \& 0xffff) + 1;#return p.id + 1;#"
+# the shared rules (ec_rules.h)
+runm ec_ours_len        $R "s#if (n != static_cast<long>(sizeof(Packet))) return false;#if (n < 0) return false;#"
+runm ec_no_magic2       $R "s# \&\& out->magic2 == kMagic2##"
+runm ec_known_any       $R "s#    return Carried(t) || t == 'H'#    return true || t == 'H'#"
+runm ec_known_c         $R "s# || t == 'C'##"
+runm ec_known_l         $R "s# || t == 'L'##"
+runm ec_known_r         $R "s# || t == 'R'##"
+runm ec_known_g         $R "s# || t == 'G'##"
+runm ec_recv_flood      $R "s#kMaxConsumePerCall = 256;#kMaxConsumePerCall = 1000;#"
+runm ec_consume_cap     $R "s# || consumed >= kMaxConsumePerCall) return false;# || consumed < 0) return false;#"
+runm ec_recv_len        $R "s# || bufLen < sizeof(Packet)# || bufLen < 1#"
+runm ec_recv_peek       $R "s#if (peek || #if ((peek \&\& false) || #"
+runm ec_recv_fromlen    $R "s#if (peek || !haveFromLen || #if (peek || (!haveFromLen \&\& false) || #"
+runm ec_token_restart   $R "s#if (now100 >= __atomic_load_n(expiry, __ATOMIC_SEQ_CST)) __atomic_store_n(count, 0u, __ATOMIC_SEQ_CST);#;#"
+runm ec_a_counted       $R "s#            ++answers;#            ;#"
+runm ec_m_dedupe        $R "/if (p.type == 'M') {/,/++medi;/ s#if (!FirstTime(p.id)) return#if (false) return#"
+runm ec_dedupe_k        $R "/if (p.type == 'K') {/,/++kills;/ s#if (!FirstTime(p.id)) return#if (false) return#"
+runm ec_dedupe_carried  $R "s#if (Carried(p.type) \&\& FirstTime(p.id)) {#if (Carried(p.type)) {#"
+runm ec_k_index         $R "s#ClientAct::kKill, p.id \& 0xffffu}#ClientAct::kKill, p.id}#"
+runm ec_carries_gate    $R "s#            if (!Carries(p.type)) {#            if (false) {#"
+runm ec_watch_mask      $R "s#        if (!st.Carries(type)) continue;#        (void)0;#"
+runm ec_watch_t         $R "s#        if (type != 'T') {#        if (true) {#"
+runm ec_pick_busiest    $R "s#dests\[i\].count > dests\[b\].count#dests[i].count < dests[b].count#"
+runm ec_ability_len     $R "s#if (std::strlen(e.name) == n \&\& std::memcmp#if (std::memcmp#"
+runm ec_fmt_exact       $R "s# \&\& std::strcmp(fmt, kProfileFmt) == 0##"
+runm ec_oursatend       $R "s#if (std::strncmp(name, kNewTacMods\[k\], 64) != 0) return false;##"
+runm ec_hide_capacity   $R "s# || capacity > kMaxTacCapacity##"
+runm ec_hide_fullcap    $R "s#full > capacity || ##"
+runm ec_settle          $R "s#nowMs - selChangedMs >= kHideSettleMs#nowMs - selChangedMs > kHideSettleMs#"
+runm ec_settle_hold     $R "s#    if (want < count \&\& !settled) want = count;#    (void)settled;#"
+runm ec_hide_write      $R "s#    if (write) {#    if (write || true) {#"
+runm ec_hide_cas        $R "s#        if (!__atomic_compare_exchange_n(#        if (__atomic_store_n(reinterpret_cast<std::uint64_t*>(list + 0x10), want, __ATOMIC_SEQ_CST), !__atomic_compare_exchange_n(#"
+runm ec_write_same      $R "s#if (!plan.ok || plan.count == want) return 0;#if (!plan.ok) return 0;#"
+runm ec_keepwhole       $R "s#serverHasIt || keepWhole ? full#serverHasIt ? full#"
+runm ec_keep_result     $R "s#plan.result = serverHasIt ? 1 : keepWhole ? 3 : 2;#plan.result = serverHasIt ? 1 : 2;#"
+runm ec_hide_gen        $R "s#    if (gen != st.gen) {#    if (false) {#"
+runm ec_hide_newlist    $R "s#    if (entries != st.entries) {  // a new list#    if (false) {  // a new list#"
+# the Quest's own (ec_core.h): the words and the gear gate
 runm ec_types_empty     $C "s#return m ? m : step1;#return m;#"
-runm ec_ability_len     $C "s#if (std::strlen(e.name) == n \&\& std::memcmp#if (std::memcmp#"
-runm ec_fmt_exact       $C "s# \&\& std::strcmp(fmt, kProfileFmt) == 0##"
-runm ec_oursatend       $C "s#if (std::strncmp(name, kNewTacMods\[k\], 64) != 0) return false;##"
-runm ec_hide_capacity   $C "s# || capacity > 4096##"
-runm ec_hide_fullcap    $C "s#full > capacity || ##"
-runm ec_settle          $C "s#nowMs - selChangedMs >= kHideSettleMs#nowMs - selChangedMs > kHideSettleMs#"
-runm ec_hide_write      $C "s#  if (write) {#  if (write || true) {#"
-runm ec_gate_gen        $C "s#gen.fetch_add(1, std::memory_order_relaxed);##"
-runm ec_pick_busiest    $C "s#dests\[i\].count > dests\[b\].count#dests[i].count < dests[b].count#"
-runm ec_known_any       $C "s#^inline bool Known(std::uint8_t t) { return .*#inline bool Known(std::uint8_t t) { (void)t; return true; }#"
-runm ec_answer_sender   $C "s# \&\& dests\[best\].addr == answerAddr##"
-runm ec_dedupe_k        $C "s#else if (p.type == 'K' \&\& FirstTime(p.id)) {#else if (p.type == 'K') {#"
-runm ec_carries_gate    $C "s#      if (Carries(p.type)) {#      if (true) {#"
 runm ec_equip_word      $C "s#return !WholeWord(words, \"noequip\");#return !WholeWord(words, \"noequip\") || true;#"
-runm ec_keepwhole       $C "s#serverHasIt || keepWhole ? full#serverHasIt ? full#"
-runm ec_lowerok         $C "s#if (want < count_now \&\& !lowerOk) return 0;#if (want < count_now \&\& !lowerOk \&\& false) return 0;#"
-runm ec_hide_gen        $C "s#  if (gen != st.gen) {#  if (false) {#"
-runm ec_hide_newlist    $C "s#  if (entries != st.entries) {#  if (false) {#"
+runm ec_gate_gen        $C "s#gen.fetch_add(1, std::memory_order_relaxed);##"
 # the handlers (ec.cpp): the scope first, then the plugin's rules
 runm ec_recv_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  if (false) return real(fd, buf, len, flags, from, fromlen);#"
 runm ec_send_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  if (false) return real(fd, buf, len, flags, to, tolen);#"
 runm ec_send_v4         $E "s# \&\& to->sa_family == AF_INET##"
-runm ec_recv_len        $E "s#len < sizeof(Packet) || ##"
-runm ec_recv_peek       $E "s#(flags \& MSG_PEEK) || ##"
-runm ec_recv_fromlen    $E "s#(flags \& MSG_PEEK) || fl == nullptr || #(flags \& MSG_PEEK) || #"
 runm ec_recv_restore    $E "s#^    \*fl = saved;#    (void)saved;#"
-runm ec_recv_flood      $E "s#kMaxConsumePerCall = 256;#kMaxConsumePerCall = 1000;#"
 runm ec_tick_fd         $E "s#if (fd == g_gameFd.load(std::memory_order_relaxed)) {#if (true) {#"
 runm ec_tick_tid        $E "s#if (tid == g_gameTid.load(std::memory_order_relaxed)) {#if (true) {#"
 runm ec_tick_src        $E "s#if (src == g_gameSrc.load(std::memory_order_relaxed)) g_gameTid#if (src || true) g_gameTid#"
@@ -53,7 +67,7 @@ runm ec_send_twice      $E "s#rep < 2#rep < 1#"
 runm ec_page_ans        $E "s#  if (ans != L.pageAns) {  // not under the line cap#  if (false) {#"
 runm ec_keep_ans        $E "s#g_hideWrite \&\& !ans \&\& OurSelected(sel)#g_hideWrite \&\& OurSelected(sel)#"
 runm ec_keep_sel        $E "s#g_hideWrite \&\& !ans \&\& OurSelected(sel)#g_hideWrite \&\& !ans#"
-runm ec_settle_use      $E "s#HideSettled(nowMs, L.selChangedMs)#true#"
+runm ec_settle_use      $E "s#keep, settled);#keep, settled || true);#"
 runm ec_loc_arm         $E "s#^    if (!first) {#    if (!first || true) {#"
 runm ec_pow2            $E "s#(Pow2(steps) || steps < L.seenSteps)#(Pow2(steps) || true)#"
 # the scope
@@ -102,3 +116,7 @@ runm ec_arena_scans_before_scope $E 's#^  if (!InCombatScope()) return real(fd, 
 runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
 # the arena APK and a plain release run no normal step, so no #2187 module writes a line (combat_install_test, TheRealStepsConsultTheGate)
 runm ec_arena_normal_runs src/quest/combat/combat_install.cpp "s#  if (!Active()) {#  if (!Active() \&\& phase == Phase::kEarly) {#" quest-host-combat combat_install_test
+# the past-cap count (#2358): the predicate's boundary (shared rules), and the count the Quest writes (its stat and the summary's capped)
+runm ec_capped_pred     $R 's#|| consumed < kMaxConsumePerCall) return false;#|| consumed <= kMaxConsumePerCall) return false;#'
+runm ec_capped_count    $E 's#g_capped.fetch_add(1, std::memory_order_relaxed);#(void)0;#'
+runm ec_capped_summary  $E 's#{"capped", g_capped.load()}, ##'

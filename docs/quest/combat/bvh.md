@@ -2,7 +2,7 @@
 
 Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
 Origin: the reference build's runtime/native/afkxr/afk_bvh.cpp (slot table :93-99, allowed call sites :103-110, the gate :38-57, the default :121,365-367)
-and afk_bvh_core.h (the format); the commit is in `docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every
+and afk_bvh_core.h (the format); the commit is in `docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's echoquest-combat): every
 address below is in upstream's afk_bvh.cpp.
 Code: `src/quest/combat/bvh_core.h` (pure traversal and header parse), `src/quest/combat/bvh.h`, `bvh.cpp` (the handlers and the install), `bvh_targets.h`
 (the pins and the thunks). Tests: `src/quest/tests/bvh_core_test.cpp` (synthetic meshes), `src/quest/tests/bvh_test.cpp` (the real thunks and manager on an image

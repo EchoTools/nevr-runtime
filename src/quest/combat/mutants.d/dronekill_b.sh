@@ -1,6 +1,7 @@
 # a mutant that leaves a variable, a parameter or a function unused would not compile under -Werror (not a kill): those append $NOWARN
 NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n#pragma GCC diagnostic ignored "-Wunused-function"\n#pragma GCC diagnostic ignored "-Wunused-but-set-parameter"'
 # dronekill (part 2 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
 runm dk_lock_never src/quest/combat/dronekill.cpp "s/  if (g_lockon) TouchTick(now, tid);//;$NOWARN" quest-host-combat dronekill_test
 runm dk_touch_live src/quest/combat/dronekill.cpp "s/    const int k = live ? OffOne(r.c, \&why) : 1;/    const int k = OffOne(r.c, \&why);/" quest-host-combat dronekill_test
 runm dk_touch_liveact src/quest/combat/dronekill.cpp "s/ || g_table.LiveActor(r.c.actor);/;/" quest-host-combat dronekill_test
@@ -23,11 +24,11 @@ runm dk_bit_cat src/quest/combat/dronekill.cpp "s/  return mask \& 1;/  return m
 runm dk_bit_slot src/quest/combat/dronekill.cpp "s/  if (!SafeRead(masks + slot \* 2ull, \&mask, sizeof mask)) return -1;/  if (!SafeRead(masks + slot * 4ull, \&mask, sizeof mask)) return -1;/" quest-host-combat dronekill_test
 runm dk_mask_idx src/quest/combat/dronekill_core.h "s/MaskAt{ Imm12(en\[3\]) \* 8, Imm12(en\[8\]) \* 8 }/MaskAt{ Imm12(en[8]) * 8, Imm12(en[3]) * 8 }/" quest-host-combat dronekill_test
 runm dk_mask_scale src/quest/combat/dronekill_core.h "s/MaskAt{ Imm12(en\[3\]) \* 8,/MaskAt{ Imm12(en[3]) * 4,/" quest-host-combat dronekill_test
-runm dk_revalid_space src/quest/combat/dronekill.cpp "s/  if (c.space == 0 || c.owner == 0) {/  if (false) {/" quest-host-combat dronekill_test
-runm dk_revalid_owner src/quest/combat/dronekill.cpp "s/ || owner != c.owner) {/) {/" quest-host-combat dronekill_test
+runm dk_revalid_space src/quest/combat/dronekill.cpp "s/  if (c.x.space == 0 || c.x.owner == 0) {/  if (false) {/" quest-host-combat dronekill_test
+runm dk_revalid_owner src/quest/combat/dronekill.cpp "s/ || owner != c.x.owner) {/) {/" quest-host-combat dronekill_test
 runm dk_revalid_sys src/quest/combat/dronekill.cpp "s/  if (system != reinterpret_cast<void\*>(c.system)) {/  if (false) {/" quest-host-combat dronekill_test
 runm dk_revalid_shape src/quest/combat/dronekill.cpp "/^void\* Revalidate/,/^}/s/  if (!g_cmp_ok || !ComponentShape(system, \&component)) {/  if (false) {/" quest-host-combat dronekill_test
-runm dk_revalid_handle src/quest/combat/dronekill.cpp "s/  if (static_cast<std::uint32_t>(CallComponent(component, system, c.actor, c.compSym)) != c.handle) {/  if (false) {/" quest-host-combat dronekill_test
+runm dk_revalid_handle src/quest/combat/dronekill.cpp "s/  if (static_cast<std::uint32_t>(CallComponent(component, system, c.actor, c.x.compSym)) != c.handle) {/  if (false) {/" quest-host-combat dronekill_test
 runm dk_shape_cache src/quest/combat/dronekill.cpp "s/  if (hit) return cached;\n  std::uint32_t tw/XX/;/^int ComponentShape/,/^}/s/  if (hit) return cached;/  (void)cached;/" quest-host-combat dronekill_test
 runm dk_shape_cache_d src/quest/combat/dronekill.cpp "/^int DisableShape/,/^}/s/  if (hit) return cached;/  (void)cached;/" quest-host-combat dronekill_test
 runm dk_shape_cache_e src/quest/combat/dronekill.cpp "/^int EnableShape/,/^}/s/  if (hit) return cached;/  (void)cached;/" quest-host-combat dronekill_test
@@ -55,11 +56,12 @@ runm dc_dis_imm src/quest/combat/dronekill_core.h "s/    for (int k : kDisImm) i
 runm dc_en_bl src/quest/combat/dronekill_core.h "s/    if (i == kEnBl) mask = ~kBlMask;/    if (false) mask = ~kBlMask;/" quest-host-combat dronekill_test
 runm dc_en_imm src/quest/combat/dronekill_core.h "s/    for (int k : kEnImm) if (i == k) mask = ~kLdrImmMask;/    for (int k : kEnImm) if (false \&\& i == k) mask = ~kLdrImmMask;/" quest-host-combat dronekill_test
 runm dc_en_last src/quest/combat/dronekill_core.h "s/0xf84307f6, 0xd65f03c0 };/0xf84307f6, 0xd65f03c1 };/" quest-host-combat dronekill_test
-runm dc_times_a src/quest/combat/dronekill_core.h "s/kJoinMs = 5000,/kJoinMs = 5001,/;s/kPendingMs = 3000,/kPendingMs = 3001,/;s/kSwallowMs = 25000,/kSwallowMs = 25001,/" quest-host-combat dronekill_test
-runm dc_join_strict src/quest/combat/dronekill_core.h "s/nowMs - g.ms < kJoinMs/nowMs - g.ms <= kJoinMs/" quest-host-combat dronekill_test
-runm dc_pending_strict src/quest/combat/dronekill_core.h "s/if (nowMs - p.ms >= kPendingMs) continue;/if (nowMs - p.ms > kPendingMs) continue;/" quest-host-combat dronekill_test
-runm dc_swallow_strict src/quest/combat/dronekill_core.h "s/nowMs - g.ms >= kSwallowMs) continue;/nowMs - g.ms > kSwallowMs) continue;/" quest-host-combat dronekill_test
+runm dc_times_a src/runtime/patch/dronekill_rules.h "s/kJoinMs = 5000;/kJoinMs = 5001;/;s/kPendingMs = 3000;/kPendingMs = 3001;/;s/kSwallowMs = 25000;/kSwallowMs = 25001;/" quest-host-combat dronekill_test
+runm dc_join_strict src/runtime/patch/dronekill_rules.h "s/now - g\[i\].opened < kJoinMs/now - g[i].opened <= kJoinMs/" quest-host-combat dronekill_test
+runm dc_pending_strict src/runtime/patch/dronekill_rules.h "s/if (now - p.at >= kPendingMs) continue;/if (now - p.at > kPendingMs) continue;/" quest-host-combat dronekill_test
+# D8 (#2359): the swallow window includes kSwallowMs, so the boundary mutant narrows it (`>=`)
+runm dc_swallow_strict src/runtime/patch/dronekill_rules.h "s/now - g\[i\].opened > kSwallowMs) continue;/now - g[i].opened >= kSwallowMs) continue;/" quest-host-combat dronekill_test
 runm dc_times_b src/quest/combat/dronekill_core.h "s/kDueMs = 2000;/kDueMs = 2001;/;s/kLockMs = 120000;/kLockMs = 120001;/;s/kChaseMs = 100;/kChaseMs = 101;/" quest-host-combat dronekill_test
-runm dc_due_strict src/quest/combat/dronekill_core.h "s/if (nowMs - g.dueMs >= kDueMs) { expired/if (nowMs - g.dueMs > kDueMs) { expired/" quest-host-combat dronekill_test
-runm dc_group_size src/quest/combat/dronekill_core.h "s/kGroupComps = 20, kGroups = 8, kPending = 20;/kGroupComps = 20, kGroups = 8, kPending = 21;/" quest-host-combat dronekill_test
-runm dc_no_r3 src/quest/combat/dronekill_core.h "s/            if (!g.number || !g.dead || nowMs - g.ms >= kSwallowMs) continue;/            continue;/;s/        for (auto\& g : groups) {   \/\/ R3/        for (auto\& g : groups) {   \/\/ R3\n            continue;/" quest-host-combat dronekill_test
+runm dc_due_strict src/quest/combat/dronekill_core.h "s/if (nowMs - g.x.dueMs >= kDueMs) { expired/if (nowMs - g.x.dueMs > kDueMs) { expired/" quest-host-combat dronekill_test
+runm dc_group_size src/runtime/patch/dronekill_rules.h "s/kGroupComps = 20, kPending = 16;/kGroupComps = 20, kPending = 17;/" quest-host-combat dronekill_test
+runm dc_no_r3 src/runtime/patch/dronekill_rules.h "s/if (!g\[i\].used || !g\[i\].dead || now - g\[i\].opened > kSwallowMs) continue;/continue;/;$NOWARN" quest-host-combat dronekill_test

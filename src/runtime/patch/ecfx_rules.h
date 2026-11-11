@@ -12,7 +12,7 @@
 // Origin. EchoCombat's `plugin/dronefix.cpp` (he_is_the_cat, heisthecat31/EchoCombat), as released in v2.0.0 (nevr-pack 4d1f0024, whose
 // dronefix.cpp is c3ff4b54's; "EC" lines below are that file): the queue EC 385-391, WallOf EC 393-395, SoundAgain EC 397-405, WallFxDue
 // EC 420-455. PC ports c3ff4b54 (runtime/combat/dronefix.cpp); the Quest ported c14c3e0a, whose block is the same text, through the
-// reference build's `runtime/native/afkxr/afk_ecfx_core.h` (kotorvr's q15t-upstream: the acquire/release accesses, the counts, the exact
+// reference build's `runtime/native/afkxr/afk_ecfx_core.h` (kotorvr's echoquest-combat: the acquire/release accesses, the counts, the exact
 // entries and the guards are its lines). Both builds hold these forms (#2349):
 //   - Every gameplay rule is EC's: stale after more than 500 ms, an in-flight slot left alone, one entry per node, the lowest kind first,
 //     the boom freed unrun, `word & ~0xf` the entry, 3000 ms and 8 walls for the sounds, a slot freed word first, then its node.

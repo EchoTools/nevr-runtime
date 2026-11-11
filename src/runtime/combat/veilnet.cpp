@@ -22,7 +22,7 @@
 // same NAT mapping).
 //
 // Every machine that hears of a veil (the user's client too) gets a "veil token" for
-// TOKEN_LIFE. The barrier wall script (tools/veil_fx.py, network_wall) waits a moment
+// a token's life (nEVR port #2358: ecr::kTokenLife, 1.5 s). The barrier wall script (tools/veil_fx.py, network_wall) waits a moment
 // at its spawn nodes for a token; a wall that takes one becomes the veil (no model, no
 // collision, smoke clouds and the veil sound); a wall that finds none is a barrier.
 //
@@ -74,6 +74,8 @@
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
+#include "runtime/patch/ec_rules.h"  // nEVR port (#2358): the EC network rules, shared with the Quest
+#include "core/burst_then_count.h"   // nEVR port (#2358): the past-cap count's budget, as dronefix.cpp's (#2349)
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -82,6 +84,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include "runtime/combat/station_icon_keys.h"  // nEVR port: path from src/
 #include "runtime/patch/equipment_refire.h"     // nEVR port: the slot setters' owner
@@ -100,26 +103,33 @@ constexpr const char *kLogName = "VeilNet";   // names the plugin in its log-cap
 
 namespace {
 
-constexpr uintptr_t TOKEN_RVA = 0x2104cc0;
-constexpr uintptr_t USE_COUNTER_RVA = 0x2104f00;
-constexpr uintptr_t POINT_TOKEN_RVA = 0x2104ce0;
-constexpr uintptr_t POINT_COUNTER_RVA = 0x2104f80;
-constexpr uintptr_t LOC_TOKEN_RVA = 0x2104d20;
-constexpr uintptr_t LOC_COUNTER_RVA = 0x2104d40;
-constexpr uintptr_t OC_TOKEN_RVA = 0x2104ca8;
-constexpr uintptr_t OC_COUNTER_RVA = 0x2104ca4;
+namespace ecr = ::nevr_ec;   // nEVR port (#2358): the EC page's layout and the rules are runtime/patch/ec_rules.h
+constexpr uintptr_t TOKEN_RVA = ecr::kPageRva + ecr::kVeilTok;
+constexpr uintptr_t USE_COUNTER_RVA = ecr::kPageRva + ecr::kVeilUse;
+constexpr uintptr_t POINT_TOKEN_RVA = ecr::kPageRva + ecr::kPointTok;
+constexpr uintptr_t POINT_COUNTER_RVA = ecr::kPageRva + ecr::kPointUse;
+constexpr uintptr_t LOC_TOKEN_RVA = ecr::kPageRva + ecr::kLocTok;
+constexpr uintptr_t LOC_COUNTER_RVA = ecr::kPageRva + ecr::kLocUse;
+constexpr uintptr_t OC_TOKEN_RVA = ecr::kPageRva + ecr::kOcTok;
+constexpr uintptr_t OC_COUNTER_RVA = ecr::kPageRva + ecr::kOcUse;
+// nEVR port (#2358): the page's RVAs are echovr.exe's as the PC port has always had them. A change to the header's offsets, or to the
+// lines above, fails the build here.
+static_assert(TOKEN_RVA == 0x2104cc0, "TOKEN_RVA is the veil token block");
+static_assert(USE_COUNTER_RVA == 0x2104f00, "USE_COUNTER_RVA is the veil use counter");
+static_assert(POINT_TOKEN_RVA == 0x2104ce0, "POINT_TOKEN_RVA is the point token block");
+static_assert(POINT_COUNTER_RVA == 0x2104f80, "POINT_COUNTER_RVA is the point use counter");
+static_assert(LOC_TOKEN_RVA == 0x2104d20, "LOC_TOKEN_RVA is the teleport token block");
+static_assert(LOC_COUNTER_RVA == 0x2104d40, "LOC_COUNTER_RVA is the teleport use counter");
+static_assert(OC_TOKEN_RVA == 0x2104ca8, "OC_TOKEN_RVA is the overcharge token block");
+static_assert(OC_COUNTER_RVA == 0x2104ca4, "OC_COUNTER_RVA is the overcharge use counter");
 constexpr uintptr_t EQUIP_RVA = nevr_combat::kEquipCellRva;  // nEVR port (#600), equip_cell.h: +00 equipped, +08 writer, +10 skips
 constexpr uintptr_t POINT_FIRED_RVA = 0x2104d44;    // POINTs whose stun went off here
-constexpr ULONGLONG TOKEN_LIFE = 15000000;      // 1.5 s, in 100 ns
-constexpr uint32_t MAGIC = 0x4c564345;          // "ECVL"
-constexpr uint32_t MAGIC2 = 0x4c494556;         // "VEIL"
 //: The gear registry's tac mod list (filled from gear_table.tacmods, InitAndLoadGearTables
 //: +0xc4eba0): a pointer to { allocator, entries, count, capacity }, entries 0x88 bytes
 //: with the name (char[64]) first. Ours are the table's last three (fix_smoke.py,
 //: fix_buff.py, fix_point.py append them in this order).
 constexpr uintptr_t TACMOD_LIST_RVA = 0x20d3430;
-constexpr size_t TACMOD_ENTRY = 0x88;
-const char *const kNewTacMods[3] = {"smoke", "buff", "point"};
+constexpr size_t TACMOD_ENTRY = ecr::kTacEntry;   // nEVR port (#2358)
 // nEVR port (#2333): SERVER_TIMEOUT (6 s without an answer to the hello) is gone: a client of this build reads no answer.
 //: MEDIGUN is off unless the server turns it on: PowerBoost.ini [server] medigun=1 next to this
 //: DLL on the server (nEVR port: combat.medigun). nEVR port (#2333): the server states it as the
@@ -144,15 +154,13 @@ struct Shared {
     volatile LONG veils, barriers;
 };
 
-struct Packet {
-    uint32_t magic;
-    uint8_t type;                               // 'H' hello, 'A' its answer, 'V' veil, 'P' point, 'T' teleport, 'O' overcharge, 'K' a drone killed (server -> clients), 'R' the RULES unlock / capture time (server -> clients), 'C' LOADOUTS asked for (client -> server), 'G' LOADOUTS (server -> clients)
-    uint8_t pad[3];
-    uint32_t id;
-    uint32_t magic2;
-};
+// 'H' hello, 'A' its answer, 'V' veil, 'P' point, 'T' teleport, 'O' overcharge, 'K' a drone killed (server -> clients), 'M' MEDIGUN,
+// 'R' the RULES unlock / capture time (server -> clients), 'C' LOADOUTS asked for (client -> server), 'G' LOADOUTS (server -> clients),
+// 'L' MAP SWITCH (server -> clients). nEVR port (#2358): the packet is ec_rules.h's.
+using Packet = ecr::Packet;
 
 uint8_t *g_base;
+uint8_t *g_page;                                // nEVR port (#2358): g_base + ecr::kPageRva, the EC page
 Shared *g_shared;
 Shared *g_point;                                // POINT's tokens (+10: walls that went off)
 Shared *g_loc;                                  // TRANSLOCATOR's tokens (+10: teleports shown)
@@ -232,12 +240,8 @@ bool Same(const sockaddr_in &a, const sockaddr_in &b) {
     return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
 }
 
-void AddToken(Shared *t) {
-    ULONGLONG now = InterruptTime();
-    if (now >= t->expiry) InterlockedExchange(&t->tokens, 0);
-    InterlockedIncrement(&t->tokens);
-    t->expiry = now + TOKEN_LIFE;
-}
+// nEVR port (#2358): ecr::AddToken on the block, with this machine's clock
+void AddToken(Shared *t) { ecr::AddToken(reinterpret_cast<uint8_t *>(t), InterruptTime()); }
 
 Shared *Tokens(uint8_t type) {
     return type == 'P' ? g_point : type == 'T' ? g_loc : type == 'O' ? g_oc : g_shared;
@@ -245,7 +249,7 @@ Shared *Tokens(uint8_t type) {
 const char *What(uint8_t type) {
     return type == 'P' ? "point" : type == 'T' ? "teleport" : type == 'O' ? "overcharge" : "veil";
 }
-bool Carried(uint8_t type) { return type == 'V' || type == 'P' || type == 'T' || type == 'O'; }
+using ecr::Carried;   // nEVR port (#2358)
 
 const char *TacMod(uint64_t s) {
     switch (s) {
@@ -260,17 +264,15 @@ const char *TacMod(uint64_t s) {
     }
 }
 
-// The last ids seen, so a veil that arrives twice (the resend) gives one token.
-uint32_t g_seen[32];
-int g_seen_next = 0;
+// nEVR port (#2358): the dedupe ring (the last ids seen, so a veil that arrives twice gives one token), the destinations and the
+// server pick are ecr::BasicState's, under g_lock. A client carries all four types (ecr::kAllTypes), as EchoCombat does.
+ecr::BasicState<SOCKET> g_ec(ecr::kAllTypes);
 
 bool FirstTime(uint32_t id) {
     AcquireSRWLockExclusive(&g_lock);
-    bool seen = false;
-    for (uint32_t s : g_seen) seen |= s == id;
-    if (!seen) g_seen[g_seen_next++ % 32] = id;
+    const bool first = g_ec.FirstTime(id);
     ReleaseSRWLockExclusive(&g_lock);
-    return !seen;
+    return first;
 }
 
 using sendto_fn = int(WSAAPI *)(SOCKET, const char *, int, int, const sockaddr *, int);
@@ -279,7 +281,7 @@ sendto_fn Real_sendto = sendto;
 recvfrom_fn Real_recvfrom = recvfrom;
 
 void Send(SOCKET s, const sockaddr_in &to, uint8_t type, uint32_t id) {
-    Packet p = { MAGIC, type, {}, id, MAGIC2 };
+    Packet p = { ecr::kMagic, type, {}, id, ecr::kMagic2 };
     Real_sendto(s, (const char *)&p, sizeof(p), 0, (const sockaddr *)&to, sizeof(to));
 }
 
@@ -287,49 +289,85 @@ void Send(SOCKET s, const sockaddr_in &to, uint8_t type, uint32_t id) {
 // The destination (socket + address) the game sent the most packets to in the last
 // second. Every game server on a PC has its own port (6792, 6793, ...): when the
 // game moves to another one (lobby -> match), this follows within a second.
-struct Dest { SOCKET sock; sockaddr_in addr; LONG count; };
-Dest g_dests[16];
-int g_best = -1;
+struct Dest { SOCKET sock; sockaddr_in addr; };
 
 // Once a second (Tick): the busiest destination of the last second becomes the
-// server, and the counts start again.
+// server, and the counts start again (nEVR port #2358: ecr::BasicState::PickServer).
 void PickServer() {
     AcquireSRWLockExclusive(&g_lock);
-    int best = -1;
-    for (int i = 0; i < 16; ++i)
-        if (g_dests[i].count && (best < 0 || g_dests[i].count > g_dests[best].count)) best = i;
-    if (best >= 0) g_best = best;
-    for (int i = 0; i < 16; ++i)
-        if (i != g_best) g_dests[i].count = 0;
-        else g_dests[i].count = 1;               // keeps its slot while quiet
+    g_ec.PickServer();
     ReleaseSRWLockExclusive(&g_lock);
 }
 
+// nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
 void SawSend(SOCKET s, const sockaddr *to) {
     if (!to || to->sa_family != AF_INET) return;
-    const sockaddr_in &a = *(const sockaddr_in *)to;
+    const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(to);
     AcquireSRWLockExclusive(&g_lock);
-    int i = 0, free_slot = -1, low = 0;
-    for (; i < 16; ++i) {
-        if (g_dests[i].count && g_dests[i].sock == s && Same(g_dests[i].addr, a)) break;
-        if (!g_dests[i].count && free_slot < 0) free_slot = i;
-        if (g_dests[i].count < g_dests[low].count) low = i;
-    }
-    if (i == 16) {                              // new destination
-        i = free_slot >= 0 ? free_slot : low;
-        if (i == g_best) g_best = -1;
-        g_dests[i] = { s, a, 0 };
-    }
-    ++g_dests[i].count;
-    if (g_best < 0) g_best = i;
+    g_ec.SawSend(s, a->sin_addr.s_addr, a->sin_port);
     ReleaseSRWLockExclusive(&g_lock);
+}
+
+// nEVR port (#2358): a datagram of ours past the per-call cap (ecr::Capped) goes to the game, and is counted. The first is a Warning; the
+// count follows at most every 10 s, and once none has come for 10 s (nevr::BurstThenCount, core/burst_then_count.h). The game's thread
+// writes it (NoteCapped) and the tick thread flushes it (FlushCapped), under g_capped_lock.
+SRWLOCK g_capped_lock = SRWLOCK_INIT;
+nevr::BurstThenCount g_capped_lines{0, 10000};  // no burst: the first event is the Warning
+std::atomic<bool> g_capped_pending{false};
+
+void ReportCapped(const nevr::BurstThenCount::Line &l) {
+    using V = nevr::BurstThenCount::Verdict;
+    if (l.verdict == V::kCapped)
+        LogWarning("%s: a datagram of ours past the cap of %d in one receive call went to the game; the later ones are counted, "
+                   "not logged, and the count follows at most every 10 s",
+                   kLogName, ecr::kMaxConsumePerCall);
+    else if (l.verdict == V::kCount)
+        LogWarning("%s: datagrams of ours past the cap went to the game: %llu in all (%llu since the last line, counted, not logged)",
+                   kLogName, static_cast<unsigned long long>(l.total), static_cast<unsigned long long>(l.sinceLine));
+}
+
+void NoteCapped(ULONGLONG now) {
+    AcquireSRWLockExclusive(&g_capped_lock);
+    const nevr::BurstThenCount::Line l = g_capped_lines.Event(now);
+    g_capped_pending.store(g_capped_lines.Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_capped_lock);
+    ReportCapped(l);
+}
+
+// The count no line covers yet, once none has come for 10 s. Called from the tick, which already runs once a second.
+void FlushCapped() {
+    if (!g_capped_pending.load(std::memory_order_relaxed)) return;
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_capped_lock);
+    const nevr::BurstThenCount::Line l = g_capped_lines.Flush(now);
+    g_capped_pending.store(g_capped_lines.Pending(), std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_capped_lock);
+    ReportCapped(l);
+}
+
+// nEVR port (#2358): the count no line covers yet goes out at the stop, once the hooks are off (Stop), so a flood that ends just before
+// the process does is still counted in the log. Shaped as dronefix.cpp's Stop does (#2349).
+void FinalCapped() {
+    const ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_capped_lock);
+    const nevr::BurstThenCount::Line l = g_capped_lines.Final(now);
+    g_capped_pending.store(false, std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&g_capped_lock);
+    ReportCapped(l);
 }
 
 bool ServerDest(Dest &out) {
+    ecr::BasicDest<SOCKET> d{};
     AcquireSRWLockShared(&g_lock);
-    bool ok = g_best >= 0;
-    if (ok) out = g_dests[g_best];
+    bool ok = g_ec.Server(&d);
     ReleaseSRWLockShared(&g_lock);
+    if (ok) {
+        out.sock = d.sock;
+        out.addr = sockaddr_in{};
+        out.addr.sin_family = AF_INET;
+        out.addr.sin_addr.s_addr = d.addr;
+        out.addr.sin_port = d.port;
+    }
     return ok;
 }
 
@@ -952,22 +990,26 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             }
             PageTexts();
         }
-    } else if (p.type == 'M' && FirstTime(p.id)) {
-        if (MedigunAllowedNow()) MedigunHere(p.id);   // nEVR port (#2333): as the server states
-    } else if (p.type == 'K' && FirstTime(p.id)) {          // a drone the server killed: DroneFix shuts it down
-        using killed_fn = void(__cdecl *)(uint32_t);
-        static killed_fn killed = nullptr;
-        if (!killed)
-            if (::nevr_combat::dronefix::Started())           // nEVR port: was GetProcAddress(DroneFix.dll)
-                killed = &::nevr_combat::dronefix::Killed;
-        if (killed) killed(p.id & 0xffff);
-        if (killed)
-            LogDebug("drone %u killed on the server: shut down here", p.id & 0xffff);
-        else
-            LogWarning("drone %u killed on the server: NOT shut down here (no DroneFix.dll)", p.id & 0xffff);
-    } else if (Carried(p.type) && FirstTime(p.id)) {
-        AddToken(Tokens(p.type));
-        LogDebug("%s %08x from the server: token here", What(p.type), p.id);
+    } else {   // nEVR port (#2358): 'M', 'K' and the carried types through ecr::BasicState::Client, each once per id
+        AcquireSRWLockExclusive(&g_lock);
+        const ecr::ClientResult r = g_ec.Client(g_page, p, InterruptTime());
+        ReleaseSRWLockExclusive(&g_lock);
+        if (r.act == ecr::ClientAct::kMedigun) {
+            if (MedigunAllowedNow()) MedigunHere(p.id);   // nEVR port (#2333): as the server states
+        } else if (r.act == ecr::ClientAct::kKill) {      // a drone the server killed: DroneFix shuts it down
+            using killed_fn = void(__cdecl *)(uint32_t);
+            static killed_fn killed = nullptr;
+            if (!killed)
+                if (::nevr_combat::dronefix::Started())           // nEVR port: was GetProcAddress(DroneFix.dll)
+                    killed = &::nevr_combat::dronefix::Killed;
+            if (killed) killed(r.drone);
+            if (killed)
+                LogDebug("drone %u killed on the server: shut down here", r.drone);
+            else
+                LogWarning("drone %u killed on the server: NOT shut down here (no DroneFix.dll)", r.drone);
+        } else if (r.act == ecr::ClientAct::kToken) {
+            LogDebug("%s %08x from the server: token here", What(p.type), p.id);
+        }
     }
 }
 
@@ -991,17 +1033,22 @@ int WSAAPI Hooked_recvfrom(SOCKET s, char *buf, int len, int flags, sockaddr *fr
     ApplyPause();                                    // ... and PAUSE
     ApplyPayload();                                  // ... and the payload rules
     RefreshStations();
-    for (;;) {
+    for (int consumed = 0;; ++consumed) {
         sockaddr_storage own;
         int own_len = sizeof(own);
         sockaddr *f = from ? from : (sockaddr *)&own;
         int *fl = from ? fromlen : &own_len;
         int saved = fl ? *fl : 0;
         int n = Real_recvfrom(s, buf, len, flags, f, fl);
-        if (n != (int)sizeof(Packet) || (flags & MSG_PEEK) || !fl) return n;
+        // nEVR port (#2358): ours is ecr::TakeOut's (a known type; at most ecr::kMaxConsumePerCall taken out in one call)
         Packet p;
-        memcpy(&p, buf, sizeof(p));
-        if (p.magic != MAGIC || p.magic2 != MAGIC2) return n;
+        if (!ecr::TakeOut(buf, n, len < 0 ? 0ull : static_cast<unsigned long long>(len), (flags & MSG_PEEK) != 0, fl != nullptr,
+                          consumed, &p)) {
+            if (ecr::Capped(buf, n, len < 0 ? 0ull : static_cast<unsigned long long>(len), (flags & MSG_PEEK) != 0, fl != nullptr,
+                            consumed))
+                NoteCapped(GetTickCount64());  // nEVR port (#2358): ours past the per-call cap: handed to the game, and counted
+            return n;
+        }
         if (f->sa_family == AF_INET) Handle(s, p, *(const sockaddr_in *)f);
         *fl = saved;
         u_long waiting = 0;
@@ -1016,20 +1063,9 @@ int WSAAPI Hooked_recvfrom(SOCKET s, char *buf, int len, int flags, sockaddr *fr
 // last three (ours) on one without. The entries stay where they are; only the count
 // changes. A rebuilt list (SettingsUpdateCB reloads the gear tables) has a new entries
 // pointer and its full count again. Nothing is touched unless its last three are ours.
-uint8_t *g_list_entries;
-uint64_t g_list_full;
-
-bool OursAtEnd(uint8_t *entries, uint64_t full) {
-    for (int k = 0; k < 3; ++k)
-        if (strncmp((const char *)entries + (full - 3 + k) * TACMOD_ENTRY, kNewTacMods[k], 64) != 0) return false;
-    return true;
-}
-
-// The tac mod the player has selected (EQUIP_RVA, from their profile update) is one of ours.
-bool OurSelected() {
-    uint64_t sym = *(volatile uint64_t *)(g_base + EQUIP_RVA);
-    return sym == 0xe32dc7c9d4804fb5ull || sym == 0xe32dc7cad6864aa4ull || sym == 0xc8c33e48386618b6ull;   // smoke, point, buff
-}
+// nEVR port (#2358): the decision (ours at the end, the full count, the selection kept whole, the settle) and the write are ec_rules.h's.
+ecr::TacList g_tac_list;          // under g_lists_lock
+ecr::SelectionSettle g_tac_settle;  // under g_lists_lock
 
 // The equipment station does not read the gear lists' own counts: it reads the gear type table
 // (*(echovr+0x20d3440): entries of 98h bytes at +08h, count +10h; each {+00 the gear list,
@@ -1874,34 +1910,29 @@ void StationView(uint8_t *list, uint8_t *entries, uint64_t count, uint64_t skip)
 }
 
 // The list is rebuilt (and its old one freed) on the game's thread: everything here is
-// guarded. 0: unchanged, 1: shown, 2: hidden.
+// guarded. 0: unchanged, 1: shown, 2: hidden, 3: kept whole (one of ours is selected on a server without EchoCombat).
+// nEVR port (#2358): the reads of the list run inside this EC_TRY frame, so GuardedReader reads plainly.
+struct GuardedReader {
+    bool Read(uintptr_t address, void *out, size_t length) const {
+        memcpy(out, reinterpret_cast<const void *>(address), length);
+        return true;
+    }
+};
 int TacModsGuarded(bool server_has_it, uint64_t *now_count) {
     EC_TRY {
-        uint8_t *list = *(uint8_t *volatile *)(g_base + TACMOD_LIST_RVA);
-        if (!list) return 0;
-        uint8_t *entries = *(uint8_t *volatile *)(list + 0x08);
-        volatile uint64_t *count = (volatile uint64_t *)(list + 0x10);
-        uint64_t capacity = *(volatile uint64_t *)(list + 0x18);
-        if (!entries) return 0;
-        // a new list is filled an entry at a time: its full count is the most it has had
-        if (entries != g_list_entries) {
-            g_list_entries = entries;
-            g_list_full = 0;
-        }
-        if (*count > g_list_full) g_list_full = *count;
-        uint64_t full = g_list_full;
-        if (full < 3 || full > capacity || !OursAtEnd(entries, full)) return 0;
-        uint64_t want = server_has_it ? full : full - 3;
+        const uintptr_t list = reinterpret_cast<uintptr_t>(*(uint8_t *volatile *)(g_base + TACMOD_LIST_RVA));
         // One of ours selected: the list stays whole. Cut short, the selection pointed past
         // its end (a loading match hides them until its server answers): kept, it is only
         // an EchoCombat tac mod on a server without it, as before the gate.
-        if (!server_has_it && OurSelected()) want = full;
+        const uint64_t selected = ecr::Load64(g_page + ecr::kEquipSel);
+        const bool settled = g_tac_settle.Look(selected, GetTickCount64());   // a cut waits until the selection is still
+        GuardedReader reader;
+        const ecr::TacPlan plan = ecr::PlanTacMods(g_tac_list, reader, list, server_has_it, 0, ecr::OurSelected(selected), settled);
+        if (!plan.ok) return 0;
+        uint64_t want = plan.want;
         if (LoadoutMode() == LOADOUT_CLASSIC && want > CLASSIC_ITEMS) want = CLASSIC_ITEMS;   // LOADOUTS CLASSIC: the stock four
-        StationView(list, entries, want, 0);              // the equipment station's copy of the count
-        if (*count == want) return 0;
-        *count = want;
-        *now_count = want;
-        return server_has_it ? 1 : 2;
+        StationView(reinterpret_cast<uint8_t *>(list), reinterpret_cast<uint8_t *>(plan.entries), want, 0);   // the equipment station's copy of the count
+        return ecr::WriteTacMods(list, plan, want, true, now_count);
     } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -2293,6 +2324,7 @@ void TacModsFor(bool server_has_it) {
     int r = TacModsGuarded(server_has_it, &n);
     if (r == 1) Log("the server has EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT shown (%llu tac mods)", n);
     if (r == 2) Log("the server has no EchoCombat: UMBRAL VEIL, OVERCHARGE and POINT hidden (%llu tac mods)", n);
+    if (r == 3) Log("the server has no EchoCombat, and one of UMBRAL VEIL, OVERCHARGE and POINT is selected: the list is kept whole (%llu tac mods)", n);   // nEVR port (#2358)
 }
 
 // Watches this machine's veil uses (client), says hello (client), shows / hides the new
@@ -2308,10 +2340,13 @@ DWORD WINAPI Tick(LPVOID) {
     volatile LONG *point_uses = (volatile LONG *)(g_base + POINT_COUNTER_RVA);
     volatile LONG *loc_uses = (volatile LONG *)(g_base + LOC_COUNTER_RVA);
     volatile LONG *oc_uses = (volatile LONG *)(g_base + OC_COUNTER_RVA);
-    LONG seen_uses = *uses, seen_veils = g_shared->veils, seen_barriers = g_shared->barriers;
-    LONG seen_point_uses = *point_uses, seen_points = g_point->veils;
-    LONG seen_loc_uses = *loc_uses, seen_locs = g_loc->veils;
-    LONG seen_oc_uses = *oc_uses, seen_ocs = g_oc->veils;
+    LONG seen_veils = g_shared->veils, seen_barriers = g_shared->barriers;
+    LONG seen_points = g_point->veils;
+    LONG seen_locs = g_loc->veils;
+    LONG seen_ocs = g_oc->veils;
+    // nEVR port (#2358): the four use counters, in "VPTO" order, as ecr::WatchUses reads them
+    uint32_t seen_use[4] = {static_cast<uint32_t>(*uses), static_cast<uint32_t>(*point_uses), static_cast<uint32_t>(*loc_uses),
+                            static_cast<uint32_t>(*oc_uses)};
     volatile LONG *point_fired = (volatile LONG *)(g_base + POINT_FIRED_RVA);
     LONG seen_fired = *point_fired;
     volatile uint64_t *equip = (volatile uint64_t *)(g_base + EQUIP_RVA);
@@ -2338,17 +2373,17 @@ DWORD WINAPI Tick(LPVOID) {
         if (GetTickCount64() >= next_hook) {             // client: tac mod selections; server: session type
             next_hook = GetTickCount64() + 1000;
             HookSelectionLogs();
+            FlushCapped();                                   // nEVR port (#2358): the past-cap count, once none came for 10 s
         }
         if (!g_server) {
-            for (int k = 0; k < 4; ++k) {
-                uint8_t type = "VPTO"[k];
-                LONG u = k == 3 ? *oc_uses : k == 2 ? *loc_uses : k ? *point_uses : *uses;
-                LONG &seen = k == 3 ? seen_oc_uses : k == 2 ? seen_loc_uses : k ? seen_point_uses : seen_uses;
-                if (u == seen) continue;
-                seen = u;
-                uint32_t id = GetTickCount() * 2654435761u ^ GetCurrentProcessId() << 16 ^ (uint32_t)u ^ k;
-                FirstTime(id);
-                if (type != 'T') AddToken(Tokens(type));     // a teleport is shown here already
+            // nEVR port (#2358): ecr::WatchUses: an id, remembered, a token here unless a teleport (shown here already)
+            ecr::Use used[4];
+            AcquireSRWLockExclusive(&g_lock);
+            const int n_used = ecr::WatchUses(g_ec, g_page, seen_use, GetTickCount(), GetCurrentProcessId(), InterruptTime(), used);
+            ReleaseSRWLockExclusive(&g_lock);
+            for (int k = 0; k < n_used; ++k) {
+                const uint8_t type = used[k].type;
+                const uint32_t id = used[k].id;
                 Dest d;
                 bool ok = ServerDest(d);
                 SendToServer(type, id);
@@ -2451,36 +2486,21 @@ DWORD WINAPI Tick(LPVOID) {
 // stops a server (its hook guard), so that one is left alone. The hook does no logging (it
 // runs inside the platform module's own logger); Tick writes the "selected:" line.
 using printf_fn = void(*)(int, uint64_t, const char *, va_list);
-constexpr char kProfileFmt[] = "[NSUSER] sent profile update: %s";
+using ecr::kProfileFmt;   // nEVR port (#2358): the format, the names' symbols and the parse are ec_rules.h's
 const wchar_t *const kLogModules[] = {L"pnsovr.dll", L"pnsrad.dll"};
 constexpr int kLogHooks = 2;
 printf_fn g_real_log[kLogHooks];
 bool g_log_tried[kLogHooks];
 
-uint64_t AbilitySymbol(const char *name, size_t n) {
-    static const struct { const char *name; uint64_t sym; } k[] = {
-        {"smoke", 0xe32dc7c9d4804fb5ull}, {"point", 0xe32dc7cad6864aa4ull}, {"buff", 0xc8c33e48386618b6ull},
-        {"heal", 0xc8c33e4832761fbcull}, {"shield", 0x41d2d43513260b1aull}, {"sensor", 0x41d2d4381430080cull},
-        {"wraith", 0x41d2d02f1b2a1316ull}};
-    for (const auto &e : k)
-        if (strlen(e.name) == n && memcmp(e.name, name, n) == 0) return e.sym;
-    return 0;
-}
-
 // nEVR port (#2289): his reader of the game's session line ("[NETLOBBY] Starting session (gametype ") is gone. echovr.exe
 // logs that line and this module does not watch echovr.exe's logger, so it never ran; SessionPrivacy() reads the type.
 void SawLog(const char *fmt, va_list args) {
-    if (!fmt || strcmp(fmt, kProfileFmt) != 0) return;
+    if (!ecr::IsProfileFmt(fmt)) return;
     va_list copy = args;
     const char *json = va_arg(copy, const char *);
-    const char *a = json ? strstr(json, "\"ability\":\"") : nullptr;
-    if (!a) return;
-    a += 11;
-    const char *e = strchr(a, '"');
-    uint64_t sym = e ? AbilitySymbol(a, e - a) : 0;
+    const uint64_t sym = ecr::SelectedFromJson(json);
     if (!sym) return;
-    *(volatile LONG *)(g_base + EQUIP_RVA + 0x20) = 0;                // a new selection: re-runs allowed
-    *(volatile uint64_t *)(g_base + EQUIP_RVA) = sym;
+    ecr::StoreSelected(g_page, sym);                                  // a new selection: re-runs allowed, then the symbol
     InterlockedExchange64(&g_selected_pending, (LONG64)sym);         // Tick logs it
 }
 
@@ -2799,6 +2819,7 @@ bool Install(bool server) {
     RateText(g_rules ? g_rules[RATE_SHOWN] : 0);         // the POINT RATE row's text (1.0x until told)
     // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished). The capture time patch
     // (match control) is written below, once the combat net's hooks are committed.
+    g_page = g_base + ecr::kPageRva;                 // nEVR port (#2358)
     g_shared = (Shared *)(g_base + TOKEN_RVA);
     g_point = (Shared *)(g_base + POINT_TOKEN_RVA);
     g_loc = (Shared *)(g_base + LOC_TOKEN_RVA);
@@ -2967,7 +2988,10 @@ bool EventDispatchHooked() { return g_dispatch_hooked; }
 
 bool CleanExitInstalled() { return g_quick_exit; }
 
-void Stop() { Uninstall(); }
+void Stop() {
+    Uninstall();
+    FinalCapped();  // nEVR port (#2358): after the hooks are off, so no datagram is counted after the last line
+}
 
 void DroneKilled(uint32_t index) { VeilNet_DroneKilled(index); }
 

@@ -8,7 +8,7 @@
 //
 // Origin. EchoCombat's `plugin/dronefix.cpp` (he_is_the_cat, heisthecat31/EchoCombat): MUZZLE, BACK_MAX, the frame average and the
 // transform. PC ports it at `c3ff4b54` (runtime/combat/dronefix.cpp), the Quest at `c14c3e0a` through the reference build's
-// `runtime/native/afkxr/afk_dronemuzzle_core.h` (kotorvr's q15t-upstream; MuzzleMove, ClampDt and FrameDt are its lines), rule for rule:
+// `runtime/native/afkxr/afk_dronemuzzle_core.h` (kotorvr's echoquest-combat; MuzzleMove, ClampDt and FrameDt are its lines), rule for rule:
 // MUZZLE df 51, BACK_MAX df 52, the frame average df 143-144, the frame time df 928-929, the transform df 916-934, `p[i] += ...` df 933-934.
 // The two ports have the same constants and the same arithmetic. They differed in one guard: PC skipped the move only when `len < 1e-4f`,
 // which is false for a NaN length, so a NaN velocity moved the pose by NaN. The guard below, `!(len >= 1e-4f)`, leaves the pose alone

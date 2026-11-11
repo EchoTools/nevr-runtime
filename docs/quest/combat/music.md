@@ -8,7 +8,7 @@ ELF vaddr = disassembly VA - 0x100000.
 
 ## Provenance
 
-The module is in kotorvr's (Ducky's) q15t-upstream: `runtime/native/afkxr/afk_music.cpp` at c5a67e8, whole file, and at the same addresses (`:51-52`: slot `0x36d76e8`,
+The module is in kotorvr's (Ducky's) echoquest-combat: `runtime/native/afkxr/afk_music.cpp` at c5a67e8, whole file, and at the same addresses (`:51-52`: slot `0x36d76e8`,
 function `0x2549264`). It came into this tree with the q15t plugin import (#1591) and moved here from `src/quest/plugins/q15t/src/music.{h,cpp}`. What is ours: the scope
 (upstream acts on every Play), the typed thunk and the manager install, the 29 code-word pins (upstream pins none), the binary-search bank, and the log lines.
 

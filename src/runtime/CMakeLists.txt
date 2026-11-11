@@ -1921,6 +1921,20 @@ if(BUILD_TESTING)
     target_link_libraries(test_powerboost_rules PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_powerboost_rules DISCOVERY_MODE PRE_TEST)
 
+    # test_ec_rules.cpp (#2358, header-only patch/ec_rules.h; the Quest host test compiles the same header).
+    add_executable(test_ec_rules tests/test_ec_rules.cpp)
+    set_source_files_properties(tests/test_ec_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ec_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ec_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ec_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_dronekill_rules.cpp (#2359, header-only patch/dronekill_rules.h; the Quest host test compiles the same header).
+    add_executable(test_dronekill_rules tests/test_dronekill_rules.cpp)
+    set_source_files_properties(tests/test_dronekill_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_dronekill_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dronekill_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_dronekill_rules DISCOVERY_MODE PRE_TEST)
+
     # test_ecfx_rules.cpp (#2349, header-only patch/ecfx_rules.h; the Quest host test compiles the same header).
     add_executable(test_ecfx_rules tests/test_ecfx_rules.cpp)
     set_source_files_properties(tests/test_ecfx_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

@@ -3,6 +3,7 @@ NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagn
 # a per-thread word shared by every thread (the mutants of the per-thread state)
 SHARED_WORD='struct SharedWord { int Create() noexcept { return 0; } std::uintptr_t Get() const noexcept { return v; } void Set(std::uintptr_t x) noexcept { v = x; } std::uintptr_t v = 0; }'
 # dronekill (part 1 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
 runm dk_pin_actor src/quest/combat/dronekill_targets.h "s/{0x36e2080ULL, 0x2059714ULL,/{0x36e2088ULL, 0x2059714ULL,/"
 runm dk_pin_enter src/quest/combat/dronekill_targets.h "s/0x36cacf8ULL, 0x263b700ULL/0x36cacf0ULL, 0x263b700ULL/"
 runm dk_pin_fire src/quest/combat/dronekill_targets.h "s/0x36c37a8ULL, 0x210bff8ULL/0x36c37a0ULL, 0x210bff8ULL/"
@@ -34,7 +35,7 @@ runm dk_actor_all src/quest/combat/dronekill.cpp "s/  if (c != nullptr \&\& !c->
 runm dk_actor_again src/quest/combat/dronekill.cpp "s/  if (c != nullptr \&\& !c->have \&\& actor_sym == kDroneActor) {/  if (c != nullptr \&\& actor_sym == kDroneActor) {/"
 runm dk_actor_reads src/quest/combat/dronekill.cpp "s/      if (SafeRead(reinterpret_cast<std::uintptr_t>(space_out), \&sp, sizeof sp) \&\&/      if (true \&\&/"
 runm dk_actor_result src/quest/combat/dronekill.cpp "/^std::uint32_t ActorHandler/,/^}/s/^  return r;\$/  return 1;/"
-runm dc_sym_a src/quest/combat/dronekill_core.h "s/kDroneActor = 0x10e40287a9bf5a13ull;/kDroneActor = 0x10e40287a9bf5a14ull;/;s/kR14Touch = 0x2E40131422F7B1FCull;/kR14Touch = 0x2E40131422F7B1FDull;/;s/kDamageable = 0xc9dc08cfc2f5920full;/kDamageable = 0xc9dc08cfc2f59210ull;/"
+runm dc_sym_a src/runtime/patch/dronekill_rules.h "s/kDroneActor = 0x10E40287A9BF5A13ull;/kDroneActor = 0x10E40287A9BF5A14ull;/;s/kTouchInteract = 0x2E40131422F7B1FCull;/kTouchInteract = 0x2E40131422F7B1FDull;/;s/kDamageable = 0xC9DC08CFC2F5920Full;/kDamageable = 0xC9DC08CFC2F59210ull;/"
 runm dk_enter_other src/quest/combat/dronekill.cpp "s/ || actor != kDroneActor) {/) {/"
 runm dk_enter_unread src/quest/combat/dronekill.cpp "s/  return SafeRead(a, d, 0x20) \&\& SafeRead(a + 0x20, \&d->enable, sizeof d->enable);/  std::memcpy(d, data, sizeof *d); return true;/;$NOWARN"
 runm dk_node_tail src/quest/combat/dronekill.cpp "s/ \&\& SafeRead(a + 0x20, \&d->enable, sizeof d->enable);/;/"
@@ -42,7 +43,7 @@ runm dk_enter_after src/quest/combat/dronekill.cpp "s/  real(node, data);  \/\/ 
 runm dk_enter_twice src/quest/combat/dronekill.cpp "s/^  SetCapture(outer);\$/  SetCapture(outer); real(node, data);/"
 runm dk_enter_nocap src/quest/combat/dronekill.cpp "s/^  SetCapture(\&cap);\$/  (void)cap;/"
 runm dk_enter_outer src/quest/combat/dronekill.cpp "s/^  SetCapture(outer);\$/  SetCapture(nullptr);/;$NOWARN"
-runm dk_enter_nocount src/quest/combat/dronekill.cpp "s/  g_enter_drone.fetch_add(1, std::memory_order_relaxed);/  g_enter_drone.fetch_add(0, std::memory_order_relaxed);/"
+runm dk_enter_nocount src/quest/combat/dronekill.cpp "s/g_enter_drone.fetch_add(1, std::memory_order_relaxed) + 1;/g_enter_drone.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm dk_enter_nospace src/quest/combat/dronekill.cpp "s/  if (!cap.have || !cap.ok || cap.space == nullptr) {/  if (!cap.have || !cap.ok) {/"
 runm dk_enter_nofound src/quest/combat/dronekill.cpp "s/  if (system == nullptr) {/  if (false) {/"
 runm dk_enter_noshape src/quest/combat/dronekill.cpp "s/  if (!g_cmp_ok || !ComponentShape(system, \&component)) {\$/  if (false) {/"
@@ -59,10 +60,10 @@ runm dk_level_words src/quest/combat/dronekill.cpp "s/  if (g_lockon || g_gun ||
 runm dk_touch_word src/quest/combat/dronekill.cpp "s/  if (g_lockon \&\& d.system == kR14Touch \&\& !d.enable) {/  if (d.system == kR14Touch \&\& !d.enable) {/"
 runm dk_touch_system src/quest/combat/dronekill.cpp "s/  if (g_lockon \&\& d.system == kR14Touch \&\& !d.enable) {/  if (g_lockon \&\& !d.enable) {/"
 runm dk_touch_on src/quest/combat/dronekill.cpp "s/  if (g_lockon \&\& d.system == kR14Touch \&\& !d.enable) {/  if (g_lockon \&\& d.system == kR14Touch) {/"
-runm dk_touch_due src/quest/combat/dronekill.cpp "/    g_touch.Deployed(c, c.ms);/{n;d}"
+runm dk_touch_due src/quest/combat/dronekill.cpp "/    g_touch.Deployed(c, c.at);/{n;d}"
 runm dk_touch_actor src/quest/combat/dronekill.cpp "s/    c.actor = cap.actor;//"
-runm dk_touch_space src/quest/combat/dronekill.cpp "s/    c.space = reinterpret_cast<std::uint64_t>(cap.space);//"
-runm dk_touch_owner src/quest/combat/dronekill.cpp "s/    c.owner = owner;//"
+runm dk_touch_space src/quest/combat/dronekill.cpp "s/    c.x.space = reinterpret_cast<std::uint64_t>(cap.space);//"
+runm dk_touch_owner src/quest/combat/dronekill.cpp "s/    c.x.owner = owner;//"
 runm dk_lock_due src/quest/combat/dronekill.cpp "s/  if (slot >= 0) g_any_due.store(true, std::memory_order_release);\n  pthread_mutex_unlock(\&g_mu);\n}/XX/;/^void LockedOn/,/^}/s/  if (slot >= 0) g_any_due.store(true, std::memory_order_release);//;$NOWARN"
 runm dk_cap_shared_word src/quest/combat/dronekill.cpp "s/^ThreadWord g_t_cap;.*/$SHARED_WORD g_t_cap;/"
 runm dk_key_failure_ignored src/quest/combat/dronekill.cpp "s/^  if (key_error != 0) {\$/  if (key_error != 0 \&\& false) {/"
@@ -101,7 +102,7 @@ runm dk_actor_capture_call src/quest/combat/dronekill.cpp "s/  ActorCapture(r, a
 runm dk_enter_inscope src/quest/combat/dronekill.cpp "s/^  EnterInScope(real, node, data);\$/  (void)0;/;$NOWARN"
 runm dk_fire_inscope src/quest/combat/dronekill.cpp "s/^  FireInScope(real, cs, handle, velocity, remote);\$/  (void)0;/;$NOWARN"
 runm dk_atk_inscope src/quest/combat/dronekill.cpp "s/^  AttackInScope(cs, handle);\$/  (void)0;/;$NOWARN"
-runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<std::uint32_t>(g_capturing.load())};/          1};/"
+runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load()};/          1, g_expired.load()};/"
 # "Prove arena pays nothing, by count": a read or a scan before the scope test must be seen by the arena test
 runm dk_arena_reads_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);\$/  { std::uint64_t probe = 0; SafeRead(reinterpret_cast<std::uintptr_t>(data), \&probe, sizeof probe); }\n&/"
 runm dk_arena_scans_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(cs, handle, velocity, remote);\$/  { std::uint64_t lv = 0; (void)level::Classify(0, false, \&lv); }\n&/"

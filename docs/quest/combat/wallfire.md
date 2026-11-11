@@ -2,7 +2,7 @@
 
 Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
 Origin: the reference build's runtime/native/afkxr/afk_wallfire.cpp (the rule :1-13, the pins :34-36, the default :17,78); the commit is in
-`docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every address below is in upstream's afk_wallfire.cpp.
+`docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's echoquest-combat): every address below is in upstream's afk_wallfire.cpp.
 Code: `src/quest/combat/wallfire.h`, `wallfire.cpp`, `wallfire_targets.h`. Test: `src/quest/tests/wallfire_test.cpp` (the real bvh module on an image built in
 memory, a synthetic room mesh), `src/quest/tests/got_pinned_test.cpp` (the pins against the real libr15).
 **Depends on `bvh`** (`bvh::TreeInstalled()`): without the static BVH answering `CBVHTree::Occluded` the segment query is never blocked, so wallfire installs

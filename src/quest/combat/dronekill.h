@@ -21,7 +21,8 @@
  * acts only while a combat map is loaded (combat_level.h `Classify`, asked by the module's own tick every kScopeFrames frames and kept in one
  * atomic, InCombatScope). Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
  * AttackTarget after its call, Actor after its call when no drone Enter is in flight; OnKilled drops the 'K'; the tick clears the tables when the
- * scope ends. Nothing is read, written, called or logged for an arena level except the one `combat_dronekill_scope` line per change of scope.
+ * scope ends. An arena level writes only the one `combat_dronekill_scope` line per change of scope; the process writes the final
+ * `combat_dronekill_stats` record at its end whenever the module is installed, with zero counts if no combat map was seen.
  * The scope moves to combat/combat_scope's InCombatMap (F19, PR #2246) once that file is on main; InCombatScope is the one place that changes.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
@@ -30,13 +31,16 @@
  * AttackTarget once per frame per drone that has a target. Not measured on a headset: the `combat_dronekill_scope` line carries each hook's call
  * count over the scope that ended. The out-of-scope path of each is counted in docs/quest/combat/dronekill.md ("Arena cost").
  *
- * Origin. The reference build's `runtime/native/afkxr/afk_dronekill.cpp` (kotorvr's q15t-upstream), which ports EchoCombat `c14c3e0a`
+ * Origin. The reference build's `runtime/native/afkxr/afk_dronekill.cpp` (kotorvr's echoquest-combat), which ports EchoCombat `c14c3e0a`
  * `plugin/dronefix.cpp`: LockedOn df 805-827, ChaseTarget df 1059-1095 (no target df 1069-1076, the chase table df 1093).
  *
  * Lines (sentinel log):
  *   hook     {"event":"combat_dronekill_hook","hook":"<name>","status":"<GotStatus>"}  Info when installed, Error otherwise
  *   install  {"event":"combat_dronekill_install","result":"installed|refused|off","reason":"..",..}  one per step
  *   scope    {"event":"combat_dronekill_scope","in_combat":0|1,"level":"0x..",..}  one per change of scope
+ *   stats    {"event":"combat_dronekill_stats","enter_drone":n,..,"expired":n,"final":0|1}  Debug every kStatsEvery drone Enters, Info at the process end
+ *   expired  {"event":"combat_dronekill_expired","index":n,"group":n,"tid":n,..}  Info per drone end that found a live group, the first 16 of a run
+ *   log_cap  {"event":"combat_dronekill_log_cap","lines":"expired","cap":16,..}  Warning, once, at the drone end past the cap
  * and the acting lines (`combat_dronekill_component`, `_release`, `_off`, `_k`, `_touch`, `_gun`, `_chase`, `_note`), each capped per kind with a
  * `combat_dronekill_cap` line when the cap is reached.
  *
@@ -122,11 +126,16 @@ void OnKilled(std::uint32_t index) noexcept;
 const float* ShotVelocity(int* remote) noexcept;
 bool ShotActive() noexcept;  // the FireBulletLocal hook is installed (the accessor can be non-null)
 
+// combat_dronekill_stats (#2359): Debug every kStatsEvery drone Enters, Info once at the process end (NoteEnd). Its fields are these counters.
+inline constexpr unsigned kStatsEvery = 16384;  // a Debug stats line every this many drone Enters (a power of two)
 struct Stats {
   std::uint32_t enter_drone, enter_other, fires, attacks, ticks, due_runs;
   std::uint32_t capturing;  // drone Enters in flight now (0 between calls)
+  std::uint32_t expired;    // drone ends the D11 rule saw: a drone's damageable went off and found its group
 };
 Stats CurrentStats() noexcept;
+// The process end (combat_install's table step): the final stats record, when the module is installed.
+void NoteEnd() noexcept;
 
 // ---- test seams ----
 // The check ResolveFns makes once the names are looked up: addrs[i] must be base + the pinned vaddr of function i (order: find, l2w, primary,

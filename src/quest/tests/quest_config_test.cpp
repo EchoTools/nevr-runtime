@@ -1301,7 +1301,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"decals", &nevr_quest::CombatConfig::decals, true},
                       {"decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU, false},
                       {"decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV, false},
-                      // The static BVH and the wall-fire check (#2182): all four are on by default, as q15t-upstream has them.
+                      // The static BVH and the wall-fire check (#2182): all four are on by default, as echoquest-combat has them.
                       {"bvh", &nevr_quest::CombatConfig::bvh, true},
                       {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
                       {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
