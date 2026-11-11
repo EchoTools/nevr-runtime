@@ -292,7 +292,7 @@ template <class CompX = None, class GroupX = None> struct Groups {
 // ---- the drone's explosion (EC's DeathFx queue; PC dronefix.cpp QueueDeathFx / DeathFxDue / ExpiredDamageable, the Quest's dronekill.cpp)
 // A dead drone's explosion runs at the next per-frame update, outside any script node. An expiry (the drone's own end) holds the first
 // system its script turns off (kNcaPhysics) back, and turns it off kFxSoundHoldMs after the explosion was spawned; a shot-down drone's
-// explosion holds nothing.
+// explosion holds nothing. (On the Quest the hold is a switch of its own, off by default: quest/combat/dronekill.h "The hold".)
 constexpr int kFxSlots = 8;                  // explosions queued at once (EC's g_fx[8])
 constexpr int kFxHeld = 8;                   // held components per explosion (EC's DeathFx::sound[8])
 constexpr uint64_t kFxSoundHoldMs = 2500;    // the explosion's sound, then the held components off (EC's FX_SOUND_HOLD_MS)
@@ -346,12 +346,15 @@ template <class Ctx, class Held> struct FxQueue {
 };
 
 // The expiry: the first-system off opens it; the damageable's off closes it. Then a drone that was alive, with an explosion context, has
-// its explosion queued with the held components; any other (already dead: shot down, its explosion then; or no context) has them off
-// now. An expiry no damageable off closed within kFxSoundHoldMs of its opening lets them go (off) all the same: nothing stays held.
+// its explosion queued with the held components (none, when nothing was held); any other (already dead: shot down, its explosion then;
+// or no context) has them off now. Both builds call OnDamageableOff.
 enum class ExpiryAction { kQueue, kOffNow };
 inline ExpiryAction OnDamageableOff(bool alive, bool open, bool haveCtx) {
     return alive && open && haveCtx ? ExpiryAction::kQueue : ExpiryAction::kOffNow;
 }
+// The Quest's let-go (quest/combat/dronekill.cpp FxTick): a hold no damageable off closed within kFxSoundHoldMs of its opening is let go
+// (turned off) then. PC does not call it: its hold lives in the one script call on one thread (dronefix.cpp t_expiry), from the
+// first-system off to that thread's damageable off, and a next first-system off on that thread lets an unfinished one go.
 inline bool ExpiryLetGo(bool open, uint64_t opened, uint64_t now) { return open && now - opened >= kFxSoundHoldMs; }
 
 }  // namespace nevr_dronekill

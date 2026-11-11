@@ -11,18 +11,30 @@
  * the read shapes of dronekill_core.h match), CTransformCS::ComputeLocalToWorldTransfQ, CPhysicsCS::PrimaryBody / SetWorldVelocity,
  * CPhTarget::ResolveBody, CR15NetPhysicsCS::IsLocallyControlled. Game memory is read through combat/safe_read.h.
  *
- * The explosion (#1737, docs/quest/combat/drone_explosion.md; `explosion`, the key `combat.dronekill_explosion`). A dead drone explodes on this
- * client: a 'K' queues its explosion; its own end (the script turns kNcaPhysics off, then its damageable) queues it too, and the first of those
- * offs is held back and turned off kFxSoundHoldMs after the explosion. The explosion runs at the tick (the game thread, outside any script node):
- * the drone library's two entries, whose addresses its prelude stores on the EC page (ec_core.h kDroneSpawn, kDroneSoundFn), each checked
- * to be that library's entry at its built offset, are called with the context kept at the drone's release, its state word at +0x18 zeroed
- * round each and put back after both (PC dronefix.cpp SpawnDeathFx). The hold skips the real Enter of that one off node. That Enter, for a
- * disable, turns the resolved component off (vtable +0x210) now or through its game space's deferred queue (owner +0x368): a ReVault read of
- * CEnableComponentNode::Enter (ELF 0x273b700, VA 0x283b700); the proven reconstruction does not hold that function yet, so that Enter has no
- * other effect is pending its reconstruction, which is requested. So the hold is made only when the component is resolved: exactly one
- * drone group is live (Enter has not looked its actor up yet, so the group cannot be told otherwise) and that group's actor has the
- * component; otherwise the real Enter runs at once, which is the game's own behaviour. The held component goes off through the same
- * stage-1 path as a kill's (OffOne), and never stays held: with no damageable off within kFxSoundHoldMs of the hold it goes off then.
+ * The explosion (#1737, docs/quest/combat/drone_explosion.md; `explosion`, the key `combat.dronekill_explosion`, default true). A dead drone
+ * explodes on this client: a 'K' queues its explosion; its own end (the script turns kNcaPhysics off, then its damageable) queues it too. The
+ * explosion runs at the tick (the game thread, outside any script node): the drone library's two entries, whose addresses its prelude stores
+ * on the EC page (ec_core.h kDroneSpawn, kDroneSoundFn), each checked to be that library's entry at its built offset, are called with the
+ * context kept at the drone's release, its state word at +0x18 zeroed round each and put back after both (PC dronefix.cpp SpawnDeathFx).
+ * With the hold off, the first-system off is the game's own Enter, run untouched; once it has run, its actor names the drone's group (the
+ * one live group of that actor whose end is not seen), whose expiry is then open, and that drone's damageable off, while the group is alive
+ * and a context was kept, queues the explosion with nothing held (sound_delay_ms 0). This is PC's order (dronefix.cpp Hooked_EnableEnter
+ * runs Real_EnableEnter for that node too) without PC's deferred disable.
+ *
+ * The hold (`hold`, the key `combat.dronekill_hold`, default FALSE; it acts only with the explosion on). It skips the real Enter of the
+ * first-system off and turns the same component off kFxSoundHoldMs after the explosion. That is safe only if CEnableComponentNode::Enter,
+ * for a disable, has no effect but the component's disable (vtable +0x210, now or through its game space's deferred queue, owner +0x368).
+ * That is NOT established: a ReVault read of Enter (ELF 0x273b700, VA 0x283b700) suggests it, the proven reconstruction does not hold
+ * that function, and its reconstruction is requested (the reconstruct pipeline's NEEDED list). The hold stays off until that reconstruction
+ * shows the one effect; turning it on by default is one constant (quest_config.h `dronekillHold`). With it on, a hold is taken only when
+ * exactly one drone group can still run its end (Enter has not looked its actor up yet; a shot-down drone's end still runs within
+ * kSwallowMs, so it counts), that group is alive, its actor has the component, the system's DisableComponent is the read shape and its game
+ * space's invoke-immediate word reads; otherwise the real Enter runs at once (the game's behaviour, then the expiry opens by actor as above).
+ * A held component goes off through the same stage-1 path as a kill's (OffOne): kFxSoundHoldMs after the explosion, at once when the drone
+ * was already dead, had no context or the queue was full, or kFxSoundHoldMs after the hold when no damageable off came. When OffOne cannot
+ * turn it off (the component was looked up again and differs, the game space defers the disable for kDueMs, or the off list is full) the
+ * component STAYS ON and nothing turns it off: one Warning `combat_dronekill_hold` step `stays_on` says so. When the combat map ends with
+ * holds open, one Info line (step `dropped`, `count`) says they went with the level.
  *
  * The kill feed. The EC client hands each first-time 'K' datagram (a drone's health ran out on the server) to OnKilled: the install registers it
  * with ec::OnDroneKilled (ec.h). Without an EC server no 'K' arrives and `kill` never fires; lock-on, gun, chase and shot do not need it.
@@ -58,8 +70,9 @@
  *                      Info per explosion run, the first 64 of a run (then one log_cap line; the stats line keeps counting)
  *   explosion_skipped  {"event":"combat_dronekill_explosion_skipped","index":n,"reason":"queue_full|no_entry|foreign_entry|no_context",..}
  *                      Warning per explosion not run, the first 16
- *   hold               {"event":"combat_dronekill_hold","index":n,"group":n,"step":"held|released|let_go|not_held|lost",..}  Debug, the first 64
- *                      (lost: Warning, a held component whose game space never let it go off within kDueMs)
+ *   hold               {"event":"combat_dronekill_hold","index":n,"group":n,"step":"held|released|off_next_tick|let_go|not_held|end_open|end_not_open|stays_on|dropped",..}
+ *                      Debug, the first 64; stays_on: Warning, the first 16 (a held component that could not be turned off stays on);
+ *                      dropped: Info, the held components a combat map's end took with it
  * and the acting lines (`combat_dronekill_component`, `_release`, `_off`, `_k`, `_touch`, `_gun`, `_chase`, `_note`), each capped per kind with a
  * `combat_dronekill_cap` line when the cap is reached.
  *
@@ -78,7 +91,8 @@ namespace nevr_quest::combat::dronekill {
 // The five rules (the reference build's TEST words; all on, as its QA file).
 struct Words {
   bool kill = true, lockon = true, gun = true, chase = true, shot = true;
-  bool explosion = true;  // `combat.dronekill_explosion` (#1737): a dead drone's explosion, and its first-system off held for it
+  bool explosion = true;  // `combat.dronekill_explosion` (#1737): a dead drone's explosion ('K' and expiry)
+  bool hold = false;      // `combat.dronekill_hold` (#1737): its first-system off held back for it; off until Enter's one effect is established
 };
 
 struct DkC3 {  // C3Vector: an HFA, passed in s0-s2

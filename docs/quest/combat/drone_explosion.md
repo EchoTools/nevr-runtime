@@ -1,8 +1,9 @@
 # The drone explosion
 
-A combat drone that dies explodes on this client: one shot down (the EC server's 'K') at once, one that runs out (its own end) with the first
-system its script turns off held back until 2.5 s after the explosion. The Quest's half is `src/quest/combat/dronekill.cpp` (the switch
-`combat.dronekill_explosion`); PC's is `src/runtime/combat/dronefix.cpp`; the queue, its timing and the expiry rule are one definition both
+A combat drone that dies explodes on this client: one shot down (the EC server's 'K') at once, one that runs out (its own end) when its
+damageable goes off. On PC the first system its script turns off is held back until 2.5 s after the explosion; on the Quest that hold is a
+switch of its own, `combat.dronekill_hold`, off by default (below, "The hold"). The Quest's half is `src/quest/combat/dronekill.cpp` (the
+switches `combat.dronekill_explosion` and `combat.dronekill_hold`); PC's is `src/runtime/combat/dronefix.cpp`; the queue, its timing and the expiry rule are one definition both
 compile, `src/runtime/patch/dronekill_rules.h` (`FxQueue`, `kFxSlots`, `kFxSoundHoldMs`, `OnDamageableOff`, `ExpiryLetGo`, `kNcaPhysics`).
 
 The explosion reads four words of the EC page's drone block (`re33_ec_page`, page+0xd60): a counter, the context of the last drone node, and
@@ -69,42 +70,55 @@ counter at +0x18 has no PC constant.
   `ncaPhysics`; the role in the drone's graph is open.
 - What `CEnableComponentNode::Enter` (ELF 0x273b700, VA 0x283b700) does for a disable besides turning the resolved component off (vtable
   +0x210, at once or through the game space's deferred queue when the owner's +0x368 is 0). That read is ReVault's; the proven
-  reconstruction does not hold the function, and its reconstruction is requested. The hold skips that Enter for one node, so that Enter's
-  single effect is pending that reconstruction; until it lands, the hold is made only when the component resolves, and every other case runs
-  the real Enter at once.
+  reconstruction does not hold the function, and its reconstruction is requested. The hold skips that whole Enter for one node (PC runs
+  the real Enter and defers only the disable), so the hold is safe only if that disable is Enter's one effect. Until the reconstruction shows
+  it, `combat.dronekill_hold` is off by default.
 - That the context the page holds at a drone's release (kept with its group) is still that drone's context when it explodes, with two drones
   out. The hold line's `ctx_match` says, per hold, whether the page's context at the first-system off equals the one kept at the release.
 - What becomes of a shot-down drone's explosion entries on a server (Quest is a client: no server branch).
 
 ## The Quest module
 
-### Switch and default
+### Switches and defaults
 
-`combat.dronekill_explosion`, a boolean, default true (the reference build ships `dronefx.on`). It acts only with `combat.dronekill` on: the
-explosion rides on dronekill's Enter hook, its group table, its kill feed and its tick (`dronekill::Words::explosion`). False: the
-first-system off runs the game's Enter, no explosion is queued, and the install line says `explosion=0`.
+- `combat.dronekill_explosion`, a boolean, default true (the reference build ships `dronefx.on`): a dead drone's explosion, on a 'K' and at
+  its end. It acts only with `combat.dronekill` on: the explosion rides on dronekill's Enter hook, its group table, its kill feed and its tick
+  (`dronekill::Words::explosion`). False: no explosion is queued, and the install line says `explosion=0`.
+- `combat.dronekill_hold`, a boolean, default **false**: the first-system off is held back and done 2.5 s after the explosion
+  (`dronekill::Words::hold`). It acts only with the explosion on. It stays off until the reconstruction of `CEnableComponentNode::Enter`
+  shows that the disable is that Enter's one effect ("Not established"); turning it on by default is one constant, the default of
+  `CombatConfig::dronekillHold` in `src/quest/sentinel/quest_config.h`. The install line says `hold=0|1`.
 
 ### What it hooks
 
-Nothing new. dronekill's `CEnableComponentNode::Enter` handler (in a combat map only) does three more things:
+Nothing new. dronekill's `CEnableComponentNode::Enter` handler (in a combat map only) does these more things:
 
 | Event | Action |
 |---|---|
 | the damageable's ON (a release) | keep the page's `kDroneCtx` word with the drone's group (0 = none) |
-| the first-system off (`kNcaPhysics`, enable 0), exactly one live group, its component resolved under that group's actor and game space | the real Enter is not run; the component is held |
-| the same, no live group, two or more, or the component not resolved | the real Enter runs at once (the game's behaviour); a `not_held` line |
-| the damageable's off, the group was alive, a hold open, a context kept | the explosion is queued with the held component (off 2500 ms after the explosion) |
-| the damageable's off, the group already dead (shot down) | the held component goes off at the next tick, no explosion |
-| a hold no damageable off closed within 2500 ms | the held component goes off (nothing stays held) |
-| a release that takes over the slot of a group with an open hold | that held component goes off at the next tick |
+| the first-system off (`kNcaPhysics`, enable 0), the hold off | the real Enter runs, untouched; then its actor names the drone's group (the one live group of that actor whose end is not seen), whose expiry opens with nothing held (`end_open`; none or two such groups: `end_not_open`) |
+| the same, the hold on, exactly one group can still run its end (one whose damageable off is not seen: alive, or dead and released no more than 25 s ago), it is alive, its component resolves under its actor and game space, the system's DisableComponent is the read shape and its game space's invoke-immediate word reads | the real Enter is not run; the component is held |
+| the same, the hold on, any of that not so (no such group, two or more, the one dead, the component not resolved, the shape or the word not readable) | the real Enter runs at once (the game's behaviour); a `not_held` line; then the expiry opens by actor as with the hold off |
+| the damageable's off, the group was alive, its expiry open, a context kept | the explosion is queued; with a held component, that goes off 2500 ms after the explosion (`sound_delay_ms` 2500), else nothing is held (`sound_delay_ms` 0) |
+| the damageable's off, the group already dead (shot down) | a held component goes off at the next tick, no explosion |
+| the damageable's off, no first-system off seen for the group | nothing: the game's own end, no explosion (as on PC, where the expiry opens at that off) |
+| a hold no damageable off closed within 2500 ms | the held component goes off |
+| a release that takes over the slot of a group with an open hold, or a drone node in another game space that clears the table | that held component goes off at the next tick (at once, from the handler, when the off list is full) |
 | a 'K' for a live group (kill word on) | the explosion is queued, holding nothing; an open hold goes off at the next tick |
 | a second 'K' for the same drone | nothing (the shared kill rule finds no live group) |
-| the queue full (8) | the held component goes off at the next tick; Warning `queue_full` |
+| the queue full (8) | a held component goes off at the next tick; Warning `queue_full` |
+| the combat map ends with holds open, queued or waiting to go off | they are dropped with its game space; one Info `combat_dronekill_hold` line, step `dropped`, with the `count` |
 
 The explosion runs at dronekill's tick (the game thread, outside any script node): both entry words are read from the page and each must be
 the drone library's entry (above), the kept context must be readable, its state word at +0x18 is saved, zeroed before each entry and put back
 after both. A held component goes off through dronekill's stage-1 path (`OffOne`), retried while its game space defers the disable (owner
-+0x368 = 0), at most 2 s (`kDueMs`), then a Warning `lost`.
++0x368 = 0), at most 2 s (`kDueMs`).
+
+**A held component can stay on.** When `OffOne` cannot turn it off (the component looked up again is not the one held, the game space defers
+the disable for 2 s, or the off list is full and the game space defers), the component stays on and nothing turns it off: the game's own
+Enter for it did not run. One Warning `combat_dronekill_hold` line, step `stays_on`, names the cause in `why`. A hold is taken only when the
+checks that make `OffOne` succeed pass at the time of the hold, so this is the case where the game's state changed between the hold and its
+off.
 
 ### Log lines
 
@@ -112,9 +126,11 @@ after both. A held component goes off through dronekill's stage-1 path (`OffOne`
   64 of a run, then one `combat_dronekill_log_cap` line; the stats record's `explosions` keeps counting.
 - `combat_dronekill_explosion_skipped` (Warning): `index`, `group`, `reason` (`queue_full|no_entry|foreign_entry|no_context`), `entry` (the word
   refused, or 0), `msg`; the first 16.
-- `combat_dronekill_hold` (Debug; `lost` and a release that could not go off are Warning): `index`, `group`, `step`
-  (`held|released|let_go|not_held|lost`), `why`, `ctx_match` (1, 0, or -1 when not measured), `msg`; the first 64.
-- `combat_dronekill_stats` gains `explosions` and `held`; `combat_dronekill_install` gains `explosion`.
+- `combat_dronekill_hold`: `index`, `group`, `step`, `why`, `ctx_match` (1, 0, or -1 when not measured), `msg`. Steps `held`, `released` (it
+  went off), `off_next_tick` (handed to the tick's off list), `let_go`, `not_held` (`why`: `no_live_group`, `ambiguous`, `dead_group`, `already_held`, `no_system`, `no_shape`, `no_disable_shape`,
+  `owner_unreadable`, `no_component`, `group_changed`), `end_open` and `end_not_open` are Debug, the first 64; `stays_on` is Warning, the
+  first 16 (its own budget); `dropped` is Info, with `count`, once per combat map that ends with held components.
+- `combat_dronekill_stats` gains `explosions` and `held`; `combat_dronekill_install` gains `explosion` and `hold`.
 
 ### Arena cost
 
@@ -123,19 +139,24 @@ None added. The Enter handler's out-of-scope path is unchanged (one relaxed load
 
 ### Tests
 
-`src/quest/tests/dronekill_test.cpp` (`TestExplosion`) drives the real handler through the real thunk, the fake entries and a fake `dladdr`
+`src/quest/tests/dronekill_test.cpp` (`TestExplosion`, `TestExplosionHoldOff`, `TestExplosionDeadEndsWhileAnotherLive`,
+`TestExplosionHoldNeedsOff`) drives the real handler through the real thunk, the fake entries and a fake `dladdr`
 answer; `src/runtime/tests/test_dronekill_rules.cpp` (`Fx*`, `Expiry*`) pins the shared queue and expiry rule with the same vectors;
-`src/quest/combat/mutants.d/dronekill_g.sh` holds the module's mutants.
+`src/quest/combat/mutants.d/dronekill_g.sh` and `dronekill_h.sh` hold the module's mutants.
 
 ### Headset row
 
-Quest 3, the combat APK, against an EchoCombat server: shoot a drone down (its explosion and sound at once, `reason=killed`); let one run out
-(its explosion, then whatever the held component controls goes off 2.5 s later: record whether that is the drone's sound or its physics, and
-the hold line's `ctx_match`). Two drones out at once: each explodes at its own position (with two live drones no hold is made: a
-`not_held why=ambiguous` line, and the run-out drone explodes only through a 'K').
+Quest 3, the combat APK, against an EchoCombat server, with the default (hold off): shoot a drone down (its explosion and sound at once,
+`reason=killed`); let one run out (its explosion, `reason=expired sound_delay_ms=0`, after an `end_open` line). Two drones out at once: each
+explodes at its own position. With `combat.dronekill_hold: true` (only after the reconstruction of `CEnableComponentNode::Enter`): let one
+run out alone (its explosion, then whatever the held component controls goes off 2.5 s later: record whether that is the drone's sound or
+its physics, and the hold line's `ctx_match`).
 
 ### Platform
 
 PC: present, `src/runtime/combat/dronefix.cpp` (`QueueDeathFx`, `DeathFxDue`, `ExpiredDamageable`), which runs the same `FxQueue` and expiry
-rule from `src/runtime/patch/dronekill_rules.h`. PC holds the first-system off by its own disable hook, per thread, and picks the drone by the
-node's context; the Quest has no disable hook, so it holds the Enter and picks the drone by the only live group.
+rule from `src/runtime/patch/dronekill_rules.h`. PC runs the real Enter of the first-system off and holds only its disable, by its own disable
+hook, per thread, and picks the drone by the node's context. The Quest has no disable hook: with the hold off it runs the real Enter and
+opens the expiry by the Enter's actor (the explosion without the delay); with the hold on it skips the Enter and picks the drone by the only
+group that can still end. PC lets a hold go only at that thread's next first-system off; the Quest also lets it go 2500 ms after the hold
+(`ExpiryLetGo`, which only the Quest calls).

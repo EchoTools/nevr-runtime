@@ -1392,9 +1392,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"ecfx", &nevr_quest::CombatConfig::ecfx, true},
                       // The drone modules (#2187): on unless the file says false.
                       {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
+                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
                       // The drone explosion (#1737): on unless the file says false (the reference build ships dronefx.on).
                       {"dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion, true},
-                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
+                      // Its hold (#1737): off unless the file says true (CEnableComponentNode::Enter's one effect is not established).
+                      {"dronekill_hold", &nevr_quest::CombatConfig::dronekillHold, false},
                       // The bullet-velocity guard (#1737 row 031): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
                       {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},
                       // The frozen-frame exit (#2377): on unless the file says false (upstream's hangwd is on by default too; D8 (a), the combat APK only).

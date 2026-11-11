@@ -176,7 +176,7 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
 ## Lines (sentinel log)
 
 - `combat_dronekill_hook` `{"hook":"<name>","status":"installed|<GotStatus>"}`: Info when installed, Error otherwise. Plus the manager's own `got_hook` line.
-- `combat_dronekill_install`: `"result":"installed"` with the five words, `explosion` (`combat.dronekill_explosion`), `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
+- `combat_dronekill_install`: `"result":"installed"` with the five words, `explosion` (`combat.dronekill_explosion`), `hold` (`combat.dronekill_hold`), `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
   `component_lookups`; `"result":"off"` (`off_config`); `"result":"refused"` with `reason` (the status token), `why` and the consequence (Error).
 - `combat_dronekill_link`: the kill feed is registered with ec. `combat_dronekill_tick_first`: the frame tick runs.
 - `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change.

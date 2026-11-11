@@ -162,9 +162,11 @@ inline MaskAt MaskOffsets(const uint32_t* en) { return MaskAt{ Imm12(en[3]) * 8,
 struct QComp { uint64_t sysSym = 0, compSym = 0, space = 0, owner = 0; };
 using Comp = ::nevr_dronekill::Comp<QComp>;
 // The explosion (#1737, docs/quest/combat/drone_explosion.md): ctx = the EC page's kDroneCtx word read at the group's release (0 = none);
-// holdOpen = the drone's first-system off (kNcaPhysics) was held back at holdAt, and `held` is that component, turned off later.
+// holdOpen = the drone's first-system off (kNcaPhysics) was held back at holdAt, and `held` is that component, turned off later;
+// endOpen = that off ran (the game's Enter, not held) and named this group's actor: its expiry is open with nothing held;
+// ended = the group's damageable off was seen (its end script ran), so its first-system off is behind it.
 struct QGroup { int number = 0, overflow = 0; uint32_t due = 0; uint64_t dueMs = 0;
-                uint64_t ctx = 0; bool holdOpen = false; uint64_t holdAt = 0; Comp held{}; };
+                uint64_t ctx = 0; bool holdOpen = false, endOpen = false, ended = false; uint64_t holdAt = 0; Comp held{}; };
 using Group = ::nevr_dronekill::Group<QComp, QGroup>;
 // group 0 = none (the component went to the pending list); again = R3: a dead group's component, due again
 struct Joined { int group; int pendingJoined; bool pending; bool again; };
@@ -278,13 +280,33 @@ struct Table {
     }
 
     // The explosion's hold (#1737). The first-system off arrives before Enter has looked its actor up, so the group it belongs to is
-    // known only when exactly one group is live: that group, else null (*live = the live groups counted).
-    Group* SoleLive(int* live) {
+    // known only when exactly one group can still run its end script: a group whose damageable off has not been seen, alive, or dead
+    // (a 'K') and released no more than kSwallowMs ago (a shot-down drone's script still runs its end within the swallow window, while
+    // its components are held off). That group when it is alive, else null (*candidates = the groups counted; *dead = the one found is
+    // dead, so the off is its own and not a live drone's).
+    Group* SoleCandidate(uint64_t nowMs, int* candidates, bool* dead) {
         Group* one = nullptr;
         int n = 0;
-        for (auto& g : t.g) if (g.used && !g.dead) { ++n; one = &g; }
-        *live = n;
-        return n == 1 ? one : nullptr;
+        for (auto& g : t.g) {
+            if (!g.used || g.x.ended || (g.dead && nowMs - g.opened > kSwallowMs)) continue;
+            ++n;
+            one = &g;
+        }
+        *candidates = n;
+        *dead = n == 1 && one->dead;
+        return n == 1 && !one->dead ? one : nullptr;
+    }
+    // The first-system off ran (the game's Enter, not held) under `actor`: the one live group of that actor whose end is not seen opens
+    // its expiry with nothing held. The group's number, 0 when no such group or more than one.
+    int OpenEnd(uint64_t actor) {
+        if (!actor) return 0;
+        Group* one = nullptr;
+        int n = 0;
+        for (auto& g : t.g)
+            if (g.used && !g.dead && !g.x.ended && g.actor == actor) { ++n; one = &g; }
+        if (n != 1) return 0;
+        if (!one->x.holdOpen) one->x.endOpen = true;
+        return one->x.number;
     }
     bool AnyHold() const {
         for (const auto& g : t.g) if (g.used && g.x.holdOpen) return true;

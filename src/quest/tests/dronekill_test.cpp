@@ -2589,6 +2589,11 @@ static int NcaOffs() {
   for (const DisCall& d : g_dis) n += d.sys == g_snd && d.handle == kNcaHandle && !d.enable ? 1 : 0;
   return n;
 }
+static Words Held() {  // the hold on (`combat.dronekill_hold`, off by default)
+  Words w;
+  w.hold = true;
+  return w;
+}
 static Words NoExplosion() {
   Words w;
   w.explosion = false;
@@ -2598,7 +2603,7 @@ static Words NoExplosion() {
 static void TestExplosion() {
   CHECK(dk::kNcaPhysics == kSound, "the world's sound system is not kNcaPhysics");
   {  // KQueuesOneExplosion, CtxStateSavedZeroedRestored, SecondKQueuesNothing
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     OnKilled(0xabcd0011u);
@@ -2618,7 +2623,7 @@ static void TestExplosion() {
     Dump("explosion: K");
   }
   {  // ExpiryAliveFiresExplosionThenHeldOffAt2500
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     ND on = Drone(kSound, kSound, 1);
@@ -2644,7 +2649,7 @@ static void TestExplosion() {
     Dump("explosion: expiry");
   }
   {  // ExpiryDeadReleasesHeldNow: with the kill word off a 'K' marks the group dead and queues nothing; its end then has the held off now
-    Words w;
+    Words w = Held();
     w.kill = false;
     CHECK(Reset(w).ok, "install");
     ArmExplosion();
@@ -2658,7 +2663,7 @@ static void TestExplosion() {
     CHECK(HasLine("why=dead"), "the released line names the dead drone");
   }
   {  // a 'K' on a drone whose first-system off is held: the explosion with nothing held, the held component off at the tick
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     CHECK(!FirstOff(), "not held");
@@ -2668,7 +2673,7 @@ static void TestExplosion() {
     CHECK(NcaOffs() == 1 && HasLine("why=killed"), "the held component did not go off at the kill's tick");
   }
   {  // HoldLetGoWithoutDamageableAt2500
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     const uint64_t t0 = g_ms;
@@ -2684,7 +2689,7 @@ static void TestExplosion() {
     CHECK(g_entry_calls.empty(), "an end after the let-go exploded (the expiry was closed)");
   }
   {  // UnresolvableRunsRealEnter: no live group, two live groups, no such component
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     CHECK(FirstOff() && g_enters.size() == 1, "with no live drone the real Enter was not run once");
     CHECK(HasLine("step=not_held") && HasLine("why=no_live_group"), "the not_held line (no live group)");
@@ -2696,21 +2701,27 @@ static void TestExplosion() {
     CHECK(CurrentStats().held == 0, "held with two live drones");
   }
   {
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     g_comps[1].sym = 0x1234;  // the drone's ncaPhysics component is not there
     CHECK(FirstOff(), "an unresolved component did not run the real Enter");
     CHECK(HasLine("why=no_component"), "the not_held line (no component)");
+    CHECK(HasLine("step=end_open"), "the real Enter ran and its actor did not open the drone's expiry");
     EndOf();
     Tick(GameAddress());
-    CHECK(g_entry_calls.empty(), "an end with no hold exploded");
+    CHECK(g_entry_calls.size() == 2 && HasLine("reason=expired") && HasLine("sound_delay_ms=0") && NcaOffs() == 0,
+          "a drone whose first-system off was not held did not explode at its end, with nothing held");
   }
   {  // the key off: the real Enter runs, nothing is queued
     CHECK(Reset(NoExplosion()).ok, "install");
     ArmExplosion();
     Release();
     CHECK(FirstOff(), "with the explosion off the first-system off was held");
+    CHECK(Reset([] { Words x = NoExplosion(); x.hold = true; return x; }()).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(FirstOff() && HasLine("hold=0"), "with the explosion off and the hold on the first-system off was held");
     OnKilled(0xabcd0011u);
     Tick(GameAddress());
     CHECK(g_entry_calls.empty() && !HasLine("combat_dronekill_hold"), "with the explosion off an explosion ran");
@@ -2718,7 +2729,7 @@ static void TestExplosion() {
   }
   {  // ForeignEntryRefused: another library, and 4 bytes past the entry's start; the held component still goes off on time
     for (int mode : {1, 2, 3}) {
-      CHECK(Reset(Words{}).ok, "install");
+      CHECK(Reset(Held()).ok, "install");
       ArmExplosion();
       g_entry_mode = mode;
       Release();
@@ -2734,7 +2745,7 @@ static void TestExplosion() {
     }
   }
   {  // NoEntry: the page holds no entry
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     SetPage(ecc::kDroneSpawn, 0);
     Release();
@@ -2743,14 +2754,14 @@ static void TestExplosion() {
     CHECK(g_entry_calls.empty() && HasLine("reason=no_entry"), "no_entry");
   }
   {  // NoContextSkipped: the page held no context at the release
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     SetPage(ecc::kDroneCtx, 0);
     Release();
     OnKilled(0xabcd0011u);
     Tick(GameAddress());
     CHECK(g_entry_calls.empty() && HasLine("reason=no_context"), "no_context at a kill");
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     SetPage(ecc::kDroneCtx, 0);
     Release();
@@ -2760,11 +2771,12 @@ static void TestExplosion() {
     CHECK(g_entry_calls.empty() && HasLine("reason=no_context") && NcaOffs() == 1, "no_context at an end: the held component off now");
   }
   {  // QueueFullReleasesNow: eight shot-down drones wait at once; a ninth that runs out has its held component off now
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     for (uint32_t i = 0; i < 8; ++i) {
       Release(0x00050011 + i);
       OnKilled(0x11 + i);
+      EndOf(0x00050011 + i);  // its end script ran (a shot-down drone that has not ended could still be the one a first-system off is for)
     }
     Release(0x00050020);
     CHECK(!FirstOff(), "the ninth drone's first-system off was not held");
@@ -2775,7 +2787,7 @@ static void TestExplosion() {
     CHECK(g_entry_calls.size() == 16, "the eight queued explosions: %zu entries", g_entry_calls.size());
   }
   {  // a game space that defers the disable (owner +0x368 = 0): the held component waits, goes off once it may, and is given up after 2 s
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     const uint64_t t0 = g_ms;
@@ -2788,7 +2800,7 @@ static void TestExplosion() {
     SetFlag(1);
     Tick(GameAddress());
     CHECK(NcaOffs() == 1, "the held component did not go off once its game space let it");
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     const uint64_t t1 = g_ms;
@@ -2798,17 +2810,18 @@ static void TestExplosion() {
     Tick(GameAddress());
     g_ms = t1 + 2500 + 1999;
     Tick(GameAddress());
-    CHECK(!HasLine("step=lost"), "given up before 2 s");
+    CHECK(!HasLine("step=stays_on"), "given up before 2 s");
     g_ms = t1 + 2500 + 2000;
     Tick(GameAddress());
-    CHECK(HasLine("step=lost") && NcaOffs() == 0, "a held component that never could go off was not given up at 2 s");
+    CHECK(HasLine("step=stays_on", 2) && HasLine("why=invoke_immediate_0") && NcaOffs() == 0,
+          "a held component that never could go off was not given up at 2 s with a Warning that it stays on");
     g_ms += 100;
     SetFlag(1);
     Tick(GameAddress());
     CHECK(NcaOffs() == 0, "a held component was tried again after it was given up");
   }
   {  // a release that reuses the slot of a group with an open hold: that hold's component goes off at the next tick
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     CHECK(!FirstOff(), "not held");
@@ -2817,7 +2830,7 @@ static void TestExplosion() {
     CHECK(NcaOffs() == 1, "a hold whose group a release took over stayed held");
   }
   {  // the level changes before the tick: the queued explosion goes with it (its context belongs to the unloaded level)
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     OnKilled(0xabcd0011u);
@@ -2833,11 +2846,195 @@ static void TestExplosion() {
     CHECK(g_entry_calls.empty(), "an explosion queued before the level changed ran after it");
   }
   {  // out of a combat map: the first-system off is the game's alone
-    CHECK(Reset(Words{}).ok, "install");
+    CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     SetScopeForTest(false);
     CHECK(FirstOff(), "out of scope the first-system off was held");
+  }
+}
+
+
+// ---- the hold is its own switch, off by default (#1737 review): with it off the first-system off is the game's own Enter, and the drone's
+// end still explodes once that off named its group by its actor
+static void TestExplosionHoldOff() {
+  {  // HoldOffExpiryExplodes
+    CHECK(Reset(Words{}).ok, "install");
+    CHECK(HasLine("explosion=1") && HasLine("hold=0"), "the install line does not say explosion=1 hold=0 by default");
+    ArmExplosion();
+    Release();
+    CHECK(FirstOff(), "with the hold off (the default) the first-system off did not run the real Enter");
+    CHECK(!HasLine("step=held") && CurrentStats().held == 0, "with the hold off a hold was taken");
+    CHECK(HasLine("step=end_open"), "the first-system off did not open the drone's expiry");
+    EndOf();
+    const uint64_t t0 = g_ms;
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2 && HasLine("reason=expired") && HasLine("sound_delay_ms=0"), "the expiry's explosion with nothing held");
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 0 && !HasLine("step=stays_on") && !HasLine("step=released"), "the module turned (or tried to turn) a component off with the hold off");
+  }
+  {  // no first-system off seen: the end is the game's own, no explosion (PC: the expiry is not open)
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release();
+    EndOf();
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "an end with no first-system off exploded");
+  }
+  {  // two drones out: the first-system off names its own drone by its actor
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    g_actor_val = 0xA1;
+    Release(kDmgHandle);
+    g_actor_val = 0xB2;
+    Release(0x00050012);
+    CHECK(FirstOff() && HasLine("group=2 step=end_open"), "the second drone's first-system off did not open its own expiry");
+    EndOf(kDmgHandle);  // (the fake Actor still answers 0xB2: the end is the damageable's, by handle)
+    Tick(GameAddress());
+    CHECK(g_entry_calls.empty(), "the other drone's end exploded");
+    EndOf(0x00050012);
+    Tick(GameAddress());
+    CHECK(g_entry_calls.size() == 2 && HasLine("reason=expired"), "the drone whose first-system off ran did not explode");
+    g_actor_val = 0;
+  }
+  {  // two live drones of one actor: the off cannot name one, so neither expiry opens
+    CHECK(Reset(Words{}).ok, "install");
+    ArmExplosion();
+    Release(kDmgHandle);
+    Release(0x00050012);
+    CHECK(FirstOff() && HasLine("step=end_not_open") && !HasLine("step=end_open"), "an off shared by two drones' actor opened an expiry");
+  }
+}
+
+// ---- a dead drone ends while another is live (#1737 review): the shot-down drone's end script still runs its first-system off, which is
+// not the live drone's, so no hold is taken (two groups can still run their end)
+static void TestExplosionDeadEndsWhileAnotherLive() {
+  CHECK(Reset(Held()).ok, "install");
+  ArmExplosion();
+  g_actor_val = 0xA1;
+  Release(kDmgHandle);
+  g_actor_val = 0xB2;
+  Release(0x00050012);
+  OnKilled(kDmgHandle & 0xffff);  // A shot down while B is out
+  Tick(GameAddress());
+  CHECK(g_entry_calls.size() == 2 && HasLine("reason=killed"), "A's kill did not explode");
+  g_actor_val = 0xA1;
+  g_lines.clear();
+  CHECK(FirstOff(), "A's own first-system off was held (as B's): A's real Enter was skipped");
+  CHECK(HasLine("step=not_held") && HasLine("why=ambiguous") && CurrentStats().held == 0, "the not_held line for a dead and a live drone");
+  EndOf(kDmgHandle);
+  const uint64_t t0 = g_ms;
+  g_ms = t0 + 2500;
+  Tick(GameAddress());
+  CHECK(NcaOffs() == 0, "B's component was turned off while B is alive");
+  // B's own end: A's end is seen, so B is the one drone that can still end, and its first-system off is held
+  g_actor_val = 0xB2;
+  CHECK(!FirstOff() && HasLine("step=held"), "B's own first-system off was not held after A's end");
+  EndOf(0x00050012);
+  Tick(GameAddress());
+  CHECK(g_entry_calls.size() == 4 && HasLine("sound_delay_ms=2500"), "B's expiry did not explode with its held component");
+  g_ms += 2500;
+  Tick(GameAddress());
+  CHECK(NcaOffs() == 1, "B's held component did not go off 2500 ms after its explosion");
+  g_actor_val = 0;
+  // a dead drone alone (its end not seen yet): not held, and not taken for a live one
+  CHECK(Reset(Held()).ok, "install");
+  ArmExplosion();
+  Release();
+  OnKilled(kDmgHandle & 0xffff);
+  CHECK(FirstOff() && HasLine("why=dead_group"), "a dead drone's first-system off was held");
+  // a dead drone released more than kSwallowMs ago no longer counts: its end ran or will not run
+  CHECK(Reset(Held()).ok, "install");
+  ArmExplosion();
+  g_actor_val = 0xA1;
+  Release(kDmgHandle);
+  OnKilled(kDmgHandle & 0xffff);
+  g_ms += dk::kSwallowMs + 1;
+  g_actor_val = 0xB2;
+  Release(0x00050012);
+  CHECK(!FirstOff() && HasLine("step=held"), "a dead drone released more than kSwallowMs ago kept a live one's first-system off from being held");
+  g_actor_val = 0;
+}
+
+// ---- a hold is taken only when it can be let go (#1737 review), and a held component that cannot be turned off says it stays on
+static void TestExplosionHoldNeedsOff() {
+  {  // the system's DisableComponent is not the read shape: no hold
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    g_dis_words[3] ^= 0x1;
+    Release();
+    CHECK(FirstOff() && HasLine("why=no_disable_shape"), "a hold was taken on a system whose DisableComponent is not the read shape");
+  }
+  {  // the system's game space (its owner word) is unreadable: no hold
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    W64(g_snd, dk::kSysOwner, 0);
+    Release();
+    CHECK(FirstOff() && HasLine("why=owner_unreadable"), "a hold was taken on a system whose invoke-immediate word cannot be read");
+  }
+  {  // the component changed after the hold: at 2500 ms after the explosion it cannot go off, a Warning says it stays on
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    g_comps[1].handle = 0x00060016;
+    EndOf();
+    const uint64_t t0 = g_ms;
+    Tick(GameAddress());
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(HasLine("step=stays_on", 2) && HasLine("why=handle changed") && !HasLine("step=released"),
+          "a held component that could not go off was not reported at Warning as staying on");
+  }
+  {  // the same at the let-go
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    Release();
+    const uint64_t t0 = g_ms;
+    CHECK(!FirstOff(), "not held");
+    g_comps[1].handle = 0x00060016;
+    g_ms = t0 + 2500;
+    Tick(GameAddress());
+    CHECK(HasLine("step=let_go") && HasLine("step=stays_on", 2), "a let-go that could not go off was not reported as staying on");
+  }
+  {  // the off list is full: a hold a release takes over, and a 'K' on a held drone, each try now and warn when it stays on
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    SetFlag(0);  // the game space defers every disable: nothing leaves the off list
+    for (int i = 0; i < 17; ++i) {
+      Release();
+      CHECK(!FirstOff(), "cycle %d: not held", i);
+    }
+    CHECK(CountLine("step=stays_on", 2) == 0, "a stays_on line while the off list had room");
+    Release();  // the 17th take-over: the list holds 16
+    CHECK(CountLine("step=stays_on", 2) == 1, "a hold a release took over with the off list full was dropped without a Warning (%d)",
+          CountLine("step=stays_on", 2));
+    CHECK(!FirstOff(), "not held");
+    OnKilled(kDmgHandle & 0xffff);
+    CHECK(CountLine("step=stays_on", 2) == 2, "a 'K' on a held drone with the off list full did not warn that it stays on (%d)",
+          CountLine("step=stays_on", 2));
+  }
+  {  // a drone Enter in another game space clears the table (D10): the open hold goes off at the next tick, not dropped
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    g_space_now = g_spacemem2;
+    ND on = Drone(kSound, kSound, 1);
+    CallEnter(&on);
+    Tick(GameAddress());
+    CHECK(NcaOffs() == 1, "a hold the table's clear took away stayed held");
+  }
+  {  // the combat map ends with a hold open: one line says it went with the level
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    Release();
+    CHECK(!FirstOff(), "not held");
+    LoadLevels({"mpl_arena_a"});
+    for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
+    CHECK(!InCombatScope(), "the arena level did not end the scope");
+    CHECK(HasLine("step=dropped", 1) && HasLine("count=1"), "the open hold was dropped with the level without a line");
   }
 }
 
@@ -2866,6 +3063,9 @@ int main() {
   TestFire();
   TestChase();
   TestExplosion();
+  TestExplosionHoldOff();
+  TestExplosionDeadEndsWhileAnotherLive();
+  TestExplosionHoldNeedsOff();
   TestArenaLevelsAreLeftAlone();
   TestScopeEndsAtTheLevelChange();
   TestProductionStep();

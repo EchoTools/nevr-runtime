@@ -241,6 +241,10 @@ struct CombatConfig {
   CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
   CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
   CombatSwitch dronekillExplosion{true, Source::kAbsent};  // `combat.dronekill_explosion`: a dead drone's explosion; needs dronekill (docs/quest/combat/drone_explosion.md)
+  // `combat.dronekill_hold`: the drone's first-system off held back for its explosion (combat/dronekill.h "The hold"). Default OFF until the
+  // reconstruction of CEnableComponentNode::Enter shows the disable is its one effect; turning it on by default is this one constant.
+  static constexpr bool kDronekillHoldDefault = false;
+  CombatSwitch dronekillHold{kDronekillHoldDefault, Source::kAbsent};
   CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
   CombatSwitch frozenFrameExit{true, Source::kAbsent};  // `combat.frozen_frame_exit`: a combat game whose frames stop in VR ends (combat/frozen_frame_exit.h)
   CombatInt frozenFrameExitS{30, Source::kAbsent};       // `combat.frozen_frame_exit_s`: its limit in seconds, 10..900, default 30

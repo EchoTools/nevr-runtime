@@ -1,6 +1,6 @@
 # a mutant that leaves a variable, a parameter or a function unused would not compile under -Werror (not a kill): those append $NOWARN
 NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n#pragma GCC diagnostic ignored "-Wunused-function"\n#pragma GCC diagnostic ignored "-Wunused-but-set-parameter"'
-# dronekill (part 2 of 7): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# dronekill (part 2 of 8): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
 # a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
 runm dk_lock_never src/quest/combat/dronekill.cpp "s/  if (g_lockon) TouchTick(now, tid);//;$NOWARN" quest-host-combat dronekill_test
 runm dk_touch_live src/quest/combat/dronekill.cpp "s/    const int k = live ? OffOne(r.c, \&why) : 1;/    const int k = OffOne(r.c, \&why);/" quest-host-combat dronekill_test

@@ -351,14 +351,14 @@ void ALongTableWritesEveryModuleRecordAndAWholePhaseLine() {
 }
 
 // The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps with impactsnd and its write-switch row
-// after the first and decals with its two flip-switch rows after the last, ec, ecfx, dronekill with its explosion switch row (#1737), dronemuzzle and powerboost, gunconnect, aibots and weapon_arm (#2185), the gates, bvh with
+// after the first and decals with its two flip-switch rows after the last, ec, ecfx, dronekill with its explosion and hold switch rows (#1737), dronemuzzle and powerboost, gunconnect, aibots and weapon_arm (#2185), the gates, bvh with
 // its two switch rows, wallfire, sendguard, pfx, pfxtev, sensorwd and music in the normal phase. Rows are found by name, so a module that moves in
 // adds its row without
 // renumbering this test; the order the plugin installed them in is checked between the named rows.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 50);
+  QCHECK(count == 51);
   const auto at = [&](const char* name) -> std::size_t {
     for (std::size_t i = 0; i < count; ++i) {
       if (std::strcmp(table[i].name, name) == 0) return i;
@@ -390,6 +390,13 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
     QCHECK(table[dkx].early == nullptr && table[dkx].normal == nullptr && table[dkx].end == nullptr && table[dkx].switchKey != nullptr &&
            std::strcmp(table[dkx].switchKey, "combat.dronekill_explosion") == 0 &&
            table[dkx].switchMember == &nevr_quest::CombatConfig::dronekillExplosion);
+  }
+  // its hold's switch (#1737, default off): a switch-only row right after the explosion's, which DronekillNormal reads
+  const std::size_t dkh = at("dronekill_hold");
+  QCHECK(dkh == dkx + 1 && dkh < bvg);
+  if (dkh < count) {
+    QCHECK(table[dkh].early == nullptr && table[dkh].normal == nullptr && table[dkh].end == nullptr && table[dkh].switchKey != nullptr &&
+           std::strcmp(table[dkh].switchKey, "combat.dronekill_hold") == 0 && table[dkh].switchMember == &nevr_quest::CombatConfig::dronekillHold);
   }
   // the sound-symbol guard (#1737): directly after the bullet-velocity guard's row, after the combat level answer's row it reads; a normal step with
   // its switch and its end
@@ -729,7 +736,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   // the texel-buffer guard's (#1650) first, its row being early
   const char* const order[] = {"texel_buffer_guard", "frozen_frame_exit", "meshstep",      "impactsnd",     "impactsnd_write", "tablestep", "instmodel", "shaderstep",
                                "decals",        "decals_flip_u", "decals_flip_v",   "ec",        "ecfx",      "dronekill",
-                               "dronekill_explosion", "bullet_velocity_guard", "sound_symbol_guard", "dronemuzzle",   "gunconnect",    "aibots",          "weapon_arm", "bvh",           "bvh_gate",        "bvh_touch", "wallfire",  "sendguard",
+                               "dronekill_explosion", "dronekill_hold", "bullet_velocity_guard", "sound_symbol_guard", "dronemuzzle",   "gunconnect",    "aibots",          "weapon_arm", "bvh",           "bvh_gate",        "bvh_touch", "wallfire",  "sendguard",
                                "fxtrail",       "voipdrop",      "custctx",         "droneguard", "droneguard_stage1", "peerclamp",
                                "hudmeter",      "shieldgamma_gamma", "shieldgamma_tube_mirror", "levelname", "sensorwd", "music"};
   constexpr std::size_t kSwitches = sizeof(order) / sizeof(order[0]);
@@ -741,8 +748,9 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   const char* const kOnConfig = "\"on\":1,\"source\":\"config\"";
   const auto want = [&](std::size_t call, std::size_t i) {
     const std::string name = order[i];
-    if (name == "decals_flip_u" || name == "decals_flip_v" || name == "droneguard_stage1" || name == "sound_symbol_guard")
-      return kOffDefault;  // the flips, droneguard's second stage and the sound-symbol guard are off by default
+    if (name == "decals_flip_u" || name == "decals_flip_v" || name == "droneguard_stage1" || name == "sound_symbol_guard" ||
+        name == "dronekill_hold")
+      return kOffDefault;  // the flips, droneguard's second stage, the sound-symbol guard and the drone explosion's hold are off by default
     if (name == "shieldgamma_gamma") return call == 1 ? kOnConfig : kOffDefault;  // the shield gamma is a test switch: off by default
     if (call == 1 && (name == "meshstep" || name == "tablestep" || name == "sendguard" || name == "hudmeter" || name == "levelname")) return kOffConfig;
     return kOnDefault;
