@@ -749,11 +749,11 @@ func TestARunIsRecordedInTheToolsLog(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("not a JSON line: %q", line)
 		}
-		seen = append(seen, rec["msg"].(string))
-		if rec["msg"] == "written" && (rec["sha256"] != r.rep.Sha256 || rec["levels"] != float64(1)) {
+		seen = append(seen, rec["event"].(string))
+		if rec["event"] == "written" && (rec["sha256"] != r.rep.Sha256 || rec["levels"] != float64(1)) {
 			t.Errorf("written record = %v", rec)
 		}
-		if rec["msg"] == "verified" && rec["frames_decoded"] != float64(1) {
+		if rec["event"] == "verified" && rec["frames_decoded"] != float64(1) {
 			t.Errorf("verified record = %v", rec)
 		}
 	}

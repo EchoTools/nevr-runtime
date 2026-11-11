@@ -8,7 +8,6 @@ tools/build_checkout.py	ported by its unit of #2132
 tools/build_distribution.py	ported by its unit of #2132
 tools/check_embedded_defaults.py	ported by its unit of #2132
 tools/check_fresh_test_programs.py	ported by its unit of #2132
-tools/check_known_wrong.py	ported by its unit of #2132
 tools/check_pr_issue_link.py	ported by its unit of #2132
 tools/check_pr_read_line.py	ported by its unit of #2132
 tools/check_pr_title.py	ported by its unit of #2132
@@ -65,8 +64,6 @@ tools/tests/quest_store_fixtures.py	ported by its unit of #2132
 tools/tests/real_repo_guard.py	ported by its unit of #2132
 tools/tests/test_abi_symbols.py	ported by its unit of #2132
 tools/tests/test_adr_numbers.py	ported by its unit of #2132
-tools/tests/test_agents_budget.py	ported by its unit of #2132
-tools/tests/test_agents_cleanup_chain.py	ported by its unit of #2132
 tools/tests/test_android_workflow.py	ported by its unit of #2132
 tools/tests/test_arena_round_time_wiring.py	ported by its unit of #2132
 tools/tests/test_asset_cache_tool.py	ported by its unit of #2132
@@ -98,7 +95,6 @@ tools/tests/test_compile_checks_use_cmake.py	ported by its unit of #2132
 tools/tests/test_config_yaml_source.py	ported by its unit of #2132
 tools/tests/test_console_output_cp_wiring.py	ported by its unit of #2132
 tools/tests/test_content_packs_doc.py	ported by its unit of #2132
-tools/tests/test_copy_credentials_guard.py	ported by its unit of #2132
 tools/tests/test_crash_reporter_suppression.py	ported by its unit of #2132
 tools/tests/test_crash_send_wiring.py	ported by its unit of #2132
 tools/tests/test_credits.py	ported by its unit of #2132
@@ -131,7 +127,6 @@ tools/tests/test_invite_answer_wiring.py	ported by its unit of #2132
 tools/tests/test_invite_choice_hook_wiring.py	ported by its unit of #2132
 tools/tests/test_invite_service_wiring.py	ported by its unit of #2132
 tools/tests/test_just_recipe.py	ported by its unit of #2132
-tools/tests/test_known_wrong.py	ported by its unit of #2132
 tools/tests/test_launch_client.py	ported by its unit of #2132
 tools/tests/test_loading_tips_wiring.py	ported by its unit of #2132
 tools/tests/test_loadout_entrant_wiring.py	ported by its unit of #2132
@@ -141,8 +136,6 @@ tools/tests/test_login_refusal_wiring.py	ported by its unit of #2132
 tools/tests/test_login_remote_pair_lifetime.py	ported by its unit of #2132
 tools/tests/test_minidmp_sender_exports.py	ported by its unit of #2132
 tools/tests/test_module_loader_surface.py	ported by its unit of #2132
-tools/tests/test_n_rules_index.py	ported by its unit of #2132
-tools/tests/test_naming.py	ported by its unit of #2132
 tools/tests/test_naming_inventory.py	ported by its unit of #2132
 tools/tests/test_netgun_bullets_wiring.py	ported by its unit of #2132
 tools/tests/test_nevr_root_wiring.py	ported by its unit of #2132
@@ -155,7 +148,6 @@ tools/tests/test_pc_frame_summary.py	ported by its unit of #2132
 tools/tests/test_pe_exports.py	ported by its unit of #2132
 tools/tests/test_pe_version_info.py	ported by its unit of #2132
 tools/tests/test_pinned_ovr_import_walk.py	ported by its unit of #2132
-tools/tests/test_platform_parity_rule.py	ported by its unit of #2132
 tools/tests/test_plugin_loader_storage.py	ported by its unit of #2132
 tools/tests/test_plugin_sdk_package.py	ported by its unit of #2132
 tools/tests/test_plugin_trust_run_mode.py	ported by its unit of #2132
@@ -223,11 +215,9 @@ tools/tests/test_release_already_built.py	ported by its unit of #2132
 tools/tests/test_release_assets.py	ported by its unit of #2132
 tools/tests/test_release_build_fixture.py	ported by its unit of #2132
 tools/tests/test_release_check.py	ported by its unit of #2132
-tools/tests/test_release_contract.py	ported by its unit of #2132
 tools/tests/test_release_draft.py	ported by its unit of #2132
 tools/tests/test_release_draft_path.py	ported by its unit of #2132
 tools/tests/test_release_headlines.py	ported by its unit of #2132
-tools/tests/test_release_preflight.py	ported by its unit of #2132
 tools/tests/test_release_quest_apk.py	ported by its unit of #2132
 tools/tests/test_release_train.py	ported by its unit of #2132
 tools/tests/test_release_version.py	ported by its unit of #2132
@@ -247,12 +237,13 @@ tools/tests/test_seed_build_tree.py	ported by its unit of #2132
 tools/tests/test_server_bots_wiring.py	ported by its unit of #2132
 tools/tests/test_server_bringup_wiring.py	ported by its unit of #2132
 tools/tests/test_server_flags_comment.py	ported by its unit of #2132
+tools/tests/test_server_frame_wait_wiring.py	source-wiring check of the server frame wait (#2109), written beside the Python wiring checks it follows; ported with them
 tools/tests/test_server_hold.py	ported by its unit of #2132
+tools/tests/test_server_idle_tick_wiring.py	source-wiring check of the server frame wait (#2109), written beside the Python wiring checks it follows; ported with them
 tools/tests/test_server_social_wiring.py	ported by its unit of #2132
 tools/tests/test_server_team_size_wiring.py	ported by its unit of #2132
 tools/tests/test_serverdb_route_wiring.py	ported by its unit of #2132
 tools/tests/test_session_router_pc_wiring.py	ported by its unit of #2132
-tools/tests/test_siblings_rule.py	ported by its unit of #2132
 tools/tests/test_signing_workflow.py	ported by its unit of #2132
 tools/tests/test_smoke_sync.py	ported by its unit of #2132
 tools/tests/test_social_test_plan_docs.py	ported by its unit of #2132
@@ -264,7 +255,6 @@ tools/tests/test_ui_text_wiring.py	ported by its unit of #2132
 tools/tests/test_url_diagnostic_log_invariants.py	ported by its unit of #2132
 tools/tests/test_vcpkg_pin.py	ported by its unit of #2132
 tools/tests/test_vcpkg_root.py	ported by its unit of #2132
-tools/tests/test_verify_agents_imports.py	ported by its unit of #2132
 tools/tests/test_verify_doc_paths.py	ported by its unit of #2132
 tools/tests/test_verify_gtest_floor.py	ported by its unit of #2132
 tools/tests/test_verify_header.py	ported by its unit of #2132
@@ -284,7 +274,6 @@ tools/tests/test_window_watch_wiring.py	ported by its unit of #2132
 tools/tests/test_winvm_checks.py	ported by its unit of #2132
 tools/tests/test_winvm_dispatch.py	ported by its unit of #2132
 tools/tests/test_winvm_runtime_root.py	ported by its unit of #2132
-tools/tests/test_work_dir_contract.py	ported by its unit of #2132
 tools/tests/test_workflow_action_runtimes.py	ported by its unit of #2132
 tools/tests/test_workflows_ndk.py	ported by its unit of #2132
 tools/tests/test_worktree_include_hook.py	ported by its unit of #2132
