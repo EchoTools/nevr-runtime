@@ -260,7 +260,7 @@ that each Kind and rank is true.
 
 | Rule | Kind | Statement | Guards | Checked by |
 | --- | --- | --- | --- | --- |
-| N1 | run | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | unchecked: `src/runtime/tests/test_parse_endpoint.cpp` tests a copy of `ParseEndpoint` defined in the test, not the function in `src/runtime/server/messages.cpp` |
+| N1 | run | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | rank 2: `src/runtime/tests/test_messages.cpp` (`MessagesEndpoint.*`, against the real `ParseEndpoint`: every malformed shape and port is refused, and each refusal's Warning names the field, the reason and the endpoint) |
 | N2 | run | Packet-encoder settings from the server are validated (`ValidatePacketEncoderSettings`) before they are forwarded to the game. | `src/runtime/server/messages.cpp` | unchecked: nothing names it |
 | N14 | run | A `???-` platform prefix must not reach an XPID: the game caches EULA acceptance per platform prefix, so `???-` breaks the cache lookup (`XPID_PLATFORM_FALLBACK_PREFIX`). | `src/runtime/hook/addresses.h`, `src/runtime/patch/xpid_patch.cpp` | unchecked: nothing names it |
 | N20 | source | No account or Discord ID literal is compiled in. Identity comes from the presented credential, or from the `config.yaml` Discord-ID fallback, which applies in client mode too (not gated on `g_isServer`). | `src/runtime/compat/ws_bridge.cpp`; `src/runtime`, `src/modules`, `src/abi`, `src/core` for literals | rank 3: verify |

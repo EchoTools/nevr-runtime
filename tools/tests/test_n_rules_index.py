@@ -106,10 +106,11 @@ class NRulesIndex(unittest.TestCase):
                 if any(c.startswith("none") for c in items(cells[4])):
                     self.assertEqual(cells[1], "source")
 
-    def test_n1_is_unchecked_because_its_test_runs_a_copy(self):
+    def test_n1_is_checked_at_rank_2_against_the_real_parse_endpoint(self):
         n1 = next(c for c in self.rows if c[0] == "N1")
-        self.assertTrue(n1[4].startswith("unchecked: "), n1[4])
-        self.assertIn("copy", n1[4])
+        self.assertTrue(n1[4].startswith("rank 2: "), n1[4])
+        self.assertIn("test_messages.cpp", n1[4])
+        self.assertNotIn("copy", n1[4])
 
     def test_n147_cites_the_tests_that_hold_the_late_load_cases(self):
         n147 = next(c for c in self.rows if c[0] == "N147")

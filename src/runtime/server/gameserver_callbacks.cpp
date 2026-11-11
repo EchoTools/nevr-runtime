@@ -214,8 +214,13 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         }
       };
       const auto commitState = [self, &state]() { self->GetContext().UpdateSessionState(state); };
-      if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
+      std::string failureReason;
+      if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch,
+                                                      &failureReason)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 lobby=%s reason=%s endpoint=%s"
+            " — the session success was not delivered to the game",
+            sessionSuccess.lobby_id().c_str(), failureReason.c_str(), sessionSuccess.endpoint().c_str());
       }
       break;
     }

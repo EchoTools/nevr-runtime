@@ -63,7 +63,10 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
 //          bytes clientMacKey (size from encoder flags)
 //          bytes clientEncKey
 //          bytes clientRandomKey
-EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg);
+// On a failure `failureReason` (when given) gets the token: bad_lobby_id, bad_group_id, not_ipv4, bad_address
+// or bad_port.
+EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg,
+                                           std::string* failureReason = nullptr);
 
 // Encode LobbySessionCreate from protobuf to LobbyStartSessionV4 binary format
 EncodedMessage EncodeLobbySessionCreate(const gameservice::v1::LobbySessionCreateMessage& msg);
@@ -89,7 +92,9 @@ EncodedMessage EncodeLobbySmiteEntrant(uint64_t playerId);
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid);
 
 // Helper: Parse endpoint string "internalIP:externalIP:port" to binary format
-bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_t& externalIP, uint16_t& port);
+// Only IPv4 fits the wire format; a refusal logs a Warning and sets *reason (not_ipv4, bad_address, bad_port).
+bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_t& externalIP, uint16_t& port,
+                   std::string* reason = nullptr);
 
 // Helper: Extract key sizes from encoder flags
 struct PacketEncoderSettings {

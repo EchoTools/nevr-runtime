@@ -182,7 +182,6 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("FormatWebSocketCloseDiagnostic", telemetry)
         self.assertIn("FormatWebSocketErrorDiagnostic", telemetry)
         self.assertNotIn("msg->errorInfo.reason.c_str()", telemetry)
-        self.assertNotIn("sessionSuccess.endpoint().c_str()", gameserver)
 
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()

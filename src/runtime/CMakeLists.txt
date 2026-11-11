@@ -1379,13 +1379,6 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_game_properties PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nevr_api)
     gtest_discover_tests(test_telemetry_game_properties DISCOVERY_MODE PRE_TEST)
 
-    # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
-    add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
-    target_include_directories(test_parse_endpoint PRIVATE
-    )
-    target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
-    gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
-
     # nevr_config unit tests (N133 S2) — parse a sample config.yaml in isolation:
     # nested plugin args, ${VAR:?} secrets interpolation (set and unset->fail),
     # ${VAR:-default}, and unknown-top-level-key rejection. Links the real

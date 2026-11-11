@@ -12,6 +12,7 @@ namespace nevr_game_server {
 bool ApplyLobbySessionSuccess(const gameservice::v1::SNSLobbySessionSuccessV5Message& message,
                               std::string& lobbySessionId,
                               const std::function<void()>& commitState,
-                              const std::function<void(EncodedMessage&)>& dispatch);
+                              const std::function<void(EncodedMessage&)>& dispatch,
+                              std::string* failureReason = nullptr);
 
 }  // namespace nevr_game_server

@@ -169,23 +169,99 @@ bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid) {
   return true;
 }
 
-// Helper: Parse endpoint string "internalIP:externalIP:port" to components
-bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_t& externalIP, uint16_t& port) {
+namespace {
+
+enum class AddrKind { Ipv4, Ipv6, Invalid };
+
+// Classifies one address field. The text is the field as sent; a v6 literal may be
+// bracketed. Only AF_INET parses are accepted by the wire format (4-byte fields).
+AddrKind ClassifyAddress(const std::string& text, struct in_addr* v4) {
+  struct in_addr probe4;
+  if (inet_pton(AF_INET, text.c_str(), v4 ? v4 : &probe4) == 1) return AddrKind::Ipv4;
+  std::string bare = text;
+  if (bare.size() >= 2 && bare.front() == '[' && bare.back() == ']') bare = bare.substr(1, bare.size() - 2);
+  struct in6_addr probe6;
+  if (inet_pton(AF_INET6, bare.c_str(), &probe6) == 1) return AddrKind::Ipv6;
+  return AddrKind::Invalid;
+}
+
+bool RefuseEndpoint(const std::string& endpointStr, const char* field, const char* reason, const char* family,
+                    std::string* reasonOut) {
+  if (reasonOut) *reasonOut = reason;
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.GAMESERVER] ParseEndpoint refused field=%s reason=%s family=%s endpoint=%s"
+      " — lobby session success message NOT sent",
+      field, reason, family, endpointStr.c_str());
+  return false;
+}
+
+// Splits "internal:external" (the part before the port). A v4 pair splits at the first colon as it always
+// did; a bracketed side ends at its ']'. An unbracketed v6 pair has no unambiguous split, so every colon is
+// tried and the endpoint counts as v6 when some split gives two addresses, one of them v6.
+bool SplitAddressPair(const std::string& head, std::string& internalStr, std::string& externalStr,
+                      bool& unbracketedV6) {
+  unbracketedV6 = false;
+  if (!head.empty() && head.front() == '[') {
+    size_t close = head.find(']');
+    if (close == std::string::npos || close + 1 >= head.size() || head[close + 1] != ':') return false;
+    internalStr = head.substr(0, close + 1);
+    externalStr = head.substr(close + 2);
+    return true;
+  }
+  size_t first = head.find(':');
+  if (first == std::string::npos) return false;
+  internalStr = head.substr(0, first);
+  externalStr = head.substr(first + 1);
+  if (!externalStr.empty() && externalStr.front() == '[') return true;
+  if (ClassifyAddress(internalStr, nullptr) == AddrKind::Ipv4 && externalStr.find(':') == std::string::npos) {
+    return true;
+  }
+  for (size_t i = head.find(':'); i != std::string::npos; i = head.find(':', i + 1)) {
+    const AddrKind left = ClassifyAddress(head.substr(0, i), nullptr);
+    const AddrKind right = ClassifyAddress(head.substr(i + 1), nullptr);
+    if (left != AddrKind::Invalid && right != AddrKind::Invalid &&
+        (left == AddrKind::Ipv6 || right == AddrKind::Ipv6)) {
+      unbracketedV6 = true;
+      return true;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+// Helper: Parse endpoint string "internalIP:externalIP:port" to components.
+// A refusal logs a Warning with the field, the reason (not_ipv4, bad_address, bad_port), the family and the
+// endpoint as received, and puts the reason token in *reason when given.
+bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_t& externalIP, uint16_t& port,
+                   std::string* reason) {
   size_t firstColon = endpointStr.find(':');
   size_t lastColon = endpointStr.rfind(':');
 
   if (firstColon == std::string::npos || lastColon == std::string::npos || firstColon == lastColon) {
-    return false;
+    return RefuseEndpoint(endpointStr, "endpoint", "bad_address", "unknown", reason);
   }
 
-  std::string internalStr = endpointStr.substr(0, firstColon);
-  std::string externalStr = endpointStr.substr(firstColon + 1, lastColon - firstColon - 1);
   std::string portStr = endpointStr.substr(lastColon + 1);
+  std::string internalStr, externalStr;
+  bool unbracketedV6 = false;
+  if (!SplitAddressPair(endpointStr.substr(0, lastColon), internalStr, externalStr, unbracketedV6)) {
+    return RefuseEndpoint(endpointStr, "endpoint", "bad_address", "unknown", reason);
+  }
+  if (unbracketedV6) return RefuseEndpoint(endpointStr, "endpoint", "not_ipv4", "ipv6", reason);
 
   // Parse IPs using inet_pton
   struct in_addr inAddr, exAddr;
-  if (inet_pton(AF_INET, internalStr.c_str(), &inAddr) != 1) return false;
-  if (inet_pton(AF_INET, externalStr.c_str(), &exAddr) != 1) return false;
+  const AddrKind internalKind = ClassifyAddress(internalStr, &inAddr);
+  if (internalKind != AddrKind::Ipv4) {
+    return RefuseEndpoint(endpointStr, "internal", internalKind == AddrKind::Ipv6 ? "not_ipv4" : "bad_address",
+                          internalKind == AddrKind::Ipv6 ? "ipv6" : "unknown", reason);
+  }
+  const AddrKind externalKind = ClassifyAddress(externalStr, &exAddr);
+  if (externalKind != AddrKind::Ipv4) {
+    return RefuseEndpoint(endpointStr, "external", externalKind == AddrKind::Ipv6 ? "not_ipv4" : "bad_address",
+                          externalKind == AddrKind::Ipv6 ? "ipv6" : "unknown", reason);
+  }
 
   internalIP = inAddr.s_addr;  // Already in network byte order, but we want host order for LE storage
   externalIP = exAddr.s_addr;
@@ -195,15 +271,17 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
   char* endptr = nullptr;
   unsigned long portVal = strtoul(portStr.c_str(), &endptr, 10);
   if (errno != 0 || endptr == portStr.c_str() || *endptr != '\0') {
+    if (reason) *reason = "bad_port";
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port parse failed port_str=%s endpoint=%s"
+        "[NEVR.GAMESERVER] ParseEndpoint port parse failed field=port reason=bad_port port_str=%s endpoint=%s"
         " — lobby session success message NOT sent",
         portStr.c_str(), endpointStr.c_str());
     return false;
   }
   if (portVal > UINT16_MAX) {
+    if (reason) *reason = "bad_port";
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port out of range port=%lu max=%u endpoint=%s"
+        "[NEVR.GAMESERVER] ParseEndpoint port out of range field=port reason=bad_port port=%lu max=%u endpoint=%s"
         " — lobby session success message NOT sent",
         portVal, UINT16_MAX, endpointStr.c_str());
     return false;
@@ -269,7 +347,8 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
   return result;
 }
 
-EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg) {
+EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg,
+                                           std::string* failureReason) {
   EncodedMessage result;
 
   // 1. GameMode (uint64_t LE) - use game_mode which is fixed64
@@ -278,6 +357,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // 2. LobbyID (GUID)
   GUID lobbyId = {};
   if (!ParseUuidToGuid(msg.lobby_id(), lobbyId)) {
+    if (failureReason) *failureReason = "bad_lobby_id";
     return {};
   }
   WriteGuid(result.data, lobbyId);
@@ -285,6 +365,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // 3. GroupID (GUID) - V5 includes this
   GUID groupId = {};
   if (!ParseUuidToGuid(msg.group_id(), groupId)) {
+    if (failureReason) *failureReason = "bad_group_id";
     return {};
   }
   WriteGuid(result.data, groupId);
@@ -292,7 +373,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // 4. Endpoint: internalIP (4 bytes) + externalIP (4 bytes) + port (2 bytes BE)
   uint32_t internalIP = 0, externalIP = 0;
   uint16_t port = 0;
-  if (!ParseEndpoint(msg.endpoint(), internalIP, externalIP, port)) {
+  if (!ParseEndpoint(msg.endpoint(), internalIP, externalIP, port, failureReason)) {
     return {};
   }
   // IPs stored as raw bytes (inet_pton gives network order, we write raw)

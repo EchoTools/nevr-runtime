@@ -4,6 +4,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 
 #include <winsock2.h>
@@ -76,6 +78,33 @@ void ExpectRepeatedBytesAt(const std::vector<uint8_t>& bytes, size_t offset, siz
 }
 
 void IgnoreGameLog(EchoVR::LogLevel, UINT64, const CHAR*, va_list) {}
+
+std::string& CapturedLog() {
+  static std::string captured;
+  return captured;
+}
+
+void CaptureGameLog(EchoVR::LogLevel, UINT64, const CHAR* format, va_list args) {
+  char line[1024];
+  vsnprintf(line, sizeof(line), format, args);
+  CapturedLog() += line;
+  CapturedLog() += '\n';
+}
+
+// Routes the game's logger into CapturedLog() so a test reads what was written.
+class ScopedCapturedLog {
+ public:
+  ScopedCapturedLog() : previous_(EchoVR::WriteLog) {
+    CapturedLog().clear();
+    EchoVR::WriteLog = &CaptureGameLog;
+  }
+  ~ScopedCapturedLog() { EchoVR::WriteLog = previous_; }
+  ScopedCapturedLog(const ScopedCapturedLog&) = delete;
+  ScopedCapturedLog& operator=(const ScopedCapturedLog&) = delete;
+
+ private:
+  EchoVR::WriteLogFunc* previous_;
+};
 
 class ScopedGameLogger {
  public:
@@ -199,6 +228,7 @@ TEST(MessagesEndpoint, ValidEndpointCarriesNetworkOrderAddressesAndPort) {
 }
 
 TEST(MessagesEndpoint, MalformedOrInvalidEndpointDoesNotRequireUninitializedOutputs) {
+  ScopedGameLogger logger;
   uint32_t internalIp = 0x11111111U;
   uint32_t externalIp = 0x22222222U;
   uint16_t port = 0x3333U;
@@ -213,11 +243,90 @@ TEST(MessagesEndpoint, MalformedOrInvalidEndpointDoesNotRequireUninitializedOutp
   EXPECT_EQ(externalIp, 0x22222222U);
   EXPECT_EQ(port, 0x3333U);
 
-  ScopedGameLogger logger;
   EXPECT_FALSE(ParseEndpoint("10.0.0.1:203.0.113.9:65536", internalIp, externalIp, port));
   EXPECT_EQ(internalIp, 0x0100000aU);
   EXPECT_EQ(externalIp, 0x097100cbU);
   EXPECT_EQ(port, 0x3333U);
+}
+
+// The cases below are the former test_parse_endpoint.cpp (N1), now against the real function.
+TEST(MessagesEndpoint, ValidEndpointsParseWithPortBounds) {
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0xFFFF;
+  EXPECT_TRUE(ParseEndpoint("10.0.0.1:10.0.0.2:7777", ip1, ip2, port));
+  EXPECT_EQ(port, 7777);
+  EXPECT_TRUE(ParseEndpoint("127.0.0.1:127.0.0.1:0", ip1, ip2, port));
+  EXPECT_EQ(port, 0);
+  EXPECT_TRUE(ParseEndpoint("1.2.3.4:5.6.7.8:65535", ip1, ip2, port));
+  EXPECT_EQ(port, 65535);
+}
+
+TEST(MessagesEndpoint, MalformedPortsAndShapesAreRefused) {
+  ScopedGameLogger logger;
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0;
+  for (const char* endpoint :
+       {"1.2.3.4:5.6.7.8:", "1.2.3.4:5.6.7.8:abc", "1.2.3.4:5.6.7.8:7777x", "1.2.3.4:5.6.7.8:   ",
+        "1.2.3.4:5.6.7.8:-1", "1.2.3.4:5.6.7.8:99999999999", "1.2.3.4:5.6.7.8:65536", "abcdef", "1.2.3.4:7777",
+        "notanip:10.0.0.2:7777", ""}) {
+    EXPECT_FALSE(ParseEndpoint(endpoint, ip1, ip2, port)) << endpoint;
+  }
+}
+
+TEST(MessagesEndpoint, RefusalsNameTheFieldTheReasonAndTheEndpoint) {
+  struct Case {
+    const char* endpoint;
+    const char* reason;
+    const char* field;
+  };
+  const Case cases[] = {
+      {"[2001:db8::1]:[2001:db8::1]:6792", "reason=not_ipv4", "field=internal"},
+      {"10.0.0.1:[2001:db8::1]:6792", "reason=not_ipv4", "field=external"},
+      {"2001:db8::1:2001:db8::2:6792", "reason=not_ipv4", "field=endpoint"},
+      {"not-an-ip:203.0.113.9:6721", "reason=bad_address", "field=internal"},
+      {"10.0.0.1:nope:6721", "reason=bad_address", "field=external"},
+      {"malformed-endpoint", "reason=bad_address", "field=endpoint"},
+      {"10.0.0.1:203.0.113.9:65536", "reason=bad_port", "field=port"},
+  };
+  for (const Case& c : cases) {
+    ScopedCapturedLog capture;
+    uint32_t ip1 = 0, ip2 = 0;
+    uint16_t port = 0;
+    EXPECT_FALSE(ParseEndpoint(c.endpoint, ip1, ip2, port)) << c.endpoint;
+    EXPECT_NE(CapturedLog().find(c.reason), std::string::npos) << c.endpoint << " log: " << CapturedLog();
+    EXPECT_NE(CapturedLog().find(c.field), std::string::npos) << c.endpoint << " log: " << CapturedLog();
+    EXPECT_NE(CapturedLog().find(std::string("endpoint=") + c.endpoint), std::string::npos)
+        << c.endpoint << " log: " << CapturedLog();
+  }
+}
+
+TEST(MessagesEndpoint, AValidEndpointWritesNoLine) {
+  ScopedCapturedLog capture;
+  uint32_t ip1 = 0, ip2 = 0;
+  uint16_t port = 0;
+  EXPECT_TRUE(ParseEndpoint("10.0.0.1:203.0.113.9:6721", ip1, ip2, port));
+  EXPECT_EQ(CapturedLog(), "");
+}
+
+TEST(MessagesEndpoint, ADroppedSessionSuccessSaysWhichLobbyAndWhy) {
+  ScopedCapturedLog capture;
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_game_mode(1);
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("[2001:db8::1]:[2001:db8::1]:6792");
+  std::string lobby;
+  std::string reason;
+  EXPECT_FALSE(nevr_game_server::ApplyLobbySessionSuccess(message, lobby, nullptr, nullptr, &reason));
+  EXPECT_EQ(reason, "not_ipv4");
+  EXPECT_TRUE(lobby.empty());
+
+  for (const char* endpoint : {"10.0.0.1:203.0.113.9:65536", "10.0.0.1:203.0.113.9:80x"}) {
+    message.set_endpoint(endpoint);
+    reason.clear();
+    EXPECT_FALSE(nevr_game_server::ApplyLobbySessionSuccess(message, lobby, nullptr, nullptr, &reason)) << endpoint;
+    EXPECT_EQ(reason, "bad_port") << endpoint;
+  }
 }
 
 TEST(MessagesEncoding, LobbySessionCreateCarriesGuidsSettingsAndLimits) {
@@ -304,6 +413,7 @@ TEST(MessagesEncoding, SessionSuccessEncodesValidatedKeysAndSequences) {
 }
 
 TEST(MessagesEncoding, SessionSuccessInvalidEndpointReturnsNoPartialMessage) {
+  ScopedGameLogger logger;
   gameservice::v1::SNSLobbySessionSuccessV5Message message;
   message.set_game_mode(0x1122334455667788ULL);
   message.set_lobby_id(kLobbyId);
