@@ -81,10 +81,7 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
 - **Cost.** Per cosmetic load (per player join or lobby change): one mutex lock and unlock pair around a scan of the 256-entry table, three never-faulting
   reads for the pool state, one counter. Per destroy: the same lock and scan. Per draw-table Grow: one read of the table header. The call rates are not known:
   `combat_custctx_stats` counts loads, refused loads, dropped destroys and Grow failures, Debug at every 1024th load and Info at the end of the process, so
-  a headset run gives them (ADR 0038). Host cost of the common path, added to a direct call of the game's function (x86-64, -O2, 2 million calls a loop, best of three loops on a machine that was
-  building at the time): LoadMeshData 2.3 us (its three `process_vm_readv` reads are almost all of it), Grow with room 0.6 us (one read), a destroy of a live
-  context within the noise of the load beside it (no read: a lock, a scan and an unlock). Per ADR 0038 a load of 2.3 us times its rate per frame has to stay
-  under 10 us, which holds up to four loads a frame; the rate is what the headset run reads from `combat_custctx_stats`. Not measured on a headset.
+  a headset run gives them (ADR 0038). Host numbers (x86-64, -O2, 2,000,000 loads (100,000 in a combat map) through the installed thunk on a libr15 image built in memory, stand-ins for the game's functions, a roomy pool, three runs, a scratch benchmark that is not committed, on a machine with nothing else running): an unhooked slot 1.3 to 1.4 ns; a load in an Echo Arena level 18.9 to 20.3 ns (the mutex pair and the scan of the table, no pool read); a load in a combat map 1.36 to 1.49 us (the three pool reads and the clock read). Grow with room (one read of the table header) and a destroy were not re-measured on the merged tip: Grow with room was 0.6 us and a destroy within the noise of the load beside it on the earlier host run. Per ADR 0038 a combat-map load of 1.5 us times its rate per frame has to stay under 10 us, which holds up to six loads a frame; the rate is what the headset run reads from `combat_custctx_stats`. Not measured on a headset.
 
 ## Gate: no file hash
 

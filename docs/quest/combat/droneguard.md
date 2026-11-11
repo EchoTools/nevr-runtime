@@ -53,7 +53,7 @@ loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTrans
 - **Cost.** Per `Follow` call: the thunk's counter, four plain loads, the state-key compare and a branch; stage 1 adds a `RefreshCache` call (the game's), a never-faulting read of the refreshed cache and, for
   a resolved player, an `IsComponentValid` call. `Follow` runs once per enabled follow component per frame. Host numbers (x86-64, -O2, 2,000,000 calls through the installed thunk on a libr15 image built in memory, a stand-in `Follow`, a scratch benchmark that is not committed):
   before the change to plain loads (one `process_vm_readv` of the span): an unhooked slot 1.6 ns per call; stage 0 with a target set 423 ns; skipping a null target 434 ns; stage 1 with a healthy
-  player 839 ns (the same machine, one session). After: an unhooked slot 1.5 ns; stage 0 with a target set 6.1 ns; skipping a null target 8.0 ns; stage 1 with a healthy player 427 ns (the
+  player 839 ns (the same machine, one session). After: an unhooked slot 1.5 ns; stage 0 with a target set 6.1 ns (re-run on the merged tip: 6.4 to 6.8 ns hooked over 1.5 to 1.6 ns direct); skipping a null target 8.0 ns; stage 1 with a healthy player 427 ns (the
   never-faulting read of the refreshed cache is what is left of it). At 8 ns the guard stays inside ADR 0038's 10 us per hook up to about 1,000 `Follow` calls per frame (stage 0); the call rate is
   not known (`combat_droneguard_stats`). Not measured on a headset.
 
