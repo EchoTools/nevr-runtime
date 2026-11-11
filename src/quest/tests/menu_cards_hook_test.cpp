@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "cargo_read_keys.h"
 #include "hook_log.h"
 #include "menu_cards_hook.h"
 #include "menu_cards_swap.h"
@@ -755,6 +756,106 @@ void OnlyTheTransformClassUnderTheQuestNameIsOffered() {
   }
 }
 
+// ---- cargo_read (T2c, #2135): the read-finished record for a key the CDN served ----------------------
+
+constexpr std::uint64_t kPosterName = 0x065104dd7f7388f1ULL;   // ui_menu_splash_screen_poster_a
+constexpr std::uint64_t kTextureClass = 0x0123456789abcdefULL;  // the resource's class: any value; the key is (name, index)
+
+// One ASTC 4x4 void-extent block (magenta) and a second block, so the first 16 bytes are the header and its colour.
+std::vector<unsigned char> CargoBytes() {
+  std::vector<unsigned char> b = {0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                  0xff, 0xff, 0x00, 0x00, 0xcc, 0xcc, 0xff, 0xff};
+  for (int i = 0; i < 16; ++i) b.push_back(static_cast<unsigned char>(0xa0 + i));  // never shown: past the first block
+  return b;
+}
+
+void AServedKeysReadIsLoggedWithItsStatusLengthAndFirstBlock() {
+  Reset("");
+  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CargoBytes();
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.calls == 1 && g_seen.buffer == bytes.data());
+  const std::vector<std::string> lines = Lines("cargo_read");
+  QCHECK(lines.size() == 1);
+  if (lines.size() != 1) return;
+  QCHECK(Text(lines[0], "level") == "info");
+  QCHECK(Text(lines[0], "name") == "0x065104dd7f7388f1");
+  QCHECK(Text(lines[0], "class") == "0x0123456789abcdef");
+  QCHECK(Field(lines[0], "index") == "1");
+  QCHECK(Field(lines[0], "status") == "4");
+  QCHECK(Field(lines[0], "bytes") == "32");
+  QCHECK(Text(lines[0], "head") == "fcfdffffffffffffffff0000ccccffff");
+  QCHECK(Field(lines[0], "reads") == "1");
+  QCHECK(Text(lines[0], "result") == "read");
+}
+
+void AServedKeyIsLoggedAtItsFirstSecondAndFourthRead() {
+  Reset("");
+  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CargoBytes();
+  for (int i = 0; i < 5; ++i) {
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
+    QCHECK(Call(block) == kCallbackResult);
+  }
+  const std::vector<std::string> lines = Lines("cargo_read");
+  QCHECK(lines.size() == 3);
+  if (lines.size() != 3) return;
+  QCHECK(Field(lines[0], "reads") == "1" && Field(lines[1], "reads") == "2" && Field(lines[2], "reads") == "4");
+  QCHECK(g_seen.calls == 5);
+}
+
+void AReadOfAKeyTheCdnDidNotServeIsSilent() {
+  Reset("");
+  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CargoBytes();
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);  // buffer 0: stock
+  QCHECK(Call(block) == kCallbackResult);
+  Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName + 1);  // another name
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(Lines("cargo_read").empty());
+  QCHECK(g_seen.calls == 2);
+}
+
+void AFailedReadOfAServedKeyIsAWarningWithNoBytes() {
+  Reset("");
+  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  Block block;
+  Resource res;
+  // A failed read can name its length with no buffer: the record must not read through the null pointer.
+  Fill(block, res, 7, 1, nullptr, 2265600, &g_alloc, 16, kTextureClass, kPosterName);
+  Thunk::Reset();
+  *Thunk::OriginalOut() = reinterpret_cast<void*>(+[](unsigned char*) -> std::uint64_t { return kCallbackResult; });
+  mc::ArmForTest("", &g_contextPointer);
+  QCHECK(Call(block) == kCallbackResult);
+  const std::vector<std::string> lines = Lines("cargo_read");
+  QCHECK(lines.size() == 1);
+  if (lines.size() != 1) return;
+  QCHECK(Text(lines[0], "level") == "warn");
+  QCHECK(Field(lines[0], "status") == "7");
+  QCHECK(Field(lines[0], "bytes") == "2265600");
+  QCHECK(Text(lines[0], "head").empty());
+  QCHECK(Text(lines[0], "result") == "failed");
+}
+
+void AShortBufferShowsOnlyItsOwnBytes() {
+  Reset("");
+  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = {0xfc, 0xfd, 0xff};
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
+  QCHECK(Call(block) == kCallbackResult);
+  const std::vector<std::string> lines = Lines("cargo_read");
+  QCHECK(lines.size() == 1 && Text(lines[0], "head") == "fcfdff" && Field(lines[0], "bytes") == "3");
+}
+
 }  // namespace
 
 int main() {
@@ -785,6 +886,11 @@ int main() {
   ATransformTableThatIsNotPinnedIsLeftAloneAndSaysWhy();
   APinnedTransformTableMissingAButtonIsRefusedAndKept();
   OnlyTheTransformClassUnderTheQuestNameIsOffered();
+  AServedKeysReadIsLoggedWithItsStatusLengthAndFirstBlock();
+  AServedKeyIsLoggedAtItsFirstSecondAndFourthRead();
+  AReadOfAKeyTheCdnDidNotServeIsSilent();
+  AFailedReadOfAServedKeyIsAWarningWithNoBytes();
+  AShortBufferShowsOnlyItsOwnBytes();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_cards_hook_test: %d check(s) failed\n", quest_test::Failures());

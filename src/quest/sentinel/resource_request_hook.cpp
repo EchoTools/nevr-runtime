@@ -13,6 +13,7 @@
 #include <pthread.h>
 
 #include "core/cargo_resolver.h"
+#include "cargo_read_keys.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -300,6 +301,8 @@ const char* CargoLabel(const nevr_shadow::Shadow* shadow, std::uint32_t user) no
 void NoteCargo(const nevr_shadow::Shadow* shadow, std::uint32_t user, std::uint64_t ret, std::uint64_t type, std::uint64_t name,
                std::uint64_t index, std::uint32_t bytes, const void* caller) noexcept {
   g_cargoServed.fetch_add(1, std::memory_order_relaxed);
+  // The read-finished callback matches its read to this serve by (name, index) and writes `cargo_read` (cargo_read_keys.h).
+  if (ret == 0) cargo_read::NoteServed(name, index);
   const std::uint64_t seen = TouchCargo(KeyOf(type, name, index));
   if (seen == 0 || (seen & (seen - 1)) != 0) return;
   const std::uint64_t pinnedCaller =
@@ -629,6 +632,7 @@ std::uint64_t WindowClockMsForTest() noexcept { return NowMs(); }
 void SetClockForTest(ClockMs clock) noexcept { g_clock.store(clock, std::memory_order_relaxed); }
 
 void ResetForTest() noexcept {
+  cargo_read::ResetForTest();
   for (KeySlot& slot : g_slots) {
     slot.key.store(0, std::memory_order_relaxed);
     slot.seen.store(0, std::memory_order_relaxed);

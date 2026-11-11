@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "cargo_read_keys.h"
 #include "core/cargo_store.h"
 #include "core/resource_shadow.h"
 #include "hook_log.h"
@@ -352,6 +353,32 @@ void NothingPublishedChangesNothing() {
   QCHECK(Lines("cargo_served").empty() && rr::CargoServedCount() == 0);
 }
 
+// T2c (#2135): each served (name, index) is recorded for the read-finished callback, which writes `cargo_read` for it.
+void AServedKeyIsRecordedForTheReadCallbackAndAFailedOneIsNot() {
+  Reset();
+  rr::PublishCargo(g_cargoSet.get());
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster, 1) == 0);  // nothing served yet
+  Call(kPixType, kPoster, 1, request);
+  Call(kPixType, kPoster, 1, request);  // a second serve records nothing new
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster, 1) == 1);
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster, 1) == 2);
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster, 0) == 0);  // index 0 was not served in this test
+  Reset();
+  rr::PublishCargo(g_cargoSet.get());
+  g_fill.failOnCargo = true;
+  Call(kDescType, kPoster, 0, request);
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster, 0) == 0);  // the game's function failed: no read will finish
+}
+
+void AKeyThatIsNotCargoIsNotRecorded() {
+  Reset();
+  rr::PublishCargo(g_cargoSet.get());
+  unsigned char request[layout::kRequestBytes] = {};
+  Call(kPixType, kPoster + 1, 1, request);  // not in the cargo set: the game's own manager answers
+  QCHECK(nevr_quest::cargo_read::TouchRead(kPoster + 1, 1) == 0);
+}
+
 void TheCounterCountIsUnchanged() { QCHECK(rr::kCounterCount == 4); }
 
 }  // namespace
@@ -372,6 +399,8 @@ int main() {
   AGameFailureWithTheShadowIsAWarningNotASilentServe();
   AReleaseBuildServesTheSameAndLogsNoRequestLine();
   NothingPublishedChangesNothing();
+  AServedKeyIsRecordedForTheReadCallbackAndAFailedOneIsNot();
+  AKeyThatIsNotCargoIsNotRecorded();
   TheCounterCountIsUnchanged();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
