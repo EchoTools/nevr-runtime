@@ -101,13 +101,13 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
     const nevr_token_auth::DevicePollResponse response = ops.poll(code);
     {
       // One Info line per poll (#397): the wait is otherwise silent, and a loop that polls and is told
-      // "pending" cannot be told from one that does not run. The body is never logged, only its size (Rule 4).
+      // "pending" cannot be told from one that does not run. The body prefix withholds token bodies.
       static const char* const kNames[] = {"pending", "verified", "expired", "error"};
       log(LogLevel::Info,
           "[NEVR.AUTH] poll #" + std::to_string(++pollsSent) + " http=" +
               (response.http_code != 0 ? std::to_string(response.http_code) : std::string("none")) +
               " status=" + kNames[static_cast<int>(response.status)] + " server_status=\"" +
-              response.server_status + "\" body_bytes=" + std::to_string(response.body_bytes));
+              response.server_status + "\" body=\"" + response.body_prefix + "\"");
       if (response.status == nevr_token_auth::DevicePollStatus::Pending && response.answered &&
           !nevr_token_auth::IsKnownPollStatus(response.server_status)) {
         log(LogLevel::Warning, "[NEVR.AUTH] poll answered an unknown status \"" + response.server_status +

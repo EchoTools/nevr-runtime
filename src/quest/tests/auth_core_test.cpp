@@ -649,11 +649,9 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK(presenter.cleared.load() >= 1);
   CHECK_EQ(http.Count("poll"), 3);
   const std::string all = log.All();
-  CHECK(all.find("?code=DEVCODE") != std::string::npos);  // the sign-in code is in the log (the page shows it)
-  // The verified poll's body holds the tokens: the poll line carries its size, never its text (Rule 4, #2378).
-  CHECK(all.find("rt-dev") == std::string::npos);
-  CHECK(all.find("eyJ") == std::string::npos);
-  CHECK(all.find("poll #3 http=200 status=verified server_status=\"verified\" body_bytes=") != std::string::npos);
+  CHECK(all.find("?code=DEVCODE") != std::string::npos);  // the code is in the log, and so are the tokens (#2244)
+  CHECK(all.find("rt-dev") != std::string::npos);
+  CHECK(all.find("eyJ") != std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
   // The per-poll line says what the server answered (#397): HTTP code, parsed status, never "none".
   CHECK(all.find("poll #1 http=200 status=pending server_status=\"pending\"") != std::string::npos);

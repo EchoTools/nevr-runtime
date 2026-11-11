@@ -53,6 +53,16 @@ bool IsKnownPollStatus(std::string_view status) {
   return status == "authorization_pending" || status == "pending" || status == "expired" || status == "verified";
 }
 
+std::string PollBodyPrefix(std::string_view body, std::size_t max_chars) {
+  std::string out;
+  out.reserve(std::min(body.size(), max_chars));
+  for (std::size_t i = 0; i < body.size() && i < max_chars; ++i) {
+    const unsigned char c = static_cast<unsigned char>(body[i]);
+    out += (c < 0x20 || c == 0x7f) ? '.' : static_cast<char>(c);
+  }
+  return out;
+}
+
 uint64_t ResolveAccessTokenExpiry(uint64_t now, const std::string& access_token,
                                   std::optional<uint64_t> expires_in) {
   return ResolveAccessTokenExpirySec(now, access_token, expires_in);
