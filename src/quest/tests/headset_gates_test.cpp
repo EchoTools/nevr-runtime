@@ -668,7 +668,7 @@ void TheInstallLineNamesEachGateAndWhy() {
     hg::Switches sw;
     sw.perm = sw.bots = sw.link = false;
     const nevr_quest::combat::ModuleResult r = hg::Install(sw);
-    QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
+    QCHECK(!r.installed && r.off && std::strcmp(r.status, "off") == 0);
     const std::vector<Line> install = Lines("combat_gates_install");
     QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
     if (install.size() == 1U) {

@@ -313,6 +313,10 @@ void TheCounterAndTheFirstSixteenLines() {
          "\"event\":\"combat_levelname_kept\",\"name\":\"0x3f9915d3001dc28e\",\"n\":1,\"lowspec\":1,\"answer\":\"plain name\"}");
   for (int i = 0; i < 40; ++i) CallSlot(2, g_game, kGlobalMp);
   QCHECK(Lines("combat_levelname_kept").size() == 16U);  // bounded to the first 16
+  // the 17th substitution writes one Warning that names the kind and the cap (line_budget.h); the count goes on
+  const std::vector<Line> capped = Lines("combat_levelname_log_cap");
+  QCHECK(capped.size() == 1U && capped[0].level == sentinel::LogLevel::kWarn);
+  QCHECK(capped.size() == 1U && Has(capped[0].text, "\"lines\":\"kept\",\"cap\":16"));
   QCHECK(levelname::KeptPlainCount() == 41);
   SetFlags(0);
   const std::size_t before = g_lines.size();
@@ -471,6 +475,23 @@ void TheLegacyKillFileIsAWarningAndNothingElse() {
   rmdir(dir);
 }
 
+// The end-of-process line (#2181): every substitution counted, not only the first sixteen. Written by the table's end step, and only when the module
+// is installed.
+void TheStatsLineCountsEveryKeptLoadAtTheEnd() {
+  Begin();
+  levelname::NoteEnd();  // not installed: nothing is written
+  QCHECK(Lines("combat_levelname_stats").empty());
+  QCHECK(InstallWithFakes().installed);
+  g_lines.clear();
+  for (int i = 0; i < 20; ++i) CallSlot(0, g_game, kGlobalMp);
+  QCHECK(Lines("combat_levelname_stats").empty());  // the line is the end's, not a call's
+  levelname::NoteEnd();
+  const std::vector<Line> stats = Lines("combat_levelname_stats");
+  QCHECK(stats.size() == 1U && stats[0].level == sentinel::LogLevel::kInfo);
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"kept_plain\":20,\"final\":1,\"consequence\":\""));
+  End();
+}
+
 // A read-only vtable page (RELRO after relocation): the word is stored and the page is read-only again afterwards.
 void AReadOnlyVtablePageIsWrittenAndRestored() {
   Begin();
@@ -501,6 +522,7 @@ int main() {
   TheOtherRefusalsSayWhy();
   TheSwitchTurnsTheModuleOffAndNothingIsWritten();
   TheLegacyKillFileIsAWarningAndNothingElse();
+  TheStatsLineCountsEveryKeptLoadAtTheEnd();
   AReadOnlyVtablePageIsWrittenAndRestored();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "levelname_test: %d check(s) failed\n", quest_test::Failures());

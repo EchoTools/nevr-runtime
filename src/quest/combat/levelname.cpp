@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -19,19 +20,22 @@ constexpr std::size_t kHookCount = 4;
 static_assert(kHookCount == pin::kSlotCount, "one handle per vtable word");
 sentinel::GotHook g_hooks[kHookCount];
 
-constexpr std::uint64_t kLogFirstKept = 16;
+constexpr unsigned kLogFirstKept = 16;
 
 using PlainFn = std::uint64_t (*)(void* game, std::uint64_t name);
 std::atomic<std::uintptr_t> g_plain{0};
 std::atomic<std::uint64_t> g_kept{0};
+std::atomic<unsigned> g_keptLines{0};  // the kept lines written, against kLogFirstKept (line_budget.h)
 std::atomic<bool> g_installed{false};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 
-// One line for the first kKeptLogFirst substitutions; written after the plain function returned, never while game code is on the stack above
-// the handler (callback_thunk.h rule 1).
+// One line for the first kLogFirstKept substitutions, then one Warning at the cap (line_budget.h). Written after the plain function returned, never
+// while game code is on the stack above the handler (callback_thunk.h rule 1).
 void NoteKept(std::uint64_t name) noexcept {
   const std::uint64_t n = g_kept.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n > kLogFirstKept) return;
+  if (!LineBudget(&g_keptLines, kLogFirstKept, "levelname", "kept", "no further kept lines are written; combat_levelname_stats still counts every substitution")) {
+    return;
+  }
   char nameText[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_levelname_kept",
                       {{"name", sentinel::HexString(nameText, name)}, {"n", n}, {"lowspec", 1}, {"answer", "plain name"}});
@@ -106,6 +110,15 @@ void WarnLegacyKillFile() noexcept {
                        {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
 }
 
+// The module's end-of-process line: every substitution counted, not only the first kLogFirstKept lines.
+void LogStats() noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_levelname_stats",
+                      {{"kept_plain", g_kept.load(std::memory_order_relaxed)},
+                       {"final", 1},
+                       {"consequence", "kept_plain is every global_mp load given the plain name since install (lowspec set); the first 16 are the "
+                                       "combat_levelname_kept lines"}});
+}
+
 struct Result {
   const char* result;
   const char* reason;
@@ -152,7 +165,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept {
   WarnLegacyKillFile();
   if (!on) {
     LogInstall(Fresh("off", "off_config"), "combat.levelname is false: global_mp loads as the game's cut level when the lowspec flag is set");
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (g_installed.load(std::memory_order_acquire)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_levelname_refused",
@@ -207,6 +220,10 @@ ModuleResult Install(bool on) noexcept {
 }
 
 bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }
+
+void NoteEnd() noexcept {
+  if (g_installed.load(std::memory_order_acquire)) LogStats();
+}
 std::uint64_t KeptPlainCount() noexcept { return g_kept.load(std::memory_order_relaxed); }
 
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
@@ -223,6 +240,7 @@ void ResetForTest() noexcept {
   }
   g_plain.store(0);
   g_kept.store(0);
+  g_keptLines.store(0);
   g_installed.store(false);
 }
 

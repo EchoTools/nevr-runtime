@@ -31,6 +31,7 @@ runm sg_unreadable_drops    $C "s/g_unreadable.fetch_add(1, std::memory_order_re
 runm sg_decode_unthinned    $C "s/if (n \\& (n - 1)) return;.*\$//"
 # the install: both switches off installs nothing, refused before the hook when the scope cannot change, the refusal an Error with its switches
 runm sg_off_installs        $C "s/if (!gamma \\&\\& !tubeMirror) {/if (false) {/"
+runm sg_off_not_counted     $C "s/    return {false, \"off\", true};/    return {false, \"off\"};/"
 runm sg_scope_not_asked     $C "s/if (!scope::Live()) return Refused/if (false) return Refused/"
 runm sg_scope_asked_after   $C "s/^  if (!scope::Live()) return Refused.*\$//; s/^\\(  if (status == sentinel::GotStatus::kOk) status = sentinel::InstallThunk<Thunk>.*\\)\$/\\1\n  if (!scope::Live()) return Refused(\"scope_not_live\", \"x\", gamma, tubeMirror);/"
 runm sg_refusal_quiet       $C "s/sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, \"combat_shieldgamma_install\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_shieldgamma_install\"/"

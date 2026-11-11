@@ -753,6 +753,17 @@ void TheLevelNameRowsReadTheirSwitchAndTheBoosterNeedsLevelname() {
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "levelname=off boosterpool=off"));
+  // off is counted as off, not failed (#2181): each row's record says outcome off at Info, and no record of either row is a Warning or a failure
+  for (const char* module : {"levelname", "boosterpool"}) {
+    const std::string who = std::string("\"module\":\"") + module + "\"";
+    std::size_t records = 0;
+    for (const Line& l : Lines("combat_install_module")) {
+      if (!Has(l.text, who)) continue;
+      ++records;
+      QCHECK(Has(l.text, "\"outcome\":\"off\"") && l.level == sentinel::LogLevel::kInfo);
+    }
+    QCHECK(records == 1U);
+  }
   QCHECK(Has(Lines("combat_levelname_install")[0].text, "\"reason\":\"off_config\""));
   QCHECK(Has(Lines("combat_boosterpool_install")[0].text, "\"reason\":\"off_config\""));
   Done();
@@ -1417,13 +1428,27 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
   }
 }
 
+// levelname and the booster pool write their stats at the end of the process (#2181), as the guard rows do: each row has an end step.
+void TheLevelNameRowsHaveAnEndStep() {
+  std::size_t count = 0;
+  const combat::Module* table = combat::ShippedModules(&count);
+  for (const char* name : {"levelname", "boosterpool"}) {
+    const combat::Module* row = nullptr;
+    for (std::size_t i = 0; i < count; ++i) {
+      if (std::strcmp(table[i].name, name) == 0) row = &table[i];
+    }
+    QCHECK(row != nullptr && row->early == nullptr && row->normal != nullptr && row->end != nullptr);
+  }
+}
+
 // The end of the process asks every row's end step; with no guard installed (no libr15 on the host) none writes a stats line.
 void TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled() {
   Process(bv::Variant::kCombat);
   combat::InstallNormal();
   g_lines.clear();
   combat::NoteProcessEnd();
-  for (const char* event : {"combat_fxtrail_stats", "combat_voipdrop_stats", "combat_custctx_stats", "combat_droneguard_stats", "combat_peerclamp_stats"}) {
+  for (const char* event : {"combat_fxtrail_stats", "combat_voipdrop_stats", "combat_custctx_stats", "combat_droneguard_stats", "combat_peerclamp_stats",
+                            "combat_levelname_stats", "combat_boosterpool_stats"}) {
     QCHECK(Lines(event).empty());
   }
   Done();
@@ -1489,6 +1514,7 @@ int main() {
   APhaseRunsOnce();
   ALongTableWritesEveryModuleRecordAndAWholePhaseLine();
   TheShippedTableRowsAreWiredToTheirSteps();
+  TheLevelNameRowsHaveAnEndStep();
   TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   AShippedRowSwitchedOffByTheConfigIsCountedAsOff();
   TheRealStepsConsultTheGate();

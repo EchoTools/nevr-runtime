@@ -27,6 +27,7 @@ runm hm_fill_uncapped       $C "s/>= kFillLines) return;/>= (kFillLines + 100000
 runm hm_comp_named_often    $C "s/if (!g_otherComp.compare_exchange_strong(none, comp, std::memory_order_relaxed)) return;/(void)none;/"
 # the install: off, refused before the hook when the scope cannot change, the refusal an Error
 runm hm_off_installs        $C "s/^  if (!on) {\$/  if (!on \\&\\& lookup == nullptr) {/"
+runm hm_off_not_counted     $C "s/    return {false, \"off\", true};/    return {false, \"off\"};/"
 runm hm_scope_not_asked     $C "s/if (!scope::Live()) return Refused/if (false) return Refused/"
 runm hm_scope_asked_after   $C "s/^  if (!scope::Live()) return Refused.*\$//; s/^\\(  if (status == sentinel::GotStatus::kOk) status = sentinel::InstallThunk<Thunk>.*\\)\$/\\1\n  if (!scope::Live()) return Refused(\"scope_not_live\", \"x\");/"
 runm hm_refusal_quiet       $C "s/sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, \"combat_hudmeter_install\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_hudmeter_install\"/"

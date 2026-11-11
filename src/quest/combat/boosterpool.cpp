@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -18,7 +19,7 @@ using ActorPair = pin::ActorPair;
 
 sentinel::GotHook g_hook;
 
-constexpr std::uint64_t kLogFirstKept = 16;
+constexpr unsigned kLogFirstKept = 16;
 
 // What the handler calls and reads, published before the word changes.
 std::atomic<AppendFn> g_append{nullptr};
@@ -28,12 +29,16 @@ std::atomic<std::uint64_t> g_plainName{0};
 std::atomic<std::uint64_t> g_suffixedName{0};
 std::atomic<std::uint64_t> g_kept{0};
 std::atomic<std::uint64_t> g_unreadable{0};
+std::atomic<unsigned> g_keptLines{0};  // the kept lines written, against kLogFirstKept (line_budget.h)
 std::atomic<bool> g_installed{false};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 
+// One line for the first kLogFirstKept substitutions, then one Warning at the cap (line_budget.h).
 void NoteKept(std::uint64_t name) noexcept {
   const std::uint64_t n = g_kept.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n > kLogFirstKept) return;
+  if (!LineBudget(&g_keptLines, kLogFirstKept, "boosterpool", "kept", "no further kept lines are written; combat_boosterpool_stats still counts every substitution")) {
+    return;
+  }
   char nameText[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_boosterpool_kept",
                       {{"name", sentinel::HexString(nameText, name)}, {"n", n}, {"answer", "plain name"}});
@@ -73,6 +78,16 @@ ActorPair Handle(Thunk::Fn original, void* st, std::uint64_t name) noexcept {
 
 NEVR_HOOK_RECORD(kRecord, Thunk, &Handle);
 
+// The module's end-of-process line: every substitution and every unreadable plain name counted, not only the first kLogFirstKept lines.
+void LogStats() noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_boosterpool_stats",
+                      {{"kept", g_kept.load(std::memory_order_relaxed)},
+                       {"unreadable", g_unreadable.load(std::memory_order_relaxed)},
+                       {"final", 1},
+                       {"consequence", "kept is every allocation whose suffixed name was given the plain one since install; unreadable the calls "
+                                       "that passed through because the plain name could not be read"}});
+}
+
 void LogInstall(const char* result, const char* reason, const char* slotStatus, const char* consequence) noexcept {
   sentinel::LogFields(std::strcmp(result, "refused") == 0 ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "combat_boosterpool_install",
                       {{"result", result}, {"reason", reason}, {"key", "combat.levelname"}, {"slot", slotStatus}, {"consequence", consequence}});
@@ -85,7 +100,7 @@ constexpr const char* kKeepsGame = "the game keeps its own allocations; the boos
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on, bool levelnameInstalled) noexcept {
   if (!on) {
     LogInstall("off", "off_config", "not_tried", "combat.levelname is false: the game keeps its own allocations");
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (!levelnameInstalled) {
     LogInstall("refused", "needs_levelname", "not_tried",
@@ -129,6 +144,10 @@ ModuleResult Install(bool on, bool levelnameInstalled) noexcept {
 std::uint64_t KeptCount() noexcept { return g_kept.load(std::memory_order_relaxed); }
 std::uint64_t UnreadableCount() noexcept { return g_unreadable.load(std::memory_order_relaxed); }
 
+void NoteEnd() noexcept {
+  if (g_installed.load(std::memory_order_acquire)) LogStats();
+}
+
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 
 void TargetsForTest(AppendFn* append, std::uintptr_t* plainAddress) noexcept {
@@ -153,6 +172,7 @@ void ResetForTest() noexcept {
   g_suffixedName.store(0);
   g_kept.store(0);
   g_unreadable.store(0);
+  g_keptLines.store(0);
   g_installed.store(false);
 }
 

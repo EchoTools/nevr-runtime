@@ -219,8 +219,8 @@ constexpr std::array kModules{
     Module{"shieldgamma_tube_mirror", nullptr, nullptr, "combat.shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror},
     // levelname, then boosterpool (#2181): the plugin installed the pair together, the level name first, after shieldgamma and before sensorwd. The bot
     // gate (above) reads the LoadLevelName word levelname takes at each bot call, not at install, so its row may come first.
-    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname},
-    Module{"boosterpool", nullptr, &BoosterPoolNormal},
+    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd},
+    Module{"boosterpool", nullptr, &BoosterPoolNormal, nullptr, nullptr, &boosterpool::NoteEnd},
     // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
     // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
     Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},

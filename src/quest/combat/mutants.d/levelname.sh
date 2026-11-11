@@ -21,8 +21,12 @@ runm ln_real_args        $L "s/  return original(game, name);/  return original(
 runm ln_real_game        $L "s/  return original(game, name);/  return original(nullptr, name);/"
 runm ln_plain_null_ok    $L "s/ \&\& plain != nullptr) {/) {/"
 runm ln_counter_wrong    $L "s/g_kept.fetch_add(1, std::memory_order_relaxed) + 1;/g_kept.fetch_add(2, std::memory_order_relaxed) + 2;/"
-runm ln_log_unbounded    $L "s/  if (n > kLogFirstKept) return;/  (void)kLogFirstKept;/"
-runm ln_no_kept_log      $L "s/  if (n > kLogFirstKept) return;/  if (n > 0) return;/"
+runm ln_log_unbounded    $L "s/  if (!LineBudget(\&g_keptLines, kLogFirstKept,/  if (!LineBudget(\&g_keptLines, 1000000,/"
+runm ln_no_kept_log      $L "s/  if (!LineBudget(\&g_keptLines, kLogFirstKept,/  if (!LineBudget(\&g_keptLines, 0,/"
+runm ln_kept_zero_increment $L "s/  const std::uint64_t n = g_kept.fetch_add(1, std::memory_order_relaxed) + 1;/  const std::uint64_t n = 1;/"
+runm ln_stats_dropped    $L "s/  if (g_installed.load(std::memory_order_acquire)) LogStats();/  if (false) LogStats();/"
+runm ln_stats_level      $L "s/sentinel::LogLevel::kInfo, \"combat_levelname_stats\"/sentinel::LogLevel::kDebug, \"combat_levelname_stats\"/"
+runm ln_off_not_counted  $L "s/    return {false, \"off\", true};/    return {false, \"off\"};/" quest-host-combat combat_install_test
 runm ln_kept_level       $L "s/sentinel::LogLevel::kInfo, \"combat_levelname_kept\"/sentinel::LogLevel::kDebug, \"combat_levelname_kept\"/"
 runm ln_slot0            $T "s/kSlots\[kSlotCount\] = {0x362ef90, /kSlots[kSlotCount] = {0x362ef98, /"
 runm ln_slot0_gate       $T "s/kSlots\[kSlotCount\] = {0x362ef90, /kSlots[kSlotCount] = {0x362ef98, /" quest-host-combat headset_gates_test
@@ -46,15 +50,17 @@ runm ln_off_installs     $L "s/  if (!on) {/  if (!on \&\& false) {/"
 runm ln_refusal_quiet    $L "s/bad ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo/bad ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kInfo/"
 runm ln_off_reason       $L "s/\"off_config\"/\"off\"/"
 runm ln_legacy_quiet     $L "s/sentinel::LogLevel::kWarn, \"combat_levelname_legacy_switch\"/sentinel::LogLevel::kInfo, \"combat_levelname_legacy_switch\"/"
-runm ln_legacy_ignored   $L "s/  if (access(path, F_OK) != 0) return;/  return;/"
+runm ln_legacy_ignored   $L "s/  if (!legacy::Present(\"levelname.off\")) return;/  return;/"
+runm ln_legacy_wrong_file $L "s/legacy::Present(\"levelname.off\")/legacy::Present(\"levelname.on\")/"
 runm ln_failed_slot_name $L "s/r.failedSlot >= 0 ? pin::kSlotNames\[r.failedSlot\] : \"none\"/\"none\"/"
 runm ln_no_lib_check     $L "s/  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, \&image)) {/  if (false) {/"
 # the rows and the key that reach the module (combat_install.cpp, quest_config.cpp, nevr_config.cpp)
 CI=src/quest/combat/combat_install.cpp
 runm ci_levelname_switch $CI "s/levelname::Install(g_config.levelname.on)/levelname::Install(true)/" quest-host-combat combat_install_test
 runm ci_levelname_row    $CI "s/    Module{\"levelname\", nullptr, \&LevelNameNormal, /    Module{\"levelname\", \&LevelNameNormal, nullptr, /" quest-host-combat combat_install_test
-runm ci_switch_no_key    $CI "s/LevelNameNormal, \"combat.levelname\", \&nevr_quest::CombatConfig::levelname}/LevelNameNormal}/" quest-host-combat combat_install_test
-runm ci_switch_wrong_key $CI "s/\"combat.levelname\", \&nevr_quest::CombatConfig::levelname}/\"combat.levelnames\", \&nevr_quest::CombatConfig::levelname}/" quest-host-combat combat_install_test
+runm ci_switch_no_key    $CI "s/LevelNameNormal, \"combat.levelname\", \&nevr_quest::CombatConfig::levelname, \&levelname::NoteEnd}/LevelNameNormal, nullptr, nullptr, \&levelname::NoteEnd}/" quest-host-combat combat_install_test
+runm ci_switch_wrong_key $CI "s/\"combat.levelname\", \&nevr_quest::CombatConfig::levelname, /\"combat.levelnames\", \&nevr_quest::CombatConfig::levelname, /" quest-host-combat combat_install_test
+runm ci_levelname_end    $CI "s/\&nevr_quest::CombatConfig::levelname, \&levelname::NoteEnd},/\&nevr_quest::CombatConfig::levelname, nullptr},/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm qc_levelname_read   $QC "s/  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r);/  (void)kCombatLevelNameKey;/" quest-host-shared quest_config_test
 runm qc_levelname_key    $QC "s/kCombatLevelNameKey = \"combat.levelname\";/kCombatLevelNameKey = \"combat.levelnames\";/" quest-host-shared quest_config_test

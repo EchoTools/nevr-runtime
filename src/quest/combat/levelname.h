@@ -36,6 +36,8 @@
  *             "rolled_back":<n>,"rollback_failed":<n>,"consequence":".."}   Info when installed or off, Error when refused
  *   kept     {"event":"combat_levelname_kept","name":"0x3f9915d3001dc28e","n":<count>,"lowspec":1,"answer":"plain name"}   Info, the first 16 only, written
  *            after the plain function returned (callback_thunk.h rule 1); `KeptPlainCount()` keeps counting
+ *   cap      {"event":"combat_levelname_log_cap","lines":"kept","cap":16,"msg":".."}   Warning, once: written by the 17th substitution (line_budget.h)
+ *   stats    {"event":"combat_levelname_stats","kept_plain":<n>,"final":1,"consequence":".."}   Info, once at the end of the process, when installed
  *   legacy   {"event":"combat_levelname_legacy_switch","file":"levelname.off","replaced_by":"combat.levelname: false",..}   Warning
  *
  * Built with -fno-exceptions, like every combat translation unit.
@@ -61,6 +63,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept;
 
 // True once Install put all four thunks in and until ResetForTest: the companion (boosterpool.h) installs only then.
 bool Installed() noexcept;
+
+// The table's end-of-process step (combat_install.h): writes the final combat_levelname_stats line when the module is installed, nothing otherwise.
+void NoteEnd() noexcept;
 
 // global_mp loads that were given the plain name since install.
 std::uint64_t KeptPlainCount() noexcept;

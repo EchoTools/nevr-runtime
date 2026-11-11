@@ -18,7 +18,11 @@ runm bp_slot_vaddr       $T "s/kSlotVaddr = 0x36cd1f8;/kSlotVaddr = 0x36cd1f0;/"
 runm bp_plain_vaddr      $B "s/image.base + pin::kPlainNameVaddr/image.base + pin::kPlainNameVaddr + 8/"
 runm bp_append_vaddr     $B "s/image.base + pin::kAppendStubVaddr/image.base + pin::kAppendStubVaddr + 4/"
 runm bp_kept_counter     $B "s/  const std::uint64_t n = g_kept.fetch_add(1, std::memory_order_relaxed) + 1;/  const std::uint64_t n = 1;/"
-runm bp_log_unbounded    $B "s/  if (n > kLogFirstKept) return;/  (void)kLogFirstKept;/"
+runm bp_log_unbounded    $B "s/  if (!LineBudget(\&g_keptLines, kLogFirstKept,/  if (!LineBudget(\&g_keptLines, 1000000,/"
+runm bp_no_kept_log      $B "s/  if (!LineBudget(\&g_keptLines, kLogFirstKept,/  if (!LineBudget(\&g_keptLines, 0,/"
+runm bp_stats_dropped    $B "s/  if (g_installed.load(std::memory_order_acquire)) LogStats();/  if (false) LogStats();/"
+runm bp_stats_level      $B "s/sentinel::LogLevel::kInfo, \"combat_boosterpool_stats\"/sentinel::LogLevel::kDebug, \"combat_boosterpool_stats\"/"
+runm bp_off_not_counted  $B "s/    return {false, \"off\", true};/    return {false, \"off\"};/" quest-host-combat combat_install_test
 runm bp_kept_level       $B "s/sentinel::LogLevel::kInfo, \"combat_boosterpool_kept\"/sentinel::LogLevel::kDebug, \"combat_boosterpool_kept\"/"
 runm bp_cache_not_stored $B "s/    g_suffixedName.store(\*suffixed, std::memory_order_release);.*/    (void)0;/"
 runm bp_cache_zero_plain $B "s/  if (\*plain != 0 \&\& \*suffixed != 0) {/  if (*suffixed != 0) {/"
@@ -37,4 +41,5 @@ runm bp_no_lib_check     $B "s/  if (lookup == nullptr || !lookup(sentinel::pinn
 CI=src/quest/combat/combat_install.cpp
 runm ci_booster_switch   $CI "s/boosterpool::Install(g_config.levelname.on, levelname::Installed())/boosterpool::Install(true, levelname::Installed())/" quest-host-combat combat_install_test
 runm ci_booster_needs    $CI "s/boosterpool::Install(g_config.levelname.on, levelname::Installed())/boosterpool::Install(g_config.levelname.on, true)/" quest-host-combat combat_install_test
-runm ci_booster_row      $CI "s/    Module{\"boosterpool\", nullptr, \&BoosterPoolNormal},/    Module{\"boosterpool\", \&BoosterPoolNormal, nullptr},/" quest-host-combat combat_install_test
+runm ci_booster_row      $CI "s/    Module{\"boosterpool\", nullptr, \&BoosterPoolNormal, nullptr, nullptr, \&boosterpool::NoteEnd},/    Module{\"boosterpool\", \&BoosterPoolNormal, nullptr, nullptr, nullptr, \&boosterpool::NoteEnd},/" quest-host-combat combat_install_test
+runm ci_booster_end      $CI "s/, nullptr, nullptr, \&boosterpool::NoteEnd},/, nullptr, nullptr, nullptr},/" quest-host-combat combat_install_test

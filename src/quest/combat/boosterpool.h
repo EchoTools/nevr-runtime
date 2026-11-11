@@ -37,6 +37,8 @@
  *   install  {"event":"combat_boosterpool_install","result":"installed|refused|off","reason":"ok|off_config|needs_levelname|<GotStatus token>|<status token>","key":"combat.levelname",
  *             "slot":"<GotStatus>","consequence":".."}   Info when installed or off, Error when refused
  *   kept     {"event":"combat_boosterpool_kept","name":"0x..","n":<count>,"answer":"plain name"}   Info, the first 16, written after the allocation returned
+ *   cap      {"event":"combat_boosterpool_log_cap","lines":"kept","cap":16,"msg":".."}   Warning, once: written by the 17th substitution (line_budget.h)
+ *   stats    {"event":"combat_boosterpool_stats","kept":<n>,"unreadable":<n>,"final":1,"consequence":".."}   Info, once at the end of the process, when installed
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -60,6 +62,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on, bool levelnameInst
 std::uint64_t KeptCount() noexcept;
 // Calls that passed through unchanged because the plain name could not be read.
 std::uint64_t UnreadableCount() noexcept;
+
+// The table's end-of-process step (combat_install.h): writes the final combat_boosterpool_stats line when the module is installed, nothing otherwise.
+void NoteEnd() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 

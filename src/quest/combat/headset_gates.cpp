@@ -329,7 +329,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
                         {{"result", "off"}, {"reason", "off_config"}, {"gate_perm", choice.permReason}, {"gate_bots", choice.botsReason},
                          {"gate_link", choice.linkReason},
                          {"consequence", "no headset gate is asked for: a Quest keeps the game's own permissions, bot body and menus"}});
-    return {false, "off"};
+    return {false, "off", true};
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_gates_install",

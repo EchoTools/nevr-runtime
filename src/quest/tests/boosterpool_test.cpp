@@ -190,6 +190,10 @@ void TheSuffixedNameIsAskedAsThePlainOne() {
   QCHECK(Has(kept[0].text, std::string("\"name\":\"") + name + "\""));
   for (int i = 0; i < 40; ++i) CallSlot(kSt, Suffixed(kPlain));
   QCHECK(Lines("combat_boosterpool_kept").size() == 16U && boosterpool::KeptCount() == 41);  // the lines are the first 16; the count goes on
+  // the 17th substitution writes one Warning that names the kind and the cap (line_budget.h)
+  const std::vector<Line> capped = Lines("combat_boosterpool_log_cap");
+  QCHECK(capped.size() == 1U && capped[0].level == sentinel::LogLevel::kWarn);
+  QCHECK(capped.size() == 1U && Has(capped[0].text, "\"lines\":\"kept\",\"cap\":16"));
   End();
 }
 
@@ -338,6 +342,25 @@ void ItInstallsOnlyWithLevelname() {
 
 }  // namespace
 
+// The end-of-process line (#2181): every substitution and every unreadable plain name counted. Written by the table's end step, and only when the
+// module is installed.
+void TheStatsLineCountsKeptAndUnreadableAtTheEnd() {
+  Begin();
+  boosterpool::NoteEnd();  // not installed: nothing is written
+  QCHECK(Lines("combat_boosterpool_stats").empty());
+  QCHECK(InstallWithFakes().installed);
+  g_lines.clear();
+  for (int i = 0; i < 3; ++i) CallSlot(kSt, Suffixed(kPlain));
+  boosterpool::SetTargetsForTest(&FakeAppend, 0x1000);
+  CallSlot(kSt, Suffixed(kPlain));  // the plain name cannot be read: the call passes through, counted as unreadable
+  QCHECK(Lines("combat_boosterpool_stats").empty());  // the line is the end's, not a call's
+  boosterpool::NoteEnd();
+  const std::vector<Line> stats = Lines("combat_boosterpool_stats");
+  QCHECK(stats.size() == 1U && stats[0].level == sentinel::LogLevel::kInfo);
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"kept\":3,\"unreadable\":1,\"final\":1,\"consequence\":\""));
+  End();
+}
+
 int main() {
   TheConstantsAreTheStoreLibr15s();
   AnInstallPutsTheThunkInTheWordAndKeepsTheOriginal();
@@ -351,6 +374,7 @@ int main() {
   AWordThatIsNotTheFunctionIsRefused();
   TheOtherRefusalsSayWhy();
   ItInstallsOnlyWithLevelname();
+  TheStatsLineCountsKeptAndUnreadableAtTheEnd();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "boosterpool_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
