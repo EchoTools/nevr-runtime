@@ -354,6 +354,8 @@ jobs:
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        # `just verify` unsets VCPKG_ROOT; tools/vcpkg_root.sh then clones the per-checkout root from this source.
+        echo "NEVR_VCPKG_SOURCE=$HOME/.vcpkg" >> "$GITHUB_ENV"
         # The compiler version plus a hash of every MinGW package vcpkg's compiler hash can see, so a
         # toolchain that moved under the same gcc version (binutils, headers, crt) is a new key and not
         # an exact hit whose archives silently never match.
