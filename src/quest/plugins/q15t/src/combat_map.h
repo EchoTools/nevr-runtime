@@ -1,8 +1,7 @@
-// Whether one of the game's gamespaces holds a combat map: the detector `aibots` and `music` read (aibots.cpp, music.cpp).
+// Whether one of the game's gamespaces holds a combat map.
 //
-// KNOWN-WRONG #2168: the level list below is a second copy of the one the runtime's refresh-rate rule keeps
-// (src/quest/combat/refresh_rate.cpp, which owns the refresh rate and replaced this plugin's rule, #2172). It stays until the two modules
-// that read it move into the runtime (`music`, `aibots`: F17, F18), which then ask the runtime's detector; this file goes with them.
+// KNOWN-WRONG #2168: unused: no module of the plugin reads this (the last readers moved into the runtime). It is removed when the fold ends. Its level list is a
+// second copy of the one the runtime keeps (src/quest/combat/combat_level.h).
 #pragma once
 
 #include <cstdint>

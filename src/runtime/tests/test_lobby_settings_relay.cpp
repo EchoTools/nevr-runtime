@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <zlib.h>
 
+#include <nlohmann/json.hpp>
+
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -345,4 +347,83 @@ TEST(LobbySettingsCleared, LineNamesReasonSessionAndWhetherSettingsHadArrived) {
   EXPECT_NE(without.find("session_id=none"), std::string::npos) << without;
   EXPECT_NE(without.find("had_settings=0"), std::string::npos) << without;
   EXPECT_NE(without.find("json_bytes=0"), std::string::npos) << without;
+}
+
+// #2333: the server's own key. With features, the game and the peers get the service's document with "nevr_server" set;
+// every key of the service's stays as it wrote it.
+TEST(LobbySettingsRelay, TheServersFeaturesAreSetInTheServicesDocument) {
+  const auto frame = MakeFrame(kDocument);
+  Calls calls;
+  const std::vector<std::string> features = {"echocombat", "echocombat_medigun"};
+  const auto report =
+      nevr_game_server::RelayLobbySettings(frame.data(), frame.size(), "sess-7", MakeSinks(calls), &features);
+  ASSERT_TRUE(report.relayed) << report.line;
+  const nlohmann::json sent = nlohmann::json::parse(std::string(calls.sendBody.begin(), calls.sendBody.end()));
+  const nlohmann::json service = nlohmann::json::parse(kDocument);
+  for (auto it = service.begin(); it != service.end(); ++it) EXPECT_EQ(sent.at(it.key()), it.value()) << it.key();
+  EXPECT_EQ(sent.at("nevr_server").at("features"), nlohmann::json(features));
+  EXPECT_EQ(std::string(calls.localMessage.begin() + 8, calls.localMessage.end()),
+            std::string(calls.sendBody.begin(), calls.sendBody.end()));
+  EXPECT_EQ(report.serviceJson, kDocument);
+  EXPECT_EQ(report.jsonBytes, calls.sendBody.size());
+  EXPECT_NE(report.line.find("features=echocombat,echocombat_medigun"), std::string::npos) << report.line;
+}
+
+// A service that writes "nevr_server" itself cannot speak for the server: the server's statement replaces it.
+TEST(LobbySettingsRelay, TheServiceCannotStateTheServersFeatures) {
+  const auto frame = MakeFrame(R"({"parties_unlocked":true,"nevr_server":{"features":["echocombat"]}})");
+  Calls calls;
+  const std::vector<std::string> none;
+  const auto report = nevr_game_server::RelayLobbySettings(frame.data(), frame.size(), "s", MakeSinks(calls), &none);
+  ASSERT_TRUE(report.relayed) << report.line;
+  const nlohmann::json sent = nlohmann::json::parse(std::string(calls.sendBody.begin(), calls.sendBody.end()));
+  EXPECT_EQ(sent.at("nevr_server").at("features"), nlohmann::json::array());
+  EXPECT_EQ(sent.at("parties_unlocked"), true);
+}
+
+TEST(LobbySettingsRaise, AServerWithNoServiceDocumentStatesItsFeaturesAlone) {
+  Calls calls;
+  const auto report = nevr_game_server::RaiseServerLobbySettings({"echocombat"}, "", "sess-3", MakeSinks(calls, true, 2));
+  ASSERT_TRUE(report.relayed) << report.line;
+  ASSERT_EQ(calls.order, (std::vector<std::string>{"local", "send"}));
+  const std::string body(calls.sendBody.begin(), calls.sendBody.end());
+  EXPECT_EQ(body, R"({"nevr_server":{"features":["echocombat"]}})");
+  EXPECT_EQ(calls.localMessage, BuildLobbySettingsLocalEvent(body));
+  EXPECT_EQ(calls.sendItem, std::vector<uint8_t>(8, 0));
+  EXPECT_EQ(calls.sendPeer, kLobbySettingsAllPeers);
+  EXPECT_EQ(report.level, LobbySettingsLogLevel::kInfo);
+  EXPECT_NE(report.line.find("[NEVR.GAMESERVER] server features stated in lobby settings session_id=sess-3 "
+                             "features=echocombat json_bytes=" + std::to_string(body.size()) + " service_keys_kept=0 send_rc=2"),
+            std::string::npos)
+      << report.line;
+}
+
+TEST(LobbySettingsRaise, RaisingOursKeepsTheServicesKeysOfThisSession) {
+  Calls calls;
+  const auto report = nevr_game_server::RaiseServerLobbySettings({}, kDocument, "s", MakeSinks(calls));
+  ASSERT_TRUE(report.relayed) << report.line;
+  const nlohmann::json sent = nlohmann::json::parse(std::string(calls.sendBody.begin(), calls.sendBody.end()));
+  EXPECT_EQ(sent.at("allowed_levels"), nlohmann::json::array({"mpl_arena_a"}));
+  EXPECT_EQ(sent.at("nevr_server").at("features"), nlohmann::json::array());
+  EXPECT_NE(report.line.find("features=none"), std::string::npos) << report.line;
+  EXPECT_NE(report.line.find("service_keys_kept=1"), std::string::npos) << report.line;
+}
+
+TEST(LobbySettingsRaise, NoBroadcasterIsAWarningAndNothingIsSent) {
+  Calls calls;
+  const auto report = nevr_game_server::RaiseServerLobbySettings({"echocombat"}, "", "s", MakeSinks(calls, false));
+  EXPECT_FALSE(report.relayed);
+  EXPECT_EQ(report.drop, LobbySettingsDrop::kNoBroadcaster);
+  EXPECT_EQ(report.level, LobbySettingsLogLevel::kWarning);
+  EXPECT_EQ(calls.sends, 0);
+  EXPECT_NE(report.line.find("server features not stated reason=no_broadcaster"), std::string::npos) << report.line;
+}
+
+TEST(LobbySettingsRaise, AnInvalidFeatureNameIsRefusedNotSent) {
+  Calls calls;
+  const auto report = nevr_game_server::RaiseServerLobbySettings({"Echo Combat"}, "", "s", MakeSinks(calls));
+  EXPECT_FALSE(report.relayed);
+  EXPECT_EQ(calls.locals, 0);
+  EXPECT_EQ(calls.sends, 0);
+  EXPECT_EQ(report.level, LobbySettingsLogLevel::kWarning);
 }
