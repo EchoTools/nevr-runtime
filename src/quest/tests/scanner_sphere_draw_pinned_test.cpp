@@ -4,7 +4,7 @@
 // are the ones the table pins (texel_buffer_guard_targets.h). The game's own pool-18 draw (the low-res transparents pass) is decoded the
 // same way: blend constants through gctx+0x368 on the command buffer at ctx+0x18+8*u8[ctx+0x260], pool 18 through the same stub with the
 // pass's frame key; the .text scans show nothing constructs that pass; the one draw-pipeline create, its blend-state table and
-// CreateBlendState's translation tables, and the two CGS::Initialize fills with the strings they name.
+// the data of CreateBlendState's two tables, and the two CGS::Initialize fills with the strings they name.
 #include <elf.h>
 #include <sys/mman.h>
 
@@ -309,6 +309,25 @@ int main(int argc, char** argv) {
   QCHECK(LdrbOffset(sd::kLowresCmdIndexWord) == sd::kCtxCmdIndexOffset);
   QCHECK(LdrXOffset(sd::kLowresCmdLoadWord) == sd::kCtxCmdBuffersOffset);
 
+  // The stub is the target of kThunkCallSites branches in .text; each has `mov w2,#imm` four words before it, and exactly one imm is
+  // the pool 18, at the pinned call: no other RenderDrawData call has an immediate pool 18.
+  std::uint64_t textBegin = 0;
+  std::uint64_t textFinish = 0;
+  QCHECK(SectionRange(elf, ".text", &textBegin, &textFinish));
+  const TextScan stubScan = ScanText(elf, textBegin, textFinish, 0, sd::kThunkVaddr);
+  QCHECK(stubScan.branchesTo.size() == sd::kThunkCallSites);
+  std::size_t pool18Sites = 0;
+  for (const std::uint64_t site : stubScan.branchesTo) {
+    std::uint32_t mov = 0;
+    QCHECK(WordAt(elf, site - 16, &mov));
+    QCHECK((mov & 0xffe0001fU) == 0x52800002U);  // mov w2,#imm16
+    if (MovImmediate(mov) == sd::kPool18Pool) {
+      ++pool18Sites;
+      QCHECK(site == sd::kPool18CallVaddr);
+    }
+  }
+  QCHECK(pool18Sites == 1);
+
   // (b) SGThreadContext::CmdBuffer is exported and reads the same two fields.
   Elf64_Sym cmd;
   QCHECK(DynamicSymbol(elf, sd::kCmdBufferSymbol, &cmd));
@@ -363,7 +382,7 @@ int main(int argc, char** argv) {
   QCHECK(bs.st_size == (sd::kBlendModeMax + 1) * sd::kBlendStateSize);
   QCHECK(InBss(elf, sd::kBlendStatesVaddr, bs.st_size));
 
-  // CreateBlendState's two tables hold the pinned engine -> Vulkan maps.
+  // CreateBlendState's two tables hold the pinned words (the adrp + add words name them).
   Elf64_Sym cbs;
   QCHECK(DynamicSymbol(elf, sd::kCreateBlendStateSymbol, &cbs));
   QCHECK(cbs.st_value == sd::kCreateBlendStateVaddr);

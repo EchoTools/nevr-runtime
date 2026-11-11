@@ -22,14 +22,17 @@
  *
  * The function. ELF 0x1898b78 (VA 0x1998b78), size 320, the .dynsym value of kRenderDrawDataSymbol (the test reads it): its first instruction is `stp x25,x24,[sp,#-0x40]!`.
  *
- * The blend constants. Upstream's pool-18 draw sets the blend constants before it draws, through the table at gctx+0x368
- * (vkCmdSetBlendConstants); that is upstream's behaviour, not measured in this tree. Measured here: CGS::Initialize stores
- * `str x0,[x29,#0x368]` (ELF 0x18deba8, VA 0x19deba8, word 0xf901b7a0), the store whose offset is that slot.
+ * The blend constants. The game's own pool-18 draw sets four 1.0 through the table at gctx+0x368 (vkCmdSetBlendConstants) on the command
+ * buffer before it draws: measured in (c) below. That upstream's pool-18 draw sets constants through the same slot is upstream's behaviour,
+ * not read here. Also measured: CGS::Initialize stores `str x0,[x29,#0x368]` (ELF 0x18deba8, VA 0x19deba8, word 0xf901b7a0), the store
+ * whose offset is that slot.
  * The gctx word and its object are the ones in texel_buffer_guard_targets.h (ELF 0x370f360, VA 0x380f360; object ELF 0x3775488).
  *
  * The draw of pool 18 itself is the eye-pass change the module makes; it is not pinned here. What the game does when it draws pool 18 is:
  *
- * (c) The low-res transparents pass, the game's only pool-18 draw. NRadEngine::CGRenderPassLowresTransparents::Render (ELF 0x189c854,
+ * (c) The low-res transparents pass, the only RenderDrawData call with an immediate pool 18 (the stub above is the target of 28 `bl` or `b`
+ * in .text, each with `mov w2,#imm` four words before it; one imm is 0x12, at the call below; the test makes this scan; draws through
+ * CGDrawData::Render loops are not covered by it). NRadEngine::CGRenderPassLowresTransparents::Render (ELF 0x189c854,
  * VA 0x199c854, size 852, vtable slot ELF 0x365bb00) takes (this, const CGRenderer&, SGThreadContext&, CGSComputeContext*, u64) in x0..x4
  * and keeps the renderer in x24 (`mov x24,x1` ELF 0x189c87c), the thread context in x19 (`mov x19,x2` 0x189c878) and the u64 in x22
  * (`mov x22,x4` 0x189c88c). In order it calls DownscaleDepth, CGRenderTargetState::Begin, then:
@@ -46,9 +49,11 @@
  *   ELF 0x189c900  ldr x8,[x24,#0x1200]         the return site
  * So the frame key the pool-18 draw passes is the pass's own u64 argument, passed through unchanged, as the eye pass passes its own (x21,
  * its x4) to pool 11: a pool-18 draw made after the pool-11 call can pass x3 of that call. The constants are set on the command buffer
- * before the draw and are not put back after it (the pass goes on to draw pools 0x1d, 0x1f, 0x20, 0x1c, 0x1e through
- * CGDrawData::Render, then ends the render-target state). CGRenderPassMainAndroid::Render (ELF 0x189e838, size 2444) makes no load from
- * gctx+0x368 and no `fmov v0.4s,#1.0` in its 2444 bytes (scanned in the objdump listing): the eye pass never sets blend constants itself.
+ * before the draw. The function has no other load from gctx+0x368 in its 852 bytes (a scan of the listing, not made by the test), so its own
+ * code sets the constants once and does not put other values back; what the pools it draws after the return site (0x1d, 0x1f, 0x20, 0x1c,
+ * 0x1e, through CGDrawData::Render) do with the command buffer's state is not established (reconstruction pending).
+ * CGRenderPassMainAndroid::Render (ELF 0x189e838, size 2444) has no load from gctx+0x368 and no `fmov v0.4s,#1.0` in its 2444 bytes (a scan
+ * of the listing, not made by the test): the eye pass's own code never sets blend constants.
  *
  * Whether the pass runs on Quest. The pass's vtable (ELF 0x365ba90) is named by one GLOB_DAT word, ELF 0x3726128, and the .text loads that
  * word at three places only: its constructor (ELF 0x189b644, 0x189b60c + 0x38), D2 (0x189bfa0) and D0 (0x189c048). The constructor
@@ -72,24 +77,28 @@
  *   ELF 0x18da4ac  mov w2,#0x1                   createInfoCount 1
  *   ELF 0x18da4b8  blr x22
  * A scan of the listing for a load of gctx+0x258 from a register just loaded from the gctx word finds this one site in libr15 (the
- * game's only vkCreateGraphicsPipelines call; the scan is a pattern over the listing, kept in the unit's scratch, not in the test).
- * The colour-blend state of the pipeline is one of the game's blend states, chosen by the u32 at desc+0x2d8:
- *   ELF 0x18da034  ldr w10,[x0,#0x2d8] / 0x18da038 cmp w10,#0x19 (b.gt: no pipeline)   the blend mode, 0..25
+ * game's only vkCreateGraphicsPipelines call; the scan is a pattern over the listing, not made by the test).
+ * Words in that function index CGRawInterface::blendstates by the u32 at desc+0x2d8 (that the indexed entry is the pipeline's colour-blend
+ * state is not established, reconstruction pending):
+ *   ELF 0x18da034  ldr w10,[x0,#0x2d8] / 0x18da038 cmp w10,#0x19   the u32 and its compare with 25 (blendstates has 26 entries)
  *   ELF 0x18da314  adrp x2,0x3718000 / 0x18da318 ldr x2,[x2,#0xc70]   GLOB_DAT CGRawInterface::blendstates
  *   ELF 0x18da324  mov w17,#0x558 / 0x18da334 madd x10,x10,x17,x2     &blendstates[mode], 0x558 bytes each
- * CGRawInterface::blendstates (ELF 0x3782b88, .bss, 35568 bytes = 26 * 0x558) is filled at run time by CGRawInterface::CreateBlendState
- * (ELF 0x188194c), which makes each entry a VkPipelineColorBlendStateCreateInfo (sType 0x1a, `mov w9,#0x1a` 0x18819bc; logicOp 0 and
- * attachmentCount 8, `mov x10,#0x800000000` 0x18819c0; pAttachments = entry + 0x158, `add x8,x1,#0x158` 0x18819b8) and fills eight
- * attachments, at a stride of 0x80 in the entry (as read; the stride of the attachments past the first is not checked against what the
- * driver reads, and the pipeline's attachmentCount comes from the subpass, not from 8). It translates the engine's SGBlendStateDesc per
- * render target (0x20 bytes from desc+8: enable, colour op, alpha op, src colour, dst colour, src alpha, dst alpha, write mask) through two
- * tables: factors at ELF 0x2d6dd38 (`add x11,x11,#0xd38` 0x1881960; engine factor n -> VkBlendFactor kBlendFactorTable[n]) and ops at
- * ELF 0x2d6dd84 (`add x12,x12,#0xd84` 0x1881964; engine op n -> VkBlendOp kBlendOpTable[n]). So the game's additive blend, engine factors
- * 1/1 with op 0, is VK_BLEND_FACTOR_ONE/ONE, VK_BLEND_OP_ADD.
- * What this means for the module: a pipeline is the game's per desc (blend mode, render pass, shaders, ...), made on demand the first time
- * a draw asks for it, and nothing in its create info names a pool. Upstream's create-info predicate (an opaque, depth-tested, not
- * depth-writing, multisampled, one-attachment pipeline becomes additive) is a guess at the pool-18 pipelines from their shape; the game
- * gives no field that confirms it.
+ * CGRawInterface::blendstates (ELF 0x3782b88, .bss, 35568 bytes = 26 * 0x558) is the array the `madd` above indexes. Not established
+ * (reconstruction pending): what fills it. CGRawInterface::CreateBlendState(SGBlendStateDesc const&, SGBlendState&) (ELF 0x188194c, size 148,
+ * .dynsym) has no reconstruction yet; that it fills a blendstates entry, the layout of its SGBlendStateDesc argument (and which of its fields
+ * are an enable, an operation or a factor), the attachment layout it writes (an entry's pAttachments, attachment count and stride), and
+ * how it indexes the two tables named below are not established. What its words carry: `adrp x11,0x2d6d000` (ELF 0x188194c) with
+ * `add x11,x11,#0xd38` (0x1881960) names the u32 table at ELF 0x2d6dd38 and `add x12,x12,#0xd84` (0x1881964, same adrp page) the u32 table
+ * at ELF 0x2d6dd84; the first 19 words of the first (0, 1, 2, 3, 6, 7, 8, 9, 4, 5, 14, 10, 11, 12, 13, 15, 16, 17, 18) and the first 5 of
+ * the second (0, 3, 4, 1, 2) are pinned data (in Vulkan's enums 1 is VK_BLEND_FACTOR_ONE and 0 is VK_BLEND_OP_ADD; what indexes the tables
+ * is not established); and the constants it loads are 0x1a (`mov w9,#0x1a` 0x18819bc, the number of
+ * VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO), `mov x10,#0x800000000` (0x18819c0) and `add x8,x1,#0x158` (0x18819b8, offset
+ * 0x158 from its second argument). Which engine blend factors or operations an additive blend uses, and so which entries of those tables
+ * it reaches, are not established.
+ * What this means for the module, as far as the words above go (the create function and its callers are not reconstructed): a pipeline
+ * is made per desc (blend mode, render pass, shaders, ...), the first time a draw asks for it, and no desc field read above names a pool.
+ * Upstream's create-info predicate (an opaque, depth-tested, not depth-writing, multisampled, one-attachment pipeline becomes additive) is a
+ * guess at the pool-18 pipelines from their shape; the game gives no field that confirms it.
  *
  * (d) The two table fills in CGS::Initialize, each through the game's vkGetDeviceProcAddr (`ldr x8,[x29,#0x88]`) with the device:
  *   vkCreateGraphicsPipelines (gctx+0x258): `ldr x8,[x29,#0x88]` ELF 0x18de7dc, `adrp x1,0x2c63000` 0x18de7e4, `add x1,x1,#0x4a8` 0x18de7e8
@@ -97,7 +106,7 @@
  *   vkCmdSetBlendConstants (gctx+0x368): `ldr x8,[x29,#0x88]` ELF 0x18deb94, `adrp x1,0x2c63000` 0x18deb9c, `add x1,x1,#0xc8a` 0x18deba0
  *     (the string at ELF 0x2c63c8a), `blr x8` 0x18deba4, `str x0,[x29,#0x368]` 0x18deba8.
  *
- * Not established (each waits on a reconstruction listed in the port2 NEEDED list; nothing here was taken from a decompilation):
+ * Not established (each awaits the reconstruction of the function it names; nothing here was taken from a decompilation):
  *   1. Which engine blend modes (0..25) are additive: the mode -> SGBlendStateDesc map is CGMaterial::ConvertToBlendState (ELF 0x18623cc).
  *   2. Which blend mode, render pass and shaders the pool-18 draws' descs carry: the route from a draw entry to its pipeline is
  *      CGDrawData::Render (ELF 0x1836d34) and GetDrawPipelineStateIdx (ELF 0x183c794); the descs' blend mode is material data, not code.
@@ -180,6 +189,7 @@ inline constexpr std::uint32_t kLowresBlendSlotWord = 0xf941b529U;  // ldr x9,[x
 inline constexpr std::uint64_t kPool18ArgVaddr = 0x189c8ecULL;
 inline constexpr std::uint32_t kPool18ArgWord = 0x52800242U;  // mov w2,#0x12
 inline constexpr std::uint32_t kPool18Pool = 18;
+inline constexpr std::size_t kThunkCallSites = 28;  // the `bl`/`b` in .text to the stub (kThunkVaddr); each has `mov w2,#pool` four words before it
 inline constexpr std::uint64_t kPool18CallVaddr = 0x189c8fcULL;
 inline constexpr std::uint32_t kPool18CallWord = 0x97daa911U;  // bl 0xf46d40
 inline constexpr std::uint64_t kPool18ReturnVaddr = 0x189c900ULL;
@@ -262,7 +272,7 @@ inline constexpr pinned::Word kPsoWords[] = {
     {"RegenerateDrawPSOs: bl PSO create", 0x18da5acULL, 0x97fffe98U},
 };
 
-// CreateBlendState and its two translation tables (engine value n -> Vulkan value table[n]).
+// CreateBlendState and its two tables: the pinned data and the words that name them (what indexes the tables is not established).
 inline constexpr const char* kCreateBlendStateSymbol =
     "_ZN10NRadEngine14CGRawInterface16CreateBlendStateERKNS_16SGBlendStateDescERNS_12SGBlendStateE";
 inline constexpr std::uint64_t kCreateBlendStateVaddr = 0x188194cULL;

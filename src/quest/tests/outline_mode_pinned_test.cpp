@@ -115,6 +115,13 @@ std::uint64_t BlTarget(std::uint32_t word, std::uint64_t pc) {
   return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
 }
 
+// The target of a `b.cond`, `cbz` or `cbnz` at pc: pc + imm19 * 4, imm19 (bits 5-23) sign-extended.
+std::uint64_t CondTarget(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = static_cast<std::int64_t>((word >> 5) & 0x7ffffU);
+  if ((imm & 0x40000) != 0) imm -= 0x80000;
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
+}
+
 // The page an `adrp` at pc names: (pc & ~0xfff) + immhi:immlo << 12, immediate sign-extended.
 std::uint64_t AdrpPage(std::uint32_t word, std::uint64_t pc) {
   std::int64_t imm = (static_cast<std::int64_t>((word >> 5) & 0x7ffffU) << 2) | static_cast<std::int64_t>((word >> 29) & 3U);
@@ -242,10 +249,24 @@ int main(int argc, char** argv) {
   for (const auto* w : {&ot::kSceneMeshCount, &ot::kScenePrimRead, &ot::kSceneDrawSetCall, &ot::kSceneDrawSetStride}) {
     within(ot::kSceneSymbol, w->vaddr);
   }
-  for (const auto* w : {&ot::kMeshSkinnedRead, &ot::kMeshBindCall, &ot::kMeshDrawSetInitCall, &ot::kMeshLastField}) {
+  for (const auto* w : {&ot::kMeshSkinnedRead, &ot::kMeshBindCall, &ot::kMeshDrawSetInitCall, &ot::kMeshStoreAt260, &ot::kMeshThisMove,
+                        &ot::kMeshThisSave, &ot::kMeshThisReload, &ot::kMeshBindResultArg, &ot::kMeshDrawSetInitBufArg}) {
     within(ot::kMeshInitializeSymbol, w->vaddr);
   }
-  for (const auto* w : {&ot::kBindComputeFormat, &ot::kBindCaseBaseAdr, &ot::kBindCopySize}) within(ot::kBindSymbol, w->vaddr);
+  for (const auto* w : {&ot::kBindComputeFormat, &ot::kBindCaseBaseAdr, &ot::kBindCopySize, &ot::kBindThisMove, &ot::kBindInputMove,
+                        &ot::kBindResultMove, &ot::kBindElementThis, &ot::kBindElementIndex, &ot::kBindElementArg, &ot::kBindUsageBranch,
+                        &ot::kBindTableLoad, &ot::kBindCaseAdd, &ot::kBindCaseBranch, &ot::kBindCaseFormatArg, &ot::kBindAppendDst,
+                        &ot::kBindAppendSrc, &ot::kBindCopySrc, &ot::kBindCopyDst}) {
+    within(ot::kBindSymbol, w->vaddr);
+  }
+  for (const ot::Call& c : ot::kBindCalls) within(ot::kBindSymbol, c.site.vaddr);
+  for (const auto* w : {&ot::kInitOutlineModeRead, &ot::kInitOutlineModeTest, &ot::kInitOutlineModeBranch}) {
+    within(ot::kInitOutlineDrawSymbol, w->vaddr);
+  }
+  for (const auto* w : {&ot::kOutlinePoolAdrp, &ot::kOutlinePoolTable, &ot::kOutlinePoolLoad, &ot::kOutlinePoolRet}) {
+    within(ot::kOutlineRenderPoolSymbol, w->vaddr);
+  }
+  for (const auto* w : {&ot::kNodeDataMove, &ot::kNodeModeRead, &ot::kNodeModeArg, &ot::kNodeSetModeCall.site}) within(ot::kNodeEnterSymbol, w->vaddr);
 
   // The stubs: each `bl` reaches its stub, and each stub's adrp + ldr name the JUMP_SLOT its symbol's relocation names.
   QCHECK(BlTarget(ot::kSceneDrawSetCall.word, ot::kSceneDrawSetCall.vaddr) == ot::kDrawSetStubVaddr);
@@ -265,6 +286,35 @@ int main(int argc, char** argv) {
     QCHECK(r.slotVaddr == stub.slotVaddr);
   }
   QCHECK(ot::kStubs[3].slotVaddr == ot::kPins.drawSetSlot);
+  QCHECK(ot::kStubs[ot::kStubDrawSetSetMode].slotVaddr == ot::kPins.drawSetSlot);
+  // The other pinned `bl`s each reach the stub named for them (the words themselves are in kBindCalls and the node's call).
+  std::vector<ot::Call> calls(std::begin(ot::kBindCalls), std::end(ot::kBindCalls));
+  calls.push_back(ot::kNodeSetModeCall);
+  for (const ot::Call& c : calls) {
+    CheckWord(r15, c.site);
+    QCHECK((c.site.word & 0xfc000000U) == 0x94000000U);
+    QCHECK(c.stub < std::size(ot::kStubs));
+    const std::uint64_t reached = BlTarget(c.site.word, c.site.vaddr);
+    if (c.stub >= std::size(ot::kStubs) || reached != ot::kStubs[c.stub].vaddr) {
+      std::fprintf(stderr, "outline_mode_pinned_test: %s reaches %#llx\n", c.site.what, static_cast<unsigned long long>(reached));
+    }
+    QCHECK(c.stub < std::size(ot::kStubs) && reached == ot::kStubs[c.stub].vaddr);
+  }
+  // The merge branches: both `b.ne` and `b.hi` of the element test go to the plain append, both `cbz` of Initialize go past the Bind call.
+  QCHECK(CondTarget(ot::kBindStreamBranch.word, ot::kBindStreamBranch.vaddr) == ot::kBindAppendAsIs);
+  QCHECK(CondTarget(ot::kBindUsageBranch.word, ot::kBindUsageBranch.vaddr) == ot::kBindAppendAsIs);
+  QCHECK(CondTarget(ot::kMeshSkinnedTest.word, ot::kMeshSkinnedTest.vaddr) == ot::kMeshMergeSkipVaddr);
+  QCHECK(CondTarget(ot::kMeshCountUsedTest.word, ot::kMeshCountUsedTest.vaddr) == ot::kMeshMergeSkipVaddr);
+  QCHECK(ot::kMeshMergeSkipVaddr > ot::kMeshBindCall.vaddr);
+
+  // OutlineRenderPool: its adrp + add name the table, and the function is those four words (its .dynsym size).
+  QCHECK(AdrpPage(ot::kOutlinePoolAdrp.word, ot::kOutlinePoolAdrp.vaddr) +
+             nevr_quest::combat::pinned::AddImmediate(ot::kOutlinePoolTable.word) ==
+         ot::kOutlinePoolTableVaddr);
+  Elf64_Sym poolSym{};
+  QCHECK(DynamicSymbol(r15, ot::kOutlineRenderPoolSymbol, &poolSym));
+  QCHECK(poolSym.st_size == ot::kOutlineRenderPoolSize);
+  QCHECK(ot::kOutlinePoolRet.vaddr + 4 == poolSym.st_value + poolSym.st_size);
 
   // The merge rule: the adr names the case base, the adrp + add name the table, and the table sends usages 0, 2, 3 and 11 to the
   // case whose `mov w1` names that usage, every other usage to the plain append.
