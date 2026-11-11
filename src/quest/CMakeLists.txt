@@ -261,6 +261,10 @@ target_compile_options(auth_core_test PRIVATE -Wall -Wextra -Werror)
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.
 option(NEVR_QUEST_BUILD_SENTINEL "Build the breakpad crash-reporter .so" ON)
+# A measurement probe for #1737 (sentinel/perf_probe_hook.h): call counts of the functions a combat reconstruction replaces
+# and the voice path's microphone read sizes. A debug build only: OFF unless the configure line sets it, so no release or
+# package-dev APK carries it.
+option(NEVR_QUEST_PERF_PROBE "Build the #1737 measurement probe into the sentinel (debug builds only)" OFF)
 if(NEVR_QUEST_BUILD_SENTINEL AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/CMakeLists.txt")
   add_subdirectory(sentinel)
 endif()

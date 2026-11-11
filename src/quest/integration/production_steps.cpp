@@ -18,6 +18,9 @@
 #include "hook_report.h"
 #include "irradiance_default.h"
 #include "path_rewrite_hook.h"
+#if defined(NEVR_QUEST_PERF_PROBE)
+#include "perf_probe_hook.h"
+#endif
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "splash_skip_hook.h"
@@ -495,6 +498,12 @@ class ProductionSteps final : public Steps {
     if (std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
       nevr_quest::path_rewrite::InstallForServiceOnly();
     }
+#if defined(NEVR_QUEST_PERF_PROBE)
+    // #1737 measurement build only (perf_probe_hook.h): on either file the attach step accepted.
+    if (outcome.verified || std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
+      nevr_quest::perf_probe::Install();
+    }
+#endif
     return outcome.verified;
   }
 
