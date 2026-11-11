@@ -1,5 +1,5 @@
 // Host test for the headset identity (ADR 0031): the rules of quest/headset_profile.h on device names, the settings each profile
-// holds against the values the code gave before that table (the eye pair per texture level, the q15t System heap, the level
+// holds against the values the code gave before that table (the eye pair per texture level, the System heap, the level
 // rate), and the identity step (integration/headset_identity_step.cpp) run over property sets. The step's one headset_profile
 // line is checked field by field against the properties the reader gave it, so a blanked, swapped or misread input fails here.
 //
@@ -62,8 +62,8 @@ void OnlyTheDeviceDecides() {
   QCHECK(headset_profile::Identify(in).profile->id == headset_profile::Id::kQuest3);
 }
 
-// Identify and IdentifyDevice answer the same rule for the same device, whatever the other properties are. The q15t plugin calls
-// IdentifyDevice with the one property it reads; the identity step calls Identify with all three (ADR 0031, R2).
+// Identify and IdentifyDevice answer the same rule for the same device, whatever the other properties are. The combat modules call
+// IdentifyDevice with the one property they read; the identity step calls Identify with all three (ADR 0031, R2).
 void IdentifyDeviceAgreesWithIdentifyForEveryRule() {
   const std::string_view devices[] = {"hollywood", "eureka", "panther", "", "Hollywood", "hollywood2"};
   for (const std::string_view device : devices) {
@@ -128,7 +128,7 @@ void EachLevelIsTodaysPair() {
   QCHECK(tq::SizeFor(tq::Level::kStock, headset_profile::kQuest2).width == 0);
 }
 
-// The q15t System heap is 512 MiB on a Quest 2 and 0 on the others (the row keeps its own 640 MiB target). The level rate is 72
+// The System heap (combat/heaps.cpp) is 512 MiB on a Quest 2 and 0 on the others (the row keeps its own 640 MiB target). The level rate is 72
 // on a Quest 2 and 90 on the others.
 void TheHeapAndTheRateAreTodaysValues() {
   QCHECK(headset_profile::kQuest2.systemHeapMiB == 512);

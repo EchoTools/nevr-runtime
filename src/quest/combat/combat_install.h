@@ -1,0 +1,128 @@
+/* The combat area's two install steps (#2171, docs/adr/0046 rule 6): where the folded combat modules go in, relative to the game's own
+ * setup, and the one line each step writes.
+ *
+ * The moments. The early step is a constructor step of the sentinel's sequence (integration/ctor_sequence.h `install_combat_early`):
+ * after Attach and the early plugin pass, before the clock hook and long before `android_main`. A module that must act before the game
+ * reads its own configuration registers a function for it. The normal step is a post-load action (integration/post_load.h): it runs on the
+ * first non-null `dlopen` the game makes after the sentinel's login and matchmaking installs and after the normal plugin pass has returned,
+ * on the thread that ran it. The q15t plugin installs first on a slot both touch (ADR 0046 rule 7); a module that has moved in must not
+ * install before the plugin's hooks are in.
+ *
+ * The gate. Both steps ask `combat::Active()` (combat_active.h) and install nothing when it is false: a plain release runs no module of
+ * combat's, and a step that is reached anyway writes one `skipped` line and runs no module function. The sequence does not reach them in
+ * that case (it skips `install_combat_early` and asks for no post-load action), so the line is the second line of defence, not the first.
+ *
+ * The table. Each phase runs one registration table, in the table's order: `kModules` in combat_install.cpp (`ShippedModules()` hands it to a test). A module registers one
+ * function per phase it has a step in, or null for none, at the position the q15t plugin installed it (plugin.cpp's order: decals after
+ * impactsnd, wallfire after bvh, the net-tick modules after ec, and so on); the order is explicit, never the order of a directory or a
+ * link. A function is `noexcept`, returns whether the module installed and a fixed status token, and writes the module's own lines
+ * itself (`combat_<module>_*`).
+ *
+ * The lines (sentinel log), N17: each module's outcome by name, and one aggregate. Each module with a step in the phase writes one record as
+ * its function returns, in the table's order, Info, or Warning when it failed:
+ *   {"event":"combat_install_module","phase":"early|normal","module":"<name>","outcome":"installed|failed|off","status":"<token>"}
+ * and then the phase writes its line, one per phase per process:
+ *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe|arena","active":1,
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"msg":"..."}
+ * The outcomes are records of their own, not a list on the phase line: one sentinel line is 768 bytes, and a list of every module outgrows it.
+ * `modules` = `installed` + `failed` + `off`: a module switched off by its key, or with nothing to act on (decals without a decals.bin), is counted
+ * in `off` and nowhere else.
+ * `active` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
+ * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
+ * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
+ * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
+ *
+ * The config lines (ADR 0046 rule 4), written by the constructor's configuration step. `combat_config` is one Info line with the section-wide keys
+ * and, for the modules that predate the next record, their switches as `<module>` and `<module>_source`. A module whose table row names a
+ * switch (`Module::switchKey`) is reported by one `combat_config_switch` record of its own, generated from the table:
+ *   {"event":"combat_config_switch","module":"meshstep","key":"combat.meshstep","on":0|1,"source":"config|default"}
+ * so a unit adds a row, never a key on a line that one sentinel line (768 bytes) cannot hold. The step also hands the configuration to SetConfig,
+ * which the registration table's rows read for their module's switch.
+ * A module whose keys do not fit that line and that predates the record reports them on a line of its own beside it: `combat_config_gates` (the headset gates,
+ * with the same `<key>` and `<key>_source` fields; `gate_link_libs` is a text and is never logged, only its source).
+ *
+ * Built with -fno-exceptions, like every combat translation unit.
+ */
+#pragma once
+
+#include <cstddef>
+
+#include "quest/sentinel/quest_config.h"
+
+namespace nevr_quest::combat {
+
+enum class Phase { kEarly, kNormal };
+const char* PhaseName(Phase phase) noexcept;  // "early", "normal"
+
+// What one module's install function answers: whether it installed, and a fixed token for the line (never a value).
+// `off` is a module that is switched off by its `combat:` key, or has nothing to act on (decals without a decals.bin): nothing was installed and
+// nothing is wrong, so it is neither installed nor failed (`installed` is false) and the phase line counts it apart.
+struct ModuleResult {
+  bool installed;
+  const char* status;
+  bool off = false;
+};
+using InstallFn = ModuleResult (*)() noexcept;
+// A module's step at the end of the process (the game's android_main returned): the counts it kept, written once.
+using EndFn = void (*)() noexcept;
+
+// One row of the registration table: the module's name (its `combat_<module>_*` events), its step in each phase and its step at the end of
+// the process, null for none.
+// A module whose switch is reported as its own `combat_config_switch` record names its `config.yaml` key and the member that holds it.
+struct Module {
+  const char* name;
+  InstallFn early;
+  InstallFn normal;
+  const char* switchKey = nullptr;                                          // e.g. "combat.meshstep"; null: reported on the `combat_config` line
+  nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
+  EndFn end = nullptr;
+};
+
+// What a phase did. `ran` is false when it did not run (combat is off in this process, or the phase already ran or was ended).
+struct Outcome {
+  bool ran = false;
+  std::size_t modules = 0;    // the modules that have a step in this phase
+  std::size_t installed = 0;
+  std::size_t failed = 0;
+  std::size_t off = 0;        // switched off by their `combat:` key, or with nothing to act on: not installed, not failed
+};
+
+// The shipped registration table (the host test reads it to pin each module's row).
+const Module* ShippedModules(std::size_t* count) noexcept;
+
+// The two steps, over the shipped table. Each runs at most once per process.
+Outcome InstallEarly() noexcept;
+Outcome InstallNormal() noexcept;
+
+// The phase over `table[0..count)`, in order: the rule the two steps share, with the table injected (the host test drives it with fakes).
+Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept;
+
+// Why a normal step never got its moment: the fixed tokens of the `reason` field (the plugin loader's tokens for the same two ends).
+namespace reason {
+inline constexpr const char* kPostLoadHookUnavailable = "post_load_hook_unavailable";  // the hook that makes the moment cannot be live
+inline constexpr const char* kGameExitedFirst = "game_exited_first";                    // the game's android_main returned before it
+}  // namespace reason
+
+// The end of the process: each module with an end step writes its own line, once. Writes nothing when combat is off in this process
+// or when the normal step never ran (no module was installed).
+void NoteProcessEnd() noexcept;
+// The same over `table[0..count)` (the host test drives it with fakes).
+void RunEnd(const Module* table, std::size_t count) noexcept;
+
+// Ends the normal step as `not_started` with `reason`: one record, and the step never runs afterwards. Writes nothing when combat is off
+// in this process, when the normal step already ran, or when it was already ended.
+void NoteNormalNotStarted(const char* reason) noexcept;
+
+// Writes the `combat_config` line for `config`.
+void LogConfig(const nevr_quest::CombatConfig& config) noexcept;
+
+// The configuration the modules' switches are read from (their rows in the registration table): set once, by the constructor's
+// configuration step, before either install step runs. Until it is set every switch has its default.
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept;
+
+// ---- test support ------------------------------------------------------------------------------------------------------
+
+// Forgets which phases ran or ended, so the next call runs and logs again, and the configuration SetConfig was given.
+void ResetInstallForTest() noexcept;
+
+}  // namespace nevr_quest::combat

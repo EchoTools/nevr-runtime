@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Point the beta channel of the signed manifest at an earlier listed release (RELEASING.md, "Emergency: roll beta back";
-#1513). Usage: rollback_beta.py vX.Y.Z (--dry-run | --live) [--forward] [--keep-train] [--yes]
+#1513). Usage: rollback_beta.py vX.Y.Z (--dry-run | --live) [--forward] [--yes]
 
 A bad release is already on beta and installers read `channels.beta`. This publishes the manifest again with beta on a
 release the manifest already lists, through the same `sign-manifest.yml` publish the Quest release timer uses, and checks
 that `verify-manifest --live` lists it with every artifact it had. It cannot target a tag the manifest does not list: the
-fix for a bad release is a new release, which reaches beta through the release train and the Quest release timer.
+fix for a bad release is a new release, which a person cuts when it is ready (RELEASING.md) and which reaches beta through
+the Quest release timer, run by hand with --tag.
 
   read_live        `verify-manifest --live` of the release signer, and the manifest the public host serves, held to the
                    sha256 the signer verified
@@ -15,24 +16,18 @@ fix for a bad release is a new release, which reaches beta through the release t
   claims           `release-signer listed-claims --tag vX.Y.Z --live`: the publish's `extra_artifacts`. They must be exactly
                    the target's artifacts that GitHub does not hold (every kind but windows-zip and quest-library), by name,
                    and each must be what the manifest lists for the tag
-  plan             printed: beta now, the target, the direction, manifest_version, the target's artifacts with sizes, and
-                   whether the train will be paused
-  --dry-run        reads (and only reads) the variable and the Quest release timer's lock, and says whether a live run would
-                   be refused; dispatches with dry_run=true, watches, checks the jobs (a dry run records nothing, so the
+  plan             printed: beta now, the target, the direction, manifest_version and the target's artifacts with sizes
+  --dry-run        reads (and only reads) the Quest release timer's lock and the signer's runs, and says whether a live run
+                   would be refused; dispatches with dry_run=true, watches, checks the jobs (a dry run records nothing, so the
                    record job is skipped), checks that beta did not move, and downloads the run's signed manifest and
-                   compares it with the live one. It changes nothing else: no variable.
-  --live --yes     pause_variable  RELEASE_TRAIN := false on EchoTools/nevr-runtime (the release train stops cutting), read back
-                                   (--keep-train skips it). This tool does not stop whatever schedules
-                                   tools/quest_release_timer.py: stop that scheduler yourself before a live run, or the timer
-                                   can publish a release to beta while the rollback is under way
-                   check_timer     no run of tools/quest_release_timer.py holds its lock (<work>/timer.lock, found as the timer
+                   compares it with the live one. It changes nothing else.
+  --live --yes     check_timer     no run of tools/quest_release_timer.py holds its lock (<work>/timer.lock, found as the timer
                                    finds it: QUEST_RELEASE_WORK_ROOT, else under $XDG_STATE_HOME/nevr-runtime), else it refuses
                    check_signer_runs   no `sign-manifest.yml` run on the signer repository is queued or running
-                   recheck         beta has not moved, and the claims still match, while pausing
+                   recheck         beta has not moved, and the claims still match, since they were read
                    dispatch, watch, check_jobs   the live publish; the jobs that publish all succeeded
                    verify_live     beta is the target and every artifact the target listed is still listed
-                   It never resumes the train: it prints the two resume commands, says the train stays paused until someone
-                   runs them, and prints what ships the fix (the train, not this tool) and the false-alarm command.
+                   It prints what ships the fix (a new release, not this tool) and the false-alarm command.
 
 Inputs, from the environment: GH_BIN (default gh), RELEASE_PUBLIC_BASE
 (required), RELEASE_SIGNER_BIN and RELEASE_SIGNER_DIR (both, or neither: then the signer is built from a snapshot of the
@@ -41,11 +36,10 @@ snapshot is removed when the run ends). No R2 credential is read, and none is pa
 1800 s for the signer build and the watch, 7200 s for the watch when the target lists PC game data). Every step appends a
 JSON line (ts, run, event, step, tag, direction, outcome, error) to $XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl; a log
 that cannot be written is a failure. A failed, interrupted or crashed run exits non-zero and names the step; after it began
-to pause or dispatch it says what is paused, what was dispatched (with the run id when known) and how to resume. A rollback
+to dispatch it says what was dispatched (with the run id when known) and what was not done. A rollback
 that was verified but whose scratch could not be removed exits 0 and says so: the outcome the command exists for is done and
-verified, and a non-zero exit would invite a second run. No token, credential or hosting URL is printed or logged: every
-value read from the environment for a credential or the host is replaced by <redacted>, and the stdout of gh and the signer
-(remote content) is never put in an error.
+verified, and a non-zero exit would invite a second run. Nothing a command prints is masked; the stdout of gh and the signer
+(remote content) is not put in an error.
 """
 
 import argparse
@@ -59,7 +53,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.parse
 import uuid
 from collections.abc import Callable
 
@@ -73,12 +66,10 @@ RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MANIFEST_PATH = "nevr-runtime/manifest.json"  # as in quest_release_timer.py
 MANIFEST_LIMIT = 16 << 20
-RELEASE_SLUG = "EchoTools/nevr-runtime"
 SIGNER_SLUG = "thesprockee/release-signer"
 WORKFLOW = "sign-manifest.yml"
-TRAIN_VARIABLE = "RELEASE_TRAIN"
 SIGNER_BINARY = "release-signer"
-DEFAULT_GH = "gh"  # as in quest_release_timer.py and release_train_guard.py
+DEFAULT_GH = "gh"  # as in quest_release_timer.py
 # The jobs of .github/workflows/sign-manifest.yml in the release-signer repository. A live run records and uploads; a dry run
 # checks, signs and verifies the upload, and the record job is skipped. A green run with a skipped job that should have run
 # published nothing, so the conclusions are read job by job.
@@ -150,15 +141,8 @@ class Rollback:
         self.tag = args.tag
         self.version = args.tag[1:]
         self.gh = env.get("GH_BIN") or DEFAULT_GH
-        base = env.get("RELEASE_PUBLIC_BASE", "")
-        redacted = [env[name] for name in SECRET_ENV if env.get(name)]
-        if base:
-            redacted += [base.rstrip("/"), urllib.parse.urlsplit(base).hostname or ""]
-        self.secrets = sorted({s for s in redacted if s}, key=len, reverse=True)
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV}  # the signer and git get no credential
         self.gh_env = {k: v for k, v in env.items() if k not in R2_ENV}  # gh keeps its own token and never sees R2
-        self.pausing = args.live and not args.keep_train
-        self.paused = {"variable": False}
         self.dispatched: str | None = None
         self.dispatch_unknown = False  # gh may have dispatched a publish and left no run id
         self.outcome = ""  # what a finished run did, for the line a failed cleanup adds to
@@ -169,13 +153,8 @@ class Rollback:
 
     # ---- plumbing -------------------------------------------------------------------------------------------------
 
-    def redact(self, text: str) -> str:
-        for secret in self.secrets:
-            text = text.replace(secret, "<redacted>")
-        return text
-
     def say(self, line: str) -> None:
-        print(self.redact(line), flush=True)
+        print(line, flush=True)
 
     def ok(self, step: str, **fields: object) -> None:
         self.current = step
@@ -198,7 +177,7 @@ class Rollback:
     def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
         parts = []
         for label, text in (("stderr", result.stderr), ("stdout", result.stdout if program in LOCAL_OUTPUT else "")):
-            tail = self.redact(text or "")[-TAIL:].strip()
+            tail = (text or "")[-TAIL:].strip()
             if tail:
                 parts.append(f"{label}: {tail}")
         return (" " + " | ".join(parts)) if parts else ""
@@ -345,27 +324,13 @@ class Rollback:
 
     def plan(self, live: dict, beta: str, direction: str, override: bool) -> None:
         manifest = live["manifest"]
-        if self.args.live and self.pausing:
-            train = f"will be paused first ({TRAIN_VARIABLE}=false; the Quest release timer is not stopped by this tool)"
-        elif self.args.live:
-            train = "not touched (--keep-train)"
-        else:
-            train = "not touched (dry run)"
         self.say(f"plan: beta v{beta} -> {self.tag} ({direction}; override={str(override).lower()})")
         self.say(f"plan: manifest_version {live['state'].get('manifest_version', manifest.get('manifest_version'))}")
         for artifact in self.artifacts_of(manifest, self.version):
             self.say(f"plan: artifact {artifact.get('name')} kind={artifact.get('kind')} size={artifact.get('size')}")
-        self.say(f"plan: train {train}")
         self.ok("plan", beta=beta, override=override)
 
     # ---- what a live run needs and a dry run only reports ---------------------------------------------------------
-
-    def variable_value(self, step: str) -> object:
-        listed = self.gh_cmd(step, ["variable", "list", "-R", RELEASE_SLUG, "--json", "name,value"]).stdout
-        try:
-            return next((v.get("value") for v in json.loads(listed) if v.get("name") == TRAIN_VARIABLE), None)
-        except (ValueError, AttributeError, TypeError) as error:
-            raise StepFailure(step, f"the variable list is unreadable: {error}") from error
 
     def timer_lock_held(self) -> bool:
         """Whether a run of tools/quest_release_timer.py holds its lock (<work>/timer.lock) now. Read-only: a work folder or a
@@ -392,15 +357,6 @@ class Rollback:
         except (ValueError, KeyError, TypeError) as error:
             raise StepFailure(step, f"the run list is unreadable: {error}") from error
 
-    def pause_variable(self) -> None:
-        step = "pause_variable"
-        self.gh_cmd(step, ["variable", "set", TRAIN_VARIABLE, "--body", "false", "-R", RELEASE_SLUG])
-        value = self.variable_value(step)
-        if value != "false":
-            raise StepFailure(step, f"{TRAIN_VARIABLE} is {value!r} after the set, not 'false'")
-        self.paused["variable"] = True
-        self.ok(step)
-
     def check_timer(self) -> None:
         step = "check_timer"
         self.current = step
@@ -420,10 +376,6 @@ class Rollback:
     def dry_preflight(self) -> None:
         """Read-only: what a live run would meet, as plan lines. A value that cannot be read is said, not guessed."""
         refused = []
-        try:
-            self.say(f"plan: {TRAIN_VARIABLE} is {self.variable_value('preflight')!r}; a live run sets it to false")
-        except StepFailure as failure:
-            self.say(f"plan: the variable could not be read: {failure}")
         try:
             held = self.timer_lock_held()
             self.say(f"plan: a run of the Quest release timer {'holds' if held else 'does not hold'} its lock")
@@ -447,7 +399,7 @@ class Rollback:
         live = self.read_live(step)
         now = self.beta_of(live)
         if now != beta:
-            raise StepFailure(step, f"beta moved while the train was being paused: it was v{beta}, it is now v{now or 'none'}; "
+            raise StepFailure(step, f"beta moved while the live checks ran: it was v{beta}, it is now v{now or 'none'}; "
                                     "nothing was dispatched")
         self.check_claims_listed(step, claims, live["manifest"])
         self.ok(step, beta=now)
@@ -562,7 +514,7 @@ class Rollback:
         if now != self.version:
             raise StepFailure(step, f"the live manifest lists beta {now or 'nothing'}, not {self.version}")
         listed = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(after["manifest"], self.version)}
-        # `before` is the manifest read after the pause, and the claims were held to it there, so this covers them.
+        # `before` is the manifest read at the recheck, and the claims were held to it there, so this covers them.
         wanted = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(before["manifest"], self.version)}
         lost = sorted(name for name, _ in wanted - listed)
         if lost:
@@ -599,12 +551,9 @@ class Rollback:
         self.plan(live, beta, direction, override)
         if not args.live:
             self.dry_preflight()
-        if self.pausing:
-            self.pause_variable()
         if args.live:
             self.check_timer()
             self.check_signer_runs()
-        if self.pausing:
             live = self.recheck(beta, claims)
         timeout = WATCH_TIMEOUT_PC_DATA if has_pc_game_data(self.artifacts_of(live["manifest"], self.version)) else WATCH_TIMEOUT
         started = time.monotonic()
@@ -627,44 +576,26 @@ class Rollback:
         self.say_next(beta, direction)
 
     def say_next(self, beta: str, direction: str) -> None:
-        if self.pausing:
-            self.say("the train is STILL PAUSED and stays paused until someone resumes it.")
         if direction == "forward":
             self.say(f"undo: python3 tools/rollback_beta.py v{beta} --live --yes")
-            if self.pausing:
-                self.say("resume the train with:")
-                self.say(self.resume_commands())
             return
         self.say("the fix does not ship through this tool, which cannot target a tag the manifest does not list: it ships "
-                 "through the train. The guard cuts the fixed release and the Quest timer publishes it to beta as a forward move "
-                 "that needs no override.")
-        if self.pausing:
-            self.say("to ship the fix, resume the train:")
-            self.say(self.resume_commands())
-        else:
-            self.say("the train was not paused (--keep-train): it will cut the fixed release when main has one.")
+                 "as a new release that a person cuts when it is ready (RELEASING.md), and the Quest release timer, run by "
+                 "hand with --tag, publishes it to beta as a forward move that needs no override.")
         self.say(f"false alarm only (it re-targets v{beta}, the release you rolled back from): "
                  f"python3 tools/rollback_beta.py v{beta} --live --forward --yes")
 
-    def resume_commands(self) -> str:
-        return (f"  {self.gh} variable set {TRAIN_VARIABLE} --body true -R {RELEASE_SLUG}\n"
-                "  and start again whatever schedules tools/quest_release_timer.py, if you stopped it")
-
     def state_report(self) -> list[str]:
-        """What a run that failed after it began to pause or dispatch did and did not do, one fact per line."""
+        """What a live run that failed did and did not do, one fact per line."""
         facts = []
         undone = []
-        if self.pausing:
-            facts.append(f"{TRAIN_VARIABLE} is false" if self.paused["variable"] else f"{TRAIN_VARIABLE} is NOT false")
-            if not self.paused["variable"]:
-                undone.append("pausing the variable")
         if self.dispatched:
             kind = "a dry run: it publishes nothing" if not self.args.live else "its outcome is not confirmed"
             facts.append(f"publish run {self.dispatched} was dispatched ({kind})")
         elif self.dispatch_unknown:
             facts.append("a publish MAY have been dispatched (gh left no run id): list the runs on the signer repo before "
                          "dispatching again")
-        elif self.pausing:
+        elif self.args.live:
             facts.append("no publish was dispatched")
             undone.append("the publish")
         if not facts:
@@ -672,8 +603,6 @@ class Rollback:
         lines = ["state: " + "; ".join(facts)]
         if undone:
             lines.append("NOT done: " + ", ".join(undone))
-        if self.paused["variable"]:
-            lines.append("the pauses that were made stay; undo them with:\n" + self.resume_commands())
         return lines
 
 
@@ -682,9 +611,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("tag", help="the listed release beta should point at, vX.Y.Z")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="dispatch the publish as a dry run and change nothing else")
-    mode.add_argument("--live", action="store_true", help="pause the train, publish, verify (needs --yes)")
+    mode.add_argument("--live", action="store_true", help="publish, verify (needs --yes)")
     parser.add_argument("--forward", action="store_true", help="the target is higher than beta (a roll forward)")
-    parser.add_argument("--keep-train", action="store_true", help="a live run does not pause the train")
     parser.add_argument("--yes", action="store_true", help="confirm a live run")
     return parser
 
@@ -702,16 +630,15 @@ def execute(args: argparse.Namespace, env: dict[str, str], runner: Runner, held:
         log = Log(state_log_path(env), args.tag)
         held["log"] = log
         log.base.update({"run": uuid.uuid4().hex, "direction": ""})
-        log.event("start", step="start", outcome="ok", error="", dry_run=args.dry_run, forward=args.forward,
-                  keep_train=args.keep_train)
+        log.event("start", step="start", outcome="ok", error="", dry_run=args.dry_run, forward=args.forward)
         rollback = held["rollback"] = Rollback(args, env, runner, log)
         if not TAG.fullmatch(args.tag):
             raise Refusal("tag", f"{args.tag!r} is not a release tag (vX.Y.Z)")
         rollback.run()
         problem = rollback.cleanup()
         if problem:
-            sys.stderr.write(f"rollback-beta: {rollback.redact(rollback.outcome)}; {rollback.redact(problem)}\n")
-            log.event("cleanup_failed", step="cleanup", outcome="failed", error=rollback.redact(problem))
+            sys.stderr.write(f"rollback-beta: {rollback.outcome}; {problem}\n")
+            log.event("cleanup_failed", step="cleanup", outcome="failed", error=problem)
         log.event("finish", step="done", outcome="ok", error="")
         return 0
     except StepFailure as failure:
@@ -736,7 +663,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     if rollback is not None:
         leftover = rollback.cleanup()
         if leftover:
-            sys.stderr.write(f"rollback-beta: {rollback.redact(leftover)}\n")
+            sys.stderr.write(f"rollback-beta: {leftover}\n")
     if log is not None:
         try:
             log.close()
@@ -748,16 +675,15 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
 
 def fail(held: dict, step: str, message: str, outcome: str, code: int = 1) -> int:
     rollback, log = held.get("rollback"), held.get("log")
-    redact = rollback.redact if rollback is not None else (lambda text: text)
-    sys.stderr.write(f"rollback-beta: {step}: {redact(message)}\n")
+    sys.stderr.write(f"rollback-beta: {step}: {message}\n")
     if rollback is not None:
         for line in rollback.state_report():
-            sys.stderr.write(redact(line) + "\n")
+            sys.stderr.write(line + "\n")
     if log is not None:
         try:
-            log.event("finish", step=step, outcome=outcome, error=redact(message))
+            log.event("finish", step=step, outcome=outcome, error=message)
         except Exception as log_failure:  # noqa: BLE001 - the report above is out; a log that cannot take this is said, not raised
-            sys.stderr.write(f"rollback-beta: {redact(str(log_failure))}\n")
+            sys.stderr.write(f"rollback-beta: {log_failure}\n")
     return code
 
 

@@ -1,10 +1,8 @@
 #pragma once
 
-// The boot log is the crash spool: it is written before the main log exists, and it is never
-// deleted. At the main log's first open the lines of THIS run are replayed into it, and once the
-// tee has closed the lines it wrote in between are replayed from the byte offset the first replay
-// stopped at, so boot and runtime events are one stream (#5). The main log is not ts-ordered
-// across that boundary: replayed lines keep their original ts and are appended when replayed.
+// Reads the lines of one run from the process's main log (core/run_log_path.h): the launcher shows a server's own log with it (#1246).
+// The boot phase writes into that same file (run_log_writer.h), so there is nothing to replay between two files; ReadNew returns the lines
+// a file gained since a byte offset, which is how a reader follows a log that is still being written.
 
 #include <nlohmann/json.hpp>
 
@@ -23,9 +21,8 @@ struct Line {
   std::string msg;
 };
 
-/// The lines of `runId` in a nevr-boot.jsonl image, in file order. The file accumulates every run;
-/// lines of other runs, lines that are not JSON objects, and lines without a ts or msg (they cannot
-/// be placed in the stream) are skipped.
+/// The lines of `runId` in a main-log image, in file order. Lines of other runs, lines that are not JSON objects, and records
+/// without a ts or msg (the host's and the structured records, which carry no msg) are skipped.
 inline std::vector<Line> ParseRun(std::string_view contents, std::string_view runId) {
   std::vector<Line> lines;
   size_t pos = 0;
@@ -43,7 +40,7 @@ inline std::vector<Line> ParseRun(std::string_view contents, std::string_view ru
     if (run == record.end() || !run->is_string() || run->get<std::string>() != runId) continue;
     if (ts == record.end() || !ts->is_string() || msg == record.end() || !msg->is_string()) continue;
     const auto level = record.find("level");
-    lines.push_back({ts->get<std::string>(), level != record.end() && level->is_string() ? level->get<std::string>() : "info",
+    lines.push_back({ts->get<std::string>(), level != record.end() && level->is_string() ? level->get<std::string>() : "unknown",
                      msg->get<std::string>()});
   }
   return lines;

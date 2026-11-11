@@ -19,8 +19,8 @@ endif()
 
 # The Quest plugin loader (docs/adr/0019-quest-plugin-loader.md): the plan, the ELF checks, the loader, its records and the
 # sentinel's binding of it. The PC's plan builder (runtime/ext/plugin_load_plan.cpp) is compiled in so one `plugins:` list
-# reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, so they are built
-# without exceptions.
+# reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, and slot_hook.cpp
+# installs the handlers the game calls, so all three are built without exceptions.
 add_library(nevr_quest_plugin STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/packaged_plugins.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_plan.cpp"
@@ -32,10 +32,12 @@ add_library(nevr_quest_plugin STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/script_redirect.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/slot_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/ext/plugin_load_plan.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/script_redirect.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/slot_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
@@ -45,8 +47,10 @@ target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibil
 
 add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
+  ../sentinel/build_variant.cpp
   libr15_attach_step.cpp
   post_load.cpp
+  module_observers.cpp
   identity_source.cpp
   stage_log.cpp
   bridge_uri.cpp
@@ -78,6 +82,9 @@ target_compile_options(nevr_quest_integration PRIVATE -Wall -Wextra -Werror
   -fvisibility=hidden -fvisibility-inlines-hidden)
 set_source_files_properties(production_steps.cpp PROPERTIES COMPILE_DEFINITIONS
   "NEVR_QUEST_GIT_COMMIT=\"${NEVR_QUEST_GIT_COMMIT}\";NEVR_QUEST_GIT_DESCRIBE=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_PROJECT_VERSION=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+if(NEVR_QUEST_PERF_PROBE)
+  set_property(SOURCE production_steps.cpp APPEND PROPERTY COMPILE_DEFINITIONS "NEVR_QUEST_PERF_PROBE=1")
+endif()
 
 # Android-linkable builds of the host tests (they cannot execute on the build machine); the same
 # sources run on the host in `just test-quest-integration`.
@@ -109,6 +116,11 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_ho
 # And the #871 resource request hook's counters (also without exceptions).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_request_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_request_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The cargo decision in that hook links the shared shadow builder and pins (docs/adr/0045-cdn-texture-delivery.md).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../core/resource_shadow.cpp"
+                                              "${CMAKE_CURRENT_SOURCE_DIR}/../../core/cargo_resolver.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../../core/resource_shadow.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../../core/cargo_resolver.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 # And the #943 texture-quality hook's counters (also without exceptions).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
@@ -163,8 +175,8 @@ target_compile_options(nevr_autopilot_plugin PRIVATE -Wall -Wextra -Werror -fno-
 # --exclude-libs: the static libc++ archive keeps its symbols out of the export set, as the sentinel does.
 target_link_options(nevr_autopilot_plugin PRIVATE -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL)
 
-# The q15t plugin (#1546): libq15t.so and libq15t_early.so, built here and carried by no APK the release or package-dev recipes
-# build; `just build-quest-q15t` builds them, and the variant recipe packages them.
+# The q15t plugin (#1546): libq15t.so, built here and carried by no APK the release or package-dev recipes build;
+# `just build-quest-q15t` builds it, and the variant and combat recipes package it.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins/q15t" "${CMAKE_CURRENT_BINARY_DIR}/q15t")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
@@ -179,6 +191,86 @@ foreach(variant ok bad)
     "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
   target_link_libraries(frames_probe_${variant} PRIVATE nevr_quest_got_hook)
   target_compile_options(frames_probe_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
+# The same controls for a reviewed assembly entry (sentinel/callback_thunk.h rule 7): the entry's record names the entry and the
+# C++ continuation the sensor walks. In ok the entry's CFI describes its frame and the helper is annotated; in bad the helper is
+# live across the call; in nocfi the entry has no FDE; in naked it is an __attribute__((naked)) function, whose FDE does not
+# describe its frame; in ldr it reads its words with a plain load.
+foreach(variant ok bad nocfi naked ldr)
+  set(_helper ok)
+  if(variant STREQUAL "bad")
+    set(_helper bad)
+  endif()
+  add_executable(frames_asm_probe_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_${_helper}.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  if(variant STREQUAL "nocfi")
+    target_compile_definitions(frames_asm_probe_nocfi PRIVATE PROBE_NO_CFI=1)
+  elseif(variant STREQUAL "naked")
+    target_compile_definitions(frames_asm_probe_naked PRIVATE PROBE_NAKED=1)
+  elseif(variant STREQUAL "ldr")
+    target_compile_definitions(frames_asm_probe_ldr PRIVATE PROBE_PLAIN_LDR=1)
+  endif()
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
+# The assembly-entry check's other controls (tests/quest frames_sensor_test.go, frames_asm_probes_test.go). Each links the ok helper
+# and differs from frames_asm_probe_ok only in the entry's text, so one thing is wrong, or right, in each. Wrong entries the sensor
+# MUST fail:
+#   tailb_sp      a tail b with the frame pushed          secondbl     a second bl after the pop
+#   below_sp      x30 stored below sp                     local_bl     a bl to a label inside the entry
+#   path_br       the br register set by a mov on a path  ldadd_ret    the call-site word read with a relaxed ldadd
+#   cfi_only_at_bl  rows right at the bl, wrong elsewhere  cas_load    the call-site word read with a relaxed cas
+#   x19_unsaved   x30 in x19, the caller's x19 never saved  x29_not_restored  the epilogue reloads x30 only
+#   bl_clobbers_br  a br through a register the bl overwrote  slot_overwrite  a spill over x30's save slot
+#   slot_revived  a second bl relying on a slot sp passed    fde_short   .cfi_endproc before the bl
+#   ret_reg       ret x1                                     remember_no_restore  a path under the wrong row after .cfi_remember_state
+# and correct entries it MUST pass:
+#   x30_in_x19    x30 kept in x19 (saved) with .cfi_register    x30_in_x20_str  the same, x20 saved with a str
+#   clang_fp clang_h clang_k   NDK clang -O2 output           fp_cfa   the CFA on x29     frame32_slot  a 32-byte frame
+#   loop          a call in a loop                              passthrough_last   the pass-through br placed last
+#   str_x30_only  only x30 saved                                sub_then_stp   sub sp, then stp with no writeback
+#   two_exits_remember   two returns under .cfi_remember_state
+# and the plugin's three entries (frames_asm_probe_real.cpp): real_naked as the plugin writes them (the sensor MUST fail them),
+# real_moved as top-level asm() with CFI and ldar loads (it MUST pass them), real_moved_pbldr with powerboost's plain ldr (#2216;
+# it MUST fail that entry).
+set(NEVR_ASM_ENTRY_PROBES
+  tailb_sp secondbl below_sp local_bl path_br ldadd_ret cfi_only_at_bl x30_in_x19
+  cas_load x19_unsaved x29_not_restored bl_clobbers_br slot_overwrite slot_revived fde_short ret_reg remember_no_restore
+  x30_in_x20_str clang_fp clang_h clang_k fp_cfa frame32_slot loop passthrough_last str_x30_only sub_then_stp two_exits_remember)
+foreach(variant ${NEVR_ASM_ENTRY_PROBES})
+  add_executable(frames_asm_probe_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probes/${variant}.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_ok.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probes/${variant}.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
+foreach(variant real_naked real_moved real_moved_pbldr)
+  add_executable(frames_asm_probe_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probe_real.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_ok.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probe_real.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  if(variant STREQUAL "real_naked")
+    target_compile_definitions(frames_asm_probe_real_naked PRIVATE PROBE_REAL_NAKED=1)
+  elseif(variant STREQUAL "real_moved_pbldr")
+    target_compile_definitions(frames_asm_probe_real_moved_pbldr PRIVATE PROBE_REAL_PLAIN_LDR=1)
+  endif()
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
 endforeach()
 
 # The sentinel links the integration, and with it every library package. (Defined here because the

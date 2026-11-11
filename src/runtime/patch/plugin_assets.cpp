@@ -24,13 +24,18 @@
 #include <set>
 #include <utility>
 
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
 
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_buffer_key.h"
+#include "runtime/patch/resource_sets.h"
+#include "runtime/patch/resource_label.h"
 
 namespace nevr::assets {
 
@@ -43,6 +48,10 @@ constexpr uintptr_t kRvaRequest = 0xFA1FE0;      // FUN_140fa1fe0: table lookup 
 constexpr uintptr_t kRvaCompletion = 0xFA16D0;   // CResourceManager::AsyncResourceIOCallback
 constexpr uintptr_t kRvaIsLoaded = 0xFA3410;     // FUN_140fa3410({type, name}) -> loaded?
 constexpr uintptr_t kRvaManager = 0x20A2AB8;     // DAT_1420a2ab8: the resource manager
+constexpr uintptr_t kRvaFindEntry = 0xF9EEE0;    // CPackageManifest::FindEntry(manifest, {type, name}, &index) -> 1 on a hit
+// The resource manager's live manifest: *(manager + 8). Its record count is at +0x30 (docs/engine/asset-system.md).
+constexpr size_t kManagerManifest = 0x8;
+constexpr size_t kManifestCount = 0x30;
 constexpr uintptr_t kRvaSymbolTable = 0x209FE18; // DAT_14209fe18: symbol table used by 0x140fa3410
 constexpr uintptr_t kRvaScheduler = 0x209FE20;   // DAT_14209fe20: task scheduler (0 = initialize inline)
 constexpr uintptr_t kRvaSecondaryOn = 0x20A8A68; // DAT_1420a8a68: 0 turns the second buffer off
@@ -75,6 +84,7 @@ using SubmitFn = uint64_t(__cdecl*)(void* manager, void* resource, void* queue);
 using RequestFn = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
 using CompletionFn = void(__cdecl*)(void* completion);
 using IsLoadedFn = uint64_t(__cdecl*)(uint64_t* key);
+using FindEntryFn = int(__cdecl*)(const void* manifest, const uint64_t* key, uint64_t* index);
 using BufferKeyFn = const uint64_t*(__cdecl*)(void* resource, void* scratch, uint32_t index);
 
 // ── State ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -143,7 +153,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx reason=buffer_mask_0x%x "
                 "(only single-buffer resources are carried)",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name), mask);
         }
         return false;
@@ -155,7 +165,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
         if (FirstWarningFor(asset.type, asset.name)) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx reason=no_task_scheduler",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name));
         }
         return false;
@@ -173,7 +183,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
         if (FirstWarningFor(asset.type, asset.name)) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name), static_cast<unsigned long long>(asset.size),
                 nevr_game_buffer::CopyName(copied));
         }
@@ -197,7 +207,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
 
     Log(EchoVR::LogLevel::Info,
         "[NEVR.ASSET] served from plugin label=%s type=0x%016llx name=0x%016llx bytes=%llu buffers=1",
-        asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+        nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
         static_cast<unsigned long long>(asset.name), static_cast<unsigned long long>(asset.size));
     return true;
 }
@@ -220,6 +230,13 @@ uint64_t __cdecl Hook_Submit(void* manager, void* resource, void* queue) {
 // fail with its generic "Cannot find resource" assert.
 uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey, uint64_t a4, uint64_t a5,
                               void* resource, uint64_t index, void* request) {
+    // #2161: a key a plugin's resource set holds, and the game's manifests do not, is filled from the resource sets'
+    // shadow manifest: the game's own function fills the request from it, and the game's own reader reads the
+    // plugin's file. Every other key goes to the game's manifest unchanged.
+    nevr_resource_sets::NoteRequest();
+    if (const void* shadowManager = nevr_resource_sets::ManagerFor(manager, typeKey, nameKey)) {
+        return g_origRequest(const_cast<void*>(shadowManager), typeKey, nameKey, a4, a5, resource, index, request);
+    }
     if (!Global().Empty()) {
         Asset asset;
         if (Global().Find(typeKey, nameKey, &asset) && FirstWarningFor(typeKey, nameKey ^ 1)) {
@@ -227,28 +244,32 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
                 "[NEVR.ASSET] registered asset requested through a loader path that reads packages "
                 "label=%s type=0x%016llx name=0x%016llx index=%llu (texture mip or archive load); the "
                 "engine will fail this read",
-                asset.label.c_str(), static_cast<unsigned long long>(typeKey),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(typeKey),
                 static_cast<unsigned long long>(nameKey), static_cast<unsigned long long>(index));
         }
     }
     return g_origRequest(manager, typeKey, nameKey, a4, a5, resource, index, request);
 }
 
-bool InstallOne(void* target, void* detour, void** original, const char* what) {
-    MH_STATUS created = MH_CreateHook(target, detour, original);
-    if (created != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.ASSET] hook create failed what=%s target=%p status=%s", what,
-            target, MH_StatusToString(created));
-        return false;
+// One engine hook, through PatchDetour, so HookGuard records it under `name`. PatchDetour reads the game's function from
+// the slot on entry and leaves the trampoline there on success; on failure the slot is put back to the game's function,
+// and PatchDetour's own Warning names the hook.
+bool InstallOne(void* target, void* detour, void** original, const char* name) {
+    *original = target;
+    return PatchDetour(original, detour, name) != FALSE;
+}
+
+// Removes one engine hook and its HookGuard record. MH_ERROR_NOT_CREATED and MH_ERROR_NOT_INITIALIZED mean the hook is
+// already gone: on a dynamic unload, platform_compat's module shutdown (boot.cpp registers it) calls Hooking::Shutdown,
+// which runs MH_Uninitialize and restores every hook before this runs. A removal that fails leaves the hook in place; it
+// is no longer guarded, and that is logged.
+void RetireEngineHook(void* target, const char* what) {
+    const MH_STATUS status = PatchRetire(target);
+    if (status != MH_OK && status != MH_ERROR_NOT_CREATED && status != MH_ERROR_NOT_INITIALIZED) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] hook remove failed what=%s target=%p status=%s; the hook stays in place and is no longer guarded",
+            what, target, MH_StatusToString(status));
     }
-    MH_STATUS enabled = MH_EnableHook(target);
-    if (enabled != MH_OK) {
-        MH_RemoveHook(target);
-        Log(EchoVR::LogLevel::Warning, "[NEVR.ASSET] hook enable failed what=%s target=%p status=%s", what,
-            target, MH_StatusToString(enabled));
-        return false;
-    }
-    return true;
 }
 
 void EnsureHooksInstalled() {
@@ -261,31 +282,120 @@ void EnsureHooksInstalled() {
         return;
     }
 
+    // Each hook is installed on its own, and either works without the other: the submit hook serves plugin assets, the
+    // request hook (the resolver, 0x140fa1fe0) serves resource sets (#2161) and names an asset read through a path
+    // that reads packages. PatchDetour's own Warning names a hook that failed.
     g_submitTarget = reinterpret_cast<void*>(Base() + kRvaSubmit);
     if (!InstallOne(g_submitTarget, reinterpret_cast<void*>(Hook_Submit),
-                    reinterpret_cast<void**>(&g_origSubmit), "submit")) {
+                    reinterpret_cast<void**>(&g_origSubmit), "plugin_assets submit")) {
         g_submitTarget = nullptr;
-        g_hookAttemptFailed = true;
-        return;
     }
     g_requestTarget = reinterpret_cast<void*>(Base() + kRvaRequest);
     if (!InstallOne(g_requestTarget, reinterpret_cast<void*>(Hook_Request),
-                    reinterpret_cast<void**>(&g_origRequest), "request")) {
-        // The submit hook alone serves loads; only the named diagnosis for the direct paths is missing.
+                    reinterpret_cast<void**>(&g_origRequest), "plugin_assets request")) {
         g_requestTarget = nullptr;
     }
     g_hooksInstalled = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.ASSET] hooks installed submit=%p request=%p", g_submitTarget,
-        g_requestTarget);
+    const bool both = g_submitTarget != nullptr && g_requestTarget != nullptr;
+    Log(both ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.ASSET] hooks installed submit=%s request=%s%s%s", g_submitTarget ? "yes" : "no",
+        g_requestTarget ? "yes" : "no", g_submitTarget ? "" : " (plugin assets are not served)",
+        g_requestTarget ? "" : " (resource sets are not served)");
 }
 
 }  // namespace
 
+bool EnsureResolverHook() {
+    EnsureHooksInstalled();
+    return g_requestTarget != nullptr;
+}
+
+// The game's live manifest, or null before the resource manager or its manifest exists.
+static const void* LiveManifest() {
+    if (!EchoVR::g_GameBaseAddress) return nullptr;
+    const uintptr_t managerAt = ReadAt<uintptr_t>(kRvaManager);
+    if (managerAt == 0) return nullptr;
+    const void* manifest = nullptr;
+    std::memcpy(&manifest, reinterpret_cast<const void*>(managerAt + kManagerManifest), sizeof(manifest));
+    return manifest;
+}
+
+uint64_t StockRecordCount() {
+    const void* manifest = LiveManifest();
+    if (manifest == nullptr) return 0;
+    uint64_t count = 0;
+    std::memcpy(&count, static_cast<const uint8_t*>(manifest) + kManifestCount, sizeof(count));
+    return count;
+}
+
+static bool ManifestHas(const void* manifest, uint64_t type, uint64_t name) {
+    if (manifest == nullptr) return false;
+    const uint64_t key[2] = {type, name};
+    uint64_t index = 0;
+    const auto findEntry = reinterpret_cast<FindEntryFn>(Base() + kRvaFindEntry);
+    return findEntry(manifest, key, &index) != 0;
+}
+
+bool StockHas(uint64_t type, uint64_t name) { return ManifestHas(LiveManifest(), type, name); }
+
+bool ManagerHas(const void* manager, uint64_t type, uint64_t name) {
+    if (manager == nullptr) return false;
+    const void* manifest = nullptr;
+    std::memcpy(&manifest, static_cast<const uint8_t*>(manager) + kManagerManifest, sizeof(manifest));
+    return ManifestHas(manifest, type, name);
+}
+
+std::vector<AssetManifestKey> AssetManifestKeys() {
+    std::vector<AssetManifestKey> keys;
+    for (const Asset& asset : Global().Snapshot()) {
+        keys.push_back({asset.type, asset.name, asset.label});
+        keys.push_back({nevr_resource_key::OnDiskType(asset.type, 0), asset.name, asset.label});
+        keys.push_back({nevr_resource_key::OnDiskType(asset.type, 1), asset.name, asset.label});
+    }
+    return keys;
+}
+
+#ifdef NEVR_TEST_HOOKS
+bool InstallHookForTest(void* target, void* detour, void** original, const char* name) {
+    return InstallOne(target, detour, original, name);
+}
+void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target, what); }
+void SetRequestOriginalForTest(RequestFnForTest original) { g_origRequest = original; }
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name) {
+    return Hook_Request(manager, type, name, 0, 0, nullptr, 0, nullptr);
+}
+#endif
+
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
     Global().SetLoadedProbe(&EngineHasLoaded);
-    const RegisterStatus status = Global().Register(type, name, data, size, label);
-    const char* shown = label ? label : "";
+    // A label outside the rule is refused before any line is written: no line carries a plugin's bytes, only their length
+    // and the rule (#2225). Registry::Register applies the same rule itself, so it cannot be skipped by another caller.
+    if (!nevr_resource_label::Ok(label)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] register refused status=%d reason=%s label_bytes=%zu type=0x%016llx name=0x%016llx bytes=%llu "
+            "rule=\"%s\" - nothing is registered",
+            static_cast<int>(RegisterStatus::BadArgument), nevr_resource_label::kReason,
+            nevr_resource_label::Bytes(label), static_cast<unsigned long long>(type),
+            static_cast<unsigned long long>(name), static_cast<unsigned long long>(size), nevr_resource_label::kRule);
+        return RegisterStatus::BadArgument;
+    }
+    const char* shown = label;  // follows the rule, so it is safe to write
+    RegisterStatus status = RegisterStatus::Ok;
+    {
+        // #2161: a resource a plugin's resource set holds is the set's; the two would be served by different hooks.
+        // The check and the Register hold the lock a set's registration holds over its check of the assets and its Add.
+        const std::unique_lock<std::mutex> claim = nevr_resource_sets::LockKeyClaims();
+        if (nevr_resource_sets::HoldsKey(type, name)) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s (a "
+                "plugin's resource set holds this key)",
+                shown, static_cast<unsigned long long>(type), static_cast<unsigned long long>(name),
+                static_cast<unsigned long long>(size), ToString(RegisterStatus::Duplicate));
+            return RegisterStatus::Duplicate;
+        }
+        status = Global().Register(type, name, data, size, label);
+    }
     if (status != RegisterStatus::Ok) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s", shown,
@@ -309,7 +419,7 @@ size_t DeregisterPluginAssets(const void* start, const void* end) {
     const size_t count = Global().Deregister(start, end, &removed);
     for (const Asset& a : removed) {
         Log(EchoVR::LogLevel::Info, "[NEVR.ASSET] deregistered label=%s type=0x%016llx name=0x%016llx",
-            a.label.c_str(), static_cast<unsigned long long>(a.type),
+            nevr_resource_sets::Printable(a.label.c_str()).c_str(), static_cast<unsigned long long>(a.type),
             static_cast<unsigned long long>(a.name));
     }
     return count;
@@ -318,13 +428,11 @@ size_t DeregisterPluginAssets(const void* start, const void* end) {
 void ShutdownPluginAssets() {
     std::lock_guard<std::mutex> lock(g_installMutex);
     if (g_requestTarget) {
-        MH_DisableHook(g_requestTarget);
-        MH_RemoveHook(g_requestTarget);
+        RetireEngineHook(g_requestTarget, "plugin_assets request");
         g_requestTarget = nullptr;
     }
     if (g_submitTarget) {
-        MH_DisableHook(g_submitTarget);
-        MH_RemoveHook(g_submitTarget);
+        RetireEngineHook(g_submitTarget, "plugin_assets submit");
         g_submitTarget = nullptr;
     }
     g_origSubmit = nullptr;

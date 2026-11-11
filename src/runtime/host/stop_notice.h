@@ -40,11 +40,28 @@ inline constexpr wchar_t kStopNoticeRefusedText[] =
 inline constexpr wchar_t kStopNoticeClockText[] =
     L"nEVR couldn't start: nevr-runtime.dll could not be checked because this PC's date or time is wrong. Set the "
     L"date and time, then start nEVR again.";
+// A release that was swapped in, mapped and then failed (ADR 0024, section 6): the host puts the previous one back at
+// the next start, so the notice says that and what to do.
+inline constexpr wchar_t kStopNoticeUpdateFailedText[] =
+    L"nEVR was updated, but the new version couldn't start. The previous version will be put back: start nEVR again.";
 inline constexpr wchar_t kStopNoticeTitle[] = L"nEVR";
 
 /// The words for a runtime that did not load: the outcome decides, and for a refusal the verifier's reason.
-inline const wchar_t* StopNoticeTextFor(RuntimeLoadOutcome outcome, nevr_plugin_signature::Reason reason) {
+/// `update_rolls_back` is true when the failed runtime is a release the host just swapped in and has marked to be put
+/// back at the next start (RuntimeLoadResult::update_failed): then, for a runtime that was mapped and failed, the notice
+/// says so.
+inline const wchar_t* StopNoticeTextFor(RuntimeLoadOutcome outcome, nevr_plugin_signature::Reason reason,
+                                        bool update_rolls_back = false) {
   using nevr_plugin_signature::Reason;
+  if (update_rolls_back) {
+    switch (outcome) {
+      case RuntimeLoadOutcome::kMissingEntry:
+      case RuntimeLoadOutcome::kNullDescriptor:
+      case RuntimeLoadOutcome::kAbiRejected:
+      case RuntimeLoadOutcome::kInitFailed: return kStopNoticeUpdateFailedText;
+      default: break;
+    }
+  }
   switch (outcome) {
     case RuntimeLoadOutcome::kRuntimeAbsent: return kStopNoticeMissingText;
     case RuntimeLoadOutcome::kRuntimeRefused:

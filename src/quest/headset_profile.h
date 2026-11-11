@@ -1,10 +1,10 @@
 /* The Quest headset identity and the settings each headset gets (ADR 0031): one function that names the headset from its
  * system properties, and one table of the settings each headset's row holds.
  *
- * Pure: no Android, no game header, no hook. The sentinel (integration/headset_identity_step.cpp) and the q15t plugin
- * (plugins/q15t/src/heaps.cpp, refresh_rate.cpp) both include it. The plugin is a separate library: it reads
- * ro.product.device itself and calls IdentifyDevice, which is Identify with that one input. Identify and IdentifyDevice agree
- * on every rule (headset_profile_test.cpp). Each caller reads its own properties; this header never does.
+ * Pure: no Android, no game header, no hook. The identity step (integration/headset_identity_step.cpp) and the combat modules
+ * (combat/heaps.cpp, combat/refresh_rate.cpp) include it. The combat modules read ro.product.device themselves and call
+ * IdentifyDevice, which is Identify with that one input, until the identity step's profile is handed to them (#2037). Identify
+ * and IdentifyDevice agree on every rule (headset_profile_test.cpp). Each caller reads its own properties; this header never does.
  *
  * The rules are checked in order and the first match wins. A rule names its inputs and their exact values. A rule never
  * infers a headset from another quantity (an eye width, a refresh rate, a memory size; ADR 0031, R3). The last rule has an
@@ -12,8 +12,8 @@
  *
  * The settings a row holds (ADR 0031, "A profile holds settings only"):
  *   - eye: the per-eye size each texture-quality level asks the headset runtime for (texture_quality.h, ADR 0015).
- *   - systemHeapMiB: the q15t System heap in MiB (q15t heaps.cpp); 0 keeps the row's own target.
- *   - levelHz: the refresh rate the combat maps and the lobby run at (q15t refresh_rate.cpp).
+ *   - systemHeapMiB: the System heap in MiB (combat/heaps.cpp); 0 keeps the row's own target.
+ *   - levelHz: the refresh rate the combat maps (and, with combat.refresh_rate_lobby, the combat lobby) run at (combat/refresh_rate.cpp).
  */
 #pragma once
 
@@ -45,26 +45,26 @@ struct Profile {
   Id id;
   const char* name;             // the profile's name in the headset_profile line
   const EyeSize* eye;           // kEyeLevelCount entries
-  int systemHeapMiB;            // the q15t System heap; 0 keeps the row's own target
+  int systemHeapMiB;            // the System heap (combat/heaps.cpp); 0 keeps the row's own target
   float levelHz;                // the combat-map and lobby refresh rate
 };
 
-// Quest 2 (ro.product.device "hollywood"): the source build's memsys:253 and the "hollywood" check heaps.cpp and
-// refresh_rate.cpp made before this table (docs/quest/q15t/modules/heaps.md R07, docs/quest/q15t/adr/0002). The eye sizes are
+// Quest 2 (ro.product.device "hollywood"): the source build's memsys:253 and the "hollywood" check the heap and refresh-rate
+// modules made before this table (docs/quest/combat/heaps.md R07, docs/quest/combat/adr/0002-level-refresh-rate-default.md). The eye sizes are
 // the Quest 2 column of the community patch's Texture Resolution table (ADR 0015): measured on no headset here.
 inline constexpr EyeSize kQuest2Eyes[kEyeLevelCount] = {
     {0, 0}, {1152, 1264}, {1440, 1584}, {1728, 1904}, {2016, 2224}, {2304, 2528}, {2592, 2848}};
 inline constexpr Profile kQuest2 = {Id::kQuest2, "quest2", kQuest2Eyes, 512, 72.f};
 
 // Quest 3 (ro.product.device "eureka"). The eye sizes are the Quest 3 column of the same table: the one the patch's values
-// were measured on (ADR 0015). The heap keeps the row's target and the rate is the match rate, as the q15t modules gave
+// were measured on (ADR 0015). The heap keeps the row's target and the rate is the match rate, as the heap and refresh-rate modules gave
 // every headset that is not hollywood before this table.
 inline constexpr EyeSize kQuest3Eyes[kEyeLevelCount] = {
     {0, 0}, {1344, 1408}, {1680, 1760}, {2376, 2568}, {3072, 3380}, {3584, 3944}, {4096, 4506}};
 inline constexpr Profile kQuest3 = {Id::kQuest3, "quest3", kQuest3Eyes, 0, 90.f};
 
 // Any headset no rule names. Its eye table is the Quest 2 one: at every level that table is no larger than the Quest 3 one, so
-// no such headset gets a bigger eye buffer than the Quest 3 values would give it. The heap and rate are the ones the q15t
+// no such headset gets a bigger eye buffer than the Quest 3 values would give it. The heap and rate are the ones the heap and refresh-rate
 // modules gave every headset that is not a Quest 2 (0 keeps the row's target; 90 Hz). None of these values is measured on a
 // headset that no rule names. A generic headset's own size is not inferred (ADR 0031, R3); a headset that needs other values
 // gets its own rule and row.
@@ -98,7 +98,7 @@ inline Match Identify(const Inputs& in) noexcept {
   return {"generic", &kGeneric};  // not reached: the last rule matches every device
 }
 
-// The match for ro.product.device alone, the one input the rules read today. The q15t plugin reads only that property.
+// The match for ro.product.device alone, the one input the rules read today. The combat modules read only that property (#2037).
 inline Match IdentifyDevice(std::string_view device) noexcept {
   Inputs inputs;
   inputs.device = device;

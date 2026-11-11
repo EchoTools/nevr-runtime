@@ -10,6 +10,8 @@
 #include <string>
 
 #include "abi/echovr.h"
+#include "core/logging.h"
+#include "runtime/server/broadcaster_address.h"
 #include "runtime/server/gameserver.h"
 #include "runtime/hook/patching.h"  // NevrUPnPConfig
 #include "runtime/server/upnp.h"
@@ -41,12 +43,5 @@ inline std::string GuidToUuidString(const GUID& guid) {
   snprintf(buf, sizeof(buf), "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
            static_cast<unsigned long>(guid.Data1), guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2],
            guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
-  return buf;
-}
-
-// Helper to convert IPv4 address (uint32_t) to string
-inline std::string Ipv4ToString(uint32_t ip) {
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (ip >> 0) & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
   return buf;
 }

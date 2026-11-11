@@ -66,15 +66,33 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         self.assertIn('kSigactionSymbol = "sigaction"', pinned)
         self.assertIn('kSignalSymbol = "signal"', pinned)
 
-    def test_the_hook_installs_both_thunks_on_the_pinned_targets_and_never_logs_from_a_handler(self):
+    def test_the_hook_installs_both_thunks_on_the_pinned_targets(self):
         hook = code("sentinel/crash_first_hook.cpp")
         install = body(hook, "bool Install() noexcept")
         self.assertIn("LibR15Sigaction()", install)
         self.assertIn("LibR15Signal()", install)
-        for handler in ("int SigactionHandler(", "SignalHandlerFn SignalHandler("):
+
+    def test_a_handler_logs_its_first_displacement_only_through_the_gate_and_never_from_the_crash_path(self):
+        # #2006: the decision line is written from the game's ordinary context. The handlers call NoteFirstDisplacement, which
+        # checks the crash-path counter and the once-flag before LogFields, and OnSignal brackets its chain with the counter.
+        hook = code("sentinel/crash_first_hook.cpp")
+        for handler, how in (("int SigactionHandler(", "sigaction"), ("SignalHandlerFn SignalHandler(", "signal")):
             text = body(hook, handler)
             self.assertNotIn("LogFields", text)
             self.assertNotIn("__android_log", text)
+            self.assertIn("if (Remember(index,", text)
+            self.assertIn(f'NoteFirstDisplacement(index, "{how}", ', text)
+        note = body(hook, "void NoteFirstDisplacement(")
+        gate = note.index("g_crashPath.load(")
+        once = note.index("g_displacedLogged[index].exchange(")
+        write = note.index("sentinel::LogFields(")
+        self.assertLess(gate, once)
+        self.assertLess(once, write)
+        self.assertIn('"crash_first_displaced"', note)
+        self.assertIn('"handler"', note)
+        on_signal = body(hook, "void OnSignal(")
+        self.assertIn("g_crashPath.fetch_add(", on_signal)
+        self.assertLess(on_signal.index("g_crashPath.fetch_sub("), on_signal.index("SYS_tgkill"))
         # A guarded signal's request is answered here and never reaches libc.
         guarded = body(hook, "int SigactionHandler(")
         self.assertEqual(guarded.count("original("), 1)
@@ -93,9 +111,8 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
     def test_the_hook_is_built_without_exceptions_and_the_host_test_runs_in_test_quest_hooks(self):
         cmake = (QUEST / "sentinel/CMakeLists.txt").read_text()
         self.assertEqual(cmake.count("crash_first_hook.cpp"), 2)  # a source, and the -fno-exceptions list
-        justfile = (ROOT / "justfile").read_text()
-        self.assertIn("src/quest/tests/crash_first_hook_test.cpp", justfile)
-        self.assertIn("timeout 120 \"$out/crash_first_hook_test\"", justfile)
+        hooks_cmake = (ROOT / "src/quest/host_tests/groups/hooks.cmake").read_text()
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(crash_first_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/crash_first_hook_test\.cpp")
 
 
 class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):
@@ -114,8 +131,8 @@ class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):
     def test_the_dlopen_hook_hands_every_module_to_the_observer_before_any_action(self):
         post_load = code("integration/post_load.cpp")
         after = body(post_load, "void AfterDlopen(")
-        self.assertLess(after.index("observer(name, handle)"), after.index("RunSlot("))
-        self.assertLess(after.index("observer(name, handle)"), after.index("RunPlugins("))
+        self.assertLess(after.index("NotifyModuleLoaded(name, handle)"), after.index("RunSlot("))
+        self.assertLess(after.index("NotifyModuleLoaded(name, handle)"), after.index("RunPluginsAndCombat("))
 
     def test_the_crash_first_step_arms_the_observer_and_makes_sure_the_dlopen_hook_is_live(self):
         step = body(code("sentinel/entry.cpp"), "bool InstallCrashFirstHook() noexcept")

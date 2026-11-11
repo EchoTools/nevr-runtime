@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
+#include "runtime/lifecycle/crash_record_line.h"
 #include "runtime/lifecycle/crash_report_win.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
 
@@ -21,6 +22,7 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <cstring>
 #include <exception>
 #include <new>
 #include <string>
@@ -32,6 +34,7 @@
 #include "core/logging.h"
 #include "core/crash_report.h"
 #include "core/nevr_root.h"
+#include "core/run_log_path.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
@@ -41,6 +44,7 @@
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/log/error_dialog_depth.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
 // its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
@@ -123,6 +127,9 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   g_gameLoopJmpBufValid.store(crashCount == 0, std::memory_order_release);
 
   if (crashCount > 0) {
+    // #2245: the longjmp ran no destructor, so a mark the game's error dialog set on this thread is cleared here;
+    // otherwise every later line of the thread would be recorded at error.
+    nevr_error_dialog::ResetAfterLongjmp();
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] game loop crash recovered count=%d recovery=exhausted outcome=server_hold "
         "(game loop will not run again; broadcaster/HTTP API stay up for a supervisor to "
@@ -369,38 +376,33 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // the %s/%d/%u/%llX conversions used here MinGW's implementation performs no
 // allocation. No float conversions are used (those may allocate on some libcs).
 
-// The crash record (beta gate G17): a tester launching from the Meta app has no console, so the
-// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\nevr\echovr\logs\nevr-crash-<run id>.txt, next to the run log,
-// once a crash path has been entered (ArmCrashRecord). The path is built at init; the handler only opens
-// and appends with raw syscalls and flushes every line, because the process may die at any point (N70).
+// The crash record (beta gate G17): a tester launching from the Meta app has no console, so the [NEVR.CRASH] lines also go into the
+// process's one main log, %LOCALAPPDATA%\nevr\echovr\logs\nevr-<creation time>.jsonl (core/run_log_path.h), the file the run log, the boot
+// phase and the host write to (docs/standards/logging.md, "One log"). Each line is one JSON record there (tag NEVR.CRASH, event
+// crash_record, the line as `msg`); there is no crash text file and no copy beside the game. The path is built at init and the file is
+// opened by ArmCrashRecord; the handler only appends with raw syscalls, one complete record per WriteFile, and flushes every record,
+// because the process may die at any point (N70: no Log(), no heap, no lock). When %LOCALAPPDATA% cannot be resolved there is no main
+// log to write to and the lines go to standard error only; the run log's own writer reports that on standard error at boot.
 static char g_crashRecordPath[MAX_PATH] = {};
 static HANDLE g_crashRecordHandle = INVALID_HANDLE_VALUE;
 static volatile LONG g_crashRecordArmed = 0;
 
 static void PrepareCrashRecordPath() {
   const std::string logs = nevr_root::LogsDir(nevr_root::RootA());  // empty when LOCALAPPDATA is unset or too long
-  int n = 0;
-  if (!logs.empty()) {
-    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\nevr-crash-%s.txt", logs.c_str(), GetRunId());
-  } else {
-    char exe[MAX_PATH] = {};
-    const DWORD elen = GetModuleFileNameA(nullptr, exe, MAX_PATH);
-    if (elen == 0 || elen >= MAX_PATH) return;
-    char* slash = strrchr(exe, '\\');
-    if (slash != nullptr) *slash = '\0';
-    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\logs\\nevr-crash-%s.txt", exe, GetRunId());
-  }
-  if (n <= 0 || n >= static_cast<int>(sizeof(g_crashRecordPath))) g_crashRecordPath[0] = '\0';
+  if (logs.empty()) return;
+  const std::string path = nevr_run_log::PathForThisProcess(logs);
+  if (path.empty() || path.size() >= sizeof(g_crashRecordPath)) return;
+  std::memcpy(g_crashRecordPath, path.c_str(), path.size() + 1);
 }
 
 static void VehWrite(const char* buf, size_t len);
 
-// From here on every [NEVR.CRASH] line is also written to the crash record. The first call opens it and
-// writes a header (run id, UTC time) so the file stands on its own.
+// From here on every [NEVR.CRASH] line is also a record in the main log. The first call opens the file and writes a header record
+// (run id, UTC time) so the crash stands out in it.
 static void ArmCrashRecord() {
   if (InterlockedExchange(&g_crashRecordArmed, 1) != 0 || g_crashRecordPath[0] == '\0') return;
-  g_crashRecordHandle = CreateFileA(g_crashRecordPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  g_crashRecordHandle = CreateFileA(g_crashRecordPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (g_crashRecordHandle == INVALID_HANDLE_VALUE) return;
   SYSTEMTIME st{};
   GetSystemTime(&st);
@@ -416,8 +418,18 @@ static void VehWrite(const char* buf, size_t len) {
   DWORD written = 0;
   if (hErr != nullptr && hErr != INVALID_HANDLE_VALUE) WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
   if (g_crashRecordArmed != 0 && g_crashRecordHandle != INVALID_HANDLE_VALUE) {
-    WriteFile(g_crashRecordHandle, buf, static_cast<DWORD>(len), &written, nullptr);
-    FlushFileBuffers(g_crashRecordHandle);
+    // One crash line as one record of the main log (crash_record_line.h): a fixed stack buffer, no heap (N70).
+    SYSTEMTIME st{};
+    GetSystemTime(&st);
+    char ts[32];
+    snprintf(ts, sizeof(ts), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+             st.wMilliseconds);
+    char record[1536];
+    const size_t recordLen = nevr_crash_recovery::BuildCrashRecord(buf, len, ts, GetRunId(), record, sizeof(record));
+    if (recordLen != 0) {
+      WriteFile(g_crashRecordHandle, record, static_cast<DWORD>(recordLen), &written, nullptr);
+      FlushFileBuffers(g_crashRecordHandle);
+    }
   }
 }
 
@@ -1062,10 +1074,10 @@ void InstallCrashFilterInstrumentation() {
     nevr_crash_win::RegisterCrashReportPlatform(ready ? crashes.c_str() : "", &LookupModuleForReport);
   }
   if (g_crashRecordPath[0] != '\0') {
-    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash record path=%s (written only if the game crashes)",
+    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash record in the main log path=%s (written only if the game crashes)",
         g_crashRecordPath);
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: no LOCALAPPDATA or module path");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: %LOCALAPPDATA% is unset or too long, so there is no main log to put it in (the crash lines go to standard error only)");
   }
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
                                        nevr_patch_addresses::CRASH_EXCEPTION_FILTER);

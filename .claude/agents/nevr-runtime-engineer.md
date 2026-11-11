@@ -51,28 +51,30 @@ feels risky":
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
    decision gates on the invariants → spec-before-code (2 review passes) →
-   the quick check on the PR's tip → file findings as GitHub issues + commit as
-   AGENTS.md "Commit and verification conventions" says (author Andrew Bates, unsigned,
-   one `Co-Authored-By: <agent name> <agents@sprock.io>` trailer). The skill is the
+   the quick check on the branch's tip → file findings as GitHub issues + commit as
+   AGENTS.md "Commit and verification conventions" says (author Spritz Metis Sprock, unsigned,
+   a `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a `Co-Authored-By: Andrew Bates
+   <a@sprock.io>` trailer, and a credit trailer for anyone whose work is integrated) → fresh-context review
+   (MERGE or FIX) → land locally (AGENTS.md "Landing"). The skill is the
    procedure; this primer is the repo knowledge it operates on. Passing a gate
    without its verification action is skipping the gate.
 
-**The PR gate is the quick check, not `just verify`.** AGENTS.md "Builds" defines it:
+**The gate before landing is the quick check, not `just verify`.** AGENTS.md "Builds" defines it:
 
-> **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
+> **A branch runs the quick check before it lands, not `just verify`.** The quick check is: the build (`just build`), the test
 > recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
-> `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test runs on main after the release cut, not on a PR. The GTest floor is not stored:
+> `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test runs on main after the release cut, not on a branch. The GTest floor is not stored:
 > `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
-> when HEAD has fewer. [...] Every PR, whatever it touches, also runs
-> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
-> not run is named as not run.
+> when HEAD has fewer. [...] Every change, whatever it touches, also runs
+> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the branch's tip, in the build slice, and report each item with its exit code in
+> the commit message; an item not run is named as not run.
 
 The build item is `just build` and its exit code, which is nonzero when the build
 fails (the recipe is a plain `cmake --build`).
-`just verify` runs only on main, after the release cut, once per cut; a PR does
-not run it and a reviewer does not ask for it (AGENTS.md "Builds", next bullet).
-A runtime or auth change's PC login runs on main after the release cut, never on a PR (below, and AGENTS.md
-"Verification before merge" / "Client login test mechanics"), on a
+`just verify` runs only on main, after the release cut, once per cut; a branch does
+not run it and the review does not ask for it (AGENTS.md "Builds", next bullet).
+A runtime or auth change's PC login runs on main after the release cut, never on a branch (below, and AGENTS.md
+"Verification before landing" / "Client login test mechanics"), on a
 throwaway copy of the install, nested display. A `ninja -t inputs` / `-t deps` proof
 that the shipped DLL is unchanged is separate information; it never stands in for the login.
 Every "done/verified" claim resolves against the quick check items you actually ran.
@@ -112,10 +114,10 @@ Sensor N109 fails if `${CMAKE_CURRENT_SOURCE_DIR}` returns to that target.
 returns nothing). A defect you find and do not fix gets a GitHub issue in the same turn
 (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn"),
 written as a falsifiable claim: Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md
-"What a PR carries"). The `N<number>` rules are tags in code comments and in the
+"What a landed commit carries"). The `N<number>` rules are tags in code comments and in the
 `just verify` recipe, indexed in AGENTS.md "The N-rules index". The highest tag in
-`src`, `tools` and `justfile` on origin/main is **N146**
-(`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`). Read the
+`src`, `tools` and `justfile` on origin/main is **N151**
+(`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`; `N802` in that list is a Python lint code in two `# noqa` comments, not a rule). Read the
 rule's comment at the site before changing a file the index guards. Anything asserting
 a ledger of N-entries, "N119 is OPEN", or that the tags stop near N92 or N120 is a
 stale snapshot.
@@ -181,7 +183,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 ## Modules vs plugins — the distinction that causes hangs
 
-- **MODULES are statically linked into BugSplat64.dll.** `src/runtime/lifecycle/boot.cpp`
+- **MODULES are statically linked into nevr-runtime.dll.** `src/runtime/lifecycle/boot.cpp`
   declares `platform_compat_Init` and `token_auth_Init` (and the `_ApiVersion` /
   `_Shutdown` entry points), calls them in that order (`platform_compat` → `token_auth`;
   the load order is load-bearing), and registers each with `RegisterStaticModule`
@@ -202,7 +204,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   continues. A plugin that re-hooks an address the runtime already owns is also
   `ServerFatal` (N84).
 - **JSONL structured logging is BUILT IN — NOT a plugin.** It lives in
-  `src/runtime/log/builtin_filter.cpp`, inside `BugSplat64.dll`. There is
+  `src/runtime/log/builtin_filter.cpp`, inside `nevr-runtime.dll`. There is
   nothing to deploy and no plugins directory is required for it.
   **Do NOT "restore" `log_filter.dll` to fix a logging problem — that plugin
   CAUSES the outage it looks like it would fix.** The loader refuses it by name
@@ -293,11 +295,11 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   (`src/runtime/lifecycle/config.cpp`) for stock-engine keys only; it is optional, and
   when none is found the runtime supplies a built-in game config. Absence logs, it is
   not fatal.
-- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 31 entries), e.g.
+- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 36 entries), e.g.
   `nevr_socket_uri` → `services.socket_uri`, `nevr_http_uri` → `auth.http_uri`,
   `matchingservice_host` → `services.matchmaking`, `nevr_serverdb_uri` →
   `services.serverdb_uri`, `external_ip` → `network.external_ip`, `upnp` →
-  `network.upnp`, plus secrets `nevr_http_key`, `nevr_server_key`, `nevr_password`.
+  `network.upnp`, plus secrets `nevr_http_key`, `nevr_server_key`.
   **Never print secret VALUES** — key names and presence/absence only.
 - `RedirectServiceUrl` (`config.cpp`) runs inside `JsonValueAsStringHook`, only after
   `ArmServiceRedirects()` has been called at the start of the deferred runtime bootstrap.
@@ -440,14 +442,14 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
 
 - Work happens in a worktree on a branch cut from `origin/main`, never on local `main`
   (AGENTS.md "Branch lifecycle"): `git worktree add --no-track -b <seat>/<issue>-<slug>
-  .claude/worktrees/<branch> origin/main`, lock it with a reason, push only by explicit
-  refspec (`git push origin HEAD:refs/heads/<branch>`), and delete the worktree, local
-  branch and origin branch in the same turn the PR merges or closes. Update with
-  `git fetch` + `git merge origin/main`, never `git pull`; no rebase, amend or force-push
+  .claude/worktrees/<branch> origin/main`, lock it with a reason, keep the branch local,
+  land it on `main` through AGENTS.md "Landing" (no pull requests), and delete the worktree and
+  local branch in the same turn it lands or is abandoned. Update with
+  `git fetch` + `git rebase origin/main` on the unpushed branch, never `git pull`; no rebase, amend or force-push
   on a pushed branch. Scratch lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only); keep a
   ledger row for every worktree, branch and scratch file you create in the ledger file
   `REAP_LEDGER` names (maintainers only).
-- **Maintainers only.** Push branches by explicit refspec only. Never `git push --mirror`, and never push a raw SHA from a maintainer clone. Before any push, run the push-time check in the maintainers' private notes. Never push, merge or rebase from local `main` without the owner's per-instance instruction.
+- **Maintainers only.** Push `main` by explicit refspec only, through AGENTS.md "Landing". only with `just land`, from the branch's own worktree (AGENTS.md "Landing"). Never `git push --mirror`, never force-push `main`, and never push a raw SHA from a maintainer clone.
 - `.claude/` is gitignored except the files `.gitignore` negates: the merge-cleanup skill, the nevr-work skill and this primer. Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
 - `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548). The symlink, the `replace`
   directives, the harness `require`, and the harness-importing integration suites
@@ -583,8 +585,8 @@ adds: read the failing program's own logs first):
   from BSR via `just proto` first.
 - `rsync --delete` at the game install root, or write to any path in the
   NEVER TOUCH list.
-- Push, merge, or rebase from local `main` without explicit per-instance
-  instruction from Andrew. Never `git push --mirror` and never push a raw SHA
+- Push `main` other than through AGENTS.md "Landing" (after a fresh-context review's
+  MERGE). Never force-push `main`, never `git push --mirror` and never push a raw SHA
   from a maintainer clone.
 - Print secret VALUES from `config.json`. Key names and presence only.
 - Introduce environment variables as a configuration channel.
@@ -613,8 +615,8 @@ adds: read the failing program's own logs first):
   modules are static) and no `LibOVRPlatform64_1.dll`.
 - **Assuming plugins are loaded because they built or sit in `plugins/`.** The loader
   reads the `plugins:` list in `config.yaml`; a DLL the config does not name is ignored.
-- **Calling a green `just verify` the PR gate, or a `ninja -t inputs` proof the login test.**
-  A PR runs the quick check; the PC login test runs on main after the release cut.
+- **Calling a green `just verify` the gate before landing, or a `ninja -t inputs` proof the login test.**
+  A branch runs the quick check; the PC login test runs on main after the release cut.
 - **Deploying `log_filter.dll` to "restore" structured logging.** Structured
   logging is built into `BugSplat64.dll`; that plugin is superseded, refused by
   name, and is the cause of the outage it appears to fix (N89).

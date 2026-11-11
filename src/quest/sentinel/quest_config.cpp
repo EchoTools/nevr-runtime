@@ -5,6 +5,7 @@
 #include "runtime/patch/invite_config.h"
 
 #include <array>
+#include <cstring>
 #include <exception>
 #include <optional>
 #include <string_view>
@@ -40,7 +41,62 @@ constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          
 constexpr const char* kPnsradProviderKey = "diagnostics.pnsrad_provider";        // Quest only (default false, #1220)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
-constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
+constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphics` has
+constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
+constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
+constexpr const char* kAssetsCdnUrlKey = "assets.cdn_url";
+constexpr const char* kAssetsManifestKey = "assets.manifest";
+constexpr const char* kAssetsRequiredOnlyKey = "assets.required_only";
+constexpr const char* kAssetsLabelsPath = "assets.labels";
+constexpr std::size_t kMaxAssetLabels = 32;
+constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
+constexpr const char* kCombatHeapsKey = "combat.heaps";           // Quest only (default true, #2175)
+constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only (default true, #2175)
+constexpr const char* kCombatRefreshRateKey = "combat.refresh_rate";                  // Quest only (default true, #2172)
+constexpr const char* kCombatRefreshRateLobbyKey = "combat.refresh_rate_lobby";        // Quest only (default FALSE, #2172: arena shares the lobby)
+constexpr const char* kCombatRefreshRateQuest2Key = "combat.refresh_rate_quest2_72";   // Quest only (default true, #2172)
+constexpr const char* kCombatMeshstepKey = "combat.meshstep";      // Quest only (default true, #2177)
+constexpr const char* kCombatInstmodelKey = "combat.instmodel";    // Quest only (default true, #2177)
+constexpr const char* kCombatShaderstepKey = "combat.shaderstep";  // Quest only (default true, #2177)
+constexpr const char* kCombatTablestepKey = "combat.tablestep";    // Quest only (default true, #2177)
+constexpr const char* kCombatGatePermKey = "combat.gate_perm";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateBotsKey = "combat.gate_bots";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
+constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
+constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
+constexpr const char* kCombatLevelNameKey = "combat.levelname";                       // Quest only (default true, #2181)
+constexpr const char* kCombatHudmeterKey = "combat.hudmeter";                          // Quest only (default true, #2186)
+constexpr const char* kCombatShieldGammaKey = "combat.shieldgamma_gamma";              // Quest only (default FALSE, #2186: a test switch upstream)
+constexpr const char* kCombatShieldTubeMirrorKey = "combat.shieldgamma_tube_mirror";   // Quest only (default true, #2186)
+constexpr const char* kCombatGunconnectKey = "combat.gunconnect";            // Quest only (default true, #2185)
+constexpr const char* kCombatAibotsKey = "combat.aibots";                    // Quest only (default true, #2185)
+constexpr const char* kCombatAibotsScenarioKey = "combat.aibots_scenario";  // Quest only (default: RandomAttack, #2185)
+constexpr const char* kCombatWeaponArmKey = "combat.weapon_arm";            // Quest only (default true, #2185)
+constexpr const char* kCombatImpactsndKey = "combat.impactsnd";            // Quest only (default true, #2183)
+constexpr const char* kCombatImpactsndWriteKey = "combat.impactsnd_write";  // Quest only (default true, #2183)
+constexpr const char* kCombatDecalsKey = "combat.decals";                  // Quest only (default true, #2183: upstream fxdecal.on; inert without decals.bin)
+constexpr const char* kCombatDecalsFlipUKey = "combat.decals_flip_u";      // Quest only (default false, #2183)
+constexpr const char* kCombatDecalsFlipVKey = "combat.decals_flip_v";      // Quest only (default false, #2183)
+constexpr const char* kCombatBvhKey = "combat.bvh";                // Quest only (default true, #2182)
+constexpr const char* kCombatBvhGateKey = "combat.bvh_gate";       // Quest only (default true, #2182)
+constexpr const char* kCombatBvhTouchKey = "combat.bvh_touch";     // Quest only (default true, #2182)
+constexpr const char* kCombatWallfireKey = "combat.wallfire";      // Quest only (default true, #2182)
+constexpr const char* kCombatSendguardKey = "combat.sendguard";   // Quest only (default true, #2179)
+constexpr const char* kCombatMusicKey = "combat.music";            // Quest only (default true, #2184)
+constexpr const char* kCombatSensorwdKey = "combat.sensorwd";      // Quest only (default true, #2184)
+constexpr const char* kCombatEcKey = "combat.ec";                  // Quest only (default true, #2187)
+constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only (default: types=VPTO equip hide, #2187)
+constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
+constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
+constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
+constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
+constexpr const char* kCombatFxtrailKey = "combat.fxtrail";                      // Quest only (default true, #2178)
+constexpr const char* kCombatVoipdropKey = "combat.voipdrop";                    // Quest only (default true, #2178)
+constexpr const char* kCombatCustctxKey = "combat.custctx";                      // Quest only (default true, #2178)
+constexpr const char* kCombatDroneguardKey = "combat.droneguard";                // Quest only (default true, #2178)
+constexpr const char* kCombatDroneguardStage1Key = "combat.droneguard_stage1";   // Quest only (default FALSE, #2178)
+constexpr const char* kCombatPeerclampKey = "combat.peerclamp";                  // Quest only (default true, #2178)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -209,7 +265,7 @@ void FallBackToStock(LoadResult& r, const std::string& why) {
           texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, very_low, low, medium, high, very_high, ultra)");
 }
 
-// Any key under `graphics` other than texture_quality is a mistake the file's author wants to hear about: a misspelling
+// Any key under `graphics` other than texture_quality and hand_flip is a mistake the file's author wants to hear about: a misspelling
 // (`texture_qualty`) or a different case (`Texture_Quality`) would otherwise give the default without a word, and when the
 // default is raised that is a silent change of level. The level itself is not touched (the key is absent, so it is the
 // default). The name is the file's own word, so it is named only when it is short printable ASCII (DescribeRejectedWord).
@@ -217,12 +273,12 @@ void WarnUnknownGraphicsKeys(const nevr::NevrConfig& cfg, LoadResult& r) {
   if (cfg.Kind(kTextureQualitySection) != nevr::NodeKind::kMapping) return;
   std::size_t unknown = 0;
   for (const std::string& key : cfg.MappingKeys(kTextureQualitySection)) {
-    if (key == kTextureQualityName) continue;
+    if (key == kTextureQualityName || key == kHandFlipName) continue;
     if (++unknown > kMaxUnknownKeyWarnings) continue;
     Add(r, LogLevel::kWarn,
         std::string("config file key=") + kTextureQualitySection + " rejected reason=unknown_key name=" +
-            DescribeRejectedWord(key) + " (ignored; the only key under " + kTextureQualitySection + " is " +
-            kTextureQualityName + ")");
+            DescribeRejectedWord(key) + " (ignored; the keys under " + kTextureQualitySection + " are " +
+            kTextureQualityName + " and " + kHandFlipName + ")");
   }
   if (unknown > kMaxUnknownKeyWarnings) {
     Add(r, LogLevel::kWarn,
@@ -264,6 +320,174 @@ void ReadTextureQuality(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.textureQuality = {level, Source::kFile};
 }
 
+// graphics.hand_flip (#2082). Absent: Off, from the default. A boolean: that value, from the file (false is the file's word too, so the
+// start line says `config`). Anything else: Off, from the default, and ReadBool's one Warning that names the key.
+void ReadHandFlip(const nevr::NevrConfig& cfg, LoadResult& r) {
+  const bool given = cfg.GetBool(kHandFlipKey).has_value();
+  // The getters give nullopt for an absent key and for a node that is not a scalar alike (a mapping, a list, a key with no value);
+  // the kind tells them apart, and the second is a mistake.
+  if (!cfg.GetString(kHandFlipKey) && cfg.Kind(kHandFlipKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kHandFlipKey + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, kHandFlipKey, false, r);
+  r.config.handFlip = {on, given ? Source::kFile : Source::kAbsent};
+}
+
+// The CDN host's base: https, a host, no query, fragment or credentials, no control or space character, ending in '/'.
+bool NormalizeCdnBase(const std::string& in, std::string* out) {
+  static const std::string kScheme = "https://";
+  if (in.size() <= kScheme.size() || in.size() > 200 || in.compare(0, kScheme.size(), kScheme) != 0) return false;
+  for (const char c : in) {
+    if (static_cast<unsigned char>(c) <= 0x20 || static_cast<unsigned char>(c) >= 0x7f || c == '?' || c == '#' || c == '@') return false;
+  }
+  const std::size_t hostEnd = in.find('/', kScheme.size());
+  if ((hostEnd == std::string::npos ? in.size() : hostEnd) == kScheme.size()) return false;  // no host
+  *out = in.back() == '/' ? in : in + "/";
+  return true;
+}
+
+// A manifest path below the host: relative, plain characters, no "..", ending in .json.
+bool IsManifestPath(const std::string& p) {
+  if (p.empty() || p.size() > 128 || p[0] == '/' || p.size() < 6 || p.compare(p.size() - 5, 5, ".json") != 0) return false;
+  if (p.find("..") != std::string::npos) return false;
+  for (const char c : p) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '/';
+    if (!ok) return false;
+  }
+  return true;
+}
+
+bool IsAssetLabel(const std::string& s) {
+  if (s.empty() || s.size() > 48) return false;
+  for (const char c : s) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+  }
+  return true;
+}
+
+// assets.* (docs/adr/0045). Every key is optional; a wrong one is a Warning naming the key and the default stays.
+void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
+  AssetsChoice a;
+  bool given = false;
+  if (cfg.Kind(kAssetsCdnUrlKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::string> value = cfg.GetString(kAssetsCdnUrlKey);
+    std::string base;
+    if (value && NormalizeCdnBase(*value, &base)) {
+      a.cdnUrl = base;
+      given = true;
+    } else {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsCdnUrlKey + " rejected reason=not_an_https_address (default stays)");
+    }
+  }
+  if (cfg.Kind(kAssetsManifestKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::string> value = cfg.GetString(kAssetsManifestKey);
+    if (value && IsManifestPath(*value)) {
+      a.manifest = *value;
+      given = true;
+    } else {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_json_path (default stays)");
+    }
+  }
+  if (cfg.Kind(kAssetsRequiredOnlyKey) != nevr::NodeKind::kAbsent) {
+    if (cfg.GetBool(kAssetsRequiredOnlyKey).has_value()) {
+      a.requiredOnly = ReadBool(cfg, kAssetsRequiredOnlyKey, false, r);
+      given = true;
+    } else {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsRequiredOnlyKey + " rejected reason=not_a_boolean (default stays)");
+    }
+  }
+  const nevr::NodeKind labelsKind = cfg.Kind(kAssetsLabelsPath);
+  if (labelsKind == nevr::NodeKind::kMapping) {
+    std::size_t seen = 0;
+    for (const std::string& label : cfg.MappingKeys(kAssetsLabelsPath)) {
+      if (++seen > kMaxAssetLabels) {
+        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=too_many_labels more=" +
+                                    std::to_string(seen - kMaxAssetLabels) + " (ignored)");
+        break;
+      }
+      if (!IsAssetLabel(label)) {
+        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=bad_label_name name=" +
+                                    DescribeRejectedWord(label) + " (ignored)");
+        continue;
+      }
+      const std::string path = std::string(kAssetsLabelsPath) + "." + label;
+      const std::optional<std::string> state = cfg.GetString(path);
+      if (state && (*state == "on" || *state == "off" || *state == "required")) {
+        a.labels.emplace_back(label, *state);
+        given = true;
+      } else {
+        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=bad_state label=" + label +
+                                    " (the label keeps its default; allowed: on, off, required)");
+      }
+    }
+  } else if (labelsKind != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=not_a_mapping (default stays)");
+  }
+  a.source = given ? Source::kFile : Source::kAbsent;
+  r.config.assets = std::move(a);
+}
+
+// combat.force (#2170). Absent: not asked, from the default. A boolean: that value, from the file (false is the file's word too, so the
+// log line says `config`). Anything else: not asked, from the default, and ReadBool's one Warning that names the key.
+void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
+  const bool given = cfg.GetBool(kCombatForceKey).has_value();
+  // The getters give nullopt for an absent key and for a node that is not a scalar alike (a mapping, a list, a key with no value);
+  // the kind tells them apart, and the second is a mistake.
+  if (!cfg.GetString(kCombatForceKey) && cfg.Kind(kCombatForceKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kCombatForceKey + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, kCombatForceKey, false, r);
+  r.config.combat.force = {on, given ? Source::kFile : Source::kAbsent};
+}
+
+// A folded combat module's switch (#2175). Absent: on, from the default. A boolean: that value, from the file. Anything else: on, from the
+// default, and ReadBool's one Warning that names the key.
+CombatSwitch ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, LoadResult& r, bool fallback = true) {
+  const bool given = cfg.GetBool(key).has_value();
+  if (!cfg.GetString(key) && cfg.Kind(key) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, key, fallback, r);
+  return {on, given ? Source::kFile : Source::kAbsent};
+}
+
+// A folded combat module's text value (#2180). A string: that text, from the file (an empty one is kept: the module reads it as "none"). A text
+// longer than the buffer, or a value that is not a string, keeps the module's default with a Warning that names the key. The text is never logged.
+CombatText ReadCombatText(const nevr::NevrConfig& cfg, const char* key, LoadResult& r) {
+  CombatText out;
+  const std::optional<std::string> value = cfg.GetString(key);
+  if (!value) {
+    if (cfg.Kind(key) != nevr::NodeKind::kAbsent) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_string (default stays)");
+    }
+    return out;
+  }
+  if (value->size() >= kCombatTextMax) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=too_long (default stays)");
+    return out;
+  }
+  std::memcpy(out.text, value->data(), value->size());
+  out.text[value->size()] = '\0';
+  out.source = Source::kFile;
+  return out;
+}
+
+// A folded combat module's integer (#2187). An integer in [lo, hi]: that value, from the file. Absent: the default. Anything else (not an
+// integer, or outside the range): the default, with a Warning that names the key.
+CombatInt ReadCombatInt(const nevr::NevrConfig& cfg, const char* key, int lo, int hi, int fallback, LoadResult& r) {
+  if (cfg.Kind(key) == nevr::NodeKind::kAbsent) return {fallback, Source::kAbsent};
+  const std::optional<std::int64_t> value = cfg.GetInt(key);
+  if (!value) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_an_integer (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  if (*value < lo || *value > hi) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=out_of_range (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  return {static_cast<int>(*value), Source::kFile};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -273,11 +497,14 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
             " (the text is kept as written; a key that uses one counts as unset)");
   }
   if (cfg.DuplicateKeyCount() != 0 || cfg.UnknownKeyCount() != 0) {
-    // Counts only (#583): the first value of a duplicate is the one read, and an unknown key is ignored.
+    // The counts and the key names (#583, #2244), never a value: the first value of a duplicate is the one read, and an
+    // unknown key is ignored.
     Add(r, LogLevel::kWarn,
         "config file=" + path + " duplicates=" + std::to_string(cfg.DuplicateKeyCount()) +
             " unknown_nested=" + std::to_string(cfg.UnknownKeyCount()) +
-            " (a duplicate key's first value is read; an unknown key is ignored; no names or values are logged)");
+            " (a duplicate key's first value is read; an unknown key is ignored) duplicate_keys=" +
+            nevr::JoinKeyNamesForLog(cfg.DuplicateKeyNames()) +
+            " unknown_keys=" + nevr::JoinKeyNamesForLog(cfg.UnknownKeyNames()));
   }
   for (const KeySpec& k : kKeys) {
     bool unsetBare = false;
@@ -306,6 +533,56 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.pnsradProvider = ReadBool(cfg, kPnsradProviderKey, false, r);
   want.inviteCodes = ReadInviteCodes(cfg, r);
   ReadTextureQuality(cfg, r);
+  ReadHandFlip(cfg, r);
+  ReadAssets(cfg, r);
+  ReadCombatForce(cfg, r);
+  r.config.combat.heaps = ReadCombatSwitch(cfg, kCombatHeapsKey, r);
+  r.config.combat.memsys = ReadCombatSwitch(cfg, kCombatMemsysKey, r);
+  r.config.combat.refreshRate = ReadCombatSwitch(cfg, kCombatRefreshRateKey, r);
+  r.config.combat.refreshRateLobby = ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r, /*fallback=*/false);
+  r.config.combat.refreshRateQuest2At72 = ReadCombatSwitch(cfg, kCombatRefreshRateQuest2Key, r);
+  r.config.combat.meshstep = ReadCombatSwitch(cfg, kCombatMeshstepKey, r);
+  r.config.combat.instmodel = ReadCombatSwitch(cfg, kCombatInstmodelKey, r);
+  r.config.combat.shaderstep = ReadCombatSwitch(cfg, kCombatShaderstepKey, r);
+  r.config.combat.tablestep = ReadCombatSwitch(cfg, kCombatTablestepKey, r);
+  r.config.combat.gatePerm = ReadCombatSwitch(cfg, kCombatGatePermKey, r);
+  r.config.combat.gateBots = ReadCombatSwitch(cfg, kCombatGateBotsKey, r);
+  r.config.combat.gateLink = ReadCombatSwitch(cfg, kCombatGateLinkKey, r);
+  r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
+  r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
+  r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
+  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r);
+  r.config.combat.hudmeter = ReadCombatSwitch(cfg, kCombatHudmeterKey, r);
+  r.config.combat.shieldgammaGamma = ReadCombatSwitch(cfg, kCombatShieldGammaKey, r, /*fallback=*/false);
+  r.config.combat.shieldgammaTubeMirror = ReadCombatSwitch(cfg, kCombatShieldTubeMirrorKey, r);
+  r.config.combat.gunconnect = ReadCombatSwitch(cfg, kCombatGunconnectKey, r);
+  r.config.combat.aibots = ReadCombatSwitch(cfg, kCombatAibotsKey, r);
+  r.config.combat.aibotsScenario = ReadCombatText(cfg, kCombatAibotsScenarioKey, r);
+  r.config.combat.weaponArm = ReadCombatSwitch(cfg, kCombatWeaponArmKey, r);
+  r.config.combat.impactsnd = ReadCombatSwitch(cfg, kCombatImpactsndKey, r);
+  r.config.combat.impactsndWrite = ReadCombatSwitch(cfg, kCombatImpactsndWriteKey, r);
+  r.config.combat.decals = ReadCombatSwitch(cfg, kCombatDecalsKey, r);
+  r.config.combat.decalsFlipU = ReadCombatSwitch(cfg, kCombatDecalsFlipUKey, r, /*fallback=*/false);
+  r.config.combat.decalsFlipV = ReadCombatSwitch(cfg, kCombatDecalsFlipVKey, r, /*fallback=*/false);
+  r.config.combat.bvh = ReadCombatSwitch(cfg, kCombatBvhKey, r);
+  r.config.combat.bvhGate = ReadCombatSwitch(cfg, kCombatBvhGateKey, r);
+  r.config.combat.bvhTouch = ReadCombatSwitch(cfg, kCombatBvhTouchKey, r);
+  r.config.combat.wallfire = ReadCombatSwitch(cfg, kCombatWallfireKey, r);
+  r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);
+  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r);
+  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);
+  r.config.combat.ec = ReadCombatSwitch(cfg, kCombatEcKey, r);
+  r.config.combat.ecWords = ReadCombatText(cfg, kCombatEcWordsKey, r);
+  r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);
+  r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
+  r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
+  r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
+  r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);
+  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);
+  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);
+  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);
+  r.config.combat.droneguardStage1 = ReadCombatSwitch(cfg, kCombatDroneguardStage1Key, r, /*fallback=*/false);
+  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);
   r.config.plugins = cfg.Plugins();
 }
 
@@ -407,6 +684,15 @@ void ReportState(LoadResult& r) {
       std::string("config key=") + kTextureQualityKey + " quality=" +
           texture_quality::LevelName(r.config.textureQuality.level) +
           " source=" + TextureSourceName(r.config.textureQuality));
+  Add(r, LogLevel::kInfo,
+      std::string("config key=") + kHandFlipKey + " flip=" + (r.config.handFlip.on ? "1" : "0") +
+          " source=" + HandFlipSourceName(r.config.handFlip));
+  Add(r, LogLevel::kInfo,
+      std::string("config key=assets labels=") + std::to_string(r.config.assets.labels.size()) +
+          " required_only=" + (r.config.assets.requiredOnly ? "1" : "0") + " cdn_url=" + (r.config.assets.cdnUrl.empty() ? "default" : "config") +
+          " manifest=" + (r.config.assets.manifest.empty() ? "default" : "config") +
+          " source=" + (r.config.assets.source == Source::kFile ? "config" : "default"));
+  // The `combat:` keys are reported once, as the structured `combat_config` line (combat/combat_install.h LogConfig), not here.
   for (const FeatureSpec& f : kFeatures) {
     Add(r, LogLevel::kInfo,
         std::string("feature=") + f.name + " requested=" + (r.config.requested.*f.flag ? "on" : "off") +
@@ -474,6 +760,8 @@ const char* SourceName(Source source) {
 }
 
 const char* TextureSourceName(const TextureChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
+
+const char* HandFlipSourceName(const HandFlipChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {

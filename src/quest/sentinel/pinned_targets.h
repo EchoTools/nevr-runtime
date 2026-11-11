@@ -938,6 +938,60 @@ inline GotTarget LibR15GetInputTrackingState() {
   return {kLibR15, kGetInputTrackingStateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dc280ULL};
 }
 
+// libr15.so's slots for the CR15Game constructor (#2090), defined in libr15 itself. C1 and C2 are one function (both dynsym
+// entries are 0x11fce34, size 2288), each called through its own PLT stub and its own JUMP_SLOT (`readelf -rW` on the store file,
+// build ID b243509c...):
+//   R_AARCH64_JUMP_SLOT 0x36c0018 -> 0x11fce34 _ZN10NRadEngine8NRadGame8CR15GameC1ERKNS_9CMainArgsE   (stub 0xed1260, one `bl`: Main_)
+//   R_AARCH64_JUMP_SLOT 0x36e7828 -> 0x11fce34 _ZN10NRadEngine8NRadGame8CR15GameC2ERKNS_9CMainArgsE   (stub 0xf20280, three `bl`:
+//                                                                  CR15NetDedicatedServer, CR15NetServer, CR15NetLanServer)
+// An Itanium constructor takes the object in x0 and the CMainArgs reference in x1 and returns nothing. The match-tags default
+// (combat/match_tags.h) wraps both.
+inline constexpr const char* kCR15GameC1Symbol = "_ZN10NRadEngine8NRadGame8CR15GameC1ERKNS_9CMainArgsE";
+inline constexpr const char* kCR15GameC2Symbol = "_ZN10NRadEngine8NRadGame8CR15GameC2ERKNS_9CMainArgsE";
+using CR15GameCtorSig = void(void* game, const void* main_args);
+struct LibR15CR15GameC1Tag {};
+struct LibR15CR15GameC2Tag {};
+using LibR15CR15GameC1Thunk = CallbackThunk<LibR15CR15GameC1Tag, CR15GameCtorSig>;
+using LibR15CR15GameC2Thunk = CallbackThunk<LibR15CR15GameC2Tag, CR15GameCtorSig>;
+
+inline GotTarget LibR15CR15GameC1() {
+  return {kLibR15, kCR15GameC1Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c0018ULL};
+}
+inline GotTarget LibR15CR15GameC2() {
+  return {kLibR15, kCR15GameC2Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e7828ULL};
+}
+
+// What the match-tags default relies on in the store file (#2090; got_pinned_test.cpp checks every line against the real libr15).
+// Both symbols are defined at kCR15GameVaddr. The constructor stores two 16-byte literals into the object (x27 = this + 0x7b08):
+//   0x11fd204 ldr q1, [0x2b9fe40]  -> 0x11fd21c str q1, [x27, #0x10fc]   = this+0x8c04, {0, 0x1003, 1, 0}: the flags at this+0x8c08
+//   0x11fd27c ldr q0, [0x2b9fe60]  -> 0x11fd28c str q0, [x27, #0x11dc]   = this+0x8ce4, {0x1003, 1, 0, 0xa}: the flags at this+0x8ce4
+// The calls: Main_ reaches C1 once (0xfb02ec); C2 is reached by CR15NetDedicatedServer, CR15NetServer and CR15NetLanServer.
+inline constexpr std::uint64_t kCR15GameVaddr = 0x11fce34ULL;
+inline constexpr std::uint64_t kCR15GameC1Stub = 0xed1260ULL;
+inline constexpr std::uint64_t kCR15GameC2Stub = 0xf20280ULL;
+inline constexpr std::uint64_t kCR15GameC1CallSite = 0xfb02ecULL;
+inline constexpr std::uint64_t kCR15GameC2CallSites[3] = {0x124b1b8ULL, 0x124b1e4ULL, 0x12ae1dcULL};
+inline constexpr std::uint64_t kCR15GameCurrentLiteral = 0x2b9fe40ULL;  // 16 bytes: 0, 0x1003, 1, 0 (32-bit words)
+inline constexpr std::uint64_t kCR15GamePendingLiteral = 0x2b9fe60ULL;  // 16 bytes: 0x1003, 1, 0, 0xa
+inline constexpr std::uint32_t kCR15GameCurrentLiteralWords[4] = {0, 0x1003, 1, 0};
+inline constexpr std::uint32_t kCR15GamePendingLiteralWords[4] = {0x1003, 1, 0, 0xa};
+struct CR15GameWord {
+  std::uint64_t vaddr;
+  std::uint32_t word;
+};
+inline constexpr CR15GameWord kCR15GameSettingsCode[] = {
+    {0x11fce60, 0x528f610a},  // mov w10, #0x7b08
+    {0x11fce70, 0x8b0a001b},  // add x27, x0, x10
+    {0x11fd200, 0xd000cd08},  // adrp x8, 0x2b9f000
+    {0x11fd204, 0x3dc39101},  // ldr q1, [x8, #0xe40]
+    {0x11fd208, 0x52821f89},  // mov w9, #0x10fc
+    {0x11fd21c, 0x3ca96b61},  // str q1, [x27, x9]
+    {0x11fd278, 0xd000cd08},  // adrp x8, 0x2b9f000
+    {0x11fd27c, 0x3dc39900},  // ldr q0, [x8, #0xe60]
+    {0x11fd280, 0x52823b88},  // mov w8, #0x11dc
+    {0x11fd28c, 0x3ca86b60},  // str q0, [x27, x8]
+};
+
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {
@@ -1150,5 +1204,182 @@ inline constexpr std::uint32_t kEntryBytes = 0x28;
 inline constexpr std::uint32_t kCapacity = 512;
 static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
 }  // namespace vk_hole_layout
+
+// NRadEngine::CGRawInterfaceVK::Allocate(VkMemoryRequirements, unsigned desired, unsigned minimal, unsigned pooled, unsigned pool,
+// SGAllocatedBase&), defined in libr15 at 0x188813c (1,620 bytes; the disassembly lists it at 0x198813c) (#2262, vk_alloc_check.h).
+// It calls vkAllocateMemory and never reads the result; a failed allocation returns 0 with no memory. JUMP_SLOT 0x36ef800
+// (`readelf -rW` on the pinned image; CreateDeviceResource reaches it through its PLT stub, `bl` at 0x18e6c54 and `cbnz w0`
+// after it). VkMemoryRequirements is 24 bytes, so AAPCS64 passes it by reference: the first words `ldp x20, x25, [x0]` and
+// `ldr w26, [x0, #16]` read size, alignment and memoryTypeBits through x0. The function fills SGAllocatedBase (0x28 bytes) with
+// zeros first; CreateDeviceResource binds [base+0] (the memory) at [base+0x10] (the offset).
+inline constexpr const char* kVkAllocateSymbol =
+    "_ZN10NRadEngine16CGRawInterfaceVK8AllocateE20VkMemoryRequirementsjjjjRNS_15SGAllocatedBaseE";
+struct VkMemoryRequirementsLayout {
+  std::uint64_t size;
+  std::uint64_t alignment;
+  std::uint32_t memoryTypeBits;
+};
+static_assert(sizeof(VkMemoryRequirementsLayout) == 24, "Vulkan's VkMemoryRequirements");
+struct SGAllocatedBaseLayout {
+  std::uint64_t memory;  // the VkDeviceMemory handle
+  std::uint64_t block;   // the block word Allocate copies from the free range it cut
+  std::uint64_t offset;  // the bind offset
+  std::uint64_t end;
+  std::uint64_t mapped;  // the host pointer of a mapped block, else 0
+};
+static_assert(sizeof(SGAllocatedBaseLayout) == 0x28, "Allocate clears 0x28 bytes of it");
+using VkAllocateSig = std::uint64_t(const VkMemoryRequirementsLayout* reqs, unsigned desired, unsigned minimal, unsigned pooled,
+                                    unsigned pool, SGAllocatedBaseLayout* out);
+struct LibR15VkAllocateTag {};
+using LibR15VkAllocateThunk = CallbackThunk<LibR15VkAllocateTag, VkAllocateSig>;
+inline GotTarget LibR15VkAllocate() {
+  return {kLibR15, kVkAllocateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ef800ULL};
+}
+inline constexpr PinnedFunction kVkAllocate = {
+    "_ZN10NRadEngine16CGRawInterfaceVK8AllocateE20VkMemoryRequirementsjjjjRNS_15SGAllocatedBaseE", 0x188813c,
+    {0xd10383ff, 0xa9086ffc, 0xa90967fa, 0xa90a5ff8}, 4};
+// NRadEngine::CErrMsg::CreateAndAddError(const char* file, unsigned line, CSymbol64 code, CSymbol64 message, ...), exported at
+// 0x11ce4dc: the error a failed Allocate returns (0x18884a8: x0 the source file, w1 the line, x2 the 64-bit word at 0x2b2f1f0,
+// x3 the message text, then `bl` to its PLT stub). Called at its link address plus the image base, never written.
+inline constexpr PinnedFunction kErrMsgCreateAndAddError = {"_ZN10NRadEngine7CErrMsg17CreateAndAddErrorEPKcjNS_9CSymbol64ES2_z",
+                                                            0x11ce4dc, {0xa9bd5bfc, 0xa90153f5, 0xa9027bf3, 0xd13c83ff}, 4};
+// It returns an int (the error id); its callers test w0, never x0.
+using ErrMsgCreateAndAddErrorFn = int (*)(const char* file, unsigned line, std::uint64_t code, const char* message, ...);
+// The error symbol Allocate passes (the .rodata word its `adrp x8, 0x2b2f000; add x8, x8, #0x1f2; and x8, x8, #~7; ldr x2, [x8]`
+// loads).
+inline constexpr std::uint64_t kVkAllocErrorCodeVaddr = 0x2b2f1f0ULL;
+inline constexpr std::uint64_t kVkAllocErrorCode = 0xe8cc523d0fc9e5feULL;
+// The two arrays a pooled Allocate appends to, neither with a bound check (#2262). Its first words load both bases:
+//   0x1888294: adrp x22, 0x3791000; adrp x23, 0x378e000      0x18882b0: add x22, x22, #0x688; add x23, x23, #0x680
+// x22 is the free-range array (vk_hole_layout); x23 is the array of VkDeviceMemory blocks the device holds: 512 entries of 0x18
+// bytes, then its 32-bit count (at x23 + 0x3000, the word 8 bytes before free-range entry 0). A new block, including one whose
+// vkAllocateMemory failed, appends to both:
+//   0x1888448: mov w13, #0x5000; ldr w9, [x22, x13]; ldur q0; ldur q1; ldr x10; add w12, w9, #1     the free-range count
+//   0x1888464: ldr w12, [x23, #0x3000]; mov w13, #0x28; madd x9, x9, x13, x22; str x10, [x9, #32]; stp q1, q0, [x9];
+//              add w9, w12, #1                                                  the block count, stored at 0x1888484
+// A dedicated allocation (pooled == 0) appends to the block array only. Nothing compares either count with 512.
+inline constexpr PinnedCode kVkAllocTableAdrp = {"CGRawInterfaceVK::Allocate table bases (adrp)", 0x1888294ULL,
+                                                 {0xb000f856, 0xd000f837}, 2};
+inline constexpr PinnedCode kVkAllocTableAdd = {"CGRawInterfaceVK::Allocate table bases (add)", 0x18882b0ULL,
+                                                {0x911a22d6, 0x911a02f7}, 2};
+inline constexpr PinnedCode kVkAllocFreeAppend = {"CGRawInterfaceVK::Allocate free-range append", 0x1888448ULL,
+                                                  {0x528a000d, 0xb86d6ac9, 0x3cc483e0, 0x3cc383e1, 0xf9402fea, 0x1100052c}, 6};
+inline constexpr PinnedCode kVkAllocBlockAppend = {"CGRawInterfaceVK::Allocate block append", 0x1888464ULL,
+                                                   {0xb97002ec, 0x5280050d, 0x9b0d5929, 0xf900112a, 0xad000121, 0x11000589}, 6};
+namespace vk_block_layout {
+inline constexpr std::uint64_t kTableVaddr = 0x378e680ULL;  // entry 0
+inline constexpr std::uint64_t kCountVaddr = 0x3791680ULL;  // a 32-bit count, directly after entry 511
+inline constexpr std::uint32_t kEntryBytes = 0x18;
+inline constexpr std::uint32_t kCapacity = 512;
+static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
+static_assert(kCountVaddr + 8 == vk_hole_layout::kTableVaddr, "free-range entry 0 follows the block count");
+}  // namespace vk_block_layout
+
+// The default irradiance texture (#2091, irradiance_default_hook.h). NRadEngine::CGEngineResources::Initialize (libr15 0x183e52c
+// pinned; disassembly 0x193e52c; 8,580 bytes, exported) builds the engine's default GPU resources. libr15 reaches it only through
+// its own PLT stub (disassembly 0x1048640: JUMP_SLOT 0x36fba08; no `b`/`bl` in .text names the function and no ADRP+ADD forms its
+// address, scanned over the whole text of the store file). `this` is x0 (kept in x19), returns the first failing step's status or 0
+// in w0. The wrapper installed on the slot is a GOT hook; the helper it marks is the row `irradiance_default.upload` of the
+// build-time patch table (quest/patch/libr15_patch_table.h).
+inline constexpr const char* kCGEngineResourcesInitializeSymbol = "_ZN10NRadEngine17CGEngineResources10InitializeEv";
+inline GotTarget LibR15CGEngineResourcesInitialize() {
+  return {kLibR15, kCGEngineResourcesInitializeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fba08ULL};
+}
+inline constexpr std::uint64_t kCGEngineResourcesInitializeVaddr = 0x183e52cULL;  // the .dynsym value of the symbol above
+// The PLT stub that loads the slot (adrp x16, 0x36fb000; ldr x17, [x16, #0xa08]; add x16, x16, #0xa08; br x17) and the one `bl` in
+// .text that reaches it (disassembly 0x26e9a70, in the engine's resource parse step).
+inline constexpr std::uint64_t kCGEngineResourcesInitializeStub = 0xf48640ULL;
+inline constexpr std::uint64_t kCGEngineResourcesInitializeCallSites[] = {0x25e9a70ULL};
+
+// The words at the "Default 3D Texture" upload in Initialize (disassembly 0x193f28c to 0x193f2d0; the store file at each vaddr,
+// which the patch does not touch). They are what makes `this + 0x1458` the destination: `mov w9, #0x1458` and `add x23, x19, x9`
+// (x19 is `this`) form the SGTexture the helper is given as x0, `add x5, sp, #0x45c` is the texel pointer (one word, zeroed at
+// 0x193efd0 `str wzr, [sp, #0x45c]`), `mov w2, #9` the format (a four-byte texel: the size table at 0x2c658b8 holds 4 at entry 9),
+// and the `bl` is the one call of the helper that carries the name "Default 3D Texture" (0x2c585b2) in x6.
+inline constexpr PinnedCode kDefault3dTextureOffset = {"Initialize: mov w9, #0x1458", 0x183f28cULL, {0x52828b09, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureAddress = {"Initialize: add x23, x19, x9", 0x183f2acULL, {0x8b090277, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureTexel = {"Initialize: add x5, sp, #0x45c", 0x183f2b8ULL, {0x911173e5, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureFormat = {"Initialize: mov w2, #9", 0x183f2bcULL, {0x52800122, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureCall = {"Initialize: bl upload helper", 0x183f2d0ULL, {0x94026f30, 0, 0, 0, 0, 0}, 1};
+
+// The equipment re-fire (#2121, combat/equip_refire.h). CR15NetPlayerEquipmentCS keeps the equipment of every player and has three setters,
+// one per slot, each called with (component x0, SCompactPoolHandle x1, CSymbol64 x2) and returning nothing: SetWeaponSlot,
+// SetAbilitySlot and SetGrenadeSlot. Each is defined in libr15 itself (ELF vaddrs 0x217ca84, 0x217cde4, 0x217cf90; the disassembly
+// lists them 0x100000 higher) and is reached two ways. A direct call goes through its PLT stub (disassembly 0x1038c30, 0x1046430, 0x1002e50:
+// the JUMP_SLOT; R15NetPlayerEquipmentSetAbilitySlotNode calls the stub at disassembly 0x24df2f4). A call a script node queues carries the
+// function's address in the queued functor, which the node loads from a GLOB_DAT word: the same node (disassembly 0x24df194; the load
+// at 0x24df32c is `adrp x8, 0x3827000; ldr x8, [x8, #0xb38]`) and CR15NetPlayerSetEquipmentNode::Enter (disassembly 0x242e5c8; the load
+// at 0x242e81c is the same two instructions) read SetAbilitySlot's GLOB_DAT word, ELF 0x3727b38. `readelf -rW` on the store file names the
+// setters in exactly these six relocations:
+//   R_AARCH64_JUMP_SLOT 0x36f3d00 SetWeaponSlot    R_AARCH64_GLOB_DAT 0x37233e8 SetWeaponSlot
+//   R_AARCH64_JUMP_SLOT 0x36fa900 SetAbilitySlot   R_AARCH64_GLOB_DAT 0x3727b38 SetAbilitySlot
+//   R_AARCH64_JUMP_SLOT 0x36d8e10 SetGrenadeSlot   R_AARCH64_GLOB_DAT 0x3711db8 SetGrenadeSlot
+// Other data xrefs ReVault lists for the setters are not slots: eh_frame data (disassembly 0x35e7268, 0x35e72e0, 0x35e7310), 4-aligned
+// tables (0x33c551c, 0x33c5534, 0x33c553c) and seven code addresses (0x221cdac to 0x24df524) that hold `00 80 80 3c`, not a pointer.
+// All six are hooked: a change reaches the setter through either word. The handle is the low 32 bits of x1 (the setters mask it).
+// `handler` is the slot's change handler (HandleWeaponChange 0x217afb4, HandleAbilityChange 0x217b124, HandleGrenadeChange 0x217b1dc;
+// void(component x0, handle x1)), which the re-fire calls; it is not hooked.
+using EquipmentSetterSig = void(void* self, std::uint32_t handle, std::uint64_t value);
+template <int Slot, int Word>
+struct LibR15EquipmentSetterTag {};
+// Slot 0 weapon, 1 tac mod, 2 ordnance; word 0 JUMP_SLOT, 1 GLOB_DAT. One thunk per hooked word (callback_thunk.h).
+template <int Slot, int Word>
+using LibR15EquipmentSetterThunk = CallbackThunk<LibR15EquipmentSetterTag<Slot, Word>, EquipmentSetterSig>;
+
+struct EquipmentSetterPin {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::uint64_t handler;
+  std::uint64_t jumpSlot;
+  std::uint64_t globDatSlot;
+};
+inline constexpr EquipmentSetterPin kEquipmentSetters[3] = {
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS13SetWeaponSlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217ca84ULL, 0x217afb4ULL,
+     0x36f3d00ULL, 0x37233e8ULL},
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS14SetAbilitySlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217cde4ULL, 0x217b124ULL,
+     0x36fa900ULL, 0x3727b38ULL},
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS14SetGrenadeSlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217cf90ULL, 0x217b1dcULL,
+     0x36d8e10ULL, 0x3711db8ULL},
+};
+
+// Slot `slot` (0 to 2) of kEquipmentSetters, through its JUMP_SLOT or its GLOB_DAT word.
+inline GotTarget LibR15EquipmentSetter(std::size_t slot, RelocKind kind) {
+  const EquipmentSetterPin& pin = kEquipmentSetters[slot];
+  return {kLibR15, pin.symbol, kind, LibR15PatchedBuildId(), kind == RelocKind::kJumpSlot ? pin.jumpSlot : pin.globDatSlot};
+}
+
+// The two game functions the re-fire calls to find the local player (not hooked, no slot of their own to pin; reached the way
+// QuitOnError is: the build ID, then these words, then base + the address).
+//   NetGameMT 0x12027d4:           mov w8, #0x8510; ldr x0, [x0, x8]; ret   (x0 = *(context + 8) -> the net game)
+//   CR15NetGame::UserId 0x125a9b8: (x0 net game, x1 and x2 the SActorGUID's two words) -> w0 the player's slot handle
+inline constexpr std::uint64_t kNetGameMTVaddr = 0x12027d4ULL;
+inline constexpr std::uint64_t kUserIdVaddr = 0x125a9b8ULL;
+using NetGameMTSig = std::uintptr_t(std::uintptr_t context_arg);
+using UserIdSig = std::uint32_t(void* net_game, std::uint64_t key0, std::uint64_t key1);
+
+// The words the wrappers' reads and the two calls were derived from, read from the store file before any slot is touched. A setter
+// reads the index table (+0xc8), the record array (+0xf8) and the 0x58-byte record's slot value (+0x18, +0x20, +0x28); SetAbilitySlot's tail
+// reads the component context (+0x80), the net game argument (context +8), the actor key (context +0x58) and the link table (+0x100), as
+// the three setters and handlers do; the handlers start with the same index-table read.
+inline constexpr PinnedCode kEquipmentRefireCode[] = {
+    {"SetWeaponSlot: prologue", 0x217ca84ULL, {0xd10243ff, 0xa9046bfb, 0xa90563f9, 0xa9065bf7, 0xa90753f5, 0xa9087bf3}, 6},
+    {"SetWeaponSlot: index table, records, record stride", 0x217ca9cULL, {0xf9406408, 0x92403c29, 0xd37ef538, 0xf9407c1a, 0x78786919, 0x52800b08}, 6},
+    {"SetWeaponSlot: weapon value compare", 0x217cab4ULL, {0x9b086b28, 0xf8418d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"SetAbilitySlot: prologue", 0x217cde4ULL, {0xd10243ff, 0xa9046bfb, 0xa90563f9, 0xa9065bf7, 0xa90753f5, 0xa9087bf3}, 6},
+    {"SetAbilitySlot: index table, records, record stride", 0x217cdfcULL, {0xf9406408, 0x92403c29, 0xd37ef538, 0xf9407c1a, 0x78786919, 0x52800b08}, 6},
+    {"SetAbilitySlot: tac mod value compare", 0x217ce14ULL, {0x9b086b28, 0xf8420d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"SetAbilitySlot: context and net game argument", 0x217ceccULL, {0xf9404269, 0xf9406668, 0xf9407e74, 0xf9400520, 0x78786915, 0}, 5},
+    {"SetAbilitySlot: link table and actor key", 0x217cee4ULL, {0xf9406668, 0xf9408269, 0xf940426a, 0xaa0003f3, 0x78786908, 0xf9402d41}, 6},
+    {"SetGrenadeSlot: prologue", 0x217cf90ULL, {0xd101c3ff, 0xf90023f6, 0xa90553f5, 0xa9067bf3, 0, 0}, 4},
+    {"SetGrenadeSlot: index table, records, record stride", 0x217cfa0ULL, {0xf9406408, 0x92403c29, 0xd37ef534, 0xf9407c16, 0x78746915, 0x52800b08}, 6},
+    {"SetGrenadeSlot: ordnance value compare", 0x217cfb8ULL, {0x9b085aa8, 0xf8428d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"HandleWeaponChange: entry and index table", 0x217afb4ULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"HandleAbilityChange: entry and index table", 0x217b124ULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"HandleGrenadeChange: entry and index table", 0x217b1dcULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"NetGameMT", 0x12027d4ULL, {0x5290a208, 0xf8686800, 0xd65f03c0, 0, 0, 0}, 3},
+    {"CR15NetGame::UserId: entry and actor key", 0x125a9b8ULL, {0xd10103ff, 0xa90253f5, 0xa9037bf3, 0xa9000be1, 0x7941b808, 0}, 5},
+};
+inline constexpr std::size_t kEquipmentRefireCodeCount = sizeof(kEquipmentRefireCode) / sizeof(kEquipmentRefireCode[0]);
+
 
 }  // namespace sentinel::pinned

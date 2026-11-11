@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0013-quest-game-data-from-the-launcher.md
+audience: all
+---
+
 # ADR 0013: Quest game data comes from Echo Launcher; the runtime fetches it in development builds only
 
 Status: accepted 2026-10-23, implemented (#758; the data step it changes is #807). Supersedes the decision of ADR 0011

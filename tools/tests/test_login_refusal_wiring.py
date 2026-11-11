@@ -86,7 +86,7 @@ class ServerWithNoPasswordSignsInByDeviceCode(unittest.TestCase):
         init = extract_braced_function(token_auth, "void nevr_token_auth::Init(")
         self.assertIn("serverSignsInByDeviceCode", init)
         self.assertIn("RunDeviceAuthFlowOffBootstrapThread(*s_auth, serverSignsInByDeviceCode)", init)
-        self.assertIn("Server mode disables device-code authentication", init)  # the password path is unchanged
+        self.assertIn("ServerPasswordSignInLine()", init)  # the password path is unchanged, its line says what it does
 
     def test_an_error_exit_of_a_server_holds_for_the_host(self):
         crash = strip_comments(read("src/runtime/lifecycle/crash_recovery.cpp"))

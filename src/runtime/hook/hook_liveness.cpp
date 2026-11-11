@@ -22,7 +22,9 @@ struct Entry {
 const Entry kEntries[] = {
     {"GetTimeMicroseconds", "all modes", false},
     {"CTimer_GetMilliSeconds", "all modes", false},
-    {"CPrecisionSleep::Wait", "CLIENT ONLY — never runs on a server", true},
+    // #2109: a server's clock is paced (#511), so every server frame that ends inside its step waits here. The
+    // "never runs on a server" reading was measured before #511.
+    {"CPrecisionSleep::Wait", "server frames that end inside their step (the paced clock)", false},
     {"EndMultiplayer", "session teardown", false},
     {"CSpinWait::WaitForValue", "under contention", false},
     {"HTTPListenerBringup", "server bringup", false},

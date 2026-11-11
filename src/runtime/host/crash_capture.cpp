@@ -64,19 +64,45 @@ void CrashCapture::SetFailWrites(bool fail) noexcept {
 }
 #endif
 
-void CrashCapture::Prepare(HMODULE host_module, BootstrapDiagnostics* diagnostics) {
+void CrashCapture::Prepare(BootstrapDiagnostics* diagnostics) {
   diagnostics_ = diagnostics;
   local_ready_ = false;
-  temp_ready_ = false;
-  host_dir_ready_ = false;
+  update_ready_ = false;
+  local_update_dir_[0] = L'\0';
+  pending_path_[0] = L'\0';
+  crashed_path_[0] = L'\0';
 
+  // The one folder a minidump goes to: %LOCALAPPDATA%\nevr\echovr\crashes. Never %TEMP% and never a folder beside the game.
   if (CopyEnv(local_app_data_, MAX_PATH, L"LOCALAPPDATA")) {
     local_ready_ = AppendPath(local_crash_dir_, MAX_PATH, local_app_data_, kCrashesSubdirectory);
+    // Self-update's crash marker lives beside the pending record it answers (update_names.h): prepared here, so the
+    // crash path builds no path.
+    update_ready_ = AppendPath(local_update_dir_, MAX_PATH, local_app_data_, kUpdateSubdirectory) &&
+                    AppendPath(pending_path_, MAX_PATH, local_update_dir_, update_names::kPendingJson) &&
+                    AppendPath(crashed_path_, MAX_PATH, local_update_dir_, update_names::kCrashedFile);
+    if (!update_ready_) {
+      local_update_dir_[0] = L'\0';
+      pending_path_[0] = L'\0';
+      crashed_path_[0] = L'\0';
+    }
   }
-  if (CopyEnv(temp_, MAX_PATH, L"TEMP")) {
-    temp_ready_ = AppendPath(temp_crash_dir_, MAX_PATH, temp_, kCrashesSubdirectory);
-  }
-  host_dir_ready_ = DirOfModule(host_dir_, MAX_PATH, host_module);
+}
+
+void CrashCapture::MarkUpdateCrashed() noexcept {
+  if (!update_ready_ || GetFileAttributesW(pending_path_) == INVALID_FILE_ATTRIBUTES) return;
+  const HANDLE marker = CreateFileW(crashed_path_, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  const DWORD error = marker == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+  if (marker != INVALID_HANDLE_VALUE) CloseHandle(marker);
+  if (diagnostics_ == nullptr) return;
+  char buffer[1024];
+  JsonLine line(buffer, sizeof(buffer), "crash_marker");
+  line.Str("outcome", marker != INVALID_HANDLE_VALUE ? "written" : "failed");
+  if (error != 0) line.UInt("win32_error", error);
+  line.Wide("path", crashed_path_);
+  line.UInt("thread", GetCurrentThreadId());
+  const std::size_t length = line.Finish();
+  if (length != 0) diagnostics_->AppendLine(buffer, length);
 }
 
 void CrashCapture::Record(const char* outcome, const char* destination, const char* stage,
@@ -128,6 +154,9 @@ bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) noexcept {
   if (g_capture_probe != nullptr) g_capture_probe();
 #endif
 
+  // First, whatever the dump does: the next start rolls a release that crashed while pending back.
+  MarkUpdateCrashed();
+
   bool captured = false;
   const HMODULE dbghelp = GetModuleHandleW(kDbgHelpModule);
   MiniDumpWriteDumpFn write_dump = nullptr;
@@ -140,30 +169,23 @@ bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) noexcept {
            dbghelp == nullptr ? ERROR_MOD_NOT_FOUND : ERROR_PROC_NOT_FOUND, nullptr, 0,
            exception_pointers);
   } else {
-    const Attempt attempts[] = {
-        {local_crash_dir_, "localappdata", local_ready_, true},
-        {temp_crash_dir_, "temp", temp_ready_, true},
-        {host_dir_, "host_directory", host_dir_ready_, false},
-    };
-    for (const Attempt& attempt : attempts) {
-      if (!attempt.ready) continue;
+    const Attempt attempt = {local_crash_dir_, "localappdata", local_ready_, true};
+    if (attempt.ready) {
       const Outcome outcome = WriteDumpTo(attempt, exception_pointers, write_dump);
       if (outcome.stage == Stage::kWritten) {
         Record("written", attempt.destination, nullptr, 0, outcome.path, outcome.size,
                exception_pointers);
         captured = true;
-        break;
+      } else {
+        Record("destination_failed", attempt.destination,
+               StageName(static_cast<DWORD>(outcome.stage)), outcome.win32_error, outcome.path, 0,
+               exception_pointers);
       }
-      Record("destination_failed", attempt.destination,
-             StageName(static_cast<DWORD>(outcome.stage)), outcome.win32_error, outcome.path, 0,
-             exception_pointers);
     }
   }
 
-  if (!captured) {
-    WriteTextDiagnostic(exception_pointers);
-    Record("failed", nullptr, nullptr, 0, nullptr, 0, exception_pointers);
-  }
+  // The crash text is this record in the main log: outcome, the exception code and address, and the thread. No text file is written.
+  if (!captured) Record("failed", nullptr, nullptr, 0, nullptr, 0, exception_pointers);
   Exit();
   return captured;
 }
@@ -229,54 +251,6 @@ CrashCapture::Outcome CrashCapture::WriteDumpTo(const Attempt& attempt,
   outcome.stage = Stage::kWritten;
   outcome.size = size == INVALID_FILE_SIZE ? 0 : size;
   return outcome;
-}
-
-void CrashCapture::WriteTextDiagnostic(PEXCEPTION_POINTERS exception_pointers) noexcept {
-  char line[512] = {};
-  DWORD code = 0;
-  unsigned long long address = 0;
-  if (exception_pointers != nullptr && exception_pointers->ExceptionRecord != nullptr) {
-    code = exception_pointers->ExceptionRecord->ExceptionCode;
-    address = static_cast<unsigned long long>(
-        reinterpret_cast<std::uintptr_t>(exception_pointers->ExceptionRecord->ExceptionAddress));
-  }
-  const int n = snprintf(line, sizeof(line),
-                         "nevr host: minidump unavailable (dbghelp absent or all destinations "
-                         "unwritable) code=0x%08lX addr=0x%llX thread=%lu\n",
-                         static_cast<unsigned long>(code), address,
-                         static_cast<unsigned long>(GetCurrentThreadId()));
-  if (n <= 0) return;
-  const std::size_t length =
-      static_cast<std::size_t>(n) < sizeof(line) ? static_cast<std::size_t>(n) : sizeof(line) - 1;
-
-  const DWORD pid = GetCurrentProcessId();
-  const LONG sequence = InterlockedIncrement(&g_dump_counter);
-
-  const Attempt attempts[] = {
-      {local_crash_dir_, "localappdata", local_ready_, true},
-      {temp_crash_dir_, "temp", temp_ready_, true},
-      {host_dir_, "host_directory", host_dir_ready_, false},
-  };
-  for (const Attempt& attempt : attempts) {
-    if (!attempt.ready) continue;
-    if (attempt.create_dir) {
-      wchar_t dir_copy[MAX_PATH] = {};
-      const std::size_t dir_len = wcslen(attempt.dir);
-      if (dir_len + 1 > MAX_PATH) continue;
-      std::memcpy(dir_copy, attempt.dir, (dir_len + 1) * sizeof(wchar_t));
-      CreateDirectories(dir_copy);
-    }
-    wchar_t path[MAX_PATH] = {};
-    if (!FormatDumpName(path, MAX_PATH, attempt.dir, pid, sequence, L"txt")) continue;
-    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) continue;
-    DWORD written = 0;
-    WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
-    FlushFileBuffers(file);
-    CloseHandle(file);
-    return;
-  }
 }
 
 }  // namespace nevr_host

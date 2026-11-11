@@ -2,6 +2,7 @@
 #include "quest/plugin/input_seam_hook.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 
@@ -9,6 +10,7 @@
 #include "hook_log.h"
 #include "pinned_targets.h"
 #include "quest/plugin/script_redirect.h"
+#include "quest/plugin/slot_hook.h"
 
 namespace nevr_quest::input_seam {
 
@@ -117,14 +119,27 @@ std::int32_t RegisterRelease(const char* pluginId, NevrQuestInputFilterFn filter
   return RegisterWith(env, pluginId, filter, user);
 }
 
-// The host API is one struct, and this file owns its initializers; the script redirect (script_redirect.h) is the
-// other member, offered in both builds: it registers a combat unit's library names, not an input filter.
+// The host API is one struct, and this file owns its initializers. The script redirect (script_redirect.h) is offered in
+// both builds: it registers a combat unit's library names. The hook service (slot_hook.h, #2001) is offered in the
+// development build only. The release API offers no slot hook service (docs/adr/0046-combat-is-part-of-the-quest-runtime.md: the
+// plugin that would have used it is folded into the runtime): both members are null there, and a plugin checks each one is not
+// null as well as that struct_size covers it.
 std::int32_t RegisterScriptRedirect(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) {
   return static_cast<std::int32_t>(script_redirect::Register(pluginId, hashes, count));
 }
 
-const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &RegisterScriptRedirect};
-const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect};
+const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &RegisterScriptRedirect,
+                              &slot_hook::RegisterSlotHook, &slot_hook::UnregisterSlotHook};
+// The release API offers no slot hook service (ADR 0046): both members are null.
+const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect, nullptr,
+                                   nullptr};
+
+// The hook service members are tail members: they follow the members a v1 plugin reads, and they keep their order, so a
+// plugin built against the struct before them reads the same offsets (struct_size is its check).
+static_assert(offsetof(NevrQuestHostApi, register_script_redirect) < offsetof(NevrQuestHostApi, register_slot_hook),
+              "the hook service members follow register_script_redirect");
+static_assert(offsetof(NevrQuestHostApi, register_slot_hook) < offsetof(NevrQuestHostApi, unregister_slot_hook),
+              "unregister_slot_hook follows register_slot_hook");
 
 }  // namespace
 

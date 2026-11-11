@@ -42,6 +42,9 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
   const BOOL ok = Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
   if (ok) {
     nevr_hook_guard::Record(target, name);
+    // Per item, so Debug (logging.md, Rule 13): a boot logs one of these per hook, the aggregate is the caller's.
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] hook installed name=%s va=%p; HookGuard checks its bytes",
+        name ? name : "(unnamed)", target);
   } else {
     // N126. A failed hook was SILENT and its return was ignored by 9 of 10 call
     // sites, which log "installed" unconditionally on the next line — so a
@@ -58,6 +61,15 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
         shown, target, Hooking::LastAttachError());
   }
   return ok;
+}
+
+/// Remove the hook PatchDetour installed at `target` and forget its HookGuard record. The record goes first: the
+/// removal writes the game's bytes back, and a VerifyAll between the two would report that write as an overwrite.
+/// Returns the MinHook status. A status other than MH_OK or MH_ERROR_NOT_CREATED means the hook is still in place
+/// and no longer guarded; the caller logs it.
+inline MH_STATUS PatchRetire(void* target) {
+  nevr_hook_guard::Retire(target);
+  return MH_RemoveHook(target);
 }
 
 /// Layout must match the declaration in gameserver.cpp (used via GetProcAddress).

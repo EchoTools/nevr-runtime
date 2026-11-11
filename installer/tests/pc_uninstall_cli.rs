@@ -149,6 +149,38 @@ fn uninstall_restores_the_recorded_original_and_sets_the_runtime_aside() {
     assert_eq!(names(&f.game), vec!["BugSplat64.dll", "echovr.exe"], "nothing of ours beside echovr.exe but the host");
 }
 
+/// ADR 0024, section 7: `uninstall` does not touch `update\`. Whatever a self-update left there (a pending release, a journal, the
+/// quarantine, the two generations the host keeps, an empty folder, even a lock file) is as it was after the run, and the run
+/// writes no `update_*` record.
+#[test]
+fn uninstall_leaves_the_update_folder_as_it_finds_it() {
+    let f = Fixture::new();
+    f.installed();
+    let update = f.root.join("update");
+    for (rel, bytes) in [
+        ("state.json", &br#"{"channel":"beta","quarantine":[{"version":"1.2.3","runtime_sha256":"x","reason":"init_failed","time":"t"}]}"#[..]),
+        ("pending.json", b"{\"boot_attempts\":1}"),
+        ("swap.json", b"{\"kind\":\"swap\"}"),
+        ("staged.json", b"{}"),
+        ("crashed", b""),
+        ("lock", b""),
+        ("staging/1.2.4/nevr-runtime.dll", b"staged"),
+        ("previous/1.2.2/nevr-runtime.dll", b"previous"),
+        ("failed/1.2.3/nevr-runtime.dll", b"failed"),
+    ] {
+        fs::create_dir_all(update.join(rel).parent().unwrap()).unwrap();
+        fs::write(update.join(rel), bytes).unwrap();
+    }
+    fs::create_dir_all(update.join("work")).unwrap();
+    let before = (snapshot(&update), names(&update), names(&update.join("work")));
+    let r = f.run();
+    assert_eq!(r.exit, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(r.json()["state"], "uninstalled");
+    assert_eq!((snapshot(&update), names(&update), names(&update.join("work"))), before, "update\\ is as the uninstall found it");
+    let events: Vec<String> = f.log_records().iter().map(|r| r["event"].as_str().unwrap_or("").to_string()).collect();
+    assert!(!events.iter().any(|e| e.starts_with("update_")), "uninstall makes no update decision: {events:?}");
+}
+
 #[test]
 fn stdout_is_one_json_line_in_the_plan_and_install_shape() {
     let f = Fixture::new();

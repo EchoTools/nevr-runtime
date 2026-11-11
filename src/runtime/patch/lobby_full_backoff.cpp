@@ -68,6 +68,11 @@ CanFollowPartyFn g_originalCanFollowParty = nullptr;
 std::mutex g_mutex;
 Policy g_policy;
 
+// The decline lines written so far (lobby_failure_message_rules.h, NoteDeclined): one per code and reason. The failure
+// callback runs on a network thread, so the state is under its own lock.
+std::mutex g_declineMutex;
+nevr_lobby_failure_message::DeclineLog g_declineLog;
+
 // The skip log's run state. JoinPartyLobby runs on the game's thread; the mutex keeps the state whole if another thread
 // ever calls it.
 std::mutex g_skipLogMutex;
@@ -142,7 +147,8 @@ void JoinPartyLobbyHook(void* netGame) {
   }
   if (!maySend) {
     EndProceedRun();
-    Log(EchoVR::LogLevel::Debug, "[NEVR.LOBBY] full lobby: join held, the lobby refused the last one");
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.LOBBY] join held reason=refused_last_join: the join goes out when the back-off ends");
     return;
   }
   // The follow goes on to the game's JoinPartyLobby, which may still refuse it through CanFollowParty (its own check).
@@ -198,8 +204,16 @@ int CanFollowPartyHook(void* netGame) {
   return answer;
 }
 
+// The sink NoteDeclined writes through: the decline line, once per code and reason (lobby_failure_message_rules.h).
+void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  char line[nevr_lobby_failure_message::kDeclineLineBytes];
+  nevr_lobby_failure_message::FormatDeclineLine(line, code, reason);
+  Log(EchoVR::LogLevel::Info, "%s", line);
+}
+
 void FailureCbHook(void* lobbyClient, void* msg) {
   std::uint8_t code = 0;
+  bool haveCode = false;  // false when the game passed no payload: there is no code to name in a log line
   bool gateOpen = false;
   std::uint8_t* gameBase = nullptr;
   // The service's message, copied before the original runs: the payload belongs to the game and may be released when
@@ -214,6 +228,7 @@ void FailureCbHook(void* lobbyClient, void* msg) {
     void* payload = nullptr;
     std::memcpy(&payload, static_cast<std::uint8_t*>(msg) + kMsgPayloadOffset, sizeof(payload));
     if (payload != nullptr) {
+      haveCode = true;
       code = static_cast<std::uint8_t*>(payload)[kFailureCodeOffset];
       std::memcpy(message, static_cast<std::uint8_t*>(payload) + nevr_lobby_failure_message::kMessageOffset,
                   sizeof(message));
@@ -224,12 +239,20 @@ void FailureCbHook(void* lobbyClient, void* msg) {
 
   // The game shows a fixed literal for this code and drops the service's message (#1443). Put the message on the error
   // page under the code's own name. Codes 11 and 12 already show it, so they are not touched.
-  if (nevr_lobby_failure_message::TakesServiceMessage(code) &&
-      nevr_lobby_failure_message::WriteErrorBlock(gameBase, nevr_lobby_failure_message::Title(code), message,
-                                                  sizeof(message))) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] failure message shown code=%u title=%s message_bytes=%zu",
-        static_cast<unsigned int>(code), nevr_lobby_failure_message::Title(code),
-        nevr_lobby_failure_message::MessageBytes(message, sizeof(message)));
+  if (haveCode && nevr_lobby_failure_message::TakesServiceMessage(code)) {
+    if (nevr_lobby_failure_message::WriteErrorBlock(gameBase, nevr_lobby_failure_message::Title(code), message,
+                                                    sizeof(message))) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] failure message shown code=%u title=%s message_bytes=%zu",
+          static_cast<unsigned int>(code), nevr_lobby_failure_message::Title(code),
+          nevr_lobby_failure_message::MessageBytes(message, sizeof(message)));
+    } else {
+      // The service's message is not shown and the game keeps its fixed literal (ADR 0032, rule 3): said once per code and
+      // reason, so a repeated failure does not flood the log.
+      const nevr_lobby_failure_message::Decline reason =
+          nevr_lobby_failure_message::DeclineFor(gameBase, message, sizeof(message));
+      std::lock_guard<std::mutex> lock(g_declineMutex);
+      nevr_lobby_failure_message::NoteDeclined(g_declineLog, code, reason, &WriteDeclineLine);
+    }
   }
 
   if (code != kLobbyFullCode) {
@@ -245,7 +268,7 @@ void FailureCbHook(void* lobbyClient, void* msg) {
     refusal = g_policy.OnLobbyFull(now);
   }
   if (refusal.gaveUp) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] full lobby: refused %d times, giving up for %llu ms",
+    Log(EchoVR::LogLevel::Warning, "[NEVR.LOBBY] full lobby: refused %d times, giving up for %llu ms",
         refusal.count, static_cast<unsigned long long>(refusal.delayMs));
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] full lobby: refused %d of %d, next join in %llu ms", refusal.count,
@@ -258,13 +281,13 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
                  const char* name) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, va);
   if (!nevr::ValidatePrologue(target, prologue.data(), prologue.size())) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
+    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] warn; %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
                                   static_cast<unsigned long long>(va));
     return;
   }
   original = reinterpret_cast<Fn>(target);
   if (PatchDetour(&original, detour, name))
-    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
+    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] info; %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
 }
 
 }  // namespace
@@ -275,7 +298,7 @@ void Install(std::uintptr_t gameBase) {
   if (nevr::ValidatePrologue(getPartyLobbyId, kGetPartyLobbyIdPrologue.data(), kGetPartyLobbyIdPrologue.size())) {
     g_getPartyLobbyId = reinterpret_cast<GetPartyLobbyIdFn>(getPartyLobbyId);
   } else {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.WS] party follow dedup off reason=prologue_mismatch va=0x%llx\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.WS] warn; party follow dedup off reason=prologue_mismatch va=0x%llx\n",
                                   static_cast<unsigned long long>(kGetPartyLobbyIdVA));
   }
   HookChecked(kJoinPartyLobbyVA, kJoinPartyLobbyPrologue, g_originalJoinPartyLobby,

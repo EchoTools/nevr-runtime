@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "runtime/patch/asset_registry.h"
 
@@ -22,6 +24,42 @@ size_t DeregisterPluginAssets(const void* start, const void* end);
 
 // Remove the hooks and drop the registry. Idempotent.
 void ShutdownPluginAssets();
+
+// #2161: installs the resolver hook (and the submit hook beside it) when they are not yet installed. True when the
+// resolver hook (FillResourceFileRequest, 0x140fa1fe0) is in place, which the resource sets need.
+bool EnsureResolverHook();
+
+// #2161: the game's live manifest (*(resource manager + 8)), read with the game's own CPackageManifest::FindEntry
+// (0x140f9eee0). StockRecordCount is 0 before the manifest exists; StockHas is false then.
+uint64_t StockRecordCount();
+bool StockHas(uint64_t type, uint64_t name);
+// #2161: the same question of the manifest of `manager` (a CResourceManager, *(manager + 8)), the manager a request
+// was made to. False for a null manager or manifest.
+bool ManagerHas(const void* manager, uint64_t type, uint64_t name);
+// #2161: the keys a manifest names each plugin asset by, for a resource set's registration to refuse. An asset is
+// keyed by its logical type (the type at CResource + 0x28 its submit hook matches), a manifest record by the on-disk
+// type the game reads a buffer by (nevr_resource_key::OnDiskType, buffers 0 and 1), so each asset gives three keys:
+// its own and the two on-disk ones, each with the asset's label.
+struct AssetManifestKey {
+    uint64_t type = 0;
+    uint64_t name = 0;
+    std::string label;
+};
+std::vector<AssetManifestKey> AssetManifestKeys();
+
+#ifdef NEVR_TEST_HOOKS
+// Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it
+// under `name`. On entry *original holds the game's function; on success it holds the trampoline.
+bool InstallHookForTest(void* target, void* detour, void** original, const char* name);
+// Test-only: retires one engine hook the way ShutdownPluginAssets does (PatchRetire, with the same status handling).
+void RetireHookForTest(void* target, const char* what);
+// Test-only (#2161): the resolver hook's own body, with `original` standing in for the game's FillResourceFileRequest.
+// It replaces the trampoline the hook calls: null leaves the hook with nothing to call, so a test that sets one puts
+// null back when it ends and installs no real hook meanwhile.
+using RequestFnForTest = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
+void SetRequestOriginalForTest(RequestFnForTest original);
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name);
+#endif
 
 }  // namespace nevr::assets
 

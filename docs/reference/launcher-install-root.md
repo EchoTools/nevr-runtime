@@ -36,14 +36,16 @@ When the runtime does not load, the game stops. There is no run without nEVR:
 - a dialog says what is wrong (`StopNoticeTextFor` in `src/runtime/host/stop_notice.h`: missing, unsigned, changed, unreadable), unless the run is
   `-server`, `-headless` or the loader lock is held, which write the record only (`notice` in the `game_stop` record);
 - the stop reasons are the `outcome` values of `RuntimeLoadResult::OutcomeName`: `no_path`, `runtime_absent`, `dependency_load_failed`,
-  `load_failed`, `missing_entry`, `null_descriptor`, `abi_rejected`, `init_failed`, `runtime_refused`. A runtime that was never
+  `load_failed`, `missing_entry`, `null_descriptor`, `abi_rejected`, `init_failed`, `runtime_refused`, `update_blocked` (a self-update that left the
+  root unfinished, ADR 0024). A runtime that was never
   installed in the root is `runtime_absent`; a file the verifier does not accept is `runtime_refused`.
 
 ## What a launcher can read
 
-The host log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl` (`%TEMP%\nevr\echovr\logs` when the root cannot be made;
-`src/runtime/host/host_paths.h`). It is JSON Lines, one object per line, each with `tag` `NEVR.HOST`, `ts`, `pid` and `run`. A launcher
-that wants to know why the game did not start reads the newest `run`'s records:
+The host writes its records into the run's one main log, `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<timestamp>.jsonl` (the UTC time the game
+process started; `src/core/run_log_path.h`); it has no log of its own and writes nowhere else when the root cannot be made. The file is
+JSON Lines, one object per line; the host's records carry `tag` `NEVR.HOST`, `ts`, `pid` and `run`, and the runtime's lines share the
+file. A launcher that wants to know why the game did not start reads the newest file's `NEVR.HOST` records:
 
 | `event` | Fields a launcher can use |
 | --- | --- |
@@ -99,7 +101,6 @@ successful run ends `uninstalled`, exit 0. The run log is `logs\nevr-install.jso
 These are not yet in the root (#575). Each moves in its own change and this page is updated with it:
 
 - the game's own logs under `_local\r14logs` (the game writes them);
-- `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, KNOWN-WRONG #1232;
 
 ## Who owns an install
 

@@ -40,7 +40,7 @@ adb logcat -c && adb logcat -v time > batch-<headset>.log
 ```
 
 Search it with `grep -F '<text>' batch-<headset>.log`. If logcat rolled over, also pull the sentinel's own log at the
-end: `adb pull /sdcard/Android/media/com.readyatdawn.r15/files/nevr-sentinel.log .` (on a headset where that file is absent, the same name in `/sdcard/Android/data/com.readyatdawn.r15/files/`)
+end: the newest `nevr-<date>T<time>.jsonl` in `/sdcard/Android/media/com.readyatdawn.r15/files/nevr/logs/` with `adb pull` (on a headset where that folder is absent, the same path below `/sdcard/Android/data/com.readyatdawn.r15/files/`)
 
 **Sentinel lines** are JSON under the logcat tag `NEVR-Sentinel`, for example `{"event":"code_write_skipped",...}`.
 A row names the event and the fields to check. Counters appear as `{"event":"hook_counter","counter":"<name>",
@@ -88,6 +88,6 @@ For each headset:
 - the four headset facts;
 - PASS or FAIL per step, with the lines the rows name pasted (the five `code_write_skipped` lines, the `sentinel_ctor` line, the `quest_logged_in_user_id` line, the `menu_cards_*` lines and the counts from step 6, the `login_title_*` counters from steps 2 and 7);
 - the screenshot from step 5;
-- `batch-<headset>.log`, and `nevr-sentinel.log` if logcat rolled over.
+- `batch-<headset>.log`, and the run's `nevr-<date>T<time>.jsonl` if logcat rolled over.
 
 Each issue closes on its own lines: #1161 (step 1), #947 (step 1, with #1207 merged), #1165 (steps 2, 3 and 7), #1173 (step 5), #1171 (step 6), #944 (step 4, with #1183 merged).

@@ -69,7 +69,7 @@ void TheMenuLevelsAreInTheMenusOrder() {
   const char* const labels[] = {"Very Low", "Low", "Medium", "High", "Very High", "Ultra"};
   for (int i = 0; i < 6; ++i) QCHECK(std::strcmp(tq::kMenuLabels[i], labels[i]) == 0);
   QCHECK(std::strcmp(tq::kMenuControlName, "Texture Resolution") == 0);
-  QCHECK(std::strcmp(tq::kMenuPageName, "GRAPHICS") == 0);
+  QCHECK(std::strcmp(tq::kMenuPageName, "NEVR") == 0);
   QCHECK(tq::kDefaultMenuIndex == 1);  // Low, the stock size
   const tq::Level levels[] = {tq::Level::kVeryLow, tq::Level::kLow, tq::Level::kMedium,
                               tq::Level::kHigh,    tq::Level::kVeryHigh, tq::Level::kUltra};
@@ -110,16 +110,17 @@ void StockAndLowGiveTheSameEyeSizeOnEachHeadset() {
 void TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn() {
   const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);
   QCHECK(r.status == tm::Status::kRewritten);
-  QCHECK(r.rows == 1 && r.pages == 1);
+  QCHECK(r.rows == 1 && r.pages == 1 && r.handFlipRows == 1);
   QCHECK(r.page == "GRAPHICS (1/3)");
   const Json doc = Json::parse(r.text, nullptr, false);
   QCHECK(!doc.is_discarded());
-  // The page keeps the one row and is called GRAPHICS; the page it was is gone.
+  // The page keeps the Texture Resolution row and the Controller Hand Flip row under it, and is called NEVR; the page it was is
+  // gone.
   QCHECK(PageNamed(doc, "GRAPHICS (1/3)") == nullptr);
-  const Json* page = PageNamed(doc, "GRAPHICS");
+  const Json* page = PageNamed(doc, "NEVR");
   QCHECK(page != nullptr);
   if (page == nullptr) return;
-  QCHECK((*page)["rows"].size() == 1);
+  QCHECK((*page)["rows"].size() == 2);
   const Json& row = (*page)["rows"][0];
   QCHECK(row["path"] == "graphics|msaa");
   QCHECK(row["name"] == "Texture Resolution");
@@ -145,8 +146,92 @@ void TheDefaultIndexIsTheCallers() {
     const tm::Result r = tm::RewriteMenuSettings(kMenu, index);
     QCHECK(r.status == tm::Status::kRewritten);
     const Json doc = Json::parse(r.text, nullptr, false);
-    QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"][0]["idx"] == index);
+    QCHECK((*PageNamed(doc, "NEVR"))["rows"][0]["idx"] == index);
   }
+}
+
+// KNOWN-WRONG #2043 The interim Controller Hand Flip row: the second row of the page, after Texture Resolution, a NAMED FLAG bound
+// to `graphics|fullscreen` whose true is "Off" (the bit set) and false is "On", starting on the choice the caller gives (index 1, Off,
+// by default: index 0 is On).
+void TheHandFlipRowIsTheSecondRowAfterTextureResolution() {
+  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);  // no index given: the row starts on Off
+  QCHECK(r.status == tm::Status::kRewritten && r.handFlipRows == 1);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  const Json* page = PageNamed(doc, "NEVR");
+  QCHECK(page != nullptr && (*page)["rows"].size() == 2);
+  if (page == nullptr || (*page)["rows"].size() != 2) return;
+  QCHECK((*page)["rows"][0]["name"] == "Texture Resolution");
+  const Json& flip = (*page)["rows"][1];
+  QCHECK(flip["path"] == "graphics|fullscreen");
+  QCHECK(flip["name"] == "Controller Hand Flip");
+  QCHECK(flip["type"] == "NAMED FLAG");
+  QCHECK(flip["truestr"] == "Off" && flip["falsestr"] == "On");
+  QCHECK(flip["value"] == true);  // the default is Off: the bit set, the game's own value
+  QCHECK(!flip.contains("idx") && !flip.contains("values"));  // a STRING ARRAY's keys: the game would write an index back
+  // The stock fullscreen row on the DISPLAY page is another page's and is not ours.
+  const Json* display = PageNamed(doc, "DISPLAY");
+  QCHECK(display != nullptr && (*display)["rows"].size() == 1 && (*display)["rows"][0]["type"] == "NAMED FLAG");
+  // The caller's index is the row's start (the stored choice): 0 is On (false), anything else is Off (true).
+  for (const int index : {0, 1, 5}) {
+    const Json withIndex = Json::parse(tm::RewriteMenuSettings(kMenu, 1, index).text, nullptr, false);
+    QCHECK((*PageNamed(withIndex, "NEVR"))["rows"][1]["value"] == (index != 0));
+  }
+}
+
+// The texture rows are what they were: the Texture Resolution row is the same with and without the new row beside it.
+void TheTextureRowIsUnchangedByTheNewRow() {
+  const Json doc = Json::parse(tm::RewriteMenuSettings(kMenu, 3, 1).text, nullptr, false);
+  const Json& row = (*PageNamed(doc, "NEVR"))["rows"][0];
+  QCHECK(row["path"] == "graphics|msaa" && row["name"] == "Texture Resolution" && row["type"] == "STRING ARRAY");
+  QCHECK(row["idx"] == 3);  // the texture default, not the hand flip index
+  QCHECK(row["values"] == Json::array({"Very Low", "Low", "Medium", "High", "Very High", "Ultra"}));
+  QCHECK(row.size() == 5);  // path, name, idx, type, values: the stock row's keys, no more
+  // The row beside it has the stock NAMED FLAG row's keys, in its order, and the two state names: nothing the engine does not read.
+  const Json& flip = (*PageNamed(doc, "NEVR"))["rows"][1];
+  QCHECK(flip.size() == 6);
+  // The order is read from the text: this file's Json sorts its keys, the rewrite keeps the order it wrote.
+  const std::string text = tm::RewriteMenuSettings(kMenu, 3, 1).text;
+  QCHECK(text.find(R"({"path":"graphics|fullscreen","name":"Controller Hand Flip","value":true,"type":"NAMED FLAG","truestr":"Off",)"
+                   R"("falsestr":"On"})") != std::string::npos);
+}
+
+// A menu with no Texture Resolution row to hang it under is a shape mismatch: the row is added beside the texture control or not
+// at all, never alone.
+void TheHandFlipRowIsNeverAddedAlone() {
+  const tm::Result alone = tm::RewriteMenuSettings(
+      R"({"pages": [{"name": "DISPLAY", "rows": [{"path": "graphics|fullscreen", "name": "Fullscreen", "type": "NAMED FLAG"}]}]})", 1, 1);
+  QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty() && alone.handFlipRows == 0);
+}
+
+// With no row offered (the hand pose hooks are not installed) the menu keeps the Texture Resolution row alone and the settings
+// document keeps its stock entry for the toggle's setting.
+void ANotOfferedRowAddsNoRowAndKeepsTheStockEntry() {
+  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1, tm::kNoHandFlipRow);
+  QCHECK(r.status == tm::Status::kRewritten && r.rows == 1 && r.handFlipRows == 0);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  QCHECK((*PageNamed(doc, "NEVR"))["rows"].size() == 1);
+  QCHECK((*PageNamed(doc, "NEVR"))["rows"][0]["name"] == "Texture Resolution");
+  const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
+      {"path": "graphics|fullscreen", "value": true, "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json";
+  const tm::Result settings = tm::RewriteGameSettings(document, false);
+  QCHECK(settings.status == tm::Status::kRewritten && settings.rows == 1 && settings.handFlipRows == 0);
+  const Json kept = Json::parse(settings.text, nullptr, false);
+  QCHECK(kept["quest"]["settings"].size() == 1 && kept["quest"]["settings"][0]["path"] == "graphics|fullscreen");
+}
+
+// The hiding entry of the settings document goes with the control's: the row is shown and its value saved.
+void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
+  const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
+      {"path": "graphics|fullscreen", "value": true, "operator": "remove"}, {"path": "graphics|sharpening", "operator": "remove"}],
+      "pages": ["GRAPHICS (1/3)"]}})json";
+  const tm::Result r = tm::RewriteGameSettings(document);
+  QCHECK(r.status == tm::Status::kRewritten && r.rows == 1 && r.handFlipRows == 1);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  QCHECK(doc["quest"]["settings"].size() == 1 && doc["quest"]["settings"][0]["path"] == "graphics|sharpening");
+  // A document with no msaa removal is still not ours, whatever else it hides.
+  const tm::Result alone = tm::RewriteGameSettings(
+      R"json({"quest": {"settings": [{"path": "graphics|fullscreen", "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json");
+  QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty());
 }
 
 void AMenuWithoutTheRowIsLeftAlone() {
@@ -194,78 +279,10 @@ void TheRewriteDoesNotChangeItsOwnOutput() {
   const tm::Result menu = tm::RewriteMenuSettings(kMenu, 1);
   QCHECK(menu.status == tm::Status::kRewritten);
   const tm::Result again = tm::RewriteMenuSettings(menu.text, 1);
-  QCHECK(again.status == tm::Status::kRewritten && again.page == "GRAPHICS");  // it still has the row: it is idempotent
+  QCHECK(again.status == tm::Status::kRewritten && again.page == "NEVR");  // it still has the row: it is idempotent
   QCHECK(Json::parse(again.text) == Json::parse(menu.text));
   const tm::Result settings = tm::RewriteGameSettings(kGameSettings);
   QCHECK(tm::RewriteGameSettings(settings.text).status == tm::Status::kShapeMismatch);
-}
-
-// ---- the player's marker ---------------------------------------------------------------------------------------------------
-
-int Marked(const char* text) { return tm::MarkedMenuIndex(text, std::strlen(text)); }
-
-void TheMarkedValueIsReadFromTheMarkerFile() {
-  QCHECK(Marked(R"({"menu_index": 3})") == 3);
-  QCHECK(Marked(R"({"menu_index":0})") == 0);
-  QCHECK(Marked("{\"menu_index\" \t:\r\n 5 }") == 5);
-  QCHECK(Marked(R"({"menu_index": 1, "other": 4})") == 1);
-  QCHECK(Marked(R"({"menu_index": 1, "menu_index": 4})") == 1);  // the first one
-  // The game's own slot is not the marker: a settings file that held the setting is not read as a choice.
-  QCHECK(Marked(R"({"graphics": {"msaa": 4}})") == -1);
-  QCHECK(Marked(R"({"graphics": {"msaa": 0}})") == -1);
-}
-
-void TheMarkerTextRoundTripsAndStaysInTheMenu() {
-  for (int index = 0; index < 6; ++index) {
-    const std::string text = tm::MarkerText(index);
-    QCHECK(Json::parse(text) == Json::parse("{\"version\":1,\"menu_index\":" + std::to_string(index) + "}"));  // valid JSON
-    QCHECK(Marked(text.c_str()) == index);
-    QCHECK(tm::MarkerVersion(text.c_str(), text.size()) == tm::kMarkerVersion);
-  }
-  QCHECK(Marked(tm::MarkerText(-4).c_str()) == 0);
-  QCHECK(Marked(tm::MarkerText(99).c_str()) == 5);
-}
-
-int Version(const char* text) { return tm::MarkerVersion(text, std::strlen(text)); }
-
-void TheMarkerVersionIsReadFromTheMarkerFile() {
-  QCHECK(Version(R"({"version":1,"menu_index":3})") == 1);
-  QCHECK(Version("{\"version\" \t:\r\n 7 }") == 7);
-  // An unversioned marker (what 6.14 to 6.16 wrote) reads 0, as does anything that is not a whole number.
-  QCHECK(Version(R"({"menu_index":3})") == 0);
-  QCHECK(Version("") == 0);
-  QCHECK(Version(R"({"version":"1"})") == 0);
-  QCHECK(Version(R"({"version":1.5})") == 0);
-  QCHECK(Version(R"({"version":-1})") == 0);
-  QCHECK(Version(R"({"versions":1})") == 0);
-  QCHECK(tm::MarkerVersion(nullptr, 10) == 0);
-  QCHECK(tm::kMarkerVersion == 1);
-}
-
-void ANumberOutsideTheMenuIsClamped() {
-  QCHECK(Marked(R"({"menu_index": 6})") == 5);
-  QCHECK(Marked(R"({"menu_index": 99999999999999999999})") == 5);
-  QCHECK(Marked(R"({"menu_index": -1})") == 0);
-  QCHECK(Marked(R"({"menu_index": -300})") == 0);
-}
-
-void NothingUsableIsMinusOne() {
-  QCHECK(Marked("") == -1);
-  QCHECK(Marked("{}") == -1);
-  QCHECK(Marked(R"({"menu_indexx": 3})") == -1);
-  QCHECK(Marked(R"({"Menu_index": 3})") == -1);
-  QCHECK(Marked(R"({"menu_index": "3"})") == -1);
-  QCHECK(Marked(R"({"menu_index": null})") == -1);
-  QCHECK(Marked(R"({"menu_index": true})") == -1);
-  QCHECK(Marked(R"({"menu_index": 2.5})") == -1);
-  QCHECK(Marked(R"({"menu_index": 2e1})") == -1);
-  QCHECK(Marked(R"({"menu_index" 3})") == -1);
-  QCHECK(tm::MarkedMenuIndex(nullptr, 10) == -1);
-  // The size bounds the read: a number cut off by the end of the text is read as far as it goes, a key cut off is not a key.
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 14) == 3);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 15) == 5);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":3", 13) == -1);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 3) == -1);
 }
 
 }  // namespace
@@ -276,15 +293,15 @@ int main() {
   TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn();
   TheKeysKeepTheirOrderSoTheGameReadsWhatItReadBefore();
   TheDefaultIndexIsTheCallers();
+  TheHandFlipRowIsTheSecondRowAfterTextureResolution();
+  TheTextureRowIsUnchangedByTheNewRow();
+  TheHandFlipRowIsNeverAddedAlone();
+  TheSettingsDocumentStopsHidingTheHandFlipSetting();
+  ANotOfferedRowAddsNoRowAndKeepsTheStockEntry();
   AMenuWithoutTheRowIsLeftAlone();
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();
   TheRewriteDoesNotChangeItsOwnOutput();
-  TheMarkedValueIsReadFromTheMarkerFile();
-  TheMarkerTextRoundTripsAndStaysInTheMenu();
-  TheMarkerVersionIsReadFromTheMarkerFile();
-  ANumberOutsideTheMenuIsClamped();
-  NothingUsableIsMinusOne();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

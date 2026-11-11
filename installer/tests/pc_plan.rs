@@ -409,6 +409,27 @@ fn a_record_without_a_release_key_does_not_block_an_install() {
 }
 
 #[test]
+fn an_installed_release_that_cannot_be_compared_is_refused_unless_allowed() {
+    // The record's release overflows a u64, so it cannot be ordered against the offered one. It must not let the older release over it.
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let text = fs::read_to_string(w.layout().record())
+        .unwrap()
+        .lines()
+        .map(|l| if l.starts_with("release=") { "release=99999999999999999999.0.0".to_string() } else { l.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(w.layout().record(), text).unwrap();
+    let older = pkg_v("5.17.0", HOST_B, RT_B);
+    let (_, plan) = plan_of(&w, &older, false);
+    assert_eq!(plan.outcome, Outcome::NeedsUser, "{plan:?}");
+    assert!(plan.reasons[0].contains("99999999999999999999.0.0") && plan.reasons[0].contains("5.17.0") && plan.reasons[0].contains("--allow-downgrade"), "{:?}", plan.reasons);
+    let (_, allowed) = plan_of(&w, &older, true);
+    assert_eq!((allowed.outcome, allowed.action), (Outcome::Proceed, Some(Action::Update)));
+}
+
+#[test]
 fn a_write_that_fails_after_the_runtime_returns_every_file_to_its_prior_bytes() {
     use std::os::unix::fs::PermissionsExt;
     let w = world();
@@ -505,6 +526,26 @@ fn launch_witness_reads_the_hosts_own_records() {
     assert!(pc::launch_witness(&refused, h, r).unwrap_err().contains("not accepted"));
     let stopped = format!("{good}{{\"event\":\"game_stop\"}}\n");
     assert!(pc::launch_witness(&stopped, h, r).unwrap_err().contains("stopped"));
+}
+
+#[test]
+fn the_hosts_log_is_the_newest_process_main_log_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "nevr-2026-11-03T09-00-00.100.jsonl",
+        "nevr-2026-11-04T10-43-51.990.jsonl",
+        "nevr-2026-11-04T10-43-51.990.1.jsonl", // a rotation's archive
+        "nevr-update.jsonl",                    // the installer's own log
+        "nevr-bootstrap.jsonl",
+        "nevr-2026-11-05T00-00-00.000.log",
+    ] {
+        fs::write(dir.path().join(name), "").unwrap();
+    }
+    let newest = pc::newest_run_log(dir.path()).unwrap();
+    assert_eq!(newest.file_name().unwrap().to_str().unwrap(), "nevr-2026-11-04T10-43-51.990.jsonl");
+    assert!(pc::is_run_log_name("nevr-pid1f4.jsonl"));
+    assert!(!pc::is_run_log_name("nevr-pid.jsonl"));
+    assert!(pc::newest_run_log(&dir.path().join("absent")).is_none());
 }
 
 #[test]

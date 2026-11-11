@@ -324,6 +324,7 @@ class Router {
     bool loginDeferred = false;  // the login waits for the gate: the session was already open when it attached (G4)
     bool loginSent = false;
     bool loginAttached = false;  // a login connection has been attached (never cleared): a matchmaker may share
+    bool framesNoted = false;    // the `service frames` line (service_frames.h) was written for this remote
     // Game frames that arrived before the remote opened or while the login is being built, in arrival order.
     std::deque<Item> pending;
     std::size_t pendingBytes = 0;

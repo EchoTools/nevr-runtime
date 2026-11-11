@@ -81,9 +81,10 @@ pub fn semver_ok(v: &str) -> bool {
         && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && (*p == "0" || !p.starts_with('0')))
 }
 
-/// Two `X.Y.Z` versions compared as numbers (`2.10.0` is above `2.9.0`); `None` when either is not `X.Y.Z`.
+/// Two `X.Y.Z` versions compared as numbers (`2.10.0` is above `2.9.0`); `None` when either is not `X.Y.Z`, or has a
+/// component that does not fit a u64 (it is not dropped: that would compare the rest as a shorter version).
 pub fn semver_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
-    let parts = |v: &str| -> Option<Vec<u64>> { semver_ok(v).then(|| v.split('.').filter_map(|p| p.parse().ok()).collect()) };
+    let parts = |v: &str| -> Option<Vec<u64>> { semver_ok(v).then(|| v.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<u64>>>()).flatten() };
     Some(parts(a)?.cmp(&parts(b)?))
 }
 
@@ -185,49 +186,6 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     done
 }
 
-/// The scheme (with `://`) and what follows it.
-fn split_scheme(url: &str) -> (&str, &str) {
-    match url.find("://") {
-        Some(i) => (&url[..i + 3], &url[i + 3..]),
-        None => ("", url),
-    }
-}
-
-/// The authority of `url` (after the scheme, before the first `/`, `?` or `#`), which is where userinfo can be.
-fn authority_of(url: &str) -> &str {
-    let (_, rest) = split_scheme(url);
-    rest.split(['/', '?', '#']).next().unwrap_or_default()
-}
-
-/// The userinfo of `url` (its credentials: the authority up to its last `@`), when it has any.
-fn userinfo_of(url: &str) -> Option<&str> {
-    let authority = authority_of(url);
-    authority.rfind('@').map(|i| &authority[..i]).filter(|u| !u.is_empty())
-}
-
-/// The URL as a diagnostic shows it (logging standard, Rule 4): scheme, host, port and path. The userinfo (a password can
-/// be there), the query and the fragment (a token can be there) are cut. The request keeps the URL it was given.
-pub fn redact_url(url: &str) -> String {
-    let (scheme, rest) = split_scheme(url);
-    let before = rest.split(['?', '#']).next().unwrap_or_default();
-    let (authority, path) = before.split_at(before.find('/').unwrap_or(before.len()));
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    format!("{scheme}{host}{path}")
-}
-
-/// Text a lower layer built from `url` (a transport error repeats the URL it was given), with the URL in its redacted
-/// form and its userinfo removed wherever it still appears.
-pub fn redact_text(text: &str, url: &str) -> String {
-    if url.is_empty() {
-        return text.to_string();
-    }
-    let mut out = text.replace(url, &redact_url(url));
-    if let Some(userinfo) = userinfo_of(url) {
-        out = out.replace(&format!("{userinfo}@"), "");
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,28 +256,12 @@ mod tests {
     }
 
     #[test]
-    fn a_url_is_shown_without_credentials_query_or_fragment() {
-        assert_eq!(redact_url("https://user:s3cret@evr.example:8443/nevr-runtime/manifest.json?token=T#frag"), "https://evr.example:8443/nevr-runtime/manifest.json");
-        assert_eq!(redact_url("https://evr.echo.taxi/nevr-runtime"), "https://evr.echo.taxi/nevr-runtime");
-        assert_eq!(redact_url("https://u@h"), "https://h");
-        assert_eq!(redact_url("https://h/x@y"), "https://h/x@y", "an @ in the path is not userinfo");
-        assert_eq!(redact_url("file:///tmp/a/b.json"), "file:///tmp/a/b.json");
-    }
-
-    #[test]
-    fn a_transport_error_loses_the_credentials_it_repeats() {
-        let url = "https://user:s3cret@127.0.0.1:1/nevr-runtime/manifest.json";
-        let text = format!("could not fetch {url}: Connection Failed: {url} (user:s3cret@127.0.0.1)");
-        let shown = redact_text(&text, url);
-        assert!(!shown.contains("s3cret") && !shown.contains("user:"), "{shown}");
-        assert!(shown.contains("https://127.0.0.1:1/nevr-runtime/manifest.json"), "{shown}");
-        assert_eq!(redact_text("no url here", url), "no url here");
-        assert_eq!(redact_text("unchanged", ""), "unchanged");
-        assert_eq!(redact_text("a@b", "https://@h/x"), "a@b", "an empty userinfo removes nothing");
-        // The query and the fragment of the URL, repeated by the error, go too (a token can be there).
-        let with_query = "https://u:p@h/x?token=T#f";
-        let shown = redact_text(&format!("boom {with_query} ({with_query})"), with_query);
-        assert!(!shown.contains("token=T") && !shown.contains("u:p"), "{shown}");
+    fn semver_cmp_refuses_an_overflowing_component() {
+        // A component that does not fit a u64 is unreadable: it must not be dropped, which compares the rest as a
+        // shorter version (`[0, 0]` sorts below `[5, 17, 0]`).
+        assert_eq!(semver_cmp("99999999999999999999.0.0", "5.17.0"), None);
+        assert_eq!(semver_cmp("18446744073709551616.0.0", "1.0.0"), None);
+        assert_eq!(semver_cmp("1.0.99999999999999999999", "1.0.0"), None);
     }
 
     #[test]

@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/server_features.h"
+#include "runtime/compat/service_frames.h"
 
 namespace nevr_session_router {
 
@@ -227,6 +229,16 @@ void Router::LobbyAnswersLocked(const std::string& frame, int connIdx, Effects& 
     offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
     const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(message.symbol, true);
     if (!kind) continue;
+    // #2333: a session in another lobby begins, so what the last server stated no longer holds (server_features.h). Every
+    // success counts, whether or not the limiter below writes its record.
+    if (*kind == nevr_lobby_frame::Kind::Success) {
+      nevr_lobby_frame::Decoded success;
+      bool wasOpen = false;
+      if (nevr_lobby_frame::Decode(*kind, message.payload, static_cast<std::size_t>(message.length), &success) &&
+          nevr_server_features::Client().ClearForLobby(success.lobby, &wasOpen)) {
+        Log(fx, LogLevel::Info, nevr_server_features::FormatCleared(nevr_lobby_frame::FormatGuidOrNone(success.lobby), wasOpen));
+      }
+    }
     const nevr_lobby_frame::ClientLobbyRecords::Admission admission = clientRecords_.Admit(*kind, now);
     for (std::size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
       if (admission.verdict.flushed[i] != 0) {
@@ -1112,6 +1124,12 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
     if (rit == remoteTable_.end()) {
       ++droppedRemoteFrames_;
       return;
+    }
+    if (!rit->second.framesNoted) {
+      // Once per remote, at its first frame (#568): which wire form the service speaks on this connection.
+      rit->second.framesNoted = true;
+      Log(fx, LogLevel::Info,
+          nevr_service_frames::FormatLine(rit->second.ownerConn, RoleName(rit->second.request.role), frame));
     }
     if (frame.size() > options_.limits.maxFrameBytes) {
       Log(fx, LogLevel::Error,

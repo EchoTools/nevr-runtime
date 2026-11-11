@@ -28,7 +28,7 @@ One game, two binaries, one codebase: a feature is written once, with a per-bina
 | Game service and protocol | `src/nevr_api/`, `gen/`, `src/runtime/compat/`, `docs/reference/social-nakama-protocol.md` | protobuf from BSR (`just proto`), the WebSocket bridge, the session router, codecs |
 | Quest sentinel | `src/quest/` | a separate CMake project (NDK, arm64); `libr15.so` is patched on the host at build time (ADR 0021, N151) |
 | Quest plugins | `src/quest/plugins/q15t`, `src/quest/plugins/autopilot`, `src/quest/plugin/` | the Quest plugin loader (ADR 0019), q15t modules, the autopilot route (ADR 0025); in no release or package-dev APK |
-| Content packs and game data | `docs/reference/content-packs.md`, `content-pack-hosting.md`, `tools/echomod/`, `src/runtime/patch/{asset_cdn,resource_override,evrp_package}.cpp`, `src/quest/data/` | game data served by plugins, hosted on the CDN, named by the signed manifest (ADR 0028, 0029) |
+| Content packs and game data | `docs/reference/content-packs.md`, `content-pack-hosting.md`, `src/runtime/content/`, `tools/echomod/`, `src/runtime/patch/{asset_cdn,resource_override,evrp_package}.cpp`, `src/quest/data/` | game data the runtime serves from the nevr root, hosted on the CDN, named by the signed manifest (ADR 0028, 0029) |
 | Core installer | `installer/` (Rust crate; the binary is `install-nevr-runtime`), `tools/package-release/` | one install method for PC and Quest (ADR 0023, 0024) |
 | Python tools | `tools/`, `tools/tests/` | gate checks (`verify_*.py`), release and Quest-APK tooling, scenario harness (`tools/scenario/`), Windows VM rig (`tools/winvm/`) |
 | Go suites | `tests/system`, `tests/plugins`, `tests/quest`, `tests/crash-ingest` | ground-truth and system tests; some write into a game install |
@@ -42,7 +42,7 @@ Each gate has a proof to produce. A gate you did not pass is named as not passed
 ### 1. Orient
 
 Read `AGENTS.md`, the global `CLAUDE.md` if you are a maintainer seat, `git log --oneline -20`, `git status`, and the
-issue the unit tracks (a PR is opened only for an existing issue: "Review, verification and merge"). Read the standard for the work you will
+issue the unit tracks (work starts from an existing issue: "Review, verification and landing"). Read the standard for the work you will
 do (`AGENTS.md` "For contributors", "Required reading": verification, logging, naming, planning). For C++ or build work
 read the C++ Mingw Addendum at the end of `AGENTS.md`; a Quest change is built with the NDK, not MinGW
 (`just configure-android`), so check which of the addendum's hard stops apply to it. If a file you will change is
@@ -64,12 +64,12 @@ Ask only about one-way actions and real dilemmas ("Do what was asked": "Decide t
 deploy, a tag, a release or publish, a signing step ("Production Deployment", "Who speaks for the owner",
 `RELEASING.md`), and a write into the owner's game install ("The game install"). The "Guardrails" are not decisions: a
 binary patch without prologue validation and committed generated protobuf are refused, not asked about. A change that
-must break an N-rule says so in the PR and why ("The N-rules index"). Everything else is a two-way door: decide it and
+must break an N-rule says so in the commit message and why ("The N-rules index"). Everything else is a two-way door: decide it and
 report it.
 
 ### 4. Plan and write the test first
 
-"Methodology" (plan, two review passes, testing strategy) and "What a PR carries" (search statement, siblings, symbols,
+"Methodology" (plan, two review passes, testing strategy) and "What a landed commit carries" (search statement, siblings, symbols,
 mutants, platform parity, headline). A new flag or config key has a consumer, shown by a grep and a test. Logging is part
 of the work (the logging standard `AGENTS.md` opens with, `docs/standards/logging.md`).
 
@@ -79,7 +79,7 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 | --- | --- |
 | PC host and runtime | "DLL Components", the boot, shutdown and crash N-rules (N36, N43, N62, N70, N82, N125, N146), "No hand-built serialization" |
 | Dedicated server | "Startup timing" (45 s patience), N102, N120, N149; a server never blocks on a prompt |
-| Plugins and trust | "Plugins", N114, N134, N135, N147, N150; `sdk/include/nevr/plugin_interface.h` is a frozen ABI (`docs/standards/naming.md`) |
+| Plugins and trust | "Plugins", N114, N134, N135, N147, N150; `sdk/include/nevr/plugin_interface.h` is the published plugin ABI, `Nevr*` with deprecated `Nvr*` aliases (`docs/standards/naming.md`) |
 | Hooks and patches | "Guardrails" (prologue validation, hook over byte patch), the hooks N-rules (N83, N84, N96, N97, N126) |
 | Protocol | "Guardrails" and "Conventions" on generated protobuf; N91, N112, N132; the wire format is checked against the game service, not guessed |
 | Quest | N151 (no code page written at run time), "Project" on sharing code with `src/runtime/`, ADR 0003/0004/0021 |
@@ -90,9 +90,10 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 
 ### 6. Prove it: the quick check, by area
 
-The PR gate is "A PR runs the quick check, not `just verify`" in `AGENTS.md` "Builds"; `just verify` runs only on main
+The gate before landing is "A branch runs the quick check before it lands, not `just verify`" in `AGENTS.md` "Builds"; `just verify` runs only on main
 after the release cut. `just --list` is the authority for recipe names. Run what covers the code you changed, in the
-build slice on the PR's tip, and report each item with its result; an item not run is named as not run.
+build slice on the branch's tip, and report each item with its exit code in the commit message; an item not run is
+named as not run.
 
 | You changed | Run (in addition to `just build`) |
 | --- | --- |
@@ -106,18 +107,22 @@ build slice on the PR's tip, and report each item with its result; an item not r
 | `tests/` Go modules | `go vet ./...` in the module; the system suites write into `$EVR_GAME_DIR`, so only on a game copy |
 | Release or packaging | `just release-preflight` before a tag; `tools/package_release.py` and the `test_release_*` tests via `just test-tools` |
 
-Every PR also runs `just test-tools` and `python3 tools/verify_doc_paths.py`. A runtime or auth change's PC login runs on
-main after the release cut ("Verification before merge", "Client login test mechanics"). Behavior only a headset or a
+Every change also runs `just test-tools` and `python3 tools/verify_doc_paths.py`. A runtime or auth change's PC login runs on
+main after the release cut ("Verification before landing", "Client login test mechanics"). Behavior only a headset or a
 live game shows is named as not run unless you ran it (the evidence ladder is `docs/standards/verification.md`).
 
 ### 7. Land
 
-The PR body: the issue (`Closes`/`Refs #N`), each command run on the exact tip with its result, what was not run, and
-last the line `Read AGENTS.md at <merge-base sha>` ("Review, verification and merge"). Commit identity and trailers:
+No pull requests. The commit message: the issue (`Closes`/`Refs #N`), each command run on the exact tip with its exit
+code, the mutants, and what was not run or not established ("What a landed commit carries"). Start a fresh-context
+review subagent with the diff, the commit message and the issue; FIX goes back to step 4, MERGE goes on to "Landing" in "Review,
+verification and landing": fetch, rebase the branch onto `origin/main`, rerun the touched tests, push the tip to
+`refs/heads/main` by explicit refspec (a fast-forward), record `main`'s SHA before and after, then fast-forward the
+local `main` only when its `git status --porcelain` is empty and HEAD is `main` (AGENTS.md "Landing"; otherwise leave
+it, rule 3). Commit identity and trailers:
 "Commit identity" and "Commits, versions and requirement words". Branch and worktree: "Branch lifecycle"; scratch:
 "Ownership and cleanup". A defect you do not fix in the same turn gets an issue ("Fix it or file it, in the same turn"),
-shaped as "What a PR carries" says; a security-sensitive one goes to the owner. Do not merge unless the owner told you to
-("Only the agent the owner has told to merge merges PRs").
+shaped as "What a landed commit carries" says; a security-sensitive one goes to the owner.
 
 ## Mistakes that recur
 

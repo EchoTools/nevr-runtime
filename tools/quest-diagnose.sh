@@ -121,33 +121,34 @@ data_legacy=no; remote_dir "$legacy/_data" && data_legacy=yes
 # The runtime also serves the Android/media files folder when it exists without _data (android_media_unmarked, #749).
 media_dir=no; remote_dir "$media/files" && media_dir=yes
 
-# The runtime's own log and crash files: nevr-sentinel*.log (this session, the kept previous sessions, the size-rotated
-# files) and nevr-crashes. The Android/media files folder is read first (where the runtime writes them, and where a player
-# can reach them); the Android/data folder is the fallback.
+# The runtime's own logs and crash files: every nevr-*.jsonl in nevr/logs (one log for each run of the game, and the rotated
+# files of a long run) and nevr-crashes. The Android/media files folder is read first (where the runtime writes them, and
+# where a player can reach them); the Android/data folder is the fallback.
 mkdir -p "$work/sentinel"
 log_dir=""; log_pull=""; log_rc=1
 for d in "$media/files" "$filesdir"; do
-  log_pull=$(dev 120 pull "$d/nevr-sentinel.log" "$work/sentinel/nevr-sentinel.log"); log_rc=$?
-  if [ "$log_rc" -eq 0 ]; then log_dir=$d; break; fi
+  names=$(dev 30 shell "ls $d/nevr/logs" | tr -d '\r' | grep -E '^nevr-.+\.jsonl$')
+  if [ -n "$names" ]; then log_dir=$d/nevr/logs; break; fi
 done
-kept_pull=""
 if [ -n "$log_dir" ]; then
+  log_rc=0
   while IFS= read -r name; do
-    kept_pull="$kept_pull$name: $(dev 120 pull "$log_dir/$name" "$work/sentinel/$name" 2>&1 | tr '\n' ' ')"$'\n'
-  done < <(dev 30 shell "ls $log_dir" | tr -d '\r' | grep -E '^nevr-sentinel\..+\.log$')
+    pulled=$(dev 120 pull "$log_dir/$name" "$work/sentinel/$name" 2>&1 | tr '\n' ' ')
+    log_pull="$log_pull$name: $pulled"$'\n'
+  done <<<"$names"
 fi
 crash_pull=""; crash_rc=1
 for d in "$media/files" "$filesdir"; do
   crash_pull=$(dev 120 pull "$d/nevr-crashes" "$work/sentinel"); crash_rc=$?
   if [ "$crash_rc" -eq 0 ]; then break; fi
 done
-for f in "$work"/sentinel/nevr-sentinel*.log; do
+for f in "$work"/sentinel/nevr-*.jsonl; do
   if [ -f "$f" ]; then protect <"$f" >"$f.protected" && mv "$f.protected" "$f"; fi
 done
 while IFS= read -r f; do
   case "$f" in *.log|*.txt|*.json) protect <"$f" >"$f.protected" && mv "$f.protected" "$f" ;; esac
 done < <(find "$work/sentinel/nevr-crashes" -type f 2>/dev/null)
-printf 'nevr-sentinel.log: exit %s %s (folder: %s)\n%snevr-crashes: exit %s %s\n' "$log_rc" "$log_pull" "${log_dir:-none}" "$kept_pull" "$crash_rc" "$crash_pull" | save sentinel/pull_results.txt
+printf 'run logs: exit %s (folder: %s)\n%snevr-crashes: exit %s %s\n' "$log_rc" "${log_dir:-none}" "$log_pull" "$crash_rc" "$crash_pull" | save sentinel/pull_results.txt
 
 # ONE clean launch. The headset's log of the run the tester came with is saved first: logcat -c erases it.
 echo "Starting the game once and waiting $wait_s s (this closes it first if it is running and erases the headset's log buffer after saving a copy) ..."

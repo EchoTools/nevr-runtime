@@ -1,0 +1,139 @@
+# meshstep: each rule of src/quest/combat/meshstep.cpp, meshstep_targets.h and the shared table_step.cpp removed or bent once;
+# src/quest/tests/meshstep_test.cpp must fail on every one. Sourced by ../mutants.sh, which defines `runm <name> <file> <sed>`.
+S=src/quest/combat/meshstep.cpp
+T=src/quest/combat/meshstep_targets.h
+TS=src/quest/combat/table_step.cpp
+# the scope: the reconstruction only in a combat match, the game's constructor elsewhere
+runm ms_scope_inverted      $S "s/  if (scope != table_step::Scope::kCombat) {/  if (scope == table_step::Scope::kCombat) {/"
+runm ms_always_reconstructs $S "s/  if (scope != table_step::Scope::kCombat) {/  if (false) {/"
+runm ms_never_reconstructs  $S "s/  if (scope != table_step::Scope::kCombat) {/  if (true) {/"
+runm ms_scope_not_read      $S "s/table_step::CurrentScope() : table_step::Scope::kUnknown;/table_step::Scope::kCombat : table_step::Scope::kUnknown;/"
+runm ms_ready_ignored       $S "s/const bool ready = g_ready.load(std::memory_order_acquire) \&\& self != nullptr \&\& init != nullptr;/const bool ready = true;/"
+runm ms_null_self_unchecked $S "s/ \&\& self != nullptr \&\& init != nullptr;/ \&\& init != nullptr;/"
+runm ms_null_init_unchecked $S "s/ \&\& self != nullptr \&\& init != nullptr;/ \&\& self != nullptr;/"
+# the game's constructor, with the game's arguments, for every other scope
+runm ms_stock_not_called    $S "s/^    original(self, init);\$/    (void)original;/"
+runm ms_stock_args_swapped  $S "s/^    original(self, init);\$/    original(const_cast<void*>(init), self);/"
+runm ms_stock_null_init     $S "s/^    original(self, init);\$/    original(self, nullptr);/"
+# the counts and the two lines
+runm ms_stock_not_counted   $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
+runm ms_built_not_counted   $S "s/g_built.fetch_add(1, std::memory_order_relaxed);/g_built.fetch_add(0, std::memory_order_relaxed);/"
+runm ms_built_said_always   $S "s/  if (g_saidBuilt.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidBuilt;/"
+runm ms_stock_said_always   $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
+runm ms_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/(scope == table_step::Scope::kUnknown ? \"combat\" : \"other\")/"
+runm ms_built_step_text     $S "s/{\"growth_step\", kGrowStep}, {\"stock_growth_step\", kStockGrowStep},/{\"growth_step\", kStockGrowStep}, {\"stock_growth_step\", kGrowStep},/"
+runm ms_built_level_debug   $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_meshstep_built\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_meshstep_built\"/"
+# the growth step
+runm ms_step_is_two         $S "s/constexpr std::uint64_t kGrowStep = 1;/constexpr std::uint64_t kGrowStep = 2;/"
+runm ms_step_is_stock       $S "s/constexpr std::uint64_t kGrowStep = 1;/constexpr std::uint64_t kGrowStep = 32;/"
+# the reconstruction: every store, in the stock order
+for off in 10 18 08 40 48 50 58 68; do
+  runm ms_drop_store_$off   $S "s/^  Put64(self, 0x$off, 0);\$//"
+done
+runm ms_drop_presence_vtbl  $S "s/^  Put64(self, 0x00, g_vtPresence);\$//"
+runm ms_drop_mesh_vtbl      $S "s/^  Put64(self, 0x00, g_vtMesh);\$//"
+runm ms_vtbl_order_swapped  $S "s/^  Put64(self, 0x00, g_vtPresence);\$/  Put64(self, 0x00, g_vtMesh);/"
+runm ms_drop_init_20        $S "s/^  Put64(self, 0x20, Get64(init, 0x08));\$//"
+runm ms_init_20_from_10     $S "s/Put64(self, 0x20, Get64(init, 0x08));/Put64(self, 0x20, Get64(init, 0x10));/"
+runm ms_init_28_from_08     $S "s/Put64(self, 0x28, Get64(init, 0x10));/Put64(self, 0x28, Get64(init, 0x08));/"
+runm ms_drop_init_28        $S "s/^  Put64(self, 0x28, Get64(init, 0x10));\$//"
+runm ms_current_not_stored  $S "s/Put64(self, 0x30, g_fns.current());/Put64(self, 0x30, 0);/"
+runm ms_current_not_called  $S "s/^  Put64(self, 0x30, g_fns.current());\$//"
+runm ms_38_is_zero          $S "s/Put64(self, 0x38, ~std::uint64_t{0});/Put64(self, 0x38, 0);/"
+runm ms_60_is_six           $S "s/Put64(self, 0x60, 7);/Put64(self, 0x60, 6);/"
+runm ms_drop_store_60       $S "s/^  Put64(self, 0x60, 7);\$//"
+runm ms_list_data_offset    $S "s/g_fns.listDataCtor(self + 0x70);/g_fns.listDataCtor(self + 0x78);/"
+runm ms_list_data_skipped   $S "s/^  g_fns.listDataCtor(self + 0x70);\$//"
+# the eleven member blocks
+runm ms_first_block_offset  $S "s/{0x2b0, 0x2e8,/{0x2b8, 0x2e8,/"
+runm ms_last_block_offset   $S "s/0x4e0};/0x4e8};/"
+runm ms_last_block_dropped  $S "s/0x4a8, 0x4e0};/0x4a8};/"
+runm ms_block_args_a        $S "s/g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/g_fns.memblockCtor(self + off, 1, 0, g_fns.currentPtr());/"
+runm ms_block_args_b        $S "s/g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/g_fns.memblockCtor(self + off, 0, 1, g_fns.currentPtr());/"
+runm ms_block_alloc_null    $S "s/g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/g_fns.memblockCtor(self + off, 0, 0, nullptr);/"
+runm ms_block_step_slot     $S "s/Put64(self, off + 0x20, kGrowStep);/Put64(self, off + 0x28, kGrowStep);/"
+runm ms_block_step_dropped  $S "s/^    Put64(self, off + 0x20, kGrowStep);\$//"
+runm ms_block_28_dropped    $S "s/^    Put64(self, off + 0x28, 0);\$//"
+runm ms_block_30_dropped    $S "s/^    Put64(self, off + 0x30, 0);\$//"
+runm ms_block_after_step    $S "s/^    Put64(self, off + 0x20, kGrowStep);\$//;s/^    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());\$/    Put64(self, off + 0x20, kGrowStep);\n    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/"
+# the vtable words are read as the stock code reads them, plus 0x10
+runm ms_presence_plus_zero  $S "s/g_vtPresence = vp + 0x10;/g_vtPresence = vp;/"
+runm ms_mesh_plus_zero      $S "s/g_vtMesh = vm + 0x10;/g_vtMesh = vm;/"
+runm ms_mesh_from_presence  $S "s/g_vtMesh = vm + 0x10;/g_vtMesh = vp + 0x10;/"
+runm ms_zero_vtbl_accepted  $S "s/ || vp == 0 || vm == 0)/)/"
+runm ms_vtbl_read_at_slot   $T "s/inline constexpr Pins kPins = {0x18677cc, 0x36e5548, 0xf28430, 0xef9c70, 0xefbc50, 0xeedec0, 0x371f860, 0x370c7d8};/inline constexpr Pins kPins = {0x18677cc, 0x36e5548, 0xf28430, 0xef9c70, 0xefbc50, 0xeedec0, 0x371f860, 0x36fc7d8};/"
+runm ms_helper_missing_ok   $S "s/if (resolved.current == nullptr || resolved.currentPtr == nullptr || resolved.listDataCtor == nullptr || resolved.memblockCtor == nullptr) {/if (false) {/"
+runm ms_helper_one_unchecked $S "s/resolved.memblockCtor == nullptr) {/false) {/"
+# the install: the pins, the build, the switch, once, the slot
+runm ms_pins_skipped        $S "s/if (const table_step::PinWord\* const bad = table_step::FirstPinMismatch(image.base, kWords, kWordCount, \&have, \&readable)) {/if (const table_step::PinWord* const bad = (table_step::FirstPinMismatch(image.base, kWords, kWordCount, \&have, \&readable), nullptr)) {/"
+runm ms_last_pin_skipped    $S "s/FirstPinMismatch(image.base, kWords, kWordCount,/FirstPinMismatch(image.base, kWords, kWordCount - 1,/"
+runm ms_first_pin_skipped   $S "s/FirstPinMismatch(image.base, kWords, kWordCount,/FirstPinMismatch(image.base, kWords + 1, kWordCount - 1,/"
+runm ms_off_ignored         $S "s/^  if (!on) {\$/  if (!on \&\& false) {/"
+runm ms_second_step_runs    $S "s/  if (g_ran.exchange(true, std::memory_order_acq_rel)) {/  if (false) {/"
+runm ms_ready_never_set     $S "s/^  g_ready.store(true, std::memory_order_release);.*\$/  (void)g_ready;/"
+runm ms_no_expected_ctor    $T "s/^  target.expectedOriginal = .*\$/  (void)base;/"
+runm ms_expected_wrong      $T "s/base + pins.ctor);/base + pins.ctor + 4);/"
+runm ms_slot_pin_off        $T "s/^                             pins.slot);\$/                             pins.slot + 8);/"
+runm ms_kind_glob_dat       $T "s/sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(),/sentinel::RelocKind::kGlobDat, sentinel::pinned::LibR15PatchedBuildId(),/"
+runm ms_legacy_not_warned   $S "s/^  table_step::WarnLegacySwitch(.*\$//"
+runm ms_legacy_file_name    $S "s/\"meshstep.off\", \"combat.meshstep: false\"/\"meshstep.of\", \"combat.meshstep: false\"/"
+runm ms_legacy_key_name     $S "s/\"meshstep.off\", \"combat.meshstep: false\"/\"meshstep.off\", \"combat.meshstep: true\"/"
+# the lines
+runm ms_refusal_not_error   $S "s/refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo/refused ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kInfo/"
+runm ms_install_slot_text   $S "s/sentinel::HexString(slot, pins.slot)/sentinel::HexString(slot, pins.ctor)/"
+runm ms_installed_status    $S "s/return Done(\"installed\", \"ok\", \"installed\", pins,/return Done(\"installed\", \"ok\", \"ok\", pins,/"
+runm ms_pin_line_have_text  $S "s/readable ? sentinel::HexString(haveText, have)/readable ? sentinel::HexString(haveText, bad->word)/"
+runm ms_pin_line_vaddr      $S "s/{\"vaddr\", sentinel::HexString(at, bad->vaddr)},/{\"vaddr\", sentinel::HexString(at, bad->word)},/"
+# the shared scope (table_step.cpp): the lobby rule is off, an arena level wins, no game is no read
+runm ts_lobby_rule_on       $TS "s/\/\*lobby=\*\/false, \&level, \/\*inFlight=\*\/true/\/*lobby=*\/true, \&level, \/*inFlight=*\/true/"
+runm ts_any_kind_acts       $TS "s/\&level, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby ? Scope::kCombat/\&level, \/*inFlight=*\/true) != level::Kind::kNone ? Scope::kCombat/"
+runm ts_combat_map_alone    $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby/level::CombatMapLoaded(game, \&level)/"
+runm ts_no_game_is_read     $TS "s/^  if (game == 0) return Scope::kUnknown;.*\$//"
+runm ts_no_game_is_combat   $TS "s/  if (game == 0) return Scope::kUnknown;/  if (game == 0) return Scope::kCombat;/"
+runm ts_reads_not_counted   $TS "s/g_scopeReads.fetch_add(1, std::memory_order_relaxed);/g_scopeReads.fetch_add(0, std::memory_order_relaxed);/"
+runm ts_pin_mismatch_unseen $TS "s/    if (!ok || word != pins\[i\].word) {/    if (!ok) {/"
+runm ts_pin_unreadable_ok   $TS "s/    if (!ok || word != pins\[i\].word) {/    if (ok \&\& word != pins[i].word) {/"
+runm ts_build_id_unchecked  $TS "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return \"build_id_mismatch\";//"
+runm ts_no_note_ok          $TS "s/  if (!sentinel::ReadBuildId(\*out, id, sizeof(id))) return \"no_build_id\";//"
+runm ts_legacy_dir_ignored  $TS "s/  if (access(path, F_OK) != 0) return;/  if (access(path, F_OK) == 0) return;/"
+runm ts_legacy_level        $TS "s/sentinel::LogFields(sentinel::LogLevel::kWarn, event,/sentinel::LogFields(sentinel::LogLevel::kInfo, event,/"
+# the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
+runm ms_stray_write_stock   $S "s/^    original(self, init);\$/    original(self, init);\n    if (self != nullptr) Put64(static_cast<std::uint8_t*>(self), 0x60, 7);/"
+runm ms_stray_write_low     $S "s/^    original(self, init);\$/    original(self, init);\n    if (self != nullptr) static_cast<std::uint8_t*>(self)[0x10] = 1;/"
+runm ms_stray_write_end     $S "s/^    original(self, init);\$/    original(self, init);\n    if (self != nullptr) static_cast<std::uint8_t*>(self)[0x7ff] = 1;/"
+# the per-level counts (shared with the other three modules: table_step.cpp)
+runm ms_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$/  (void)\&CountsOf;/"
+runm ms_counts_swapped      $S "s/return {g_stock.load(std::memory_order_relaxed), g_built.load(std::memory_order_relaxed)};/return {g_built.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed)};/"
+runm ts_note_never          $TS "s/^  if (g_flushing.exchange(true, std::memory_order_acquire)) return;.*\$/  return;/"
+# not listed: ts_note_unchanged_ok (dropping NoteScope's first early return) is equivalent, the guard inside the flush repeats it
+runm ts_note_level_ignored  $TS "s/g_lastLevel.load(std::memory_order_relaxed) == level) return;/true) return;/"
+runm ts_note_scope_ignored  $TS "s/g_lastScope.load(std::memory_order_relaxed) == static_cast<int>(scope) \&\&/true \&\&/"
+runm ts_counts_new_level    $TS "s/^    WriteCounts(oldScope, oldLevel);\$/    WriteCounts(scope, level);/"
+runm ts_counts_not_delta    $TS "s/^    r.lastLeft = now.leftAlone;\$//"
+runm ts_counts_changed_delta $TS "s/^    r.lastChanged = now.changed;\$//"
+runm ts_counts_empty_written $TS "s/^    if (left == 0 \&\& changed == 0) continue;\$//"
+runm ts_counts_left_field   $TS "s/{\"left_alone\", left}, {\"changed\", changed},/{\"left_alone\", changed}, {\"changed\", left},/"
+runm ts_counts_level_field  $TS "s/{\"level\", sentinel::HexString(levelText, level)}/{\"level\", sentinel::HexString(levelText, level \& 0)}/"
+runm ts_counts_level_debug  $TS "s/sentinel::LogFields(sentinel::LogLevel::kInfo, r.event,/sentinel::LogFields(sentinel::LogLevel::kDebug, r.event,/"
+runm ts_register_dedup      $TS "s/g_counted\[i\].event == event || std::strcmp(g_counted\[i\].event, event) == 0/false/"
+runm ts_note_not_called     $TS "s/^  NoteScope(scope, level);\$/  (void)\&NoteScope; (void)level;/"
+# the in-flight gamespaces (combat_level.cpp, combat_level_targets.h; asked by the scope): a combat map that is only loading is a combat match
+# not listed: a changed fiber offset in combat_level_targets.h does not compile (the static_asserts tie it to the pinned instruction word), and lv_fiber_rows_unchecked
+# is equivalent (a null rows pointer reads nothing)
+LV=src/quest/combat/combat_level.cpp
+LT=src/quest/combat/combat_level_targets.h
+runm ts_inflight_not_asked  $TS "s/&level, \/\*inFlight=\*\/true)/\&level, \/*inFlight=*\/false)/"
+runm lv_inflight_ignored    $LV "s/^  if (inFlight) ScanInFlight(out, game);\$/  (void)inFlight; (void)\&ScanInFlight;/"
+runm lv_fiber_stride        $LV "s/rows + i \* sizeof(std::uintptr_t)/rows + i/"
+runm lv_fiber_count_cap     $LV "s/  if (!ok || rows == 0 || count > kMaxGamespaces) return;/  if (!ok || rows == 0) return;/"
+runm lv_arena_wins_not      $LV "s/  if (IsEchoArenaLevel(current) \&\& !out.echoArena) {/  if (IsEchoArenaLevel(current) \&\& !out.echoArena \&\& !out.combatMap) {/"
+runm lv_name_dropped        $LV "s/    if (named.id == level) return named.name;/    if (named.id == level + 1) return named.name;/"
+runm ts_level_name_field    $TS "s/name != nullptr ? name : \"other\"/((void)name, \"other\")/"
+# the default of the switch (quest_config.h; the reader's fallback is quest_config_test's, mutated by hand in the PR body)
+runm ms_default_off         src/quest/sentinel/quest_config.h "s/  CombatSwitch meshstep;  /  CombatSwitch meshstep{false, Source::kAbsent};  /"
+# what is loading decides, and the fiber table is read before the loaded tables (a finishing gamespace is in at least one)
+runm lv_loading_not_deciding $LV "s/  if (inFlight \&\& loaded.loading > 0) {/  if (false) {/"
+runm lv_order_swapped       $LV "/^  if (inFlight) ScanInFlight(out, game);\$/{s/.*/  ScanLoaded(out, game);/;b};/^  ScanLoaded(out, game);\$/s/.*/  if (inFlight) ScanInFlight(out, game);/"
+# not listed: lv_lobby_loading_combat (the lobby rule while a combat lobby loads) is not asked by the table steps (lobby=false); combat_level_test kills it
+runm lv_loading_counted_not $LV "s/^    ++out.loading;\$//"
+runm lv_fresh_fiber_counted $LV "s/^    if (current == kLevelNotStored) continue;.*\$//"

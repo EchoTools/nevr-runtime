@@ -17,6 +17,7 @@ set(NEVR_HOST_UNITS
     "host/crash_report_host.cpp"
     "host/crash_send_host.cpp"
     "host/crash_send_winhttp.cpp"
+    "host/file_digest.cpp"
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
@@ -24,6 +25,10 @@ set(NEVR_HOST_UNITS
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "host/stop_line.cpp"
+    # Self-update's swap at start (ADR 0024, section 4).
+    "host/update_names.cpp"
+    "host/update_seams.cpp"
+    "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -42,6 +47,15 @@ set(PATCHES_SOURCES
     "lifecycle/game_image_guard.cpp"
     "lifecycle/runtime_entry.cpp"
     "lifecycle/runtime_exports.cpp"
+    # PC self-update, the runtime's half (ADR 0024, sections 3 and 6; #1200): the decisions, the check and the confirmation, the
+    # worker's threads, and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are the
+    # host's units, compiled into both DLLs as game_image_guard and the verifier are.
+    "lifecycle/update_policy.cpp"
+    "lifecycle/update_run.cpp"
+    "lifecycle/update_worker.cpp"
+    "lifecycle/update_process.cpp"
+    "host/update_names.cpp"
+    "host/file_digest.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -69,6 +83,35 @@ set(PATCHES_SOURCES
     "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    # #600: hooks into the game's script DLLs, installed as each loads (runtime/hook/script_hooks.h).
+    "hook/script_hooks.cpp"
+    "hook/script_resource_hook.cpp"
+    # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/clock_pause.cpp"
+    "combat/capture_scores.cpp"
+    "combat/capture_time.cpp"
+    "combat/clock_pause.cpp"
+    "combat/combat.cpp"
+    "combat/dot_script.cpp"
+    "combat/orb_pause.cpp"
+    "combat/point_rate.cpp"
+    "combat/rules_button.cpp"
+    "combat/script_guard.cpp"
+    "combat/shared_magazine.cpp"
+    "combat/station_cells.cpp"
+    "combat/team_ready.cpp"
+    "combat/unlock_time.cpp"
+    # #1424: content packs served from the nEVR root (runtime/content/content_pack.h).
+    "content/content_json.cpp"
+    "content/content_pack.cpp"
+    "content/content_pack_install.cpp"
+    "combat/cat_compat.cpp"
+    "combat/write_gate.cpp"
+    "combat/dronefix.cpp"
+    # Measurement build (gear carry-over): [NEVR.COMBAT] gear records, log-only hooks (combat/gear_trace_rules.h).
+    "combat/gear_trace.cpp"
+    "combat/powerboost.cpp"
+    "combat/veilnet.cpp"
     "hook/export_trace_thunk.cpp"
     "hook/export_tracer.cpp"
     "lifecycle/state_machine.cpp"
@@ -89,8 +132,14 @@ set(PATCHES_SOURCES
     "patch/server_bots.cpp"
     # #1422: a server's match team size (pure logic in server_team_size.h).
     "patch/server_team_size.cpp"
+    # #2109: a server's frame wait: raw pings answered as they arrive (pure logic in server_frame_wait.h).
+    "patch/server_frame_wait.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
+    # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
+    "patch/resource_sets.cpp"
+    "patch/resource_set_registry.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
     "compat/ws_bridge.cpp"
     # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
     "compat/session_router.cpp"
@@ -120,10 +169,13 @@ set(PATCHES_SOURCES
     # #1419, docs/adr/0022: the GPU score the auto-selector reads, filled when the game's own rating is zero (pure rule).
     "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
-    "patch/arena_public_clock.cpp"
     # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
     "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
+    # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
+    "patch/queued_join_log.cpp"
+    # #2333: the current server's features, read from the lobby settings the client receives (compat/server_features.h).
+    "patch/lobby_settings_hook.cpp"
     # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
     "patch/deadlock_monitor.cpp"
     "patch/noovr_arglookup.cpp"
@@ -135,12 +187,16 @@ set(PATCHES_SOURCES
     # #1420: the netgun bullet ids of the four unfinished weapons (pure logic in netgun_bullet_ids.h).
     "patch/netgun_bullet_ids.cpp"
     "patch/splash_skip.cpp"
+    # #2121: the equipment change the game drops is applied again (pure logic in equipment_refire_rules.h).
+    "patch/equipment_refire.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
+    # #2245: the game's error dialog; the lines it logs are recorded at error.
+    "log/error_dialog_level.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
     "log/url_diagnostics.cpp"
@@ -156,6 +212,7 @@ set(PATCHES_SOURCES
     "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
     "server/registration_metadata.cpp"
+    "server/registered_levels.cpp"
     "server/installed_levels.cpp"
     "server/telemetry_game_type.cpp"
     "server/game_type_table.h"
@@ -197,8 +254,6 @@ set(PATCHES_HEADERS
     "patch/loading_tips.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
-    "patch/arena_public_clock.h"
-    "patch/arena_public_clock_rules.h"
     "patch/broadcaster_allow_incoming.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
@@ -223,6 +278,9 @@ set(PATCHES_HEADERS
     "patch/server_bots_install.h"
     "patch/server_team_size.h"
     "patch/server_team_size_install.h"
+    "patch/server_frame_wait.h"
+    "patch/server_frame_wait_env.h"
+    "patch/server_frame_wait_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
@@ -274,6 +332,7 @@ set(PATCHES_HEADERS
     "log/builtin_filter.h"
     "log/bridge_line.h"
     "log/rate_limiter.h"
+    "log/collapse_format_rules.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
@@ -308,6 +367,13 @@ set(PATCHES_HEADERS
 )
 
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
+# he_is_the_cat's three EchoCombat files (runtime/combat/combat.h), ported nearly as he wrote them. Their MSVC
+# __try/__except blocks are EC_TRY/EC_EXCEPT (cat_compat.h): a setjmp, so GCC warns (-Wclobbered) for every local that
+# is live across it. A local is stale after a fault only if the block wrote it before the fault and code after the
+# block reads it; that is not audited block by block here, and replacing EC_TRY with checked reads is listed as debt
+# for the careful path in the PR that adds this. Every other warning stays an error for these files.
+set_source_files_properties(combat/dronefix.cpp combat/powerboost.cpp combat/veilnet.cpp
+  PROPERTIES COMPILE_OPTIONS "-Wno-clobbered")
 
 target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
@@ -347,6 +413,75 @@ find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile
 
 find_package(ZLIB REQUIRED)  # server/lobby_settings_relay.cpp inflates the game service's lobby settings frame (#905)
 target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd ZLIB::ZLIB CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
+
+# The core install method (installer/, ADR 0023), statically linked into nevr-runtime.dll for the update worker (ADR 0024, section 3: one
+# signed file, no extra DLL for the plugin gate to verify). Cargo builds the staticlib from the committed Cargo.lock, locked, for the
+# toolchain's own Windows target; the runtime links it and the system libraries rustc names for it (`--print native-static-libs`).
+# NEVR_UPDATE_CORE is ON when cargo is found and OFF when it is not (a configure-time warning says so); -DNEVR_UPDATE_CORE=ON makes a
+# missing cargo an error, -DNEVR_UPDATE_CORE=OFF skips the core. A runtime built without it ends every check in
+# `update check action=failed reason=core_open_failed`, one line per launch, and never updates.
+# A version run of build.yml links a prebuilt library (NEVR_INSTALL_LIB) the core-library job builds; the build job has no Rust toolchain.
+set(NEVR_UPDATE_CORE AUTO CACHE STRING "Link the Rust core install method into nevr-runtime.dll for PC self-update: ON, OFF or AUTO (on when cargo is found)")
+set_property(CACHE NEVR_UPDATE_CORE PROPERTY STRINGS AUTO ON OFF)
+set(NEVR_INSTALL_LIB "" CACHE FILEPATH "A prebuilt core library to link instead of building it with cargo (build.yml's core-library job hands one over)")
+set(NEVR_UPDATE_CORE_ENABLED OFF)
+if(NOT NEVR_UPDATE_CORE STREQUAL "OFF")
+  if(NEVR_INSTALL_LIB)
+    if(NOT EXISTS "${NEVR_INSTALL_LIB}")
+      message(FATAL_ERROR "NEVR_INSTALL_LIB names ${NEVR_INSTALL_LIB}, which does not exist")
+    endif()
+    set(NEVR_UPDATE_CORE_ENABLED ON)
+  else()
+    find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+    if(NEVR_CARGO)
+      set(NEVR_UPDATE_CORE_ENABLED ON)
+    elseif(NEVR_UPDATE_CORE STREQUAL "ON")
+      message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: nevr-runtime.dll links the Rust core install method (ADR 0024) and neither cargo nor NEVR_INSTALL_LIB was given. "
+                          "Install a Rust toolchain with the x86_64-pc-windows-gnu target.")
+    else()
+      message(WARNING "cargo was not found: nevr-runtime.dll is built WITHOUT the core install method and will never update itself "
+                      "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+    endif()
+  endif()
+endif()
+if(NEVR_UPDATE_CORE_ENABLED)
+  if(MSVC)
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-msvc")
+    set(NEVR_INSTALL_LIB_NAME "nevr_install.lib")
+  else()
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-gnu")
+    set(NEVR_INSTALL_LIB_NAME "libnevr_install.a")
+  endif()
+  if(NOT NEVR_INSTALL_LIB)
+  string(TOUPPER "${NEVR_INSTALL_TARGET}" NEVR_INSTALL_TARGET_UPPER)
+  string(REPLACE "-" "_" NEVR_INSTALL_TARGET_UPPER "${NEVR_INSTALL_TARGET_UPPER}")
+  set(NEVR_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")
+  set(NEVR_INSTALL_LIB "${NEVR_INSTALL_DIR}/${NEVR_INSTALL_TARGET}/release/${NEVR_INSTALL_LIB_NAME}")
+  file(GLOB_RECURSE NEVR_INSTALL_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/installer/src/*.rs")
+  set(NEVR_INSTALL_ENV "")
+  if(NOT MSVC)
+    list(APPEND NEVR_INSTALL_ENV "CARGO_TARGET_${NEVR_INSTALL_TARGET_UPPER}_LINKER=${CMAKE_C_COMPILER}")
+  endif()
+  add_custom_command(
+    OUTPUT "${NEVR_INSTALL_LIB}"
+    COMMAND ${CMAKE_COMMAND} -E env ${NEVR_INSTALL_ENV}
+            "${NEVR_CARGO}" build --locked --release --target ${NEVR_INSTALL_TARGET} --lib
+            --manifest-path "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" --target-dir "${NEVR_INSTALL_DIR}"
+    DEPENDS ${NEVR_INSTALL_SOURCES} "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" "${CMAKE_SOURCE_DIR}/installer/Cargo.lock"
+            "${CMAKE_SOURCE_DIR}/installer/pinned-keys.txt"
+    COMMENT "Building the core install method (installer/) for nevr-runtime.dll"
+    VERBATIM)
+  add_custom_target(nevr_install_core DEPENDS "${NEVR_INSTALL_LIB}")
+  endif()
+  add_library(nevr_install STATIC IMPORTED GLOBAL)
+  set_target_properties(nevr_install PROPERTIES IMPORTED_LOCATION "${NEVR_INSTALL_LIB}"
+    INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp")
+  if(TARGET nevr_install_core)
+    add_dependencies(nevr_install nevr_install_core)
+  endif()
+  target_link_libraries(nevr_runtime PRIVATE nevr_install)
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_UPDATE_CORE_LINKED=1)
+endif()
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -706,6 +841,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_runtime_verify PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_runtime_verify DISCOVERY_MODE PRE_TEST)
 
+    # Self-update's swap at start (ADR 0024, section 4; #2104): the lock, the vocabulary, the journal and its recovery,
+    # over real files in a temporary nevr root and the signed fixtures of NEVR_SIGFIX_DIR.
+    add_executable(test_host_update_swap tests/test_host_update_swap.cpp)
+    target_compile_options(test_host_update_swap PRIVATE -Werror)
+    target_link_libraries(test_host_update_swap PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_update_swap DISCOVERY_MODE PRE_TEST)
+
     # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
     # library holds, and the test pulls it from there.
     add_executable(test_host_exports tests/test_host_exports.cpp)
@@ -976,7 +1118,7 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
-    # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
+    # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -985,8 +1127,8 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
-    # #982: the CJson_GetFloat detour answers round_time with 480 s for a public Arena session, whatever the order of
-    # the game's reads and the session's messages (lifecycle/arena_rules_hook.cpp).
+    # The CJson_GetFloat detour answers round_time with the game's own value for every session, unless config.yaml
+    # sets arena.round_time (lifecycle/arena_rules_hook.cpp).
     add_executable(test_arena_rules_hook tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
       lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
@@ -1011,25 +1153,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
 
-    # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
-    add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
-    set_source_files_properties(tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp
+    # #2109: a server's frame wait (raw pings answered as they arrive, never an early return) and the overrun delta-time
+    # patch's site and gate, driven on a fake clock and a fake socket (header-only patch/server_frame_wait.h), and the
+    # Env the server runs it on over a real UDP socket on the loopback (patch/server_frame_wait_env.h).
+    add_executable(test_server_frame_wait tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp)
+    set_source_files_properties(tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_arena_public_clock PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock PRIVATE GTest::gtest GTest::gtest_main)
-    gtest_discover_tests(test_arena_public_clock DISCOVERY_MODE PRE_TEST)
-
-    # #982: the hook on the real stock Arena script DLLs under MinHook (needs NEVR_SCRIPT_DLL_DIR; skips without it).
-    add_executable(test_arena_public_clock_hook tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
-    set_source_files_properties(tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_arena_public_clock_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING
-      NEVR_TEST_HOOKS NEVR_ARENA_PUBLIC_CLOCK_TESTING)
-    target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
-    gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
+    target_include_directories(test_server_frame_wait PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_frame_wait PRIVATE GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_server_frame_wait DISCOVERY_MODE PRE_TEST)
 
     # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
     add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp
@@ -1056,6 +1188,135 @@ if(BUILD_TESTING)
     target_include_directories(test_gpu_score PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
+
+    # #600: the script guards (runtime/combat/script_guard.h) through the script hook table, on a fake heal script.
+    add_executable(test_script_guard tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_guard.cpp combat/script_guard.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_guard PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_guard PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_guard DISCOVERY_MODE PRE_TEST)
+    # #600: the equipment station's grid hooks (runtime/combat/station_cells.h), on a fake station script.
+    add_executable(test_station_cells tests/test_station_cells.cpp combat/station_cells.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_station_cells.cpp combat/station_cells.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_station_cells PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_station_cells PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_station_cells PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_station_cells DISCOVERY_MODE PRE_TEST)
+
+    # #600: the DOT FIELD script's sound and scene-set hooks (runtime/combat/dot_script.h), on a fake DOT script.
+    add_executable(test_dot_script tests/test_dot_script.cpp combat/dot_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_dot_script.cpp combat/dot_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_dot_script PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_dot_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dot_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_dot_script DISCOVERY_MODE PRE_TEST)
+
+    # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
+    add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_shared_magazine PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_shared_magazine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_shared_magazine PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_shared_magazine DISCOVERY_MODE PRE_TEST)
+
+    # #600: the spawn orbs' PAUSE hook and slot (runtime/combat/orb_pause.h), on a fake spawn point script.
+    add_executable(test_orb_pause tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_orb_pause.cpp combat/orb_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_orb_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_orb_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_orb_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_orb_pause DISCOVERY_MODE PRE_TEST)
+
+    # #600: Combat's clocks and PAUSE (runtime/combat/clock_pause.h), 15 hooks on a fake game-mode script.
+    add_executable(test_clock_pause tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_clock_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_clock_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_clock_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_clock_pause DISCOVERY_MODE PRE_TEST)
+
+    # #600: POINT RATE and PAUSE on the capture points (runtime/combat/point_rate.h), on a fake capture point script.
+    add_executable(test_point_rate tests/test_point_rate.cpp combat/point_rate.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_point_rate.cpp combat/point_rate.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_point_rate PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_point_rate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_point_rate PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_point_rate DISCOVERY_MODE PRE_TEST)
+
+    # #600: the RULES page's starting scores on the capture points (runtime/combat/capture_scores.h), on two fake scripts.
+    add_executable(test_capture_scores tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_capture_scores PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_capture_scores PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_capture_scores PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_capture_scores DISCOVERY_MODE PRE_TEST)
+
+    # #600: the RULES page's time rows in Combat (runtime/combat/capture_time.h), on a fake game-mode script.
+    add_executable(test_capture_time tests/test_capture_time.cpp combat/capture_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_capture_time.cpp combat/capture_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_capture_time PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_capture_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_capture_time PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_capture_time DISCOVERY_MODE PRE_TEST)
+
+    # #600: the capture point's unlock time and its countdown under PAUSE (runtime/combat/unlock_time.h).
+    add_executable(test_unlock_time tests/test_unlock_time.cpp combat/unlock_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_unlock_time.cpp combat/unlock_time.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_unlock_time PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_unlock_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_unlock_time PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_unlock_time DISCOVERY_MODE PRE_TEST)
+
+    # #600: Combat's clocks and PAUSE (runtime/combat/clock_pause.h), 15 hooks on a fake game-mode script.
+    add_executable(test_clock_pause tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_clock_pause.cpp combat/clock_pause.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_clock_pause PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_clock_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_clock_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_clock_pause DISCOVERY_MODE PRE_TEST)
+
+    # #600: TEAM READY's hooks and slot on Combat's game-mode script (runtime/combat/team_ready.h), on a fake script.
+    add_executable(test_team_ready tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_team_ready.cpp combat/team_ready.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_team_ready PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_team_ready PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_team_ready PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_team_ready DISCOVERY_MODE PRE_TEST)
+
+    # #600: the podium terminal's RULES button in Combat (runtime/combat/rules_button.h), on a fake podium script.
+    add_executable(test_rules_button tests/test_rules_button.cpp combat/rules_button.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_rules_button.cpp combat/rules_button.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_rules_button PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_rules_button PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_rules_button PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_rules_button DISCOVERY_MODE PRE_TEST)
+
+    # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
+    add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
+      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_script_hooks PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_script_hooks PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_script_hooks PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_script_hooks DISCOVERY_MODE PRE_TEST)
 
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
@@ -1088,7 +1349,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_server_context.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_context PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main nevr_core ws2_32)
     gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_session_unregister
@@ -1190,13 +1451,6 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_game_properties PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nevr_api)
     gtest_discover_tests(test_telemetry_game_properties DISCOVERY_MODE PRE_TEST)
 
-    # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
-    add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
-    target_include_directories(test_parse_endpoint PRIVATE
-    )
-    target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
-    gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
-
     # nevr_config unit tests (N133 S2) — parse a sample config.yaml in isolation:
     # nested plugin args, ${VAR:?} secrets interpolation (set and unset->fail),
     # ${VAR:-default}, and unknown-top-level-key rejection. Links the real
@@ -1210,6 +1464,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_nevr_config PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_nevr_config DISCOVERY_MODE PRE_TEST)
+
+    # NevrConfig::Set (#2060): the first config.yaml writer, tested only through the interface. Same link as test_nevr_config.
+    add_executable(test_nevr_config_set tests/test_nevr_config_set.cpp)
+    set_source_files_properties(tests/test_nevr_config_set.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_nevr_config_set PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nevr_config_set PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+    gtest_discover_tests(test_nevr_config_set DISCOVERY_MODE PRE_TEST)
 
     # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
     # of the config.cpp cutover (flat->path map, service-host fallback, scheme
@@ -1600,6 +1862,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
+    # #2161: plugin resource sets: the format (nevr/resource_set.h), the registry and its mount checks
+    # (patch/resource_set_registry.cpp), the shadow it builds (core/resource_shadow.cpp) and the PE image mapping
+    # (patch/image_file_range.h). std, zstd and the SDK only.
+    add_executable(test_resource_sets
+      tests/test_resource_sets.cpp
+      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
+    set_source_files_properties(tests/test_resource_sets.cpp patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_resource_sets PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_resource_sets PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main zstd::libzstd)
+    gtest_discover_tests(test_resource_sets DISCOVERY_MODE PRE_TEST)
+
     # The plugin asset registry (patch/asset_registry.cpp): std + nlohmann-json only, so it builds and runs on
     # its own. The hooks that serve it to the engine (patch/plugin_assets.cpp) are in BugSplat64.dll.
     add_executable(test_asset_registry
@@ -1648,6 +1924,45 @@ if(BUILD_TESTING)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
 
+    # test_queued_join_log.cpp (#2163): the [NEVR.MATCH] rules, and the four hooks under MinHook against a fake game image.
+    add_executable(test_queued_join_log tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_queued_join_log PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_queued_join_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
+
+    # test_server_features.cpp (#2333, header-only compat/server_features.h): the statement a server makes and a client reads.
+    add_executable(test_server_features tests/test_server_features.cpp)
+    set_source_files_properties(tests/test_server_features.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_features PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_features DISCOVERY_MODE PRE_TEST)
+
+    # test_lobby_settings_hook.cpp (#2333): the LobbySettingsCB hook under MinHook against a fake game image.
+    add_executable(test_lobby_settings_hook tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_lobby_settings_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_lobby_settings_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_lobby_settings_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_lobby_settings_hook DISCOVERY_MODE PRE_TEST)
+
+    # test_gear_trace.cpp (gear carry-over measurement): the [NEVR.COMBAT] gear rules, and the four hooks under MinHook
+    # against a fake game image.
+    add_executable(test_gear_trace tests/test_gear_trace.cpp combat/gear_trace.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_gear_trace.cpp combat/gear_trace.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_gear_trace PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_gear_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gear_trace PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_gear_trace DISCOVERY_MODE PRE_TEST)
+
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
     target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1681,6 +1996,48 @@ if(BUILD_TESTING)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_menu_version_label PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
+
+    # test_equipment_refire.cpp (#2121, header-only patch/equipment_refire_rules.h; the Quest host test compiles the same header).
+    add_executable(test_equipment_refire tests/test_equipment_refire.cpp)
+    set_source_files_properties(tests/test_equipment_refire.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
+
+    # test_dronemuzzle_rules.cpp (#2337, header-only patch/dronemuzzle_rules.h; the Quest host test compiles the same header).
+    add_executable(test_dronemuzzle_rules tests/test_dronemuzzle_rules.cpp)
+    set_source_files_properties(tests/test_dronemuzzle_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_dronemuzzle_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dronemuzzle_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_dronemuzzle_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_powerboost_rules.cpp (#2339, header-only patch/powerboost_rules.h; the Quest host test compiles the same header).
+    add_executable(test_powerboost_rules tests/test_powerboost_rules.cpp)
+    set_source_files_properties(tests/test_powerboost_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_powerboost_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_powerboost_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_powerboost_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_ec_rules.cpp (#2358, header-only patch/ec_rules.h; the Quest host test compiles the same header).
+    add_executable(test_ec_rules tests/test_ec_rules.cpp)
+    set_source_files_properties(tests/test_ec_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ec_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ec_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ec_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_dronekill_rules.cpp (#2359, header-only patch/dronekill_rules.h; the Quest host test compiles the same header).
+    add_executable(test_dronekill_rules tests/test_dronekill_rules.cpp)
+    set_source_files_properties(tests/test_dronekill_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_dronekill_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dronekill_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_dronekill_rules DISCOVERY_MODE PRE_TEST)
+
+    # test_ecfx_rules.cpp (#2349, header-only patch/ecfx_rules.h; the Quest host test compiles the same header).
+    add_executable(test_ecfx_rules tests/test_ecfx_rules.cpp)
+    set_source_files_properties(tests/test_ecfx_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ecfx_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ecfx_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ecfx_rules DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
@@ -1756,6 +2113,50 @@ if(BUILD_TESTING)
     add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
 
+    # The combat module's write gate (runtime/combat/write_gate.h): a write that overlaps a range the runtime hooked
+    # (HookGuard) or wrote (ProcessMemcpy) is refused. Links the real guard and the real Log().
+    add_executable(test_combat_write_gate tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_write_gate PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_combat_write_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_write_gate PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_combat_write_gate DISCOVERY_MODE PRE_TEST)
+
+    # The combat module's group defaults and the balance transform's merge (runtime/combat): pure headers.
+    add_executable(test_combat_settings tests/test_combat_settings.cpp)
+    set_source_files_properties(tests/test_combat_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
+
+    # #2289: the combat module's match type, from the stored session game type (runtime/combat/match_type.h). Links the real store.
+    add_executable(test_combat_match_type tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp)
+    set_source_files_properties(tests/test_combat_match_type.cpp lifecycle/arena_round_time.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_match_type PRIVATE NEVR_ARENA_ROUND_TIME_TESTING)
+    target_include_directories(test_combat_match_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
+
+    # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
+    add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
+    set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_shipped_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_shipped_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_shipped_settings DISCOVERY_MODE PRE_TEST)
+
+    # #1424: the content pack the runtime serves (runtime/content): content.json's rules, the decision over a pack the test
+    # builds in a temporary folder, the paths it serves and the files it holds. Links the real decision, the real rewriter's
+    # loader-lock probe and the real Log().
+    add_executable(test_content_pack tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp
+      host/file_digest.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_content_pack.cpp content/content_json.cpp content/content_pack.cpp host/file_digest.cpp
+      hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_content_pack PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_content_pack PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_content_pack PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_content_pack DISCOVERY_MODE PRE_TEST)
+
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
     set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
@@ -1797,6 +2198,10 @@ if(BUILD_TESTING)
       nevr_host_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
+    # The unsigned DLLs those fixtures are made from (ADR 0041): the `sigfix_dlls` target builds them, and
+    # gen_plugin_signature_fixtures.py is handed <bin>/sigfix.
+    add_subdirectory(tests/sigfix)
+
     # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
     # pass the same check, over fixture directories the same generator writes.
     add_executable(test_plugin_tree
@@ -1810,6 +2215,31 @@ if(BUILD_TESTING)
     target_link_libraries(test_plugin_tree PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6; #1200): the decisions, the check, the confirmation and
+    # the worker's threads, against a fake core in a temp nevr root. Compiles no game stub, no Log and no core (Rust).
+    add_executable(test_update_worker
+      tests/test_update_worker.cpp
+      lifecycle/update_policy.cpp
+      lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp
+      host/update_names.cpp)
+    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp host/update_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_update_worker PRIVATE -Werror)
+    target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_update_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_update_worker DISCOVERY_MODE PRE_TEST)
+
+    # The Rust core linked into a MinGW C++ binary and called from a worker thread (ADR 0024, "What is not known"): the same staticlib and
+    # system libraries nevr-runtime.dll links.
+    if(NEVR_UPDATE_CORE_ENABLED)
+      add_executable(test_update_core_link tests/test_update_core_link.cpp)
+      set_source_files_properties(tests/test_update_core_link.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      target_include_directories(test_update_core_link PRIVATE ${CMAKE_SOURCE_DIR})
+      target_link_libraries(test_update_core_link PRIVATE GTest::gtest GTest::gtest_main nevr_install)
+      gtest_discover_tests(test_update_core_link DISCOVERY_MODE PRE_TEST)
+    endif()
 
     # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
     add_executable(test_plugin_trust
@@ -1876,6 +2306,15 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       # #432: plugin_loader.cpp and ws_bridge.cpp read the process-wide plugin asset registry.
       patch/asset_registry.cpp
+      # The engine hooks that serve the registry: the N84 test installs one through InstallHookForTest (PatchDetour).
+      patch/plugin_assets.cpp
+      # #2161: the resource sets plugin_loader.cpp opens to a plugin's init and plugin_assets.cpp asks the resolver about.
+      patch/resource_sets.cpp
+      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      # #2161: a mounted set's levels reach installed_levels through the production key list and merge.
+      server/registered_levels.cpp
+      server/installed_levels.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
@@ -1927,6 +2366,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp
+      patch/plugin_assets.cpp
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
       ext/plugin_tree.cpp
@@ -1969,7 +2409,7 @@ if(BUILD_TESTING)
       )
     endif()
     target_link_libraries(test_behavioral PRIVATE
-      GTest::gtest GTest::gtest_main nevr::plugin_sdk
+      GTest::gtest GTest::gtest_main nevr::plugin_sdk zstd::libzstd
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
       ws2_32 psapi advapi32 crypt32
     )
@@ -2015,6 +2455,15 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_level"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # #2161: a plugin that carries a resource set in its own file and registers it from its init.
+    add_library(test_plugin_resources SHARED
+      tests/plugin_resources_test_dll.cpp)
+    target_compile_definitions(test_plugin_resources PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_link_libraries(test_plugin_resources PRIVATE nevr::plugin_sdk)
+    set_target_properties(test_plugin_resources PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_resources"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -2039,9 +2488,21 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # The entry-point prefix is Nevr; a plugin built before that exports Nvr. One fixture of each.
+    foreach(_exports_fixture nevr deprecated)
+      add_library(test_plugin_${_exports_fixture}_exports SHARED
+        tests/plugin_${_exports_fixture}_exports_test_dll.cpp)
+      target_compile_definitions(test_plugin_${_exports_fixture}_exports PRIVATE NEVR_PLUGIN_EXPORTS)
+      target_link_libraries(test_plugin_${_exports_fixture}_exports PRIVATE nevr::plugin_sdk)
+      set_target_properties(test_plugin_${_exports_fixture}_exports PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_${_exports_fixture}_exports"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level)
+      test_plugin_level test_plugin_resources
+      test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -2077,11 +2538,11 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
+    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

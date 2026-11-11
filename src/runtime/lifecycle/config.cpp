@@ -14,13 +14,11 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/readable_memory.h"
-#include "runtime/lifecycle/arena_round_time.h"
 
 #include <atomic>
+#include <cstdio>
 #include <exception>
-#include <mutex>
 #include <new>
-#include <optional>
 #include <string>
 
 /// <summary>
@@ -130,46 +128,51 @@ static void ApplyServerTimestep() {
     }
   }
   // The global is module data and always readable; ApplyStep decides on isServer, so a client writes nothing.
+  // #2109: a server boots with no session, so the boot write is the idle step. The session's rate (the parsed
+  // network.tick_rate_hz, or the game type's default) is written when a session opens (ApplySessionTimestep).
+  const uint32_t bootRate = nevr_server_timestep::kIdleTickRateHz;
   CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
   uint64_t* stepField = nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-  const nevr_server_timestep::StepWrite w =
-      nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
+  const nevr_server_timestep::StepWrite w = nevr_server_timestep::ApplyStep(g_isServer != FALSE, bootRate, stepField);
   g_stepRecord.Store(w);
   const char* source = rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default";
   switch (w.outcome) {
     case StepOutcome::kSet:
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %llu us); source=%s",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
-          static_cast<unsigned long long>(w.was), source);
+          "[NEVR.PATCH] server tick rate: %u a second until a session opens (idle step %u us; the game had %llu us); "
+          "a session runs at network.tick_rate_hz=%u (source=%s; 0 is the game's own %u a second, and Combat gets %u "
+          "unless the key is set)",
+          static_cast<unsigned>(bootRate), static_cast<unsigned>(w.stepUs), static_cast<unsigned long long>(w.was),
+          static_cast<unsigned>(g_headlessTickRateHz), source,
+          static_cast<unsigned>(nevr_server_timestep::kGameTickRateHz),
+          static_cast<unsigned>(nevr_server_timestep::kCombatTickRateHz));
       break;
-    case StepOutcome::kKeepGameStep:
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: 0 keeps the game's own step (%llu us); source=%s",
+    case StepOutcome::kKeepGameStep:  // not reached: the boot rate is the idle rate, never 0
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: the game's own step is kept (%llu us); source=%s",
           static_cast<unsigned long long>(w.was), source);
       break;
     case StepOutcome::kStateMissing:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the game's time step state is not there when the "
-          "local config loads",
-          static_cast<unsigned>(g_headlessTickRateHz));
+          "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: the game's time step state is not there when the "
+          "local config loads (the server idles at the game's own step)",
+          static_cast<unsigned>(bootRate));
       break;
     case StepOutcome::kRateRefused:
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server tick rate not set rate=%u Hz: outside the allowed range",
-          static_cast<unsigned>(g_headlessTickRateHz));
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: outside the allowed range",
+          static_cast<unsigned>(bootRate));
       break;
     case StepOutcome::kUnexpectedOldValue:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the step slot holds %llu us, which is no step "
+          "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: the step slot holds %llu us, which is no step "
           "(version drift; allowed %u..%u us)",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned long long>(w.was),
+          static_cast<unsigned>(bootRate), static_cast<unsigned long long>(w.was),
           static_cast<unsigned>(nevr_server_timestep::kMinPlausibleStepUs),
           static_cast<unsigned>(nevr_server_timestep::kMaxPlausibleStepUs));
       break;
     case StepOutcome::kWriteDidNotHold:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate write did not hold rate=%u Hz wrote=%u us read_back=%llu us",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
-          static_cast<unsigned long long>(w.after));
+          "[NEVR.PATCH] server idle tick rate write did not hold rate=%u Hz wrote=%u us read_back=%llu us",
+          static_cast<unsigned>(bootRate), static_cast<unsigned>(w.stepUs), static_cast<unsigned long long>(w.after));
       break;
     case StepOutcome::kNotServer:
     case StepOutcome::kNotApplied:
@@ -181,9 +184,14 @@ static void ApplyServerTimestep() {
 // written again when a session opens: Combat gets the 30 a second its physics was tuned for (the game's damping is
 // per step, not per second), Arena and every other type the configured/default rate, and an explicit
 // network.tick_rate_hz wins for all. The same plan, bounds checks and read-back as the boot write (ApplyStep, N31).
-// Called from the session-create callbacks (server/gameserver_callbacks.cpp) with the type they stored.
+// Called from the session-create callbacks (server/gameserver_callbacks.cpp) with the type they stored; an empty
+// type is a start frame that named none (ApplyUntypedSessionTimestep).
+// #2109: the slot holds the idle step until now. A rate of 0 writes the game's own step back (RateToWrite), and a
+// write that failed and left the idle step in the slot is followed by the game's own step (ApplySessionStep,
+// SessionFallbackRateHz), so a session never runs at 6 a second when a write could change it.
 void ApplySessionTimestep(const std::string& gameType, const std::string& sessionId) {
   using nevr_server_timestep::StepOutcome;
+  const char* typeName = gameType.empty() ? "unknown" : gameType.c_str();
   try {
     const nevr_server_timestep::SessionRate rate = nevr_server_timestep::TickRateForGameType(
         gameType, g_headlessTickRateHz, g_tickRateConfigured.load(std::memory_order_relaxed));
@@ -191,24 +199,96 @@ void ApplySessionTimestep(const std::string& gameType, const std::string& sessio
     const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
     uint64_t* stepField =
         nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-    const nevr_server_timestep::StepWrite w =
-        nevr_server_timestep::ApplyStep(g_isServer != FALSE, rate.hz, stepField);
+    const nevr_server_timestep::SessionStepWrite s =
+        nevr_server_timestep::ApplySessionStep(g_isServer != FALSE, rate.hz, stepField);
+    const nevr_server_timestep::StepWrite& w = s.first;
     if (w.outcome == StepOutcome::kNotServer) return;
+    if (w.outcome == StepOutcome::kSet) g_stepRecord.Store(w);  // the read-back compares with the latest write
+    if (s.fallbackHz != 0 && s.fallback.outcome == StepOutcome::kSet) g_stepRecord.Store(s.fallback);
     const bool failed = nevr_server_timestep::StepFailed(w.outcome);
+
+    // What the session runs at when its own write failed, as far as the writes saw the slot.
+    char runsAt[200] = "";
+    if (failed) {
+      uint64_t holds = 0;
+      if (s.fallbackHz != 0 && s.fallback.outcome == StepOutcome::kSet) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the session runs at the game's own %u a second: the slot held the idle "
+                      "step, and the fallback write held, step_us=%u)",
+                      static_cast<unsigned>(s.fallbackHz), static_cast<unsigned>(s.fallback.stepUs));
+      } else if (s.fallbackHz != 0) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the slot holds the idle step and the fallback write to %u a second "
+                      "failed too, outcome=%s: the session may run at %u a second)",
+                      static_cast<unsigned>(s.fallbackHz), nevr_server_timestep::OutcomeName(s.fallback.outcome),
+                      static_cast<unsigned>(nevr_server_timestep::kIdleTickRateHz));
+      } else if (nevr_server_timestep::SlotAfterFailure(w, &holds)) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the session runs at the step the slot holds, %llu us, which is not the "
+                      "idle step)", static_cast<unsigned long long>(holds));
+      } else {
+        std::snprintf(runsAt, sizeof(runsAt), " (the clock is not readable, so nothing was written; the session "
+                      "runs at whatever step that clock holds)");
+      }
+    }
     // N122: a mode decision logs its outcome at Info even when the step was already that value.
     Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
         "[NEVR.PATCH] session tick rate game_type=%s session=%s rate_hz=%u source=%s step_us=%u was_us=%llu "
         "outcome=%s%s",
-        gameType.c_str(), sessionId.c_str(), static_cast<unsigned>(rate.hz),
+        typeName, sessionId.c_str(), static_cast<unsigned>(rate.hz),
         nevr_server_timestep::RateSourceName(rate.source), static_cast<unsigned>(w.stepUs),
-        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
-        failed ? " (the session runs on the step the server had before it)" : "");
+        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome), runsAt);
   } catch (const std::bad_alloc&) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (out of memory)",
-        gameType.c_str());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (out of memory)", typeName);
   } catch (const std::exception&) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)",
-        gameType.c_str());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)", typeName);
+  }
+}
+
+// #2109: a legacy start frame that names no game type still opens a session. When the slot holds the idle step (no
+// session create wrote a rate first), the session gets the rate for an unknown type, the configured or default rate
+// a server ran every session at before the step followed the type (UntypedSessionStartWrites). When a session create
+// already wrote the session's own rate, it stays.
+void ApplyUntypedSessionTimestep(const std::string& sessionId) {
+  if (!g_isServer) return;
+  const nevr_server_timestep::StepWrite last = ServerStepWrite();
+  if (nevr_server_timestep::UntypedSessionStartWrites(last)) {
+    ApplySessionTimestep(std::string(), sessionId);
+    return;
+  }
+  // N122: the decision is logged when nothing is written too.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] session tick rate game_type=unknown session=%s outcome=kept step_us=%u last_write=%s (the start frame "
+      "named no game type; the step already set for this session stays)",
+      sessionId.c_str(), static_cast<unsigned>(last.stepUs), nevr_server_timestep::OutcomeName(last.outcome));
+}
+
+// #2109: puts the server back on the idle step when the game ends its session, or the service ends the one the server
+// runs (nevr_server_timestep::IdlesAfterSessionEnd decides; server/gameserver.cpp EndServerSession and the CODE_ENDED
+// case in server/gameserver_callbacks.cpp call this). A ServerDB reconnect does not: the game's match goes on. The same
+// plan, bounds checks and read-back as the other writes (ApplyStep, N31).
+void ApplyServerIdleTimestep(const char* reason, const std::string& sessionId) {
+  using nevr_server_timestep::StepOutcome;
+  try {
+    CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
+    uint64_t* stepField =
+        nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+    const nevr_server_timestep::StepWrite w =
+        nevr_server_timestep::ApplyStep(g_isServer != FALSE, nevr_server_timestep::kIdleTickRateHz, stepField);
+    if (w.outcome == StepOutcome::kNotServer) return;
+    if (w.outcome == StepOutcome::kSet) g_stepRecord.Store(w);
+    const bool failed = nevr_server_timestep::StepFailed(w.outcome);
+    // N122: a mode decision logs its outcome at Info even when the step was already that value.
+    Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] idle tick rate reason=%s session=%s rate_hz=%u step_us=%u was_us=%llu outcome=%s%s",
+        reason != nullptr ? reason : "unknown", sessionId.empty() ? "none" : sessionId.c_str(),
+        static_cast<unsigned>(nevr_server_timestep::kIdleTickRateHz), static_cast<unsigned>(w.stepUs),
+        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
+        failed ? " (the server keeps the step it had)" : "");
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] idle tick rate not set reason=%s (out of memory)",
+        reason != nullptr ? reason : "unknown");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] idle tick rate not set reason=%s (std::exception)",
+        reason != nullptr ? reason : "unknown");
   }
 }
 
@@ -422,18 +502,18 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
   int source = 2;  // 0 primary, 1 loginservice_host fallback, 2 none (use default)
   const char* host = NevrCfgServiceHost(serviceKey, &source);
   if (source == 0) {
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.PATCH] Service override [" + std::string(serviceKey) + "]: ", host ? host : "");
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
   if (source == 1) {
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.PATCH] Service fallback [" + std::string(serviceKey) + " → loginservice_host]: ", host ? host : "");
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
       "[NEVR.PATCH] Service default [" + std::string(serviceKey) + "]: ", defaultUrl ? defaultUrl : "");
   Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(defaultUrl);
@@ -458,7 +538,7 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.PATCH] auto-relay [" + std::string(serviceKey) + "] through bridge: ",
       url ? url : "", " -> ", relayUrl);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
@@ -531,7 +611,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
 
     if (uri != originalUri) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] HTTP(S) connection redirected: ", originalUri ? originalUri : "", " → ", uri ? uri : "");
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
@@ -547,7 +627,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
         [] { return NevrCfgGetFlat("nevr_http_uri"); },
         [](const char* url, const char* httpTarget) { return NevrCfgRedirect(url, httpTarget, 0, 0); }));
     if (uri != configured) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] HTTP(S) connection redirected: ", gameUri, " → ", uri);
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
@@ -612,7 +692,7 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
       });
   if (chosen == result) return result;
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", chosen);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(chosen);
@@ -651,7 +731,7 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
       nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, keyName);
   if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride) {
     if (overrideInput.redirectsArmed) {
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
           "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
           overrideOutcome.value ? overrideOutcome.value : "");
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());

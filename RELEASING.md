@@ -5,12 +5,15 @@ publishes them together, and nothing public exists before that go: no tag, no re
 staging directory, so no half-built release is ever visible. Nothing about a published release is edited afterwards: a wrong
 release is fixed by the next version.
 
+**When to release.** A person cuts a release when it is ready. Nothing cuts one on a schedule or by itself: no workflow, timer
+or switch starts a release, and a release the person has not decided on does not exist.
+
 **Owner.** The release owner is accountable for a release from staging until it is live and watched, or until it is
 withdrawn and cleaned up. The publish (step 4) happens on the owner's go.
 
-**Seats.** A release seat merges its own pull requests, in this repository and in the signer repository, once the pull
-request's checks are green and a fresh verifier (neither the author nor the implementer) has passed the tip with every
-finding fixed. It deletes the branch and the worktree the same turn.
+**Landing.** Release work in this repository lands like every change (AGENTS.md, "Review, verification and landing"):
+on a local branch, after the quick check and a fresh-context review's MERGE, pushed to `main` as a fast-forward; the landed with `just land` (a fast-forward,
+no squash); the branch and the worktree are deleted the same turn. Work in the signer repository follows that repository's rules.
 
 ## The flow
 
@@ -54,9 +57,15 @@ time, under the owner's go.
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed,
   not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix and perf commits (a breaking change counts
   only on those types) since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release
-  versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never
+  versions"). Every other build stamps `<next>-dev.<N>+<sha>`, where `<next>` is the release the commits since the highest reachable tag lead to (`tools/next_release_version.py`), which sorts after that tag and before `<next>`; it is never
   released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
+  **A patch release of an older version** is the one exception: when `main` has moved on and the fix has to reach players
+  without the changes since, the release is cut from a branch `release/X.Y`, made at the line's newest tag, that holds only the
+  fix, and the tag sits on that branch's tip, so it is not an ancestor of `main`. v6.16.5 is the v6.16.4 commit plus
+  one fix, cut from `release/6.16`; its version is the next patch of the 6.16 line. The same fix also reaches `main` through its
+  own landed commit. `next_release_version.py` counts from the newest tag reachable from `origin/main`, so a patch-branch tag
+  is not its base.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
 - **Pre-release or release:** the flag is the only difference. Promoting a pre-release
   (`gh release edit vX.Y.Z --prerelease=false`) changes no byte and fires no workflow. Nothing in a file depends on the flag.
@@ -176,11 +185,11 @@ gh release view vX.Y.Z --json body --jq .body
 
 The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write
 it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
-or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
+or internal (#1444). Read the line against the landed commits' messages before publishing. The body of a published release stays
 editable ("Immutable releases"); the assets do not.
 
-**Headline files.** A pull request that changes what players see adds `release-headlines/<issue-or-topic>.txt`: one line, 1
-to 200 characters, one plain sentence a player would understand about that change only, written by the PR's author, with a
+**Headline files.** A commit that changes what players see adds `release-headlines/<issue-or-topic>.txt`: one line, 1
+to 200 characters, one plain sentence a player would understand about that change only, written with the change, with a
 full stop added if it has none (or `!` or `?`). `notes` builds the player line from the files that exist at `--rev` and not at
 `--base`, joined with one space in file-name order (at most 600 characters). A path present at the base tag is old by
 construction, whatever its content, so no earlier release's sentence rides along. A file with another name (a letter or digit,
@@ -188,9 +197,9 @@ then letters, digits, `.`, `_`, `-`, then `.txt`; `release-headlines/README.md` 
 with more than one line or a line over 200 characters, or `release-headline.txt` at the rev fails `notes` and names the file;
 a joined line over 600 fails it and names the files joined; none falls back silently. A path that already exists at the base
 tag is never read, so a new change uses a new file name (a reused name is dropped, not refused). A test
-(`tools/tests/test_release_headlines.py`) fails a PR whose tree holds `release-headline.txt`, and `notes` refuses it at the cut
+(`tools/tests/test_release_headlines.py`) fails a tree that holds `release-headline.txt`, and `notes` refuses it at the cut
 as the backstop. A successful `notes` writes one JSON line to stderr (`"event":"headlines"`, with `used`, `line`, `base` and
-`rev`). The PR that adds a fragment also deletes the fragments present at the newest `vX.Y.Z` tag
+`rev`). The commit that adds a fragment also deletes the fragments present at the newest `vX.Y.Z` tag
 (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A fragment left behind is harmless, since a path present at
 the base is never read.
 
@@ -203,7 +212,7 @@ copies it once in the packaging step, `tools/package_release.py` refuses a tree 
 signer signs each entry separately, so they differ after signing), `tools/verify_symbols.py` checks the copy through the new
 name's symbol file, and release-signer lists `install-nevr-runtime.exe` as an optional entry, so the signer must have that
 change before a build that carries the new name is signed. The old name is removed in the first release after the launcher and
-every other outside caller have confirmed they use the new one. The removal is a PR that deletes the copy in the packaging step,
+every other outside caller have confirmed they use the new one. The removal is a commit that deletes the copy in the packaging step,
 its gate in `package_release.py` and `verify_symbols.py`, the signer's optional entry and this paragraph.
 
 ## The Quest APK
@@ -232,7 +241,7 @@ just publish-quest-apk vX.Y.Z   # puts the APK and its .sha256 on the release ho
 ```
 
 The recipe takes the bucket, the public host, the release-signer executable and checkout and a GitHub read token from the
-environment and nothing else: `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `RELEASE_PUBLIC_BASE`,
+environment and nothing else (`just` loads `.env` into it, and `just release-check` checks every one up front, #1997): `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `RELEASE_PUBLIC_BASE`,
 `RELEASE_SIGNER_BIN`, `RELEASE_SIGNER_DIR`, `GH_TOKEN` and `NEVR_RCLONE_REMOTE`. A missing one is a refusal that names it. The
 APK goes up through the signer's `put-quest-apk`, which checks that the release is published, that the APK was built from the
 tag's commit and that it carries the pinned signer certificate, and writes the object only if absent. The recipe then fetches
@@ -247,38 +256,45 @@ The release notes for a build signed with a new key carry one line for Quest pla
 build is signed with the new key (Android refuses an update from a different signer). `put-quest-apk` pins the signer
 certificate in the release-signer's `config/`; a new key needs that pin changed there before the publish.
 
-The variant APK (`nevr-runtime-vX.Y.Z-q15t-quest.apk`) is built by `just release-quest-variant-apk vX.Y.Z <plugins>` from the
-same loader asset plus private plugin libraries that stay outside this repository. It is published with
-`tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. The combat APK is built by
-`just release-quest-combat-apk`. Neither is in the manifest through this document's flow.
+The variant APK (`nevr-runtime-vX.Y.Z-q15t-quest.apk`) is built by `just release-quest-variant-apk vX.Y.Z` from the
+same loader asset plus the q15t plugin library the tag's own source builds: the recipe runs `just build-quest-q15t` in the checkout (HEAD is
+the tag's commit) and packages `build/quest-q15t/libq15t.so`, so the library in the APK is the tag's build output, behind that recipe's
+checks (static initializers, emulated thread-local storage, the pinned libr15 build ID, the shipped defaults). The heap sizes and the render-target
+pool are not a library: the sentinel sets them in its own early combat step (`src/quest/combat/heaps.h`), before `android_main` reads them, so neither APK
+packages an early plugin. The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages the same library.
+Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
+`combat` for the combat APK, `arena` for the arena APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
+(`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).
+No library is an argument to either recipe; a path in the place of the store APK is refused. The build needs an Android NDK r26d
+(`ANDROID_NDK_HOME`), a vcpkg checkout (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`) and
+`config/public-defaults.env`, as `just build-android` does, and the store APK it repacks (`NEVR_STORE_APK`, a file). The variant is published with
+`tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. Neither APK is in the manifest through this document's flow.
 
-## The Quest half of the train
+**The arena APK.** Each release also gets `nevr-runtime-vX.Y.Z-arena-quest.apk` (with its `.sha256`): the store APK repacked with
+the release's own loader and nothing else, so it has no combat (#2298). `just release-quest-arena-apk vX.Y.Z` builds it into
+`build/quest-release/vX.Y.Z/arena/`: no q15t library and no plugin manifest are built or packaged, and the repack stamps the word
+`arena`. `tools/quest_release_base.py check-arena` refuses the APK, before it is copied out, if it holds any entry of the reference
+build (`assets/afk_default_on.txt`, `libassetpatch.so`), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
+the q15t variant, it is **listed in the manifest**, as the kind `quest-apk-arena` beside the combat `quest-apk` (the reference
+build's repack, whose stamp is empty and which stays the default). `tools/publish_quest_apk.py vX.Y.Z --listed-variant arena`
+puts it up through the signer's `put-quest-apk --kind quest-apk-arena` and keeps the claim with `--extra-out`. The build needs the
+store APK (`NEVR_STORE_APK`) and `just configure`, not the NDK.
 
-`tools/quest_release_timer.py` finishes the Quest half of a release as the workflows cut it today: it takes a draft or a
-published tag, so this section describes the draft path of KNOWN-WRONG #1865 until that lands.
+## The Quest half of a release
+
+`tools/quest_release_timer.py` finishes the Quest half of a release, by hand, once the release is published: the person who
+holds the Quest signing key runs it with `--tag vX.Y.Z`. Nothing runs it on a schedule.
 
 The Quest APK is built from the store game and signed with the Quest signing key, and the R2 credential is the publisher's, so no
-workflow can build or upload it. The train publishes the GitHub release; a scheduler on the publisher's machine runs
-`tools/quest_release_timer.py --probe` first (the repository ships no unit for it). The probe makes one GitHub call and starts the run only when there is work: a
-draft with its loader asset uploaded, a published tag that is not done with fewer than three counted failures and none in the
-last 30 minutes, or no run started in the last 30 minutes. A run for a draft builds the APK while the signer runs
-(`build_apk`), polls the release every 10 seconds for up to 45 minutes (`await_published`), and on publication checks the
-APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), then runs
-`publish_apk` and the unchanged beta dispatch. Nothing is uploaded to R2 while the release is a draft, because the signer's
-`put-quest-apk` accepts only a published release. A draft that is deleted, or not published in 45 minutes, is recorded as
-`draft_abandoned` and left to the published path; its failures before its publication are not counted. A scheduled run runs
-`tools/quest_release_timer.py --stage-draft`, which takes a qualifying draft or else the newest published tag.
-
-The timer takes the **newest tag only**: the newest draft that qualifies (above), or else the newest published tag. A
-release that is not the newest when the timer first sees it is never built, because a later tag supersedes it. That is
-intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
+workflow can build or upload it. The tool needs the release published, because the signer's `put-quest-apk` accepts only a
+published release.
 
 It runs from a clone of the repository that the publisher keeps for it, named by `QUEST_RELEASE_REPO` (default: the clone the script sits in). It fetches `origin/main` itself, and the `checkout` step refuses, as a `refused` record, unless the clone is clean and HEAD is the freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that clone is not on origin or points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands, with the full object id, for each tag it lists.
 
-1. Takes the newest tag (above). A tag that has a `done` record in the log is left alone. A tag that has
+1. Takes the tag given with `--tag`. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried: the run writes `skipped_after_failures`, with the step and the part of the last failure, and exits 0.
    `python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` (the tag is required) records `failures_reset` for that
-   tag and does nothing else; only the failures after the newest reset count toward the three. Use it after fixing what made a tag fail three times (a stale pin, say), then run the tag again.
+   tag and does nothing else; only the failures after the newest reset count toward the three. Use it after fixing what made a tag fail three times (a build that needed a fix on `main`, say), then run the tag again.
    A dirty or stale checkout, a local tag origin does not have, or a missing credential, is a refusal that is logged and never counts toward the three failures.
 2. Builds the release-signer from a snapshot of its `main` (`QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository), and reads `verify-manifest --live`. A tag that beta already
    lists needs no release build: the run goes on to the variant (below). Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
@@ -288,47 +304,62 @@ It runs from a clone of the repository that the publisher keeps for it, named by
    after it.
 4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
    public host, and the signer's claim is kept for the manifest.
-5. Dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
+5. Builds and puts up the arena APK (below), then dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
    `extra_artifacts` and `dry_run=false` (a live publish with no dry run, on the owner's standing word), and watches it.
    A run is accepted only when the jobs that publish (`Commit the manifest record`, `Publish to R2`, `A run that
    published nothing is red`) all concluded `success`; a green run with a skipped one is a failure.
 6. Requires `verify-manifest --live` to list the tag on beta, and requires the manifest the public host serves (held to the
    sha256 the signer verified) to list, in the new release, the same `game-data` artifact by name and size. A missing or
    changed entry is a failure, never `done`.
-7. Builds and publishes the variant APK, when it is configured (below).
-8. Removes the worktree, the signer snapshot and the variant scratch by exact path.
+7. Builds and publishes the variant APK (below).
+8. Removes the worktree and the signer snapshot by exact path.
 
-Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. A rollback refuses while a timer run holds its lock; see "Emergency: roll beta back". **Credentials go only where they are used:**
 the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, and `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default). A missing one is a `refused` record that names it, and the run exits 1. The R2 credential is never written into the log or into a command.
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default), `NEVR_QUEST_REFERENCE_APK` (the reference build the main APK is repacked from), `NEVR_STORE_APK` (a file: the store APK the variant is repacked from), and the Quest build's inputs: `ANDROID_NDK_HOME` (an NDK r26d directory, the one that holds `toolchains/llvm`; its `source.properties` must say `Pkg.Revision` 26.3.x), `VCPKG_ROOT` (a vcpkg checkout) and `config/public-defaults.env` in the clone the timer runs from. A missing one, a `NEVR_STORE_APK` that is not a file, a directory that is no r26d NDK or no vcpkg checkout, or a clone without the defaults file is a `refused` record that names it, before any step runs (the main release cannot be taken back, so the variant's inputs are checked before it is published), and the run exits 1. The R2 credential is never written into the log or into a command.
+
+**The arena APK in the run.** A tag's manifest is published once, so the arena claim goes into the same `extra_artifacts` as the
+main one. After `publish_apk` and before the dispatch the timer runs, in the tag's worktree and the build slice:
+
+- `arena_gate` runs `put-quest-apk -h` of the signer it built and looks for a `--kind` flag (the signer takes `--kind
+  quest-apk-arena`). A signer without it records `arena_skipped` with the reason `signer_lacks_kind`, no claim is added, and
+  the run is the run without an arena APK;
+- `arena_build` runs `just release-quest-arena-apk vX.Y.Z`; `arena_publish` runs `tools/publish_quest_apk.py vX.Y.Z
+  --listed-variant arena --extra-out <claim>`. The dispatch then carries both claims, the main one first;
+- `verify_live` also requires the live manifest to list the arena artifact with the kind `quest-apk-arena` and the claimed
+  size and sha256.
+
+From the gate on, a failure of an arena step blocks the dispatch: nothing is published to the manifest, and the `failed` record
+carries `part` `arena` and `reason` `arena_blocks_dispatch`. The reason is that a tag can be published only once, so
+publishing without the arena APK would lose it for that tag for good, while a blocked run can be fixed and run again (it counts
+toward the three tries). A tag the manifest already lists, or whose history has `main_complete`, cannot gain an entry, so those
+runs build no arena APK.
 
 **The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
 published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK
-(step 3) from the release's own loader asset, signed with the same key, plus two plugin libraries (`libq15t.so` and `libq15t_early.so`) from a
-private build that stays outside this repository, so the two APKs of one version can always be compared. The timer builds it
+(step 3) from the release's own loader asset, signed with the same key, plus the q15t plugin library (`libq15t.so`) that the
+tag's own source builds, so the two APKs of one version can always be compared and the plugin is the tag's. The timer builds it
 in the same run as the main APK, after the main release is complete (published, listed and verified live):
 
-- `variant_pins` copies each library into a private scratch directory (mode 0700, files 0600), hashes the copy, holds it to
-  its pin and packages the copies, so a file that changes afterwards is not what is built;
-- `variant_build` runs `just release-quest-variant-apk vX.Y.Z <libq15t.so>:<libq15t_early.so>` in the same worktree, after
-  the same configure, in the same slice as the main build (it writes `build/quest-release/vX.Y.Z/variant/`). Its whole output
+- `variant_configure` runs `just configure-android` in the tag's worktree, in the same slice as the main build: the Quest build
+  tree and its vcpkg ports. For a tag that was already listed the run makes the worktree and the PC configure first;
+- `variant_build` runs `just release-quest-variant-apk vX.Y.Z` in the same worktree (it writes `build/quest-release/vX.Y.Z/variant/`),
+  which runs `just build-quest-q15t` and packages its `libq15t.so`. Its whole output
   goes to `variant-vX.Y.Z-build.log` in the timer's work directory, a file that is 0600 from the moment it is opened, kept when
-  the step fails and removed when the variant is done;
+  the step fails and removed when the variant is done. After the build the run writes one `variant_library` record for the
+  packaged library: its name, size, sha256 and the libr15 build ID in its `q15t-config` marker, read from the library inside the signed
+  APK the recipe wrote (the file that is published) and compared with the file the build wrote. An APK whose library is not the build's,
+  an APK without the library, or a library without that marker fails this step, and nothing is published;
 - `variant_publish` runs `tools/publish_quest_apk.py vX.Y.Z --variant q15t`: `rclone copyto --ignore-existing` for the APK and
   its `.sha256`, then the same fetch-back by size and sha256 from the public host. There is no signer call and no manifest
   claim, an object already on the host is never replaced, and only the R2 credential is in its environment.
 
-It is optional. The run reads, from its environment, `NEVR_VARIANT_DIR` (the directory holding the two libraries) and `NEVR_VARIANT_PINS` (a `sha256sum`-format file
-with exactly one `<64 hex>  <name>` line per library); neither is in this repository. Neither value is logged or given to
-a command, and each is replaced by `<redacted>` in anything written; the records name the two files, their sizes and their
-pinned sha256 only. With both unset the run logs `variant_not_configured` once and does nothing else. Exactly one set, a pins
-file with a missing, extra, duplicate or malformed line, a missing library, or a sha256 that differs from its pin is a failure
-that names the file, never a skip.
+The variant is always built; there is no setting that turns it off or supplies its library.
 
 A failing variant step never blocks or undoes the main release, which is complete by then. It is recorded as `failed` with the
-step (`variant_pins`, `variant_build`, `variant_publish`, or `variant_exists` and the shared `worktree`, `build_slot` and
+step (`variant_configure`, `variant_build`, `variant_publish`, or `variant_exists` and the shared `worktree`, `build_slot` and
 `configure` when the tag was already listed), the run exits 1, and it counts toward the same three
 tries. A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
 plugin check prints the plugin's own symbol names): the output of `variant_build` is in the 0600 file the failure names, and
@@ -337,14 +368,7 @@ record carries `part`: `main` until the main release is complete (published, lis
 `done` is written only when the variant is done, so the next run finds the tag listed and checks the host for the variant pair
 (`variant_exists`, below). An exception that no step expected (a broken answer from the host is one of the expected ones) is
 recorded as `failed` with the step `unexpected`, naming its class and where it happened and never its text, with `part` as above;
-the worktree and the scratch are removed, the run exits 1, and it counts toward the three tries like any other failure.
-
-The private copies of the libraries are in `variant-vX.Y.Z` in the timer's work directory, which carries the marker file
-`.made-by-quest-release-timer` from the moment the timer makes it. Every run that reaches the release list (or has `--tag`), the
-already-listed path and a failing run included, removes a directory of that name that carries the marker (a killed run's leftovers): the files first, then the marker, then the directory, so
-a sweep that fails part way leaves a directory that is still marked and the next run retries it. It records
-`variant_scratch_removed`; a directory without the marker, or a link, is never removed, and the pins step then fails because it
-cannot make its own.
+the worktree is removed, the run exits 1, and it counts toward the three tries like any other failure.
 
 `variant_exists` GETs the APK, following no redirect. 404 means it is absent: the variant is built and published alone, in a
 worktree of its own that the run removes, with no second manifest publish. An APK that is there (200, not HTML) is listed
@@ -353,8 +377,8 @@ serves it (hashed as it streams in); that logs `variant_listed`, builds nothing 
 either file is a failure.
 
 **One run at a time.** A run that does work takes a non-blocking lock on `timer.lock` in the timer's work directory and holds it
-until it ends. A run that finds it held (a hand `--tag` run while the timer's is working, say) records `busy`, prints one line
-to stderr and exits 0 having done nothing, so it can neither sweep a live run's scratch nor publish twice. `--reset-failures` does no work and takes no lock.
+until it ends. A run that finds it held (a second hand `--tag` run while the first is working, say) records `busy`, prints one line
+to stderr and exits 0 having done nothing, so it cannot publish twice. `--reset-failures` does no work and takes no lock.
 
 **A completed main release is never run again.** A tag whose history has `main_complete` takes the variant-only path
 whatever beta lists: no signer is built, and `check_listed` and the dispatch are not run; the run records
@@ -434,9 +458,8 @@ fault in the manifest, a service or a player's own files is not cured by moving 
 
 **Where, and as whom.** Run it from a clean checkout of nevr-runtime `main`, on the machine that runs the Quest release timer,
 because it reads that timer's lock (`timer.lock`, in the timer's work directory) and refuses while a run holds it. The account
-`GH_BIN` runs as must be able to dispatch workflows on the release-signer repository and to set repository variables on
-`EchoTools/nevr-runtime`. When `GH_BIN` is unset the tool uses `gh`, which must be signed in as that account; export `GH_BIN`
-before you start, since the fourth line below uses it. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool
+`GH_BIN` runs as must be able to dispatch workflows on the release-signer repository. When `GH_BIN` is unset the tool uses
+`gh`, which must be signed in as that account. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool
 requires (the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs"); the tool refuses loudly if it is empty. The release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or
 else `QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository.
 
@@ -444,13 +467,11 @@ else `QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository.
 export RELEASE_PUBLIC_BASE=...   # the manifest host's public base, see docs/reference/verifying-a-release.md
 python3 tools/rollback_beta.py vX.Y.Z --dry-run
 python3 tools/rollback_beta.py vX.Y.Z --live --yes
-$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
 ```
 
-Always run the dry run first. The live run pauses the release-cut switch (`RELEASE_TRAIN`, read by the current cut workflow
-`.github/workflows/release-train.yml`), dispatches the publish, verifies it, and stops there: it never resumes the switch.
-The fourth line resumes it, once the owner has decided which release beta should follow. Stop whatever schedules
-`tools/quest_release_timer.py` before a live run, since the tool does not stop it. Each step appends a record to
+Always run the dry run first. The live run refuses while a run of `tools/quest_release_timer.py` holds its lock or a
+`sign-manifest.yml` run is in progress, reads beta again, dispatches the publish and verifies it. Do not start the timer while
+a rollback is under way: the tool checks the lock once and does not hold it. Each step appends a record to
 `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token, credential or host is printed or logged.
 
 **Ship the fix.** The fix reaches beta through a new release cut through the same flow as any release. The bad release's tag is

@@ -7,7 +7,7 @@ when, they appear in all capitals, as shown here.
 
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
-adding a `Log()` call, BEFORE reviewing a PR that touches logging, and
+adding a `Log()` call, BEFORE reviewing a change that touches logging, and
 BEFORE tuning the built-in log filter.
 
 ---
@@ -107,7 +107,7 @@ for row.
 
 | Tag                   | Component                                     |
 | --------------------- | --------------------------------------------- |
-| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection)  |
+| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection); the session router's lines on PC and Quest; one Info `service frames conn=<n> role=<config\|login\|matchmaker> format=<evr\|unknown>` line per service connection at its first frame (`compat/service_frames.h`, #568): `evr` when the frame starts with the EVR marker, `unknown` otherwise (the bridge does not decode a protobuf Envelope, so it never says `protobuf`); written once per connection by the PC bridge's own path and by the router, never per frame. A matchmaker that shares the login session's remote writes none (the login connection's line covers that remote). On the router the `conn` and `role` are those of the connection that owns the remote (the session remote reports conn=0 role=config), and the router's record carries no `[NEVR.WS]` tag of its own on Quest (bare `service frames ...`; on PC the bridge's log hook adds it) |
 | `[NEVR.GAMESERVER]`   | GameServerLib (lobby registration, sessions)  |
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
@@ -124,6 +124,7 @@ for row.
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
 | `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
+| `[NEVR.SCRIPT]`       | Hooks into the game's script DLLs (`hook/script_hooks.h`, #600): `script load hooks installed` (Info, once, the two `CScriptResource` wraps) or `not installed` (Warning, with `load_bytes` and `free_bytes`); per load of a script with hooks `script hooks installed script=<hash> base=<addr> hooks=<n> slots=<n> pins=<n>` (Info; a pin is a row whose bytes are checked and where nothing is installed), or `script hooks refused` (Warning) after one `hook not installed` Warning per row whose bytes differ (`name`, `rva`, `va`, `expected`, `actual`, Rule 6) and one `slot not replaced` Warning per slot that holds no engine function (`name`, `rva`, `va`, `value`); `slot not put back` (Warning, at the free, with `name`, `va`, `found` and `ours`) when something rewrote a slot after the table replaced it, which then keeps what it holds; `script hooks removed` (Info) before the game frees a hooked script; `script loaded`, `script loaded again`, `script reference freed` and `script freed` (Debug) for every other load and free, with the module `base` |
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
 | `[NEVR.PERF]`         | Frame-time probe (`diagnostics.frame_stats`): the start line and one summary line per 10 s window |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
@@ -131,14 +132,21 @@ for row.
 | `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
 | `[NEVR.MENU]`         | Menu text the runtime sets: the nEVR version on the menu's versions panel (`patch/menu_version_label.h`) |
 | `[NEVR.SPLASH]`       | A button press skips the splash screen: the Continue element going live, each skip with the button id and how long the button was live (`patch/splash_skip.h`) |
+| `[NEVR.EQUIP]`        | The equipment change the game drops, applied again (`patch/equipment_refire_rules.h` is the one definition, `patch/equipment_refire.h` the PC hooks, #2121): at boot one Debug `equipment setter hook installed` line per slot, one aggregate `equipment re-fire hooks: N of 3 installed`, and on a pinned-check failure a Warning `equipment re-fire hook not installed: <name> va=.. reason=bytes_mismatch first_difference=.. expected=.. actual=..` plus an aggregate of 0 (Rule 6); per setter call a Debug `equipment change` record with the verdict (`tracked`, `unchanged`, `not_local`, `server`, `unreadable`) and `read`, `changed`, `local`; per re-fire one Info `equipment re-fired` line with `slot`, the value's name, `handle`, `changes` and `quiet_ms`, or `equipment re-fire skipped` with the `reason` (`component_unreadable`, `component_replaced`, `record_gone`, `record_changed_elsewhere`, `not_local`). Quest (`quest/combat/equip_refire.h`): the sentinel writes `combat_equip_refire_install` (one record, six per-word statuses `weapon_jump` ... `ordnance_glob`), `combat_equip_refire_change` (Debug, with a `word` field `jump_slot` or `glob_dat`, capped at 256 per process and then one `combat_equip_refire_change_cap` Warning), `combat_equip_refire_refired` and `combat_equip_refire_skipped`, with the field names above |
+| `[NEVR.COMBAT]`      | The EchoCombat module (`runtime/combat/combat.h`: he_is_the_cat's DroneFix, PowerBoost and VeilNet, ported): one line per feature group at install (`feature enabled`, `feature off`, `feature refused ... reason=`, and `feature disabled` for the four never on), a `combat module started` summary, `hook applied` / `hook refused` per detour with `module`, `name`, `va` and `rva`, `overlap refused` with the write's range and the runtime's range it met (`runtime/combat/write_gate.h`), `balance applied` / `balance not applied` per load of mp_weapon_settings, `team ready fix registered script=<hash> hooks=<n> slots=<n>` (Info, once; `combat/team_ready.h`), `DOT FIELD fix registered script=<hash> hooks=<n>` (Info, once; `combat/dot_script.h`), `shared magazine fix registered script=<hash> hooks=<n> slots=<n>` (Info, once; `combat/shared_magazine.h`), `rules button fix registered script=<hash> hooks=<n> slots=<n>` (Info, once; `combat/rules_button.h`), `rules button: first read on this load field=<matchisarena|matchiscombat> engine=<byte> written=<byte> script=<hash> base=<addr>` (Info, once per flag per load of the podium script), `orb pause fix registered script=<hash> hooks=<n> slots=<n>` (Info, once, when match control starts; `combat/orb_pause.h`), `orb pause: match live from=<unset|0|1> to=<0|1> script=<hash> paused=<0|1|2>` (Info, once per change of the RULES mailbox's match-live byte) and `orb pause: pre-match orbs started|stopped script=<hash> paused=<0|1|2>` (Info, once per change: PAUSE turns the spawn orbs' pre-match orbs on or off), `clock pause fix registered script=<hash> hooks=<n>` (Info, once, when match control starts; `combat/clock_pause.h`), `clock pause: clocks held from=<0|1> to=<0|1> paused=<0|1|2> script=<hash>` (Info, once per change: PAUSE makes the game-mode script's clocks stand still or count again), `point rate fix registered script=<hash> hooks=<n> slots=<n>` (Info, once, when match control starts; `combat/point_rate.h`), `point rate: points rise changed from rate=<quarters> held=<0|1> to rate=<quarters> held=<0|1> paused=<0|1|2> script=<hash>` (Info, once per change: POINT RATE or PAUSE changes how a held capture point's points rise), `capture scores fix registered mode_script=<hash> hooks=<n> point_script=<hash> hooks=<n> pins=<n>` (Info, once, when match control starts; `combat/capture_scores.h`), `capture scores: starting scores changed from blue=<points> orange=<points> to blue=<points> orange=<points> script=<hash>` (Info, once per change of the published scores) and `capture scores: round starts with blue=<points> orange=<points> script=<hash>` (Info, once per round, when a starting score is not 0), `capture time fix registered script=<hash> hooks=<n> pins=<n>` (Info, once, when match control starts; `combat/capture_time.h`), `capture time: T changed from=<seconds> to=<seconds> capture=<seconds> script=<hash>` (Info, once per podium press that changes T), `unlock time fix registered script=<hash> hooks=<n> pins=<n>` (Info, once, when match control starts; `combat/unlock_time.h`), `unlock time: countdown changed from lock=<minutes> held=<0|1> to lock=<minutes> held=<0|1> paused=<0|1|2> map_lock=<minutes> script=<hash>` (Info, once per change of the unlock time in effect or of PAUSE holding the countdown), `station cells fix registered script=<hash> hooks=<n>` (Info, once, when VeilNet starts; `combat/station_cells.h`), `script guards registered guards=<n> server=<bool>` (Info, once, when VeilNet starts) and `script node skipped guard="<name>" script=<hash> node=<id> selected=<symbol> skips=<n>` (Debug, per node a guard keeps; `combat/script_guard.h`), and one `PowerBoost settings read config_yaml=<n> shipped=<n> code=<n>` line at start (each key's own source is a Debug `setting <section>.<key>=<value> source=<config.yaml|shipped|code ...>` line, the first time the key is read). Cat's own lines carry `module=<dronefix|powerboost|veilnet>` and keep his caps (Debug 5000, Info 20000 lines a module, then one Warning) |
+| `[NEVR.CONTENT]`     | The content pack the runtime serves (`runtime/content/content_pack.h`, #1424): one line per run with the decision, `content pack served id=.. version=.. manifests=.. packages=.. scripts=.. files_checked=..` and `no content pack installed` at Info, `content pack refused id=.. reason=<token> detail=".."` at Warning (the tokens are in `docs/reference/content-packs.md`); one `manifest served`, `package served` or `script served` line per file with `id`, `name`, `game_path`, `pack_file` and `count`, Info the first time a file is served and Debug after; a served open the game's function fails is a Warning with its `result`. A pack's file contents are never logged |
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
+| `[NEVR.LOBBY]`        | The lobby-full back-off and the failure-message rewrite, PC and Quest (`patch/lobby_full_backoff.cpp`, `patch/lobby_failure_message_rules.h`; Quest: `social/lobby_full_hooks.cpp`, `social/lobby_full_layout.h`): the join hold and refusal lines, the code-8 page shown, and the decline when the game keeps its own page (`failure message not shown`, Info once per code and reason; each later one is a Debug `page_unchanged` record). A Quest line is a `lobby_full` sentinel record: its fields are `status`, `code`, `reason` and the consequence as `msg` (the decline also carries `title`; `refusal_dropped` also carries `game_status` when there is a lobby client). `refusal_dropped` and `refusal_uncounted` are Info once per process for each code, and Debug after. The Quest caps those Debug repeats and the decline's repeat (`page_unchanged`) at 10 per 10 s per kind (`RepeatLimiter`, `social/lobby_full_layout.h`): the repeats a window does not write are counted, and the count is written as one Debug `repeats_suppressed` record (`record`, `count`, `window_ms` `10000`) before the next refusal or decline record of any kind. The sentinel log has no level gate, so these caps are what bound its disk log and its crash ring. The PC join hold (`join held`) is a Debug line with `reason=refused_last_join`, written on each tick a join is held; the per-refusal Info line (`full lobby: refused N of M`) is its summary. The built-in filter's N78 limiter (`runtime/log/rate_limiter.h`) caps the hold line at 3 per 5 s for one line text, then writes a counted `[NEVR.LOGFILTER] repeated count=<n> window_s=<t>` line |
+| `[NEVR.MATCH]`        | What a PC client did with a lobby session success and what became of a join the game queued (`patch/queued_join_log.h`, `patch/queued_join_log_rules.h`, #2163): one Info `session success` line per success with `status_at_arrival`, `status_after`, `session` (the game's own id text, `none` for the nil id), `action` (`joined`, `queued`, `ignored`, `unclassified`) and `reason`; one Info `queued join acted on` line when the game's "Leave For Match" runs, with `result` (`started`: a join request went out for the queued id; `started_nothing_queued`: one went out with no id queued; `not_started`: none went out; the game's own leave set the status to 0, but the queued id stays in the buffer, so a later Leave For Match could still send it); one Info `queued join dropped` line when the lobby status leaves 7 for anything but 8, with `status_to` and `by` (`SwitchTo`, or `End`, which writes status 0 directly; the End that Leave For Match itself runs is not a drop; no join request was sent for the queued session, and its id stays in the buffer, so a later Leave For Match could still send it). Statuses are the game's lobby status numbers (4 creating, 5 finding, 6 joining, 7 join queued, 8 join started). Never a player name or account id; the hook lines carry the expected and actual prologue bytes on a mismatch (Rule 6) |
 | `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines, a one-time `settings_trace` line, and one `gpu_score kept|filled|unrated` line a run, which says the score the selector read and, when unrated, why (`patch/render_config.h`, `patch/render_config_hook.h`, `patch/gpu_score.h`, ADR 0022, #1419) |
-| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), and the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line). The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records, in the run's main log (Rule 17): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line), self-update's swap at start (`event` `update_swap`, ADR 0024 section 8: `outcome`, `reason`, `from`, `to`, `files`, `elapsed_ms`), its rollback of a release that did not start (`event` `update_rollback`: `mode`, `outcome`, `reason`, `from` the failed release, `to` the restored one, `boot_attempts`, `files`, `elapsed_ms`; `event` `update_trial`: one per start that loads a pending release without deciding a rollback, `outcome` `counted` or `not_counted`, `reason`, `release`, `boot_attempts`) and the crash capture's marker for it (`event` `crash_marker`: `outcome`, `win32_error`, `path`, `thread`). The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
+| `[NEVR.UPDATE]`       | The runtime's half of PC self-update (`lifecycle/update_*.cpp`, ADR 0024 sections 3, 6 and 8, #1200): `update disabled reason=<dev_build\|flag\|config\|host_cannot_swap\|no_root>` once per run; one `update check` line per check with `channel`, `channel_source`, `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason` and `elapsed_ms`; `update verify` per staged file with `path`, `version`, `ok` and the verifier's `reason`; `update published` with `version` and `files`; `update confirmed` with `version`, `after_ms` and `role`; `update confirm skipped` with the `reason`. A reason is a word; the core's own error text is never a field (Rule 4), it is in `logs\nevr-update.jsonl` (`[NEVR.INSTALL]`) |
 | `[NEVR.LOGSEND]`      | The player log upload (`core/log_send.h`, ADR 0030, #1788): one Info line per tap with the file names and sizes, one Info line with the status and the code, a Warning with the status and the transport error or HTTP status on a failure. Never the text of a log, the body or the answer |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
+| `[NEVR.QUESTBUILD]`   | The Quest store build's host tools (`nevr_quest_obb_extract`, `tools/quest_store_build.py`, `tools/quest_store_install.py`, ADR 0042): one JSON line per step on standard output, with `schema`, `ts`, `level`, `tag`, `event` and the step's own fields (digests, byte counts, `ms`); a refusal is the event `refused` with a `code` and a `detail`. Never a key, a passphrase or file contents |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
@@ -148,10 +156,11 @@ for review.
 ### The `NEVR.STOP` line
 
 Every way the host stops the game, and every attach that leaves the game running without the runtime, writes one JSON
-object on one line to standard error, once per run. A `-server` operator has a console and no dialog; this is what they
-read. The host log (`nevr-bootstrap.jsonl`) carries the same facts: in the `game_stop` record when the host ends the
-process, and in a `host_not_attached` record when the game keeps running. The line is built in a fixed buffer
-(`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
+object on one line to standard error, once per run, when the process has a standard error handle that takes the write
+(`PutStopLine` writes nothing without one). A `-server` operator has a console and no dialog; this is what they read.
+The host's records in the main log (Rule 17) carry the same facts whether or not the line is written: in the `game_stop`
+record when the host ends the process, and in a `host_not_attached` record when the game keeps running. The line is
+built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
 
 | Field             | Meaning                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------- |
@@ -176,6 +185,7 @@ process, and in a `host_not_attached` record when the game keeps running. The li
 | `null_descriptor`        | `true`    | 78                        | `NEVR_GetRuntimeApi` returned no descriptor                                     |
 | `abi_rejected`           | `true`    | 78                        | The descriptor's ABI version or size was rejected                               |
 | `init_failed`            | `true`    | 78                        | `initialize` returned non-zero or threw                                         |
+| `update_blocked`         | `true`    | 78                        | A self-update left the nEVR root unfinished and this start could not finish it (ADR 0024): nothing was loaded; `update_reason` in `game_stop` and `detail` name why (`lock_timeout`, `bad_journal`, `journal_unreadable`, `reparse_point`, `move_failed`, `internal_error`, and from a rollback that cannot go back: `no_previous`, `previous_unverified`, `runtime_in_use`, `runtime_not_writable`, `rollback_blocked`, `state_unreadable`, `pending_unreadable`) |
 | `no_path`                | `true`    | 78                        | No nEVR root could be formed (no `%LOCALAPPDATA%` that fits)                    |
 | `unsupported_image`      | `true`    | 3762421763 (`0xE0420003`) | The process image is not the supported `echovr.exe` build (the image guard)     |
 | `host_not_attached`      | `false`   | none                      | The image check, the prologue check or the hook install failed: no detour was installed and the game runs without the runtime. `detail` names the step |
@@ -198,6 +208,16 @@ process, and in a `host_not_attached` record when the game keeps running. The li
 |         | state, pointer values, hex dumps, per-frame counters, per-connection         |            |
 |         | diagnostics. The individual boot-step lines (`[NEVR.BOOT] installing X`)    |            |
 |         | live here; INFO gets the summary (`boot complete: N hooks`).                |            |
+
+**The level a record carries.** A record's `level` is the level its line was given, mapped in one place,
+`src/core/log_level.h` (`nevr_log_level`): the game's CLog levels and `EchoVR::LogLevel` are one numbering (1 debug,
+2 info, 4 warning, 8 error; echovr.exe `CLog::DefaultHandler` 0x1400eba20), written `debug`, `info`, `warn`, `error`.
+A level with no name is written `unknown` with the number beside it (`level_raw` in the filter's record,
+`log/run_log_record.h`; `unknown; level_raw=<n>` after the tag of a boot line); it is never written `info`, and
+`min_level` never drops it. A boot line states its level after its tag (Rule 12); one that states none is recorded
+`unknown`. The game's error dialog (echovr.exe 0x1400ea730, the box that says the game cannot start) logs its title
+and message at info; the runtime hooks it (`log/error_dialog_level.h`), and a line logged while it runs is recorded at
+`error` with `game_level` keeping the level the game gave it.
 
 **Anti-patterns by level:**
 
@@ -249,7 +269,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 
 // AFTER, structured (ADR 0027): the event, the tag and each field are JSON keys
 Log(Level::Info, Tag::GameServer, "websocket_connected",
-    {Str("uri", RedactUrlForDiagnostics(uri)), Int("conn_id", connIndex)});
+    {Str("uri", UrlForDiagnostics(uri)), Int("conn_id", connIndex)});
 ```
 
 **Where:** This rule applies to every `Log()` call site.
@@ -317,14 +337,28 @@ A component that initializes silently is a component whose failure is
 undetectable. Every `Init()` function SHALL log at entry and exit, with
 the exit log including success/failure and any relevant state.
 
-### Rule 4: Remote text and response bodies are not log fields
+### Rule 4: Remote text and response bodies are not log fields, except what this rule names
 
 HTTP response bodies, JSON parser exception text, protobuf error messages,
 WebSocket close/error reasons, and callback exception text can echo secrets or
 user supplied content. Do not log these values, even at Debug. Keep the
 operational signal by logging numeric status/error codes, bounded byte counts,
-retry counts, and stable event markers. URL diagnostics must use the redacted
-formatters and omit query and fragment data. Preserve the original response
+retry counts, and stable event markers. Three things are logged as values:
+
+- A URL is logged whole, through `UrlForDiagnostics` (userinfo, query and
+  fragment included; control characters are written as %XX so one URL is one
+  line).
+- A network address that parsed (an IP, a port, an endpoint of them) is logged
+  as it is.
+- A peer's endpoint or lobby id that did not parse, which the operator needs to
+  see why a session success was refused, is logged through
+  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value
+  (Rule 15): at most 64 bytes of it, inside double quotes, each non-printable
+  byte, each backslash and each double quote written as `\xNN`, so the text
+  cannot end its own field or start another, with its full length beside it
+  (`endpoint_len=<n>`, `lobby_len=<n>`, so a cut value says so).
+
+Any other text from a peer stays out of the log. Preserve the original response
 and request bytes for protocol handling; this rule changes diagnostics only.
 
 ### Rule 5: Noise is a defect
@@ -520,11 +554,11 @@ Log(EchoVR::LogLevel::Error,
 
 Every config decision that affects runtime behavior SHALL be logged at
 INFO level when it is loaded. Log the key and a safe summary, not secret
-values or unredacted URLs. This includes:
+values. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
-- Config-file overrides (arena round time, mercy score, and redacted service URLs).
-- Service redirects (each key and redacted source/destination URL).
+- Config-file overrides (arena round time, mercy score, and service URLs).
+- Service redirects (each key and its source and destination URL).
 - Module/plugin load decisions (loaded, skipped, failed).
 
 The log is the only record of what configuration decisions the process is
@@ -536,7 +570,7 @@ it was applied.
 The runtime boots under the DllMain loader lock, where the game's CLog is not
 usable. The boot phase runs from `nevr_boot_log_tee::Init()` to
 `nevr_boot_log_tee::Close()`, and in it `Log()` itself reports through the boot
-tee (stderr and `nevr-boot.jsonl`): `Init()` sets `Log()`'s boot sink
+tee (stderr and the main log, Rule 17): `Init()` sets `Log()`'s boot sink
 (`SetBootLogSink` in `src/core/logging.h`) and `Close()` clears it. Code that
 runs both during boot and after it calls `Log()` and never branches on the
 phase.
@@ -627,8 +661,8 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
   spaces, so a plugin cannot start a second line, and message, keys and values are capped so a line
   fits the 2048-byte buffer `Log()` uses before the game logger exists; fields past the cap are counted
   in `fields_dropped=<n>`.
-- **When.** A plugin has a host log from its init callback (`NvrPluginInit` or `NvrPluginInitEx`)
-  on, from any thread, including from `NvrPluginShutdown` with the id and function it kept. There is
+- **When.** A plugin has a host log from its init callback (`NevrPluginInit` or `NevrPluginInitEx`)
+  on, from any thread, including from `NevrPluginShutdown` with the id and function it kept. There is
   none before init (no context exists) and none from `DllMain`, which runs under the loader lock. A
   host older than v6 passes a context that does not cover `ctx->log`; the plugin logger then falls back
   to stderr (`<prefix> <LEVEL> <message>`), which that host does not collect.
@@ -691,6 +725,36 @@ record, and `ClientLobbyRecords`, which both writers use); `LogClientLobbyMessag
 `lobby records` cases in `src/quest/tests/session_router_test.cpp`. Both suites compare their output with the
 expected lines in `src/runtime/tests/lobby_record_golden.h`, so the two writers' bytes are pinned to one text.
 
+### Rule 17: One log — every record of a process goes into one file
+
+A process writes one main log, `<nevr root>\logs\nevr-<UTC time the process started>.jsonl`
+(`src/core/run_log_path.h`; `nevr-pid<hex>.jsonl` when the start time cannot be read). The host, the boot phase, the runtime's filter
+and the crash path all append to it, so a run is read from one file in time order, and no record waits in a spool to be replayed.
+The host DLL and `nevr-runtime.dll` share no memory, so each derives the name from the process's creation time, which is also what
+the run id is built from.
+
+- **What marks a writer.** A host record carries `"tag":"NEVR.HOST"`; a boot-phase record carries `"src":"boot"`; a crash line
+  carries `"tag":"NEVR.CRASH"` and `"event":"crash_record"`; the filter's own lines carry `ts`, `run`, `level` and `msg`. A reader
+  tells them apart by those keys, never by the file.
+- **No other place.** When the folder cannot be made or the file cannot be opened (no `%LOCALAPPDATA%`, a path that does not
+  fit, a full disk), the record goes to standard error and a count of the records lost is kept and logged once a file opens. It
+  never goes to a folder beside the game, to `%TEMP%` or to a second file. A crash writes no text file: the record in the main log
+  is the text. Crash dumps and readable crash reports go only to `<nevr root>\crashes`.
+- **Appends are whole lines.** A record is one `WriteFile` with `FILE_APPEND_DATA`, taken under an in-process lock and the named
+  mutex `Local\nevr-host-bootstrap-log` (`nevr_run_log::kMutexName`), because Wine does not make a `FILE_APPEND_DATA` write atomic
+  and the host's crash-report thread appends while the runtime does. The crash path takes no lock and no heap (N70): it writes a fixed
+  buffer to a handle opened when the crash path was armed.
+- **Rotation keeps the name.** A file that reaches its size or age limit is renamed `nevr-<timestamp>.<n>.jsonl` and the process
+  goes on writing its own name, so the host and the crash path never hold a name that has moved.
+- **Quest.** The sentinel writes the same shape to `nevr-<timestamp>.jsonl` in `nevr/logs` below the media or the data folder it
+  chose (the `sentinel_log_dir` line says which). Logcat keeps receiving every line.
+- **Not covered.** The core installer's own run log (`installer/`, ADR 0023) and the game's own `_local\r14logs`.
+
+**Where:** `src/core/run_log_path.h`, `src/runtime/log/run_log_writer.h`, `src/runtime/host/bootstrap_diagnostics.cpp`,
+`src/runtime/lifecycle/crash_recovery.cpp` (`BuildCrashRecord` in `crash_record_line.h`), `src/runtime/log/boot_log_tee.cpp`.
+Tests: `test_boot_log_routing.cpp`, `test_bootstrap_diagnostics.cpp`, `test_host_crash_capture.cpp`, `test_host_stop_line.cpp`,
+`src/runtime/tests/host_crash/host_crash_test.cpp`.
+
 ---
 
 ## BEFORE / AFTER Reference
@@ -708,11 +772,11 @@ structured call (ADR 0027) writes as its own key.
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
 | Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
-| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
+| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
-| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
+| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s ip_len=%zu"` | Already compliant — carries server_id and ip (an address that parses as IPv4 or IPv6 as written, anything else through `Escape`) with its length |
 | State transition | `"[NETGAME] Logging in..."` | `"[NEVR.PATCH] netgame state from=%s to=%s"` |
 | Crash dump | `"=== CRASH DUMP ==="` | `"[NEVR.CRASH] exception code=0x%08lX name=%s rip=0x%llX"` |
 
@@ -743,7 +807,7 @@ structured call (ADR 0027) writes as its own key.
 
 ## Hard Stops
 
-These are enforced in code review. A PR that introduces a log line
+These are enforced in code review. A change that introduces a log line
 failing any of these checks is rejected until the violation is fixed.
 
 | Problem                                      | Why It's a Stop                   | Fix                                                   |

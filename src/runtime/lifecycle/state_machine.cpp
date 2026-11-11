@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/server_bringup.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/ext/plugin_loader.h"
+#include "runtime/combat/gear_trace.h"
 #include "core/globals.h"
 #include "core/login_session.h"
 #include "core/logging.h"
@@ -87,19 +88,19 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
 
   // Notify plugins of state change
   {
-    NvrGameContext ctx = {};
+    NevrGameContext ctx = {};
     ctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
     ctx.net_game = pGame;
     ctx.game_state = static_cast<uint32_t>(state);
     ctx.flags = NEVR_HOST_HAS_NETGAME;
     if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
     else ctx.flags |= NEVR_HOST_IS_CLIENT;
-    ctx.ctx_size = sizeof(NvrGameContext);
+    ctx.ctx_size = sizeof(NevrGameContext);
     ctx.get_plugin_count = GetLoadedPluginCount;
     ctx.get_plugin_info = GetLoadedPluginInfo;
     NotifyPluginsStateChange(&ctx, fromState, static_cast<uint32_t>(state));
     {
-      NvrModuleContext mctx = {};
+      NevrModuleContext mctx = {};
       mctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
       mctx.flags = NEVR_HOST_HAS_NETGAME;
       if (g_isServer) mctx.flags |= NEVR_HOST_IS_SERVER;
@@ -108,6 +109,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
     s_prevState = static_cast<uint32_t>(state);
   }
+  nevr_gear_trace::OnNetGameState(static_cast<int32_t>(fromState), static_cast<int32_t>(state));
 
   if (nevr_server_bringup::BeginsMultiplayer(g_isServer != FALSE, static_cast<EchoVR::NetGameState>(fromState),
                                              state)) {

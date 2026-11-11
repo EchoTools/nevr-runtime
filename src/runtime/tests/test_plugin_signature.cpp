@@ -44,7 +44,7 @@ class PluginSignature : public ::testing::Test {
  protected:
   void SetUp() override {
     const char* dir = std::getenv("NEVR_SIGFIX_DIR");
-    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> "
+    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> --dll-dir <bin>/sigfix "
                                "and export it (just test-auth-unit does)";
     dir_ = dir;
     std::ifstream in(dir_ + "/fixtures.json");

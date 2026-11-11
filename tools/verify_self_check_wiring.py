@@ -48,7 +48,7 @@ REQUIRED = [
     ("src/quest/integration/production_steps.cpp", r"SetProcessEndCallback\(&OnGameProcessEnd\);",
      "the constructor step InstallProcessEnd does not register OnGameProcessEnd with the process-end hook"),
     ("src/quest/integration/production_steps.cpp",
-     r"void OnGameProcessEnd\(\) noexcept \{[\s\S]{0,200}FinishPlugins\(nevr_quest::plugin::reason::kGameExitedFirst\);[\s\S]{0,40}ReportAndroidMainReturned\(\);",
+     r"void OnGameProcessEnd\(\) noexcept \{[\s\S]{0,200}FinishPlugins\(nevr_quest::plugin::reason::kGameExitedFirst\);[^}]{0,240}ReportAndroidMainReturned\(\);",
      "the process-end callback does not end the pending plugin entries and send the android_main_returned report"),
     ("src/quest/sentinel/entry.cpp", r"bool InstallProcessEndHook\(\) noexcept \{ return nevr_quest::process_end::Install\(\); \}",
      "InstallProcessEndHook does not return the result of the process-end hook's install"),
@@ -111,6 +111,12 @@ def scan_files(root: Path):
                     yield path
 
 
+def strip_comments(text: str) -> str:
+    """C++ comments out, so a call that is commented out does not satisfy a required pattern (N99)."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)^[ \t]*//[^\n]*\n|[ \t]//[^\n]*", "", text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=REPO)
@@ -124,7 +130,7 @@ def main() -> int:
             print(f"verify: FAIL — self-check wiring: cannot read {rel}: {error}", file=sys.stderr)
             failed += 1
             continue
-        if not re.search(pattern, text, re.S):
+        if not re.search(pattern, strip_comments(text) if path.suffix in (".cpp", ".h") else text, re.S):
             print(f"verify: FAIL — self-check wiring: {rel}: {message}", file=sys.stderr)
             failed += 1
     scanned = 0

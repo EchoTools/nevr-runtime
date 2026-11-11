@@ -5,13 +5,17 @@
  * levels are 5/5 when CGRenderConfig::StablePowerState() is true and 2/2 otherwise, so a shipping build asks for 2/2.
  * The call is once per entry into VR mode, not per frame.
  *
- * This module owns the decision, not the slot. GotHook allows one owner per libr15 slot (got_hook.h, kAlreadyInstalled), and
- * the render-configuration hook (render_config_hook.cpp, #1139) already owns the vrapi_SetClockLevels slot and is the one
+ * This module owns the decision, not the slot. GotHook chains handlers on one slot (got_hook.h). The
+ * render-configuration hook (render_config_hook.cpp, #1139) owns the vrapi_SetClockLevels slot and is the one
  * place that sees the call. Its handler asks Choose() which levels to call the original with:
  *   - override on and the game asks for (2, 2): (4, 4);
  *   - any other pair, or override off: the game's own pair.
  * The original's result is returned as it came, and the render_config line reports the levels applied (cpu_level, gpu_level)
  * and VrApi's answer (clock_result), so a run says whether the headset granted what was asked.
+ *
+ * Owner (ADR 0039). This file owns the clock levels: no other module hooks vrapi_SetClockLevels or changes the levels (the q15t
+ * plugin's clock raise is `diagnostics.clock_levels_override: true`, ADR 0046 rule 3). Its inputs are the game's request and that switch,
+ * both named on the `clock_levels_arm` line and the render_config line.
  *
  * Choose() is lock-free and does not log, allocate or throw: it runs inside a hook (callback_thunk.h). Arm() logs one
  * `clock_levels_arm` line with the switch value, whatever it is; the switch is `diagnostics.clock_levels_override` in

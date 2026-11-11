@@ -10,6 +10,7 @@ One text file, one fact per line, readable without a tool:
 | Line | Content |
 | --- | --- |
 | `summary:` | the one logged line (below) |
+| `build:` | `version=<version> kind=<dev\|release> variant=<word\|none>`: the build that crashed (ADR 0040 rule 2). Set at start through `nevr_crash::SetBuild`; the Quest sentinel sets it; a report with none has no such line (KNOWN-WRONG #2231: the PC sets none) |
 | `signal:` | signal name and number, `code=` (`si_code` on Quest, the access kind on PC), `fault_addr=` |
 | `thread:` | thread name and id |
 | `pc:`, `lr:` | `module+offset`, `build_id=`, `symbol=<nearest exported symbol>+offset` (`lr` on Quest only) |
@@ -64,7 +65,10 @@ platforms share: the game's request is remembered, not carried out; ours runs on
   libraries libpnsrad, libpnsradmatchmaking and libpnsovr import `sigaction` and `signal` too and the game loads them after
   the constructor; the dlopen hook (live on every launch) hands each load to `OnModuleLoaded`, which hooks their two slots
   right after the game's dlopen returns (`{"event":"crash_first_late",...}`), and again for a mapping loaded again. A
-  library's own ELF constructors run inside dlopen, before that moment.
+  library's own ELF constructors run inside dlopen, before that moment. The first request the game makes for each of the five
+  signals writes `{"event":"crash_first_displaced",...}`, naming the signal, the entry it called (`sigaction` or `signal`), and the kind of handler the game kept (`function`, `default` or `ignore`; only a function runs
+  after the crash capture); a request made while the crash path runs writes nothing, and the next ordinary request for that
+  signal writes the line.
 - PC: `kernel32!SetUnhandledExceptionFilter` is hooked (`src/runtime/lifecycle/crash_first_win.h`); the game's filter is
   remembered and ours stays the top-level filter. On an unhandled exception it writes the report (unless `WriteCrashDump`
   already wrote one) and runs the game's filter. `[NEVR.CRASH] first handler installed` says it is in place and
@@ -100,7 +104,7 @@ it to `<stem>.report.txt.rejected` and it is never offered again. Anything else 
 leaves it for the next start. A 2xx lost on the way back sends the same `(install_id, report_id)` again; the service counts it
 once.
 
-**Log.** PC: a `crash_send` record in `nevr-bootstrap.jsonl` (`tag` `NEVR.HOST`); Quest: a `crash_send` line in the sentinel
+**Log.** PC: a `crash_send` record in the run's main log (`nevr-<timestamp>.jsonl`, `tag` `NEVR.HOST`); Quest: a `crash_send` line in the sentinel
 log. `state` is `sent`, `rejected`, `deferred`, `unreadable`, `install_id_unavailable`, `off` or `pass` (what was sent and
 rejected, and how many are left). A folder with nothing to send writes nothing. The report text and the body are never logged.
 

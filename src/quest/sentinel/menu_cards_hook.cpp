@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "cargo_read_keys.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -31,6 +32,10 @@ std::atomic<const char*> g_slotPin{nevr_menu_cards::kStockTransformSha256};
 std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
+
+// How many leading bytes of a CDN read's buffer `cargo_read` shows: one ASTC block, so a void-extent header (fc fd ff ff ...)
+// and its colour tell our bytes from the stock texture's.
+constexpr std::size_t kCargoReadHeadBytes = 16;
 
 // Two bounded diagnostics over finished primary buffers. A key is claimed by fetch_add; two threads racing on the same new
 // key can each log it once, which only costs a line.
@@ -222,11 +227,41 @@ void OfferSlots(unsigned char* data, const Delivery& d) noexcept {
                        {"slot_tutorial", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kTutorialOwner)}});
 }
 
+// A read of a key the CDN served (cargo_read_keys.h): one `cargo_read` line at the key's 1st, 2nd, 4th ... read, with the
+// read's status, its length and its first bytes, so a run shows whether the engine read the cargo file into the resource. A CDN
+// texture's buffer 1 is not a primary buffer, so this runs before that filter. Status 4 is a finished read; any other status
+// makes the game's callback mark the resource failed (5), and the line is then a warning.
+void NoteCargoRead(const Delivery& d) noexcept {
+  const std::uint64_t reads = cargo_read::TouchRead(d.nameSymbol, d.index);
+  if (reads == 0 || (reads & (reads - 1)) != 0) return;
+  char head[2 * kCargoReadHeadBytes + 1] = {};
+  if (d.buffer != nullptr) {
+    static const char kDigits[] = "0123456789abcdef";
+    const std::size_t n = d.size < kCargoReadHeadBytes ? static_cast<std::size_t>(d.size) : kCargoReadHeadBytes;
+    for (std::size_t i = 0; i < n; ++i) {
+      head[2 * i] = kDigits[d.buffer[i] >> 4];
+      head[2 * i + 1] = kDigits[d.buffer[i] & 0xf];
+    }
+  }
+  const bool done = d.status == block::kStatusDone;
+  char nameHex[19], classHex[19];
+  sentinel::LogFields(done ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "cargo_read",
+                      {{"name", sentinel::HexString(nameHex, d.nameSymbol)},
+                       {"class", sentinel::HexString(classHex, d.classSymbol)},
+                       {"index", d.index},
+                       {"status", d.status},
+                       {"bytes", d.size},
+                       {"head", head},
+                       {"reads", reads},
+                       {"result", done ? "read" : "failed"}});
+}
+
 // Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
 void Offer(unsigned char* data) noexcept {
   g_deliveries.fetch_add(1, std::memory_order_relaxed);
   if (data == nullptr) return;
   const Delivery d = Inspect(data);
+  NoteCargoRead(d);
   if (!IsFinishedPrimary(d)) return;
   NoteResource(d);
   nevr_netgun_bullets::Resource netgun = nevr_netgun_bullets::Resource::Particles;
@@ -301,6 +336,7 @@ void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
 void ArmSlotPinForTest(const char* pinHex) noexcept { g_slotPin.store(pinHex, std::memory_order_release); }
 
 void ResetForTest() noexcept {
+  cargo_read::ResetForTest();
   g_deliveries.store(0, std::memory_order_relaxed);
   g_pages.store(0, std::memory_order_relaxed);
   g_swapped.store(0, std::memory_order_relaxed);

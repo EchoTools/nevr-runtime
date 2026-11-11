@@ -30,10 +30,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "runtime/compat/social_level.h"
+#include "runtime/ext/plugin_manifest.h"
 
 namespace nevr_quest_login {
 
@@ -81,6 +83,10 @@ struct BuildInfo {
   std::string git_commit;
   std::string git_describe;
   std::string build_type;
+  // The plugin report the login carries as `nevr_plugins` (what the loader did with each entry), asked at every login attempt
+  // because the loader settles entries over the run. Empty function or empty result: no plugin fields. Called from the
+  // exceptions-enabled compose phase only, so it may allocate; it must not call into the game.
+  std::function<std::vector<PluginManifestEntry>()> plugin_report;
 };
 
 // Values the game already placed in the login JSON; the rewrite relays them.
@@ -131,6 +137,9 @@ enum class ComposeStatus { Ok, MissingAccountId, MissingToken, ProfileBuildFaile
 struct Composition {
   ComposeStatus status = ComposeStatus::ProfileBuildFailed;
   std::vector<Field> fields;
+  // The `nevr_plugins` array as CJson indexed paths (`nevr_plugins[0]|name`, one Field per member), built from the same
+  // nevr_login_profile builder as the PCVR login. Apart from `fields` because it is applied best effort: see Plan.
+  std::vector<Field> plugin_fields;
   // Profile members that have no CJson setter (arrays, nulls, reals, out-of-range
   // integers). Paths only, never values.
   std::vector<std::string> skipped;
@@ -452,6 +461,10 @@ struct Plan {
   std::uint64_t provider = 0;
   std::uint64_t account_id = 0;
   std::vector<Field> fields;
+  // Written after `fields`, and never at the cost of the login: the indexed-path form is a prediction not yet seen on a
+  // headset (docs/adr/0019-quest-plugin-loader.md, section 2). A refusal restores them and the login goes out without
+  // `nevr_plugins`, which the service reads as an empty report.
+  std::vector<Field> plugin_fields;
   std::size_t skipped = 0;
   std::size_t kept_client_class = 0;
   std::size_t kept_measured = 0;

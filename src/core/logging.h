@@ -13,10 +13,9 @@ extern std::string GetISO8601Timestamp();
 /// process so lines from different files can be correlated to one run.
 ///
 /// Derived from the PID and the process creation time — not from a counter or a
-/// call-time clock — so BootLogTee (which writes <exedir>\logs\nevr-boot.jsonl,
-/// append-mode across runs) and the log filter (which writes a per-run file under
-/// %LOCALAPPDATA%) independently compute the SAME value. Without it the two files
-/// cannot be joined, and the append-mode boot log cannot even be split by run.
+/// call-time clock — so every writer of the process's one main log (the boot tee, the
+/// log filter, the crash path) and the host DLL, which shares no memory with the
+/// runtime, independently compute the SAME value (and the same file name, core/run_log_path.h).
 ///
 /// Returns a stable pointer to a static buffer. Safe to call from DllMain: no heap,
 /// no loader-lock call, no CRT locale dependency.

@@ -8,6 +8,14 @@
 // (config.cpp), as the legacy patch did. A server is always fixed-timestep; the rate is the config key
 // network.tick_rate_hz (flat key nevr_tick_rate_hz, #595).
 //
+// #2109: a server with no session ticks at kIdleTickRateHz. The boot write is the idle step; a session writes its own
+// rate when it opens (ApplySessionTimestep, never leaving a session at the idle step: SessionFallbackRateHz,
+// UntypedSessionStartWrites), and the idle rate goes back only when the game ends its session or the service ends the
+// current one (IdlesAfterSessionEnd); a ServerDB reconnect does not end the game's match. The game paces each frame itself,
+// in CClock::UpdateAndPace (echovr.exe 0x1400cf3b0): with the clock's mode bits 0x18 it waits out the rest of the step
+// in CPrecisionSleep::Wait, which the runtime owns (patch/server_frame_wait.h answers UDP raw pings during that wait,
+// so a slow idle tick does not delay them).
+//
 // What is pure: ParseTickRateHz, StepMicroseconds, PlanStepWrite, ReadBackMatches, WithFixedTimestep and the
 // decision/format functions (DecideReadBack, ReadBackLine, OutcomeName) touch no memory but their arguments.
 // ApplyFlag and ApplyStep write, and ApplyStep reads, the field a caller hands them; ReadClock reads the
@@ -42,6 +50,14 @@ constexpr uint32_t kMinTickRateHz = 10;
 constexpr uint32_t kMaxTickRateHz = 1000;
 /// The game's own fixed step, 30 a second, in microseconds.
 constexpr uint32_t kGameDefaultStepUs = 33333;
+/// The game's own rate, the one kGameDefaultStepUs is the step of.
+constexpr uint32_t kGameTickRateHz = 30;
+
+/// #2109: the rate a server ticks at while it has no session. It is below kMinTickRateHz on purpose: an operator
+/// cannot configure it (ParseTickRateHz refuses it), only the idle write uses it. With no session there is no player to
+/// simulate for; what still runs per frame is the network update (a session that opens is seen up to one idle step
+/// later) and the per-frame work of an empty level. UDP raw pings do not wait for it: the frame wait answers them.
+constexpr uint32_t kIdleTickRateHz = 6;
 
 /// The step for `ticksPerSecond`, in microseconds. 0 for a rate of 0: leave the game's step.
 inline uint32_t StepMicroseconds(uint32_t ticksPerSecond) {
@@ -87,10 +103,55 @@ inline SessionRate TickRateForGameType(std::string_view gameType, uint32_t confi
   return {kDefaultTickRateHz, RateSource::kDefault};
 }
 
-/// The steps a step slot can plausibly hold: those of the rates in range. A value outside is not a
-/// step, so the address it was read from is not the step slot (N31).
+/// The steps a step slot can plausibly hold: those of the rates in range and the idle rate's (#2109). A value outside
+/// is not a step, so the address it was read from is not the step slot (N31).
 constexpr uint32_t kMinPlausibleStepUs = 1000000u / kMaxTickRateHz;
-constexpr uint32_t kMaxPlausibleStepUs = 1000000u / kMinTickRateHz;
+constexpr uint32_t kMaxPlausibleStepUs = 1000000u / kIdleTickRateHz;
+static_assert(kIdleTickRateHz < kMinTickRateHz, "the idle rate is below every rate an operator can configure");
+
+/// #2109: the rate to write for a session's rate `hz`. 0 is the game's own rate: the slot holds the idle step while
+/// no session runs, so a session at rate 0 writes the game's step back instead of leaving the slot alone.
+inline uint32_t RateToWrite(uint32_t hz) { return hz == 0 ? kGameTickRateHz : hz; }
+
+/// #2109: the step the idle write puts in the slot.
+inline uint32_t IdleStepUs() { return 1000000u / kIdleTickRateHz; }
+
+// --- when the server goes back to the idle step (#2109) ---------------------------------------------------------------
+
+/// Why the runtime's record of a session ended.
+enum class SessionEndCause : uint8_t {
+  kGameEnded,     ///< The game ended its session: CNSLobby::EndSession (echovr.exe 0x140607e00) disconnected every peer
+                  ///< (LeaveSession 0x14060b1f0), then called IServerLib::EndSession (vtable +0x38).
+  kServiceEnded,  ///< ServerDB sent CODE_ENDED for a session id.
+  kReconnect,     ///< The ServerDB socket reconnected: the runtime drops its record of the session and registers again.
+                  ///< The game's match, if one runs, goes on (the socket drops during level loads, gameserver_callbacks.cpp).
+  kShutdown,      ///< The process is exiting.
+};
+
+inline const char* SessionEndCauseName(SessionEndCause c) {
+  switch (c) {
+    case SessionEndCause::kGameEnded: return "game_ended";
+    case SessionEndCause::kServiceEnded: return "service_ended";
+    case SessionEndCause::kReconnect: return "reconnect";
+    case SessionEndCause::kShutdown: return "shutdown";
+  }
+  return "unknown";
+}
+
+/// Whether a session end puts the server on the idle step. Only the end of the session the server is running does: the
+/// game's own end (no peer is left to simulate for), or the service's CODE_ENDED naming the current session. A
+/// reconnect ends only the runtime's record while the game's match goes on, a CODE_ENDED that names another session
+/// (a late one, after a new session opened) is not this session's end, and a shutdown needs no step.
+inline bool IdlesAfterSessionEnd(SessionEndCause cause, std::string_view endedSessionId,
+                                 std::string_view currentSessionId) {
+  switch (cause) {
+    case SessionEndCause::kGameEnded: return true;
+    case SessionEndCause::kServiceEnded: return !endedSessionId.empty() && endedSessionId == currentSessionId;
+    case SessionEndCause::kReconnect:
+    case SessionEndCause::kShutdown: return false;
+  }
+  return false;
+}
 
 /// Parses network.tick_rate_hz. Absent or empty is kDefaultTickRateHz. 0 is 0: the game's own step,
 /// still fixed (the flag is set for every server), never an unpaced loop. A value that is not a plain
@@ -131,10 +192,11 @@ struct StepPlan {
 };
 
 /// What to do with the step slot for `hz`, given the `currentStepUs` read from it. The rate is
-/// range-checked and the value read back is bounds-checked before anything is written.
+/// range-checked (the configurable range, or the idle rate) and the value read back is bounds-checked before anything
+/// is written.
 inline StepPlan PlanStepWrite(uint32_t hz, uint32_t currentStepUs) {
   if (hz == 0) return {StepAction::KeepGameStep, 0};
-  if (hz < kMinTickRateHz || hz > kMaxTickRateHz) return {StepAction::RefuseRate, 0};
+  if (hz != kIdleTickRateHz && (hz < kMinTickRateHz || hz > kMaxTickRateHz)) return {StepAction::RefuseRate, 0};
   if (currentStepUs < kMinPlausibleStepUs || currentStepUs > kMaxPlausibleStepUs) {
     return {StepAction::RefuseSlot, 0};
   }
@@ -219,6 +281,36 @@ struct StepWrite {
   uint64_t after = 0;  ///< The slot read back after a write.
 };
 
+/// #2109: whether the runtime's last write that held (`last`, from StepRecord) left the slot at the idle step.
+inline bool LeftAtIdle(const StepWrite& last) {
+  return last.outcome == StepOutcome::kSet && last.stepUs == IdleStepUs();
+}
+
+/// #2109: what the slot holds after a write that failed, as far as the write saw it: the read-back of a write that did
+/// not hold, else the value found before the write. False when the slot could not be read at all (kStateMissing).
+inline bool SlotAfterFailure(const StepWrite& failed, uint64_t* holds) {
+  if (failed.outcome == StepOutcome::kStateMissing) return false;
+  *holds = failed.outcome == StepOutcome::kWriteDidNotHold ? failed.after : failed.was;
+  return true;
+}
+
+/// #2109: a session must never run at the idle step. When its own write failed and left the slot at the idle step, the
+/// game's own rate is written instead (kGameTickRateHz, the step a server with no tick-rate write runs at). Returns
+/// that rate, or 0 for no second write: the first write held or was the operator's choice (rate 0), the slot does not
+/// hold the idle step (it holds no step, or another writer's value, so the session is not at 6 a second), or the slot
+/// could not be read (a second write would fail the same way).
+inline uint32_t SessionFallbackRateHz(const StepWrite& first) {
+  if (!StepFailed(first.outcome)) return 0;
+  uint64_t holds = 0;
+  if (!SlotAfterFailure(first, &holds)) return 0;
+  return holds == IdleStepUs() ? kGameTickRateHz : 0;
+}
+
+/// #2109: a session start whose frame names no game type (the legacy start frame alone, with no session create before
+/// it) still opens a session, so it writes the rate for an unknown type when the slot holds the idle step. When the
+/// session create already wrote the session's own rate, that rate stays: the frame cannot say better.
+inline bool UntypedSessionStartWrites(const StepWrite& last) { return LeftAtIdle(last); }
+
 /// Writes the server's step to `*stepField`, the game's 64-bit step (echovr.exe 0x140127a04
 /// `MOV qword ptr [RBX + 0x90], RAX`), by PlanStepWrite: the rate is range-checked and the value found is
 /// bounds-checked before the write (N31), and the write is read back. A client or a null field writes
@@ -250,6 +342,23 @@ inline StepWrite ApplyStep(bool isServer, uint32_t rateHz, uint64_t* stepField) 
                   ? StepOutcome::kSet
                   : StepOutcome::kWriteDidNotHold;
   return w;
+}
+
+/// #2109: what a session's write did: its own rate, and the fallback write SessionFallbackRateHz asked for, if any.
+struct SessionStepWrite {
+  StepWrite first;
+  uint32_t fallbackHz = 0;  ///< 0: no second write was made
+  StepWrite fallback;
+};
+
+/// #2109: writes a session's rate (RateToWrite of `sessionHz`) and, when that failed and left the slot at the idle
+/// step, the game's own rate, so a session never runs at the idle step a write could have changed.
+inline SessionStepWrite ApplySessionStep(bool isServer, uint32_t sessionHz, uint64_t* stepField) {
+  SessionStepWrite r;
+  r.first = ApplyStep(isServer, RateToWrite(sessionHz), stepField);
+  r.fallbackHz = SessionFallbackRateHz(r.first);
+  if (r.fallbackHz != 0) r.fallback = ApplyStep(isServer, r.fallbackHz, stepField);
+  return r;
 }
 
 // --- the live read-back ---------------------------------------------------------------------------------

@@ -3,14 +3,19 @@
 // before the single reporter start, the isolation of one failing piece from the others, the post-load
 // policy, the identity source, the social switch and the frame tap. Fakes stand in for every library.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <new>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -55,7 +60,14 @@ struct FakeSteps final : Steps {
   // Per step: true = report failure, "throw" = throw.
   std::vector<std::string> failing;
   std::vector<std::string> throwing;
-  bool loginArg = false, mmArg = false, pluginsArg = false;
+  bool loginArg = false, mmArg = false, pluginsArg = false, combatArg = false;
+  // The combat area (#2171): whether combat::Active() answers true, whether asking throws, what the finish was told.
+  bool combatActive = false;
+  bool combatActiveThrows = false;
+  int combatAsked = 0;
+  int combatFinishCalls = 0;
+  std::string combatFinishReason;
+  bool combatFinishThrows = false;
   PluginCounts plugins;  // what the plan answers (#438)
   int planCalls = 0;
   int finishCalls = 0;
@@ -102,6 +114,18 @@ struct FakeSteps final : Steps {
     return plugins;
   }
   bool RunEarlyPlugins() override { return Step("plugins_early"); }
+  bool CombatActive() override {
+    ++combatAsked;
+    if (combatActiveThrows) throw std::runtime_error("injected");
+    return combatActive;
+  }
+  bool InstallCombatEarly() override { return Step("combat_early"); }
+  void FinishCombat(const char* reason) override {
+    ++combatFinishCalls;
+    combatFinishReason = reason;
+    calls.emplace_back("combat_finish");
+    if (combatFinishThrows) throw std::runtime_error("injected");
+  }
   void FinishPlugins(const char* reason) override {
     ++finishCalls;
     finishReason = reason;
@@ -150,6 +174,7 @@ struct FakeSteps final : Steps {
   }
   bool InstallCreditsText() override { return Step("credits"); }
   bool InstallMenuCards() override { return Step("menu_cards"); }
+  bool InstallIrradianceDefault() override { return Step("irradiance"); }
   bool WizardMetricWanted() override {
     if (inviteWantedThrows) throw std::runtime_error("injected");
     return inviteWanted;
@@ -165,10 +190,11 @@ struct FakeSteps final : Steps {
   bool StartBridge() override { return Step("bridge"); }
   bool InstallRedirect() override { return Step("redirect"); }
   bool InstallSocial() override { return Step("social"); }
-  bool InstallDlopenHook(bool login, bool mm, bool plugins) override {
+  bool InstallDlopenHook(bool login, bool mm, bool plugins, bool combat) override {
     loginArg = login;
     mmArg = mm;
     pluginsArg = plugins;
+    combatArg = combat;
     dlopenArgsSeen = true;
     return Step("dlopen");
   }
@@ -203,7 +229,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -223,15 +249,16 @@ void TestFullStackOrder() {
   s.devBuild = true;
   s.config.effective.clockLevels = true;
   s.plugins = {1, 1};
+  s.combatActive = true;  // a combat run: its early step sits after the early plugin pass (#2171)
   s.inviteWanted = true;  // the observer's step runs in the full stack (and is the one step this test turns on)
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(s.clockLevelsArgSeen && s.clockLevelsOverrideArg);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach",
-                                         "plugins_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "token",      "prompt",       "bridge",
+                                         "plugins_early", "combat_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "irradiance", "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump",     "pns_provider"};
   QCHECK(s.calls == want);
-  QCHECK(s.loginArg && s.mmArg && s.pluginsArg);
+  QCHECK(s.loginArg && s.mmArg && s.pluginsArg && s.combatArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
 }
 
@@ -290,7 +317,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -300,6 +327,7 @@ void TestHwDumpIsIndependentAndContained() {
     // The resource request hook (#871) runs in every build; devBuild decides only its log lines.
     s.devBuild = true;
     s.plugins = {1, 0};  // and no early plugin means a skipped early pass (#438)
+    s.combatActive = true;  // the combat area's early step is ok here too (#2171)
     s.inviteWanted = true;  // the observer's step (#966) is ok here: the loop below asks every step before hwdump to be kOk
     if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
     const ConstructorReport r = RunConstructorSequence(s);
@@ -593,6 +621,37 @@ void TestMenuCardsAreUnconditionalOrderedAndContained() {
   }
 }
 
+// The grey default irradiance texture (#2091) installs on every launch, whatever else is on, after the menu cards and the clock-level
+// arming and before token auth; the step has its own stable name; a failing or throwing step is contained and every other step
+// still runs, and it still runs when any single other early step fails or throws.
+void TestIrradianceDefaultIsUnconditionalOrderedAndContained() {
+  QCHECK(std::strcmp(StepName(StepId::kInstallIrradianceDefault), "install_irradiance_default") == 0);
+  for (const bool everything : {false, true}) {
+    FakeSteps s = FakeSteps::With(everything, everything, everything, everything);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallIrradianceDefault).state == StepState::kOk);
+    QCHECK(s.Index("irradiance") == s.Index("clock_levels") + 1);
+    QCHECK(s.Index("irradiance") > s.Index("menu_cards"));
+    QCHECK(s.Index("irradiance") < s.Index("token") || !s.Ran("token"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"irradiance"}; else s.throwing = {"irradiance"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallIrradianceDefault).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "texture", "credits", "menu_cards", "clock_levels"}) {
+    for (const char* mode : {"fail", "throw"}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
+      const ConstructorReport r = RunConstructorSequence(s);
+      QCHECK(r.at(StepId::kInstallIrradianceDefault).state == StepState::kOk);
+      QCHECK(s.Ran("irradiance"));
+    }
+  }
+}
+
 // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2): its step names itself and runs right after the menu cards when
 // the invite switch is wanted. When it is not wanted, or asking about it throws, the step is skipped and nothing is called. A
 // failing or throwing step is contained: every other step still runs.
@@ -640,7 +699,7 @@ void TestResourceRequestHookRunsInEveryBuildOrderedAndContained() {
   {  // release: the counters and the hook run, its log lines are off, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
@@ -653,7 +712,7 @@ void TestResourceRequestHookRunsInEveryBuildOrderedAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
@@ -795,7 +854,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -807,7 +866,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     // The unresolved configuration is a mistake, so the level is `stock`: its counters are registered and the step runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -997,7 +1056,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
@@ -1112,6 +1171,43 @@ void TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions() {
   SetModuleLoadedObserver(nullptr);
   AfterDlopen("libpnsrad.so", &dummy);
   QCHECK(g_observed.size() == 1);
+}
+
+// The observer table (#2187): the first slot is SetModuleLoadedObserver's, AddModuleLoadedObserver fills the others; every observer sees every
+// non-null handle, in slot order, the first slot's first; adding one twice keeps one entry; a full table refuses; null is refused.
+std::vector<std::string> g_tableSeen;
+void TableObserverA(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("A:") + name); }
+void TableObserverB(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("B:") + name); }
+void TableObserverC(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("C:") + name); }
+void TableObserverD(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("D:") + name); }
+void TableObserverE(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("E:") + name); }
+
+void TestTheModuleLoadedObserverTableCallsEveryObserverInSlotOrder() {
+  int dummy = 0;
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  ClearModuleLoadedObserversForTest();
+  g_tableSeen.clear();
+  QCHECK(!AddModuleLoadedObserver(nullptr));
+  QCHECK(AddModuleLoadedObserver(&TableObserverB));
+  QCHECK(AddModuleLoadedObserver(&TableObserverB));  // already there: one entry
+  SetModuleLoadedObserver(&TableObserverA);          // the first slot, set after an add: still called first
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_tableSeen.size() == 2 && g_tableSeen[0] == "A:libpnsovr.so" && g_tableSeen[1] == "B:libpnsovr.so");
+  QCHECK(AddModuleLoadedObserver(&TableObserverC) && AddModuleLoadedObserver(&TableObserverD));
+  QCHECK(!AddModuleLoadedObserver(&TableObserverE));  // slots 1..3 are taken
+  g_tableSeen.clear();
+  AfterDlopen("libpnsrad.so", nullptr);  // a failed dlopen reaches none
+  AfterDlopen("libpnsrad.so", &dummy);
+  QCHECK(g_tableSeen.size() == 4 && g_tableSeen[0] == "A:libpnsrad.so" && g_tableSeen[1] == "B:libpnsrad.so" &&
+         g_tableSeen[2] == "C:libpnsrad.so" && g_tableSeen[3] == "D:libpnsrad.so");
+  SetModuleLoadedObserver(nullptr);  // clearing the first slot leaves the added ones
+  g_tableSeen.clear();
+  AfterDlopen("libx.so", &dummy);
+  QCHECK(g_tableSeen.size() == 3 && g_tableSeen[0] == "B:libx.so");
+  ClearModuleLoadedObserversForTest();
+  g_tableSeen.clear();
+  AfterDlopen("libx.so", &dummy);
+  QCHECK(g_tableSeen.empty());
 }
 
 // The login-failed page's title hook (#1137) waits for the script library like the matchmaking redirect waits for its own:
@@ -1368,6 +1464,166 @@ void TestThePluginPassRunsOutsideThePolicyLockAndNeverReentersItself() {
   QCHECK(g_pluginRuns == 1);
   QCHECK(g_pluginReentries == 1);
   QCHECK(g_statsSeenInside == 1);  // the outer call was counted before the plugins ran
+}
+
+// ---- the combat slot of the post-load policy (#2171) -----------------------------------------------------------------------
+
+int g_combatRuns = 0;
+std::thread::id g_combatThread;
+std::uint64_t g_pluginsSettledSeenByCombat = 99;
+std::uint64_t g_combatSettledSeenByCombat = 99;
+int g_combatReentries = 0;
+bool g_combatReenters = false;
+
+ActionResult FakeCombat() noexcept {
+  ++g_combatRuns;
+  g_order.emplace_back("combat");
+  g_combatThread = std::this_thread::get_id();
+  const PostLoadStats stats = PostLoadStatsView();  // takes the policy's lock: combat runs outside it
+  g_pluginsSettledSeenByCombat = stats.pluginsSettled;
+  g_combatSettledSeenByCombat = stats.combatSettled;
+  if (g_combatReenters) {
+    int inner = 0;
+    AfterDlopen("libfromcombat.so", &inner);
+    ++g_combatReentries;
+  }
+  return {Settle::kDone, "fake_combat"};
+}
+
+void ResetCombat(ActionFn login, ActionFn mm, ActionFn plugins, ActionFn combat) {
+  ResetPlugins(login, mm, plugins);
+  g_combatRuns = 0;
+  g_combatThread = std::thread::id();
+  g_pluginsSettledSeenByCombat = g_combatSettledSeenByCombat = 99;
+  g_combatReentries = 0;
+  g_combatReenters = false;
+  PostLoadActions a;
+  a.login = login;
+  a.matchmaking = mm;
+  a.plugins = plugins;
+  a.combat = combat;
+  SetPostLoadActions(a);
+}
+
+// The combat action runs after the plugin action has returned and its settled flag is set, on the thread that ran the plugins, once; the
+// login and matchmaking installs came first.
+void TestTheCombatActionRunsAfterThePluginActionHasReturned() {
+  int dummy = 0;
+  ResetCombat(&OrderedLogin, &OrderedMatchmaking, &FakePlugins, &FakeCombat);
+  QCHECK(PostLoadPending());
+  AfterDlopen("libc++_shared.so", &dummy);
+  QCHECK((g_order == std::vector<std::string>{"login", "matchmaking", "plugins", "combat"}));
+  QCHECK(g_pluginRuns == 1 && g_combatRuns == 1);
+  QCHECK(g_pluginsSettledSeenByCombat == 1);  // the plugin pass was settled before combat started
+  QCHECK(g_combatSettledSeenByCombat == 0);
+  QCHECK(g_combatThread == std::this_thread::get_id());
+  QCHECK(PostLoadStatsView().combatSettled == 1 && PostLoadStatsView().pluginsSettled == 1);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_pluginRuns == 1 && g_combatRuns == 1);  // once each
+}
+
+// With no plugin action the combat action has the moment to itself: the first non-null dlopen, once, and a failed dlopen is no moment.
+void TestTheCombatActionRunsAloneWhenNoPluginIsPlanned() {
+  int dummy = 0;
+  ResetCombat(nullptr, nullptr, nullptr, &FakeCombat);
+  QCHECK(PostLoadPending());
+  AfterDlopen("libfoo.so", nullptr);
+  QCHECK(g_combatRuns == 0 && PostLoadStatsView().combatSettled == 0);
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 1 && PostLoadStatsView().combatSettled == 1);
+  QCHECK(g_pluginsSettledSeenByCombat == 0);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 1);
+  // Not requested: nothing runs and nothing is pending.
+  ResetCombat(nullptr, nullptr, nullptr, nullptr);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 0 && PostLoadStatsView().combatSettled == 0);
+}
+
+// A dlopen the plugin pass makes comes back through the hook on its thread: it neither starts combat inside the plugin pass nor runs
+// it twice. A dlopen the combat action makes does not start it again.
+void TestACombatActionNeverRunsInsideThePluginPassOrTwice() {
+  int dummy = 0;
+  ResetCombat(nullptr, nullptr, &FakePlugins, &FakeCombat);
+  g_pluginReenters = true;
+  g_combatReenters = true;
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_pluginRuns == 1 && g_pluginReentries == 1);
+  QCHECK(g_combatRuns == 1 && g_combatReentries == 1);
+  QCHECK((g_order == std::vector<std::string>{"plugins", "combat"}));  // the plugin's inner dlopen did not run combat early
+}
+
+// Two threads: A is held inside the plugin action; B's dlopen returns without running the combat action (and without running the plugins
+// again); when A's action returns, A runs the combat action, once, on its own thread.
+std::mutex g_gateMutex;
+std::condition_variable g_gateCv;
+bool g_pluginInside = false;
+bool g_pluginMayReturn = false;
+bool g_gateTimedOut = false;
+
+ActionResult HeldPlugins() noexcept {
+  ++g_pluginRuns;
+  g_order.emplace_back("plugins");
+  std::unique_lock<std::mutex> lock(g_gateMutex);
+  g_pluginInside = true;
+  g_gateCv.notify_all();
+  // A deadline, not a sleep: a pass that is never released is a failure of the test, not a hang.
+  if (!g_gateCv.wait_for(lock, std::chrono::seconds(30), [] { return g_pluginMayReturn; })) g_gateTimedOut = true;
+  return {Settle::kDone, "held_plugins"};
+}
+
+void TestASecondThreadNeverRunsCombatWhileThePluginActionIsHeld() {
+  ResetCombat(nullptr, nullptr, &HeldPlugins, &FakeCombat);
+  g_pluginInside = g_pluginMayReturn = g_gateTimedOut = false;
+  std::thread::id threadA;
+  std::thread a([&] {
+    int dummy = 0;
+    threadA = std::this_thread::get_id();
+    AfterDlopen("libA.so", &dummy);
+  });
+  {
+    std::unique_lock<std::mutex> lock(g_gateMutex);
+    QCHECK(g_gateCv.wait_for(lock, std::chrono::seconds(30), [] { return g_pluginInside; }));
+  }
+  {
+    int dummy = 0;
+    AfterDlopen("libB.so", &dummy);  // thread B: returns at once
+    AfterDlopen("libB2.so", &dummy);
+  }
+  QCHECK(g_combatRuns == 0);   // B did not run combat
+  QCHECK(g_pluginRuns == 1);   // nor the plugin pass again
+  QCHECK(PostLoadStatsView().combatSettled == 0 && PostLoadPending());
+  {
+    const std::lock_guard<std::mutex> lock(g_gateMutex);
+    g_pluginMayReturn = true;
+  }
+  g_gateCv.notify_all();
+  a.join();
+  QCHECK(!g_gateTimedOut);
+  QCHECK(g_combatRuns == 1);                 // A ran it, once
+  QCHECK(g_combatThread == threadA);         // on the thread that ran the plugins
+  QCHECK(g_pluginsSettledSeenByCombat == 1);
+  QCHECK((g_order == std::vector<std::string>{"plugins", "combat"}));
+  int dummy = 0;
+  AfterDlopen("libC.so", &dummy);
+  QCHECK(g_combatRuns == 1 && g_pluginRuns == 1);
+  QCHECK(!PostLoadPending());
+}
+
+// The combat slot does not disturb the other actions: a login that retries is still retried, and the combat action waits for no module.
+void TestTheCombatActionDoesNotWaitForTheOtherActionsToSettle() {
+  int dummy = 0;
+  ResetCombat(&FakeLogin, nullptr, nullptr, &FakeCombat);
+  g_loginRuns = 0;
+  g_loginSettle = Settle::kRetryLater;
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_loginRuns == 1 && g_combatRuns == 1);
+  QCHECK(PostLoadPending());  // the login still wants a retry
+  AfterDlopen("libfoo2.so", &dummy);
+  QCHECK(g_loginRuns == 2 && g_combatRuns == 1);
 }
 
 void TestPostLoadGiveUpEndsOnlyThatAction() {
@@ -1976,6 +2232,139 @@ void TestNormalEntriesEndWhenTheDlopenHookCannotBeLive() {
   }
 }
 
+// ---- the combat area's two install steps (#2171, docs/adr/0046 rule 6) ----------------------------------------------------
+
+// A plain release (combat::Active() false) sets nothing: no early step, no dlopen hook of its own, no counters for it, nothing to end
+// when the hook is not live. The early step is skipped with a reason that says why, at Info (it is the state of the build, not a fault).
+void TestCombatInactiveInstallsNothingAndSkipsWithAReason() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(s.combatAsked >= 1);  // the sequence asks the gate, it does not assume
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallCombatEarly).reason, "combat_inactive") == 0);
+  QCHECK(std::strcmp(StepName(StepId::kInstallCombatEarly), "install_combat_early") == 0);
+  QCHECK(StepLogLevel("skipped", "combat_inactive") == StepLevel::kInfo);
+  QCHECK(!s.Ran("combat_early") && !s.Ran("reg_dlopen") && !s.Ran("dlopen"));
+  QCHECK(!s.combatArg && s.combatFinishCalls == 0);
+  // The login and redirect installs ride the hook as before, and the hook is not asked for combat.
+  FakeSteps on = FakeSteps::With(true, true, true, true);
+  RunConstructorSequence(on);
+  QCHECK(on.loginArg && on.mmArg && !on.combatArg);
+  QCHECK(on.combatFinishCalls == 0);
+}
+
+// A question that cannot be answered is combat off: the folded modules install only on a yes.
+void TestACombatQuestionThatThrowsIsCombatOff() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  s.combatActiveThrows = true;
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kSkipped);
+  QCHECK(!s.Ran("combat_early") && !s.Ran("dlopen") && !s.combatArg);
+}
+
+// A combat run with login off and no plugin planned still gets the dlopen hook: its counters register before the one reporter start, the
+// hook installs, and it is asked for the combat action alone.
+void TestCombatActiveWantsTheDlopenHookOnItsOwn() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(s.Ran("reg_dlopen") && s.Ran("dlopen"));
+  QCHECK(r.at(StepId::kInstallDlopenHook).state == StepState::kOk);
+  QCHECK(s.combatArg && !s.loginArg && !s.mmArg && !s.pluginsArg);
+  QCHECK(s.Index("reg_dlopen") < s.Index("reporter"));
+  QCHECK(s.combatFinishCalls == 0);
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kOk);
+}
+
+// The early step runs once, after Attach and after the early plugin pass (the plugin installs first on a slot both touch, ADR 0046 rule
+// 7), and before the clock hook.
+void TestTheEarlyCombatStepRunsAfterAttachAndBeforeTheClockHook() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  RunConstructorSequence(s);
+  QCHECK(s.Index("identify_headset") == s.Index("reporter") + 1);  // the headset identity (ADR 0031) sits between them
+  QCHECK(s.Index("attach") == s.Index("identify_headset") + 1);
+  QCHECK(s.Index("combat_early") == s.Index("attach") + 1);
+  QCHECK(s.Index("clock") == s.Index("combat_early") + 1);
+  QCHECK(std::count(s.calls.begin(), s.calls.end(), "combat_early") == 1);
+  FakeSteps p = FakeSteps::With(false, false, false, false);
+  p.combatActive = true;
+  p.plugins = {1, 0};
+  RunConstructorSequence(p);
+  QCHECK(p.Index("attach") < p.Index("plugins_early"));
+  QCHECK(p.Index("plugins_early") < p.Index("combat_early"));
+  QCHECK(p.Index("combat_early") < p.Index("clock"));
+}
+
+// The login and matchmaking installs, the plugin pass and the combat step all ride the one hook, each told apart.
+void TestCombatRidesTheSameDlopenHookAsTheOtherInstalls() {
+  FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.combatActive = true;
+  s.plugins = {0, 2};
+  RunConstructorSequence(s);
+  QCHECK(s.loginArg && s.mmArg && s.pluginsArg && s.combatArg);
+  FakeSteps plain = FakeSteps::With(false, false, false, false);
+  plain.combatActive = true;
+  plain.plugins = {0, 1};
+  RunConstructorSequence(plain);
+  QCHECK(plain.pluginsArg && plain.combatArg && !plain.loginArg && !plain.mmArg);
+}
+
+// When the hook cannot be live (counters refused, the step fails, the step throws) the combat step has no moment to run in: one record
+// says `not_started` with the reason, as the plugin entries do; the plugin entries get their own. A finish that throws is contained.
+void TestTheCombatStepEndsWhenTheDlopenHookCannotBeLive() {
+  for (const char* which : {"reg_dlopen", "dlopen"}) {
+    for (const bool throws : {false, true}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      s.combatActive = true;
+      s.plugins = {0, 1};
+      (throws ? s.throwing : s.failing) = {which};
+      RunConstructorSequence(s);
+      QCHECK(s.combatFinishCalls == 1);
+      QCHECK(s.combatFinishReason == "post_load_hook_unavailable");
+      QCHECK(s.finishCalls == 1 && s.finishReason == "post_load_hook_unavailable");
+    }
+  }
+  {  // no plugin planned: the combat record is the only one
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.combatActive = true;
+    s.failing = {"dlopen"};
+    RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 1 && s.finishCalls == 0);
+  }
+  {  // combat off and a hook that is not live: nothing is owed to combat
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.plugins = {0, 1};
+    s.failing = {"dlopen"};
+    RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 0 && s.finishCalls == 1);
+  }
+  {  // a finish that throws is contained: the later steps run
+    FakeSteps s = FakeSteps::With(false, false, false, true);
+    s.config.effective.hwdump = true;
+    s.combatActive = true;
+    s.failing = {"reg_dlopen"};
+    s.combatFinishThrows = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 1);
+    QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
+  }
+}
+
+// A failing or throwing early step leaves every other step as it was, and the post-load moment is still asked for.
+void TestAFailingCombatEarlyStepNeverMovesAnotherStep() {
+  for (const bool throws : {false, true}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.combatActive = true;
+    (throws ? s.throwing : s.failing) = {"combat_early"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallCombatEarly).state == (throws ? StepState::kThrew : StepState::kFailed));
+    QCHECK(s.Ran("clock") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen") && s.Ran("credits"));
+    QCHECK(s.combatArg);
+  }
+}
+
 void TestStepLogLevels() {
   QCHECK(StepLogLevel("ok", "ok") == StepLevel::kInfo);
   QCHECK(StepLogLevel("skipped", "social_off") == StepLevel::kInfo);
@@ -2018,9 +2407,14 @@ void TestRouterLinesClassify() {
   QCHECK(!c("[router] game=1 conn=0 (config)"));
 }
 
-// The constructor's begin record names the build (#1391): the version and the commit, as fields of one sentinel_ctor line.
+// The constructor's begin record names the build (#1391, #2170): the version, the commit, the build kind and the variant, as fields of
+// one sentinel_ctor line (ADR 0040 rule 2).
 std::vector<std::string> g_beginLines;
-void CaptureBeginLine(sentinel::LogLevel, const char* line) { g_beginLines.emplace_back(line); }
+std::vector<sentinel::LogLevel> g_beginLevels;
+void CaptureBeginLine(sentinel::LogLevel level, const char* line) {
+  g_beginLines.emplace_back(line);
+  g_beginLevels.push_back(level);
+}
 
 std::size_t CountEventKeys(const std::string& text) {
   const std::string needle = "\"event\":";
@@ -2031,21 +2425,35 @@ std::size_t CountEventKeys(const std::string& text) {
   return count;
 }
 
-void TestConstructorBeginNamesTheBuild() {
-  constexpr const char* kVersion = "6.0.1-dev.2+0123456789abcdef0123456789abcdef01234567";
-  constexpr const char* kCommit = "0123456789abcdef0123456789abcdef01234567";
+constexpr const char* kBeginVersion = "6.0.1-dev.2+0123456789abcdef0123456789abcdef01234567";
+constexpr const char* kBeginCommit = "0123456789abcdef0123456789abcdef01234567";
+
+void LogBegin(const char* kind, const nevr_quest::build_variant::Stamp& stamp) {
   g_beginLines.clear();
+  g_beginLevels.clear();
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureBeginLine);
-  nevr_quest::integration::LogConstructorBegin(kVersion, kCommit);
+  nevr_quest::integration::LogConstructorBegin(kBeginVersion, kBeginCommit, kind, stamp);
   sentinel::SetLogSink(previous);
+}
+
+void TestConstructorBeginNamesTheBuild() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  nevr_quest::build_variant::Stamp stamp;
+  stamp.variant = Variant::kNone;
+  stamp.source = StampSource::kStamp;
+  LogBegin("dev", stamp);
   QCHECK(g_beginLines.size() == 1U);
   if (g_beginLines.size() != 1U) return;
   const std::string& line = g_beginLines[0];
   const nlohmann::json j = nlohmann::json::parse(line);
   QCHECK(j.value("event", "") == "sentinel_ctor");
   QCHECK(j.value("action", "") == "begin");
-  QCHECK(j.value("version", "") == std::string(kVersion));
-  QCHECK(j.value("commit", "") == std::string(kCommit));
+  QCHECK(j.value("version", "") == std::string(kBeginVersion));
+  QCHECK(j.value("commit", "") == std::string(kBeginCommit));
+  QCHECK(j.value("kind", "") == "dev");  // ADR 0040 rule 2: the first record names the build kind
+  QCHECK(j.value("variant", "?") == "none");  // ... and the variant: a plain release stamp names none
+  QCHECK(j.value("variant_source", "") == "stamp");
   QCHECK(CountEventKeys(line) == 1U);
 }
 
@@ -2054,10 +2462,79 @@ void TestIdentifyHeadsetStepName() {
   QCHECK(std::strcmp(StepName(StepId::kIdentifyHeadset), "identify_headset") == 0);
 }
 
+// The begin record names the variant the stamp holds, each word as itself, in a release build and in a development build.
+void TestConstructorBeginNamesEachVariant() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  struct Case {
+    Variant variant;
+    const char* word;
+  };
+  for (const Case& c : {Case{Variant::kQ15t, "q15t"}, Case{Variant::kCombat, "combat"}, Case{Variant::kPerfProbe, "perf-probe"}}) {
+    for (const char* kind : {"dev", "release"}) {
+      nevr_quest::build_variant::Stamp stamp;
+      stamp.variant = c.variant;
+      stamp.source = StampSource::kStamp;
+      LogBegin(kind, stamp);
+      QCHECK(g_beginLines.size() == 1U);  // a good stamp adds no second line
+      if (g_beginLines.empty()) continue;
+      const nlohmann::json j = nlohmann::json::parse(g_beginLines[0]);
+      QCHECK(j.value("event", "") == "sentinel_ctor");
+      QCHECK(j.value("variant", "") == c.word);
+      QCHECK(j.value("variant_source", "") == "stamp");
+      QCHECK(j.value("kind", "") == kind);
+    }
+  }
+}
+
+// A stamp that is missing, unreadable or wrong is no variant, and one more line says so with the reason and what follows from it,
+// after the begin record (which stays the first line).
+void TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  struct Case {
+    StampSource source;
+    const char* sourceName;
+    const char* why;
+    sentinel::LogLevel level;
+  };
+  const Case cases[] = {
+      {StampSource::kAbsent, "absent", "no_file", sentinel::LogLevel::kWarn},
+      {StampSource::kUnreadable, "unreadable", "symlink", sentinel::LogLevel::kWarn},
+      {StampSource::kInvalid, "invalid", "unknown_word", sentinel::LogLevel::kWarn},
+  };
+  for (const Case& c : cases) {
+    nevr_quest::build_variant::Stamp stamp;
+    stamp.variant = Variant::kNone;
+    stamp.source = c.source;
+    stamp.why = c.why;
+    LogBegin("release", stamp);
+    QCHECK(g_beginLines.size() == 2U);
+    if (g_beginLines.size() != 2U) continue;
+    const nlohmann::json begin = nlohmann::json::parse(g_beginLines[0]);
+    QCHECK(begin.value("event", "") == "sentinel_ctor");  // still the first line
+    QCHECK(begin.value("variant", "") == "none");
+    QCHECK(begin.value("variant_source", "") == c.sourceName);
+    const nlohmann::json note = nlohmann::json::parse(g_beginLines[1]);
+    QCHECK(note.value("event", "") == "build_variant");
+    QCHECK(note.value("source", "") == c.sourceName);
+    QCHECK(note.value("reason", "?") == c.why);
+    QCHECK(note.value("msg", "").find("no variant") != std::string::npos);
+    QCHECK(note.value("msg", "").find("folded combat modules do not install") != std::string::npos);
+    QCHECK(!note.value("reason", "").empty());  // an empty field reads as a missing value (logging.md Category H)
+    // every APK this sentinel ships in is stamped by the repack, so a missing stamp is a packaging or install fault and says so
+    if (c.source == StampSource::kAbsent) QCHECK(note.value("msg", "").find("packaging or install fault") != std::string::npos);
+    QCHECK(g_beginLevels[0] == sentinel::LogLevel::kInfo);
+    QCHECK(g_beginLevels[1] == c.level);
+  }
+}
+
 }  // namespace
 
 int main() {
   TestConstructorBeginNamesTheBuild();
+  TestConstructorBeginNamesEachVariant();
+  TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord();
   TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
   TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step();
@@ -2071,6 +2548,13 @@ int main() {
   TestANormalPluginEntryWantsTheDlopenHookOnItsOwn();
   TestThePluginPassRidesTheSameDlopenHookAsTheOtherInstalls();
   TestNormalEntriesEndWhenTheDlopenHookCannotBeLive();
+  TestCombatInactiveInstallsNothingAndSkipsWithAReason();
+  TestACombatQuestionThatThrowsIsCombatOff();
+  TestCombatActiveWantsTheDlopenHookOnItsOwn();
+  TestTheEarlyCombatStepRunsAfterAttachAndBeforeTheClockHook();
+  TestCombatRidesTheSameDlopenHookAsTheOtherInstalls();
+  TestTheCombatStepEndsWhenTheDlopenHookCannotBeLive();
+  TestAFailingCombatEarlyStepNeverMovesAnotherStep();
   TestFullStackOrder();
   TestHwDumpIsIndependentAndContained();
   TestPnsProviderGates();
@@ -2084,6 +2568,7 @@ int main() {
   TestTextureQualityIsUnconditionalIndependentAndContained();
   TestRenderConfigIsUnconditionalOrderedAndContained();
   TestMenuCardsAreUnconditionalOrderedAndContained();
+  TestIrradianceDefaultIsUnconditionalOrderedAndContained();
   TestWizardMetricIsGatedOrderedAndContained();
   TestClockLevelsIsUnconditionalIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
@@ -2103,6 +2588,7 @@ int main() {
   TestPostLoadCountsEachDistinctMatchmakingImage();
   TestPostLoadRunsTheLoginTitleActionUntilItSettles();
   TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions();
+  TestTheModuleLoadedObserverTableCallsEveryObserverInSlotOrder();
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
@@ -2111,6 +2597,11 @@ int main() {
   TestThePluginPassRunsOnceOnTheFirstDlopenAfterTheOtherInstalls();
   TestThePluginPassWaitsForAHandleAndNeedsNoOtherAction();
   TestThePluginPassRunsOutsideThePolicyLockAndNeverReentersItself();
+  TestTheCombatActionRunsAfterThePluginActionHasReturned();
+  TestTheCombatActionRunsAloneWhenNoPluginIsPlanned();
+  TestACombatActionNeverRunsInsideThePluginPassOrTwice();
+  TestASecondThreadNeverRunsCombatWhileThePluginActionIsHeld();
+  TestTheCombatActionDoesNotWaitForTheOtherActionsToSettle();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();

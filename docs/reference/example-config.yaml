@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override and graphics.texture_quality. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -147,16 +147,277 @@ graphics:
   # Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2
   # samples. This build has not measured any headset's native size. A bigger size looks sharper and costs frame time.
   # `stock` answers the headset's own size; every other level answers the profile's table.
-  # The game's settings menu has the same setting: a GRAPHICS page with one control, "Texture Resolution", of the six
+  # The game's settings menu has the same setting: a NEVR page with one control, "Texture Resolution", of the six
   # levels (Very Low to Ultra). A change there applies at the next frame, with no restart, and the game saves it. This key
   # is the level the game starts at when the player has chosen nothing; what the player saved always wins over it. The
   # control shows `stock` as Low.
   # Read once at launch. Any mistake (a value that is not one of the seven words, a mapping or a list, a key with no value,
   # a `graphics` that is not a mapping, an unset ${VAR}, a file rejected as a whole) gives `stock`, with a warning in the
-  # sentinel log that names the key. Any other key under `graphics` (a misspelling such as `texture_qualty`, or
-  # `Texture_Quality`) is ignored with a warning that names it.
+  # sentinel log that names the key. Any other key under `graphics` than `texture_quality` and `hand_flip` (a misspelling such as
+  # `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
+
+  # Quest only. Controller Hand Flip: a boolean. true turns the controllers' orientation by 180 degrees about their local Z axis,
+  # for players on a Quest 2 whose Touch Pro or Touch Plus controllers show their hands rolled backwards; false (and absent) leaves
+  # every pose as the headset runtime reports it. The settings menu has the same setting, a "Controller Hand Flip" row under
+  # Texture Resolution on the NEVR page; a change there takes effect on the next frame, and the sentinel writes it here as `true` (On)
+  # or `false` (Off) within about a second, so the next launch starts with the player's last choice. It is the choice at launch
+  # only; the menu's choice wins while the game runs. Read once at launch. A value that is not a boolean (a word such as `maybe`, a
+  # number, a mapping or a list, a key with no value, an unset ${VAR}) is Off, with a warning in the sentinel log that names the
+  # key. The sentinel log line `hand_flip_start` names the value and its source (`config` when this file gave it, `default`
+  # when it did not), and `hand_flip_saved` names each write of this key.
+  # Default (absent): false.
+  # hand_flip: true
+
+# ---------------------------------------------------------------------------
+# combat — the combat modules built into the Quest runtime, and EchoCombat built into the PC runtime
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h; on PC, src/runtime/combat/combat.cpp
+# reads the EchoCombat keys below (drone ... clean_exit, settings) and nothing else of the section.
+# ---------------------------------------------------------------------------
+
+combat:
+  # Quest only. A boolean. The combat modules built into the runtime run in the q15t and combat APKs (the variant the APK's build
+  # names in the first line of the sentinel log, `variant`) and in no other. `true` asks for them to run whatever the APK's variant,
+  # which a development build honours and a release build does not: a release build logs one warning that says the key is ignored.
+  # A value that is not a boolean (a word such as `maybe`, a number, a mapping or a list, a key with no value, an unset ${VAR}) asks for
+  # nothing, with a warning in the sentinel log that names the key. Read once at launch. The sentinel log line `combat_active` names
+  # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
+  # Default (absent): false.
+  # force: true
+  #
+  # sendguard: Quest only. A boolean. A script send to a game space that is not loaded is dropped, not faulted (the game reads a null space
+  # and crashes without it; src/quest/combat/sendguard.h). Applies where the combat modules run, as `force` says. `false` leaves the game's own
+  # send alone. A value that is not a boolean asks for nothing, with a warning in the sentinel log that names the key. The q15t plugin's
+  # `sendguard.off` file is no longer read; one found in the files folder's q15t directory is a warning that names this key. Read once at
+  # launch; the sentinel log record `combat_config_switch` (module `sendguard`) shows the value and where it came from.
+  # Default (absent): true.
+  # sendguard: false
+
+  # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
+  # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
+  # boolean is ignored with a warning in the sentinel log that names the key. Read once at launch; the sentinel log line `combat_heaps_install` says
+  # what the game reads after the step. Default (absent): true.
+  # heaps: false
+
+  # Quest only. A boolean. The render-target layout pool is made with 1024 slots instead of 512 and a log line says whether android_main started after
+  # the sizes were set, in the q15t and combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
+  # has it, because the heap and the pool are one memory change. A value that is not a boolean is ignored with a warning that names the key. Read once at
+  # launch; the sentinel log lines `combat_memsys_install` and `combat_memsys_witness` report it. Default (absent): true.
+  # memsys: false
+
+  # The refresh-rate rule of the combat modules (src/quest/combat/refresh_rate.h): 90 Hz (72 Hz on a Quest 2) while a combat map is loaded
+  # (and, with refresh_rate_lobby, the combat lobby), the game's own rate (120 on a Quest) in an Echo Arena level, in every other lobby and
+  # everywhere else. Quest only; it runs where the combat modules run (see `force`). Booleans, read once at launch; a value that is not a
+  # boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_refresh_rate_install` and `combat_refresh_rate_switch` say what was read and what was sent.
+  # refresh_rate: false turns the rule off: the game's own rate always (every request is still logged). Default (absent): true.
+  # refresh_rate: false
+  # refresh_rate_lobby: true makes the combat lobby (`mpl_lobby_b_combat`) ask for the level rate too; the lobbies arena players use never
+  # change. Default (absent): false.
+  # refresh_rate_lobby: true
+  # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
+  # refresh_rate_quest2_72: false
+
+  # Quest only. A boolean. The game's global level, global_mp, loads at full size in the q15t and combat APKs instead of the cut
+  # `global_mp_lowspec` a Quest gets (src/quest/combat/levelname.h), together with the booster pool's companion (boosterpool.h): the combat bot body
+  # exists only in the full level. The global level loads once after login, before any lobby, so it cannot be limited to combat: an arena match on
+  # such an APK runs with the full global level too. `false` leaves the game's cut level, and the bot-body gate (`gate_bots`, below), which needs the full
+  # level, then leaves the game's own bot choice, because it asks the game's LoadLevelName slot. A value that is not a boolean is ignored with a warning in the sentinel log that
+  # names the key. Read once at launch; the sentinel log lines `combat_levelname_install` and `combat_boosterpool_install` report it, and one `combat_config_switch` record says what was read. Default
+  # (absent): true. The plugin's kill file `levelname.off` is not read; one found is a warning that names this key.
+  # levelname: false
+
+  # Quest only. A boolean. The wrist HUD's weapon-slot heat fill stops being 0 x 0 (src/quest/combat/hudmeter.h). It acts only while a combat
+  # map or the combat lobby is loaded; in an Echo Arena level, in the lobbies arena players use and everywhere else the game's own call
+  # goes through untouched. `false` leaves the game's fill. Read once at launch; the sentinel log lines `combat_hudmeter_install` and
+  # `combat_scope_change` say what was installed and when a combat level was entered. Default (absent): true.
+  # hudmeter: false
+
+  # Quest only. Booleans. The spawn-tube and barrier colours (src/quest/combat/shieldgamma.h). Both act only while a combat map or the combat
+  # lobby is loaded; in an Echo Arena level the game's own write goes through untouched. A value that is not a boolean keeps the default,
+  # with a warning that names the key. Read once at launch; the sentinel log line `combat_shieldgamma_install` says what was installed.
+  # shieldgamma_tube_mirror: false stops the launch-tube windows from showing the team colour. Default (absent): true.
+  # shieldgamma_tube_mirror: false
+  # shieldgamma_gamma: true decodes the shield and barrier colour as the PC's pixel shader does (red-orange instead of yellow-orange). It was
+  # a test switch in the reference build. Default (absent): false.
+  # shieldgamma_gamma: true
+  # Quest only. Booleans. The resource table-step modules (src/quest/combat/meshstep.h, instmodel.h, shaderstep.h, tablestep.h): the tables of the
+  # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the q15t and combat APKs;
+  # in an Echo Arena level, in the lobbies arena players use and before the game is known the resources are the game's own. `false` leaves the game's
+  # step of 32 for that resource class even in a combat match. A value that is not a boolean is ignored with a warning in the sentinel log that names
+  # the key. Read once at launch; the sentinel log records `combat_config_switch`, `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install`
+  # and `combat_tablestep_install` report each. Default (absent): true.
+  # meshstep: false
+  # instmodel: false
+  # shaderstep: false
+  # tablestep: false
+
+  # The three headset gates of the combat modules (src/quest/combat/headset_gates.h): the game branches on "this is a Quest headset" in three places that
+  # a Quest running combat has to skip. Quest only; they run where the combat modules run (see `force`). Booleans, read once at launch; a value that
+  # is not a boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_gates_install`, `combat_gates_answered`, `combat_gates_scoped_out` and `combat_gates_headset_bind` say what was read and what each gate did.
+  # gate_perm: false leaves the game's rule that a party member on a Quest may not use combat. Default (absent): true.
+  # gate_perm: false
+  # gate_bots: false leaves the game's rule that a Quest gets the arena bot. The gate acts only while a combat map or the combat lobby is loaded, and only
+  # where the full-size global_mp is in use (the combat bot exists only there; the gate checks the game's LoadLevelName slot). Default (absent): true.
+  # gate_bots: false
+  # gate_link: false leaves the combat menus telling the player this is a Quest (which locks the combat cards). Default (absent): true.
+  # gate_link: false
+  # gate_link_libs: which script libraries the menu gate answers: `all`, `none`, or file names (or fragments of them) separated by commas or spaces,
+  # at most 639 characters. A library that is not named gets the game's own answer. Default (absent): the 21 libraries of the combat entries.
+  # gate_link_libs: "none"
+
+  # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
+  # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
+  # game today; the sentinel log line `combat_pfx_install` says what was read. `false` keeps the gate shut. A value that is not a boolean keeps the
+  # default, with a warning in the sentinel log that names the key. Read once at launch. Default (absent): true.
+  # pfx: false
+
+  # Quest only. A boolean. The event-effect decision of the particle renderer (src/quest/combat/pfxtev.h): its six event effects may be created in
+  # combat maps only. Nothing asks until the renderer is in the runtime, so `true` changes nothing in the game today; the sentinel log line
+  # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
+  # key. Read once at launch. Default (absent): true.
+  # pfxtev: false
+
+  # Quest only. Booleans. Three small combat modules that act on the game, each on unless the file says `false` (the q15t build of the combat mod has all three on).
+  # They run where the combat modules run (see `force`), read once at launch; a value that is not a boolean keeps the default, with a warning in the sentinel
+  # log that names the key. The sentinel log lines `combat_gunconnect_install`, `combat_aibots_install` and `combat_weapon_arm_install` say what was read, and
+  # each module's acting lines (`combat_gunconnect_connect`, `combat_aibots_enable`, `combat_weapon_arm_set`) say what it did. None of them acts in an Echo
+  # Arena level.
+  # gunconnect: false leaves the local player's guns as the game has them. Otherwise the game's gun connect is called for them in a combat level when the game
+  # left them unconnected (offline practice), so they fire. Default (absent): true.
+  # gunconnect: false
+  # aibots: false leaves the practice bots standing still, as the game has them. Otherwise the game's AI scenario is started for the bots of a practice match
+  # in a combat level. Default (absent): true.
+  # aibots: false
+  # aibots_scenario: which scenario `aibots` starts: a number 0-6 or one of patrol, randomattack, weaponattack, spike, aithrowtest, aionevone, aibdebugarena;
+  # `off` turns the bots off. A word that is none of these keeps RandomAttack, with a warning that does not name it. Default (absent): randomattack.
+  # aibots_scenario: randomattack
+  # weapon_arm: false leaves the gun hand as the game has it. Otherwise a profile whose `weaponarm` is not 1 (0 or absent) gets the gun in the
+  # right hand, the first time it is in a combat map, once per missing marker; a left-handed player's gun moves to the right again after a reinstall, cleared app data
+  # or a switch between the store and the combat build. The game saves the hand into the profile, so this changes the saved profile. The profile's marker file stays under `files/q15t` of the app's external files directory. Default
+  # (absent): true.
+  # weapon_arm: false
+
+  # Quest only. A boolean. The bullet impact sounds (src/quest/combat/impactsnd.h): the game builds its impact table with 5 of 15 rows and a stock id in
+  # every row, so a bullet hit plays no impact sound; with this on, a combat level's table gets every row and its Wwise ids. It acts only while a combat
+  # level is loaded (an Echo Arena match keeps the game's own table). The sentinel log lines `combat_impactsnd_install` and `combat_impactsnd_scope` say what
+  # was read and which loads it acted on. A value that is not a boolean keeps the default, with a warning that names the key. Read once at launch. Default
+  # (absent): true.
+  # impactsnd: false
+  # impactsnd_write: false makes the module read and log the table and write nothing to it (and keeps the game's own loader). Default (absent): true.
+  # impactsnd_write: false
+
+  # Quest only. A boolean. The level decals (src/quest/combat/decals.h): the combat levels' static decals, which the Quest renderer cannot draw, as quads in
+  # dynamic-mesh nodes from the content pack's `decals.bin`. It draws nothing without that file, and only in a combat level (a combat map or the war room).
+  # Without that file it installs nothing and an arena match pays nothing; the sentinel log line `combat_decals_install` says what was read. Default
+  # (absent): true.
+  # decals: false
+  # decals_flip_u and decals_flip_v mirror the decals' uv inside each quad (the uv orientation of the bake is inferred, not read). Default (absent): false.
+  # decals_flip_u: true
+  # decals_flip_v: true
+
+  # Quest only. Booleans. The static BVH (src/quest/combat/bvh.h): the Quest's level collision tree is a stub, so no cast against the level's walls
+  # ever hits. `bvh` answers casts from the game's own static BVH on a combat map or in the combat lobby (walls block the AI's sight and bullets);
+  # every other level, an Echo Arena level included, keeps the game's own answers. Default (absent): true.
+  # bvh: false leaves the game's stubbed static BVH.
+  # bvh_gate: false lets every cast use the tree instead of only the three callers the PC answers from the level. Default (absent): true.
+  # bvh_touch: false leaves the touch-interaction ray with the game's own answer instead of a miss. Default (absent): true.
+  # wallfire refuses a gun's shot when the segment from the player to the muzzle crosses static geometry on a combat map or in the combat lobby. It needs
+  # `bvh: true` and installs nothing without it. Default (absent): true. The sentinel log lines `combat_config_switch`, `combat_bvh_install`,
+  # `combat_bvh_summary` and `combat_wallfire_install` say what was read and what was done. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch.
+  # bvh: false
+  # bvh_gate: false
+  # bvh_touch: false
+  # wallfire: false
+  # Quest only. Booleans. Combat music (src/quest/combat/music.h): one combat music instance at a time. A music Play posted while a combat map is loaded
+  # first posts both music Stops, and the Stops are posted again when the combat map unloads; every other sound, and every Echo Arena level, is the game's own.
+  # `false` leaves the game's music alone. Read once at launch; the sentinel log lines `combat_config_switch` and `combat_music_install` say what was read.
+  # A value that is not a boolean keeps the default, with a warning that names the key. Default (absent): true.
+  # music: false
+  # The scanner-sphere watchdog (src/quest/combat/sensorwd.h): in a combat map, a threat-scanner sphere still enabled 6 seconds after its enable is turned off
+  # on the game thread, and turned on again at its actor's next ping. An Echo Arena level, every lobby and every other state pass through untouched. `false`
+  # leaves the sphere to the game. Read once at launch; the sentinel log lines `combat_config_switch` and `combat_sensorwd_install` say what was read.
+  # Default (absent): true.
+  # sensorwd: false
+  # Quest only. A boolean. The EC network client (src/quest/combat/ec.h): on a combat map or the combat lobby it exchanges the EC network's
+  # 16-byte datagrams with the game server (the server needs EC), writes re33_ec_page for the EC script libraries, stores the selected tac mod
+  # and, with the `hide` word, hides EC's three tac mods on a server without EC. In every other level, arena included, it passes the game's
+  # traffic through and sends nothing. The sentinel log line `combat_ec_install` says what was installed. `false` installs nothing (the page
+  # stays zeroed: EC scripts decide as on a PC without the EC network client). A value that is not a boolean keeps the default, with a warning
+  # that names the key. Read once at launch. Default (absent): true.
+  # ec: false
+
+  # Quest only. A string: the EC client's words, space separated. `types=<letters of VPTO>` names the packet types it carries (veil, point,
+  # translocator, overcharge; no word, an empty list or another letter: translocator only); `equip` stores the selected tac mod, `noequip` only
+  # logs it; `hide` hides smoke, buff and point on a server without EC; `loctoken=<seconds>` (1 to 600) is a test word that adds a LOC token at
+  # that period. The sentinel log line `combat_ec_words` says what was read. Default (absent): "types=VPTO equip hide".
+  # ec_words: "types=VPTO equip hide"
+
+  # Quest only. A boolean. NEUTRON effects (src/quest/combat/ecfx.h): the EC wall library queues its NEUTRON effects and the EC client's net
+  # tick runs them, on a combat map or the combat lobby only. Needs `ec`. The sentinel log line `combat_ecfx_install` says what was read.
+  # `false` leaves the wall library running its effects in its own node. A value that is not a boolean keeps the default, with a warning that
+  # names the key. Read once at launch. Default (absent): true.
+  # ecfx: false
+
+  # Quest only. An integer 0..3. POWER BOOST, the client half of an EchoCombat server's POWER BOOST (src/quest/combat/powerboost.h): 0 installs
+  # nothing; 1 only records the markers the server puts in the heal channel; 2 also keeps them from reaching the game as heals and tells the server
+  # a use; 3 also unlinks a target outside the booster's cone. It acts only while a combat map or the combat lobby is loaded. A value that is not
+  # an integer in 0..3 keeps the default, with a warning that names the key. The sentinel log line `combat_powerboost_install` says which stage is on.
+  # Read once at launch. Default (absent): 3.
+  # powerboost_stage: 0
+
+  # Quest only. A boolean. A combat drone's rules (src/quest/combat/dronekill.h): a drone the server says died goes off, a drone that has
+  # locked on stays grabbable until it fires, its gun, satellite and port show as one, it chases its target, and its shot's velocity is handed
+  # to dronemuzzle. They act only while a combat map is loaded; in every other level the hooks only call the game's function. The sentinel log
+  # line `combat_dronekill_install` says what was read. `false` installs nothing. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch. Default (absent): true.
+  # dronekill: false
+
+  # Quest only. A boolean. A combat drone's bullets leave its gun, not its root (src/quest/combat/dronemuzzle.h). It needs dronekill (above):
+  # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
+  # the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # dronemuzzle: false
+
+  # The crash and timing guards of the combat modules (src/quest/combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h). Quest only;
+  # each runs where the combat modules run (see `force`), and each is on unless it says `false`. Booleans, read once at launch; a value that is not a
+  # boolean keeps the default, with a warning in the sentinel log that names the key. The plugin's `fxtrail.off`, `voipdrop.off` and `custctx.off`
+  # files are no longer read; one found in the files folder's q15t directory is a warning that names the key. The sentinel log lines
+  # `combat_<module>_install` and `combat_<module>_stats` say what was installed and what each guard caught.
+  # fxtrail: a bullet whose trail effect has no instance ends its trail, so the bullet can be freed. Acts only while a combat map is loaded.
+  # fxtrail: false
+  # voipdrop: a voice packet whose receiver table needs a page that cannot be allocated is dropped instead of crashing the game. Acts in every level.
+  # voipdrop: false
+  # custctx: three guards on the lobby cosmetics renderer (a destroy of a context that is being loaded, a draw table that cannot grow, a load on
+  # a nearly full render-target layout pool). The destroy and draw-table guards act in every level; the pool refusal acts only while a combat map or
+  # the combat lobby is loaded.
+  # custctx: false
+  # droneguard: the drone's follow update is skipped while its target is null instead of crashing the game. Acts in every level.
+  # droneguard: false
+  # droneguard_stage1: also skips the update when the drone's cached player no longer resolves. Needs droneguard. Default (absent): false.
+  # droneguard_stage1: true
+  # peerclamp: a peer's last-received stamp above the broadcaster's "now" is pulled down to "now" before the game's timeout loop, so a new game
+  # server peer is not dropped as timed out. Acts only while a combat map or the combat lobby is loaded.
+  # peerclamp: false
+
+  # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
+  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
+  # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
+  # drone: false            # DRONE. Default: true.
+  # overcharge: false       # OVERCHARGE. Default: true.
+  # medigun: true           # MEDIGUN (needs overcharge and veil; a client shows it only on a server that states it, #2333). Default: false.
+  # veil: false             # UMBRAL VEIL and the combat net. Default: true.
+  # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
+  # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
+  # clean_exit: false       # Ends the process at the engine teardown instead of running it (his quit-crash fix). Default: true.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>; a key left out takes the value his release ships
+  #   buff:
+  #     self_damage: 5
+  #   cone:
+  #     link_window_ms: 500
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -236,13 +497,12 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it a server with auth.password registers through socket_uri with
-  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
-  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
-  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # as query parameters. Without it a server (signed in by device code) registers on the token route at
+  # socket_uri, so it needs no configuration. A server with none of serverdb, serverdb_uri, or socket_uri
+  # stops at registration:
   # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
+  # Default (absent): socket_uri.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -346,7 +606,8 @@ network:
 # identity — server identity fields sent during ServerDB registration
 #
 # These identify the server instance to the community infrastructure.
-# All keys are optional but a server without them will fail to register.
+# All keys are optional. A server that signs in by device code takes its identity from the
+# access token and needs none of them.
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/compat/ws_bridge.cpp
@@ -354,10 +615,11 @@ network:
 
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
-  # ServerDB WebSocket URI. Required for server registration.
+  # ServerDB WebSocket URI on the legacy (URL-parameter) registration route only; a device-code server
+  # does not use it.
   # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
-  # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
+  # discord_id: "<the Discord id of the server owner>"
 
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
@@ -402,12 +664,9 @@ auth:
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
-  # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
-  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
-  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
-  # SECRET — use env-var substitution in production.
-  # password: "${NEVR_PASSWORD:?password is required}"
+  # A dedicated server needs no username or password: it signs in by device code. At startup it prints a code and
+  # the page that takes it on the console (standard error) and in the log, waits for the approval, asks for a new
+  # code when one runs out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
 
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
@@ -469,11 +728,7 @@ telemetry:
 
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
-  # Absent: game default (typically 180.0), except on a server, where a public Arena
-  # session uses 480.0 (8:00). The session's game type is stored from the session
-  # create and from the session start frame the game starts from, so the order the
-  # service sends them in does not matter. Other game types, private Arena and reads
-  # before any session keep the game default (#982).
+  # Absent: game default (typically 180.0).
   # Not a secret.
   # round_time: 300.0
 
@@ -517,19 +772,42 @@ arena:
 # exitonerror: true
 
 # ---------------------------------------------------------------------------
+# update — PC self-update (ADR 0024)
+#
+# Once per launch, after start-up, the runtime asks the signed manifest which release its channel names. When that is a
+# different release it downloads it, checks every byte against the manifest and the release signer's Authenticode signature,
+# and stages it under update\ in the nEVR root (%LOCALAPPDATA%\nevr\echovr). The host puts it in place at the next launch and
+# loads it; a release that does not start is replaced by the one that did. Nothing is written to the game folder. The check
+# runs on its own thread: the game never waits for it. A build made for development never updates.
+#
+#   enabled   false turns the check off (a release the host already swapped in is still confirmed). The "-no-update" flag
+#             does the same for one run. Absent: true.
+#   channel   The release channel to follow (for example "beta" or "stable"). Absent: the channel the installer recorded,
+#             else the core's default. The "update check" log line names the channel and where it came from
+#             (channel_source: config, state or default).
+#
+# Not secrets.
+# Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgUpdateEnabled, NevrCfgUpdateChannel),
+#         src/runtime/lifecycle/update_worker.cpp
+# ---------------------------------------------------------------------------
+# update:
+#   enabled: true
+#   channel: beta
+
+# ---------------------------------------------------------------------------
 # plugins — plugin loading and configuration
 #
 # Plugins are optional DLLs loaded from plugins\ in the nEVR root
-# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NevrPluginInterface lifecycle:
 #
-#   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
-#   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
-#   NvrPluginInit(ctx)      — called once at load time (optional)
-#   NvrPluginOnFrame(ctx)   — called each game frame (optional)
-#   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
-#   NvrPluginShutdown()     — called at unload time (optional)
+#   NevrPluginGetInfo()      — returns name, version, description (REQUIRED)
+#   NevrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
+#   NevrPluginInit(ctx)      — called once at load time (optional)
+#   NevrPluginOnFrame(ctx)   — called each game frame (optional)
+#   NevrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
+#   NevrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# InitEx contract (NevrPluginInitEx, optional, API v4): a plugin that exports it
 # is called with (ctx, args_json), where args_json is the entry's `args` as a
 # flat JSON object string ("{}" when the entry has none, never null). The
 # plugin extracts the keys it understands, ignores the rest, and uses sensible

@@ -10,9 +10,11 @@
 #include <vector>
 
 #include "core/logging.h"
+#include "runtime/combat/combat.h"
+#include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/service_config.h"
-#include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"
+#include "runtime/server/registered_levels.h"
 
 namespace nevr_game_server {
 namespace {
@@ -57,11 +59,7 @@ void FillRegistrationMetadata(RegistrationParams& params) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] level manifest reader failed: %s", problem.c_str());
     }
 
-    std::vector<std::pair<uint64_t, uint64_t>> registered;
-    for (const nevr::assets::Asset& asset : nevr::assets::Global().Snapshot()) {
-      registered.emplace_back(asset.type, asset.name);
-    }
-    AddRegisteredLevels(registered, &levels);
+    AddRegisteredLevels(RegisteredLevelKeys(), &levels);
     if (levels.levels.empty()) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] level manifests: 0 levels from %zu manifest(s) read",
           levels.manifestsRead);
@@ -78,16 +76,22 @@ void FillRegistrationMetadata(RegistrationParams& params) {
           rejectedRegions, rejectedGuilds);
     }
 
+    // #2333: what this server runs, which the service matches finds and joins against (its match label's features).
+    std::vector<std::string> features = nevr_combat::ServerFeatures();
+
     params.installedLevels = std::move(levels.levels);
     params.regions = std::move(regions);
     params.guilds = std::move(guilds);
+    params.features = std::move(features);
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu plugin_levels=%zu regions=%zu guilds=%zu",
+        "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu plugin_levels=%zu regions=%zu guilds=%zu "
+        "features=%s",
         params.installedLevels.size(), levels.manifestsRead, levels.pluginLevels, params.regions.size(),
-        params.guilds.size());
+        params.guilds.size(), nevr_server_features::Joined(params.features).c_str());
   } catch (const std::exception& error) {
     Log(EchoVR::LogLevel::Error,
-        "[NEVR.GAMESERVER] registration metadata failed (%s); registering without installed levels, regions or guilds",
+        "[NEVR.GAMESERVER] registration metadata failed (%s); registering without installed levels, regions, guilds or "
+        "features",
         error.what());
   }
 }

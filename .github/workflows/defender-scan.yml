@@ -71,7 +71,18 @@ jobs:
     - name: Create the distribution zip (unsigned)
       run: |
         set -euo pipefail
+        shopt -s nullglob
         cmake --build --preset mingw-release --target dist
+        # The zip holds the one package directory the dist target wrote, so the scan unzips the files the package
+        # holds. dist/symbols/ is not a package directory and is not matched.
+        packages=(dist/nevr-runtime-v*/)
+        if [ "${#packages[@]}" -ne 1 ]; then
+          echo "expected exactly one package directory under dist/, found ${#packages[@]}" >&2
+          exit 1
+        fi
+        name=$(basename "${packages[0]}")
+        # -D: files only, as the packager's zip listed them (no directory entries).
+        (cd dist && zip -r -D "$name.zip" "$name/")
         ls -l dist/*.zip
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

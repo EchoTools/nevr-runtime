@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0027-structured-logging.md
+audience: all
+---
+
 # ADR 0027: structured logging: a record names its event, and each field is its own JSON key
 
 Status: proposed. Tracking issue: #841. Nothing in this record is built when it is written. It supersedes the sub-section
@@ -20,7 +27,7 @@ not text.
 ### A record is text inside a JSON envelope
 
 `Log(EchoVR::LogLevel, format, ...)` (`src/core/logging.h`) formats printf text. In the boot phase (N36) it goes to the boot
-sink, `nevr_boot_log_tee`, which writes `nevr-boot.jsonl`. After the boot phase it calls the game's `EchoVR::WriteLog`; the
+sink, `nevr_boot_log_tee`, which appends to the process's main log. After the boot phase it calls the game's `EchoVR::WriteLog`; the
 built-in filter's detour on the game's `CLog::PrintfImpl` (`hook_PrintfImpl` in `src/runtime/log/builtin_filter.cpp`)
 captures the formatted text, and `EmitLine` writes it to the console and to the run log (`WriteFileRecord`). Before the
 game's logger exists, `Log()` writes to stderr. A run-log record:
@@ -38,7 +45,7 @@ Three writers in the tree already write fields as keys, each with a header of it
 
 | Writer | Header | Fields |
 | --- | --- | --- |
-| host, `nevr-bootstrap.jsonl` (`nevr_host::JsonLine` in `src/runtime/host/host_json.h`; `BootstrapDiagnostics::EmitChecked` in `src/runtime/host/bootstrap_diagnostics.cpp`) | `tag` `NEVR.HOST`, `ts`, `pid`, `run` (the host's own 16-hex-digit token), `event` | flat: string, signed and unsigned integer, `0x` hex string, bool, byte string |
+| host, in the process's main log (`nevr_host::JsonLine` in `src/runtime/host/host_json.h`; `BootstrapDiagnostics::EmitChecked` in `src/runtime/host/bootstrap_diagnostics.cpp`) | `tag` `NEVR.HOST`, `ts`, `pid`, `run` (the host's own 16-hex-digit token), `event` | flat: string, signed and unsigned integer, `0x` hex string, bool, byte string |
 | installer run log (`installer/src/log.rs`, ADR 0023) | `tag` `[NEVR.INSTALL]` (brackets included), `ts`, `level`, `run_id`, `event`, `step`, `platform` | flat; a reserved key is refused |
 | Quest sentinel (`src/quest/sentinel/hook_log.h`) | `ts_ms`, `level`, `event` | flat: a string or a `long long`; a `bool` is written `0`/`1`, an unsigned value is cast to `long long`, a non-ASCII byte becomes `?` |
 
@@ -54,7 +61,7 @@ script yet.
 | printf `Log(` calls outside `src/quest/`, `src/runtime/tests/` and `Router::Log` | 1,045 in 63 files: `src/runtime` 983, `src/modules` 54, `src/core` 7, `plugins/common` 1 |
 | by level | Info 374, Warning 348, Debug 173, Error 110, an expression (a ternary or a variable) 40 |
 | by format (not recounted) | 225 literals with no conversion; 769 with conversions; 48 pass a string built elsewhere through `"%s"`; 3 formats are not literals |
-| subsystem (not recounted) | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 13 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3), `NEVR.LOBBY` (3) |
+| subsystem (not recounted) | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 12 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3) |
 | identifiers in the text (not recounted) | 523 formats carry a `key=` token; 438 distinct keys (`name` 80, `reason` 66, `va` 51, `error` 33, `conn` 30) |
 | text keys that name a header key (not recounted) | `msg` 3, `level` 1, `event` 1, `tag` 1; `error` 33 and `plugin` 9, which section 2 keeps as field keys |
 | non-ASCII in formats (not recounted) | 187 formats: U+2014 (em dash) in 186, U+2192 in 1 |
@@ -84,7 +91,7 @@ not cover are marked "not recounted" above.
 | `tests/smoke/score-log.sh` | 83 rows of regexes over the log after ANSI is stripped; 21 name a `[NEVR.` tag (`[NEVR.WS] LOGIN SUCCESS`, `[NEVR.WS] login injected xpid=`, `[NEVR.LOGFILTER] health emitted=`), and others match our text without one (`boot log opened run=`) |
 | `verify-server.sh` | its console capture, by 8 phrases (`LOGIN SUCCESS`, `registration successful`, `Proxy listening on`, `login injected`, `Graceful shutdown initiated`, `Service redirect`, `HTTP(S) connection redirected`, `engine flags`) |
 | `launch-client.sh` | the newest run log, by 6 phrases (`to logged in`, `rad15_live failed`, `Service is unavailable`, `built-in defaults embedded in this build: (none)`, `to in game`, `invalid header`) |
-| `AGENTS.md`, "Verification before merge" | the four keys on the `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in` |
+| `AGENTS.md`, "Verification before landing" | the four keys on the `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in` |
 | `tools/scenario/run_scenario.py`, `tools/scenario/scenarios/` | 131 regex steps (78 `expect_log`, 53 `wait_log`) in 21 files over the console capture; the `[NEVR.SCENARIO]` marker |
 | `tools/host_stop_cause.py` | host records, by key (`event`, `run`, `outcome`) |
 | `tools/quest_autopilot_run.py` (`parse_plugin_line`) and `tools/tests/test_quest_autopilot_run.py` | the autopilot plugin's `[NEVR.PLUGIN] plugin=nevr_autopilot <message> <key>=<value>` lines in logcat; the test's fixtures also carry the sentinel's `ts_ms` records |
@@ -214,7 +221,7 @@ One JSON object per line, UTF-8, flat. A field is never an object, an array, or 
 | `tag` | string | the subsystem, a row of the standard's table, without brackets (`NEVR.WS`); `EVR` on a game line | the call; the sink, from the text's leading tag, for a printf call |
 | `event` | string | the class of event, snake_case; `text` for a printf call; `game_line` for a game line | the call |
 | `msg` | string, optional | a literal sentence that states the consequence (Category G); the formatted text of a printf call; the text of a game line | the call |
-| `src` | string, optional | `boot` on a record replayed into the run log from the boot spool | the filter |
+| `src` | string, optional | `boot` on a record the boot tee wrote in the boot phase | the boot tee |
 | `plugin` | string, optional | the plugin's id, the `name` of its `config.yaml` entry: on every plugin record, and on a loader record about one plugin | the host; a loader call |
 | `fields_dropped`, `fields_truncated` | number, optional | fields refused (a reserved key, over the record cap) and string values cut | the encoder |
 | `record_error` | string, optional | `record_too_large` when the record did not fit: the header, the event and this key only | the encoder |
@@ -265,19 +272,19 @@ and its text is never built at run time.
 - A value that must stay private but must be matched across records (an invite code) is passed to `Fp`, which writes 8
   hex digits of a hash salted with the run id as `<key>_fp`; `CodeFingerprint` in `src/runtime/patch/invite_wizard.h` is
   the precedent (FNV-1a over a salt that differs from run to run).
-- A URL is `Str(key, RedactUrlForDiagnostics(url))` (`src/runtime/log/url_diagnostics.h`). A secret config value is never a
-  field; its presence is (`Bool("nevr_http_key_set", ...)`).
+- A URL is `Str(key, UrlForDiagnostics(url))` (`src/runtime/log/url_diagnostics.h`), which writes the URL whole (userinfo, query and
+  fragment included) on one line. A secret config value is never a field; its presence is (`Bool("nevr_http_key_set", ...)`).
 - The source check fails a call whose arguments contain `what()` or a JSON `dump(`, or a `Str` whose key is `token`,
   `password`, `secret`, `authorization`, `cookie`, `body`, `response`, `payload` or `what`, or a `Str` whose key names a URL
-  (`uri`, `url`, `*_uri`, `*_url`) and whose value does not pass through the redacting formatter. slog's `LogValuer` is the
+  (`uri`, `url`, `*_uri`, `*_url`) and whose value does not pass through the URL formatter. slog's `LogValuer` is the
   precedent for making the safe value the one a type produces ("the Value returned from its LogValue method is used").
 
 ### 5. Where a record goes
 
 `Log()` checks the level (one relaxed atomic load), encodes the record, and hands the bytes to one sink, by phase:
 
-1. **Boot phase** (`nevr_boot_log_tee::Init()` to `Close()`, N36): the boot spool, `nevr-boot.jsonl`, and the console, both
-   with kernel32 `WriteFile`. That makes N43's "kernel32 calls only (no CRT locks)" true of the console mirror too:
+1. **Boot phase** (`nevr_boot_log_tee::Init()` to `Close()`, N36): the process's main log (`run_log_writer.h`, the writer the
+   filter goes on using) and the console, both with kernel32 `WriteFile`. That makes N43's "kernel32 calls only (no CRT locks)" true of the console mirror too:
    `TeeFprintf` mirrors to stderr with the CRT's `vfprintf` and `fflush`, which take the stream lock.
 2. **After the boot phase**: the run log's writer in the built-in filter, which the filter sets at its init (as the boot
    tee sets the boot sink), and the console rendering. Our records no longer pass through `EchoVR::WriteLog`; the game's
@@ -294,8 +301,12 @@ the console (AGENTS.md, Logging, rule 4). The crash path (`BreakpointVEH`, `Writ
 `VehPrintf` (N70). `ServerFatal` and the fatal handler write one Error record (`tag` `NEVR.FATAL`, `event` `fatal`, the
 cause as fields) before `ForceFatalExit`.
 
-The replay of the boot spool into the run log (`ReplayBootLines`) copies a record and adds `src`; a line in the spool's
-older shape (the spool keeps every run) is wrapped as now.
+The boot tee's records carry `src` `boot` and go straight into the main log, so nothing is replayed and no boot file exists.
+The host's records (`tag` `NEVR.HOST`) and the crash path's (`tag` `NEVR.CRASH`) are appended to the same file: the host DLL and
+`nevr-runtime.dll` share no memory, so each names the file `nevr-<UTC process creation time>.jsonl` (`core/run_log_path.h`)
+from the same time, appends under the named mutex `Local\nevr-host-bootstrap-log`, and a rotation renames the old content to
+`nevr-<time>.<n>.jsonl` and goes on writing that name. A record that cannot be written goes to the console and is counted, never
+to another file (`docs/standards/logging.md`, Rule 17).
 
 ### 6. The console
 
@@ -391,7 +402,7 @@ event reads its keys.
 | `verify-server.sh`, `launch-client.sh`, `tools/winvm/checks.py` | the same: a phrase becomes the migrated line's console form (`login_injected xpid=...`) or a key match over the run log when its line migrates; `to logged in` and `rad15_live failed` are game lines and stay text |
 | `AGENTS.md` verification text | stage 2 rewrites it to the config and login events, with the scripts |
 | scenario steps | a `wait_log` or `expect_log` step keeps its regex over the console until its line migrates; the console form of section 6 keeps a migrated line matchable by `event` and `key=value`, and the harness gains a key match over the run log |
-| `tools/host_stop_cause.py` | not affected: the host's records keep their writer |
+| `tools/host_stop_cause.py` | reads the logs folder: the host's records are in each process's main log |
 | `tools/quest_autopilot_run.py` and its test | move with the Quest stage and with the plugin records (section 8) |
 | `just verify` sensors, `tools/verify_log_rules.py`, the `tools/tests/` files | each is re-pointed in the pull request that changes the text or form it reads (Rule 14) |
 | GTests | a capturing sink replaces the substring helpers and the `Log` stubs as their files migrate |
@@ -405,15 +416,16 @@ prio ... and tag tag"). `LogFields(level, event, {fields})` maps one to one onto
 `ts`; its readers are two Quest tests (`src/quest/tests/got_hook_test.cpp`, `src/quest/tests/sentinel_host_test.cpp`),
 the sentinel's on-disk log (`src/quest/sentinel/sentinel_log.cpp`, which drops the key) and the fixtures of
 `tools/tests/test_quest_autopilot_run.py`. The 74 calls to local `Log` functions and `Router::Log` (compiled into the
-Quest build too) move to the structured call through the sinks they are given. The Quest has no N80 run id; the
-record's `run` there is the process id with the process start time from `/proc/self/stat`, formatted as on PC (not built
-or measured). The Quest stage starts once stage 1's core exists and
-retires the sentinel's own writer, as #841 requires; it is the platform twin of stages 2 to 4, not a later option.
+Quest build too) move to the structured call through the sinks they are given. The Quest's `run` is the process id with the process start time from `/proc/self/stat`, formatted as on PC
+(`core/run_id.h`). The sentinel's on-disk log is one file for each process, `nevr-<UTC time of its first open>.jsonl` in
+`nevr/logs` below the game's files folder (the media folder first, else the data folder; the `sentinel_log_dir` line says
+which), with the PC main log's header (`ts`, `run`, `level`, `tag`); a size rotation renames the old content to
+`nevr-<time>.<n>.jsonl`. The previous session's log is the file before it. There is no `nevr-sentinel.log` and no session file.
 
 ### 12. Seams this design does not own
 
 - **Where logs are written.** The install-root work owns it (ADR 0012, #857, #570, #1232). The sink takes the folder from
-  `nevr_root::LogsDir`, as the filter does now, and changes no path.
+  `nevr_root::LogsDir`, as the filter does now; the host, the boot phase and the crash path write the same file (Rule 17).
 - **Retention (decided).** The run logs follow journald's model: every run's log is kept, and the oldest are deleted only
   when the logs folder passes a size cap, 1 GB by default on a client and no cap by default on a server; the open file is
   never deleted. journald.conf: `SystemMaxUse=` "defaults to 10% ... of the size of the respective file system, but each
@@ -473,7 +485,7 @@ retires the sentinel's own writer, as #841 requires; it is the platform twin of 
 ## Open questions for the owner
 
 1. **A plugin's event.** Recommended: `plugin_line` with the message as `msg`, as section 8 says, and later a tail member
-   of `NvrGameContext` (a capability bump to v9, as v5, v6 and v8 were) that takes an event name and typed fields. The
+   of `NevrGameContext` (a capability bump to v9, as v5, v6 and v8 were) that takes an event name and typed fields. The
    alternative, reading a message that looks like an identifier (the Quest autopilot sends `route_start`) as the event,
    changes what a plugin's text means without its author's knowledge.
 2. **One `run` per process.** The host stamps its own 16-hex-digit token (pid, creation time and the performance counter,

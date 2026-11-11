@@ -1,3 +1,6 @@
+#include "runtime/combat/combat.h"
+#include "runtime/content/content_pack.h"
+#include "runtime/hook/script_resource_hook.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
@@ -10,12 +13,15 @@
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/lifecycle/state_machine.h"
+#include "runtime/lifecycle/runtime_entry.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/patch/resource_sets.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
@@ -28,12 +34,12 @@
 #include "runtime/patch/netgun_bullet_ids.h"
 #include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
-#include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/patch/loading_tips.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
+#include "runtime/patch/server_frame_wait_install.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/self_provenance.h"
@@ -41,7 +47,7 @@
 
 // Statically-linked module entry points (the modules are linked into
 // BugSplat64.dll). Each module's symbols are prefixed to avoid
-// collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
+// collisions — both define NevrModuleInit/NevrModuleApiVersion/etc.
 namespace nevr_token_auth {
 std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
 bool SignInEndedWithoutToken();  // token_auth.h (#1446)
@@ -49,11 +55,11 @@ bool SignInEndedWithoutToken();  // token_auth.h (#1446)
 
 extern "C" {
 // platform_compat
-int platform_compat_Init(const NvrModuleContext* ctx);
+int platform_compat_Init(const NevrModuleContext* ctx);
 uint32_t platform_compat_ApiVersion(void);
 void platform_compat_Shutdown(void);
 // token_auth
-int token_auth_Init(const NvrModuleContext* ctx);
+int token_auth_Init(const NevrModuleContext* ctx);
 uint32_t token_auth_ApiVersion(void);
 void token_auth_Shutdown(void);
 const char* TokenAuth_GetToken(void);
@@ -243,6 +249,13 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
     LoadPlugins(PluginPhase::Early);
   }
+  // #1424: an installed content pack (<root>\content\<id>\) is checked and its manifests, packages and scripts are served
+  // from here on. Before the original call, after the early pass: InitGlobals reads the manifests and opens the packages
+  // inside that call, and the early pass's plugin-signature rewriter stays first among the load rewriters. Once per process.
+  nevr_content::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  // #600: script hooks go in as the game loads each script and come out before it frees it. Before the original call, on
+  // client and server: the global level's scripts load inside it. Once per process.
+  nevr_script_resource_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
@@ -280,7 +293,7 @@ static void LogTimestepArgs() {
   try {
     const nevr_timestep_log::Inputs in = nevr_timestep_log::BuildInputs(
         GetTimestepStripReport(), g_isServer != FALSE, nevr_cmdline::HasTimestepOption(GetCommandLineA()),
-        ServerStepWrite(), g_flagRecord.Load(), g_headlessTickRateHz);
+        ServerStepWrite(), g_flagRecord.Load(), nevr_server_timestep::kIdleTickRateHz);  // #2109: boot writes the idle step
     for (const nevr_timestep_log::Line& line : nevr_timestep_log::Decide(in)) {
       Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
           "[NEVR.PATCH] %s", line.text.c_str());
@@ -412,7 +425,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Load modules. Order matters — dependencies must load first.
   {
-    static NvrModuleContext moduleCtx = {};
+    static NevrModuleContext moduleCtx = {};
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
     moduleCtx.early_config = g_earlyConfigPtr;
     moduleCtx.flags = 0;
@@ -433,7 +446,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Must load before any network-using code. Statically linked (2026-08-02).
     {
       uint32_t apiVer = platform_compat_ApiVersion();
-      if (!NvrModuleApiVersionSupported(apiVer)) {
+      if (!NevrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.MODULE] platform_compat: API v%u exceeds host v%u — refusing (rebuild the "
             "module against this host)",
@@ -453,7 +466,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Statically linked (2026-08-02).
     {
       uint32_t apiVer = token_auth_ApiVersion();
-      if (!NvrModuleApiVersionSupported(apiVer)) {
+      if (!NevrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.MODULE] token_auth: API v%u exceeds host v%u — refusing (rebuild the module "
             "against this host)",
@@ -520,6 +533,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_telemetryDiag = TRUE;
     } else if (lstrcmpW(flag, L"-timestamps") == 0) {
       g_timestampLogs = TRUE;
+    } else if (lstrcmpW(flag, L"-no-update") == 0) {
+      // Read here, ahead of StartProcessWorker (the end of this function), which logs `update disabled reason=flag`.
+      g_noUpdate = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
     } else if (lstrcmpW(flag, L"-config") == 0) {
@@ -697,8 +713,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
     nevr_coop_ai_trace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
-    // #982: a public Arena match's clock keeps counting through goals, like a private match (arena_public_clock_rules.h).
-    nevr_arena_public_clock::Install();
 
     // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
     // patch/binary_bug_fixes.cpp, which validates the address and saves the
@@ -755,6 +769,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // it. The transform rewrites the player's own stock CR15NetGunCR in memory; both client and server load it. Registered
   // after InstallResourceOverride, which created the registry.
   nevr_netgun_bullet_ids::Install();
+
+  // EchoCombat's balance values: a transform of the player's own stock mp_weapon_settings (runtime/combat/combat.h). It
+  // reads combat.balance when the resource first loads, after config.yaml is readable.
+  nevr_combat::RegisterBalance();
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
   // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
@@ -879,6 +897,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // #1422: a server's match team size (network.max_team_size, absent = the game's 5), at ServerAssignTeam's
   // two checked-patch sites; a client logs that it does not apply (N122/N124).
   nevr_server_team_size::Install(g_isServer != FALSE);
+  // #2109: a server's frame wait answers raw pings as they arrive and never ends a frame early; with it, the overrun
+  // delta-time patch. A client logs that it does not apply (N122/N124).
+  nevr_server_frame_wait::Install(g_isServer != FALSE);
 
   // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
   // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs
@@ -893,8 +914,15 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         provenance.version.c_str(), provenance.reason.c_str());
   }
 
+  // EchoCombat, built in (runtime/combat/combat.h): after every hook of the runtime's own is in place, so its write gate
+  // sees them all, and where Cat's three plugins loaded before.
+  nevr_combat::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
+
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
+  // #2161: the resource sets the plugins registered are mounted once the game's manifest exists (now, or from the
+  // per-frame tick when it is not built yet).
+  nevr_resource_sets::MountWhenReady();
 
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
@@ -904,6 +932,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",
       g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
       static_cast<unsigned>(GetWebSocketBridgePort()));
+
+  // #1200, ADR 0024 section 3: PC self-update. The bootstrap is done (a client: the graphics device exists; a server: the first original
+  // call has returned), so the worker starts here, never earlier, and never on the game's thread: it decides once per launch (a dev
+  // build, -no-update, update.enabled: false and a host that cannot swap each end in one `update disabled` line), then checks on its own
+  // thread and confirms a swapped release once the per-frame dispatcher has run for 10 s (frame/tick.cpp).
+  nevr_update::StartProcessWorker(nevr_runtime_entry::HostCanSwap(), g_noUpdate != FALSE, g_isServer != FALSE);
 
 #ifdef NEVR_SCENARIO_CONTROL
   nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)

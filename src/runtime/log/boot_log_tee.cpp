@@ -9,16 +9,16 @@
 #include <cstring>
 
 #include "core/json_escape.h"
+#include "core/log_level.h"
 #include "core/logging.h"  // GetRunId (N80), SetBootLogSink, GetLogLevelString
 #include "runtime/log/boot_lines.h"
+#include "runtime/log/run_log_writer.h"
 
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
-static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
 static std::atomic<bool> g_boot_active{false};  // Init() to Close(), the boot phase
-static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for the replay (#5)
 
 // Log()'s boot sink (BootLogSink, core/logging.h), set from Init() to Close() whether or not the
 // file opened: the boot phase is defined by the tee being open (Init() to Close()), not by the file being
@@ -26,11 +26,16 @@ static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for 
 // when there is no tag.
 static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
     const char* const lvl = GetLogLevelString(level);
+    // #2245: a level with no name is written "unknown" with the number it came with, never as info.
+    char raw[32] = "";
+    if (nevr_log_level::Name(static_cast<std::uint32_t>(level)) == nullptr) {
+        std::snprintf(raw, sizeof(raw), "level_raw=%d ", static_cast<int>(level));
+    }
     const char* const tagEnd = msg[0] == '[' ? std::strchr(msg, ']') : nullptr;
     if (tagEnd != nullptr && tagEnd[1] == ' ') {
-        nevr_boot_log_tee::TeeFprintf("%.*s %s; %s\n", static_cast<int>(tagEnd + 1 - msg), msg, lvl, tagEnd + 2);
+        nevr_boot_log_tee::TeeFprintf("%.*s %s; %s%s\n", static_cast<int>(tagEnd + 1 - msg), msg, lvl, raw, tagEnd + 2);
     } else {
-        nevr_boot_log_tee::TeeFprintf("%s; %s\n", lvl, msg);
+        nevr_boot_log_tee::TeeFprintf("%s; %s%s\n", lvl, raw, msg);
     }
 }
 
@@ -41,64 +46,11 @@ static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
 void nevr_boot_log_tee::Init() {
     SetBootLogSink(&ReportBootLog);
     g_boot_active.store(true, std::memory_order_release);
-    // Get the EXE directory
-    char exe_path[MAX_PATH];
-    DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) {
-        return;
-    }
-
-    // Strip filename to get the directory
-    char* slash = std::strrchr(exe_path, '\\');
-    if (slash == nullptr) {
-        slash = std::strrchr(exe_path, '/');
-    }
-    if (slash != nullptr) {
-        *slash = '\0';
-    }
-
-    // Build the logs directory path
-    char log_dir[MAX_PATH];
-    int n = snprintf(log_dir, sizeof(log_dir), "%s\\logs", exe_path);
-    if (n < 0 || n >= static_cast<int>(sizeof(log_dir))) {
-        return;
-    }
-
-    // Create logs directory (ignore errors — may already exist)
-    CreateDirectoryA(log_dir, nullptr);
-
-    // Build full file path
-    char log_path[MAX_PATH];
-    n = snprintf(log_path, sizeof(log_path), "%s\\nevr-boot.jsonl", log_dir);
-    if (n < 0 || n >= static_cast<int>(sizeof(log_path))) {
-        return;
-    }
-
-    std::snprintf(g_boot_path, sizeof(g_boot_path), "%s", log_path);
-
-    // Open for append — OPEN_ALWAYS creates if missing, does not truncate
-    g_boot_handle = CreateFileA(
-        log_path,
-        GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr,            // default security
-        OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr             // no template
-    );
-
-    if (g_boot_handle == INVALID_HANDLE_VALUE) {
-        // Silently ignore — TeeFprintf degrades to stderr-only
-        return;
-    }
-
-    // Seek to end for append semantics
-    SetFilePointer(g_boot_handle, 0, nullptr, FILE_END);
-
-    // N80: this file accumulates every run. Without a delimiter an operator reading
-    // it cannot tell where the current run's boot lines begin — the previous five
-    // runs sit directly above them with nothing separating the sequences.
-    TeeFprintf("[NEVR.PATCH] boot log opened run=%s\n", GetRunId());
+    // The boot phase writes into the process's one main log, <root>\logs\nevr-<creation time>.jsonl (run_log_writer.h), the file
+    // the filter and the host write to; there is no separate boot file. The writer makes the file on the first record.
+    // A run that cannot open it says so on standard error and the boot lines stay on stderr (the writer is loud, never silent).
+    // The line's own text keeps "boot log opened run=" (tests/smoke/score-log.sh reads it).
+    TeeFprintf("[NEVR.PATCH] info; boot log opened run=%s path=%s\n", GetRunId(), nevr_run_log_writer::Path());
 }
 
 void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
@@ -109,11 +61,6 @@ void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
         std::vfprintf(stderr, fmt, args);
         va_end(args);
         std::fflush(stderr);
-    }
-
-    // --- boot file (if open) ---
-    if (g_boot_handle == INVALID_HANDLE_VALUE) {
-        return;
     }
 
     // Format the message into a stack buffer
@@ -136,10 +83,7 @@ void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
     char escaped[4096];
     nevr_json_escape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
 
-    // Build the JSONL line (boot_lines.h). N80: the run ID is what lets these lines be joined to
-    // the runtime log and, because this file is opened in append mode across runs, what lets one
-    // run's boot lines be separated from the last. #5: the ts (GetSystemTime, kernel32 only, the
-    // main log's format) places the line in the main log when it replays this run's boot lines.
+    // Build the JSONL record (boot_lines.h): ts in the main log's format, the run id (N80), the level, src "boot".
     SYSTEMTIME st;
     GetSystemTime(&st);
     char ts[32];
@@ -150,21 +94,16 @@ void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
     if (line_len < 0) {
         return;
     }
-
-    DWORD written = 0;
-    WriteFile(g_boot_handle, line_buf, static_cast<DWORD>(line_len), &written, nullptr);
-    // Failure is silent — nothing to do with a failed write at boot time
+    // A record that cannot be written is counted and reported on stderr by the writer (run_log_writer.h).
+    nevr_run_log_writer::Append(line_buf, static_cast<std::size_t>(line_len));
 }
 
-const char* nevr_boot_log_tee::Path() { return g_boot_path; }
+const char* nevr_boot_log_tee::Path() { return nevr_run_log_writer::Path(); }
 
 bool nevr_boot_log_tee::Active() { return g_boot_active.load(std::memory_order_acquire); }
 
 void nevr_boot_log_tee::Close() {
     SetBootLogSink(nullptr);
     g_boot_active.store(false, std::memory_order_release);
-    if (g_boot_handle != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_boot_handle);
-        g_boot_handle = INVALID_HANDLE_VALUE;
-    }
+    // The main log stays open: the filter and the crash path write to it after the boot phase (run_log_writer.h).
 }

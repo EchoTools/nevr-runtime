@@ -5,24 +5,32 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
 when, they appear in all capitals, as shown here.
 
-How work in this repo is planned and tracked on GitHub. It binds issues, PRs, branches and milestones. Planning
+How work in this repo is planned and tracked on GitHub. It binds issues, branches and milestones. Planning
 drifts; the hygiene rules at the end are how it gets corrected, on a schedule, the same way every time.
 
 ## Release milestones
 
-Milestones are ordered by when they ship, not by version number. There are three:
+A release milestone is titled with the version the next tag will compute to: the version
+`python3 tools/next_release_version.py` gives for `main` (see "Release versions"). The tool counts every commit on
+`main` that the highest release tag reachable from `main` (`vX.Y.Z` below) does not contain, so every commit merged
+since that tag ships under one version, whatever milestone its issue is in. With no breaking `feat`, `fix` or `perf`
+merged since that tag, the milestones are:
 
 | milestone | holds |
 |---|---|
-| `Next release` | what ships in the next tagged release |
-| `Release after` | what ships in the release after that |
+| `vX.Y.(Z+1)`, the next patch | the next release, while the commits merged since `vX.Y.Z` hold a `fix` or `perf` and no `feat` |
+| `vX.(Y+1).0`, the next minor | the next release, once a `feat` is merged since `vX.Y.Z` |
 | `Future` | wanted, not scheduled |
+
+Work of any other type (`docs`, `chore`, `ci`, ...) bumps nothing. It ships in the next release, and with no `fix`,
+`perf` or `feat` merged since `vX.Y.Z` the tool names no version for it: it exits 1, nothing to release.
 
 - The description opens with `Outcome:`: the state of the world when the release is done, then its definition of done.
 - **No due dates.** Releases are scoped by work, not by the calendar.
-- When a release is tagged, `Next release` is renamed to the version it shipped as (`v5.6.0`) and closed. Anything
-  still open in it moves to `Release after` first. Unfinished work never holds a release. `Release after` is then
-  renamed `Next release`, and a new `Release after` is opened.
+- **An item moves when a merge changes the computed version.** A milestone whose `feat` has not merged yet carries the
+  version the tool gives for `main` now. When a merge changes that version (a `feat` merging turns the next patch into
+  the next minor), the milestone's items move to the milestone of the new version.
+- Unfinished work never holds a release.
 - Work nobody has decided to schedule has no milestone and carries the `backlog` label.
 
 ### Release versions
@@ -41,10 +49,9 @@ commits of a merged branch included. The base is the highest `vX.Y.Z` tag reacha
 pre-release tag is not a release tag, and a scratch dry-run tag (`v0.0.<issue>`) is never the highest. It refuses a
 version whose tag already exists.
 
-Only a commit's first line gives its type and its `!`. In a squash commit GitHub's first line is the PR title when the
-PR has several commits and the one commit's subject when it has one, and the body lists the sub-commits' messages:
-their subjects count for nothing, their `BREAKING CHANGE:` footers count. `tools/check_pr_title.py` checks the PR
-title only, so a one-commit PR's subject MUST follow Conventional Commits as well. A commit whose type understates its
+Only a commit's first line gives its type and its `!`; a `BREAKING CHANGE:` footer anywhere in a commit's message
+counts. Every commit that lands on `main` (AGENTS.md, "Landing") MUST have a subject that follows Conventional Commits,
+including each commit of a branch that carries several. A commit whose type understates its
 change (a `fix` that breaks an interface) gives the release the wrong version, and the review is where that is caught.
 
 
@@ -80,15 +87,15 @@ Remaining points in a milestone divided by velocity is the number of sprints lef
 | Icebox | not scheduled | none |
 | Backlog | in the active milestone, not started | pointed |
 | Started | being worked | an owner is named |
-| Finished | PR open | the quick check (AGENTS.md, "Builds") green on the PR head, output in the PR body |
-| Delivered | merged | merged to `main`; `just verify` runs on `main` after the release cut, once per cut, output recorded |
+| Finished | reviewed | the quick check (AGENTS.md, "Builds") green on the branch tip, exit codes in the commit message, and a fresh-context review's MERGE |
+| Delivered | landed | landed on `main` (AGENTS.md, "Landing"); `just verify` runs on `main` after the release cut, once per cut, output recorded |
 | Accepted | proven in real use | the owner or a tester confirmed it working, or the end-to-end check passed |
 | Rejected | failed acceptance | back to Started, with the failure quoted |
 
-No workflow runs on a pull request or a push, so the Finished gate is the local capped quick check and the
-`just verify` on `main` after the release cut is a local run, not a CI status. CI runs by hand: `gh workflow run <file> --ref <branch>`.
+No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes, so the Finished gate is
+the local capped quick check and the `just verify` on `main` after the release cut is a local run, not a CI status. CI runs by hand: `gh workflow run <file> --ref main`.
 
-Only Accepted points count toward velocity. Delivered is not done: merged code that nobody has seen work is not yet
+Only Accepted points count toward velocity. Delivered is not done: landed code that nobody has seen work is not yet
 value.
 
 ## Hygiene rules
@@ -99,31 +106,27 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 **Issues**
 - An open issue has a release milestone or the `backlog` label, never neither.
 - An issue in a release milestone has a kind label: `bug`, `enhancement`, or `documentation`.
-- An issue that a merged PR fixed is closed, with the PR linked.
+- An issue that landed work fixed is closed, by the `Closes #N` line of the commit that landed it.
 
-**PRs**
-- A PR is opened only for an existing issue, and its body names it. The issue states the problem and its done-bar. The
-  body links the issue it resolves with a closing keyword (`Closes #N`, `Fixes #N` or `Resolves #N`), one line for each
-  issue. There is no "no issue" form: a fix that has no issue gets an issue first.
-  `.github/workflows/pr-issue-link-check.yml` (`tools/check_pr_issue_link.py`) fails a body that names none.
-  GitHub copies the body into the squash commit, so the issue closes when the PR merges.
-- `Refs #N` (or `Part of #N`, `Completes #N`) is only for a PR that leaves a named live check owed (a headset run, a
-  server run), and the body says what is still open. That check is a task line on the issue, and whoever does it closes
-  the issue with the evidence. A merged PR never leaves its issue open silently.
-- The review confirms that each linked issue is resolved by the diff; the body check only sees that a reference
-  exists.
-- A PR carries the same milestone as the issue it resolves.
-- A PR with no activity across a sprint is either picked up, rebased, or closed with the reason. A PR that is far behind
-  `main` or conflicting is replaced by a focused PR rather than rebased wholesale.
+**Landing**
+- No pull requests. Work starts from an existing issue, and the commit that lands on `main` names it with a closing
+  keyword (`Closes #N`, `Fixes #N` or `Resolves #N`), one line for each issue; GitHub closes the issue when the commit
+  reaches `main`. There is no "no issue" form: a fix that has no issue gets an issue first.
+- `Refs #N` (or `Part of #N`, `Completes #N`) is only for a commit that leaves a named live check owed (a headset run, a
+  server run), and the message says what is still open. That check is a task line on the issue; close the issue with
+  the evidence when the check is done. Landed work never leaves its issue open silently.
+- The fresh-context review (AGENTS.md, "Review, verification and landing") confirms that each named issue is resolved
+  by the diff before it gives MERGE.
 
 **Branches**
-- A branch whose PR merged is deleted (GitHub keeps it restorable from the PR).
-- A branch with no PR is opened as one or deleted within 24 hours, by the seat that created it (`AGENTS.md`,
-  "Branch lifecycle"); nothing is left to age across sprints.
+- A branch whose work landed is deleted in the same turn (`AGENTS.md`, "Branch lifecycle").
+- A branch not landed within 24 hours is landed or deleted, by the seat that created it; nothing is left to age across
+  sprints.
 
 **Milestones**
-- An open milestone's title is `Next release`, `Release after` or `Future`. A milestone closed when its release is tagged is
-  titled with the version it shipped as, `vX.Y.Z`; the closed `v4.x` milestones keep their titles.
+- An open milestone's title is `Future` or the version the next tag will compute to (see "Release milestones"). A
+  milestone closed when its release is tagged is titled with the version it shipped as, `vX.Y.Z`; the closed `v4.x`
+  milestones keep their titles.
 - The description starts with `Outcome:`.
 - No due date.
 - A closed milestone has no open items.

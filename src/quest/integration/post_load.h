@@ -6,6 +6,8 @@
 //   login title         needs the login-failed page's script library, lib7f2363b8976491aa.so (#1137)
 //   plugin pass         needs nothing but a running game: the first non-null dlopen is its moment (#438, ADR 0019
 //                       section 3), after the two installs above have had theirs
+//   combat step         needs nothing but a running game too (#2171, docs/adr/0046 rule 6): it runs on the thread that ran the
+//                       plugin pass, right after the pass has returned, or at the first non-null dlopen when no plugin is planned
 //
 // dlopen_hook.cpp calls AfterDlopen from the handler of the hook on libr15's dlopen slot, after the
 // real dlopen has returned a non-null handle. AfterDlopen runs entirely outside any game call: it
@@ -45,18 +47,35 @@ struct PostLoadActions {
   // arrives while it runs does not start it again. It settles whatever it answers (a plugin that fails is a record, not a
   // retry). null: no plugin waits for it.
   ActionFn plugins = nullptr;
+  // The combat area's normal install step (#2171, combat/combat_install.h). It shares the plugin pass's runner: one thread at a time
+  // is in it, the combat action starts only after the plugin action has returned and its settled flag is set (the q15t plugin installs
+  // first on a slot both touch, ADR 0046 rule 7), on the thread that ran the plugin action, outside the lock above, and a call that
+  // arrives while either runs returns without starting anything. With no plugin action it runs at the first non-null dlopen, behind the
+  // same guard. Runs once and settles whatever it answers. null: combat does not run in this process, nothing is tried.
+  ActionFn combat = nullptr;
 };
 
 // Replaces the actions and forgets every settled state. Call before the dlopen hook is installed (or
 // from a test). Not for use while dlopen can run on another thread.
 void SetPostLoadActions(const PostLoadActions& actions);
 
-// A function the dlopen hook calls for every non-null handle, before the actions above run and whether or not any is wanted.
-// It must not throw and must not call game code. The crash-first hook uses it to hook the provider libraries' sigaction and
-// signal slots when they load (sentinel/crash_first_hook.h, #1605). Set once at install; null: none. Not cleared by
+// The functions the dlopen hook calls for every non-null handle, before the actions above run and whether or not any is wanted, in
+// a fixed table (module_observers.cpp): the first slot is SetModuleLoadedObserver's, the others are added with
+// AddModuleLoadedObserver, and every observer is called in slot order. Each must not throw and must not call game code. The
+// crash-first hook sets the first to hook the provider libraries' sigaction and signal slots when they load
+// (sentinel/crash_first_hook.h, #1605); the EC client adds one to hook their WriteLogV slots (combat/ec.h, #2187). Not cleared by
 // SetPostLoadActions.
 using ModuleLoadedFn = void (*)(const char* name, void* handle) noexcept;
+inline constexpr int kModuleLoadedObservers = 4;
+// Sets the first slot (null: none).
 void SetModuleLoadedObserver(ModuleLoadedFn fn) noexcept;
+// Adds `fn` to the first free slot after the first. True when it is in the table (added now, or already there); false for null or
+// a full table. Safe from any thread: a dlopen that races the add sees the observer or not, never a torn slot.
+bool AddModuleLoadedObserver(ModuleLoadedFn fn) noexcept;
+// Calls every observer with `name` and `handle` (AfterDlopen does, for a non-null handle).
+void NotifyModuleLoaded(const char* name, void* handle) noexcept;
+// Empties every slot (tests).
+void ClearModuleLoadedObserversForTest() noexcept;
 
 // True while at least one action is still wanted and unsettled.
 bool PostLoadPending() noexcept;
@@ -69,6 +88,7 @@ struct PostLoadStats {
   std::uint64_t matchmakingSettled = 0;
   std::uint64_t loginTitleSettled = 0;  // 1 when the login title action settled
   std::uint64_t pluginsSettled = 0;  // 1 when the plugin pass ran
+  std::uint64_t combatSettled = 0;   // 1 when the combat action ran
 };
 PostLoadStats PostLoadStatsView() noexcept;
 

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0018-quest-resource-request-log.md
+audience: all
+---
+
 # ADR 0018: a log of every resource request the Quest game makes
 
 Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build::kIsDev`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
@@ -50,7 +57,7 @@ Not verified on a headset: that a half-loaded lobby produces failed requests thr
 
 Installed in every build, not only development builds. The request log lines stay development-only (`nevr_build::kIsDev`); the overlay's counters are registered in every build.
 
-On a manifest miss (the handler's own binary search of the manifest finds no record for the (type, name) pair, the same search the game runs), the handler serves a loose file in the platform data directory, with the same steps as the reference build's cave (`q15t-upstream/tools/qcp_patches.py`, P9): `GetUnpackagedResourcePath`, then `CSysFile::Open` (flags 1), then `CSysFile::Size`, then the request's owner, index, handle, uncompressed size, memory space and valid word. Only `ServeLoose` writes the request. If any of the three stages fails, the game's function runs as it would have and raises its own "Cannot find resource". A manifest hit never reaches the overlay: the game's call runs first, as before.
+On a manifest miss (the handler's own binary search of the manifest finds no record for the (type, name) pair, the same search the game runs), the handler serves a loose file in the platform data directory, with the same steps as the reference build's cave (`echoquest-combat/tools/qcp_patches.py`, P9): `GetUnpackagedResourcePath`, then `CSysFile::Open` (flags 1), then `CSysFile::Size`, then the request's owner, index, handle, uncompressed size, memory space and valid word. Only `ServeLoose` writes the request. If any of the three stages fails, the game's function runs as it would have and raises its own "Cannot find resource". A manifest hit never reaches the overlay: the game's call runs first, as before.
 
 Logging: a served file is one `resource_overlay_served` line and a failed stage one `resource_overlay_failed` line, both development-only, sharing a cap of 32 lines. The counters `resource_overlay_served` and `resource_overlay_failed` count in every build, so a release build reports overlay outcomes through the counters only.
 

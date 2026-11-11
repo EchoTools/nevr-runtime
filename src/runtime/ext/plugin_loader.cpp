@@ -33,19 +33,21 @@
 #include "runtime/hook/dll_load_hook.h"         // #741: loads a plugin makes after init
 #include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
 #include "runtime/patch/asset_registry.h"      // #432: assets a plugin carries leave with its image
+#include "runtime/patch/resource_sets.h"       // #2161: the resource sets a plugin registers from its init
+#include "runtime/patch/resource_override.h"   // #2161: a mounted set's overrides leave with its image
 
 struct LoadedPlugin {
   HMODULE                     hModule;
-  NvrPluginInfo               info;
+  NevrPluginInfo               info;
   uint32_t                    api_version;
-  uint32_t                    capabilities;  /* NvrPluginCapabilities bitmask; 0 = UNDECLARED */
+  uint32_t                    capabilities;  /* NevrPluginCapabilities bitmask; 0 = UNDECLARED */
   /* What get_plugin_info hands out: its own struct, not a cast of `info` (whose
-   * padding sits where NvrLoadedPluginInfo has api_version). */
-  NvrLoadedPluginInfo         loaded_info;
-  NvrPluginInit_fn            init;
-  NvrPluginOnFrame_fn         on_frame;
-  NvrPluginOnGameStateChange_fn on_state_change;
-  NvrPluginShutdown_fn        shutdown;
+   * padding sits where NevrLoadedPluginInfo has api_version). */
+  NevrLoadedPluginInfo         loaded_info;
+  NevrPluginInit_fn            init;
+  NevrPluginOnFrame_fn         on_frame;
+  NevrPluginOnGameStateChange_fn on_state_change;
+  NevrPluginShutdown_fn        shutdown;
   std::string                 path;
   const char*                 id;  /* the config.yaml entry's name; see InternPluginId */
 };
@@ -130,8 +132,8 @@ static uint64_t ObserveMainLevel() {
 }
 
 // The context one plugin sees: the caller's, with that plugin's id, the host log and the current level filled in.
-static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
-  NvrGameContext ctx = base;
+static NevrGameContext ContextFor(const NevrGameContext& base, const char* id) {
+  NevrGameContext ctx = base;
   ctx.plugin_id = id != nullptr ? id : "";
   ctx.log = HostPluginLog;
   ctx.level_symbol = ObserveMainLevel();
@@ -141,7 +143,7 @@ static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
 
 // N134 S8: query API — lets a plugin discover its neighbours at runtime.
 // Called through ctx->get_plugin_count / ctx->get_plugin_info (function
-// pointers filled into NvrGameContext by LoadPlugins and every per-frame/
+// pointers filled into NevrGameContext by LoadPlugins and every per-frame/
 // per-state-change ctx construction). Returns the count of successfully
 // loaded plugins; a plugin that failed init or was refused (N89) is not in
 // g_plugins and therefore not counted.
@@ -150,9 +152,9 @@ int GetLoadedPluginCount(void) {
   return static_cast<int>(g_plugins.size());
 }
 
-const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
+const NevrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   if (index < 0 || static_cast<size_t>(index) >= g_plugins.size()) return nullptr;
-  // The plugin's own NvrLoadedPluginInfo. Not a cast of p.info: NvrPluginInfo is
+  // The plugin's own NevrLoadedPluginInfo. Not a cast of p.info: NevrPluginInfo is
   // padded to 32 bytes, so through it api_version read the padding and
   // capabilities read api_version. Stable for the process lifetime: g_plugins is a deque, so a
   // later push_back never moves an entry whose pointer a plugin kept.
@@ -723,17 +725,34 @@ void InstallPluginLoadFilter(const std::string& pluginDir) {
   }
 }
 
+// The prefix of the plugin entry points is Nevr; a plugin built before that exports the same names with Nvr.
+// Each entry point is resolved under its Nevr name first and, when the plugin does not export it, under the
+// deprecated Nvr name. `suffix` is the name without the prefix ("PluginInitEx"). `deprecatedUsed` collects the
+// deprecated names that resolved, so the loader can say once, per plugin, that it loaded through them.
+FARPROC ResolvePluginExport(HMODULE plugin, const char* suffix, std::vector<std::string>* deprecatedUsed) {
+  if (FARPROC canonical = GetProcAddress(plugin, (std::string("Nevr") + suffix).c_str())) return canonical;
+  const std::string old = std::string("Nvr") + suffix;
+  FARPROC deprecated = GetProcAddress(plugin, old.c_str());
+  if (deprecated != nullptr) deprecatedUsed->push_back(old);
+  return deprecated;
+}
+
+template <typename Fn>
+Fn ResolvePluginExportAs(HMODULE plugin, const char* suffix, std::vector<std::string>* deprecatedUsed) {
+  return reinterpret_cast<Fn>(ResolvePluginExport(plugin, suffix, deprecatedUsed));
+}
+
 struct StagedPlugin {
   HMODULE                  hModule;
   PluginLoadItem            item;
-  NvrPluginInfo             info;
+  NevrPluginInfo             info;
   uint32_t                  apiVersion;
-  uint32_t                  caps;      // NvrPluginCapabilities, for pass-2 sorting
-  NvrPluginInitEx_fn        initExFn;
-  NvrPluginInit_fn          initFn;
-  NvrPluginOnFrame_fn       onFrameFn;
-  NvrPluginOnGameStateChange_fn onStateChangeFn;
-  NvrPluginShutdown_fn      shutdownFn;
+  uint32_t                  caps;      // NevrPluginCapabilities, for pass-2 sorting
+  NevrPluginInitEx_fn        initExFn;
+  NevrPluginInit_fn          initFn;
+  NevrPluginOnFrame_fn       onFrameFn;
+  NevrPluginOnGameStateChange_fn onStateChangeFn;
+  NevrPluginShutdown_fn      shutdownFn;
   PluginInitKind            initKind;
   std::string               path;       // full path to DLL on disk
   size_t                    planIndex;  // #60: this plugin's entry in `report`
@@ -783,7 +802,7 @@ class PluginLoadRun {
   }
 
   // Pass 2: order the staged plugins and init each one.
-  void InitAll(const NvrGameContext& ctx) {
+  void InitAll(const NevrGameContext& ctx) {
     SortAndLogOrder();
     InitStaged(ctx);
   }
@@ -1156,17 +1175,18 @@ class PluginLoadRun {
     const PluginLoadItem& item = plan[planIndex];
     PluginManifestEntry& itemReport = report[planIndex];
     const char* filename = item.file.c_str();
-  auto getInfoFn = reinterpret_cast<NvrPluginGetInfo_fn>(GetProcAddress(hPlugin, "NvrPluginGetInfo"));
+  std::vector<std::string> deprecatedUsed;
+  auto getInfoFn = ResolvePluginExportAs<NevrPluginGetInfo_fn>(hPlugin, "PluginGetInfo", &deprecatedUsed);
   if (!getInfoFn) {
     FreeLibrary(hPlugin);
-    FailPluginLoad(item, "missing NvrPluginGetInfo export", itemReport);
+    FailPluginLoad(item, "missing NevrPluginGetInfo export (nor the deprecated NvrPluginGetInfo)", itemReport);
     return;
   }
 
-  NvrPluginInfo info = getInfoFn();
+  NevrPluginInfo info = getInfoFn();
   if (!info.name) {
     FreeLibrary(hPlugin);
-    FailPluginLoad(item, "NvrPluginGetInfo returned NULL name", itemReport);
+    FailPluginLoad(item, "NevrPluginGetInfo returned NULL name", itemReport);
     return;
   }
 
@@ -1176,7 +1196,7 @@ class PluginLoadRun {
   // unsupported version; the plugin loader deliberately does not, and this
   // asymmetry is deliberate (see N134). `required`
   // governs load/init FAILURE, not version skew.
-  auto apiVersionFn = reinterpret_cast<NvrPluginGetApiVersion_fn>(GetProcAddress(hPlugin, "NvrPluginGetApiVersion"));
+  auto apiVersionFn = ResolvePluginExportAs<NevrPluginGetApiVersion_fn>(hPlugin, "PluginGetApiVersion", &deprecatedUsed);
   uint32_t apiVersion = apiVersionFn ? apiVersionFn() : 1;
   if (apiVersion > NEVR_PLUGIN_API_VERSION) {
     Log(EchoVR::LogLevel::Warning,
@@ -1189,16 +1209,26 @@ class PluginLoadRun {
   // plugin that lies is believed. It exists so honest plugins are legible, so a
   // server can require a declaration before accepting a session, and so an
   // operator can see the answer without reading the plugin's source.
-  auto capsFn = reinterpret_cast<NvrPluginGetCapabilities_fn>(GetProcAddress(hPlugin, "NvrPluginGetCapabilities"));
+  auto capsFn = ResolvePluginExportAs<NevrPluginGetCapabilities_fn>(hPlugin, "PluginGetCapabilities", &deprecatedUsed);
   const uint32_t caps = capsFn ? capsFn() : NEVR_PLUGIN_CAP_UNDECLARED;
 
-  // Resolve init exports: v4 args-aware NvrPluginInitEx (preferred) and v3
-  // NvrPluginInit (fallback), plus the tick/state/shutdown lifecycle exports.
-  auto initExFn = reinterpret_cast<NvrPluginInitEx_fn>(GetProcAddress(hPlugin, "NvrPluginInitEx"));
-  auto initFn = reinterpret_cast<NvrPluginInit_fn>(GetProcAddress(hPlugin, "NvrPluginInit"));
-  auto onFrameFn = reinterpret_cast<NvrPluginOnFrame_fn>(GetProcAddress(hPlugin, "NvrPluginOnFrame"));
-  auto onStateChangeFn = reinterpret_cast<NvrPluginOnGameStateChange_fn>(GetProcAddress(hPlugin, "NvrPluginOnGameStateChange"));
-  auto shutdownFn = reinterpret_cast<NvrPluginShutdown_fn>(GetProcAddress(hPlugin, "NvrPluginShutdown"));
+  // Resolve init exports: v4 args-aware NevrPluginInitEx (preferred) and v3
+  // NevrPluginInit (fallback), plus the tick/state/shutdown lifecycle exports.
+  auto initExFn = ResolvePluginExportAs<NevrPluginInitEx_fn>(hPlugin, "PluginInitEx", &deprecatedUsed);
+  auto initFn = ResolvePluginExportAs<NevrPluginInit_fn>(hPlugin, "PluginInit", &deprecatedUsed);
+  auto onFrameFn = ResolvePluginExportAs<NevrPluginOnFrame_fn>(hPlugin, "PluginOnFrame", &deprecatedUsed);
+  auto onStateChangeFn =
+      ResolvePluginExportAs<NevrPluginOnGameStateChange_fn>(hPlugin, "PluginOnGameStateChange", &deprecatedUsed);
+  auto shutdownFn = ResolvePluginExportAs<NevrPluginShutdown_fn>(hPlugin, "PluginShutdown", &deprecatedUsed);
+
+  // One line per plugin that loaded through the deprecated Nvr names (docs/standards/naming.md), naming them.
+  if (!deprecatedUsed.empty()) {
+    std::string names;
+    for (const std::string& n : deprecatedUsed) names += (names.empty() ? "" : ", ") + n;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] plugin=%s file=%s loaded with deprecated Nvr exports (%s); rebuild against the current "
+        "SDK to export the Nevr names", item.name.c_str(), filename, names.c_str());
+  }
 
   const PluginInitKind initKind =
       ChoosePluginInit(initExFn != nullptr, initFn != nullptr);
@@ -1212,13 +1242,13 @@ class PluginLoadRun {
         "U+FFFD in args_json", item.name.c_str(), key.c_str());
   }
 
-  // A v3 plugin (only NvrPluginInit) has no args channel — if the operator
+  // A v3 plugin (only NevrPluginInit) has no args channel — if the operator
   // configured args for it, say so rather than dropping them silently. Do NOT
   // log the args_json itself (it may hold secrets); log only that args exist.
   if (initKind == PluginInitKind::Legacy && item.args_json != "{}") {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PLUGIN] %s: args configured but the plugin exports only the v3 "
-        "NvrPluginInit (no args channel) — args ignored", filename);
+        "NevrPluginInit (no args channel) — args ignored", filename);
   }
 
   // Stage for pass-2 caps-ordered init (N134 S8).
@@ -1264,18 +1294,22 @@ class PluginLoadRun {
   }
 
   // Init each staged plugin in order; record the outcome in `report` and `g_plugins`.
-  void InitStaged(const NvrGameContext& ctx) {
+  void InitStaged(const NevrGameContext& ctx) {
   for (const StagedPlugin& s : staged) {
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
     const char* pluginId = InternPluginId(s.item.name);
-    const NvrGameContext pluginCtx = ContextFor(ctx, pluginId);
+    const NevrGameContext pluginCtx = ContextFor(ctx, pluginId);
     int result = 0;
+    // #2161: register_resources is open for this plugin, on this thread, while its init runs; an init that fails
+    // drops what it registered.
+    nevr_resource_sets::BeginPluginInit(pluginId, s.hModule);
     switch (s.initKind) {
       case PluginInitKind::Ex:     result = s.initExFn(&pluginCtx, s.item.args_json.c_str()); break;
       case PluginInitKind::Legacy: result = s.initFn(&pluginCtx); break;
       case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
+    nevr_resource_sets::EndPluginInit(pluginId, result == 0);
     if (result != 0) {
       // An unsuccessful init may already have installed detours or acquired
       // resources. Give the plugin its shutdown callback before unmapping
@@ -1312,7 +1346,7 @@ class PluginLoadRun {
       continue;
     }
 
-    const NvrLoadedPluginInfo loadedInfo = {
+    const NevrLoadedPluginInfo loadedInfo = {
         s.info.name, s.info.description,
         s.info.version_major, s.info.version_minor, s.info.version_patch,
         s.apiVersion, s.caps};
@@ -1426,7 +1460,7 @@ void LoadPlugins(PluginPhase phase) {
   const size_t loadedBefore = g_plugins.size();
 
   // Build init context (shared; the per-plugin channel is args_json via InitEx).
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.net_game = nullptr;
   ctx.game_state = 0;
@@ -1434,9 +1468,10 @@ void LoadPlugins(PluginPhase phase) {
   if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
   else ctx.flags |= NEVR_HOST_IS_CLIENT;
   if (g_isHeadless) ctx.flags |= NEVR_HOST_IS_HEADLESS;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
+  ctx.register_resources = nevr_resource_sets::HostRegisterResources;  // v9 (#2161): init contexts only
 
   InstallPluginLoadFilter(pluginDir);  // loads a plugin makes after its init face the same check
 
@@ -1465,7 +1500,8 @@ void LoadPlugins(PluginPhase phase) {
 
 // Assets a plugin registered point into its image; drop them before the image goes so the engine can never be
 // handed a pointer into freed memory. A well-behaved plugin deregisters its own in shutdown; this is the host's
-// guarantee for one that does not.
+// guarantee for one that does not. The same holds for resource overrides whose bytes are in the image: the host
+// registers a mounted resource set's overrides itself (#2161), and a plugin may register its own.
 static void ReleaseAssetsOf(HMODULE module) {
   if (module == nullptr) return;
   const auto* base = reinterpret_cast<const uint8_t*>(module);
@@ -1479,6 +1515,7 @@ static void ReleaseAssetsOf(HMODULE module) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.ASSET] released %zu asset(s) still registered by a plugin at unload", released);
   }
+  DeregisterResourceOverrides(base, base + nt->OptionalHeader.SizeOfImage);
 }
 
 void UnloadPlugins() {
@@ -1495,19 +1532,19 @@ void UnloadPlugins() {
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 
-void TickPlugins(const NvrGameContext* ctx) {
+void TickPlugins(const NevrGameContext* ctx) {
   for (auto& p : g_plugins) {
     if (p.on_frame) {
-      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      const NevrGameContext pluginCtx = ContextFor(*ctx, p.id);
       p.on_frame(&pluginCtx);
     }
   }
 }
 
-void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
+void NotifyPluginsStateChange(const NevrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
   for (auto& p : g_plugins) {
     if (p.on_state_change) {
-      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      const NevrGameContext pluginCtx = ContextFor(*ctx, p.id);
       p.on_state_change(&pluginCtx, old_state, new_state);
     }
   }
@@ -1522,7 +1559,7 @@ void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uin
 
 #ifdef NEVR_TEST_HOOKS
 
-void TestHook_RegisterPluginOnFrame(NvrPluginOnFrame_fn fn) {
+void TestHook_RegisterPluginOnFrame(NevrPluginOnFrame_fn fn) {
   LoadedPlugin p = {};
   p.hModule = nullptr;
   p.on_frame = fn;
@@ -1531,7 +1568,7 @@ void TestHook_RegisterPluginOnFrame(NvrPluginOnFrame_fn fn) {
   g_plugins.push_back(p);
 }
 
-void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
+void TestHook_RegisterPluginOnStateChange(NevrPluginOnGameStateChange_fn fn) {
   LoadedPlugin p = {};
   p.hModule = nullptr;
   p.on_frame = nullptr;

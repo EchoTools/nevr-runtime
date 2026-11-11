@@ -662,6 +662,72 @@ class WritePluginManifestGoldenTest(unittest.TestCase):
         self.assertEqual(written, self.GOLDEN.read_bytes())
 
 
+class BuildVariantStampTest(unittest.TestCase):
+    """The stamp that names an APK's variant (ADR 0040 rule 1, docs/adr/0046 rule 5): `lib/arm64-v8a/libnevr_build_variant.so`
+    holds the word, which the sentinel reads beside its own library before its first line. The words are the ones the ADR names;
+    an empty word is a plain release; any other is refused, and nothing is written for it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="quest-repack-variant-", dir=work_root.test_scratch())
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.stage = self.tmp / "stage"
+        (self.stage / "lib" / "arm64-v8a").mkdir(parents=True)
+        self.stamp = self.stage / "lib" / "arm64-v8a" / "libnevr_build_variant.so"
+
+    def test_the_words_are_the_ones_the_adr_names_and_the_arena_apk(self):
+        self.assertEqual(libs.VARIANT_WORDS, ("q15t", "combat", "perf-probe", "arena"))
+        self.assertEqual(libs.VARIANT_ENTRY, "lib/arm64-v8a/libnevr_build_variant.so")
+
+    def test_each_word_is_written_as_exactly_its_bytes(self):
+        for word in libs.VARIANT_WORDS:
+            with self.subTest(word=word):
+                self.assertEqual(libs.write_build_variant(self.stage, word), [])
+                self.assertEqual(self.stamp.read_bytes(), word.encode("ascii"))
+
+    def test_an_empty_word_is_a_plain_release_and_writes_an_empty_stamp(self):
+        self.assertEqual(libs.write_build_variant(self.stage, ""), [])
+        self.assertTrue(self.stamp.is_file())
+        self.assertEqual(self.stamp.read_bytes(), b"")
+
+    def test_any_other_word_is_refused_by_name_and_writes_nothing(self):
+        for word in ("bogus", "Q15T", "Combat", " combat", "combat\n", "q15t ", "perf_probe", "combat\0", "release", "dev", "Arena", "arena ", "arena\n"):
+            with self.subTest(word=word):
+                problems = libs.write_build_variant(self.stage, word)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("is not a variant word", problems[0])
+                self.assertIn("q15t, combat, perf-probe, arena", problems[0])
+                self.assertFalse(self.stamp.exists())
+
+    def test_the_command_line_refuses_an_unknown_word_with_exit_one(self):
+        for command in ("check-build-variant", "write-build-variant"):
+            with self.subTest(command=command):
+                args = [sys.executable, "-I", str(REPO / "tools" / "quest_repack_libs.py"), command, "--variant", "bogus"]
+                if command == "write-build-variant":
+                    args += ["--stage", str(self.stage)]
+                result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("not a variant word", result.stderr)
+                self.assertFalse(self.stamp.exists())
+
+    def test_the_command_line_accepts_the_words_and_the_empty_word(self):
+        for word in ("", "q15t", "combat", "perf-probe", "arena"):
+            with self.subTest(word=word):
+                result = subprocess.run(
+                    [sys.executable, "-I", str(REPO / "tools" / "quest_repack_libs.py"), "write-build-variant",
+                     "--stage", str(self.stage), "--variant", word],
+                    capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.stamp.read_bytes(), word.encode("ascii"))
+
+    def test_a_plugin_named_like_the_stamp_is_a_collision(self):
+        self.assertIn("libnevr_build_variant.so", libs.STAGED_BY_RECIPE)
+
+    def test_the_stamp_is_not_an_unlisted_plugin(self):
+        self.assertEqual(libs.write_build_variant(self.stage, "combat"), [])
+        self.assertEqual(libs.plugin_manifest_problems(self.stage), [])
+
+
 class ShimRowsTest(unittest.TestCase):
     """`check-shim-rows`: the shim is the build for the rows the library is patched with (ADR 0021 section 11)."""
 
@@ -935,6 +1001,59 @@ class RepackWithAPluginTest(RepackFixture):
 
 
 @unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")
+class RepackNamesItsVariantTest(RepackFixture):
+    """`just android-repack-apk` with its variant parameter (the last): the signed APK carries the stamp the sentinel reads."""
+
+    STAMP = "lib/arm64-v8a/libnevr_build_variant.so"
+
+    def run_recipe(self, *tail: str):
+        work = self.tmp / "work"
+        result = subprocess.run(
+            ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
+             str(self.apk), str(self.shim), os.path.relpath(work, REPO), "", "", "", str(self.patcher), "", "", "", "", "", "",
+             *tail],
+            capture_output=True, text=True, env=self.env, timeout=300)
+        self.signed = work / "r15_nevr-sentinel_signed.apk"
+        return result
+
+    def signed_stamp(self, *tail: str) -> bytes:
+        """Repacks once with `tail` and returns the stamp's bytes from the signed APK."""
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe(*tail)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("verify-signed OK", result.stdout)
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.getinfo(self.STAMP).compress_type, zipfile.ZIP_STORED)
+            return z.read(self.STAMP)
+
+    def test_q15t_is_in_the_signed_apk_stored(self):
+        self.assertEqual(self.signed_stamp("q15t"), b"q15t")
+
+    def test_combat_is_in_the_signed_apk_stored(self):
+        self.assertEqual(self.signed_stamp("combat"), b"combat")
+
+    def test_perf_probe_is_in_the_signed_apk_stored(self):
+        self.assertEqual(self.signed_stamp("perf-probe"), b"perf-probe")
+
+    def test_arena_is_in_the_signed_apk_stored(self):
+        self.assertEqual(self.signed_stamp("arena"), b"arena")
+
+    def test_an_empty_word_gives_a_plain_release_stamp(self):
+        self.assertEqual(self.signed_stamp(""), b"")
+
+    def test_no_word_gives_a_plain_release_stamp(self):
+        self.assertEqual(self.signed_stamp(), b"")
+
+    def test_an_unknown_word_is_refused_before_anything_is_staged_or_signed(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe("bogus")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a variant word", result.stderr)
+        self.assertEqual(recorded_runs(self.patcher), [])  # the patcher never ran
+        self.assertFalse(self.signed.exists())
+
+
+@unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")
 class RepackPatchesLibr15Test(RepackFixture):
     """`just android-repack-apk`: libr15.so goes through the patcher (the `patcher` parameter is the stand-in), is stored
     like the store's entry, and the patcher's file is checked again by verify-signed (ADR 0021 section 9)."""
@@ -1141,6 +1260,20 @@ class StageLibsTest(unittest.TestCase):
         self.assertEqual((self.stage / libs.STAGED_REPLACE_LIST).read_text(), "")
         self.assertEqual(libs.replaced_names(self.stage), [])
 
+    def test_the_staged_names_are_recorded_so_the_plugin_manifest_check_skips_them(self):
+        # #2092: a repack with a plugin and script libraries wrote a plugin manifest, then staged the libraries; the signed-APK
+        # check then named every staged script library "staged, not listed in libnevr_plugin_manifest.so".
+        self.assertEqual(self.run_stage(), [])
+        self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(self.names))
+        abi = self.stage / "lib/arm64-v8a"
+        (abi / "libplugin.so").write_bytes(b"plugin")
+        (abi / libs.MANIFEST_NAME).write_text(json.dumps({"plugins": [
+            {"name": "plugin", "file": "libplugin.so", "enabled": True, "early": False, "sha256": SHA(b"plugin")}]}))
+        self.assertEqual(libs.plugin_manifest_problems(self.stage), [])
+        (abi / "libstray.so").write_bytes(b"staged by nothing")
+        self.assertEqual(libs.plugin_manifest_problems(self.stage),
+                         [f"lib/arm64-v8a/libstray.so: staged, not listed in {libs.MANIFEST_NAME}"])
+
     def test_an_unlisted_library_is_refused(self):
         self.write_sums()
         (self.libs / "SHA256SUMS").write_text(f"{SHA(self.names['lib0123456789abcdef.so'])}  lib0123456789abcdef.so\n")
@@ -1239,6 +1372,8 @@ class StageRedirectedLibsTest(unittest.TestCase):
             self.assertFalse((staged / name).exists(), name)
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
+        # The record the plugin-manifest check reads holds the names as staged, _q15t and all (#2092).
+        self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(libs.staged_name(n) for n in self.NINE))
 
     def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
         for name in (self.NINE[3], self.NINE[8]):

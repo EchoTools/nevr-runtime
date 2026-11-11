@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "core/logging.h"
+#include "runtime/hook/write_ranges.h"
 
 namespace {
 
@@ -17,32 +18,49 @@ constexpr int kSnapshotBytes = 16;
 /// Fixed capacity — no heap. Recording happens during boot, some of it under the
 /// loader lock, and this is a diagnostic that must never be the reason a boot fails.
 ///
-/// The bound is found, not set. Counting the install sites in src/ that reach Record() (every
-/// PatchDetour/InstallBootDetour call, each row of the binary_bug_fixes hook table, and the raw
-/// MinHook installs that call Record directly) gives 65 for a build with every optional hook
-/// present: crash_recovery 9, mode_patches 8, binary_bug_fixes 7, party_invite_gate 7,
-/// initialize 8 (6 InstallBootDetour + CSysDLL_GetSymbol + CSysDLL_Load), headless_graphics 4,
-/// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2, menu_version_label 1, splash_skip 1, ui_texture_mips 1,
-/// and one each in xpid_patch, return_to_lobby, resource_override, builtin_filter. The
-/// capacity is twice that counted 65 sites, so a new hook has room. If the table fills,
-/// Record() counts the drop (never silent): VerifyAll() reports it at ERROR and
-/// DroppedCount() exposes it.
+/// The bound is found, not set. A `git grep -nE` over src/ for calls to PatchDetour, InstallBootDetour,
+/// hook_guard::Record and RecordBytes (outside src/runtime/tests and hook/patching.h, comment lines
+/// dropped) finds 70 call lines: each is a place an install reaches Record(). A call line can install
+/// several records (a loop over a table, or a wrapper called once per row or per engine hook: the
+/// binary_bug_fixes hook table, loading_tips' detour list, plugin_assets'
+/// two engine hooks), so the capacity is about twice the line count. The table holds live records, not call
+/// lines: a retired record's slot is reused. If the table fills, Record() counts the drop (never silent):
+/// VerifyAll() reports it at ERROR and DroppedCount() exposes it.
 constexpr int kMaxGuarded = 128;
 
+/// One slot. Writers change a slot only under g_writerLock, with `seq` odd, and readers skip a
+/// slot whose `seq` is odd. `gen` is the record's generation (unique per published record), or 0
+/// when the slot is free. Readers take no lock: a seqlock read copies the slot only when `seq` is
+/// even and unchanged across the copy, so a reader never sees half a record.
 struct GuardedSite {
+  volatile LONG seq;
+  volatile LONG gen;
+  volatile LONG reportedGen;  // generation whose overwrite ERROR has been logged — a collision
+                              // that stays overwritten (nothing un-overwrites one) must not
+                              // re-log the identical ERROR every ~30s periodic check.
   const void* target;
   const char* name;  // string literal from the call site; not owned
   unsigned char bytes[kSnapshotBytes];
-  volatile LONG published;  // release-published only after all fields are filled
-  volatile LONG reported;  // true once this site's overwrite ERROR has been logged —
-                  // a collision that stays overwritten (nothing un-overwrites
-                  // one) must not re-log the identical ERROR every ~30s
-                  // periodic check for the rest of the process lifetime.
+};
+
+struct Snapshot {
+  const void* target;
+  const char* name;
+  unsigned char bytes[kSnapshotBytes];
+  LONG gen;
+  LONG seq;  // the slot's seq when it was copied: even, and unchanged across the copy
 };
 
 GuardedSite g_sites[kMaxGuarded];
-volatile LONG g_reserved = 0;
-volatile LONG g_recorded = 0;
+
+// Serializes Record, RecordBytes, Retire and ResetForTest. An SRW lock, not a spin lock: a
+// Record can run under the loader lock during boot, and an uncontended acquire calls no loader
+// code. Nothing holds it while logging.
+SRWLOCK g_writerLock = SRWLOCK_INIT;
+
+volatile LONG g_generation = 0;   // last generation handed out
+volatile LONG g_slotsUsed = 0;    // one past the highest slot index ever claimed: readers scan up to here
+volatile LONG g_recorded = 0;     // live records
 volatile LONG g_dropped = 0;           // Record() calls that found the table full
 volatile LONG g_dropReported = 0;       // g_dropped value VerifyAll() last reported
 volatile LONG g_firstDropClaimed = 0;   // one writer fills the two fields below
@@ -52,6 +70,8 @@ const char* g_firstDropName = nullptr;
 
 #ifdef NEVR_TEST_HOOKS
 void (*g_beforePublishForTest)() = nullptr;
+/// Runs in VerifyAll right after a slot is copied, before the target's bytes are read.
+void (*g_afterReadForTest)() = nullptr;
 #endif
 
 /// Committed+readable check that does not use IsBadReadPtr (deprecated, and
@@ -76,6 +96,34 @@ void FormatBytes(const unsigned char* src, int n, char* out, size_t out_cap) {
   out[used < out_cap ? used : out_cap - 1] = '\0';
 }
 
+LONG SlotsInUse() { return InterlockedCompareExchange(&g_slotsUsed, 0, 0); }
+
+/// Copies slot `i` when it holds a record and no writer is changing it. Lock-free: see GuardedSite.
+bool ReadSlot(LONG i, Snapshot& out) {
+  GuardedSite& s = g_sites[i];
+  const LONG before = InterlockedCompareExchange(&s.seq, 0, 0);
+  if ((before & 1) != 0) return false;
+  const LONG gen = InterlockedCompareExchange(&s.gen, 0, 0);
+  if (gen == 0) return false;
+  out.target = s.target;
+  out.name = s.name;
+  memcpy(out.bytes, s.bytes, kSnapshotBytes);
+  out.gen = gen;
+  out.seq = before;
+  return InterlockedCompareExchange(&s.seq, 0, 0) == before;
+}
+
+/// True when this call is the first to report the record of generation `gen` in slot `i`. A slot
+/// reused by a later record has a new generation, so the new record's first overwrite is reported.
+bool ClaimReport(LONG i, LONG gen) {
+  GuardedSite& s = g_sites[i];
+  for (;;) {
+    const LONG prev = InterlockedCompareExchange(&s.reportedGen, 0, 0);
+    if (prev == gen) return false;
+    if (InterlockedCompareExchange(&s.reportedGen, gen, prev) == prev) return true;
+  }
+}
+
 }  // namespace
 
 namespace nevr_hook_guard {
@@ -87,31 +135,41 @@ void RecordImpl(const void* target, const char* name, const unsigned char* bytes
   if (target == nullptr) return;
   if (!Readable(target, kSnapshotBytes)) return;
 
-  LONG idx = 0;
-  for (;;) {
-    idx = InterlockedCompareExchange(&g_reserved, 0, 0);
-    if (idx >= kMaxGuarded) {
-      // No Log() here, one line per dropped hook would repeat itself: the drop is counted
-      // and VerifyAll() (tick, plugin loader: never under the lock) reports it.
-      if (InterlockedCompareExchange(&g_firstDropClaimed, 1, 0) == 0) {
-        g_firstDropTarget = target;
-        g_firstDropName = name != nullptr ? name : "(unnamed)";
-        InterlockedExchange(&g_firstDropPublished, 1);
-      }
-      InterlockedIncrement(&g_dropped);
-      return;
+  AcquireSRWLockExclusive(&g_writerLock);
+  int idx = -1;
+  for (int i = 0; i < kMaxGuarded; i++) {
+    if (InterlockedCompareExchange(&g_sites[i].gen, 0, 0) == 0) {
+      idx = i;
+      break;
     }
-    if (InterlockedCompareExchange(&g_reserved, idx + 1, idx) == idx) break;
+  }
+  if (idx < 0) {
+    ReleaseSRWLockExclusive(&g_writerLock);
+    // No Log() here, one line per dropped hook would repeat itself: the drop is counted
+    // and VerifyAll() (tick, plugin loader: never under the lock) reports it.
+    if (InterlockedCompareExchange(&g_firstDropClaimed, 1, 0) == 0) {
+      g_firstDropTarget = target;
+      g_firstDropName = name != nullptr ? name : "(unnamed)";
+      InterlockedExchange(&g_firstDropPublished, 1);
+    }
+    InterlockedIncrement(&g_dropped);
+    return;
   }
 
-  g_sites[idx].target = target;
-  g_sites[idx].name = name != nullptr ? name : "(unnamed)";
-  memcpy(g_sites[idx].bytes, bytes != nullptr ? bytes : static_cast<const unsigned char*>(target), kSnapshotBytes);
+  GuardedSite& s = g_sites[idx];
+  const LONG gen = InterlockedIncrement(&g_generation);
+  InterlockedIncrement(&s.seq);  // odd: readers skip the slot until it is published
+  s.target = target;
+  s.name = name != nullptr ? name : "(unnamed)";
+  memcpy(s.bytes, bytes != nullptr ? bytes : static_cast<const unsigned char*>(target), kSnapshotBytes);
 #ifdef NEVR_TEST_HOOKS
   if (g_beforePublishForTest != nullptr) g_beforePublishForTest();
 #endif
-  InterlockedExchange(&g_sites[idx].published, 1);
+  InterlockedExchange(&s.gen, gen);
   InterlockedIncrement(&g_recorded);
+  if (idx + 1 > g_slotsUsed) InterlockedExchange(&g_slotsUsed, idx + 1);
+  InterlockedIncrement(&s.seq);  // even: the slot is stable
+  ReleaseSRWLockExclusive(&g_writerLock);
 }
 
 }  // namespace
@@ -125,39 +183,79 @@ void RecordBytes(const void* target, const char* name, const unsigned char (&byt
 
 bool IsOurDetour(const void* target) {
   if (target == nullptr || !Readable(target, kSnapshotBytes)) return false;
-  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
-  for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
-    if (InterlockedCompareExchange(&g_sites[i].published, 0, 0) == 0) continue;
-    if (g_sites[i].target == target) return memcmp(target, g_sites[i].bytes, kSnapshotBytes) == 0;
+  const LONG used = SlotsInUse();
+  for (LONG i = 0; i < used; i++) {
+    Snapshot snap{};
+    if (!ReadSlot(i, snap) || snap.target != target) continue;
+    if (memcmp(target, snap.bytes, kSnapshotBytes) == 0) return true;
   }
   return false;
 }
 
+int Retire(const void* target) {
+  int retired = 0;
+  const char* firstName = nullptr;
+  if (target != nullptr) {
+    AcquireSRWLockExclusive(&g_writerLock);
+    const LONG used = SlotsInUse();
+    for (LONG i = 0; i < used; i++) {
+      GuardedSite& s = g_sites[i];
+      if (InterlockedCompareExchange(&s.gen, 0, 0) == 0 || s.target != target) continue;
+      if (firstName == nullptr) firstName = s.name;
+      InterlockedIncrement(&s.seq);  // odd: readers skip the slot while it is freed
+      InterlockedExchange(&s.gen, 0);
+      InterlockedIncrement(&s.seq);  // even
+      InterlockedDecrement(&g_recorded);
+      retired++;
+    }
+    ReleaseSRWLockExclusive(&g_writerLock);
+  }
+  const unsigned long long va = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(target));
+  if (retired == 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook retire refused va=0x%llX reason=not_recorded; no guard record was there to forget",
+        va);
+    return 0;
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] hook retired name=%s va=0x%llX records=%d", firstName, va, retired);
+  return retired;
+}
+
 int VerifyAll(const char* context) {
-  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
+  const LONG used = SlotsInUse();
   int mismatches = 0;
   int newlyReported = 0;
 
-  for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
-    GuardedSite& s = g_sites[i];
-    if (InterlockedCompareExchange(&s.published, 0, 0) == 0) continue;
-    if (s.target == nullptr) continue;
-    if (!Readable(s.target, kSnapshotBytes)) continue;
+  for (LONG i = 0; i < used; i++) {
+    Snapshot snap{};
+    if (!ReadSlot(i, snap)) continue;
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterReadForTest != nullptr) g_afterReadForTest();
+#endif
+    if (snap.target == nullptr) continue;
+    if (!Readable(snap.target, kSnapshotBytes)) continue;
 
     unsigned char now[kSnapshotBytes];
-    memcpy(now, s.target, kSnapshotBytes);
-    if (memcmp(now, s.bytes, kSnapshotBytes) == 0) continue;
+    memcpy(now, snap.target, kSnapshotBytes);
+    if (memcmp(now, snap.bytes, kSnapshotBytes) == 0) continue;
 
+    // The bytes differ, and a Retire explains that: it changes the slot (seq, then gen 0) before MH_RemoveHook writes the
+    // game's bytes back, so a copy taken across that is not an overwrite. A Record can reuse the slot the same way. A slot
+    // whose seq or gen moved since the copy is skipped; an overwrite that is still there is found by the next pass.
+    if (InterlockedCompareExchange(&g_sites[i].seq, 0, 0) != snap.seq ||
+        InterlockedCompareExchange(&g_sites[i].gen, 0, 0) != snap.gen) {
+      continue;
+    }
     mismatches++;
-    // Edge-triggered: log this site's ERROR once, the first check that finds
+    // Edge-triggered: log this record's ERROR once, the first check that finds
     // it overwritten. Nothing un-overwrites a clobbered hook, so without this
     // gate the identical line repeats every ~30s periodic check forever.
-    if (InterlockedCompareExchange(&s.reported, 1, 0) != 0) continue;
+    if (!ClaimReport(i, snap.gen)) continue;
     newlyReported++;
 
     char expected[kSnapshotBytes * 2 + 1];
     char actual[kSnapshotBytes * 2 + 1];
-    FormatBytes(s.bytes, kSnapshotBytes, expected, sizeof(expected));
+    FormatBytes(snap.bytes, kSnapshotBytes, expected, sizeof(expected));
     FormatBytes(now, kSnapshotBytes, actual, sizeof(actual));
 
     // ERROR, not Warning: an operator MUST act. Two MinHook instances on one
@@ -167,7 +265,7 @@ int VerifyAll(const char* context) {
         "[NEVR.PATCH] hook overwritten name=%s va=0x%llX after=%s "
         "expected=%s actual=%s — another module detoured an address gamepatches "
         "already owns",
-        s.name, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(s.target)),
+        snap.name, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(snap.target)),
         context != nullptr ? context : "(unknown)", expected, actual);
   }
 
@@ -194,12 +292,32 @@ int VerifyAll(const char* context) {
         "[NEVR.PATCH] hook guard: %d new overwrite(s) detected after=%s "
         "(%d of %ld guarded address(es) now overwritten, cumulative)",
         newlyReported, context != nullptr ? context : "(unknown)",
-        mismatches, static_cast<long>(n));
+        mismatches, static_cast<long>(RecordedCount()));
   }
   return mismatches;
 }
 
 int RecordedCount() { return static_cast<int>(InterlockedCompareExchange(&g_recorded, 0, 0)); }
+
+bool FindOverlap(const void* start, std::size_t length, Overlap* hit) {
+  if (start == nullptr || length == 0) return false;
+  const auto s = reinterpret_cast<std::uintptr_t>(start);
+  const LONG used = SlotsInUse();
+  for (LONG i = 0; i < used; i++) {
+    Snapshot snap{};
+    if (!ReadSlot(i, snap)) continue;
+    const auto t = reinterpret_cast<std::uintptr_t>(snap.target);
+    if (!nevr_write_ranges::Overlaps(s, length, t, kSnapshotBytes)) continue;
+    if (hit != nullptr) *hit = Overlap{t, static_cast<std::size_t>(kSnapshotBytes), snap.name, "hook"};
+    return true;
+  }
+  nevr_write_ranges::Range r{};
+  if (nevr_write_ranges::FindOverlap(s, length, &r)) {
+    if (hit != nullptr) *hit = Overlap{r.start, r.length, r.name, "write"};
+    return true;
+  }
+  return false;
+}
 
 int DroppedCount() { return static_cast<int>(InterlockedCompareExchange(&g_dropped, 0, 0)); }
 
@@ -207,11 +325,16 @@ int Capacity() { return kMaxGuarded; }
 
 #ifdef NEVR_TEST_HOOKS
 void SetBeforePublishForTest(void (*callback)()) { g_beforePublishForTest = callback; }
+void SetAfterReadForTest(void (*callback)()) { g_afterReadForTest = callback; }
 
 void ResetForTest() {
-  InterlockedExchange(&g_reserved, 0);
+  AcquireSRWLockExclusive(&g_writerLock);
+  for (GuardedSite& s : g_sites) {
+    InterlockedExchange(&s.gen, 0);
+    InterlockedExchange(&s.reportedGen, 0);
+  }
   InterlockedExchange(&g_recorded, 0);
-  memset(g_sites, 0, sizeof(g_sites));
+  InterlockedExchange(&g_slotsUsed, 0);
   InterlockedExchange(&g_dropped, 0);
   InterlockedExchange(&g_dropReported, 0);
   InterlockedExchange(&g_firstDropClaimed, 0);
@@ -219,6 +342,8 @@ void ResetForTest() {
   g_firstDropTarget = nullptr;
   g_firstDropName = nullptr;
   g_beforePublishForTest = nullptr;
+  g_afterReadForTest = nullptr;
+  ReleaseSRWLockExclusive(&g_writerLock);
 }
 #endif
 

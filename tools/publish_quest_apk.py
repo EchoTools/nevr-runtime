@@ -2,6 +2,7 @@
 """Put a release's Quest APK and its .sha256 on R2, then fetch both back from the public host and compare (RELEASING.md,
 "The Quest APK"; #1098). Usage: publish_quest_apk.py vX.Y.Z [--dir build/quest-release/vX.Y.Z] [--extra-out FILE]
                                                    publish_quest_apk.py vX.Y.Z --variant NAME [--dir DIR]
+                                                   publish_quest_apk.py vX.Y.Z --listed-variant arena [--dir DIR] [--extra-out FILE]
 
 The files are the ones `just release-quest-apk vX.Y.Z` wrote. The APK goes up through the release signer's
 `put-quest-apk`, which checks that the release is published, that the APK was built from the tag's commit and signed with
@@ -24,6 +25,11 @@ build/quest-release/<tag>/variant (or --dir), and both go up with `rclone copyto
 already there is never replaced. The signer is not run and there is no manifest claim, so the variant is not in the
 manifest, and the environment needs only the R2 credential and RELEASE_PUBLIC_BASE. The same fetch-back by size and sha256
 follows. `--extra-out` is refused with it. Every record of the run carries `variant`.
+
+`--listed-variant arena` (#2298) publishes the arena APK, which IS in the manifest as the kind `quest-apk-arena`: the files are
+`nevr-runtime-<tag>-arena-quest.apk` and its `.sha256` that `just release-quest-arena-apk` wrote to build/quest-release/<tag>/arena
+(or --dir). It goes up like the release APK, through the signer's `put-quest-apk --kind quest-apk-arena`, with the whole environment
+the release APK needs, and `--extra-out` keeps the signer's claim for the manifest publish. It is refused with `--variant`.
 
 Exit 0 only when both files fetched back from RELEASE_PUBLIC_BASE equal the local ones in size and sha256. Every step
 appends a JSON line to $XDG_STATE_HOME/nevr-runtime/publish-quest-apk.jsonl (default ~/.local/state/...); a log that
@@ -62,6 +68,8 @@ VARIANT_REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECR
 # The rclone remote's name: letters, digits and underscores, so rclone's RCLONE_CONFIG_<NAME>_* variables can name it.
 RCLONE_REMOTE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 VARIANT_NAME = re.compile(r"[a-z0-9]+")
+# The variants the manifest lists, each with the kind the signer's put-quest-apk is given (`--kind`). The signer's default kind is quest-apk.
+LISTED_KINDS = {"arena": "quest-apk-arena"}
 SIGNER_CONFIG = ("config/manifest.yml", "config/sources.yml")
 TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -139,10 +147,11 @@ def sha256_file(path: pathlib.Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def local_files(directory: pathlib.Path, tag: str,
-                variant: str | None = None) -> tuple[str, pathlib.Path, pathlib.Path, str, int, bytes]:
+def local_files(directory: pathlib.Path, tag: str, variant: str | None = None,
+                listed: bool = False) -> tuple[str, pathlib.Path, pathlib.Path, str, int, bytes]:
     name = apk_name(tag, variant)
-    recipe = f"release-quest-apk {tag}" if variant is None else f"release-quest-variant-apk {tag} <plugins>"
+    recipe = (f"release-quest-apk {tag}" if variant is None else
+              f"release-quest-{variant}-apk {tag}" if listed else f"release-quest-variant-apk {tag}")
     apk, sidecar = directory / name, directory / f"{name}.sha256"
     if not apk.is_file():
         raise Failure(f"{apk} does not exist; run `just {recipe}` first")
@@ -248,12 +257,17 @@ def put_object(source: pathlib.Path, key: str, env: dict[str, str], what: str) -
 
 
 def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
+    listed = args.listed_variant
+    if listed is not None and listed not in LISTED_KINDS:
+        raise Failure(f"refused: --listed-variant must be one of {', '.join(sorted(LISTED_KINDS))}")
+    if listed is not None and args.variant is not None:
+        raise Failure("refused: --listed-variant and --variant are two different publishes")
     variant = args.variant
     if variant is not None and not VARIANT_NAME.fullmatch(variant):
         raise Failure("refused: --variant must be lowercase letters and digits")
     if variant is not None and args.extra_out is not None:
         raise Failure("refused: --extra-out keeps the signer's manifest claim, and --variant publishes without the signer")
-    refused = missing_env(env, variant)
+    refused = missing_env(env, variant)  # a listed variant goes through the signer, so it needs the release APK's whole environment
     if refused:
         log.event("refused", missing=refused)
         raise Failure(f"refused: set {', '.join(refused)}")
@@ -263,11 +277,12 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
         raise Failure(f"{args.tag} is not a release tag (vX.Y.Z)")
     base = public_base(env)
     signer_cwd = signer_dir(env) if variant is None else ""
+    apk_variant = listed if listed is not None else variant  # the word in the APK's name
     if args.dir:
         directory = pathlib.Path(args.dir)
     else:
-        directory = pathlib.Path("build") / "quest-release" / args.tag / ("variant" if variant is not None else "")
-    name, apk, sidecar, digest, size, sidecar_bytes = local_files(directory.resolve(), args.tag, variant)
+        directory = pathlib.Path("build") / "quest-release" / args.tag / (listed or ("variant" if variant is not None else ""))
+    name, apk, sidecar, digest, size, sidecar_bytes = local_files(directory.resolve(), args.tag, apk_variant, listed is not None)
     log.event("local_files", apk=name, sha256=digest, size=size)
     extra_out = pathlib.Path(args.extra_out) if args.extra_out else None
     if extra_out is not None and os.path.lexists(extra_out):
@@ -276,8 +291,10 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
     if variant is None:
         with tempfile.TemporaryDirectory() as scratch:
             extra = os.path.join(scratch, "extra.json")
-            result = run_step([env["RELEASE_SIGNER_BIN"], "put-quest-apk", "--tag", args.tag, "--apk", str(apk), "--out", extra],
-                              env, "the signer's put-quest-apk", cwd=signer_cwd)
+            command = [env["RELEASE_SIGNER_BIN"], "put-quest-apk", "--tag", args.tag, "--apk", str(apk), "--out", extra]
+            if listed is not None:
+                command += ["--kind", LISTED_KINDS[listed]]
+            result = run_step(command, env, "the signer's put-quest-apk", cwd=signer_cwd)
             if extra_out is not None:
                 keep_extra(pathlib.Path(extra), extra_out)
         log.event("put_apk", object=f"{KEY_PREFIX}/{args.tag}/{name}", signer_line=result.stdout.strip())
@@ -309,13 +326,14 @@ def main(argv: list[str], env: dict[str, str]) -> int:
     parser.add_argument("tag", help="the release tag, vX.Y.Z")
     parser.add_argument("--dir", help="where release-quest-apk wrote the files (default build/quest-release/<tag>)")
     parser.add_argument("--extra-out", help="keep the signer's manifest claim in this new file")
+    parser.add_argument("--listed-variant", help="publish the arena APK, which the manifest lists as quest-apk-arena (through the signer)")
     parser.add_argument("--variant", help="publish the unlisted APK of this name (lowercase letters and digits): no signer, no claim")
     args = parser.parse_args(argv)
     log = None
     try:
         log = Log(state_log_path(env), args.tag)
-        if args.variant is not None:
-            log.base["variant"] = args.variant
+        if args.variant is not None or args.listed_variant is not None:
+            log.base["variant"] = args.variant or args.listed_variant
         log.event("start", dir=args.dir or "", extra_out=args.extra_out or "")
         publish(args, env, log)
     except Failure as failure:

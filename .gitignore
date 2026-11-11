@@ -108,8 +108,8 @@ echovr
 # Temporary working files
 _temp/
 
-# Environment files. The root .env holds runtime-only local overrides: never committed, never
-# read by the build. The build embeds config/public-defaults.env, which CI writes from the repository's
+# Environment files. The root .env holds local overrides and the release inputs (just loads it): never committed,
+# never read by the build. The build embeds config/public-defaults.env, which CI writes from the repository's
 # Actions variables and a developer fills from config/public-defaults.env.example.
 /config/public-defaults.env
 extras/.env
@@ -161,3 +161,6 @@ dump.rdb
 /installer/target/
 # the lock file is committed so a build never resolves a crate nobody reviewed (docs/reference/verifying-a-release.md)
 !/installer/Cargo.lock
+
+# A combat module's mutant list (src/quest/combat/mutants.sh); `*.d` above would otherwise ignore the directory.
+!src/quest/combat/mutants.d/

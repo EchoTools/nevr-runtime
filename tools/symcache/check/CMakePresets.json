@@ -1,0 +1,17 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "symcache-check",
+            "displayName": "Compile check of the generated symbol table (host compiler)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../build/symcache-check"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "symcache-check",
+            "configurePreset": "symcache-check"
+        }
+    ]
+}

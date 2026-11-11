@@ -45,7 +45,7 @@ constexpr char kPluginName[] = "nevr_autopilot";
 constexpr int kStartFilePollMs = 100;  // ADR 0025: the start file is checked every 100 ms
 
 struct Plugin {
-  const NvrGameContext* ctx = nullptr;
+  const NevrGameContext* ctx = nullptr;
   std::string id;
   std::string routePath;
   std::string startFile;
@@ -262,7 +262,7 @@ bool Init(Plugin& p, const char* argsJson, const Os& os) {
        {"start_after_s", Seconds(p.route.startAfterNs)},
        {"start", p.startFile.empty() ? "first_frame" : "start_file"},
        {"drives", Drives(p.route)}});
-  const bool covered = p.ctx->ctx_size >= offsetof(NvrGameContext, quest) + sizeof(p.ctx->quest);
+  const bool covered = p.ctx->ctx_size >= offsetof(NevrGameContext, quest) + sizeof(p.ctx->quest);
   const NevrQuestHostApi* quest = covered ? p.ctx->quest : nullptr;
   if (quest == nullptr || quest->struct_size < sizeof(NevrQuestHostApi) || quest->register_input_filter == nullptr) {
     Log(p, NEVR_LOG_ERROR, "input_filter", {{"result", "no_host_api"}});
@@ -299,7 +299,7 @@ constexpr Os kRealOs{&OpenWake, &StartThread};
 
 const Os& RealOs() noexcept { return kRealOs; }
 
-int InitWith(const NvrGameContext* ctx, const char* argsJson, const Os& os) {
+int InitWith(const NevrGameContext* ctx, const char* argsJson, const Os& os) {
   if (ctx == nullptr || g_plugin != nullptr) return 1;
   Plugin* p = new (g_storage) Plugin();
   p->ctx = ctx;
@@ -331,13 +331,13 @@ void Shutdown() {
 
 }  // namespace nevr_autopilot::plugin
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return {"nevr_autopilot", "drives the controllers through a route file (dev builds; #1202)", 1, 0, 0};
 }
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* args_json) {
   return nevr_autopilot::plugin::InitWith(ctx, args_json, nevr_autopilot::plugin::RealOs());
 }
 
-NEVR_PLUGIN_API void NvrPluginShutdown(void) { nevr_autopilot::plugin::Shutdown(); }
+NEVR_PLUGIN_API void NevrPluginShutdown(void) { nevr_autopilot::plugin::Shutdown(); }

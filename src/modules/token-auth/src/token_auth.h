@@ -20,9 +20,20 @@ void Init(uintptr_t base_addr, bool is_server);
 void Shutdown();
 
 // The one line a server with no password prints for its host (#1532): the code and the page that takes it, as a
-// JSON object on one line so a supervisor can read it too. The code is a credential for five minutes; it goes to the
-// console on purpose and never to the log, which carries it masked.
+// JSON object on one line so a supervisor can read it too. The code lives five minutes; the log carries it in full too,
+// because a headless server's log may be the only place its host can read it. Tokens are never logged.
 std::string ServerSignInPromptLine(const std::string& code, const std::string& loginUrl);
+
+// The Info line a server with auth.password writes: it says what the server does, not that device codes are off.
+std::string ServerPasswordSignInLine();
+// The Info text of the flow's own guard, written when a caller runs the device flow in server mode
+// without enabling server sign-in in the flow's ops (only a caller that builds its own ops can reach it).
+std::string ServerFlowRefusedLine();
+// The `auth=` value of the module's readiness line: "password" for a server that signs in with auth.password (its
+// sign-in follows, so it is not "n/a"), "n/a" for a server with no token auth, else ok or failed.
+const char* TokenAuthReadiness(bool is_server, bool has_device_auth, bool server_password_sign_in, bool auth_ok);
+// The module's readiness Info line, whole: `[NEVR.MODULE] token_auth initialized mode=<server|client> auth=<value>`.
+std::string TokenAuthReadinessLine(bool is_server, bool has_device_auth, bool server_password_sign_in, bool auth_ok);
 
 struct ConsoleWrite {
     bool ok = false;
@@ -95,10 +106,9 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
 
 DeviceAuthState InspectInitialDeviceAuth();
 DeviceAuthState InspectDeviceAuthAfterRefresh(const ::CachedAuthToken& auth);
-// Exercises the production executable-relative credential-cache lookup. The
-// caller owns fixture setup and must ensure the cache the lookup selects (the nevr
-// root's .credentials.json, else _local/.credentials.json beside the test
-// executable) is restored when this returns.
+// Exercises the production credential-cache lookup. The caller owns fixture
+// setup and must ensure the cache the lookup selects (the nevr root's
+// .credentials.json, the only place it reads) is restored when this returns.
 DeviceAuthState InspectDeviceAuthFromCache();
 
 // Drives the background refresh thread's expiry guard, in-process and without

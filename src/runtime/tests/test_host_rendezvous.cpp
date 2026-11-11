@@ -4,6 +4,7 @@
 // measured by the child-process harnesses in tests/bootstrap_attach and
 // tests/rendezvous.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_rendezvous.h"
 #include "runtime/host/stop_notice.h"
@@ -125,7 +126,7 @@ TEST(HostRendezvous, UnreadableOrNullTargetsAreRejectedRatherThanFaulting) {
 TEST(HostRendezvous, AMismatchedPrologueIsNotHookedAndIsJournalledWithTheBytesFound) {
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
@@ -137,7 +138,7 @@ TEST(HostRendezvous, AMismatchedPrologueIsNotHookedAndIsJournalledWithTheBytesFo
   EXPECT_EQ(changed.bytes[7], static_cast<unsigned char>(nevr_host::kGameMainWrapperPrologue[7] ^ 0x01));
 
   diagnostics.FlushAttachJournal();
-  const std::string line = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  const std::string line = ReadAll(nevr_test::HostLogPath(local));
   const nlohmann::json record = nlohmann::json::parse(line.substr(0, line.find('\n')));
   EXPECT_EQ(record.at("step"), "prologue_check");
   EXPECT_EQ(record.at("outcome"), "mismatch");
@@ -159,14 +160,14 @@ TEST(HostRendezvous, TheWrapperTargetIsThePinnedRvaAndThirteenBytes) {
 TEST(HostRendezvous, AnUnreadableTargetIsJournalledWithoutActualBytes) {
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
   EXPECT_EQ(rendezvous.Install(nullptr), nullptr);
 
   diagnostics.FlushAttachJournal();
-  const std::string line = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  const std::string line = ReadAll(nevr_test::HostLogPath(local));
   const nlohmann::json record = nlohmann::json::parse(line.substr(0, line.find('\n')));
   EXPECT_EQ(record.at("outcome"), "mismatch");
   EXPECT_FALSE(record.contains("actual_prologue"));
@@ -211,7 +212,7 @@ struct RendezvousSandbox {
 // record: the writer ends every record with one, so a last line without it is a write cut short and is
 // not read.
 std::vector<nlohmann::json> RecordsOnDisk(const std::wstring& local) {
-  const std::string text = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  const std::string text = ReadAll(nevr_test::HostLogPath(local));
   std::vector<nlohmann::json> records;
   std::size_t start = 0;
   while (start < text.size()) {
@@ -241,7 +242,7 @@ const nlohmann::json* Step(const std::vector<nlohmann::json>& records, const cha
 TEST(HostRendezvousRecords, ALastLineWithoutANewlineEndsTheReadInsteadOfLoopingForever) {
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   const char complete[] = "{\"event\":\"complete\"}\n";
   const char cut[] = "{\"event\":\"cut_short\"}";  // parses, has no newline
   diagnostics.AppendLine(complete, sizeof(complete) - 1);
@@ -255,7 +256,7 @@ TEST(HostRendezvousInstall, ReadsTheHookBytesAfterEnableAndMarksThemValid) {
   RendezvousSandbox sandbox;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ExecutableTarget target;
   ASSERT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;
@@ -275,12 +276,32 @@ TEST(HostRendezvousInstall, ReadsTheHookBytesAfterEnableAndMarksThemValid) {
   EXPECT_FALSE(Step(records, "hook_install")->contains("hook_bytes"));
 }
 
+// ADR 0024, section 3: this host swaps a staged release in and rolls back one that does not start (#2104, #2105), so
+// the context it hands the runtime says so, in a context whose size covers the word.
+TEST(HostRendezvousInstall, TheContextTellsTheRuntimeThisHostSwapsAndRollsBack) {
+  RendezvousSandbox sandbox;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
+  ExecutableTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+
+  const NevrHostContext& context = rendezvous.Context();
+  EXPECT_EQ(context.header.struct_size, nevr_runtime_abi::kHostContextV1_2Size);
+  EXPECT_EQ(context.header.abi_minor, 2u);
+  EXPECT_EQ(context.capabilities, nevr_runtime_abi::kHostCapabilitySwap);
+  EXPECT_TRUE(nevr_runtime_abi::HostCanSwap(&context));
+}
+
 TEST(HostRendezvousInstall, AFailedBytesReadIsOnTheInstallRecordAndTheContextSaysUnread) {
   RendezvousSandbox sandbox;
   RuntimeRendezvous::Seams().fail_hook_bytes_read = true;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ExecutableTarget target;
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
@@ -303,7 +324,7 @@ TEST(HostRendezvousInstall, TheInstallWaitIsSignalledOnceTheInstallHasExitedAndI
   RendezvousSandbox sandbox;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ExecutableTarget target;
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
@@ -319,7 +340,7 @@ TEST(HostRendezvousInstall, AnEventThatCannotBeCreatedIsRecordedAsUnavailableWit
   RuntimeRendezvous::Seams().fail_event_create = true;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ExecutableTarget target;
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
@@ -338,7 +359,7 @@ TEST(HostRendezvousInstall, AnInstallThatNeverFinishesTimesOutAndIsRecordedWithW
   RuntimeRendezvous::Seams().install_wait_ms = 30;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
   HANDLE never = CreateEventW(nullptr, TRUE, FALSE, nullptr);  // nobody signals it
@@ -358,7 +379,7 @@ TEST(HostRendezvousInstall, ADetourEnteredWithoutAHookReturnsZeroAndLeavesARecor
   RendezvousSandbox sandbox;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
   EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0);
@@ -421,7 +442,7 @@ TEST(HostRendezvousStop, ARuntimeThatDidNotLoadStopsTheGameWithCode78AndOneRecor
   RuntimeRendezvous::Seams().stop_game = &CountStop;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ReturningTarget target;
   ASSERT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;
@@ -482,9 +503,9 @@ std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* r
   RuntimeRendezvous::Seams().command_line = &CommandLine;
   RuntimeRendezvous::Seams().exit_notice_wait_ms = 0;  // the hold for a console reader is not for a unit test
   const std::wstring local = MakeTempDir();
-  g_log_path = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  g_log_path = nevr_test::HostLogPath(local);
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ReturningTarget target;
   EXPECT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;
@@ -580,7 +601,7 @@ TEST(HostStopNotice, ACommandLineThatCannotBeReadMeansNoDialogBecauseItMightHold
   RuntimeRendezvous::Seams().command_line = &UnreadableCommandLine;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ReturningTarget target;
   ASSERT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;
@@ -682,7 +703,7 @@ TEST(HostStopNotice, ASecondThreadWaitsBehindTheDialogInsteadOfEndingTheProcessU
   RuntimeRendezvous::Seams().command_line = &CommandLine;
   const std::wstring local = MakeTempDir();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ReturningTarget target;
   ASSERT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;

@@ -8,6 +8,21 @@
 cmake_minimum_required(VERSION 3.23)
 project(nevr_quest LANGUAGES C CXX)
 
+# The host tests (docs/adr/0041): the quest-host-* presets turn this on besides NEVR_QUEST_HOST_TOOLS, and host/CMakeLists.txt then
+# adds the test programs of src/quest/host_tests. ctest runs from the top of the tree, so testing is enabled here.
+option(NEVR_QUEST_HOST_TESTS "Build the Quest host tests with the host compiler (the quest-host-* presets)" OFF)
+if(NEVR_QUEST_HOST_TESTS)
+  enable_testing()
+endif()
+
+# The quest-patcher preset builds the host tools (host/CMakeLists.txt) with the host compiler, and nothing of the Android project.
+option(NEVR_QUEST_HOST_TOOLS "Build the Quest host tools with the host compiler (the quest-patcher preset)" OFF)
+if(NEVR_QUEST_HOST_TOOLS)
+  get_filename_component(NEVR_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+  add_subdirectory(host)
+  return()
+endif()
+
 if(NOT ANDROID)
   message(FATAL_ERROR
     "src/quest is an Android target. Configure with the android-arm64 preset:\n"
@@ -102,6 +117,17 @@ target_compile_options(nevr_quest_stable_string_pool PRIVATE -Wall -Wextra -Werr
 add_executable(stable_string_pool_test tests/stable_string_pool_test.cpp)
 target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_pool)
 target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
+
+# CSymbol64Hash on bytes >= 0x80 sign-extends under this AArch64 clang, where plain char is unsigned (#657). The vectors of
+# tests/symbol_hash_test.cpp are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not start
+# under qemu-user (TLS segment alignment), so nothing is linked or run. `just test-android` builds this target:
+#   cd src/quest && cmake --build --preset android-arm64 --target nevr_quest_symbol_hash_check
+# -fsyntax-only writes no object, so ninja treats the target as out of date and runs the check every time it is asked for. It is
+# excluded from the default build, which the sentinel link and check-android-static-init read.
+add_library(nevr_quest_symbol_hash_check OBJECT EXCLUDE_FROM_ALL tests/symbol_hash_test.cpp)
+set_target_properties(nevr_quest_symbol_hash_check PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(nevr_quest_symbol_hash_check PRIVATE "${NEVR_REPO_ROOT}/src" "${NEVR_REPO_ROOT}/sdk/include")
+target_compile_options(nevr_quest_symbol_hash_check PRIVATE -Wall -Wextra -Werror -fsyntax-only)
 
 # Quest social provider: a CNSISocial-compatible facade over the shared PCVR social model, the frame
 # observer that feeds it and the hook installer (docs/adr/0003, "Social provider"). The sentinel links it
@@ -235,8 +261,18 @@ target_compile_options(auth_core_test PRIVATE -Wall -Wextra -Werror)
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.
 option(NEVR_QUEST_BUILD_SENTINEL "Build the breakpad crash-reporter .so" ON)
+# A measurement probe for #1737 (sentinel/perf_probe_hook.h): call counts of the functions a combat reconstruction replaces
+# and the voice path's microphone read sizes. A debug build only: OFF unless the configure line sets it, so no release or
+# package-dev APK carries it.
+option(NEVR_QUEST_PERF_PROBE "Build the #1737 measurement probe into the sentinel (debug builds only)" OFF)
 if(NEVR_QUEST_BUILD_SENTINEL AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/CMakeLists.txt")
   add_subdirectory(sentinel)
+endif()
+
+# Combat behaviour (#1737 plan 6a Q3): hooks that change how the game plays a combat match, in their own area; the sentinel links it.
+# After the sentinel, because it hooks through the sentinel's GOT backend.
+if(TARGET nevr_quest_got_hook)
+  add_subdirectory(combat)
 endif()
 
 # The login hook links the shared GOT backend target built by the sentinel (a second copy of
@@ -252,7 +288,8 @@ if(TARGET nevr_quest_got_hook)
     login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp
     login/login_standin.cpp
-    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/ext/plugin_manifest.cpp")
   target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
   target_compile_options(nevr_quest_login PRIVATE -Wall -Wextra -Werror)

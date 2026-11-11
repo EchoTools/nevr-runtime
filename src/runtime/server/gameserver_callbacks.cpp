@@ -2,6 +2,7 @@
 #include "runtime/server/registration_metadata.h"
 #include "runtime/server/telemetry_game_type.h"
 #include "core/hex_dump.h"
+#include "core/remote_text.h"
 #include "core/curl_global.h"
 #include <atomic>
 #include <chrono>
@@ -12,10 +13,12 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include "core/auth_token.h"
 #include "core/auth_token_refresh.h"
+#include "runtime/combat/combat.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/lifecycle/crash_recovery.h"  // PerformGracefulShutdown
 #include "runtime/lifecycle/return_to_lobby.h"
@@ -59,24 +62,20 @@ using namespace nevr_game_server;
 
 namespace {
 
-/// Stores the session's game type for the public Arena round default (#982) and says so, with the type it replaces and
-/// how many round_time reads found no type since the last session, so one server run shows the order of the session
-/// messages and the game's reads. A public Arena session whose type arrived after such a read is a Warning: those
-/// reads kept the game's own round length.
+/// Stores the session's game type and says so, with the type it replaces, so one server run shows the order of the
+/// session messages; the session's step follows the type.
 void StoreSessionGameType(const std::string& gameType, const char* source, const std::string& sessionId) {
   const std::optional<std::string> previous = nevr_arena_round_time::SetSessionGameType(gameType);
-  const std::uint32_t readsWithoutType = nevr_arena_round_time::TakeReadsWithoutType();
-  const bool missed = readsWithoutType > 0 && nevr_arena_round_time::DecideRoundTimeDefault(gameType).applied;
-  Log(missed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-      "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s "
-      "round_time_reads_without_type=%u%s",
-      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none", readsWithoutType,
-      missed ? " (the game read round_time before this type was known; those reads kept the game's own value)" : "");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s",
+      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none");
   // #1785: the step follows the type (Combat's physics is tuned for 30 a second, not the Arena rate).
   ApplySessionTimestep(gameType, sessionId);
 }
 
 }  // namespace
+
+// The server states its features in the lobby settings of a new session (#2333); defined beside the relay below.
+static void StateServerFeatures(GameServerLib* self);
 
 // --- TCP Broadcaster Callbacks ---
 
@@ -122,8 +121,11 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
   switch (envelope.message_case()) {
     case gameservice::v1::Envelope::kGameServerRegistrationSuccess: {
       const auto& regSuccess = envelope.game_server_registration_success();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s",
-          static_cast<unsigned long long>(regSuccess.server_id()), regSuccess.external_ip_address().c_str());
+      const std::string shownIp = AddressForLog(regSuccess.external_ip_address());
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s ip_len=%zu",
+          static_cast<unsigned long long>(regSuccess.server_id()), shownIp.c_str(),
+          regSuccess.external_ip_address().size());
       self->GetContext().SetRegistered(true);
 
       // Encode protobuf to binary format and forward to game
@@ -161,8 +163,11 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       // A new session on this server: the exit watchdog of the session that ended before it (#1756) must not fire.
       self->CancelEndedSessionWatchdog();
 
+      // #2333: the clients of this session learn what the server runs from the game's lobby settings document.
+      StateServerFeatures(self);
+
       // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
-      // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
+      // It is stored for every session, telemetry or not: the session's step follows it (#1785).
       const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
                                                                       sessionCreate.lobby_type() == 1);
       StoreSessionGameType(gameType.gameType, "session_create", sessionCreate.lobby_session_id());
@@ -189,20 +194,33 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
     case gameservice::v1::Envelope::kLobbySessionEvent: {
       const auto& event = envelope.lobby_session_event();
       if (event.code() == gameservice::v1::LobbySessionEventMessage::CODE_ENDED) {
+        // #2109: only the service's end of the session this server runs puts it back on the idle step; a late
+        // CODE_ENDED that names an earlier session does not idle the one now running.
+        const std::string currentSessionId = self->GetContext().GetSessionState().lobbySessionId;
+        const bool idles = nevr_server_timestep::IdlesAfterSessionEnd(
+            nevr_server_timestep::SessionEndCause::kServiceEnded, event.lobby_session_id(), currentSessionId);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] session ended by ServerDB session_id=%s — scheduling return to lobby",
-            event.lobby_session_id().c_str());
+            "[NEVR.GAMESERVER] session ended by ServerDB session_id=%s current_session=%s idle_tick=%s — scheduling "
+            "return to lobby",
+            event.lobby_session_id().c_str(), currentSessionId.empty() ? "none" : currentSessionId.c_str(),
+            idles ? "yes" : "no (it names another session than the one this server runs)");
         CallScheduleReturnToLobby();
         self->GetContext().EndSession();
+        if (idles) {
+          ApplyServerIdleTimestep(nevr_server_timestep::SessionEndCauseName(
+                                      nevr_server_timestep::SessionEndCause::kServiceEnded),
+                                  event.lobby_session_id());
+        }
       }
       break;
     }
 
     case gameservice::v1::Envelope::kLobbySessionSuccessV5: {
       const auto& sessionSuccess = envelope.lobby_session_success_v5();
+      const std::string shownLobby = nevr_remote_text::Escape(sessionSuccess.lobby_id());
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s, game_mode=0x%llX",
-          sessionSuccess.lobby_id().c_str(),
+          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s lobby_len=%zu, game_mode=0x%llX",
+          shownLobby.c_str(), sessionSuccess.lobby_id().size(),
           static_cast<unsigned long long>(sessionSuccess.game_mode()));
 
       SessionState state = self->GetContext().GetSessionState();
@@ -213,8 +231,15 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         }
       };
       const auto commitState = [self, &state]() { self->GetContext().UpdateSessionState(state); };
-      if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
+      std::string failureReason;
+      if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch,
+                                                      &failureReason)) {
+        const std::string shownEndpoint = nevr_remote_text::Escape(sessionSuccess.endpoint());
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 lobby=%s lobby_len=%zu reason=%s"
+            " endpoint=%s endpoint_len=%zu — the session success was not delivered to the game",
+            shownLobby.c_str(), sessionSuccess.lobby_id().size(), failureReason.c_str(), shownEndpoint.c_str(),
+            sessionSuccess.endpoint().size());
       }
       break;
     }
@@ -753,10 +778,9 @@ static_assert(nevr_game_server::kLobbySettingsAllPeers == EchoVR::Peer_AllPeers,
 // so this raises the local event the game's local handler stores, and sends the same document to every peer
 // that is connected now. Peers accepted later get it from the game (AcceptPlayersSuccessCBHost, 0x140603e20).
 // Runs from GameServerLib::Update() through WebSocketClient::ProcessReceivedMessages: the game thread.
-static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT64 size) {
-  auto& context = self->GetContext();
-  EchoVR::Broadcaster* broadcaster = context.GetBroadcaster();
-
+// The two game calls the relay and the server's own document go through (#905, #2333): the local event the game's
+// local handler stores at NetGame+0x63260, and CBroadcaster::Send to every connected peer.
+static nevr_game_server::LobbySettingsSinks LobbySettingsSinksFor(EchoVR::Broadcaster* broadcaster) {
   nevr_game_server::LobbySettingsSinks sinks;
   if (broadcaster != nullptr && EchoVR::BroadcasterReceiveLocalEvent != nullptr && EchoVR::BroadcasterSend != nullptr) {
     sinks.raiseLocalEvent = [broadcaster](void* message, uint64_t messageSize) {
@@ -771,21 +795,53 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
                                      ~0ULL, 1.0f, static_cast<EchoVR::SymbolId>(-1));
     };
   }
+  return sinks;
+}
 
-  const std::string session = context.GetSessionState().lobbySessionId;
-  const nevr_game_server::LobbySettingsReport report = nevr_game_server::RelayLobbySettings(data, size, session, sinks);
+static void LogLobbySettingsReport(const nevr_game_server::LobbySettingsReport& report) {
   const EchoVR::LogLevel level = report.level == nevr_game_server::LobbySettingsLogLevel::kWarning
                                      ? EchoVR::LogLevel::Warning
                                      : EchoVR::LogLevel::Info;
   Log(level, "%s", report.line.c_str());
+}
+
+// The game service's lobby settings document (#905). The ServerDB frame carries the TCP form of the message;
+// the dedicated server never registers the game's TCP handler (PatchEnableServer forces the local handler set),
+// so this raises the local event the game's local handler stores, and sends the same document to every peer
+// that is connected now. Peers accepted later get it from the game (AcceptPlayersSuccessCBHost, 0x140603e20).
+// The server's own key (its features, #2333) is set in the document first, so the service's document never takes it
+// away. Runs from GameServerLib::Update() through WebSocketClient::ProcessReceivedMessages: the game thread.
+static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT64 size) {
+  auto& context = self->GetContext();
+  const nevr_game_server::LobbySettingsSinks sinks = LobbySettingsSinksFor(context.GetBroadcaster());
+  const std::string session = context.GetSessionState().lobbySessionId;
+  const std::vector<std::string> features = nevr_combat::ServerFeatures();
+  const nevr_game_server::LobbySettingsReport report =
+      nevr_game_server::RelayLobbySettings(data, size, session, sinks, &features);
+  LogLobbySettingsReport(report);
   if (report.relayed) {
     nevr_game_server::LobbySettingsRecord record;
     record.present = true;
     record.wireBytes = report.wireBytes;
     record.jsonBytes = report.jsonBytes;
     record.sessionId = session;
+    record.json = report.serviceJson;
     context.RecordLobbySettings(record);
   }
+}
+
+// The server states its features to the clients of a new session (#2333): its own lobby settings document. Called once
+// the session has started, on the game thread. StartSession clears the record of the last document first
+// (server_context.cpp), so here the record holds no service document and serviceJson is empty: a service document that
+// arrives during the session is merged by the relay (RelayLobbySettingsFrame sets the server's key in it). The record is
+// still read, so a call made after a service document of this session keeps that document's keys.
+static void StateServerFeatures(GameServerLib* self) {
+  auto& context = self->GetContext();
+  const nevr_game_server::LobbySettingsRecord record = context.GetLobbySettings();
+  const std::string session = context.GetSessionState().lobbySessionId;
+  const std::string serviceJson = record.present && record.sessionId == session ? record.json : std::string();
+  LogLobbySettingsReport(nevr_game_server::RaiseServerLobbySettings(nevr_combat::ServerFeatures(), serviceJson, session,
+                                                                    LobbySettingsSinksFor(context.GetBroadcaster())));
 }
 
 // How long after ServerDB's CODE_ENDED the process may stay up before it is ended (#1756). The clean path takes
@@ -870,13 +926,16 @@ void GameServerLib::RegisterTcpCallbacks() {
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
-      // #982: this frame is what the game starts the session from, so its game type is stored before the game sees
-      // it. The protobuf session create normally arrives first and stores the same type; a service that sends the
-      // frame alone, or in the other order, no longer leaves the game reading the previous session's type or none.
+      // This frame is what the game starts the session from, so its game type is stored, and the session's step set
+      // (#1785), before the game sees it. The protobuf session create normally arrives first and stores the same type;
+      // a service that sends the frame alone, or in the other order, does not leave the session on the previous step.
       if (const auto frameType =
               nevr_game_type_table::GameTypeOfSessionStart(static_cast<const uint8_t*>(data), size)) {
         StoreSessionGameType(*frameType, "legacy_session_start", nevr_server_bots::SessionIdOf(
                                                                       static_cast<const uint8_t*>(data), size));
+      } else {
+        // #2109: a start frame with no game type still opens a session: it must not run at the idle step.
+        ApplyUntypedSessionTimestep(nevr_server_bots::SessionIdOf(static_cast<const uint8_t*>(data), size));
       }
       // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
       nevr_server_bots::ForgetSession();
@@ -904,6 +963,8 @@ void GameServerLib::RegisterTcpCallbacks() {
       [](const nevr_game_server::LobbySettingsRecord& cleared, const char* reason, const std::string& sessionId) {
         Log(EchoVR::LogLevel::Info, "%s",
             nevr_game_server::FormatLobbySettingsCleared(cleared, reason, sessionId).c_str());
+        // #2109: no idle step here. Every context EndSession reaches this handler, a reconnect's included, and a
+        // reconnect does not end the game's match; the idle step follows only a real end (IdlesAfterSessionEnd).
       });
 
   // Re-register on WebSocket reconnection so nakama knows we're available for new sessions.
@@ -921,10 +982,13 @@ void GameServerLib::ProcessPendingReconnect() {
   // Only re-register if we were previously registered (not on first connect)
   if (!m_context->IsRegistered()) return;
 
-  // End any stale session state from before the disconnect
+  // End any stale session state from before the disconnect. #2109: only the runtime's record; the game's match, if one
+  // runs (the socket drops during level loads), goes on at its tick rate (IdlesAfterSessionEnd: kReconnect).
   m_context->EndSession();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu",
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu (the session record is dropped; a "
+      "running match keeps its tick rate)",
       static_cast<unsigned long long>(m_context->GetSessionState().serverId));
 
   SessionState state = m_context->GetSessionState();
@@ -939,8 +1003,7 @@ void GameServerLib::ProcessPendingReconnect() {
   // Resolve IP the same way as initial registration: prefer UPnP/config external IP,
   // fall back to raw socket address. The "internal_ip_address" protobuf field is a
   // legacy misnomer — ServerDB expects the public-facing IP here.
-  std::string internalIp = Ipv4ToString(
-      reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr)->sin_addr.S_un.S_addr);
+  std::string internalIp = nevr_game_server::BroadcasterInternalIp(broadcaster->data->addr, "re-registration");
   std::string externalIp;
   uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 

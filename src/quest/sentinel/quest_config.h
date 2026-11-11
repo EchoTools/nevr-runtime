@@ -30,12 +30,38 @@
 // mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
 // rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII). A key under
 // `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
-// `stock` leaves the headset runtime's own eye-buffer size.
+// `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
+// kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
+//
+// `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0045) change the CDN texture delivery's defaults
+// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default.
+//
+// `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
+// written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
+// with one Warning that names the key, never the value. It is also where a choice made in the menu is kept: the sentinel writes it
+// through NevrConfig::Set (hand_flip.h), so the next launch reads the player's last choice here. A file rejected as a whole says
+// nothing about it: Off, from the default.
+//
+// `combat.force` (#2170, docs/adr/0046 rule 5) is a boolean: `true` asks for the folded combat modules to run whatever the APK's
+// variant. Absent, it is not asked (from the default). A value that is no boolean (a word, a number, a list, a mapping, a key with no
+// value, an unset ${VAR}) is not asked, with one Warning that names the key, never the value. Only a development build honours it
+// (combat::Decide); a release build refuses it with a Warning of its own. The configuration reads the request, nothing more; the `combat_config` line reports it (combat/combat_install.h).
+//
+// `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
+// pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
+// value. They only matter in the q15t and combat APKs, where the modules run.
+//
+// `combat.levelname` (#2181) is a boolean, true when absent, read the same way: `false` leaves the game's cut global level (combat/levelname.h) and, with it,
+// the booster pool's companion (combat/boosterpool.h).
+// `combat.meshstep`, `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false`
+// leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default because the upstream build the
+// community combat port ships turns the same change on (`--resource-table-step-1`, in its wave-2 recipe).
 #pragma once
 
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/nevr_config.h"
@@ -119,6 +145,110 @@ struct TextureChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
 };
 
+// The Controller Hand Flip setting (#2082), after the file and the default have spoken.
+struct HandFlipChoice {
+  bool on = false;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
+};
+
+// The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
+// defaults live in code (quest/cargo/cargo_service.h); the file only changes them, and an empty field means the code's default.
+//   assets.cdn_url        the host's base (https only); assets.manifest the manifest's path under it (a test device names its own)
+//   assets.required_only  fetch only the labels whose state is `required`
+//   assets.labels.<name>  on, off or required; a label the code and the file do not name is off, whatever a manifest says
+// A key that is wrong is one Warning that names the key and never the value, and the default stays.
+struct AssetsChoice {
+  std::string cdnUrl;
+  std::string manifest;
+  bool requiredOnly = false;
+  std::vector<std::pair<std::string, std::string>> labels;  // (label, "on" | "off" | "required"), in file order
+  Source source = Source::kAbsent;                         // kFile: the file gave at least one accepted assets key
+};
+
+// The combat.force request (#2170, docs/adr/0046 rule 5), after the file and the default have spoken: the file asks for the folded
+// combat modules to run whatever the APK's variant. Whether it is honoured is combat::Decide's rule (combat/combat_active.h).
+struct CombatForceChoice {
+  bool on = false;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, not asked
+};
+
+// A folded combat module's switch (docs/adr/0046 rule 4): `combat.<module>`, a boolean that is on unless the file says false.
+struct CombatSwitch {
+  bool on = true;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, on
+};
+
+// A folded combat module's text value (`combat.gate_link_libs`). `source` is kFile when the file gave a string (an empty one included: it means
+// "none"); otherwise the module's default stands and `text` is empty. A fixed buffer, so the configuration stays trivially copyable.
+inline constexpr std::size_t kCombatTextMax = 640;
+struct CombatText {
+  char text[kCombatTextMax] = {};
+  Source source = Source::kAbsent;
+};
+
+// A folded combat module's integer (`combat.powerboost_stage`). `source` is kFile when the file gave an integer in the module's range; otherwise
+// `value` is the module's default.
+struct CombatInt {
+  int value = 0;
+  Source source = Source::kAbsent;
+};
+
+// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
+// each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
+// example config and the `combat_config` line (combat/combat_install.h).
+struct CombatConfig {
+  CombatForceChoice force;
+  CombatSwitch heaps;   // `combat.heaps`: the four heap sizes (combat/heaps.h)
+  CombatSwitch memsys;  // `combat.memsys`: the render-target pool and, with it, the System heap size (combat/memsys.h)
+  CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
+  CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
+  CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
+  CombatSwitch meshstep;    // `combat.meshstep`: mesh-list tables grow by 1 in a combat match (combat/meshstep.h)
+  CombatSwitch instmodel;   // `combat.instmodel`: instanced-model tables grow by 1 in a combat match (combat/instmodel.h)
+  CombatSwitch shaderstep;  // `combat.shaderstep`: shader-set tables built by ConstructInstance grow by 1 in a combat match (combat/shaderstep.h)
+  CombatSwitch tablestep;   // `combat.tablestep`: shader-set tables built by CreateInstance grow by 1 in a combat match (combat/tablestep.h)
+  CombatSwitch gatePerm{true, Source::kAbsent};   // `combat.gate_perm`: a Quest in a party may use combat (combat/headset_gates.h)
+  CombatSwitch gateBots{true, Source::kAbsent};   // `combat.gate_bots`: a combat match picks the combat bot body (only where levelname is installed)
+  CombatSwitch gateLink{true, Source::kAbsent};   // `combat.gate_link`: the combat menus are not told this is a Quest
+  CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch levelname{true, Source::kAbsent};              // `combat.levelname`: global_mp keeps its plain name, with the booster pool's companion (combat/levelname.h, boosterpool.h)
+  CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
+  CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
+  CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)
+  // The three modules of #2185, each on unless the file says false (upstream's shipped build has all three on): gun connect, practice AI bots and
+  // the gun hand default.
+  CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)
+  CombatSwitch aibots;        // `combat.aibots`: EnableScenario once the bots of a combat match are in game (combat/aibots.h)
+  CombatText aibotsScenario;  // `combat.aibots_scenario`: 0-6 or a name or off; unset: RandomAttack
+  CombatSwitch weaponArm;     // `combat.weapon_arm`: a profile whose `weaponarm` is not 1 gets the gun in the right hand once per missing marker (combat/weapon_arm.h)
+  CombatSwitch impactsnd{true, Source::kAbsent};        // `combat.impactsnd`: the impact table's rows and Wwise ids, repaired in combat levels only (combat/impactsnd.h)
+  CombatSwitch impactsndWrite{true, Source::kAbsent};   // `combat.impactsnd_write`: false reads and logs the table and writes nothing to it
+  CombatSwitch decals{true, Source::kAbsent};           // `combat.decals`: the level decals of decals.bin (combat/decals.h); on, and inert without that file (upstream's fxdecal.on)
+  CombatSwitch decalsFlipU{false, Source::kAbsent};     // `combat.decals_flip_u`: mirror the decals' u inside each quad
+  CombatSwitch decalsFlipV{false, Source::kAbsent};     // `combat.decals_flip_v`: mirror the decals' v inside each quad
+  CombatSwitch bvh{true, Source::kAbsent};       // `combat.bvh`: the static BVH answers casts on combat maps only (combat/bvh.h)
+  CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
+  CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
+  CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
+  CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on by default upstream, afk_music.cpp:1
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the q15t plugin's Q15T_SENSORWD was in v6.16.5
+  CombatSwitch ec;      // `combat.ec`: the EC network client and the writer of re33_ec_page (combat/ec.h)
+  CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
+  CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
+  CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
+  CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
+  CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
+  CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)
+  CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
+  CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)
+  CombatSwitch droneguard;  // `combat.droneguard`: the drone's follow update is skipped while its target is null (combat/droneguard.h)
+  CombatSwitch droneguardStage1{false, Source::kAbsent};  // `combat.droneguard_stage1`: also skip a stale cached player (default OFF, a test switch upstream; needs droneguard)
+  CombatSwitch peerclamp;   // `combat.peerclamp`: a peer's last-received stamp above "now" is pulled down to "now", combat levels only (combat/peerclamp.h)
+};
+
 struct LogEvent {
   LogLevel level;
   std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
@@ -133,6 +263,9 @@ struct ResolvedConfig {
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
+  HandFlipChoice handFlip;
+  AssetsChoice assets;
+  CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).
   std::vector<nevr::PluginSpec> plugins;
@@ -161,6 +294,8 @@ const char* FeatureName(Feature feature);
 const char* SourceName(Source source);
 // "config" when the file gave the texture level, else "default": the words the install log line and the config report use.
 const char* TextureSourceName(const TextureChoice& choice);
+// "config" when the file gave the hand flip value, else "default".
+const char* HandFlipSourceName(const HandFlipChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

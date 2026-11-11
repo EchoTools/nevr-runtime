@@ -279,7 +279,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
       constructedUri = std::move(*built);
       serverDbUri = constructedUri.c_str();
-      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
           "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     } else {
@@ -297,12 +297,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
       constructedUri = std::move(*built);
       serverDbUri = constructedUri.c_str();
-      // Do NOT log constructedUri here — this branch embeds the operator's
-      // password in the query string. Presence only, never the value.
-      Log(EchoVR::LogLevel::Debug,
-          "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth, percent-encoded): "
-          "discord_id=%s password=%s",
-          discordId, (password && password[0] != '\0') ? "present (redacted)" : "absent");
+      const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
+          "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth, percent-encoded): ", constructedUri);
+      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     }
   }
 
@@ -317,9 +314,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Connect with the JWT as Authorization: Bearer; the token route forwards it
   // to Nakama's acceptor, which sets the operator identity (BAC-2/3).
   if (!m_wsClient->Connect(serverDbUri, wsToken)) {
-    // serverDbUri may be the password-bearing legacy-auth URI at this point
-    // (see the constructedUri branch above) — redact before logging.
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", serverDbUri ? serverDbUri : "");
     Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     return;
@@ -332,11 +327,10 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     return;
   }
 
-  sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
   uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 
   // Resolve IP addresses and apply UPnP / config overrides
-  std::string internalIp = Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr);
+  std::string internalIp = nevr_game_server::BroadcasterInternalIp(broadcaster->data->addr, "registration");
   std::string externalIp;  // empty = let UPnP fill it, or falls back to internalIp
 
   NevrUPnPConfig upnpCfg = {};
@@ -397,7 +391,7 @@ VOID GameServerLib::Unregister() {
 }
 
 void GameServerLib::ShutdownUnregisterOnGameThread() {
-  EndSession();
+  EndServerSession(nevr_server_timestep::SessionEndCause::kShutdown);
   UnregisterFromServerDb(true);
 }
 
@@ -405,7 +399,7 @@ void GameServerLib::ShutdownUnregisterOffGameThread() {
   // Everything here is safe off the game thread: ServerContext state is
   // mutex-guarded and WebSocketClient is documented thread-safe. The callback
   // registry is not, so it is skipped (GH #44).
-  EndSession();
+  EndServerSession(nevr_server_timestep::SessionEndCause::kShutdown);
   UnregisterFromServerDb(false);
 }
 

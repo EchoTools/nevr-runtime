@@ -43,9 +43,8 @@ class TheGuardIsWired(unittest.TestCase):
         self.assertIn("nevr_quest::vk_free_guard::Install();", body)
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
-        justfile = read("justfile")
-        self.assertIn("src/quest/tests/vk_free_guard_test.cpp", justfile)
-        self.assertIn('timeout 120 "$out/vk_free_guard_test"', justfile)
+        hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_free_guard_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/vk_free_guard_test\.cpp")
 
     def test_the_real_library_check_covers_the_slot_and_the_layout(self):
         text = read("src/quest/tests/got_pinned_test.cpp")
@@ -76,6 +75,58 @@ class TheLayoutIsTheWordsTheyWereReadFrom(unittest.TestCase):
         self.assertEqual(mov_w14 & 0x1F, 14)
         self.assertEqual((mov_w14 >> 5) & 0xFFFF, 0x5000)
         self.assertEqual(0x5000, 512 * 0x28)
+
+
+class TheAllocationCheckIsWired(unittest.TestCase):
+    """#2262: an allocation libr15 reports as made with no memory is refused (vk_alloc_check.h). vk_alloc_check_test.cpp drives
+    the handler and got_pinned_test.cpp checks the slot and the pins against the real libr15; this pins the wiring."""
+
+    def test_the_slot_is_the_games_own_function(self):
+        text = read("src/quest/sentinel/pinned_targets.h")
+        self.assertIn(
+            'kVkAllocateSymbol =\n    "_ZN10NRadEngine16CGRawInterfaceVK8AllocateE20VkMemoryRequirementsjjjjRNS_15SGAllocatedBaseE"', text
+        )
+        body = extract_braced_function(text, "inline GotTarget LibR15VkAllocate() {")
+        self.assertRegex(body, r"kLibR15,\s*kVkAllocateSymbol,\s*RelocKind::kJumpSlot,\s*LibR15PatchedBuildId\(\),\s*0x36ef800ULL")
+
+    def test_the_hook_is_built_without_exceptions_into_the_sentinel(self):
+        cmake = read("src/quest/sentinel/CMakeLists.txt")
+        self.assertRegex(cmake, r"add_library\(ovrplatformloader SHARED[^)]*\bvk_alloc_check\.cpp")
+        props = re.search(r"set_source_files_properties\(([^)]*)PROPERTIES COMPILE_OPTIONS \"-fno-exceptions\"\)", cmake)
+        self.assertIsNotNone(props)
+        self.assertIn("vk_alloc_check.cpp", props.group(1))
+
+    def test_every_launch_installs_it(self):
+        body = extract_braced_function(strip_comments(read("src/quest/sentinel/entry.cpp")), "bool InstallVkExtWindowHook() noexcept {")
+        self.assertIn("nevr_quest::vk_alloc_check::Install();", body)
+
+    def test_the_host_test_runs_in_the_hooks_recipe(self):
+        hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_alloc_check_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/vk_alloc_check_test\.cpp")
+
+    def test_the_real_library_check_covers_the_slot_and_the_pins(self):
+        text = read("src/quest/tests/got_pinned_test.cpp")
+        self.assertIn("pinned::LibR15VkAllocate()", text)
+        self.assertIn("&pinned::kVkAllocate,", text)
+        self.assertIn("&pinned::kErrMsgCreateAndAddError,", text)
+        self.assertIn("pinned::kVkAllocErrorCodeVaddr", text)
+        for block in ("kVkAllocTableAdrp", "kVkAllocTableAdd", "kVkAllocFreeAppend", "kVkAllocBlockAppend"):
+            self.assertIn(f"&pinned::{block}", text)
+        self.assertIn("NobitsHolds(r15, pinned::vk_block_layout::kTableVaddr", text)
+
+    def test_the_block_bound_is_the_words_it_was_read_from(self):
+        pins = read("src/quest/sentinel/pinned_targets.h")
+        block = re.search(r"namespace vk_block_layout \{(.*?)\}  // namespace vk_block_layout", pins, re.S).group(1)
+        table = int(re.search(r"kTableVaddr = (0x[0-9a-f]+)ULL", block).group(1), 16)
+        count = int(re.search(r"kCountVaddr = (0x[0-9a-f]+)ULL", block).group(1), 16)
+        stride = int(re.search(r"kEntryBytes = (0x[0-9a-f]+);", block).group(1), 16)
+        self.assertEqual((count - table) // stride, 512)
+        words = re.search(r"kVkAllocBlockAppend = \{[^{]*\{([^}]*)\}", pins).group(1)
+        ldr = [int(w, 16) for w in re.findall(r"0x[0-9a-f]+", words)][0]
+        # ldr w12, [x23, #imm]: imm12 at bits 21:10, scaled by 4; Rn x23, Rt w12.
+        self.assertEqual(((ldr >> 10) & 0xFFF) * 4, count - table)
+        self.assertEqual((ldr >> 5) & 0x1F, 23)
+        self.assertEqual(ldr & 0x1F, 12)
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ class WorktreeSetupTest(unittest.TestCase):
             self.assertTrue((self.wt / "extern" / name / "CMakeLists.txt").exists(), name)
             self.assertFalse((self.wt / "extern" / name / ".git").exists(), f"{name}/.git must not be copied")
         self.assertTrue((self.wt / "gen/cpp/x.pb.cc").exists())
-        self.assertFalse((self.wt / ".env").exists(), ".env is runtime-only and is never copied into a worktree")
+        self.assertFalse((self.wt / ".env").exists(), ".env is never copied into a worktree")
         after = sorted(str(p.relative_to(self.main)) for p in self.main.rglob("*") if ".git/" not in str(p))
         self.assertEqual(before, after, "the main checkout changed")
 

@@ -11,7 +11,7 @@
 namespace nevr_host_environment {
 
 inline std::string BootLine(const nevr_system_info::Host& host) {
-  std::string line = "[NEVR.BOOT] host environment: wine=";
+  std::string line = "[NEVR.BOOT] info; host environment: wine=";
   line += host.wine_version.empty() ? "none" : host.wine_version;
   line += " host_os=";
   line += host.wine_host_os.empty() ? "none" : host.wine_host_os;

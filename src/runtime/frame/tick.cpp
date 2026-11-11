@@ -7,8 +7,11 @@
  * WHICH SITE DRIVES THIS, AND WHY IT MATTERS (N86)
  *
  * The obvious frame site — CPrecisionSleep::Wait, the engine's own frame pacer —
- * is entered ZERO times on a dedicated server. Measured across a full run, with
- * the hook confirmed installed. Wiring per-frame work there and watching
+ * was entered ZERO times on a dedicated server, measured across a full run with
+ * the hook installed, before #511 paced the server's clock. Since then it runs on
+ * every server frame that ends inside its step, and never on one that overruns,
+ * so it is still no per-frame site (#2109 serves UDP pings from it). Wiring
+ * per-frame work there and watching
  * `just verify` go green proved the call site existed in source; it proved
  * nothing about whether it runs. Plugins got no OnFrame, modules got no tick,
  * and nothing said so.
@@ -42,10 +45,13 @@
 #include "runtime/lifecycle/config.h"          // LogServerStepReadBack
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
+#include "runtime/patch/resource_sets.h"
 #include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
@@ -82,6 +88,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // #1139, ADR 0022: the render_config line. A no-op until Install ran on a client; then one evaluation a second.
     // No new dispatcher, thread or Tick* site (N86): it runs inside this function like the calls around it.
     nevr_render_config_hook::Poll(nowUs);
+    // #1200, ADR 0024 section 6: the swapped release is confirmed started once this dispatcher has run for 10 s. Here it is one atomic
+    // compare; the confirmation itself runs on its own thread. Not new per-frame work of its own: no thread, dispatcher or Tick* site (N86).
+    nevr_update::OnFrame(nowUs);
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {
@@ -148,19 +157,26 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         }
     }
 
-    NvrGameContext gctx = {};
+    NevrGameContext gctx = {};
     gctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     gctx.flags = g_isServer ? NEVR_HOST_IS_SERVER : NEVR_HOST_IS_CLIENT;
     if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
-    gctx.ctx_size = sizeof(NvrGameContext);
+    gctx.ctx_size = sizeof(NevrGameContext);
     gctx.get_plugin_count = GetLoadedPluginCount;
     gctx.get_plugin_info = GetLoadedPluginInfo;
     TickPlugins(&gctx);
 
-    NvrModuleContext mctx = {};
+    NevrModuleContext mctx = {};
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // #2161: a resource-set mount deferred until the game's manifest exists (run on the game's own thread only), and
+    // the sets' read summary.
+    {
+        const unsigned long loop = GameLoopThreadId();
+        nevr_resource_sets::OnFrame(loop != 0 && loop == GetCurrentThreadId());
+    }
 
     // #906, #896: the UI text writer touches the game's UI state, so it runs on the thread that runs the game's main
     // wrapper (crash_recovery.cpp records it) only. This dispatcher is also driven from GetTimeMicroseconds, which any
@@ -170,6 +186,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
+        // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

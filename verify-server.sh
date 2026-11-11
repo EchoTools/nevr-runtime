@@ -243,7 +243,7 @@ echo "$RC" > "$OUT/exit_code.txt"
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_after.txt"
 # The game's log for THIS run is the newest nevr-*.jsonl written since the run started, in the nevr root's logs folder
-# (the install-root layout, ADR 0012), not the executable's folder. The host's nevr-bootstrap.jsonl is not the game's log.
+# (the install-root layout, ADR 0012), not the executable's folder. The host's records are lines of the same file.
 # It is copied into the run's directory now (#1297): the test that made the game copy deletes it when the run ends, and a
 # log left in the copy goes with it. A copy that does not match the original fails the run.
 RUN_LOGDIR="$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
@@ -251,7 +251,7 @@ RUN_LOG_COPY="$OUT/game-log.jsonl"
 run_log=""
 for f in "$RUN_LOGDIR"/nevr-*.jsonl; do
   [ -f "$f" ] || continue
-  case "$f" in */nevr-bootstrap.jsonl) continue ;; esac
+  is_run_log_name "${f##*/}" || continue  # the installer's nevr-update.jsonl and a rotation's archive share the folder: not the game's
   [ "$(stat -c %Y "$f")" -ge "$RUN_START_EPOCH" ] && run_log="$f"
 done
 copied_to=none

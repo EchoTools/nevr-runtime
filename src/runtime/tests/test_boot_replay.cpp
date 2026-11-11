@@ -30,12 +30,13 @@ TEST(BootLines, RecordIsOneJsonLineWithATimestamp) {
   const auto json = nlohmann::json::parse(line);
   EXPECT_EQ(json.at("ts"), "2026-10-09T01:02:03.004Z");
   EXPECT_EQ(json.at("run"), "run-1");
-  EXPECT_EQ(json.at("level"), "info");
+  EXPECT_EQ(json.at("level"), "unknown") << "a message that states no level is not claimed as info (#2245)";
+  EXPECT_EQ(json.at("src"), "boot") << "a boot-phase line is marked as one in the main log";
   EXPECT_EQ(json.at("msg"), "hooks \"ok\"\n");
 }
 
 // #664: the record's level is the level the message states after its tag (Rule 12), so a warn; or error; boot
-// line is found by level. A message that states none is info.
+// line is found by level. A message that states none is unknown, never info (#2245).
 TEST(BootLines, TheRecordsLevelIsTheOneTheMessageStates) {
   const struct { const char* msg; const char* level; } cases[] = {
       {"[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryW", "warn"},
@@ -43,16 +44,17 @@ TEST(BootLines, TheRecordsLevelIsTheOneTheMessageStates) {
       {"[NEVR.BOOT] debug; detail", "debug"},
       {"[NEVR.BOOT] info; installing", "info"},
       {"warn; no tag at all", "warn"},
-      {"[NEVR.PATCH] boot log opened run=x", "info"},
-      {"[NEVR.PATCH] warning; not a level word", "info"},
-      {"[NEVR.PATCH] warn without the semicolon", "info"},
-      {"[NEVR.PATCH]warn; no space after the tag", "info"},
-      {"[NEVR.PATCH]xwarn; glued to the tag", "info"},
-      {"[NEVR.PATCH] warn;glued", "info"},
-      {"[NEVR.PATCH] information about the boot", "info"},
-      {"[NEVR.PATCH] warn  two spaces, no semicolon", "info"},
-      {"[NEVR.PATCH] text that says warn; later", "info"},
-      {"", "info"},
+      {"[NEVR.PATCH] unknown; level_raw=3 a level with no name", "unknown"},
+      {"[NEVR.PATCH] boot log opened run=x", "unknown"},
+      {"[NEVR.PATCH] warning; not a level word", "unknown"},
+      {"[NEVR.PATCH] warn without the semicolon", "unknown"},
+      {"[NEVR.PATCH]warn; no space after the tag", "unknown"},
+      {"[NEVR.PATCH]xwarn; glued to the tag", "unknown"},
+      {"[NEVR.PATCH] warn;glued", "unknown"},
+      {"[NEVR.PATCH] information about the boot", "unknown"},
+      {"[NEVR.PATCH] warn  two spaces, no semicolon", "unknown"},
+      {"[NEVR.PATCH] text that says warn; later", "unknown"},
+      {"", "unknown"},
   };
   for (const auto& c : cases) {
     const auto json = nlohmann::json::parse(Record("2026-10-09T01:02:03.004Z", "run-1", c.msg));
@@ -69,6 +71,14 @@ TEST(BootReplay, AReplayedWarnLineKeepsItsLevel) {
   EXPECT_EQ(lines[1].level, "info");
 }
 
+// #2245: a record that carries no level is replayed as unknown, not as info.
+TEST(BootReplay, ARecordWithNoLevelIsReplayedAsUnknown) {
+  const std::string file = "{\"ts\":\"2026-10-09T02:00:00.000Z\",\"run\":\"run-2\",\"msg\":\"no level key\"}\n";
+  const auto lines = nevr_boot_replay::ParseRun(file, "run-2");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(lines[0].level, "unknown");
+}
+
 TEST(BootLines, BuildReportsATooSmallBuffer) {
   char tiny[16];
   EXPECT_EQ(nevr_boot_lines::Build(tiny, sizeof(tiny), "2026-10-09T01:02:03.004Z", "run-1", "x"), -1);
@@ -83,7 +93,7 @@ TEST(BootReplay, ReplaysOnlyThisRunInFileOrder) {
   ASSERT_EQ(lines.size(), 2U);
   EXPECT_EQ(lines[0].ts, "2026-10-09T02:00:00.001Z");
   EXPECT_EQ(lines[0].msg, "first");
-  EXPECT_EQ(lines[0].level, "info");
+  EXPECT_EQ(lines[0].level, "unknown");
   EXPECT_EQ(lines[1].msg, "second \x1b[0m ctl") << "escapes round-trip";
 }
 

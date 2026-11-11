@@ -10,7 +10,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <pthread.h>
 
+#include "core/cargo_resolver.h"
+#include "cargo_read_keys.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -61,6 +64,15 @@ std::atomic<std::uint64_t> g_overlayFailed{0};
 std::atomic<std::uint64_t> g_overlayTicket{0};
 std::atomic<bool> g_overlayCapSaid{false};
 
+// The cargo set (PublishCargo). The resolver holds the published shadow and the per-thread pins; g_sets remembers which Mounted each
+// published shadow came from, for the label name of a serve line (read only when a line is written, never on the hot path).
+nevr_cargo::Resolver g_cargo;
+std::atomic<const nevr_cargo::Mounted*> g_sets[kCargoSets];
+std::atomic<unsigned> g_setCount{0};
+std::atomic<std::uint64_t> g_cargoServed{0};
+constexpr unsigned kCargoSlots = 256;
+KeySlot g_cargoSeen[kCargoSlots];
+
 constexpr std::uint64_t Mix(std::uint64_t x) noexcept {
   x ^= x >> 30;
   x *= 0xbf58476d1ce4e5b9ULL;
@@ -91,7 +103,23 @@ std::uint64_t Touch(std::uint64_t key) noexcept {
   return 0;
 }
 
+// The same as Touch for the cargo keys: how many times this key has been served, or 0 when it found no slot.
+std::uint64_t TouchCargo(std::uint64_t key) noexcept {
+  const std::size_t home = static_cast<std::size_t>(key % kCargoSlots);
+  for (unsigned probe = 0; probe < kProbeLimit; ++probe) {
+    KeySlot& slot = g_cargoSeen[(home + probe) % kCargoSlots];
+    std::uint64_t held = slot.key.load(std::memory_order_acquire);
+    if (held == 0 && slot.key.compare_exchange_strong(held, key, std::memory_order_acq_rel)) held = key;
+    if (held != key) continue;
+    return slot.seen.fetch_add(1, std::memory_order_relaxed) + 1;
+  }
+  return 0;
+}
+
 long long ThreadId() noexcept { return static_cast<long long>(::syscall(SYS_gettid)); }
+
+// A cheap per-thread key for the pins: the pthread handle, an integer type on glibc and bionic (no system call, no allocation).
+std::uint64_t PinKey() noexcept { return static_cast<std::uint64_t>(::pthread_self()); }  // an integer on glibc and on bionic
 
 std::int64_t ReadI64(const unsigned char* request, std::size_t at) noexcept {
   std::int64_t v = 0;
@@ -258,6 +286,39 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
                        {"alignment", ReadU64(request, layout::kAlignment)}});
 }
 
+// The label of a record in the set whose shadow answered: the Mounted that published that shadow.
+const char* CargoLabel(const nevr_shadow::Shadow* shadow, std::uint32_t user) noexcept {
+  const unsigned count = g_setCount.load(std::memory_order_acquire);
+  for (unsigned i = 0; i < count && i < kCargoSets; ++i) {
+    const nevr_cargo::Mounted* const set = g_sets[i].load(std::memory_order_acquire);
+    if (set != nullptr && set->shadow.get() == shadow) return user < set->labels.size() ? set->labels[user].c_str() : "unknown";
+  }
+  return "unknown";
+}
+
+// Counts a request filled from a cargo shadow and writes its line at the key's 1st, 2nd, 4th, 8th ... serve. Runs after the game's
+// function returned, so no logging frame is live while game code runs.
+void NoteCargo(const nevr_shadow::Shadow* shadow, std::uint32_t user, std::uint64_t ret, std::uint64_t type, std::uint64_t name,
+               std::uint64_t index, std::uint32_t bytes, const void* caller) noexcept {
+  g_cargoServed.fetch_add(1, std::memory_order_relaxed);
+  // The read-finished callback matches its read to this serve by (name, index) and writes `cargo_read` (cargo_read_keys.h).
+  if (ret == 0) cargo_read::NoteServed(name, index);
+  const std::uint64_t seen = TouchCargo(KeyOf(type, name, index));
+  if (seen == 0 || (seen & (seen - 1)) != 0) return;
+  const std::uint64_t pinnedCaller =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(caller)) - g_loadBase.load(std::memory_order_relaxed);
+  char typeHex[19], nameHex[19];
+  sentinel::LogFields(ret == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, ret == 0 ? "cargo_served" : "cargo_failed",
+                      {{"label", CargoLabel(shadow, user)},
+                       {"type", sentinel::HexString(typeHex, type)},
+                       {"name", sentinel::HexString(nameHex, name)},
+                       {"index", index},
+                       {"bytes", bytes},
+                       {"seen", seen},
+                       {"site", SiteName(pinnedCaller)},
+                       {"tid", ThreadId()}});
+}
+
 // True when the manifest the manager holds has no record for (type, name): the same binary search the game runs
 // (0x2543a30-0x2543a90), with signed 64-bit keys and an unsigned count. A null manager or manifest answers false, so the
 // game's function runs and decides.
@@ -405,7 +466,13 @@ void NoteOverlay(const Served& s, std::uint64_t type, std::uint64_t name, std::u
 std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManagerOpaque* manager, std::uint64_t type,
                       std::uint64_t name, std::uint64_t unused, void* allocator, void* owner, std::uint64_t index,
                       unsigned char* request) noexcept {
-  if (request != nullptr) {
+  // Cargo first: a key the published shadow holds is filled by the game's own function from the shadow, and cargo replaces stock.
+  // Select also pins the shadow of a texture's index 0 for its index 1, so it runs for every request.
+  const nevr_shadow::Shadow* const cargo = g_cargo.Select(PinKey(), name, index);
+  nevr_shadow::Found found;
+  std::uint32_t user = 0;
+  const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);
+  if (!fromCargo && request != nullptr) {
     const GameFns* const fns = g_fns.load(std::memory_order_acquire);
     if (fns != nullptr && ManifestMisses(manager, type, name)) {
       const Served served = ServeLoose(*fns, manager, type, name, allocator, owner, index, request);
@@ -414,7 +481,10 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
       // Not served: the game's function below raises its own error, as it does without the overlay.
     }
   }
-  const std::uint64_t ret = original(manager, type, name, unused, allocator, owner, index, request);
+  CResourceManagerOpaque* const filledFrom =
+      fromCargo ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(cargo->manager())) : manager;
+  const std::uint64_t ret = original(filledFrom, type, name, unused, allocator, owner, index, request);
+  if (fromCargo) NoteCargo(cargo, user, ret, type, name, index, found.size, caller);
   if (g_logRequests.load(std::memory_order_relaxed)) {
     Note(type, name, index, owner, allocator, ret, caller, request);
   } else if (ret != 0) {
@@ -502,6 +572,18 @@ bool InstallCounted(bool countersRegistered, bool logRequests) noexcept {
   return InstallImpl(logRequests, countersRegistered ? "registered" : "refused");
 }
 
+void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept {
+  if (mounted == nullptr || !mounted->shadow) return;
+  const unsigned at = g_setCount.load(std::memory_order_relaxed);
+  if (at < kCargoSets) {
+    g_sets[at].store(mounted, std::memory_order_release);
+    g_setCount.store(at + 1, std::memory_order_release);
+  }
+  g_cargo.Publish(mounted->shadow.get());
+}
+
+unsigned long long CargoServedCount() noexcept { return g_cargoServed.load(std::memory_order_relaxed); }
+
 const char* ResolveGameFnsForTest(std::uint64_t base, SymbolLookup lookup, GameFns* out) noexcept {
   struct Want {
     const char* symbol;
@@ -550,6 +632,7 @@ std::uint64_t WindowClockMsForTest() noexcept { return NowMs(); }
 void SetClockForTest(ClockMs clock) noexcept { g_clock.store(clock, std::memory_order_relaxed); }
 
 void ResetForTest() noexcept {
+  cargo_read::ResetForTest();
   for (KeySlot& slot : g_slots) {
     slot.key.store(0, std::memory_order_relaxed);
     slot.seen.store(0, std::memory_order_relaxed);
@@ -568,6 +651,14 @@ void ResetForTest() noexcept {
   g_fns.store(nullptr, std::memory_order_release);
   g_logRequests.store(false, std::memory_order_relaxed);
   g_loadBase.store(0, std::memory_order_relaxed);
+  g_cargo.Reset();
+  for (unsigned i = 0; i < kCargoSets; ++i) g_sets[i].store(nullptr, std::memory_order_relaxed);
+  g_setCount.store(0, std::memory_order_relaxed);
+  g_cargoServed.store(0, std::memory_order_relaxed);
+  for (KeySlot& slot : g_cargoSeen) {
+    slot.key.store(0, std::memory_order_relaxed);
+    slot.seen.store(0, std::memory_order_relaxed);
+  }
 }
 
 Totals CurrentTotals() noexcept {

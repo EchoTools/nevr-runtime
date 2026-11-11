@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0017-invite-codes-for-the-create-game-wizard.md
+audience: all
+---
+
 # ADR 0017: invite codes for the CREATE GAME / JOIN VIA CODE wizard are issued by the game service and carried by a runtime hook
 
 Status: proposed (#906). Items marked **Decision needed** are not settled by this record.

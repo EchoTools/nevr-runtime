@@ -18,6 +18,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nevr {
@@ -92,6 +93,22 @@ struct PluginSpec {
 /// The kind of node a config path names (NevrConfig::Kind). `kNull` is a key written with no value (or `~`, `null`).
 enum class NodeKind { kAbsent, kNull, kScalar, kSequence, kMapping };
 
+/// What NevrConfig::Set did (the first config.yaml writer in the tree). `ok`: the file now holds the value (`wrote` says whether
+/// a write was needed). `reason` is a stable token when `ok` is false and "" otherwise; `err` is the errno-style code of the
+/// failing file step, or 0 for a refusal that is about the file's content. The core logs nothing: the caller words the Warning.
+///
+/// Refusals (nothing is written): "no_file", "unsupported_path", "unreadable", "not_a_regular_file", "too_large",
+/// "unparseable" (a YAML error, which includes a truncated file), "multi_document", "not_a_mapping", "root_flow_style",
+/// "section_not_a_mapping", "section_flow_style", "duplicate_section", "duplicate_key", "value_not_a_scalar",
+/// "value_not_plain", "value_not_a_plain_word", "value_not_on_key_line", "multiline_scalar", "position_mismatch", "verify_failed". A failed
+/// write step gives "write_failed" or "rename_failed" with `err`, and leaves the previous file as it was.
+struct ConfigSetResult {
+  bool ok = false;
+  bool wrote = false;
+  const char* reason = "";
+  int err = 0;
+};
+
 class NevrConfig {
  public:
   NevrConfig();
@@ -132,6 +149,35 @@ class NevrConfig {
   /// A sequence at `path` as strings; a lone scalar becomes a single element.
   std::vector<std::string> GetStringList(const std::string& path) const;
 
+  /// The file `Set` edits. LoadFromFile binds the path it read; a config built from a string, or default-constructed, is bound
+  /// with BindFile (the Quest reads the file itself and parses the text).
+  void BindFile(std::string path) { boundFile_ = std::move(path); }
+  const std::string& BoundFile() const { return boundFile_; }
+
+  /// Typed setter beside the getters, and the only code that writes `config.yaml`: sets the boolean at the two-level dotted
+  /// `path` ("graphics.hand_flip") in the bound file and persists it in this one call, then updates the in-memory tree so a
+  /// getter reads the new value. The file is read afresh from disk (it may have changed since the load), edited by splicing
+  /// bytes at the span the parser reports for the key's value (or at the end of the section's block mapping, at its child
+  /// indentation), and replaced atomically (a temporary file in the same directory, then a rename). Every other byte of the
+  /// file, comments included, is untouched: the document is never re-emitted. A missing file is created holding just the key.
+  /// Never throws. See ConfigSetResult for the refusals.
+  ///
+  /// Callers in one process may call Set at the same time, on the same file or on the same object: one mutex per file (keyed by its
+  /// canonical path) covers the whole read, splice, write, rename and in-memory update, so no caller's key is lost to another's.
+  /// Another process editing the file is not covered. The getters take no lock: do not read an object while another thread calls
+  /// Set on it.
+  ///
+  /// Prior art for editing through the parser's source positions: ruamel.yaml's round-trip mode (https://yaml.readthedocs.io/)
+  /// and toml_edit (https://docs.rs/toml_edit/).
+  ConfigSetResult Set(const std::string& path, bool value) noexcept;
+
+  /// The same edit for a plain word (starts with a letter or `_`, then letters, digits, `_`, `.`, `-`; at most 64; not a YAML boolean or
+  /// null word, and never numeric-looking, which is why a digit cannot start one), such as the
+  /// level name at "graphics.texture_quality". Any other text is refused with "value_not_a_plain_word" and nothing is written.
+  /// A string literal must name this overload: `Set(path, "high")` would pick the boolean one, so that spelling is deleted.
+  ConfigSetResult Set(const std::string& path, const std::string& value) noexcept;
+  ConfigSetResult Set(const std::string& path, const char* value) = delete;
+
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
@@ -139,18 +185,30 @@ class NevrConfig {
   const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
   /// Mistakes in the file's shape that the parser keeps going past (#583). DuplicateKeyCount: a key that repeats in
   /// one mapping (the first value is the one read). UnknownKeyCount: a key under a section in KnownConfigKeyPaths()
-  /// that no reader reads (ignored). Counts only: the names and values stay out, as the Quest's log requires.
+  /// that no reader reads (ignored). The names are the dotted paths of the keys (`social.facade`), in file order for
+  /// duplicates and in section order for unknown keys, each as often as it was found. The values are never kept: a value
+  /// can be `auth.password`.
   std::size_t DuplicateKeyCount() const { return duplicateKeys_; }
   std::size_t UnknownKeyCount() const { return unknownKeys_; }
+  const std::vector<std::string>& DuplicateKeyNames() const { return duplicateKeyNames_; }
+  const std::vector<std::string>& UnknownKeyNames() const { return unknownKeyNames_; }
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
+ public:
+  struct ScalarEdit;  // what Set writes (.cpp only)
+
+ private:
+  ConfigSetResult SetScalar(const std::string& path, const ScalarEdit& edit) noexcept;
   std::unique_ptr<Impl> impl_;
   std::vector<PluginSpec> plugins_;
+  std::string boundFile_;
   bool empty_ = true;
   std::vector<std::string> unsetBareVars_;
   std::size_t duplicateKeys_ = 0;
   std::size_t unknownKeys_ = 0;
+  std::vector<std::string> duplicateKeyNames_;
+  std::vector<std::string> unknownKeyNames_;
 };
 
 /// Every dotted path a reader of either build reads under a known section, sorted (#583): the one list the unknown-key
@@ -158,12 +216,17 @@ class NevrConfig {
 /// and is not checked.
 std::vector<std::string> KnownConfigKeyPaths();
 
+/// The key names of DuplicateKeyNames() or UnknownKeyNames() as one log-safe token: comma-separated, a character outside
+/// printable ASCII without space written as `?`, a name cut at 64 characters, at most 20 names and then `+N more`.
+/// Both builds' count warnings use it; it carries names only, never a value.
+std::string JoinKeyNamesForLog(const std::vector<std::string>& names);
+
 /// PC only (defined in nevr_config_policy.cpp): logs one Warning per name in cfg.UnsetBareVars(), through Log().
 /// The parser itself logs nothing, so the Quest can build it without the PC logger.
 void LogUnsetBareVars(const NevrConfig& cfg);
 
 /// PC only (defined in nevr_config_policy.cpp): one Warning with the duplicate and unknown-key counts when either is
-/// non-zero (#583). Names and values are not logged.
+/// non-zero (#583), with the names of the keys (never their values).
 void LogShapeWarnings(const NevrConfig& cfg);
 
 /// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list

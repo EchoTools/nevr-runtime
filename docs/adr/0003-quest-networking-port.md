@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0003-quest-networking-port.md
+audience: all
+---
+
 # ADR 0003: Quest networking shares the PCVR protocol core and differs only in adapters
 
 Status: accepted. The login-profile builder, the EVR frame codec and the redirect policy are
@@ -461,8 +468,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    features, one Error line `config file=<path> rejected reason=<token> (embedded defaults stay)` where the token is
    `nevr_config`'s class of failure (`ReasonToken`), never the parser's text.
    Every key source, requested and effective feature state, and rejection is logged by key or
-   feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
-   same directory, as one JSON object per line, and the log names the file it read
+   feature name, never by value, to logcat tag `NEVR-Sentinel` and to the run's log (`nevr-<timestamp>.jsonl` in `nevr/logs` below the
+   files directory), as one JSON object per line, and the log names the file it read
    (`config file=<path> loaded`, or `absent, using embedded defaults`). A value the file gives as the empty
    string is rejected and cannot clear an embedded default. A `nevr-quest.json` in the
    same directory is not read; the log says once that it is present and ignored. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
@@ -704,8 +711,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      16 KiB), installs handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGBUS` and `SIGTRAP`
      (`InstallHandlersLocked`, `kExceptionSignals`), and creates a dump GUID from `getrandom`
      (`GRND_NONBLOCK`) or, failing that, `/dev/urandom` (`extern/breakpad/src/common/linux/guid_creator.cc`);
-   - `InitActivation()`: opens `config.yaml` read-only and `nevr-sentinel.log` read-write in
-     append mode in the app's external files directory. Both opens are non-blocking, the log open
+   - `InitActivation()`: opens `config.yaml` read-only in the app's external files directory and the run's log
+     (`nevr-<timestamp>.jsonl`, in `nevr/logs` below it) read-write in append mode. Both opens are non-blocking, the log open
      does not follow symlinks, and each target must be a regular file (a FIFO or device is
      refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open (a
      missing directory, or a directory or a symlink at the path) is retried at most once per 30 s,
@@ -853,8 +860,19 @@ not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateCon
 called through its own PLT (JUMP_SLOT `0x36e8028`), the same shape as the `TString` slot, so it has its own
 thunk (`Slot::kCreateConnection`, installed with libr15's `TString` slot): a URL that starts `https://api.` or
 `https://api-` goes through `ServiceRedirector::ApplyUrl`, the same shared policy and string pool, so it
-reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot, the result and every
-other URL pass through. The strings of the game's service-status request
+reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot and the result pass
+through. The same decision then refuses four hosts the game must not contact (#2089): after the redirect has
+answered, a URL that is still `RAD.bugsplat.com` (`RegisterGlobalCrashHandler`, `0x108f528`; the crash-dump upload
+`ProcessDumpFiles`, `0x108de4c`, posts on that connection), `s3-us-west-2.amazonaws.com`
+(`CR15NetPackageDownloadCS::Initialize`, `0x226bf58`), `graph.oculus.com` (`CR15NetGame::Initialize`, `0x1386520`, and
+`CR15NetMatchmakerQueues::Initialize`, `0x138812c`) or `api-<env>.readyatdawn.com` (`0x136c25c`) is passed to the
+original as `https://127.0.0.1:9`. `CreateConnection` makes a connection object and sends nothing (`0x1096c08` strips the
+scheme and tail-calls the three-argument form `0x1096c78`, which allocates and stores host, port and the https flag), and
+its callers keep going on a zero result (`0x226bf58`: a non-zero result ends `Initialize`), so the original still runs and
+the refusal is the address, never an error return: every later request on that object ends in a refused connection on the
+device. All seven call sites in libr15 go through the one PLT stub (`0x1021280`, GOT `0x36e8028`). Each refused host has one
+reporter counter, `http_create_connection_refused_{rad_bugsplat,s3,graph,api_env}`. The block follows the redirect, so a
+graph or api host sent to `nevr_http_uri` is not refused; every other URL passes. The strings of the game's service-status request
 (`status/services,news?env=%s&projectid=rad14`, `libr15.so` `0x2baa0d2`) and of its matchmaker queue API
 (`ready_at_dawn/join_queue`, `poll_queue_position`, `leave_queue`, `0x2bad4ea`, `0x2bad390`, `0x2bad547`) are in
 `libr15.so`, and the PC build sends both on the connection `InitializeHttp`-style code opens to the same base
@@ -1864,7 +1882,7 @@ and two linked probes (`frames_probe_ok`, `frames_probe_bad`).
 `redirect_installed`, `social_hook_installed`, `dlopen_hook_installed`, `libpnsovr_loaded`,
 `login_hook_installed`, `matchmaking_redirect_installed`, `router_remote_connected`,
 `router_remote_failed`, `login_rewritten`, `login_accepted`, `login_refused`. The hook backend's lines
-and the stage lines reach logcat (tag `NEVR-Sentinel`) and the on-disk `nevr-sentinel.log`.
+and the stage lines reach logcat (tag `NEVR-Sentinel`) and the on-disk run log (`nevr/logs/nevr-<timestamp>.jsonl`).
 
 **Not run on a headset.** Everything in this section except the sentinel base (loader shim, Breakpad,
 clock hook) is built and host-tested only: the order of the constructor against the game's first config

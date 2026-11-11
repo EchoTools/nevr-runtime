@@ -2,6 +2,7 @@
 // nevr-runtime.dll (runtime/host/stop_line.h, #1252). Every line a test reads back is parsed with nlohmann::json, and the
 // field order is read from the text, since a parsed object does not keep it.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/stop_line.h"
 
 #include "runtime/host/bootstrap_diagnostics.h"
@@ -270,9 +271,10 @@ TEST(StopLineRuntime, EveryOutcomeThatStopsTheGameHasItsOwnReasonAndTheSameExitC
       {RuntimeLoadOutcome::kAbiRejected, "abi_rejected"},
       {RuntimeLoadOutcome::kInitFailed, "init_failed"},
       {RuntimeLoadOutcome::kRuntimeRefused, "runtime_refused"},
+      {RuntimeLoadOutcome::kUpdateBlocked, "update_blocked"},
   };
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   for (const Row& row : rows) {
     RuntimeLoadResult result = Result(row.outcome, L"C:\\nevr\\nevr-runtime.dll");
     RuntimeStopText text;
@@ -287,14 +289,25 @@ TEST(StopLineRuntime, EveryOutcomeThatStopsTheGameHasItsOwnReasonAndTheSameExitC
 
 TEST(StopLineRuntime, AnAbsentRuntimeSaysItIsMissingAndWhereTheHostLooked) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\echovr\\nevr-runtime.dll");
   EXPECT_EQ(DetailOf(diagnostics, result), "nevr-runtime.dll is missing; path=C:\\nevr\\echovr\\nevr-runtime.dll");
 }
 
+// ADR 0024, section 4: a start that stops because a self-update left the root unfinished says why and where.
+TEST(StopLineRuntime, AnUnfinishedUpdateSaysWhyAndNamesTheRoot) {
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(nullptr, nullptr);
+  RuntimeLoadResult result = Result(RuntimeLoadOutcome::kUpdateBlocked, L"C:\\nevr\\echovr\\nevr-runtime.dll");
+  result.update_reason = "bad_journal";
+  EXPECT_EQ(DetailOf(diagnostics, result),
+            "a self-update left the nEVR root unfinished and this start could not finish it (bad_journal), so nothing "
+            "was loaded; path=C:\\nevr\\echovr\\nevr-runtime.dll");
+}
+
 TEST(StopLineRuntime, ARefusedRuntimeCarriesTheVerifiersOwnWordsAndNoVersion) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeRefused, L"C:\\nevr\\echovr\\nevr-runtime.dll");
   result.verify_reason = "unsigned";
   RuntimeStopText text;
@@ -305,7 +318,7 @@ TEST(StopLineRuntime, ARefusedRuntimeCarriesTheVerifiersOwnWordsAndNoVersion) {
 
 TEST(StopLineRuntime, ARuntimeTheHostReadStatesItsVersion) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kInitFailed, L"C:\\nevr\\echovr\\nevr-runtime.dll");
   result.runtime_version = "5.8.1";
   result.init_code = 3;
@@ -319,7 +332,7 @@ TEST(StopLineRuntime, ARuntimeTheHostReadStatesItsVersion) {
 
 TEST(StopLineRuntime, AnAbiRejectionNamesTheStatusAndBothVersions) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kAbiRejected, L"C:\\nevr\\nevr-runtime.dll");
   result.abi_status = nevr_runtime_abi::Status::kMajorMismatch;
   result.expected_major = 1;
@@ -334,7 +347,7 @@ TEST(StopLineRuntime, AnAbiRejectionNamesTheStatusAndBothVersions) {
 
 TEST(StopLineRuntime, ALoadFailureNamesTheWin32Error) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kDependencyLoadFailed, L"C:\\nevr\\nevr-runtime.dll");
   result.win32_error = 126;
   const std::string detail = DetailOf(diagnostics, result);
@@ -346,7 +359,7 @@ TEST(StopLineRuntime, ALegacyRuntimeBesideTheHostIsNamedWhenTheRuntimeIsAbsentFr
   const std::wstring root = MakeTempDir(L"root");
   MakeFile(host_dir + L"nevr-runtime.dll");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, host_dir.c_str());
+  diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, (root + L"\\nevr-runtime.dll").c_str());
 
   const std::string detail = DetailOf(diagnostics, result);
@@ -365,7 +378,7 @@ TEST(StopLineRuntime, ALegacyRuntimeBesideTheHostIsNamedWhenTheRuntimeIsAbsentFr
 TEST(StopLineRuntime, NoLegacySentenceWhenNothingIsBesideTheHost) {
   const std::wstring host_dir = MakeTempDir(L"host") + L"\\";
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, host_dir.c_str());
+  diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   EXPECT_EQ(DetailOf(diagnostics, result).find("beside"), std::string::npos);
   RemoveDirectoryW(host_dir.c_str());
@@ -375,7 +388,7 @@ TEST(StopLineRuntime, ALegacyFileIsNotMentionedForAnOutcomeThatIsNotAbsent) {
   const std::wstring host_dir = MakeTempDir(L"host") + L"\\";
   MakeFile(host_dir + L"nevr-runtime.dll");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, host_dir.c_str());
+  diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   RuntimeLoadResult refused = Result(RuntimeLoadOutcome::kRuntimeRefused, L"C:\\nevr\\nevr-runtime.dll");
   refused.verify_reason = "unsigned";
   EXPECT_EQ(DetailOf(diagnostics, refused).find("beside"), std::string::npos);
@@ -388,17 +401,17 @@ TEST(StopLineRuntime, ALegacyFileIsNotMentionedForAnOutcomeThatIsNotAbsent) {
 TEST(StopLineRuntime, TheLogFieldIsThePathOfTheLogTheHostWrites) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   RuntimeStopText text;
   nevr_host::DescribeRuntimeStop(diagnostics, result, text);
-  EXPECT_EQ(std::wstring(text.facts.log), local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  EXPECT_EQ(std::wstring(text.facts.log), nevr_test::HostLogPath(local));
 }
 
 TEST(StopLineRuntime, WriteRuntimeStopLineWritesOneLineWithTheDescribedFacts) {
   StderrCapture capture;
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   ASSERT_TRUE(nevr_host::WriteRuntimeStopLine(diagnostics, result));
   const nlohmann::json record = ParseOne(capture.Text());
@@ -421,7 +434,7 @@ TEST(StopLineRuntime, TheNoticeLineStatesTheAbsentRuntimeAndTheFixOnOneLineOfTex
   g_console_records.clear();
   BootstrapDiagnostics::SetEmitSinkForTest(&CollectConsoleRecord);
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   EXPECT_TRUE(nevr_host::WriteRuntimeNoticeLine(nevr_host::kStopNoticeMissingText, diagnostics, result));
   BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
@@ -442,7 +455,7 @@ TEST(StopLineRuntime, TheNoticeLineStatesTheAbsentRuntimeAndTheFixOnOneLineOfTex
 TEST(StopLineRuntime, ATimestampInTheFutureNamesTheClockAndTheVerifiersWords) {
   StderrCapture capture;
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeRefused, L"C:\\nevr\\nevr-runtime.dll");
   result.verify_reason = "timestamp invalid: the token's time is in the future";
   result.verify_reason_code = nevr_plugin_signature::Reason::TimestampInvalid;
@@ -455,35 +468,33 @@ TEST(StopLineRuntime, ATimestampInTheFutureNamesTheClockAndTheVerifiersWords) {
   EXPECT_EQ(text.find("reinstall"), std::string::npos) << "the fix for a clock is the clock, not the install: " << text;
 }
 
-// A first stop record whose primary directory is blocked is written to %TEMP%: the record's `log`, the console line and the
-// dialog all name that file, not the directory the record would have gone to first.
-TEST(StopLineRuntime, TheFirstRecordThatFallsBackToTempNamesTheTempLogOnTheRecordAndOnTheLine) {
+// A stop record whose main log cannot be written is not written anywhere else: it is dropped to the console, loudly, with an empty
+// `log`, and neither %TEMP% nor the folder of the host DLL gets a file. The stop line says no log was written.
+TEST(StopLineRuntime, ARecordThatCannotBeWrittenToTheMainLogGoesToTheConsoleAndNowhereElse) {
   StderrCapture capture;
   const std::wstring temp = MakeTempDir(L"temp");
+  SetEnvironmentVariableW(L"TEMP", temp.c_str());
+  SetEnvironmentVariableW(L"TMP", temp.c_str());
   const std::wstring blocker_dir = MakeTempDir(L"blocker");
   MakeFile(blocker_dir + L"\\file");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), temp.c_str(), nullptr);
+  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), nullptr);
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   nlohmann::json record;
   record["event"] = "game_stop";
   RuntimeStopText text;
   nevr_host::DescribeRuntimeStop(diagnostics, result, text);
   nevr_host::AddStopFacts(record, text.facts);
-  ASSERT_EQ(diagnostics.Emit(record), nevr_host::DiagnosticDestination::kFallback);
-  ASSERT_TRUE(nevr_host::WriteRuntimeStopLine(diagnostics, result));
-  const std::wstring expected = temp + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
-  EXPECT_EQ(ParseOne(capture.Text()).at("log"), Utf8(expected));
-  const std::vector<std::string> written = Lines(ReadAll(expected));
-  ASSERT_EQ(written.size(), 1u);
-  EXPECT_EQ(nlohmann::json::parse(written[0]).at("log"), Utf8(expected));
+  ASSERT_EQ(diagnostics.Emit(record), nevr_host::DiagnosticDestination::kDropped);
+  EXPECT_EQ(ParseOne(capture.Text()).at("log"), "") << "the dropped record names no file";
+  EXPECT_EQ(GetFileAttributesW((temp + L"\\nevr").c_str()), INVALID_FILE_ATTRIBUTES) << "nothing in %TEMP%";
 }
 
 TEST(StopLineRuntime, ADetailWithThreePathsKeepsEveryPathAndASmallerOneStaysWhole) {
   const std::wstring host_dir = MakeTempDir(L"host") + L"\\";
   MakeFile(host_dir + L"nevr-runtime.dll");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, host_dir.c_str());
+  diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   // A search path of 259 characters, each three bytes in UTF-8 (U+20AC), under the directory part.
   std::wstring root = L"C:\\";
   while (root.size() + 1 + 20 < 259) root += L"\x20AC";
@@ -500,7 +511,7 @@ TEST(StopLineRuntime, ADetailThatCannotHoldAPieceSaysSoInsteadOfEndingMidSentenc
   const std::wstring host_dir = MakeTempDir(L"host") + L"\\";
   MakeFile(host_dir + L"nevr-runtime.dll");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, host_dir.c_str());
+  diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   // The search path longer than any a MAX_PATH buffer holds cannot be built, so build the overflow from the verifier's
   // own words instead: a refusal reason far longer than the detail.
   RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeRefused, L"C:\\nevr\\nevr-runtime.dll");
@@ -561,7 +572,7 @@ TEST(StopLineAttach, ReportNotAttachedWritesTheRecordAndTheLineWithoutACode) {
   const std::wstring local = MakeTempDir(L"local");
   StderrCapture capture;
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   nevr_host::ReportNotAttached(diagnostics);
 
@@ -573,9 +584,9 @@ TEST(StopLineAttach, ReportNotAttachedWritesTheRecordAndTheLineWithoutACode) {
   EXPECT_EQ(line.at("host_version"), nevr_host::Version());
   EXPECT_EQ(line.at("runtime_version"), "not loaded");
   EXPECT_EQ(line.at("detail"), nevr_host::AttachFailureDetail(AttachFailure::kPrologueCheck));
-  EXPECT_EQ(line.at("log"), Utf8(local) + "\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  EXPECT_EQ(line.at("log"), Utf8(nevr_test::HostLogPath(local)));
 
-  const std::vector<std::string> records = Lines(ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"));
+  const std::vector<std::string> records = Lines(ReadAll(nevr_test::HostLogPath(local)));
   ASSERT_EQ(records.size(), 1u);
   const nlohmann::json record = nlohmann::json::parse(records[0]);
   EXPECT_EQ(record.at("event"), "host_not_attached");
@@ -589,18 +600,18 @@ TEST(StopLineAttach, ReportNotAttachedWritesNothingWhenNoStepFailed) {
   const std::wstring local = MakeTempDir(L"local");
   StderrCapture capture;
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   nevr_host::ReportNotAttached(diagnostics);
   EXPECT_EQ(capture.Text(), "");
-  EXPECT_EQ(ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"), "");
+  EXPECT_EQ(ReadAll(nevr_test::HostLogPath(local)), "");
 }
 
 TEST(StopLineAttach, ReportUnsupportedImageWritesTheStopRecordAndTheLineWithTheGuardsCode) {
   const std::wstring local = MakeTempDir(L"local");
   StderrCapture capture;
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   nevr_host::ReportUnsupportedImage(diagnostics, kImageGuardExitCode);
 
   const nlohmann::json line = ParseOne(capture.Text());
@@ -612,7 +623,7 @@ TEST(StopLineAttach, ReportUnsupportedImageWritesTheStopRecordAndTheLineWithTheG
   EXPECT_EQ(line.at("host_version"), nevr_host::Version());
   EXPECT_NE(std::string(line.at("detail")).find("not the supported echovr.exe build"), std::string::npos);
 
-  const std::vector<std::string> records = Lines(ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"));
+  const std::vector<std::string> records = Lines(ReadAll(nevr_test::HostLogPath(local)));
   ASSERT_EQ(records.size(), 1u);
   const nlohmann::json record = nlohmann::json::parse(records[0]);
   EXPECT_EQ(record.at("event"), "game_stop");
@@ -622,39 +633,37 @@ TEST(StopLineAttach, ReportUnsupportedImageWritesTheStopRecordAndTheLineWithTheG
   EXPECT_EQ(record.at("detail"), line.at("detail"));
 }
 
-TEST(StopLineLogPath, IsTheFirstReadyDirectoryBeforeAnythingIsWritten) {
+TEST(StopLineLogPath, IsTheMainLogBeforeAnythingIsWritten) {
   const std::wstring local = MakeTempDir(L"local");
   const std::wstring temp = MakeTempDir(L"temp");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), temp.c_str(), nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   wchar_t path[MAX_PATH] = {};
   ASSERT_TRUE(diagnostics.LogFilePath(path, MAX_PATH));
-  EXPECT_EQ(std::wstring(path), local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  EXPECT_EQ(std::wstring(path), nevr_test::HostLogPath(local));
 }
 
-TEST(StopLineLogPath, FollowsTheDirectoryTheLastRecordReached) {
-  const std::wstring temp = MakeTempDir(L"temp");
-  // A local-app-data that is a file, so the primary directory cannot be created and the record falls back to %TEMP%.
+TEST(StopLineLogPath, IsFalseOnceTheLastRecordReachedNoFile) {
+  // A local-app-data that is a file, so the logs directory cannot be created: there is no other place to write.
   const std::wstring blocker_dir = MakeTempDir(L"blocker");
   MakeFile(blocker_dir + L"\\file");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), temp.c_str(), nullptr);
-  ASSERT_EQ(diagnostics.Emit(nlohmann::json{{"event", "probe"}}), nevr_host::DiagnosticDestination::kFallback);
+  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), nullptr);
+  ASSERT_EQ(diagnostics.Emit(nlohmann::json{{"event", "probe"}}), nevr_host::DiagnosticDestination::kDropped);
   wchar_t path[MAX_PATH] = {};
-  ASSERT_TRUE(diagnostics.LogFilePath(path, MAX_PATH));
-  EXPECT_EQ(std::wstring(path), temp + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  EXPECT_FALSE(diagnostics.LogFilePath(path, MAX_PATH));
 }
 
 TEST(StopLineLogPath, IsFalseWhenNoDirectoryIsReadyOrThePathDoesNotFit) {
   BootstrapDiagnostics none;
-  none.PrepareForTest(nullptr, nullptr, nullptr);
+  none.PrepareForTest(nullptr, nullptr);
   wchar_t path[MAX_PATH] = {L'x', 0};
   EXPECT_FALSE(none.LogFilePath(path, MAX_PATH));
   EXPECT_EQ(path[0], L'\0') << "out is emptied";
 
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics some;
-  some.PrepareForTest(local.c_str(), nullptr, nullptr);
+  some.PrepareForTest(local.c_str(), nullptr);
   wchar_t small[8] = {L'x', 0};
   EXPECT_FALSE(some.LogFilePath(small, 8));
   EXPECT_EQ(small[0], L'\0');
@@ -666,7 +675,7 @@ TEST(StopLineLogPath, IsFalseAfterARecordThatReachedNoFile) {
   const std::wstring blocker_dir = MakeTempDir(L"blocker");
   MakeFile(blocker_dir + L"\\file");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest((blocker_dir + L"\\file").c_str(), nullptr);
   ASSERT_EQ(diagnostics.Emit(nlohmann::json{{"event", "probe"}}), nevr_host::DiagnosticDestination::kDropped);
   wchar_t path[MAX_PATH] = {};
   EXPECT_FALSE(diagnostics.LogFilePath(path, MAX_PATH));

@@ -3,6 +3,7 @@
 // checks — they fail if the core ever reports kLoaded for a null descriptor or a
 // major mismatch, or if it over-reads a short descriptor's ABI version.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/runtime_load.h"
 
 #include "core/runtime_abi.h"
@@ -203,14 +204,14 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticWritesAParseableRecord) {
   EmitLoadDiagnostic(diagnostics, result);
 
   const std::string line =
-      ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+      ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(line.empty());
   const nlohmann::json record = nlohmann::json::parse(line);
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "abi_rejected");
   EXPECT_EQ(record.at("degraded_action"), "stop_game");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
   EXPECT_EQ(record.at("actual_abi"), "2.0");
   EXPECT_EQ(record.at("abi_status"), "major_mismatch");
 }
@@ -243,14 +244,14 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticOmitsAbiFieldsWhenNoDescriptorWasRead) {
   EmitLoadDiagnostic(diagnostics, result);
 
   const std::string line =
-      ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+      ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(line.empty());
   const nlohmann::json record = nlohmann::json::parse(line);
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "runtime_absent");
   EXPECT_EQ(record.at("degraded_action"), "stop_game");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
   EXPECT_EQ(record.at("win32_error").get<int>(), static_cast<int>(kFileNotFound));
   EXPECT_FALSE(record.contains("abi_status"));
   EXPECT_FALSE(record.contains("actual_abi"));
@@ -270,15 +271,15 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   ASSERT_TRUE(result.Loaded());
   EmitLoadDiagnostic(diagnostics, result);
 
-  const std::string line = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string line = ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(line.empty());
   const nlohmann::json record = nlohmann::json::parse(line);
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "loaded");
   EXPECT_EQ(record.at("degraded_action"), "dispatch");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
-  EXPECT_EQ(record.at("actual_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
+  EXPECT_EQ(record.at("actual_abi"), "1.2");
   EXPECT_EQ(record.at("abi_status"), "ok");
   EXPECT_EQ(record.at("init_code"), 0);
   EXPECT_FALSE(record.contains("win32_error"));
@@ -427,7 +428,7 @@ TEST(HostRuntimeLoad, TheLoadRecordNamesTheRootAndSaysWhenNevrRootWasIgnored) {
   const std::wstring local = MakeTempDir(L"local");
   SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
   SetEnvironmentVariableW(L"TEMP", MakeTempDir(L"temp").c_str());
-  const std::wstring log = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  const std::wstring log = nevr_test::HostLogPath(local);
 
   BootstrapDiagnostics diagnostics;
   diagnostics.Prepare(GetModuleHandleW(nullptr));
@@ -570,7 +571,7 @@ TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
   nevr_host::RuntimeLoader loader;
   loader.Prepare();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
+  diagnostics.PrepareForTest(L"", L"");
   NevrHostContext host{};
 
   const RuntimeLoadResult outside = loader.Load(host, diagnostics);
@@ -607,7 +608,7 @@ TEST(HostRuntimeLoad, LoadLooksInTheNevrRootAndTheResultSaysWhichRootAndWhetherN
   nevr_host::RuntimeLoader loader;
   loader.Prepare();
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
+  diagnostics.PrepareForTest(L"", L"");
   NevrHostContext host{};
   const RuntimeLoadResult result = loader.Load(host, diagnostics);
 
@@ -625,7 +626,7 @@ TEST(HostRuntimeLoad, LoadLooksInTheNevrRootAndTheResultSaysWhichRootAndWhetherN
 TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
@@ -634,7 +635,7 @@ TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
   result.loader_lock_held = true;
   EmitLoadDiagnostic(diagnostics, result);
 
-  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(local)).c_str());
   const std::size_t split = text.find('\n');
   ASSERT_NE(split, std::string::npos);
   const nlohmann::json first = nlohmann::json::parse(text.substr(0, split));
@@ -648,7 +649,7 @@ TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
 TEST(HostRuntimeLoad, ARecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kAbiRejected;
   result.loader_lock_held = true;
@@ -657,7 +658,7 @@ TEST(HostRuntimeLoad, ARecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) 
   EXPECT_NO_THROW(EmitLoadDiagnostic(diagnostics, result));
   nevr_host::SetEmitLoadFailureForTest(false);
 
-  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(text.empty());
   const nlohmann::json marker = nlohmann::json::parse(text.substr(0, text.find('\n')));
   EXPECT_EQ(marker.at("tag"), "NEVR.HOST");
@@ -690,7 +691,7 @@ TEST(HostRuntimeLoad, EveryOutcomeButLoadedNamesTheStopAsItsAction) {
 TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched) {
   const std::wstring local = MakeTempDir(L"stop");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
   result.path_ok = true;
@@ -702,7 +703,7 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
 
   nevr_host::EmitStopDiagnostic(diagnostics, result);
 
-  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(text.empty());
   const nlohmann::json record = nlohmann::json::parse(text.substr(0, text.find('\n')));
   EXPECT_EQ(record.at("tag"), "NEVR.HOST");
@@ -716,7 +717,7 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
   EXPECT_EQ(record.at("host_version"), std::string(nevr_host::Version()));
   EXPECT_EQ(record.at("runtime_version"), "not loaded");
   EXPECT_EQ(record.at("detail"), "nevr-runtime.dll is missing; path=C:\\games\\echovr\\bin\\win10\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("log"), Utf8(local) + "\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  EXPECT_EQ(record.at("log"), Utf8(nevr_test::HostLogPath(local)));
   // The host's identity: the literal the packager reads from this file, so the log names exactly what ran.
   EXPECT_EQ(record.at("host_identity"), std::string(nevr_host::IdentityLiteral()));
   EXPECT_EQ(std::string(nevr_host::IdentityLiteral()).rfind("NEVR-BUILD ", 0), 0u);
@@ -725,13 +726,13 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
 TEST(HostRuntimeLoad, TheStopRecordStatesTheVersionOfARuntimeTheHostRead) {
   const std::wstring local = MakeTempDir(L"stopver");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kInitFailed;
   result.runtime_version = "5.8.1";
   result.init_code = 3;
   nevr_host::EmitStopDiagnostic(diagnostics, result);
-  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(text.empty());
   const nlohmann::json record = nlohmann::json::parse(text.substr(0, text.find('\n')));
   EXPECT_EQ(record.at("runtime_version"), "5.8.1");
@@ -751,7 +752,7 @@ TEST(HostRuntimeLoad, TheHostBuildLiteralSaysWhetherThisHostLoadsAnUnsignedRunti
 TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {
   const std::wstring local = MakeTempDir(L"stopmark");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kInitFailed;
 
@@ -759,7 +760,7 @@ TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnExcepti
   EXPECT_NO_THROW(nevr_host::EmitStopDiagnostic(diagnostics, result));
   nevr_host::SetEmitLoadFailureForTest(false);
 
-  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(local)).c_str());
   ASSERT_FALSE(text.empty());
   const nlohmann::json marker = nlohmann::json::parse(text.substr(0, text.find('\n')));
   EXPECT_EQ(marker.at("event"), "game_stop");

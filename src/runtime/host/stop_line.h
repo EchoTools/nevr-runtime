@@ -2,7 +2,7 @@
 
 // The one console line the host writes whenever it stops the game, or leaves the game running without nevr-runtime.dll
 // (tag `NEVR.STOP`, #1252). A `-server` operator has a console and no dialog; this is what they read, and the same facts
-// go to the host log (nevr-bootstrap.jsonl) so the two agree. The line is built in a fixed buffer with JsonLine
+// go to the host's records in the run's main log so the two agree. The line is built in a fixed buffer with JsonLine
 // (host_json.h) and written with one WriteFile to the standard error handle: no heap, no lock, safe in the places the
 // host stops the game from. Nothing here calls the NEVR logger.
 //
@@ -14,7 +14,8 @@
 //   code            the exit code (78 for every runtime that did not load; 0xE0420003 for the image guard), as a
 //                   number; omitted when stopped is false
 //   reason          a token: runtime_absent, runtime_refused, dependency_load_failed, load_failed, missing_entry,
-//                   null_descriptor, abi_rejected, init_failed, no_path, unsupported_image or host_not_attached
+//                   null_descriptor, abi_rejected, init_failed, no_path, update_blocked, unsupported_image or
+//                   host_not_attached
 //   host_version    the version in the host's own NEVR-BUILD literal
 //   runtime_version the version in nevr-runtime.dll's NEVR-BUILD literal when the host read the file, else "not loaded"
 //   detail          what is wrong and where, in words

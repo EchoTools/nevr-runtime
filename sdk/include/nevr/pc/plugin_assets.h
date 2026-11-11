@@ -52,7 +52,7 @@ inline int RegisterAsset(uint64_t type_hash, uint64_t name_hash, const void* dat
     return detail::g_fnRegisterAsset(type_hash, name_hash, data, size, label);
 }
 
-// Deregister every asset whose data lies in [start, end). Call from NvrPluginShutdown with the plugin image.
+// Deregister every asset whose data lies in [start, end). Call from NevrPluginShutdown with the plugin image.
 inline void DeregisterAssets(const void* start, const void* end) {
     std::call_once(detail::g_assetOnce, detail::ResolveAssetExports);
     if (detail::g_fnDeregisterAssets) detail::g_fnDeregisterAssets(start, end);

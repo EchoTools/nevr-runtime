@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0010-signed-plugins-only.md
+audience: all
+---
+
 # ADR 0010: plugins are checked against the release-signer pipeline, and a run can require the signature
 
 Status: accepted, implemented by #745 (merge commit 712fb5c4226335f9084ef5dcd42da986e62efc04: the signature check; signed-only and dev
@@ -14,7 +21,7 @@ Code is cited by file and symbol; every measurement names its probe; what is not
 
 ## Context
 
-`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NvrPluginInit*`
+`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NevrPluginInit*`
 inside the game process, with the runtime's authority. Nothing asks who built the file. The signing pipeline for releases exists
 (`thesprockee/release-signer`, Azure Artifact Signing, profile `andrew-bates-public`); the runtime does not use its output for plugins.
 The pipeline has produced a signed file: the v5.4.3 release's `BugSplat64.dll` (`tools/fetch_real_signed_dll.py` fetches
@@ -121,7 +128,7 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   left to the OS search (the plugins directory may not be on it), and a file the filter cannot name is refused (#1177);
 The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
 thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
-runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NvrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NevrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
@@ -334,7 +341,7 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | a staged plugin's `DllMain` loads the plugin's own path | checked by the filter (it holds the file); the loader's own load of it is not checked a second time |
 | late load by a full path, a link in it repointed after the check, signed-only run | the checked file loads; an unsigned-allowed run loads what the caller named |
 
-Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
+Mutants (AGENTS.md "What a landed commit carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open
 (a 65th dependency is then accepted), compare the late-load path as text instead of its final path (an 8.3 name, a `\\?\` prefix or a trailing dot
 or space then loads unchecked), let a late load go by the caller's text after the check, rewrite in an unsigned-allowed run, rewrite a bare name; each makes its row fail.

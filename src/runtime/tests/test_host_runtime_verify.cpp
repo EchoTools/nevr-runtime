@@ -13,6 +13,7 @@
 // throwaway PKI into the directory named by NEVR_SIGFIX_DIR (`just test-auth-unit` makes it). The tests that need them
 // fail without it: a verifier test that skips is a verifier nobody tested.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/runtime_rendezvous.h"
@@ -140,6 +141,44 @@ TEST(HostStopNoticeText, EachCauseSaysWhatIsWrongAndWhatToDo) {
         RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor, RuntimeLoadOutcome::kAbiRejected,
         RuntimeLoadOutcome::kInitFailed}) {
     EXPECT_EQ(StopNoticeTextFor(outcome, Reason::Accepted), std::wstring(nevr_host::kStopNoticeText));
+  }
+}
+
+// A runtime that was swapped in and mapped, and then failed, is put back at the next start (ADR 0024, section 6): the
+// player is told in plain words that nEVR was updated, could not start, and what happens next. Only the failures that
+// leave the runtime mapped say it; a refused file never ran and is put back in the same start.
+TEST(HostStopNoticeText, AFailedUpdateSaysItWasUpdatedCouldNotStartAndWillBePutBack) {
+  const std::wstring text = StopNoticeTextFor(RuntimeLoadOutcome::kInitFailed, Reason::Accepted, true);
+  EXPECT_NE(text.find(L"updated"), std::wstring::npos) << "it says nEVR was updated";
+  EXPECT_NE(text.find(L"couldn't start"), std::wstring::npos);
+  EXPECT_NE(text.find(L"put back"), std::wstring::npos) << "it says the previous version comes back";
+  EXPECT_NE(text.find(L"start nEVR again"), std::wstring::npos) << "and what to do";
+  for (const RuntimeLoadOutcome outcome : {RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor,
+                                           RuntimeLoadOutcome::kAbiRejected, RuntimeLoadOutcome::kInitFailed}) {
+    EXPECT_EQ(StopNoticeTextFor(outcome, Reason::Accepted, true), text);
+    EXPECT_EQ(StopNoticeTextFor(outcome, Reason::Accepted, false), std::wstring(nevr_host::kStopNoticeText))
+        << "without a scheduled rollback the general words stand";
+  }
+}
+
+// The host decides what a failed load of a release that is still pending asks of it (ADR 0024, section 6): a runtime that
+// never ran is put back in the same start; one that was mapped is marked, and the next start puts it back.
+TEST(HostPendingFailure, TheOutcomeDecidesWhetherTheRuntimeNeverRanOrWasMapped) {
+  using nevr_host::ClassifyPendingFailure;
+  using nevr_host::PendingFailure;
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kRuntimeRefused, RuntimeLoadOutcome::kRuntimeAbsent, RuntimeLoadOutcome::kLoadFailed,
+        RuntimeLoadOutcome::kDependencyLoadFailed}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kNeverRan);
+  }
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor, RuntimeLoadOutcome::kAbiRejected,
+        RuntimeLoadOutcome::kInitFailed}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kMapped);
+  }
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kLoaded, RuntimeLoadOutcome::kNoPath, RuntimeLoadOutcome::kUpdateBlocked}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kNone);
   }
 }
 
@@ -329,7 +368,7 @@ class HostRuntimeVerify : public ::testing::Test {
  protected:
   void SetUp() override {
     const char* dir = std::getenv("NEVR_SIGFIX_DIR");
-    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> "
+    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> --dll-dir <bin>/sigfix "
                                "--plugin-dll <the rendezvous nevr-runtime.dll> and export it (just test-auth-unit does)";
     fixtures_ = dir;
     std::ifstream in(fixtures_ + "/fixtures.json");
@@ -358,7 +397,7 @@ class HostRuntimeVerify : public ::testing::Test {
     ASSERT_NE(CreateDirectoryW(nevr_root_.c_str(), nullptr), FALSE);
     runtime_path_ = nevr_root_ + L"\\nevr-runtime.dll";
     nevr_host::SetRuntimeDirForTest(nevr_root_.c_str());
-    g_log_path = local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+    g_log_path = nevr_test::HostLogPath(local_);
     g_versions_written_before_load = false;
 
     // The host stand-in, in the install directory: the game's folder, where the runtime is no longer looked for.
@@ -399,7 +438,7 @@ class HostRuntimeVerify : public ::testing::Test {
     RemoveDirectoryW(nevr_root_.c_str());
     DeleteFileW((install_ + L"\\BugSplat64.dll").c_str());
     RemoveDirectoryW(install_.c_str());
-    DeleteFileW((local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+    DeleteFileW((nevr_test::HostLogPath(local_)).c_str());
   }
 
   std::wstring FixtureFile(const char* key) const {
@@ -435,7 +474,7 @@ class HostRuntimeVerify : public ::testing::Test {
     BootstrapDiagnostics diagnostics;
     // The host stand-in sits in install_: its directory is where an old-layout runtime would be found.
     const std::wstring host_dir = install_ + L"\\";
-    diagnostics.PrepareForTest(local_.c_str(), nullptr, host_dir.c_str());
+    diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
     nevr_test::StderrCapture capture;
     {
       ReturningTarget target;
@@ -445,7 +484,7 @@ class HostRuntimeVerify : public ::testing::Test {
       EXPECT_NE(rendezvous.Install(target.code()), nullptr);
       outcome.result = RuntimeRendezvous::GameMainWrapperDetour(0x1234);
       diagnostics.FlushAttachJournal();
-      outcome.records = ParseRecords(ReadAll(local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"));
+      outcome.records = ParseRecords(ReadAll(nevr_test::HostLogPath(local_)));
       RuntimeRendezvous::ResetActiveForTest();
     }
     outcome.stderr_text = capture.Text();
@@ -665,7 +704,7 @@ TEST_F(HostRuntimeVerify, ADevBuildLoadsAnUnsignedRuntimeAndSaysSoInTheRecord) {
 TEST_F(HostRuntimeVerify, ARuntimeThatLoadsAndFailsToInitializeStatesItsVersionInTheStopFacts) {
   StageCopy("nevr-runtime.signed");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local_.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local_.c_str(), nullptr);
   nevr_host::RuntimeLoader loader;
   loader.Prepare();
   NevrHostContext host{};
@@ -719,6 +758,76 @@ TEST_F(HostRuntimeVerify, AServerIsRefusedTheSameWayWithTheRecordsAndNoDialog) {
   const nlohmann::json line = OneStopLine(outcome);
   EXPECT_EQ(line.at("reason"), "runtime_refused");
   EXPECT_EQ(line.at("code"), 78);
+}
+
+// Self-update (docs/adr/0024-pc-self-update.md, section 4; #2104), through the detour: the swap runs before the verdict,
+// the file the verdict accepts and the load maps is the swapped one, and update_swap comes before versions (section 8).
+// The test's own update\ files are removed by exact path at its end.
+void RemoveUpdateFiles(const std::wstring& nevr_root) {
+  for (const wchar_t* file : {L"\\update\\previous\\7.7.7\\nevr-runtime.dll", L"\\update\\staging\\1.2.3\\nevr-runtime.dll",
+                              L"\\update\\staged.json", L"\\update\\swap.json", L"\\update\\pending.json", L"\\update\\state.json"}) {
+    DeleteFileW((nevr_root + file).c_str());
+  }
+  for (const wchar_t* dir : {L"\\update\\previous\\7.7.7", L"\\update\\previous", L"\\update\\staging\\1.2.3",
+                             L"\\update\\staging", L"\\update"}) {
+    RemoveDirectoryW((nevr_root + dir).c_str());
+  }
+}
+
+TEST_F(HostRuntimeVerify, AStagedReleaseIsSwappedInBeforeTheVerdictAndIsWhatLoads) {
+  StageCopy("nevr-runtime.unsigned");  // the release in the root, which the swap moves out unchecked
+  const std::vector<unsigned char> staged = ReadBytes(FixtureFile("nevr-runtime.signed"));
+  const std::wstring update = nevr_root_ + L"\\update";
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE);
+  ASSERT_NE(CreateDirectoryW((update + L"\\staging").c_str(), nullptr), FALSE);
+  ASSERT_NE(CreateDirectoryW((update + L"\\staging\\1.2.3").c_str(), nullptr), FALSE);
+  WriteBytes(update + L"\\staging\\1.2.3\\nevr-runtime.dll", staged);
+  const nlohmann::json staged_json = {
+      {"version", "1.2.3"},
+      {"files", nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"size", staged.size()}, {"sha256", Sha256Hex(staged)}}})}};
+  const std::string text = staged_json.dump();
+  WriteBytes(update + L"\\staged.json", std::vector<unsigned char>(text.begin(), text.end()));
+
+  const Outcome outcome = Run();
+  RemoveUpdateFiles(nevr_root_);
+
+  EXPECT_EQ(outcome.result, kOriginalResult) << "the swapped runtime was loaded and its game_main ran";
+  EXPECT_TRUE(g_events.empty());
+  const nlohmann::json swap = Only(outcome, "update_swap");
+  EXPECT_EQ(swap.at("outcome"), "swapped");
+  EXPECT_EQ(swap.at("to"), "1.2.3");
+  EXPECT_EQ(Only(outcome, "versions").at("runtime_sha256"), Sha256Hex(staged)) << "the verdict was on the swapped file";
+  EXPECT_EQ(Only(outcome, "runtime_load").at("verify"), "accepted");
+  EXPECT_LT(IndexOf(outcome.records, "update_swap"), IndexOf(outcome.records, "versions"));
+}
+
+// ADR 0024, section 4.6: a journal the host cannot read is not executed, and the game loads nothing: the root may hold
+// files of two releases.
+TEST_F(HostRuntimeVerify, AJournalTheHostCannotReadStopsTheGameBeforeAnyLoad) {
+  StageCopy("nevr-runtime.signed");
+  const std::wstring update = nevr_root_ + L"\\update";
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE);
+  const std::string journal = "{\"kind\": \"swap\", \"phase\": ";
+  WriteBytes(update + L"\\swap.json", std::vector<unsigned char>(journal.begin(), journal.end()));
+
+  const Outcome outcome = Run();
+  RemoveUpdateFiles(nevr_root_);
+
+  EXPECT_FALSE(outcome.runtime_mapped) << "nothing is loaded from a root the journal says may be half moved";
+  EXPECT_EQ(g_before_load_calls.load(), 0);
+  EXPECT_EQ(g_events, (std::vector<std::string>{"notice", "stop"}));
+  EXPECT_EQ(g_stop_code, 78u);
+  const nlohmann::json swap = Only(outcome, "update_swap");
+  EXPECT_EQ(swap.at("outcome"), "blocked");
+  EXPECT_EQ(swap.at("reason"), "bad_journal");
+  const nlohmann::json stop = Only(outcome, "game_stop");
+  EXPECT_EQ(stop.at("reason"), "update_blocked");
+  EXPECT_EQ(stop.at("update_reason"), "bad_journal");
+  EXPECT_EQ(IndexOf(outcome.records, "versions"), -1) << "no verdict was taken";
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("reason"), "update_blocked");
+  const std::string detail = line.at("detail");
+  EXPECT_NE(detail.find("bad_journal"), std::string::npos) << detail;
 }
 
 }  // namespace

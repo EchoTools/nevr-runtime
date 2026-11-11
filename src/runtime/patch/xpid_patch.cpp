@@ -6,7 +6,7 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/compat/evr_codec.h"
 // N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
-// its Log() output reached neither the console log nor nevr-boot.jsonl — so
+// its Log() output reached neither the console log nor the main log — so
 // across every captured run the patch reported NOTHING, success or failure, and
 // whether the game's provider strings were actually rewritten was unknowable.
 // (`login injected xpid=DSC-...` does not prove it: ws_bridge builds that prefix
@@ -36,12 +36,12 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
 /// terminal severity once the CLI says whether this is a server.
 ///
 /// This runs from Initialize() under the DllMain loader lock, in the boot phase,
-/// so it reports through the boot tee (stderr and nevr-boot.jsonl). The first
+/// so it reports through the boot tee (stderr and the main log). The first
 /// mismatch is also the cause boot.cpp names when a server refuses to start.
 static void ReportByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
   nevr_boot_log_tee::TeeFprintf(
-      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x\n",
+      "[NEVR.XPID] warn; %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x\n",
       what, static_cast<unsigned>(offset),
       expected[0], expected[1], expected[2], expected[3],
       site[0], site[1], site[2], site[3]);
@@ -80,7 +80,7 @@ VOID PatchDscProvider() {
   if (!ok) {
     // The failure is reported once, through the boot tee below, and g_bootHookFailed
     // carries the decision.
-    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] warn; validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
     // Every other address in addresses.h is then suspect too — continuing would
@@ -96,7 +96,7 @@ VOID PatchDscProvider() {
     g_bootHookFailed = true;
     NoteBootHookFailureCause("XPID provider-string validation failed");
     nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.XPID] XPID provider-string validation failed — echovr.exe is not the build this runtime "
+        "[NEVR.XPID] error; XPID provider-string validation failed — echovr.exe is not the build this runtime "
         "targets; every patched address is suspect; a server will refuse to start\n");
     return;
   }
@@ -121,12 +121,12 @@ VOID PatchDscProvider() {
     g_bootHookFailed = true;
     NoteBootHookFailureCause("XPID provider-string patch write failed");
     nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.XPID] provider-string patch FAILED — identity strings are inconsistent; "
+        "[NEVR.XPID] error; provider-string patch FAILED — identity strings are inconsistent; "
         "a server will refuse to start\n");
     return;
   }
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] info; DSC provider patch applied at 5 sites\n");
 }
 
 // ============================================================================
@@ -157,7 +157,7 @@ VOID PatchProviderPrefixOvrOrg() {
   g_RealGetProviderPrefix = reinterpret_cast<GetProviderPrefixFn>(target);
   if (PatchDetour(&g_RealGetProviderPrefix, reinterpret_cast<PVOID>(GetProviderPrefixHook),
                   "GetProviderPrefix")) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] info; GetProviderPrefix detour OK\n");
     return;
   }
   const char* const status = Hooking::LastAttachError();

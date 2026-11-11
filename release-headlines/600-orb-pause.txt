@@ -1,0 +1,1 @@
+On PC combat servers, the spawn orbs give the pre-match orbs while a match is paused, and TEAM READY knows when the match is live.

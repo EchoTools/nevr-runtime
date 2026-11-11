@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0004-quest-verification-regime.md
+audience: all
+---
+
 # ADR 0004: Quest networking is verified against the exact binaries, offline
 
 Status: accepted, mostly not implemented. The shared redirect vectors and the source-parity
