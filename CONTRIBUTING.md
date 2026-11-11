@@ -52,8 +52,8 @@ binary. See "Testing" in `AGENTS.md`.
    `Refs #N` for one it only advances (the message says what is still open). The message also carries what and why,
    each command run on the tip with its exit code, and what was not run (`AGENTS.md`, "What a landed commit carries").
 4. Review the branch in a fresh context and land it on `main` as "Review, verification and landing" in
-   [`AGENTS.md`](AGENTS.md) says: a MERGE verdict, then fetch, rebase onto `origin/main`, rerun the touched tests,
-   push the tip to `main` as a fast-forward. Without push access, stop after the rerun, push the branch to your fork
+   [`AGENTS.md`](AGENTS.md) says: a MERGE verdict, then `just land --test '<command>'` from the branch's own worktree
+   (it rebases, reruns the tests and pushes the tip to `main` as a fast-forward; no squash). Without push access, stop after the rerun, push the branch to your fork
    and post its name and tip SHA on the issue. No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a
    vcpkg input changes; run CI by hand on `main` with `gh workflow run <file> --ref main` (`build.yml`, `android.yml`,
    `vcpkg-cache.yml`, `defender-scan.yml`).

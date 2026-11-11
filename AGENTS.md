@@ -112,7 +112,7 @@ each one gives; do the step this way on yours:
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
 | "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a branch. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
-| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, take the review to its MERGE verdict and run "Landing" through step (2), then stop: push the branch to your fork and post its name and tip SHA on the issue. Never push to `main` of another remote. |
+| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, take the review to its MERGE verdict, rebase onto `origin/main` and rerun the tests, then stop: push the branch to your fork and post its name and tip SHA on the issue. Never push to `main` of another remote. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
@@ -717,12 +717,12 @@ your seat name, for example `claude-main` or `codex`.
 - **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
   files the repo's own tools write at the work root stay where they are. When you are done,
   delete what you created, not into the user's trash, in one of two ways: move each finished item, by its exact
-  path, into one holding directory (`<work root>/<seat>/to-delete/`), list it, then remove that directory with
-  `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
+  path, into a new holding directory under your own scratch root (`<work root>/<seat>/to-delete-<n>/`), list it,
+  then remove that literal path with `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
   script (`set -eu`, no globs), read it back, check each path is yours under the work root, then run it. Never
   another recursive removal (`rm -r`, `-R`, `-rf`, `-fr`, `find ... -delete`), including a chained last step: a
   rerun removes whatever the path names then (#2270). Never delete a directory another agent may still be working
-  in. A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
+  in. A run's logs and evidence are kept until their end (next bullet). Never `rm` anything inside a shared folder, and never delete by pattern across it.
 - **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
   (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
   creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the commit
@@ -797,13 +797,12 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Git
 
-- **Branches are cut with `--no-track`; `main` is pushed by explicit refspec:**
-  `git push origin HEAD:refs/heads/main` from the landing worktree ("Landing"). Record `git ls-remote origin main`
-  before the push and compare after it; read the `->` line of every push.
+- **Branches are cut with `--no-track`; `main` is pushed only by `just land`** ("Landing"), which records
+  origin's `main` before and after the push.
 - **Update with `git fetch` and `git rebase origin/main` on the unpushed branch** ("Landing"), never `git pull`.
 - **A contributor's fork branch is fetched with `git fetch --no-tags <fork-url> <branch>`.** Fetching a fork into the shared clone (a named remote, or a refspec that stores refs) brings the fork's tags, and a local tag that is not on origin makes the release preflight refuse (#1463).
-- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch, and never a
-  force-push of `main`. Fix a pushed mistake with a new commit.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch, no squash merge
+  ever, and never a force-push of `main`. Fix a pushed mistake with a new commit.
 - **Branches start from `origin/main`.** Do not base a branch on another feature branch.
 - **Report a mistake the moment you see it,** with the command and its output.
 
@@ -929,7 +928,8 @@ your seat name, for example `claude-main` or `codex`.
   commit message and the issue text, and nothing of the author's conclusions. Have it read the diff and the
   surrounding code, reproduce what the commit message claims, report findings with `file:line` and quoted evidence,
   and end with one verdict: MERGE or FIX. FIX goes back to the work; after the fix, start a new review on the new tip.
-  Only MERGE lands.
+  Only MERGE lands. The review subagent is `nevr-runtime-engineer` (`.claude/agents/nevr-runtime-engineer.md`),
+  never `general-purpose`.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing.
 - **Name the result before the check.** Before a check, a test run or a done condition, write down the result that would
@@ -939,22 +939,23 @@ your seat name, for example `claude-main` or `codex`.
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The commit message is the evidence.** It carries what "What a landed commit carries" lists: each command run on
   the exact tip and its exit code, the mutants, what was not run or not established, and the issue. When the content
-  changes before landing, amend that commit before Landing's step (1).
+  changes before landing, amend the commit before `just land`; the rerun's exit codes are in the landing log.
 - **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its
   done-bar. The commit message carries one line for each issue it resolves: `Closes #N` (or `Fixes #N`,
   `Resolves #N`); GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open,
   such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open. A fix
-  that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is
+  that has no issue gets an issue first. There is no "no issue" form. Land the line the prepared message carries;
+  change `Refs` to `Closes` only after checking that the issue has nothing left open. The review confirms that each named issue is
   resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`).
-- **Landing.** In the worktree, after MERGE: (1) `git fetch origin`, then `git rebase origin/main` (the branch is
-  unpushed; a merge commit would land on `main` with git's default subject, which is not a Conventional Commit);
-  (2) rerun the tests the change touches on the result, amend their exit codes into the commit message, and send a
-  failure back to the work; (3) record `git ls-remote origin refs/heads/main`; (4) fast-forward `main` on origin from
-  the worktree by explicit refspec, `git push origin HEAD:refs/heads/main` (a push without `--force` can only
-  fast-forward); (5) record `git ls-remote origin refs/heads/main` again: it is the branch tip; (6) in the checkout
-  where `main` is checked out, `git fetch origin && git merge --ff-only origin/main`. A push rejected because `main`
-  moved goes back to step 1, with local `main` untouched. Never force-push `main`. Then delete the branch ("Branch
-  lifecycle").
+- **Landing.** Land from the branch's own worktree, never from the main checkout, which is only ever fast-forwarded to
+  `origin/main`. After MERGE, run `just land --test '<command>'`, one `--test` for each test command the change
+  touches (`tools/cmd/land`). One lander at a time: under a lock on `nevr-land.lock` in the git common directory, taken
+  before the fetch and released after the push, it fetches, records origin's `main`, rebases the branch's own commits
+  onto `origin/main`, reruns each test, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so
+  only a fast-forward), records `main` again, fast-forwards the main checkout, and appends every step to
+  `$XDG_STATE_HOME/nevr-runtime/land.jsonl`. Exit 4 (a rebase conflict) or 5 (a test failed) goes back to the work and
+  a new review; exit 6 (origin's `main` moved) runs `just land` again. No squash merge, ever: each commit of the branch
+  lands with its own message. Never force-push `main`. Then delete the branch ("Branch lifecycle").
 - **Verification before landing.** A runtime change is tested once before it lands: the
   quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
   (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, and does not
