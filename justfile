@@ -1655,6 +1655,13 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     (cd src/quest && cmake --preset quest-host-hooks-pinned && cmake --build --preset quest-host-hooks-pinned)
     build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" "$out/lib/lib/arm64-v8a/libpnsrad.so"
+    # Each combat module's own pinned program (src/quest/combat/README.md rule 6) checks its targets header against the
+    # store libr15.so, its one argument. A program registered in the hooks-pinned group is run here without a line of its own.
+    for prog in build/quest-host-hooks-pinned/hooks-pinned/*_pinned_test; do
+        [ "$(basename "$prog")" = got_pinned_test ] && continue
+        echo "test-quest-hooks-pinned: $(basename "$prog")"
+        "$prog" "$out/lib/lib/arm64-v8a/libr15.so"
+    done
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
     # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
