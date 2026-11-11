@@ -65,6 +65,9 @@ After "How an agent works here", these come before every other rule in this file
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **Every action follows a documented pattern.** Before an action, name the pattern this repo documents that covers it:
+  a rule in this file, a `justfile` recipe, or a step in `RELEASING.md` or a runbook under `docs/`. An action no
+  documented pattern covers is not taken: stop, name the gap and the action it blocks, and report it.
 
 ## Commits, versions and requirement words
 
@@ -110,7 +113,7 @@ nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connectio
 
 The rest of this file binds every agent, a contributor's included, except the parts marked **Maintainers only**. This
 section applies to an agent working for an outside contributor, on the contributor's own machine. It adds what such an
-agent needs: what to read, what a PR carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
+agent needs: what to read, what a landed commit carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
 on yours instead. Where a step needs access only the maintainers have (the production server's logs, the
 release pipeline), do what you can without it and ask in the issue. Never guess in its place.
 
@@ -141,11 +144,11 @@ each one gives; do the step this way on yours:
 | "Builds" (builds and live game runs): the shared `nevr-builds.slice` and `nevr-live.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. Builds, verify and tests run in `nevr-builds.slice`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. If you run one build lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install" | See "Your game install" below. |
-| "Check production Nakama logs" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the issue, giving the run's time window (UTC), the account and the client log lines around the failure. |
+| "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the issue, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the issue. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
 | "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a branch. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
-| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, run the quick check, take the review to its MERGE verdict and rebase onto `origin/main`, then stop: push the branch to your fork and post its name and tip SHA on the issue. A maintainer's agent fetches it ("Git") and lands it. Never open a pull request. |
+| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, run the quick check, take the review to its MERGE verdict and rebase onto `origin/main`, then stop: push the branch to your fork and post its name and tip SHA on the issue. A maintainer's agent fetches it ("Git") and lands it. Never open a pull request. take the review to its MERGE verdict, rebase onto `origin/main` and rerun the tests, then stop: push the branch to your fork and post its name and tip SHA on the issue. Never push to `main` of another remote. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
@@ -186,7 +189,7 @@ The message of the commit that lands carries the items below; it is the evidence
 
   "Nothing found" counts only with the pattern and the scope it ran over.
 - **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
-  what you fix. A PR that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  what you fix. A PR commit that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
   that shape (the pattern and the scope it ran over), and says for each hit: fixed in this commit, filed (`#N`), or not
   the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
 
@@ -198,7 +201,7 @@ The message of the commit that lands carries the items below; it is the evidence
     bearer_reconnect_auth.cpp: not the same shape (it mints at most once per 30 s).
   ```
 - **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
-  the reviewer knows what you looked at and what you left alone:
+  the review sees what was read and what was left alone:
 
   ```
   ## Symbols
@@ -206,7 +209,7 @@ The message of the commit that lands carries the items below; it is the evidence
   Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
   ```
 - **A mutant for every changed line of behaviour.** This is stricter than "A test must fail without the change" under
-  "Review, verification and landing", which every PR meets; a contributor's PR meets this as well. For every line
+  "Review, verification and landing", which every PR meets; a contributor's PR commit meets; a contributor's commit meets this as well. For every line
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
@@ -219,13 +222,13 @@ The message of the commit that lands carries the items below; it is the evidence
   - M2 `undrained_` never decremented -> FAIL test_reader_gate: TimesOutWhenReadersStay
   - restored tree: 9 tests OK
   ```
-- **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`) and its
-  result, what was not run, and the tracking issue.
-- **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
-  body what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
+- **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`) tip SHA and its
+  result, what was not run, and the tracking issue. exit code, what was not run or not established, and the issue (`Closes #N` or `Refs #N`).
+- **Platform parity.** PCVR and Quest stay at parity. A PR commit that adds or changes player-facing behavior says in its
+  body message what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
-- **A headline, when players see a change.** A PR that changes what players see adds `release-headlines/<issue-or-topic>.txt`
-  with one line, one plain sentence a player would understand about that change only, written by the PR's author
+- **A headline, when players see a change.** A commit that changes what players see adds `release-headlines/<issue-or-topic>.txt`
+  with one line, one plain sentence a player would understand about that change only, written with the change
   (`RELEASING.md`, "Write the release body"), and deletes the fragments present at the newest `vX.Y.Z` tag
   (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). The release body's player line is the files the range
   adds, or "Fixes and internal changes." when it adds none; the commits never write it. A change behind a setting that is
@@ -399,7 +402,7 @@ a file it names.
 
 ## Branch lifecycle (every agent-created branch)
 
-**Whoever creates a branch deletes it.** Nobody else cleans up after you.
+**Whoever creates a branch deletes it.** Nothing else cleans it up.
 
 Every branch an agent creates has a documented deletion point from the moment it exists. A landed branch is scratch: `main` keeps the commits, so never keep one "for reference".
 
@@ -699,11 +702,11 @@ An unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`) is looked up in th
 
 ## Continuity
 
-You are not the first agent to work here, and you won't be the last. Act like it.
+Other agents worked here before this session, and others will after it. Act like it.
 
 - **Search before you build.** The answer probably already exists in the game's disassembly, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
 - **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
-- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
+- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. Other agents work in this repo at the same time. Stop doing sequential searches when you could dispatch five agents at once.
 - **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
 - **Don't hand off what you can finish.** Writing a handoff doc is not progress. Finishing the work is progress. A session can end without warning, so what a successor needs is already in commits, the issue and the ledger (rule 5), not in a handoff doc.
 - **Measure everything before concluding anything.** One data point is not a finding. If you measure registered component types, also measure loaded component resources. If you compare arena vs combat, compare at every layer — code registration, resource data, runtime state, rendered output. A conclusion from a single measurement is a guess. Cross-validate before declaring anything "critical."
@@ -745,8 +748,8 @@ your seat name, for example `claude-main` or `codex`.
 - **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
   files the repo's own tools write at the work root stay where they are. When you are done,
   delete what you created, not into the user's trash, in one of two ways: move each finished item, by its exact
-  path, into one holding directory (`<work root>/<seat>/to-delete/`), list it, then remove that directory with
-  `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
+  path, into a new holding directory under your own scratch root (`<work root>/<seat>/to-delete-<n>/`), list it,
+  then remove that literal path with `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
   script (`set -eu`, no globs), read it back, check each path is yours under the work root, then run it. Never
   another recursive removal (`rm -r`, `-R`, `-rf`, `-fr`, `find ... -delete`), including a chained last step: a
   rerun removes whatever the path names then (#2270). Never delete a directory another agent may still be working
@@ -792,7 +795,7 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
-- **Cached builds come from one fixed, clean checkout.** The build checkout is `<work root>/build-checkout/nevr-runtime`
+- **Cached builds come from one fixed, clean checkout.** The build checkout is checkout:** `<work root>/build-checkout/nevr-runtime`
   (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
   `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes. The Quest build uses the
   launcher here as in every other checkout (see "Builds"). Nobody edits
@@ -813,13 +816,13 @@ your seat name, for example `claude-main` or `codex`.
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
   `test-runs/tools-tests` in the work root, `~/src/nevr-runtime-work`). A failure is reported by the test ids that run's record
-  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its result in the commit message; an item
-  not run is named as not run.
-  No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; the rest are started by hand.
+  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its result in the commit message; an item exit code in
+  the commit message; an item not run is named as not run.
+  No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; the rest are started CI runs on a landing push except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
 - **`just verify` runs only on main, after the release cut, once per cut.** A branch does not run it and the
   review does not ask for it. It is not run again for the same cut. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
-  `verify: OK` is the proof: the review reads that log and does not run verify again. A missing HEAD line is
+  `verify: OK` is the proof: the review reads that log and does read that log; do not run verify again. A missing HEAD line is
   checked in seconds (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time),
   never by a re-run. Run verify again only for a later release cut.
 
@@ -963,8 +966,8 @@ your seat name, for example `claude-main` or `codex`.
 - **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict: (1) `git fetch origin main && git rebase origin/main`; a rebase that stops on a conflict goes back to the work, the quick check and a new review; (2) rerun the test recipes that cover the change on the rebased tip; a failure goes back to the work; (3) record `git ls-remote origin refs/heads/main`; (4) `git push origin HEAD:refs/heads/main`, never forced, so it can only fast-forward; (5) run `git ls-remote origin refs/heads/main` again: it prints the branch tip. A rejected push means `main` moved: go back to (1). No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). The main checkout is shared: fast-forward it (`git -C <main checkout> merge --ff-only origin/main`) only when its `git status --porcelain` is empty and `git -C <main checkout> symbolic-ref --short HEAD` prints `main`, and otherwise leave it (rule 3).
 - **Verification before landing.** A runtime change is tested by its author before it lands (and its covering tests once more after Landing's rebase): the
   quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
-  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after
-  its rebase. A red PC login run or a red `just verify` on main is a
+  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after and does not
+  its run them again after a rebase. A red PC login run or a red `just verify` on main is a
   red main. A red main is bisected, and the culprit is reverted or fixed by a landed commit. Landing does not stop while main is
   red. Main always builds. The PC login run's log shows all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the

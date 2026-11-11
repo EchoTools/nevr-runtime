@@ -91,7 +91,7 @@ not cover are marked "not recounted" above.
 | `tests/smoke/score-log.sh` | 83 rows of regexes over the log after ANSI is stripped; 21 name a `[NEVR.` tag (`[NEVR.WS] LOGIN SUCCESS`, `[NEVR.WS] login injected xpid=`, `[NEVR.LOGFILTER] health emitted=`), and others match our text without one (`boot log opened run=`) |
 | `verify-server.sh` | its console capture, by 8 phrases (`LOGIN SUCCESS`, `registration successful`, `Proxy listening on`, `login injected`, `Graceful shutdown initiated`, `Service redirect`, `HTTP(S) connection redirected`, `engine flags`) |
 | `launch-client.sh` | the newest run log, by 6 phrases (`to logged in`, `rad15_live failed`, `Service is unavailable`, `built-in defaults embedded in this build: (none)`, `to in game`, `invalid header`) |
-| `AGENTS.md`, "Verification before merge" | the four keys on the `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in` |
+| `AGENTS.md`, "Verification before landing" | the four keys on the `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in` |
 | `tools/scenario/run_scenario.py`, `tools/scenario/scenarios/` | 131 regex steps (78 `expect_log`, 53 `wait_log`) in 21 files over the console capture; the `[NEVR.SCENARIO]` marker |
 | `tools/host_stop_cause.py` | host records, by key (`event`, `run`, `outcome`) |
 | `tools/quest_autopilot_run.py` (`parse_plugin_line`) and `tools/tests/test_quest_autopilot_run.py` | the autopilot plugin's `[NEVR.PLUGIN] plugin=nevr_autopilot <message> <key>=<value>` lines in logcat; the test's fixtures also carry the sentinel's `ts_ms` records |

@@ -68,6 +68,11 @@ worktree-setup:
 install-hooks:
     tools/install-git-hooks.sh
 
+# Land this worktree's branch on origin's main, one lander at a time: lock, fetch, rebase, rerun each --test, push the tip to refs/heads/main never forced, record main before and after (tools/cmd/land; AGENTS.md "Landing")
+[positional-arguments]
+land *args: go-tools
+    build/go-tools/land "$@"
+
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}

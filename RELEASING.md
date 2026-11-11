@@ -12,8 +12,8 @@ or switch starts a release, and a release the person has not decided on does not
 withdrawn and cleaned up. The publish (step 4) happens on the owner's go.
 
 **Landing.** Release work in this repository lands like every change (AGENTS.md, "Review, verification and landing"):
-on a local branch, after the quick check and a fresh-context review's MERGE, pushed to `main` as a fast-forward; the
-branch and the worktree are deleted the same turn. Work in the signer repository follows that repository's rules.
+on a local branch, after the quick check and a fresh-context review's MERGE, pushed to `main` as a fast-forward; the landed with `just land` (a fast-forward,
+no squash); the branch and the worktree are deleted the same turn. Work in the signer repository follows that repository's rules.
 
 ## The flow
 
