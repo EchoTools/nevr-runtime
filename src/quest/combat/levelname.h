@@ -26,7 +26,7 @@
  * Frequency (ADR 0038). The function runs once per level the game loads: the handler compares the level to one constant and reads the flags word
  * only for global_mp. Not measured on a headset.
  *
- * Origin. The reference build's G7 rule (its patch table `full_global_mp_patches`, tools/qcp_patches.py:386; docs/audits/2026-11-05-q15t-origin-citations.md,
+ * Origin. The reference build's G7 rule (its patch table `full_global_mp_patches`, tools/qcp_patches.py:389; docs/audits/2026-11-05-q15t-origin-citations.md,
  * rows for `levelname`), which rewrote the `tbnz` branch target into a code cave. This is our own implementation, reached through the vtable
  * words instead of a code write, imported with the q15t plugin from kotorvr's echoquest-combat and moved here from the plugin's levelname.cpp.
  *

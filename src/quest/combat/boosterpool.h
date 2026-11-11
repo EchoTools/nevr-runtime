@@ -30,7 +30,8 @@
  * atomic load and compare per call once the names are cached; before that, one process_vm_readv and one Append call, at most a few times.
  *
  * Origin. The reference build's `booster_pool.plain_name` word row (its patch table, `tbz` at 0x2110f40 stock 0x36f8012a to `b` 0x14000009;
- * docs/audits/2026-11-05-q15t-origin-citations.md, the `levelname` rows). The word row is not applied here: this is our own implementation, reached
+ * docs/audits/2026-11-05-q15t-origin-citations.md, the `levelname` rows). Upstream pins the word in the tools directory of `kotorvr/echoquest-combat`:
+ * `qcp_patches.py:380` (`LOWSPEC_BOOSTER_PATTERN`) and `:407-408` (the G7 booster patch). The word row is not applied here: this is our own implementation, reached
  * through the import slot, moved from the q15t plugin's boosterpool.cpp (imported from kotorvr's echoquest-combat).
  *
  * Lines (sentinel log):
