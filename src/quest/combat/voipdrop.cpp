@@ -15,8 +15,6 @@ namespace nevr_quest::combat::voipdrop {
 
 namespace {
 
-namespace pinned = sentinel::pinned;
-
 sentinel::GotHook g_hook;
 Fns g_f{};  // set before the slot is swapped, read-only after
 std::atomic<std::uint64_t> g_packets{0};
@@ -102,11 +100,13 @@ void ReceiveHandler(ReceiveVoipThunk::Fn original, void* self, std::uint64_t han
 
 NEVR_HOOK_RECORD(kReceiveVoipRecord, ReceiveVoipThunk, &ReceiveHandler);
 
-ModuleResult Refused(const char* token, const char* pin = nullptr, const char* found = nullptr, const char* expected = nullptr) noexcept {
-  if (pin != nullptr) {
+ModuleResult Refused(const char* token, const pinned::Failure* word = nullptr) noexcept {
+  if (word != nullptr) {
+    char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_voipdrop_install",
-                        {{"result", "refused"}, {"reason", token}, {"pin", pin}, {"found", found}, {"expected", expected},
-                         {"consequence", kRefusedConsequence}});
+                        {{"result", "refused"}, {"reason", token}, {"pin", word->what}, {"vaddr", sentinel::HexString(at, word->vaddr)},
+                         {"found", word->readable ? sentinel::HexString(haveText, word->have) : "unreadable"},
+                         {"expected", sentinel::HexString(wantText, word->want)}, {"consequence", kRefusedConsequence}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_voipdrop_install",
                         {{"result", "refused"}, {"reason", token}, {"consequence", kRefusedConsequence}});
@@ -147,23 +147,15 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
     return {false, "off_config", true};
   }
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded");
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded");
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id");
-  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
-  std::uint32_t have = 0;
-  bool readable = false;
-  const std::size_t bad = FirstWordMismatch(image.base, kWords, kWordCount, &have, &readable);
-  if (bad != kWordCount) {
-    char at[19];
-    char haveText[19];
-    char wantText[19];
-    return Refused("pinned_word_mismatch", sentinel::HexString(at, kWords[bad].vaddr),
-                   readable ? sentinel::HexString(haveText, have) : "unreadable", sentinel::HexString(wantText, kWords[bad].word));
-  }
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
+  pinned::Failure word;
+  if (pinned::FirstFailure(image.base, &kWordPins, 1, &word)) return Refused("pinned_word_mismatch", &word);
   if (fns.blockAllocator == nullptr || fns.currentPtr == nullptr || fns.setCurrent == nullptr || fns.current == nullptr) return Refused("export_missing");
   g_f = fns;  // before the slot changes: the handler never sees a half-set table
-  sentinel::GotTarget target(pinned::kLibR15, kReceiveVoipSymbol, sentinel::RelocKind::kJumpSlot, pinned::LibR15PatchedBuildId(), pins.slot);
+  sentinel::GotTarget target(sentinel::pinned::kLibR15, kReceiveVoipSymbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(), pins.slot);
   target.expectedOriginal = reinterpret_cast<const void*>(image.base + pins.fn);
   target = target.Owned("combat/voipdrop");
   ReceiveVoipThunk::Arm(kReceiveVoipRecord);

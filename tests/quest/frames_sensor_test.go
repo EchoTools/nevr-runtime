@@ -61,7 +61,13 @@ const outsideSection = "nevr_outside_game_call"
 // The assembly entries the sentinel may carry, by symbol name: each is reviewed for callback_thunk.h rule 7 (the br with the
 // caller's registers untouched, and a personality-free continuation; the sensor checks the ldar loads, the CFI rows at each bl
 // and the branch to the continuation). The combat modules that need one add its name here, in the change that moves them.
-var reviewedAsmEntries = []*regexp.Regexp{}
+var reviewedAsmEntries = []*regexp.Regexp{
+	regexp.MustCompile(`^nevr_combat_headset_tramp$`),    // src/quest/combat/headset_gates_entry.inc: CVR::HeadsetType (bot-body and menu gates)
+	regexp.MustCompile(`^nevr_combat_party_tramp$`),      // src/quest/combat/headset_gates_entry.inc: PartyMemberHeadsetType (party-permissions gate)
+	regexp.MustCompile(`^nevr_combat_pb_resolve_entry$`), // src/quest/combat/powerboost_thunk.inc: CPhTarget::ResolveBody (the POWER BOOST cone)
+	regexp.MustCompile(`^nevr_combat_dm_tp_entry$`),   // src/quest/combat/dronemuzzle_entry.inc: CncaGameSpace::WorldTeleport (drone muzzle, F4)
+	regexp.MustCompile(`^nevr_combat_dm_fire_entry$`), // src/quest/combat/dronemuzzle_entry.inc: CR15NetBulletCS::FireBullet (drone muzzle, F6)
+}
 
 // What is wrong with the library's hook records, as messages. `names` maps a function start to its symbol, `thunkEntries`
 // holds the CallbackThunk Entry functions, `recordEntries` counts the records that name each entry.

@@ -49,7 +49,8 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         self.assertIsNotNone(options)
         for flag in ("-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fvisibility=hidden"):
             self.assertIn(flag, options.group(1))
-        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook)", cmake)
+        # nlohmann: runtime/compat/server_features.h, which the EC client reads the server's statement with (#2333)
+        self.assertIn("target_link_libraries(nevr_quest_combat PUBLIC nevr_quest_got_hook nevr::plugin_sdk nlohmann_json::nlohmann_json)", cmake)
 
     def test_the_quest_project_adds_the_combat_directory_after_the_sentinel(self):
         cmake = read("src/quest/CMakeLists.txt")

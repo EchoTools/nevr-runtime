@@ -11,38 +11,41 @@
  * table at +0xc8, the data array at +0xf8, the entry's instance at +0x10) with never-faulting reads. For an effect with no instance it answers
  * FLT_MAX: a trail that never existed has run its course. A read that fails, or an effect with an instance, answers the game's own value.
  *
- * Arena (same APK). It acts only while a combat map is loaded (level_scope.h: `InCombatMap`, an Echo Arena level that is loaded wins). In an arena
- * match, in every lobby and in any level that is not a combat map the handler reads one atomic and returns the game's own value, so no arena
- * effect is ended and no memory is read. The guard changes a value the game computes (a trail that "never ran its course" now has), and the
- * fault it prevents is one of bullets, which only combat has; that is why it is scoped and the crash-only guards are not.
- * The look lags a level change by up to scope::kLookEverySeconds (half a second): the leak it guards is one of a match, not of its first
- * half second.
+ * Arena (same APK). It acts only while a combat map is loaded (combat_scope.h `SeenCombatMap`: a combat map was loaded at the last look and no Echo Arena
+ * level was). The handler tests that first and, outside a combat map, calls the game's function with the same arguments and does nothing else: no read of
+ * the game's memory, no counter, no line, no level scan. The combat body is another function (`ActInCombatMap`, not inlined), which first checks that the look
+ * is fresh (`scope::LookIsFresh()`: a tick that stopped makes a true answer false after kStaleAfterMs). So an arena match on the combat APK costs this hook its
+ * call through the thunk and, in the handler, a load of the scope word, a test and the tail call (arm64, from the object file: see the cost in
+ * docs/quest/combat/fxtrail.md). The guard changes a value the game computes (a trail that "never ran its course" now has), and the fault it prevents is one
+ * of bullets, which only combat has; that is why it is scoped and the crash-only guards are not.
+ * The answer lags a level change by up to scope::kLookEveryMs (a quarter of a second): the leak it guards is one of a match, not of its first quarter second.
  *
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.fxtrail` in
  * config.yaml (default true). The plugin's `fxtrail.off` file is no longer read; one found in the files folder's q15t directory is a Warning
  * that names the key.
  *
- * Install. The patched build ID, then the code words (fxtrail_targets.h), then the level scope's tick, then the JUMP_SLOT, which must hold
- * EffectTime itself (a word something else already replaced is refused, not chained over). A refused install leaves the game's calls as they
+ * Install. The scope must be live (`scope::Live()`: the `scope` row of the install table registered the refresh and the tick is installed; else `scope_not_live`
+ * and nothing is hooked, because the guard would never see a combat map), the patched build ID, the code words (fxtrail_targets.h), then the JUMP_SLOT, which
+ * must hold EffectTime itself (a word something else already replaced is refused, not chained over). A refused install leaves the game's calls as they
  * are. It registers in combat::InstallNormal()'s table at the position the plugin installed it (first of the guards).
  *
  * Frequency (ADR 0038). EffectTime runs once per effect handle per query; how many per frame is not known (the module counts them:
- * `combat_fxtrail_stats`). Every call pays the thunk's counter and one relaxed atomic load of the scope. A call in a combat map also pays up to
- * four process_vm_readv calls (the old plugin's cost, kept) and, when the effect has no instance, one counter and a log line at 1, 2, 4, 8 ...
- * ended trails. The host cost per call is in docs/quest/combat/fxtrail.md; not measured on a headset.
+ * `combat_fxtrail_stats`). Every call pays the thunk's counter and one relaxed atomic load of the scope word. A call in a combat map also reads the clock
+ * (`LookIsFresh`), pays up to four process_vm_readv calls (the old plugin's cost, kept) and, when the effect has no instance, one counter and a log line at
+ * 1, 2, 4, 8 ... ended trails. The host cost per call is in docs/quest/combat/fxtrail.md; not measured on a headset.
  *
  * Owner (ADR 0039). This file owns the value EffectTime answers for an effect with no instance, in a combat map.
  *
  * Origin. The q15t plugin's `fxtrail.cpp`, written here (imported in #1591) on the reference build's `afk_fxtrail.cpp` (Ducky's echoquest-combat;
  * docs/audits/2026-11-05-q15t-origin-citations.md rows 63-68 and 212-213: afk_fxtrail.cpp:1,41,60-77 and the rule at :1-24). The plugin's
- * word pins are an addition to it; the level scope is an addition made here.
+ * word pins are an addition to it; the scope is the runtime's (combat_scope.h, #2246).
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_fxtrail_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,
- *             "scope":"combat_map","consequence":".."}   Info for installed and off, Error for refused (+ pinned_word_mismatch: "pin",
- *             "found","expected")
+ *             "scope":"combat_map","consequence":".."}   Info for installed and off, Error for refused (reason scope_not_live; pinned_word_mismatch
+ *             adds "pin" (the word's name), "vaddr", "found", "expected")
  *   ended    {"event":"combat_fxtrail_ended","n":<count>,"consequence":".."}  Info, at the 1st, 2nd, 4th, 8th ... ended trail
- *   stats    {"event":"combat_fxtrail_stats","calls":<n>,"in_combat":<n>,"ended":<n>,"level_looks":<n>,"final":0|1,"consequence":".."}
+ *   stats    {"event":"combat_fxtrail_stats","calls":<n>,"in_combat":<n>,"ended":<n>,"final":0|1,"consequence":".."}
  *            Debug every kStatsEvery combat-map calls, Info once at the end of the process when the guard is installed
  *   legacy   {"event":"combat_fxtrail_legacy_switch","key":"combat.fxtrail","file":"fxtrail.off","consequence":".."}  Warning
  *

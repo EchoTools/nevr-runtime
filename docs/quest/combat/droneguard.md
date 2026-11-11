@@ -45,8 +45,8 @@ loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTrans
 
 ## Arena cost and arena behaviour (arena and combat share the APK)
 
-- **Behaviour.** A crash-only guard, and it acts in every level on purpose: it does not use `level_scope.h`. The fault happens when the drone's actor is enabled, which can be in the first
-  frames of a level load, before a level look up to half a second old would see the level. It changes what the game does only where the stock call would dereference NULL (stage 0) or use
+- **Behaviour.** A crash-only guard, and it acts in every level on purpose: it asks nothing of the combat level answer (`combat_scope.h`) and is not a reader of the scope row. The fault happens when the drone's actor is enabled, which can be in the first
+  frames of a level load, before a level look up to a quarter of a second old would see the level. It changes what the game does only where the stock call would dereference NULL (stage 0) or use
   a stale cache (stage 1): that component's follow update is skipped for that frame. Every other call reaches the game's `Follow` with the same two arguments
   (`droneguard_test`: set target, healthy player, argument mutants). `TheGuardHasNoLevelScope` runs a null target with no level look ever made and sees it skipped. Whether the arena has
   `CR15NetFollowPlayerCS` components at all is not established here; `combat_droneguard_stats` gives the call count on a headset. Stage 1 is off unless asked for.
@@ -60,9 +60,9 @@ loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTrans
 ## Gate: no file hash
 
 The gates are the patched build ID the install checks, the four stage-0 code words (read before the slot is touched) and the slot's own expected word: it must hold exactly `base + 0x2149764`, so a word
-something else replaced is refused, not chained over. A word that differs is one Error `combat_droneguard_install` line (`reason` `pinned_word_mismatch`, `pin`, `found`, `expected`; `found` is
+something else replaced is refused, not chained over. A word that differs is one Error `combat_droneguard_install` line (`reason` `pinned_word_mismatch`, `pin` (the word's name), `vaddr`, `found`, `expected`; `found` is
 `unreadable` for a page that cannot be read). Stage 1's three words are checked after those, and a mismatch is an Error `combat_droneguard_stage1` line naming the pin with the null half still installed.
-The tables are `kWords` and `kIdxWords` in `droneguard_targets.h`; `got_pinned_test` reads each in the store libr15. `droneguard_test` flips each in turn, reads one from an unreadable page, and pins both tables by a
+The tables are `kWords` and `kIdxWords` in `droneguard_targets.h` (`pinned::Word`; the follow offsets are tied to stage 0's words by `static_assert`; checked by `pinned::FirstFailure`); `got_pinned_test` reads each in the store libr15. `droneguard_test` flips each in turn, reads one from an unreadable page, and pins both tables by a
 fingerprint.
 
 ## Lines (sentinel log)

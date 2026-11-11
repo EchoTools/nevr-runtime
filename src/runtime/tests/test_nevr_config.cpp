@@ -769,8 +769,13 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
       "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
       "diagnostics.ui_event_probe", "diagnostics.pnsrad_provider", "diagnostics.clock_levels_override",
       "graphics.texture_quality", "graphics.hand_flip", "combat.force", "combat.heaps", "combat.memsys",
-      "combat.refresh_rate", "combat.refresh_rate_lobby", "combat.refresh_rate_quest2_72", "combat.pfx", "combat.pfxtev", "combat.fxtrail",
-      "combat.voipdrop", "combat.custctx", "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp"};
+      "combat.refresh_rate", "combat.refresh_rate_lobby", "combat.refresh_rate_quest2_72", "combat.meshstep", "combat.instmodel",
+      "combat.shaderstep", "combat.tablestep", "combat.pfx", "combat.pfxtev", "combat.gate_perm", "combat.gate_bots", "combat.gate_link",
+      "combat.gate_link_libs", "combat.impactsnd", "combat.impactsnd_write", "combat.decals", "combat.decals_flip_u", "combat.decals_flip_v",
+      "combat.bvh", "combat.bvh_gate", "combat.bvh_touch", "combat.wallfire", "combat.sendguard", "combat.music", "combat.sensorwd", "combat.ec",
+      "combat.ec_words", "combat.ecfx", "combat.powerboost_stage", "combat.dronekill", "combat.dronemuzzle", "combat.gunconnect", "combat.aibots", "combat.aibots_scenario", "combat.weapon_arm",
+      "combat.hudmeter", "combat.shieldgamma_gamma", "combat.shieldgamma_tube_mirror", "combat.fxtrail", "combat.voipdrop", "combat.custctx",
+      "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp"};
   for (const std::string& path : questReads) {
     EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
   }

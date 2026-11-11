@@ -1,16 +1,17 @@
 // Host test of peerclamp (src/quest/combat/peerclamp.cpp, #2178): the real handler through the thunk, installed by the real GotHook into the JUMP_SLOT
 // of a libr15 image built in memory, and called the way the game calls it: through the slot. The game side is a model: a fake SBroadcasterData
 // (head, chunk table, per-chunk count, "now") with peer entries of the real stride (0x948), key at +0x18 and stamp at +0x228, a fake
-// SAddress::kInvalid reached through its GOT word, and a stand-in for CleanupPeers itself. The levels the guard is scoped by are the real scope, driven
-// through its tick against a model of the game's gamespace tables (combat_game_model.h).
+// SAddress::kInvalid reached through its GOT word, and a stand-in for CleanupPeers itself. The levels the guard is scoped by are the real combat level answer
+// (combat_scope.h), refreshed through the tick's callback against a model of the game's gamespace tables (combat_game_model.h, combat_scope_world.h).
 //
 // What it pins (the q15t plugin's peerclamp_test assertions, on the new fixture): the walk lowers a stamp above "now" to "now" and nothing else, the game's
 // function runs once with the same argument (after the clamp), nothing to walk and every unreadable read leave the stamps alone, the walk stops at 4096
 // entries with one Warning, the clamp lines are capped, a slot that does not hold CleanupPeers is refused and left alone with the pin named, an unreadable
 // or null kInvalid refuses the install, every code word flipped in turn refuses the install, and an unreadable word does too. New with the move: the guard
 // acts only while a combat map or the combat lobby is loaded (an arena match, the lobbies arena players use, nothing loaded, a look that never ran and a
-// combat map with an arena level also loaded leave a future stamp alone and write nothing), the switch, the missing image and build ID, the stats lines,
-// and the tick table that has no room.
+// combat map with an arena level also loaded leave a future stamp alone, write nothing, read none of the game's memory and scan no level, by count), a true
+// answer older than kStaleAfterMs is not believed, the switch, the missing image and build ID, the stats lines, and a scope that cannot change (the install is
+// refused).
 //
 // Built and run by `just test-quest-combat`.
 
@@ -18,6 +19,7 @@
 
 #include <sys/mman.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,12 +27,15 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
-#include "quest/combat/level_scope.h"
-#include "quest/tests/combat_game_model.h"
+#include "quest/combat/safe_read.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
 #include "quest/tests/combat_pin_check.h"
+#include "quest/tests/combat_pins.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -44,8 +49,10 @@ using combat_test::Image;
 using combat_test::Line;
 using combat_test::Lines;
 using nevr_quest::combat::ModuleResult;
-using nevr_quest::combat::PinnedWord;
-namespace gm = combat_test::game_model;
+using nevr_quest::combat::pinned::Word;
+// The tables themselves, not the module's own `kWordPins` (which a bug could shorten): the test puts every pinned word in the image and flips every one.
+const nevr_quest::combat::pinned::Pins kAllWords = {pc::kWords, pc::kWordCount, nullptr, 0};
+namespace world = combat_test::scope_world;
 
 using CleanupFn = void (*)(void*);
 
@@ -131,10 +138,11 @@ bool Lookup(const char* module, sentinel::ElfImage* out) {
 // (`invalidWord`).
 void Build(std::uintptr_t slotWord = 0, std::uintptr_t invalidWord = ~static_cast<std::uintptr_t>(0)) {
   g_pins = pc::kPins;
-  g_image.Build({{pc::kCleanupSymbol, g_pins.slot, false, false, g_pins.fn}});
+  g_image.Build({{pc::kCleanupSymbol, g_pins.slot, false, false, g_pins.fn}, world::TickRow()});
+  world::PutTickSlot(g_image);
   // base + fn is the stand-in's address: the real function is not in the image, so the pin holds the stand-in's offset.
   g_pins.fn = reinterpret_cast<std::uintptr_t>(&RealCleanup) - g_image.Base();
-  for (const PinnedWord& w : pc::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  combat_test::PutPins(g_image, &kAllWords, 1);
   *g_image.Slot(g_pins.slot) = slotWord != 0 ? reinterpret_cast<void*>(slotWord) : reinterpret_cast<void*>(&RealCleanup);
   g_image.Put<std::uintptr_t>(g_pins.invalid, invalidWord == ~static_cast<std::uintptr_t>(0) ? reinterpret_cast<std::uintptr_t>(g_invalidKey) : invalidWord);
 }
@@ -142,22 +150,28 @@ CleanupFn Slot() { return reinterpret_cast<CleanupFn>(*g_image.Slot(g_pins.slot)
 bool Hooked() { return *g_image.Slot(g_pins.slot) == pc::CleanupThunk::EntryAddress(); }
 bool SlotIsTheGames() { return *g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(&RealCleanup); }
 
-void Begin() {
+// A fresh world: the module forgotten, a libr15 holding the pinned words, the slot and the tick's slot, and the capture started. `scopeLive`: the combat tick
+// is installed on the image and the scope row has registered the refresh (what the shipped table does before this module).
+std::atomic<std::uint64_t> g_reads{0};  // every SafeRead the module makes (safe_read.h's test counter)
+void Begin(bool scopeLive = true) {
   combat_test::StartCapture();
   pc::ResetForTest();
-  scope::ResetForTest();
-  tick::ResetForTest();
-  gm::ClearGame();
-  gm::Now() = 0.0;
+  world::Reset();
   g_realCalls = 0;
   g_see = nullptr;
   Build();
+  g_reads = 0;
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  if (scopeLive) {
+    QCHECK(world::StartScope(&Lookup));
+    combat_test::Captured().clear();
+  }
 }
 void End() {
   pc::ResetForTest();
-  scope::ResetForTest();
-  tick::ResetForTest();
+  world::Reset();
   g_image.Drop();
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   combat_test::StopCapture();
 }
 
@@ -168,7 +182,8 @@ CleanupFn InstalledIn(std::initializer_list<const char*> levels) {
   End();
   Begin();
   QCHECK(Install().installed);
-  gm::SetLevels(levels);
+  world::Levels(levels);
+  g_reads = 0;
   return Slot();
 }
 
@@ -179,15 +194,15 @@ void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(std::strcmp(pc::kCleanupSymbol, "_ZN10NRadEngine16SBroadcasterData12CleanupPeersEv") == 0);
   QCHECK(pc::kOffHead == 0x554 && pc::kOffPerChunk == 0x560 && pc::kOffChunks == 0x518 && pc::kOffNow == 0x478 && pc::kOffSent == 0x470);
   QCHECK(pc::kStride == 0x948 && pc::kOffNext == 0x8 && pc::kOffKey == 0x18 && pc::kOffStamp == 0x228 && pc::kKeyLen == 0x80 && pc::kEnd == 0xffffffffU);
-  static const PinnedWord kWant[26] = {
-      {0x24ef9b0, 0x6db733ed}, {0x24ef9b4, 0x6d012beb}, {0x24ef9d8, 0xb945541b}, {0x24efa14, 0xd0009177}, {0x24efa18, 0xf9429ef7},
-      {0x24efa2c, 0xaa0003f3}, {0x24efa30, 0x5281291c}, {0x24efa68, 0xb9456268}, {0x24efa6c, 0xf9428e69}, {0x24efa74, 0xf9423e78},
-      {0x24efa78, 0x1ac80b6a}, {0x24efa7c, 0xf86a5934}, {0x24efa80, 0x1b08ed5a}, {0x24efa84, 0x52801002}, {0x24efa8c, 0x9bbc5348},
-      {0x24efa90, 0xb940091b}, {0x24efa94, 0xf9411519}, {0x24efa98, 0x91006116}, {0x24efaa4, 0xb4fffd40}, {0x24efae4, 0xcb190319},
-      {0x24eeec8, 0xf9400260}, {0x24eeecc, 0x97a90645}, {0xf307e0, 0xf0013df0},  {0xf307e4, 0xf9456e11},  {0xf307e8, 0x912b6210},
-      {0xf307ec, 0xd61f0220}};
+  static const Word kWant[26] = {
+      {"", 0x24ef9b0, 0x6db733ed}, {"", 0x24ef9b4, 0x6d012beb}, {"", 0x24ef9d8, 0xb945541b}, {"", 0x24efa14, 0xd0009177}, {"", 0x24efa18, 0xf9429ef7},
+      {"", 0x24efa2c, 0xaa0003f3}, {"", 0x24efa30, 0x5281291c}, {"", 0x24efa68, 0xb9456268}, {"", 0x24efa6c, 0xf9428e69}, {"", 0x24efa74, 0xf9423e78},
+      {"", 0x24efa78, 0x1ac80b6a}, {"", 0x24efa7c, 0xf86a5934}, {"", 0x24efa80, 0x1b08ed5a}, {"", 0x24efa84, 0x52801002}, {"", 0x24efa8c, 0x9bbc5348},
+      {"", 0x24efa90, 0xb940091b}, {"", 0x24efa94, 0xf9411519}, {"", 0x24efa98, 0x91006116}, {"", 0x24efaa4, 0xb4fffd40}, {"", 0x24efae4, 0xcb190319},
+      {"", 0x24eeec8, 0xf9400260}, {"", 0x24eeecc, 0x97a90645}, {"", 0xf307e0, 0xf0013df0},  {"", 0xf307e4, 0xf9456e11},  {"", 0xf307e8, 0x912b6210},
+      {"", 0xf307ec, 0xd61f0220}};
   QCHECK(pc::kWordCount == 26);
-  for (std::size_t i = 0; i < 26; ++i) QCHECK(pc::kWords[i].vaddr == kWant[i].vaddr && pc::kWords[i].word == kWant[i].word);
+  for (std::size_t i = 0; i < 26; ++i) QCHECK(pc::kWords[i].vaddr == kWant[i].vaddr && pc::kWords[i].word == kWant[i].word && pc::kWords[i].what[0] != '\0');
   QCHECK(combat_test::Fingerprint(pc::kWords, pc::kWordCount) == combat_test::Fingerprint(kWant, 26));
 }
 
@@ -195,7 +210,7 @@ void TheThunkTakesTheSlotAndTheLineSaysSo() {
   Begin();
   const ModuleResult r = Install();
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off);
-  QCHECK(Hooked() && tick::Count() == 1);  // the level scope's tick is registered, once
+  QCHECK(Hooked() && tick::Count() == 1);  // the scope row registered the refresh with the tick, once; the module adds no callback
   const std::vector<Line> install = Lines("combat_peerclamp_install");
   QCHECK(install.size() == 1U);
   if (install.size() == 1U) {
@@ -302,7 +317,7 @@ void UnreadableMemoryLeavesTheStampsAloneAndCallsTheGamesFunction() {
     std::memset(kpage, 0xee, 0x80);
     Build(0, reinterpret_cast<std::uintptr_t>(kpage));
     QCHECK(Install().installed);
-    gm::SetLevels({"mpl_combat_dyson"});
+    world::Levels({"mpl_combat_dyson"});
     mprotect(kpage, 4096, PROT_NONE);
     Peers q;
     q.Build(3, 4);
@@ -412,7 +427,8 @@ void TheClampLinesAreCappedAndTotalsAreWrittenEvery100th() {
   End();
 }
 
-// The scope: only a combat map or the combat lobby. Each of these leaves a future stamp alone, calls the game's function and counts the call as not in scope.
+// The scope: only a combat map or the combat lobby. Each of these leaves a future stamp alone, calls the game's function and counts the call as not in scope;
+// arena pays nothing, by count: no read of the game's memory and no level scan.
 void AnArenaMatchAndEveryOtherLevelLeaveAFutureStampAloneAndWriteNothing() {
   struct Case {
     const char* what;
@@ -435,34 +451,57 @@ void AnArenaMatchAndEveryOtherLevelLeaveAFutureStampAloneAndWriteNothing() {
     p.Build(3, 4);
     p.SetStamp(0, kNow + 5);
     Bd(p, 0);
+    const std::uint32_t scans = nevr_quest::combat::level::ScanCalls();
     hook(g_bd);
     if (p.Stamp(0) != kNow + 5) std::fprintf(stderr, "peerclamp scope: %s clamped\n", c.what);
     QCHECK(p.Stamp(0) == kNow + 5 && g_realCalls == 1 && g_realBd == g_bd);
     QCHECK(pc::CurrentStats().inScope == 0 && pc::CurrentStats().walked == 0 && pc::CurrentStats().clamped == 0 && pc::CurrentStats().calls == 1);
     QCHECK(Lines("combat_peerclamp_clamped").empty());
+    QCHECK(g_reads.load() == 0 && nevr_quest::combat::level::ScanCalls() == scans);  // nothing of the game's was read, no level was asked for
     End();
   }
   {  // reads nothing: the broadcaster is unreadable and the call still goes to the game's function without a counted read
     const CleanupFn hook = InstalledIn({"mpl_arena_a"});
     hook(reinterpret_cast<void*>(0x20));
-    QCHECK(g_realCalls == 1 && pc::CurrentStats().inScope == 0);
+    QCHECK(g_realCalls == 1 && pc::CurrentStats().inScope == 0 && g_reads.load() == 0);
     End();
   }
 }
 
-// Before the scope's first look, and when its tick never runs, nothing is clamped (fail closed); the stats say the scope never looked.
+// Before the scope's first look nothing is clamped (the answer starts false); the scope has not looked, and nothing is read.
 void BeforeTheFirstLookNothingIsClamped() {
   Begin();
   QCHECK(Install().installed);
+  g_reads = 0;  // the install's own pin reads are not the call's
   Peers p;
   p.Build(2, 2);
   p.SetStamp(0, kNow + 5);
   Bd(p, 0);
   Slot()(g_bd);
-  QCHECK(g_realCalls == 1 && p.Stamp(0) == kNow + 5 && pc::CurrentStats().clamped == 0 && scope::Looks() == 0);
-  pc::NoteEnd();
-  const std::vector<Line> stats = Lines("combat_peerclamp_stats");
-  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"level_looks\":0"));
+  QCHECK(g_realCalls == 1 && p.Stamp(0) == kNow + 5 && pc::CurrentStats().clamped == 0 && scope::Looks() == 0 && g_reads.load() == 0);
+  End();
+}
+
+// A true answer older than kStaleAfterMs is not believed: the tick stopped, so a future stamp is left alone and nothing is read, and the first look after the
+// tick is back makes the guard act again.
+void ATrueAnswerFromAStoppedTickIsNotBelieved() {
+  const CleanupFn hook = InstalledIn({"mpl_combat_dyson"});
+  Peers p;
+  p.Build(2, 2);
+  p.SetStamp(0, kNow + 5);
+  Bd(p, 0);
+  hook(g_bd);
+  QCHECK(p.Stamp(0) == kNow && pc::CurrentStats().clamped == 1);  // fresh: acts
+  world::TheTickStops();
+  QCHECK(scope::SeenCombatOrLobby() && !scope::LookIsFresh());
+  p.SetStamp(0, kNow + 5);
+  Bd(p, 0);
+  g_reads = 0;
+  hook(g_bd);
+  QCHECK(p.Stamp(0) == kNow + 5 && pc::CurrentStats().clamped == 1 && pc::CurrentStats().inScope == 1 && g_reads.load() == 0 && g_realCalls == 2);
+  world::Levels({"mpl_combat_dyson"});
+  hook(g_bd);
+  QCHECK(p.Stamp(0) == kNow && pc::CurrentStats().clamped == 2);
   End();
 }
 
@@ -475,24 +514,22 @@ void TheCombatLobbyAndACombatMapClampAndTheGuardFollowsTheLevel() {
   Bd(p, 0);
   hook(g_bd);
   QCHECK(p.Stamp(0) == kNow && pc::CurrentStats().clamped == 1);  // the combat lobby is enough
-  gm::SetLevels({"mpl_lobby_b2"});  // an arena lobby: off again
+  world::Levels({"mpl_lobby_b2"});  // an arena lobby: off again
   p.SetStamp(0, kNow + 5);
   Bd(p, 0);
   hook(g_bd);
   QCHECK(p.Stamp(0) == kNow + 5 && pc::CurrentStats().clamped == 1);
-  gm::SetLevels({"mpl_combat_fission"});  // a combat map
+  world::Levels({"mpl_combat_fission"});  // a combat map
   Bd(p, 0);
   hook(g_bd);
   QCHECK(p.Stamp(0) == kNow && pc::CurrentStats().clamped == 2);
-  gm::SetLevels({"mpl_combat_fission", "mpl_arena_a"});  // an arena level loads while the map is still there: arena wins
+  world::Levels({"mpl_combat_fission", "mpl_arena_a"});  // an arena level loads while the map is still there: arena wins
   p.SetStamp(0, kNow + 5);
   Bd(p, 0);
   hook(g_bd);
   QCHECK(p.Stamp(0) == kNow + 5 && pc::CurrentStats().clamped == 2 && pc::CurrentStats().inScope == 2);
-  // Between looks the answer is the last look's: the level changes in the game, the clock has not moved past the schedule.
-  gm::ClearGame();
-  gm::PutLevel(0, 0, EchoVR::CSymbol64Hash("mpl_combat_dyson"));
-  scope::Tick(gm::GameAddress());
+  // Between looks the answer is the last look's: the level changes in the game, nothing has looked yet.
+  world::LevelsWithoutALook({"mpl_combat_dyson"});
   hook(g_bd);
   QCHECK(p.Stamp(0) == kNow + 5 && scope::Looks() == 4);
   End();
@@ -522,7 +559,7 @@ void ANullOrUnreadableInvalidWordRefusesTheInstall() {
   Begin();
   Build(0, 0);
   ModuleResult r = Install();
-  QCHECK(!r.installed && std::strcmp(r.status, "invalid_unreadable") == 0 && SlotIsTheGames() && tick::Count() == 0);
+  QCHECK(!r.installed && std::strcmp(r.status, "invalid_unreadable") == 0 && SlotIsTheGames() && tick::Count() == 1);
   std::vector<Line> install = Lines("combat_peerclamp_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"invalid_unreadable\""));
   End();
@@ -531,7 +568,7 @@ void ANullOrUnreadableInvalidWordRefusesTheInstall() {
   QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_NONE) == 0);
   r = Install();
   mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ | PROT_WRITE);
-  QCHECK(!r.installed && std::strcmp(r.status, "invalid_unreadable") == 0 && SlotIsTheGames() && tick::Count() == 0);
+  QCHECK(!r.installed && std::strcmp(r.status, "invalid_unreadable") == 0 && SlotIsTheGames() && tick::Count() == 1);
   install = Lines("combat_peerclamp_install");
   QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"invalid_unreadable\""));
   End();
@@ -542,7 +579,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
   Begin();
   const ModuleResult r = Install(false);
   QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0);
-  QCHECK(SlotIsTheGames() && tick::Count() == 0);
+  QCHECK(SlotIsTheGames() && tick::Count() == 1 && g_reads.load() == 0);  // the scope row's refresh is the only callback; the off module read nothing
   const std::vector<Line> install = Lines("combat_peerclamp_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
@@ -566,7 +603,7 @@ void AMissingOrOtherImageInstallsNothing() {
   const std::vector<Line> lines = Lines("combat_peerclamp_install");
   QCHECK(lines.size() == 4U);
   for (const Line& l : lines) QCHECK(l.level == sentinel::LogLevel::kError && Has(l.text, "\"result\":\"refused\""));
-  QCHECK(tick::Count() == 0);  // nothing was installed, so no tick was asked for
+  QCHECK(tick::Count() == 1);  // the module asked for no callback of its own
   End();
 }
 
@@ -574,26 +611,44 @@ void AMissingOrOtherImageInstallsNothing() {
 void EveryPinnedWordGatesTheInstall() {
   Begin();
   combat_test::EveryPinIsRefused(
-      "combat_peerclamp_install", pc::kWords, pc::kWordCount, g_image,
+      "combat_peerclamp_install", kAllWords, g_image,
       [] {
         combat_test::StartCapture();
         pc::ResetForTest();
-        scope::ResetForTest();
-        tick::ResetForTest();
+        world::Reset();
         Build();
+        QCHECK(world::StartScope(&Lookup));
+        combat_test::Captured().clear();
       },
-      [] { return Install(); }, [] { return SlotIsTheGames() && tick::Count() == 0; });
+      [] { return Install(); }, [] { return SlotIsTheGames(); });
   End();
 }
 
-// The tick table has no room: the guard would never be in scope, so it is not installed.
-void ATickTableThatIsFullRefusesTheInstall() {
-  Begin();
-  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
-  const ModuleResult r = Install();
-  QCHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0 && SlotIsTheGames());
-  const std::vector<Line> install = Lines("combat_peerclamp_install");
-  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"tick_table_full\""));
+// A scope that cannot change refuses the install: the guard would never be in a combat map or the combat lobby, so no hook is put in (the same refusal as the
+// other readers of the answer). Either the scope row never registered its refresh, or the tick is not installed, or the tick table has no room.
+void AScopeThatCannotChangeRefusesTheInstall() {
+  Begin(/*scopeLive=*/false);  // the tick is not installed, the scope row did not register
+  ModuleResult r = Install();
+  QCHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames());
+  std::vector<Line> install = Lines("combat_peerclamp_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"scope_not_live\""));
+  QCHECK(g_reads.load() == 0 && tick::Count() == 0);
+  End();
+  Begin(/*scopeLive=*/false);  // the tick is installed, but no row registered the refresh
+  QCHECK(tick::InstallAt(&Lookup));
+  r = Install();
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames() && !scope::Live());
+  End();
+  Begin(/*scopeLive=*/false);  // the tick table has no room, so the scope row cannot register
+  QCHECK(tick::InstallAt(&Lookup));
+  for (std::size_t i = tick::Count(); i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
+  QCHECK(!scope::InstallNormal().installed);
+  r = Install();
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames());
+  End();
+  Begin(/*scopeLive=*/false);  // off by the key wins over a scope that cannot change: nothing is asked of the scope
+  r = Install(false);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0);
   End();
 }
 
@@ -617,14 +672,14 @@ void TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd() {
   hook(g_bd);
   std::vector<Line> stats = Lines("combat_peerclamp_stats");
   QCHECK(stats.size() == 1U && stats[0].level == sentinel::LogLevel::kDebug && Has(stats[0].text, "\"final\":0") &&
-         Has(stats[0].text, "\"calls\":4096,\"in_scope\":4096,\"walked\":8192,\"clamped\":0,\"capped\":0,\"level_looks\":1"));
+         Has(stats[0].text, "\"calls\":4096,\"in_scope\":4096,\"walked\":8192,\"clamped\":0,\"capped\":0,\"final\":0"));
   p.SetStamp(1, kNow + 5);  // one clamp and one more call before the end
   Bd(p, 0);
   hook(g_bd);
   pc::NoteEnd();
   stats = Lines("combat_peerclamp_stats");
   QCHECK(stats.size() == 2U && stats[1].level == sentinel::LogLevel::kInfo && Has(stats[1].text, "\"final\":1") &&
-         Has(stats[1].text, "\"calls\":4097,\"in_scope\":4097,\"walked\":8194,\"clamped\":1,\"capped\":0,\"level_looks\":1"));
+         Has(stats[1].text, "\"calls\":4097,\"in_scope\":4097,\"walked\":8194,\"clamped\":1,\"capped\":0,\"final\":1"));
   End();
   Begin();  // not installed: no final line
   pc::NoteEnd();
@@ -647,13 +702,14 @@ int main() {
   TheClampLinesAreCappedAndTotalsAreWrittenEvery100th();
   AnArenaMatchAndEveryOtherLevelLeaveAFutureStampAloneAndWriteNothing();
   BeforeTheFirstLookNothingIsClamped();
+  ATrueAnswerFromAStoppedTickIsNotBelieved();
   TheCombatLobbyAndACombatMapClampAndTheGuardFollowsTheLevel();
   ASlotThatDoesNotHoldCleanupPeersIsRefusedAndLeftAlone();
   ANullOrUnreadableInvalidWordRefusesTheInstall();
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();
-  ATickTableThatIsFullRefusesTheInstall();
+  AScopeThatCannotChangeRefusesTheInstall();
   ASecondInstallDoesNothing();
   TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd();
   if (quest_test::Failures() != 0) {

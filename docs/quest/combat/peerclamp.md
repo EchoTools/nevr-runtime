@@ -1,13 +1,13 @@
 # Module `peerclamp` (row R36)
 
-Files: `src/quest/combat/peerclamp.{h,cpp}`, `src/quest/combat/peerclamp_targets.h` (the pins), `src/quest/combat/level_scope.{h,cpp}` (the level answer it is
+Files: `src/quest/combat/peerclamp.{h,cpp}`, `src/quest/combat/peerclamp_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the combat level answer it is
 scoped by), `src/quest/tests/peerclamp_test.cpp`, `src/quest/combat/mutants.d/peerclamp.sh`. The module is a normal-phase row of the combat install table
 (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
 `combat.peerclamp` (default true). The q15t plugin had no switch file for it.
 
 Origin: Ducky's echoquest-combat reference build, afk_peerclamp.cpp (the rule at :1, the constants at :39-44, the 26 pinned words at :50-62, the clamp at
 :83-116; docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242), reconstructed in the q15t plugin (imported in #1591) and moved here. Upstream
-it was test only; the plugin built it on (#1625). The level scope is an addition made in the move.
+it was test only; the plugin built it on (#1625). The scope is the runtime's (`combat_scope.h`, #2246).
 
 ## Row covered
 
@@ -43,22 +43,22 @@ from `kInvalid` and whose stamp (+0x228) is above `now` gets its stamp set to `n
 below `now`, a real silence included, are untouched); `idx = next` until the end marker 0xffffffff or 4096 entries (one Warning, once). Then the game's function runs,
 always, with the same argument. The clamp happens before the call and logs before it too, so no game frame is live above a log.
 
-Install: the patched build ID, the 26 code words, the pointer word at `base + 0x371d538` (null or unreadable: refused, `invalid_unreadable`), the level scope's tick,
+Install: the scope must be live first (`scope::Live()`: the `scope` row of the install table registered the refresh and the tick is installed; else `scope_not_live` and nothing is hooked), the patched build ID, the 26 code words, the pointer word at `base + 0x371d538` (null or unreadable: refused, `invalid_unreadable`),
 then the thunk on the slot, which must hold exactly `base + 0x24ef9b0`.
 
 ## Arena cost and arena behaviour (arena and combat share the APK)
 
 - **Behaviour.** This guard writes the game's memory (a peer's stamp); the plugin declared it altering gameplay and upstream it was test only. So it is scoped: it acts
-  only while a combat map or the combat lobby is loaded (`level_scope.h`, `InCombatMapOrLobby()`; an Echo Arena level that is loaded wins over any combat level still loaded
-  during a transition; `mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena` and `_b_social`, the lobbies arena players use, never enable it). In an arena match the handler returns the
-  game's function after one relaxed atomic load: no read, no write. `peerclamp_test` runs a future stamp in all four Echo Arena levels, in the arena lobbies, with a level nobody
-  names, with nothing loaded, before the scope's first look, and with an arena level loaded beside a combat map or the combat lobby: the stamp is left alone, nothing is read,
-  the game's function runs once. Even in scope the clamp changes nothing for a healthy session: it acts only when `stamp > now`, which a healthy peer never has.
-- **Known limits.** The scope's look lags a level change by up to half a second. A lobby-to-match switch from a lobby that is not the combat lobby is not covered: whether the
+  only while a combat map or the combat lobby is loaded (`combat_scope.h`, `SeenCombatOrLobby()`; an Echo Arena level that is loaded wins over any combat level still loaded
+  during a transition; a true answer older than `kStaleAfterMs`, a tick that stopped, is not believed; `mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena` and `_b_social`, the lobbies arena players use, never enable it). In an arena match the handler calls the
+  game's function with the same argument after a load of the scope word and a test: no read, no write, no counter, no line, no level scan. The combat body is another function (`ActInScope`, not inlined) that begins with `scope::LookIsFresh()`. `peerclamp_test` runs a future stamp in all four Echo Arena levels, in the arena lobbies, with a level nobody
+  names, with nothing loaded, before the scope's first look, and with an arena level loaded beside a combat map or the combat lobby: the stamp is left alone, by count
+  (`SetReadCounterForTest`, `level::ScanCalls()`) nothing is read and no level is scanned, the game's function runs once; with a combat answer from a tick that stopped it is the same. Even in scope the clamp changes nothing for a healthy session: it acts only when `stamp > now`, which a healthy peer never has.
+- **Known limits.** The scope's look lags a level change by up to a quarter of a second. A lobby-to-match switch from a lobby that is not the combat lobby is not covered: whether the
   race happens there is not established. `combat_peerclamp_clamped` and `combat_peerclamp_stats` on a headset would show it.
 - **Cost.** `CleanupPeers` runs once per `CBroadcaster::Receive`; how often per frame is not known (the module counts: `combat_peerclamp_stats`). In arena each call pays the thunk's counter
-  and one atomic load; the scope's tick adds one clock read per frame and, every half second, one `level::Scan` (two table reads and, per gamespace, three more `process_vm_readv` reads).
-  In scope a call also pays `2 + (one per peer)` `process_vm_readv` calls and the counters. Host numbers (x86-64, -O2, a temporary benchmark that is not committed): through the slot against the direct call, three runs, the direct call 1.9 to 3.4 ns; in an Echo Arena level 2.3 to 4.8 ns added per call; in a combat map with two healthy
+  and one relaxed load of the scope word and a test; the scope's own refresh (`combat_scope.h`) adds one clock read per frame and, every quarter second, one `level::Scan` (two table reads and, per gamespace, three more `process_vm_readv` reads), once for every module that reads it.
+  In scope a call also reads the clock (`LookIsFresh`) and pays `2 + (one per peer)` `process_vm_readv` calls and the counters. Host numbers (x86-64, -O2, a temporary benchmark that is not committed): through the slot against the direct call, three runs, the direct call 1.9 to 3.4 ns; in an Echo Arena level 2.3 to 4.8 ns added per call; in a combat map with two healthy
   peers (four `process_vm_readv` calls, no clamp) 3.6 to 4.5 us added per call. So in scope one call per frame stays under ADR 0038's 10 us a hook, two would not; the call rate is
   what the stats line measures.
   Not measured on a headset.
@@ -66,18 +66,18 @@ then the thunk on the slot, which must hold exactly `base + 0x24ef9b0`.
 ## Gate: no file hash
 
 The gates are the patched build ID the install checks, the 26 code words (read before the slot is touched) and the slot's own expected word. A word that differs is refused
-with one Error `combat_peerclamp_install` line (`reason` `pinned_word_mismatch`, `pin`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The pins
-are `kWords` in `peerclamp_targets.h`; `got_pinned_test` reads every one in the store libr15. `peerclamp_test` flips each in turn, reads one from an unreadable page, and pins the
+with one Error `combat_peerclamp_install` line (`reason` `pinned_word_mismatch`, `pin` (the word's name), `vaddr`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The pins
+are `kWords` in `peerclamp_targets.h` (`pinned::Word`; the offsets the walk reads are tied to them by `static_assert`; checked by `pinned::FirstFailure`); `got_pinned_test` reads every one in the store libr15. `peerclamp_test` flips each in turn, reads one from an unreadable page, and pins the
 table by a fingerprint.
 
 ## Lines (sentinel log)
 
 - `combat_peerclamp_install`: `result` `installed|refused|off`, `reason`, `hook`, `scope` `combat_map_or_lobby`, `consequence`. Info for `installed` and `off` (reason `off_config`), Error
-  for a refusal (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `invalid_unreadable`, `tick_table_full`, `slot_refused`).
+  for a refusal (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `invalid_unreadable`, `scope_not_live`, `slot_refused`).
 - `combat_peerclamp_clamped`: Info, the first 16 clamps (`n`, `idx`, `stamp`, `now`, `diff`, `sent`); then `combat_peerclamp_clamped_total` (`clamps`) at every 100th clamp, at most 8.
 - `combat_peerclamp_walk_capped`: Warning, once (`entries` 4096).
-- `combat_peerclamp_stats`: `calls`, `in_scope`, `walked`, `clamped`, `capped`, `level_looks`, `final`; Debug every 4096 in-scope calls, Info once at the end of the process when the guard is
-  installed. `level_looks` 0 says the scope never ran (then nothing is clamped).
+- `combat_peerclamp_stats`: `calls`, `in_scope`, `walked`, `clamped`, `capped`, `final`; Debug every 4096 in-scope calls, Info once at the end of the process when the guard is
+  installed.
 
 ## Prediction (written before any headset run)
 
@@ -89,7 +89,7 @@ In most sessions zero `combat_peerclamp_clamped` lines (the race is rare); when 
 
 - `combat_peerclamp_install` `refused` with `pinned_word_mismatch` on a build the sentinel accepted by build ID: the code at that address is not what the handler was derived from.
 - The 0.25 s "communication timeout" disconnect still occurs and no clamp line was logged with `in_scope` above 0: the stamp is not above `now` (`now` is stale or the age is computed elsewhere), or the
-  walk missed the entry (layout wrong). With `in_scope` 0 or `level_looks` 0: the scope did not enable it (the switch came from a lobby that is not the combat lobby, or the combat tick did not run).
+  walk missed the entry (layout wrong). With `in_scope` 0: the scope did not enable it (the switch came from a lobby that is not the combat lobby, or the combat tick stopped: `combat_scope_stale` lines).
 - Clamp lines in every session at steady state: `now` lags the stamps normally, and the clamp would mask a real silence (peers that left never time out).
 - `invalid_unreadable`: the GOT word at 0x371d538 is not relocated when the step runs.
 - `combat_peerclamp_walk_capped`: the peer list loops or is longer than 4096.

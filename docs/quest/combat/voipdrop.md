@@ -48,8 +48,8 @@ is not covered.
 
 ## Arena cost and arena behaviour (arena and combat share the APK)
 
-- **Behaviour.** The guard acts in every level, on purpose: it is a crash guard of voice code that arena and combat share, so a scope by level would leave the crash in place (and
-  could lag a level change). It changes what the game does only where the game would otherwise fault: that packet is dropped. Every other packet reaches the stock function with the same
+- **Behaviour.** The guard acts in every level, on purpose: it is a crash guard of voice code that arena and combat share, so a scope by level (`combat_scope.h`) would leave the crash in place (and
+  could lag a level change); it asks nothing of the scope and is not a reader of the scope row. It changes what the game does only where the game would otherwise fault: that packet is dropped. Every other packet reaches the stock function with the same
   arguments (`voipdrop_test`: the arguments, the free-page case, head 0, every doubt). An arena match with free memory sees no change; on a plain release the module installs nothing.
 - **Cost.** `ReceiveVoip` runs once per remote voice packet; the rate per frame is not known, and `combat_voipdrop_stats` counts it (`packets`, `probed`, `dropped`; written at the end of the
   process and every 16384 packets). In the common case each packet pays the thunk's counter, two relaxed atomic increments and one plain 4-byte load (the free head, `[self+0x1b8]`): `ReceiveVoip` returns before touching `self`
@@ -61,7 +61,7 @@ is not covered.
 
 The gates are the patched build ID the install checks, the 10 code words above (read before the slot is touched), the four exports, and the slot's own expected word: it must hold exactly
 `base + 0x21c3238`, so a word something else replaced is refused, not chained over. A word that differs is refused with one Error `combat_voipdrop_install` line (`reason`
-`pinned_word_mismatch`, `pin`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The pins are `kWords` in `voipdrop_targets.h`; `got_pinned_test` reads every
+`pinned_word_mismatch`, `pin` (the word's name), `vaddr`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The pins are `kWords` in `voipdrop_targets.h` (`pinned::Word`; the table and page offsets are tied to them by `static_assert`; checked by `pinned::FirstFailure`); `got_pinned_test` reads every
 one in the store libr15. `voipdrop_test` flips each in turn, reads one from an unreadable page, and pins the table by a fingerprint.
 
 ## Lines (sentinel log)

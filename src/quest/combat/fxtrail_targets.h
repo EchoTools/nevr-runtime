@@ -37,20 +37,26 @@ struct EffectTimeTag {};
 using EffectTimeThunk = sentinel::CallbackThunk<EffectTimeTag, EffectTimeSig>;
 
 // The code words the lookup was derived from (the 11 of EffectTime's 13 instructions before the two after `ret`).
-inline constexpr PinnedWord kWords[] = {
-    {0x16647e4, 0xf9406408},  // ldr x8,[x0,#0xc8]
-    {0x16647e8, 0x92403c29},  // and x9,x1,#0xffff
-    {0x16647ec, 0xd37ef529},  // lsl x9,x9,#2
-    {0x16647f0, 0x5280030a},  // mov w10,#0x18
-    {0x16647f4, 0x78696908},  // ldrh w8,[x8,x9]
-    {0x16647f8, 0xf9407c09},  // ldr x9,[x0,#0xf8]
-    {0x1664800, 0x9b0a2508},  // madd x8,x8,x10,x9
-    {0x1664804, 0xf9400908},  // ldr x8,[x8,#0x10]
-    {0x1664808, 0xb4000068},  // cbz x8,+0xc
-    {0x166480c, 0xbd434100},  // ldr s0,[x8,#0x340]
-    {0x1664810, 0xd65f03c0},  // ret
+inline constexpr pinned::Word kWords[] = {
+    {"EffectTime: ldr x8, [x0, #0xc8]", 0x16647e4, 0xf9406408},
+    {"EffectTime: and x9, x1, #0xffff", 0x16647e8, 0x92403c29},
+    {"EffectTime: lsl x9, x9, #2", 0x16647ec, 0xd37ef529},
+    {"EffectTime: mov w10, #0x18", 0x16647f0, 0x5280030a},
+    {"EffectTime: ldrh w8, [x8, x9]", 0x16647f4, 0x78696908},
+    {"EffectTime: ldr x9, [x0, #0xf8]", 0x16647f8, 0xf9407c09},
+    {"EffectTime: madd x8, x8, x10, x9", 0x1664800, 0x9b0a2508},
+    {"EffectTime: ldr x8, [x8, #0x10]", 0x1664804, 0xf9400908},
+    {"EffectTime: cbz x8, <target>", 0x1664808, 0xb4000068},  // cbz x8,+0xc
+    {"EffectTime: ldr s0, [x8, #0x340]", 0x166480c, 0xbd434100},
+    {"EffectTime: ret", 0x1664810, 0xd65f03c0},
 };
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
+inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
+// The words carry the offsets the guard reads: a changed offset in this file fails the build, a different libr15 fails the install.
+static_assert(pinned::LdrXOffset(kWords[0].word) == kOffIndex, "the pinned load of the index table does not carry kOffIndex");
+static_assert(pinned::LdrXOffset(kWords[5].word) == kOffData, "the pinned load of the data array does not carry kOffData");
+static_assert(pinned::MovImmediate(kWords[3].word) == kDataStride, "the pinned entry stride is not kDataStride");
+static_assert(pinned::LdrXOffset(kWords[7].word) == kOffInstance, "the pinned load of the instance does not carry kOffInstance");
 
 // The slot as a manager target on a libr15 loaded at `base`: it must hold EffectTime itself (base + its address), so a word something else
 // already replaced is refused, not chained over.

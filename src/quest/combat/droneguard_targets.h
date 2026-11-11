@@ -48,20 +48,26 @@ struct EngineFns {
 };
 
 // Stage 0: the words Follow's null-target read was derived from.
-inline constexpr PinnedWord kWords[] = {
-    {0x21497bc, 0xf940a274},
-    {0x2149744, 0x97b7a7c7},
-    {0x21497cc, 0xb9419261},
-    {0x214980c, 0x79432268},
+inline constexpr pinned::Word kWords[] = {
+    {"Follow: ldr x20, [x19, #0x140]", 0x21497bc, 0xf940a274},
+    {"Update: bl <target>", 0x2149744, 0x97b7a7c7},
+    {"Follow: ldr w1, [x19, #0x190]", 0x21497cc, 0xb9419261},
+    {"Follow: ldrh w8, [x19, #0x190]", 0x214980c, 0x79432268},
 };
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
+inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
+// The words carry the offsets the guard reads: a changed offset in this file fails the build, a different libr15 fails the install.
+static_assert(pinned::LdrXOffset(kWords[0].word) == kOffTarget, "the pinned load of the followed system does not carry kOffTarget");
+static_assert(pinned::LdrWOffset(kWords[2].word) == kOffHandleIdx, "the pinned load of the cached index does not carry kOffHandleIdx");
+static_assert(pinned::LdrhOffset(kWords[3].word) == kOffHandleIdx, "the pinned half-word load of the cached index does not carry kOffHandleIdx");
 // Stage 1's own words (the RefreshCache call site, IsComponentValid's first words): a mismatch leaves the null half only.
-inline constexpr PinnedWord kIdxWords[] = {
-    {0x21497c8, 0x97b70b0a},
-    {0x1cdb3e0, 0x7941e008},
-    {0x1cdb3f8, 0x6b41413f},
+inline constexpr pinned::Word kIdxWords[] = {
+    {"Follow: bl <target>", 0x21497c8, 0x97b70b0a},
+    {"IsComponentValid: ldrh w8, [x0, #0xf0]", 0x1cdb3e0, 0x7941e008},
+    {"IsComponentValid: cmp w9, w1, lsr #16", 0x1cdb3f8, 0x6b41413f},
 };
 inline constexpr std::size_t kIdxWordCount = sizeof(kIdxWords) / sizeof(kIdxWords[0]);
+inline constexpr pinned::Pins kIdxWordPins = {kIdxWords, kIdxWordCount, nullptr, 0};
 
 // The slot as a manager target on a libr15 loaded at `base`: it must hold Follow itself (base + its address).
 inline sentinel::GotTarget FollowTarget(std::uintptr_t base) {

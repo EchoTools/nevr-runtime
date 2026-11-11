@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "quest/combat/level_scope.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -12,8 +12,6 @@
 namespace nevr_quest::combat::peerclamp {
 
 namespace {
-
-namespace pinned = sentinel::pinned;
 
 // One read of the broadcaster fields (+0x470..+0x564) covers sent, now, the chunk table, the head index and the per-chunk count.
 constexpr std::size_t kBdSpan = kOffPerChunk + 4 - kOffSent;
@@ -42,11 +40,9 @@ void LogStats(bool final) noexcept {
                        {"walked", g_walked.load(std::memory_order_relaxed)},
                        {"clamped", g_clamped.load(std::memory_order_relaxed)},
                        {"capped", g_capped.load(std::memory_order_relaxed)},
-                       {"level_looks", scope::Looks()},
                        {"final", final ? 1 : 0},
                        {"consequence", "calls is every CleanupPeers call the game made, in_scope those made while a combat map or the combat lobby was loaded "
-                                       "(the only ones read), walked the peer entries seen, clamped the stamps pulled down; level_looks is 0 when the "
-                                       "level scope never ran, and then nothing is clamped"}});
+                                       "(the only ones read), walked the peer entries seen, clamped the stamps pulled down"}});
 }
 
 // Written before the game's function is called, from a frame that holds no game frame above it.
@@ -115,8 +111,10 @@ void Clamp(std::uintptr_t bd) noexcept {
   }
 }
 
-void CleanupHandler(CleanupThunk::Fn original, void* bd) noexcept {
-  if (!scope::InCombatMapOrLobby()) {  // arena, the lobbies arena players use, every other level: the game's function, nothing read or written
+// The call in a combat map or the combat lobby. Not inlined into the handler: its reads, its buffers and its log calls would give the handler a frame, a stack
+// canary and saved registers on the path of an arena match, which must be a load, a test and a tail call.
+[[gnu::noinline]] void ActInScope(CleanupThunk::Fn original, void* bd) noexcept {
+  if (!scope::LookIsFresh()) {  // the tick stopped: the answer is not believed (combat_scope.h)
     original(bd);
     return;
   }
@@ -126,13 +124,25 @@ void CleanupHandler(CleanupThunk::Fn original, void* bd) noexcept {
   original(bd);
 }
 
+void CleanupHandler(CleanupThunk::Fn original, void* bd) noexcept {
+  // Arena, the lobbies arena players use and every other level: the game's function with the same argument and nothing else: nothing read, nothing written,
+  // no counter, no line.
+  if (!scope::SeenCombatOrLobby()) {
+    original(bd);
+    return;
+  }
+  ActInScope(original, bd);
+}
+
 NEVR_HOOK_RECORD(kCleanupRecord, CleanupThunk, &CleanupHandler);
 
-ModuleResult Refused(const char* token, const char* pin = nullptr, const char* found = nullptr, const char* expected = nullptr) noexcept {
-  if (pin != nullptr) {
+ModuleResult Refused(const char* token, const pinned::Failure* word = nullptr) noexcept {
+  if (word != nullptr) {
+    char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_peerclamp_install",
-                        {{"result", "refused"}, {"reason", token}, {"pin", pin}, {"found", found}, {"expected", expected},
-                         {"consequence", kRefusedConsequence}});
+                        {{"result", "refused"}, {"reason", token}, {"pin", word->what}, {"vaddr", sentinel::HexString(at, word->vaddr)},
+                         {"found", word->readable ? sentinel::HexString(haveText, word->have) : "unreadable"},
+                         {"expected", sentinel::HexString(wantText, word->want)}, {"consequence", kRefusedConsequence}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_peerclamp_install",
                         {{"result", "refused"}, {"reason", token}, {"consequence", kRefusedConsequence}});
@@ -149,26 +159,20 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
                          {"consequence", "combat.peerclamp is false: the game's timeout loop reads every stamp as it is, and a stamp above now drops the peer"}});
     return {false, "off_config", true};
   }
+  // The guard acts only while a combat map or the combat lobby is loaded, which the scope's answer says: when that answer cannot change (the tick or the scope
+  // row's refresh is not installed) the hook would never act, so it is not installed (combat_scope.h `Live`).
+  if (!scope::Live()) return Refused("scope_not_live");
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded");
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded");
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id");
-  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
-  std::uint32_t have = 0;
-  bool readable = false;
-  const std::size_t bad = FirstWordMismatch(image.base, kWords, kWordCount, &have, &readable);
-  if (bad != kWordCount) {
-    char at[19];
-    char haveText[19];
-    char wantText[19];
-    return Refused("pinned_word_mismatch", sentinel::HexString(at, kWords[bad].vaddr),
-                   readable ? sentinel::HexString(haveText, have) : "unreadable", sentinel::HexString(wantText, kWords[bad].word));
-  }
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
+  pinned::Failure word;
+  if (pinned::FirstFailure(image.base, &kWordPins, 1, &word)) return Refused("pinned_word_mismatch", &word);
   std::uintptr_t invalid = 0;
   if (!SafeRead(image.base + static_cast<std::uintptr_t>(pins.invalid), &invalid, sizeof(invalid)) || invalid == 0) return Refused("invalid_unreadable");
-  if (!scope::Start()) return Refused("tick_table_full");  // the guard would never be in scope, so it is not installed
   g_invalid.store(invalid, std::memory_order_relaxed);
-  sentinel::GotTarget target(pinned::kLibR15, kCleanupSymbol, sentinel::RelocKind::kJumpSlot, pinned::LibR15PatchedBuildId(), pins.slot);
+  sentinel::GotTarget target(sentinel::pinned::kLibR15, kCleanupSymbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(), pins.slot);
   target.expectedOriginal = reinterpret_cast<const void*>(image.base + pins.fn);
   target = target.Owned("combat/peerclamp");
   CleanupThunk::Arm(kCleanupRecord);

@@ -27,6 +27,7 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
 #include "quest/tests/combat_pin_check.h"
+#include "quest/tests/combat_pins.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -38,7 +39,10 @@ using combat_test::Image;
 using combat_test::Line;
 using combat_test::Lines;
 using nevr_quest::combat::ModuleResult;
-using nevr_quest::combat::PinnedWord;
+using nevr_quest::combat::pinned::Word;
+// The tables themselves, not the module's own `kWordPins` (which a bug could shorten): the test puts every pinned word in the image and flips every one.
+const nevr_quest::combat::pinned::Pins kAllWords = {dg::kWords, dg::kWordCount, nullptr, 0};
+const nevr_quest::combat::pinned::Pins kAllIdxWords = {dg::kIdxWords, dg::kIdxWordCount, nullptr, 0};
 
 using FollowFn = void (*)(void*, std::uint64_t);
 
@@ -120,8 +124,8 @@ void Build(std::uintptr_t slotWord = 0) {
   g_image.Build({{dg::kFollowSymbol, g_pins.slot, false, false, g_pins.fn}});
   // base + fn is the stand-in's address: the real function is not in the image, so the pin holds the stand-in's offset.
   g_pins.fn = reinterpret_cast<std::uintptr_t>(&RealFollow) - g_image.Base();
-  for (const PinnedWord& w : dg::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
-  for (const PinnedWord& w : dg::kIdxWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  combat_test::PutPins(g_image, &kAllWords, 1);
+  combat_test::PutPins(g_image, &kAllIdxWords, 1);
   *g_image.Slot(g_pins.slot) = slotWord != 0 ? reinterpret_cast<void*>(slotWord) : reinterpret_cast<void*>(&RealFollow);
 }
 FollowFn Slot() { return reinterpret_cast<FollowFn>(*g_image.Slot(g_pins.slot)); }
@@ -159,13 +163,13 @@ void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(std::strcmp(dg::kRefreshCacheSymbol, "_ZNK10NRadEngine16CComponentHandleINS_8NRadGame15CR15PlayerNavCSEE12RefreshCacheEv") == 0);
   QCHECK(std::strcmp(dg::kIsValidSymbol, "_ZNK10NRadEngine8NRadGame15CR15PlayerNavCS16IsComponentValidENS_18SCompactPoolHandleE") == 0);
   QCHECK(dg::kOffTarget == 0x140 && dg::kOffHandle == 0x148 && dg::kOffHandleFlags == 0x16c && dg::kOffHandleSys == 0x188 && dg::kOffHandleIdx == 0x190);
-  static const PinnedWord kWant[4] = {{0x21497bc, 0xf940a274}, {0x2149744, 0x97b7a7c7}, {0x21497cc, 0xb9419261}, {0x214980c, 0x79432268}};
+  static const Word kWant[4] = {{"", 0x21497bc, 0xf940a274}, {"", 0x2149744, 0x97b7a7c7}, {"", 0x21497cc, 0xb9419261}, {"", 0x214980c, 0x79432268}};
   QCHECK(dg::kWordCount == 4);
-  for (std::size_t i = 0; i < 4; ++i) QCHECK(dg::kWords[i].vaddr == kWant[i].vaddr && dg::kWords[i].word == kWant[i].word);
+  for (std::size_t i = 0; i < 4; ++i) QCHECK(dg::kWords[i].vaddr == kWant[i].vaddr && dg::kWords[i].word == kWant[i].word && dg::kWords[i].what[0] != '\0');
   QCHECK(combat_test::Fingerprint(dg::kWords, dg::kWordCount) == combat_test::Fingerprint(kWant, 4));
-  static const PinnedWord kWantIdx[3] = {{0x21497c8, 0x97b70b0a}, {0x1cdb3e0, 0x7941e008}, {0x1cdb3f8, 0x6b41413f}};
+  static const Word kWantIdx[3] = {{"", 0x21497c8, 0x97b70b0a}, {"", 0x1cdb3e0, 0x7941e008}, {"", 0x1cdb3f8, 0x6b41413f}};
   QCHECK(dg::kIdxWordCount == 3);
-  for (std::size_t i = 0; i < 3; ++i) QCHECK(dg::kIdxWords[i].vaddr == kWantIdx[i].vaddr && dg::kIdxWords[i].word == kWantIdx[i].word);
+  for (std::size_t i = 0; i < 3; ++i) QCHECK(dg::kIdxWords[i].vaddr == kWantIdx[i].vaddr && dg::kIdxWords[i].word == kWantIdx[i].word && dg::kIdxWords[i].what[0] != '\0');
   QCHECK(combat_test::Fingerprint(dg::kIdxWords, dg::kIdxWordCount) == combat_test::Fingerprint(kWantIdx, 3));
 }
 
@@ -425,7 +429,8 @@ void AChangedStageOneWordLeavesTheNullHalfOnlyAndNamesIt() {
       char found[19];
       char want[19];
       QCHECK(stage1[0].level == sentinel::LogLevel::kError && Has(stage1[0].text, "\"reason\":\"pinned_word_mismatch\""));
-      QCHECK(Has(stage1[0].text, std::string("\"pin\":\"") + sentinel::HexString(at, dg::kIdxWords[i].vaddr) + "\""));
+      QCHECK(Has(stage1[0].text, std::string("\"pin\":\"") + dg::kIdxWords[i].what + "\""));
+      QCHECK(Has(stage1[0].text, std::string("\"vaddr\":\"") + sentinel::HexString(at, dg::kIdxWords[i].vaddr) + "\""));
       QCHECK(Has(stage1[0].text, std::string("\"found\":\"") + sentinel::HexString(found, flipped) + "\""));
       QCHECK(Has(stage1[0].text, std::string("\"expected\":\"") + sentinel::HexString(want, good) + "\""));
     }
@@ -532,7 +537,7 @@ void AMissingOrOtherImageInstallsNothing() {
 void EveryPinnedWordGatesTheInstall() {
   Begin();
   combat_test::EveryPinIsRefused(
-      "combat_droneguard_install", dg::kWords, dg::kWordCount, g_image,
+      "combat_droneguard_install", kAllWords, g_image,
       [] {
         combat_test::StartCapture();
         dg::ResetForTest();

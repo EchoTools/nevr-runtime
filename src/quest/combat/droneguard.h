@@ -11,9 +11,9 @@
  * CR15PlayerNavCS::IsComponentValid(target, idx) refuses the cached index. A read that fails is doubt: Follow runs. There is no access-violation
  * handler: a non-null but stale pointer still faults, as in the reference build.
  *
- * Arena (same APK). This is a crash-only guard and it acts in every level on purpose; it does not use level_scope.h. The fault happens when the
- * drone's actor is enabled, which can be in the first frames of a level load, before a level look that is up to half a second old would see the
- * level. What it changes: only a call whose target is null (stage 0), or whose cache is stale (stage 1), is skipped for that component that frame,
+ * Arena (same APK). This is a crash-only guard and it acts in every level on purpose; it asks nothing of the combat level answer (combat_scope.h),
+ * so it is not a reader of the scope row. The fault happens when the drone's actor is enabled, which can be in the first frames of a level load, before a
+ * level look that is up to a quarter of a second old would see the level. What it changes: only a call whose target is null (stage 0), or whose cache is stale (stage 1), is skipped for that component that frame,
  * where the stock call would dereference null; every other call reaches the game's Follow with the same two arguments. Whether the arena
  * has CR15NetFollowPlayerCS components at all is not established; `combat_droneguard_stats` gives the call count on a headset.
  *

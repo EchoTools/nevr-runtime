@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -20,13 +21,14 @@
 namespace combat_test {
 
 // One relocation of the image: the symbol it names (a data object or a function), the slot, and whether it is a GLOB_DAT word or a
-// JUMP_SLOT.
+// JUMP_SLOT (or, with `abs64`, an R_AARCH64_ABS64 word of a vtable or factory table, which the manager hooks as a class C word).
 struct Reloc {
   const char* symbol;
   std::uint64_t slot;
   bool globDat;
   bool object;          // STT_OBJECT, else STT_FUNC
   std::uint64_t value;  // the symbol's address (st_value)
+  bool abs64 = false;   // an ABS64 relocation, whatever `globDat` says
 };
 
 class Image {
@@ -34,8 +36,11 @@ class Image {
   static constexpr std::size_t kSize = 0x3800000;
   static constexpr std::uint64_t kRwStart = 0x3600000;
 
-  // `buildId` null: the patched libr15's (the one the running sentinel checks). `note` false: no PT_NOTE, so no build ID.
-  void Build(const std::vector<Reloc>& relocs, const char* buildId = nullptr, bool note = true) {
+  // `buildId` null: the patched libr15's (the one the running sentinel checks). `note` false: no PT_NOTE, so no build ID. `name` null: libr15.so
+  // (another library's image, such as libpnsovr.so, names itself). `rwStart`: where the writable segment starts (a smaller library's slots
+  // are below libr15's).
+  void Build(const std::vector<Reloc>& relocs, const char* buildId = nullptr, bool note = true, const char* name = nullptr,
+             std::uint64_t rwStart = kRwStart) {
     Drop();
     void* const mem = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     QCHECK(mem != MAP_FAILED);
@@ -64,8 +69,9 @@ class Image {
       dynstr.push_back('\0');
       Elf64_Rela rel{};
       rel.r_offset = r.slot;
-      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), r.globDat ? sentinel::kNativeRelocs.globDat : sentinel::kNativeRelocs.jumpSlot);
-      (r.globDat ? rela : jmprel).push_back(rel);
+      const std::uint32_t type = r.abs64 ? sentinel::kNativeRelocs.abs64 : (r.globDat ? sentinel::kNativeRelocs.globDat : sentinel::kNativeRelocs.jumpSlot);
+      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), type);
+      (r.abs64 || r.globDat ? rela : jmprel).push_back(rel);
     }
     QCHECK(dynstr.size() < kDynsymAt - kDynstrAt);
     QCHECK(syms.size() * sizeof(Elf64_Sym) < kJmprelAt - kDynsymAt);
@@ -97,11 +103,11 @@ class Image {
     phdr_[0].p_type = PT_LOAD;
     phdr_[0].p_flags = PF_R | PF_X;
     phdr_[0].p_vaddr = 0;
-    phdr_[0].p_filesz = phdr_[0].p_memsz = kRwStart;
+    phdr_[0].p_filesz = phdr_[0].p_memsz = rwStart;
     phdr_[1].p_type = PT_LOAD;
     phdr_[1].p_flags = PF_R | PF_W;
-    phdr_[1].p_vaddr = kRwStart;
-    phdr_[1].p_filesz = phdr_[1].p_memsz = kSize - kRwStart;
+    phdr_[1].p_vaddr = rwStart;
+    phdr_[1].p_filesz = phdr_[1].p_memsz = kSize - rwStart;
     phdr_[2].p_type = PT_DYNAMIC;
     phdr_[2].p_flags = PF_R | PF_W;
     phdr_[2].p_vaddr = kDynamicAt;
@@ -112,7 +118,7 @@ class Image {
     image_.base = reinterpret_cast<std::uintptr_t>(mem_);
     image_.phdr = phdr_;
     image_.phnum = note ? 4 : 3;
-    std::strcpy(image_.name, sentinel::pinned::kLibR15);
+    std::snprintf(image_.name, sizeof(image_.name), "%s", name != nullptr ? name : sentinel::pinned::kLibR15);
     present_ = true;
   }
 
@@ -138,6 +144,20 @@ class Image {
     return value;
   }
   void** Slot(std::uint64_t vaddr) { return reinterpret_cast<void**>(mem_ + vaddr); }
+
+  // A callable "real function of the game" at `vaddr`, implemented by `fn`: a 12-byte x86-64 trampoline (movabs rax, fn; jmp rax) on a page made
+  // executable, so a slot that holds base + vaddr (the pinned original) can be called through. Host tests run on x86-64 only.
+  void Real(std::uint64_t vaddr, void* fn) {
+    const std::uintptr_t page = (Base() + vaddr) & ~static_cast<std::uintptr_t>(4095);
+    QCHECK(mprotect(reinterpret_cast<void*>(page), 4096, PROT_READ | PROT_WRITE | PROT_EXEC) == 0);
+    unsigned char* const t = mem_ + vaddr;
+    t[0] = 0x48;
+    t[1] = 0xb8;
+    const std::uint64_t target = reinterpret_cast<std::uint64_t>(fn);
+    std::memcpy(t + 2, &target, sizeof(target));
+    t[10] = 0xff;
+    t[11] = 0xe0;
+  }
 
  private:
   static constexpr std::uint64_t kNoteAt = 0x100;

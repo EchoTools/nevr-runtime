@@ -28,6 +28,11 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
+// sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
+namespace sentinel {
+const char* FilesDir() { return "/nonexistent-nevr-files"; }
+}  // namespace sentinel
+
 namespace {
 
 namespace bv = nevr_quest::build_variant;

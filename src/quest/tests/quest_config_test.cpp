@@ -1154,15 +1154,22 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
-// combat.heaps and combat.memsys (#2175, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
-// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. The two are
+// combat.heaps, combat.memsys and combat.sendguard (#2175, #2179, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
+// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. Each is
 // independent, and a file rejected as a whole contributes nothing.
 void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
   struct Key {
     const char* name;
     nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
   };
-  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps}, {"memsys", &nevr_quest::CombatConfig::memsys}};
+  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
+                      {"memsys", &nevr_quest::CombatConfig::memsys},
+                      // the resource table steps (#2177)
+                      {"meshstep", &nevr_quest::CombatConfig::meshstep},
+                      {"instmodel", &nevr_quest::CombatConfig::instmodel},
+                      {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep},
+                      {"sendguard", &nevr_quest::CombatConfig::sendguard}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
     const std::string full = std::string("combat.") + key.name;
@@ -1187,8 +1194,11 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
       CHECK(!r.config.combat.force.on);  // no other key moved
       const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
       CHECK(other);  // the other module's switch is its own
+      for (const Key& each : keys) {
+        if (each.member != key.member) CHECK((r.config.combat.*each.member).on);  // and no other key moved
+      }
     }
-    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
+    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: the default, and the key is named
       const LoadResult r = Load(Full(), section + value + "\n");
       CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
       CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
@@ -1269,9 +1279,42 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
                       {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // #2186: shieldgamma_gamma is OFF by default (a test switch upstream), the other two are on
+                      {"hudmeter", &nevr_quest::CombatConfig::hudmeter, true},
+                      {"shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma, false},
+                      {"shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror, true},
+
+                      // the headset gates' four keys (#2180, combat/headset_gates.h): the same rule, each on by default
+                      {"gate_perm", &nevr_quest::CombatConfig::gatePerm, true},
+                      {"gate_bots", &nevr_quest::CombatConfig::gateBots, true},
+                      {"gate_link", &nevr_quest::CombatConfig::gateLink, true},
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
-                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
+                      // Gun connect, practice AI bots and the gun hand default (#2185): on unless the file says false.
+                      {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},
+                      {"aibots", &nevr_quest::CombatConfig::aibots, true},
+                      {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true},
+                      // The impact sounds and the level decals (#2183). decals is on by default (upstream's fxdecal.on) and inert without decals.bin; its two flips are off.
+                      {"impactsnd", &nevr_quest::CombatConfig::impactsnd, true},
+                      {"impactsnd_write", &nevr_quest::CombatConfig::impactsndWrite, true},
+                      {"decals", &nevr_quest::CombatConfig::decals, true},
+                      {"decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU, false},
+                      {"decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV, false},
+                      // The static BVH and the wall-fire check (#2182): all four are on by default, as q15t-upstream has them.
+                      {"bvh", &nevr_quest::CombatConfig::bvh, true},
+                      {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
+                      {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
+                      {"wallfire", &nevr_quest::CombatConfig::wallfire, true},
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as the q15t plugin's Q15T_MUSIC and Q15T_SENSORWD were in v6.16.5 (music is also on by default upstream, afk_music.cpp:1).
+                      {"music", &nevr_quest::CombatConfig::music, true},
+                      {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true},
+                      // The EC client and its NEUTRON effects (#2187): on unless the file says false.
+                      {"ec", &nevr_quest::CombatConfig::ec, true},
+                      {"ecfx", &nevr_quest::CombatConfig::ecfx, true},
+                      // The drone modules (#2187): on unless the file says false.
+                      {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
+                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
@@ -1307,6 +1350,112 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
       const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + (k.defaultOn ? "false" : "true") + "\nnot_a_section: 1\n");
       CHECK(r.fileRejected && (r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
     }
+  }
+}
+
+// combat.ec_words (#2187): a text. Absent, or a value that is not a string: no text and not from the file (the module's
+// `types=VPTO equip hide` stands); a string is taken as it is, an empty one included.
+void CombatEcWordsIsATextThatTheFileGivesWhole() {
+  {
+    const LoadResult r = Load(Full(), "combat:\n  ec: true\n");
+    CHECK(r.config.combat.ecWords.source != Source::kFile && r.config.combat.ecWords.text[0] == '\0');
+  }
+  for (const char* words : {"types=VPTO equip hide", "types=T noequip", ""}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  ec_words: \"") + words + "\"\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && r.config.combat.ecWords.source == Source::kFile);
+    CHECK(std::string(r.config.combat.ecWords.text) == words);
+  }
+  for (const char* value : {"[a]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  ec_words: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.ecWords.source != Source::kFile && r.config.combat.ecWords.text[0] == '\0');
+  }
+}
+
+// combat.gate_link_libs (#2180): a text. Absent, or a value that is not a string: no text and not from the file (the module's 21 libraries stand).
+// A string, an empty one included, is the file's word, kept whole and never logged; one that does not fit the buffer keeps the default with a Warning
+// that names the key and not the text.
+void CombatGateLinkLibsIsATextThatTheFileGivesWhole() {
+  const std::string key = "combat.gate_link_libs";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.gateLinkLibs.source != Source::kFile && r.config.combat.gateLinkLibs.text[0] == '\0');
+  }
+  const struct {
+    const char* yaml;
+    const char* want;
+  } given[] = {{"combat:\n  gate_link_libs: all\n", "all"},
+               {"combat:\n  gate_link_libs: \"none\"\n", "none"},
+               {"combat:\n  gate_link_libs: \"0e4384a5 1703a89b\"\n", "0e4384a5 1703a89b"},
+               {"combat:\n  gate_link_libs: \"lib555db38933fef859.so,libf808c072bb49da47.so\"\n", "lib555db38933fef859.so,libf808c072bb49da47.so"},
+               {"combat:\n  gate_link_libs: \"\"\n", ""}};
+  for (const auto& g : given) {
+    const LoadResult r = Load(Full(), g.yaml);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && r.config.combat.gateLinkLibs.source == Source::kFile);
+    CHECK(std::string(r.config.combat.gateLinkLibs.text) == g.want);
+  }
+  {  // a value that is not a string keeps the default, with a Warning that names the key
+    for (const char* value : {"[a, b]", "{a: 1}"}) {
+      const LoadResult r = Load(Full(), std::string("combat:\n  gate_link_libs: ") + value + "\n");
+      CHECK(!r.fileRejected && r.config.combat.gateLinkLibs.source != Source::kFile && r.config.combat.gateLinkLibs.text[0] == '\0');
+      CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_a_string", LogLevel::kWarn));
+    }
+  }
+  {  // the longest text that fits, and one byte more
+    const std::string fits(nevr_quest::kCombatTextMax - 1, 'a');
+    const LoadResult ok = Load(Full(), "combat:\n  gate_link_libs: " + fits + "\n");
+    CHECK(ok.config.combat.gateLinkLibs.source == Source::kFile && std::string(ok.config.combat.gateLinkLibs.text) == fits);
+    const LoadResult longer = Load(Full(), "combat:\n  gate_link_libs: " + fits + "a\n");
+    CHECK(longer.config.combat.gateLinkLibs.source != Source::kFile && longer.config.combat.gateLinkLibs.text[0] == '\0');
+    CHECK(EventsWithAreAtLevel(longer, "config file key=" + key + " rejected reason=too_long", LogLevel::kWarn));
+    CHECK(!EventsContain(longer, "aaaa"));
+  }
+}
+
+// combat.aibots_scenario (#2185): a text like gate_link_libs. Absent, or not a string: no text from the file (RandomAttack stands). A string is the file's word, kept whole.
+void CombatAibotsScenarioIsATextThatTheFileGivesWhole() {
+  const std::string key = "combat.aibots_scenario";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  aibots: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.aibotsScenario.source != Source::kFile && r.config.combat.aibotsScenario.text[0] == '\0');
+  }
+  for (const char* word : {"patrol", "randomattack", "6", "off"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  aibots_scenario: ") + word + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested=") && r.config.combat.aibotsScenario.source == Source::kFile);
+    CHECK(std::string(r.config.combat.aibotsScenario.text) == word);
+    CHECK(r.config.combat.aibots.on && r.config.combat.aibots.source != Source::kFile);  // the scenario key is not the switch
+  }
+  for (const char* value : {"[a, b]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  aibots_scenario: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.aibotsScenario.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_a_string", LogLevel::kWarn));
+  }
+}
+
+// combat.powerboost_stage (#2187): an integer 0..3. Absent: 3 (swallow and cone), not from the file. An integer in the range: that stage, from the
+// file. A value that is not an integer, or one outside 0..3, keeps 3 with a Warning that names the key.
+void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
+  const std::string key = "combat.powerboost_stage";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+  }
+  for (int stage = 0; stage <= 3; ++stage) {
+    const LoadResult r = Load(Full(), "combat:\n  powerboost_stage: " + std::to_string(stage) + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == stage && r.config.combat.powerboostStage.source == Source::kFile);
+  }
+  for (const char* value : {"4", "-1", "99"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=out_of_range", LogLevel::kWarn));
+  }
+  for (const char* value : {"two", "2.5", "true", "[1, 2]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
   }
 }
 
@@ -1364,6 +1513,7 @@ void CombatCrashGuardKeysDefaultAsShippedAndTheFileDecides() {
 }
 
 int main() {
+  CombatPowerboostStageIsAnIntegerFromZeroToThree();
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();
@@ -1389,6 +1539,9 @@ int main() {
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
   CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
   CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
+  CombatGateLinkLibsIsATextThatTheFileGivesWhole();
+  CombatAibotsScenarioIsATextThatTheFileGivesWhole();
+  CombatEcWordsIsATextThatTheFileGivesWhole();
   CombatCrashGuardKeysDefaultAsShippedAndTheFileDecides();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();

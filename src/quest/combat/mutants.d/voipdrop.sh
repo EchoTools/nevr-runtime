@@ -4,19 +4,14 @@ F=src/quest/combat/voipdrop.cpp
 T=src/quest/combat/voipdrop_targets.h
 H=src/quest/combat/voipdrop.h
 # the decision: a head of -1 means the next packet needs a page; a page that cannot be had drops the packet
-runm vd_head_cmp        $F "s/  if (ok \&\& head == -1) {/  if (ok \&\& head != -1) {/"
-runm vd_head_any        $F "s/  if (ok \&\& head == -1) {/  if (ok \&\& (head == -1 || head != -1)) {/"
+runm vd_head_cmp        $F "s/  if (head == -1) {  \/\/ the next packet needs a fresh page/  if (head != -1) {  \/\/ the next packet needs a fresh page/"
+runm vd_head_any        $F "s/  if (head == -1) {  \/\/ the next packet needs a fresh page/  if (head == -1 || head != -1) {  \/\/ the next packet needs a fresh page/"
 runm vd_never_drops     $F "s/      if (!PageAvailable(cs, page)) {/      if (page == 0xdeadbeef \&\& !PageAvailable(cs, page)) {/"
 runm vd_always_drops    $F "s/      if (!PageAvailable(cs, page)) {/      if (!PageAvailable(cs, page) || true) {/"
 runm vd_drop_inverted   $F "s/      if (!PageAvailable(cs, page)) {/      if (PageAvailable(cs, page)) {/"
 runm vd_unread_page     $F "s/    if (ok) {\$/    if (true) {/"
 runm vd_drop_calls_real $F "s/        LogDrop(page, g_dropped.fetch_add(1, std::memory_order_relaxed) + 1);/        LogDrop(page, g_dropped.fetch_add(1, std::memory_order_relaxed) + 1);\n        original(self, handle, event, data, bytes);/"
 # the receiver's layout and the allocator's vtable
-runm vd_head_off        $T "s/kFreeHead = kTable + 0x50/kFreeHead = kTable + 0x54/"
-runm vd_page_off        $T "s/kPageBytes = kTable + 0x64/kPageBytes = kTable + 0x60/"
-runm vd_block_off       $T "s/kPageBlock = kTable + 0x18/kPageBlock = kTable + 0x10/"
-runm vd_table_off       $T "s/kTable = 0x168/kTable = 0x160/"
-runm vd_alloc_slot      $T "s/kVtAlloc = 0x10/kVtAlloc = 0x18/"
 runm vd_free_slot       $T "s/kVtFree = 0x38/kVtFree = 0x30/"
 # the probe: given back, the context switched and restored, doubt runs the game's function
 runm vd_no_give_back    $F "s/      if (page != nullptr) reinterpret_cast<FreeFn>(release)(allocator, page);/      (void)release;/"
@@ -53,10 +48,10 @@ runm vd_stats_dropped      $F "s/{\"dropped\", g_dropped.load(std::memory_order_
 # the install: the slot must hold ReceiveVoip itself, the pins gate it, the exports gate it, the build ID gates it
 runm vd_no_expected     $F "s/  target.expectedOriginal = reinterpret_cast<const void\*>(image.base + pins.fn);/  (void)pins.fn;/"
 runm vd_expected_wrong  $F "s/image.base + pins.fn);/image.base + pins.fn + 4);/"
-runm vd_pins_skipped    $F "s/  if (bad != kWordCount) {/  if (false) {/"
-runm vd_last_pin_skipped $F "s/FirstWordMismatch(image.base, kWords, kWordCount, \&have, \&readable)/FirstWordMismatch(image.base, kWords, kWordCount - 1, \&have, \&readable)/"
-runm vd_pin_unreadable_ok $F "s/readable ? sentinel::HexString(haveText, have) : \"unreadable\"/sentinel::HexString(haveText, have)/"
-runm vd_build_id_skipped $F "s/  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
+runm vd_pins_skipped        $F "s/  if (pinned::FirstFailure(image.base, \&kWordPins, 1, \&word)) return Refused(\"pinned_word_mismatch\", \&word);/  if (false) return Refused(\"pinned_word_mismatch\", \&word);/"
+runm vd_last_pin_skipped    $T "s/kWordPins = {kWords, kWordCount, nullptr, 0};/kWordPins = {kWords, kWordCount - 1, nullptr, 0};/"
+runm vd_pin_unreadable_ok $F "s/word->readable ? sentinel::HexString(haveText, word->have) : \"unreadable\"/sentinel::HexString(haveText, word->have)/"
+runm vd_build_id_skipped    $F "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
 runm vd_no_build_id_ok  $F "s/  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused(\"no_build_id\");//"
 runm vd_no_fn_check     $F "s/  if (fns.blockAllocator == nullptr || fns.currentPtr == nullptr || fns.setCurrent == nullptr || fns.current == nullptr) return Refused(\"export_missing\");//"
 runm vd_fn_check_first  $F "s/fns.blockAllocator == nullptr || fns.currentPtr == nullptr ||/fns.currentPtr == nullptr ||/"
@@ -78,12 +73,11 @@ runm vd_legacy_no_key   $F "s/{\"key\", \"combat.voipdrop\"}, //"
 # the pinned constants
 runm vd_slot_const      $T "s/kReceiveVoipSlotVaddr = 0x36c5d80ULL/kReceiveVoipSlotVaddr = 0x36c5d88ULL/"
 runm vd_real_const      $T "s/kReceiveVoipVaddr = 0x21c3238ULL/kReceiveVoipVaddr = 0x21c3230ULL/"
-runm vd_word_changed    $T "s/{0x2316504, 0xb9406661}/{0x2316504, 0xb9406660}/"
-runm vd_word_dropped    $T "s/    {0x23165a8, 0xb9005269},  \/\/ str w9,\[x19,#0x50\] (the free head)//"
+runm vd_word_changed    $T "s/0x2316504, 0xb9406661}/0x2316504, 0xb9406660}/"
 # The table row (combat_install.cpp) and the key (quest_config.cpp, nevr_config.cpp) are shared files, run against combat_install_test and quest_config_test.
 CI=src/quest/combat/combat_install.cpp
 runm vd_row_ignores_switch $CI "s/voipdrop::Install(g_config.voipdrop.on)/voipdrop::Install(true)/" quest-host-combat combat_install_test
-runm vd_row_end_null       $CI "s/\&VoipdropNormal, \&voipdrop::NoteEnd}/\&VoipdropNormal, nullptr}/" quest-host-combat combat_install_test
+runm vd_row_end_null       $CI "s/voipdrop, \&voipdrop::NoteEnd}/voipdrop, nullptr}/" quest-host-combat combat_install_test
 runm vd_row_early          $CI "s/Module{\"voipdrop\", nullptr, \&VoipdropNormal,/Module{\"voipdrop\", \&VoipdropNormal, nullptr,/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm vd_qc_default_off     $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r, false);/" quest-host-shared quest_config_test
@@ -93,3 +87,10 @@ runm vd_nc_known_key       src/core/nevr_config.cpp "s/\"fxtrail\", \"voipdrop\"
 # the free head is a plain load; a null receiver goes to the game's function untouched
 runm vd_plain_null_unchecked $F "s/  const std::int32_t head = self != nullptr ? \*reinterpret_cast<const volatile std::int32_t\*>(cs + kFreeHead) : 0;/  const std::int32_t head = *reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead);/"
 runm vd_plain_load_wrong_off $F "s/\*reinterpret_cast<const volatile std::int32_t\*>(cs + kFreeHead)/*reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead + 4)/"
+
+runm vd_row_member         $CI "s/\"combat.voipdrop\", \&nevr_quest::CombatConfig::voipdrop,/\"combat.voipdrop\", \&nevr_quest::CombatConfig::custctx,/" quest-host-combat combat_install_test
+runm vd_row_key            $CI "s/\"combat.voipdrop\", \&nevr_quest/\"combat.voipdrops\", \&nevr_quest/" quest-host-combat combat_install_test
+# voipdrop asks nothing of the scope: it is not a reader of the scope row
+runm vd_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.voipdrop.on;/" quest-host-combat combat_install_test
+# (kTable, kFreeHead, kPageBytes, kPageBlock and kVtAlloc are tied to the pinned words by static_assert in voipdrop_targets.h: a changed one fails the build)
+runm vd_vtfree_off        $T "s/kVtFree = 0x38;/kVtFree = 0x30;/"

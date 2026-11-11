@@ -12,36 +12,41 @@
  * at an address that was just read. Same thread as the stock loop; no lock, no allocation, no game call before the original.
  *
  * Arena (same APK). It writes the game's memory (the q15t plugin declared it altering gameplay, and upstream it was TEST ONLY), so it acts only while a
- * combat map or the combat lobby is loaded (level_scope.h: `InCombatMapOrLobby`; an Echo Arena level that is loaded wins over any combat level still
- * loaded during a transition; the lobbies arena players use never enable it). In an arena match the handler reads one atomic and calls the game's function:
- * no read, no write. Even in scope the clamp changes nothing for a healthy session, because it acts only when stamp > now. Known limits: the scope's
- * look lags a level change by up to scope::kLookEverySeconds (half a second), and a lobby-to-match switch from a lobby that is not the combat lobby is not
- * covered (not established whether the race happens there; `combat_peerclamp_clamped` and `combat_peerclamp_stats` on a headset would show it).
+ * combat map or the combat lobby is loaded (combat_scope.h `SeenCombatOrLobby`: a combat map or the combat lobby was loaded at the last look and no Echo Arena
+ * level was; an Echo Arena level that is loaded wins over any combat level still loaded during a transition; the lobbies arena players use never enable it).
+ * The handler tests that first and, outside it, calls the game's function with the same argument and does nothing else: no read, no write, no counter, no
+ * line, no level scan. The combat body is another function (`ActInScope`, not inlined), which first checks that the look is fresh (`scope::LookIsFresh()`: a
+ * tick that stopped makes a true answer false after kStaleAfterMs). Even in scope the clamp changes nothing for a healthy session, because it acts only
+ * when stamp > now. Known limits: the answer lags a level change by up to scope::kLookEveryMs (a quarter of a second), and a lobby-to-match switch from a
+ * lobby that is not the combat lobby is not covered (not established whether the race happens there; `combat_peerclamp_clamped` and
+ * `combat_peerclamp_stats` on a headset would show it).
  *
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.peerclamp` in
  * config.yaml (default true; upstream it was off unless asked, and the q15t plugin built it on). The plugin had no switch file for it.
  *
  * Install. The patched build ID, then the code words (peerclamp_targets.h), then the GOT word that holds &SAddress::kInvalid (read once; unreadable or
- * null refuses, `invalid_unreadable`), then the level scope's tick, then the JUMP_SLOT, which must hold CleanupPeers itself. A refused install leaves the
+ * null refuses, `invalid_unreadable`), then the JUMP_SLOT, which must hold CleanupPeers itself. The scope must be live first (`scope::Live()`: the `scope` row
+ * of the install table registered the refresh and the tick is installed; else `scope_not_live` and nothing is hooked). A refused install leaves the
  * game's calls as they are. It registers in combat::InstallNormal()'s table at the position the plugin installed it (last of the guards).
  *
  * Frequency (ADR 0038). CleanupPeers runs once per CBroadcaster::Receive (the rate per frame is not known: `combat_peerclamp_stats` counts it). Every call
- * pays the thunk's counter and one relaxed atomic load. In scope a call also pays 2 + (one per peer) process_vm_readv calls and the counters. Host numbers are
+ * pays the thunk's counter and one relaxed atomic load of the scope word. In scope a call also reads the clock (`LookIsFresh`), pays 2 + (one per peer)
+ * process_vm_readv calls and the counters. Host numbers are
  * in docs/quest/combat/peerclamp.md; not measured on a headset.
  *
  * Owner (ADR 0039). This file owns the last-received stamps of the broadcaster's peers, in a combat map or the combat lobby.
  *
  * Origin. The q15t plugin's `peerclamp.cpp`, written here (imported in #1591) on the reference build's `afk_peerclamp.cpp` (Ducky's echoquest-combat;
- * docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242: afk_peerclamp.cpp:1,39-44,50-62,55-57,83-116). The level scope is an addition
- * made in the move.
+ * docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242: afk_peerclamp.cpp:1,39-44,50-62,55-57,83-116). The scope is the runtime's
+ * (combat_scope.h, #2246).
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_peerclamp_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,
- *             "scope":"combat_map_or_lobby","consequence":".."}  Info for installed and off, Error for refused (+ pinned_word_mismatch: "pin","found","expected")
+ *             "scope":"combat_map_or_lobby","consequence":".."}  Info for installed and off, Error for refused (reason scope_not_live; pinned_word_mismatch adds "pin" (the word's name), "vaddr", "found", "expected")
  *   clamped  {"event":"combat_peerclamp_clamped","n":<clamp count>,"idx":<entry>,"stamp":"..","now":"..","diff":"..","sent":"..","consequence":".."}  Info,
  *            the first kClampLines of the process, then {"event":"combat_peerclamp_clamped_total","clamps":<n>} at every kTotalEvery-th clamp, at most kTotalLines
  *   capped   {"event":"combat_peerclamp_walk_capped","entries":4096,"consequence":".."}  Warning, once
- *   stats    {"event":"combat_peerclamp_stats","calls":<n>,"in_scope":<n>,"walked":<entries>,"clamped":<n>,"capped":<n>,"level_looks":<n>,"final":0|1,
+ *   stats    {"event":"combat_peerclamp_stats","calls":<n>,"in_scope":<n>,"walked":<entries>,"clamped":<n>,"capped":<n>,"final":0|1,
  *             "consequence":".."}  Debug every kStatsEvery in-scope calls, Info once at the end of the process when installed
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.

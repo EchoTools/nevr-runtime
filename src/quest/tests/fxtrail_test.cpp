@@ -1,16 +1,16 @@
 // Host test of fxtrail (src/quest/combat/fxtrail.cpp, #2178): the real handler through the thunk, installed by the real GotHook into the JUMP_SLOT
 // of a libr15 image built in memory, and called the way the game calls it: through the slot. The game side is a model: a fake
 // CParticleEffectCS laid out the way EffectTime reads it (index table at +0xc8, data array at +0xf8, 0x18 bytes an entry, the instance at +0x10)
-// and a stand-in for EffectTime itself. The level the guard is scoped by is the real scope, driven through its tick against a model of the game's
-// gamespace tables (combat_game_model.h).
+// and a stand-in for EffectTime itself. The level the guard is scoped by is the real combat level answer (combat_scope.h), refreshed through the tick's
+// callback against a model of the game's gamespace tables (combat_game_model.h, combat_scope_world.h).
 //
 // What it pins (the q15t plugin's fxtrail_test assertions, on the new fixture): an effect with no instance answers FLT_MAX with the game's function
 // called once with the same arguments, an effect with an instance answers the game's value, the lookup's stride and index mask, the ended line at
 // 1, 2, 4 ..., a failed read answers the game's value, a slot that does not hold EffectTime is refused and left alone with the pin named, every
 // code word flipped in turn refuses the install, and an unreadable word does too. New with the move: the guard acts only while a combat map is
 // loaded (an arena match, every lobby, a look that never ran and a combat map with an arena level also loaded read nothing and answer the game's
-// value), the switch, the legacy switch file (a Warning, never a switch), the missing image and build ID, the stats lines, and the tick table
-// that has no room.
+// value, with no read of the game's memory and no level scan, counted), a true answer older than kStaleAfterMs is not believed, the switch, the legacy
+// switch file (a Warning, never a switch), the missing image and build ID, the stats lines, and a scope that cannot change (the install is refused).
 //
 // Built and run by `just test-quest-combat`.
 
@@ -27,13 +27,16 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
-#include "quest/combat/level_scope.h"
-#include "quest/tests/combat_game_model.h"
+#include "quest/combat/safe_read.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
 #include "quest/tests/combat_pin_check.h"
+#include "quest/tests/combat_pins.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -42,13 +45,15 @@ namespace fx = nevr_quest::combat::fxtrail;
 namespace scope = nevr_quest::combat::scope;
 namespace tick = nevr_quest::combat::tick;
 namespace pinned = sentinel::pinned;
+namespace world = combat_test::scope_world;
 using combat_test::Has;
 using combat_test::Image;
 using combat_test::Line;
 using combat_test::Lines;
 using nevr_quest::combat::ModuleResult;
-using nevr_quest::combat::PinnedWord;
-namespace gm = combat_test::game_model;
+using nevr_quest::combat::pinned::Word;
+// The tables themselves, not the module's own `kWordPins` (which a bug could shorten): the test puts every pinned word in the image and flips every one.
+const nevr_quest::combat::pinned::Pins kAllWords = {fx::kWords, fx::kWordCount, nullptr, 0};
 
 using EffectTimeFn = float (*)(const void*, std::uint64_t);
 
@@ -104,30 +109,37 @@ bool Lookup(const char* module, sentinel::ElfImage* out) {
 // A libr15 holding the pinned words and the slot, which holds `slotWord` (the stand-in when 0).
 void Build(std::uintptr_t slotWord = 0) {
   g_pins = fx::kPins;
-  g_image.Build({{fx::kEffectTimeSymbol, g_pins.slot, false, false, g_pins.fn}});
+  g_image.Build({{fx::kEffectTimeSymbol, g_pins.slot, false, false, g_pins.fn}, world::TickRow()});
+  world::PutTickSlot(g_image);
   // base + fn is the stand-in's address: the real function is not in the image, so the pin holds the stand-in's offset.
   g_pins.fn = reinterpret_cast<std::uintptr_t>(&RealEffectTime) - g_image.Base();
-  for (const PinnedWord& w : fx::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  combat_test::PutPins(g_image, &kAllWords, 1);
   *g_image.Slot(g_pins.slot) = slotWord != 0 ? reinterpret_cast<void*>(slotWord) : reinterpret_cast<void*>(&RealEffectTime);
 }
 EffectTimeFn Slot() { return reinterpret_cast<EffectTimeFn>(*g_image.Slot(g_pins.slot)); }
 bool Hooked() { return *g_image.Slot(g_pins.slot) == fx::EffectTimeThunk::EntryAddress(); }
 bool SlotIsTheGames() { return *g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(&RealEffectTime); }
 
-void Begin() {
+// A fresh world: the module forgotten, a libr15 holding the pinned words, the slot and the tick's slot, and the capture started. `scopeLive`: the combat tick
+// is installed on the image and the scope row has registered the refresh (what the shipped table does before this module).
+std::atomic<std::uint64_t> g_reads{0};  // every SafeRead the module makes (safe_read.h's test counter)
+void Begin(bool scopeLive = true) {
   combat_test::StartCapture();
   fx::ResetForTest();
-  scope::ResetForTest();
-  tick::ResetForTest();
-  gm::ClearGame();
-  gm::Now() = 0.0;
+  world::Reset();
   Build();
+  g_reads = 0;
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  if (scopeLive) {
+    QCHECK(world::StartScope(&Lookup));
+    combat_test::Captured().clear();
+  }
 }
 void End() {
   fx::ResetForTest();
-  scope::ResetForTest();
-  tick::ResetForTest();
+  world::Reset();
   g_image.Drop();
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
   combat_test::StopCapture();
 }
 
@@ -142,7 +154,8 @@ ModuleResult Install(bool on = true, const char* legacyDir = nullptr) {
 void InstalledIn(std::initializer_list<const char*> levels) {
   Begin();
   QCHECK(Install().installed);
-  gm::SetLevels(levels);
+  world::Levels(levels);
+  g_reads = 0;
 }
 
 // ---- the tests ------------------------------------------------------------------------------------------------------------------
@@ -151,11 +164,11 @@ void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(fx::kEffectTimeSlotVaddr == 0x36e7b98 && fx::kEffectTimeVaddr == 0x16647e4);
   QCHECK(std::strcmp(fx::kEffectTimeSymbol, "_ZNK10NRadEngine17CParticleEffectCS10EffectTimeENS_18SCompactPoolHandleE") == 0);
   QCHECK(fx::kOffIndex == 0xc8 && fx::kOffData == 0xf8 && fx::kDataStride == 0x18 && fx::kOffInstance == 0x10);
-  static const PinnedWord kWant[11] = {{0x16647e4, 0xf9406408}, {0x16647e8, 0x92403c29}, {0x16647ec, 0xd37ef529}, {0x16647f0, 0x5280030a},
-                                       {0x16647f4, 0x78696908}, {0x16647f8, 0xf9407c09}, {0x1664800, 0x9b0a2508}, {0x1664804, 0xf9400908},
-                                       {0x1664808, 0xb4000068}, {0x166480c, 0xbd434100}, {0x1664810, 0xd65f03c0}};
+  static const Word kWant[11] = {{"", 0x16647e4, 0xf9406408}, {"", 0x16647e8, 0x92403c29}, {"", 0x16647ec, 0xd37ef529}, {"", 0x16647f0, 0x5280030a},
+                                 {"", 0x16647f4, 0x78696908}, {"", 0x16647f8, 0xf9407c09}, {"", 0x1664800, 0x9b0a2508}, {"", 0x1664804, 0xf9400908},
+                                 {"", 0x1664808, 0xb4000068}, {"", 0x166480c, 0xbd434100}, {"", 0x1664810, 0xd65f03c0}};
   QCHECK(fx::kWordCount == 11);
-  for (std::size_t i = 0; i < 11; ++i) QCHECK(fx::kWords[i].vaddr == kWant[i].vaddr && fx::kWords[i].word == kWant[i].word);
+  for (std::size_t i = 0; i < 11; ++i) QCHECK(fx::kWords[i].vaddr == kWant[i].vaddr && fx::kWords[i].word == kWant[i].word && fx::kWords[i].what[0] != '\0');
   QCHECK(combat_test::Fingerprint(fx::kWords, fx::kWordCount) == combat_test::Fingerprint(kWant, 11));
 }
 
@@ -163,7 +176,7 @@ void TheThunkTakesTheSlotAndTheLineSaysSo() {
   Begin();
   const ModuleResult r = Install();
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off);
-  QCHECK(Hooked() && tick::Count() == 1);  // the level scope's tick is registered, once
+  QCHECK(Hooked() && tick::Count() == 1);  // the scope row registered the refresh with the tick, once; the module adds no callback
   const std::vector<Line> install = Lines("combat_fxtrail_install");
   QCHECK(install.size() == 1U);
   if (install.size() == 1U) {
@@ -236,8 +249,8 @@ void AFailedReadKeepsTheGamesValue() {
   End();
 }
 
-// The scope: only a combat map. Each of these answers the game's value for an effect that has no instance, counts the call as not in a
-// combat map and writes no ended line.
+// The scope: only a combat map. Each of these answers the game's value for an effect that has no instance, counts the call as not in a combat map, writes
+// no ended line, and (arena pays nothing, by count) reads none of the game's memory and scans no level.
 void AnArenaMatchAndEveryOtherLevelKeepTheGamesValueAndReadNothing() {
   struct Case {
     const char* what;
@@ -256,29 +269,45 @@ void AnArenaMatchAndEveryOtherLevelKeepTheGamesValueAndReadNothing() {
   for (const Case& c : cases) {
     InstalledIn(c.levels);
     World(0, 0x1234);  // the effect has no instance: in a combat map this would be FLT_MAX
+    const std::uint32_t scans = nevr_quest::combat::level::ScanCalls();
     const float t = Slot()(g_cs, kHandle);
     if (t != kRealTime) std::fprintf(stderr, "fxtrail scope: %s answered %g\n", c.what, static_cast<double>(t));
     QCHECK(t == kRealTime && g_realCalls == 1);
     QCHECK(fx::CurrentStats().inCombat == 0 && fx::CurrentStats().ended == 0 && fx::CurrentStats().calls == 1);
     QCHECK(Lines("combat_fxtrail_ended").empty());
+    QCHECK(g_reads.load() == 0 && nevr_quest::combat::level::ScanCalls() == scans);  // nothing of the game's was read, no level was asked for
     End();
   }
   {  // reads nothing: the effect memory is unreadable and the call still answers the game's value without a counted read
     InstalledIn({"mpl_arena_a"});
-    QCHECK(Slot()(reinterpret_cast<const void*>(0x20), kHandle) == kRealTime && fx::CurrentStats().inCombat == 0);
+    QCHECK(Slot()(reinterpret_cast<const void*>(0x20), kHandle) == kRealTime && fx::CurrentStats().inCombat == 0 && g_reads.load() == 0);
     End();
   }
 }
 
-// Before the scope's first look, and when its tick never runs, nothing is ended (fail closed); the stats say the scope never looked.
+// Before the scope's first look nothing is ended (the answer starts false); the scope has not looked, and the module says nothing about it.
 void ABeforeTheFirstLookNothingIsEnded() {
   Begin();
   QCHECK(Install().installed);
+  g_reads = 0;  // the install's own pin reads are not the call's
   World(0, 0x1234);
-  QCHECK(Slot()(g_cs, kHandle) == kRealTime && fx::CurrentStats().ended == 0 && scope::Looks() == 0);
-  fx::NoteEnd();
-  const std::vector<Line> stats = Lines("combat_fxtrail_stats");
-  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"level_looks\":0"));
+  QCHECK(Slot()(g_cs, kHandle) == kRealTime && fx::CurrentStats().ended == 0 && scope::Looks() == 0 && g_reads.load() == 0);
+  End();
+}
+
+// A true answer older than kStaleAfterMs is not believed: the tick stopped, so the guard answers the game's value and reads nothing, and the first look
+// after the tick is back makes it act again.
+void ATrueAnswerFromAStoppedTickIsNotBelieved() {
+  InstalledIn({"mpl_combat_dyson"});
+  World(0, 0x1234);
+  QCHECK(Slot()(g_cs, kHandle) == FLT_MAX);  // fresh: acts
+  const std::uint64_t reads = g_reads.load();
+  world::TheTickStops();
+  QCHECK(scope::SeenCombatMap() && !scope::LookIsFresh());  // the word still says combat; its look is too old
+  QCHECK(Slot()(g_cs, kHandle) == kRealTime && fx::CurrentStats().ended == 1 && fx::CurrentStats().inCombat == 1);
+  QCHECK(g_reads.load() == reads);  // the stale call read nothing
+  world::Levels({"mpl_combat_dyson"});
+  QCHECK(Slot()(g_cs, kHandle) == FLT_MAX && fx::CurrentStats().ended == 2);
   End();
 }
 
@@ -287,17 +316,15 @@ void TheGuardFollowsTheLoadedLevelAtTheNextLook() {
   InstalledIn({"mpl_lobby_b_combat"});
   World(0, 0x1234);
   QCHECK(Slot()(g_cs, kHandle) == kRealTime);  // the combat lobby is not a map
-  gm::SetLevels({"mpl_lobby_b_combat", "mpl_combat_gauss"});  // the map loads: the lobby is still loaded
+  world::Levels({"mpl_lobby_b_combat", "mpl_combat_gauss"});  // the map loads: the lobby is still loaded
   QCHECK(Slot()(g_cs, kHandle) == FLT_MAX);
-  gm::SetLevels({"mpl_combat_gauss", "mpl_arena_b"});  // an arena level loads while the map is still there: arena wins
+  world::Levels({"mpl_combat_gauss", "mpl_arena_b"});  // an arena level loads while the map is still there: arena wins
   QCHECK(Slot()(g_cs, kHandle) == kRealTime);
-  gm::SetLevels({"mpl_combat_gauss"});
+  world::Levels({"mpl_combat_gauss"});
   QCHECK(Slot()(g_cs, kHandle) == FLT_MAX);
-  QCHECK(fx::CurrentStats().ended == 2 && scope::Looks() == 4);
-  // Between looks the answer is the last look's: the level changes in the game, the clock has not moved past the schedule.
-  gm::ClearGame();
-  gm::PutLevel(0, 0, EchoVR::CSymbol64Hash("mpl_arena_a"));
-  scope::Tick(gm::GameAddress());
+  QCHECK(fx::CurrentStats().ended == 2 && scope::Looks() == 4);  // one look per level change: the first load and the three moves
+  // Between looks the answer is the last look's: the level changes in the game, nothing has looked yet.
+  world::LevelsWithoutALook({"mpl_arena_a"});
   QCHECK(Slot()(g_cs, kHandle) == FLT_MAX && scope::Looks() == 4);
   End();
 }
@@ -358,7 +385,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
   Begin();
   const ModuleResult r = Install(false);
   QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0);
-  QCHECK(SlotIsTheGames() && tick::Count() == 0);
+  QCHECK(SlotIsTheGames() && tick::Count() == 1 && g_reads.load() == 0);  // the scope row's refresh is the only callback; the off module read nothing
   const std::vector<Line> install = Lines("combat_fxtrail_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
@@ -383,34 +410,51 @@ void AMissingOrOtherImageInstallsNothing() {
   const std::vector<Line> lines = Lines("combat_fxtrail_install");
   QCHECK(lines.size() == 4U);
   for (const Line& l : lines) QCHECK(l.level == sentinel::LogLevel::kError && Has(l.text, "\"result\":\"refused\""));
-  QCHECK(tick::Count() == 0);  // nothing was installed, so no tick was asked for
   End();
 }
 
-// 8. The pinned words: the table is pinned, every word flipped in turn (and an unreadable one) refuses the install before the slot or the tick.
+// 8. The pinned words: the table is pinned, every word flipped in turn (and an unreadable one) refuses the install before the slot is touched.
 void EveryPinnedWordGatesTheInstall() {
   Begin();
   combat_test::EveryPinIsRefused(
-      "combat_fxtrail_install", fx::kWords, fx::kWordCount, g_image,
+      "combat_fxtrail_install", kAllWords, g_image,
       [] {
         combat_test::StartCapture();
         fx::ResetForTest();
-        scope::ResetForTest();
-        tick::ResetForTest();
+        world::Reset();
         Build();
+        QCHECK(world::StartScope(&Lookup));
+        combat_test::Captured().clear();
       },
-      [] { return Install(); }, [] { return SlotIsTheGames() && tick::Count() == 0; });
+      [] { return Install(); }, [] { return SlotIsTheGames(); });
   End();
 }
 
-// The tick table has no room: the guard would never be in a combat map, so it is not installed.
-void ATickTableThatIsFullRefusesTheInstall() {
-  Begin();
-  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
-  const ModuleResult r = Install();
-  QCHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0 && SlotIsTheGames());
-  const std::vector<Line> install = Lines("combat_fxtrail_install");
-  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"tick_table_full\""));
+// A scope that cannot change refuses the install: the guard would never see a combat map, so no hook is put in (the same refusal as the other readers of the
+// answer). Either the scope row never registered its refresh, or the tick is not installed.
+void AScopeThatCannotChangeRefusesTheInstall() {
+  Begin(/*scopeLive=*/false);  // the tick is not installed, the scope row did not register
+  ModuleResult r = Install();
+  QCHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames());
+  std::vector<Line> install = Lines("combat_fxtrail_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"scope_not_live\""));
+  QCHECK(g_reads.load() == 0 && tick::Count() == 0);
+  End();
+  Begin(/*scopeLive=*/false);  // the tick is installed, but no row registered the refresh
+  QCHECK(tick::InstallAt(&Lookup));
+  r = Install();
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames() && !scope::Live());
+  End();
+  Begin(/*scopeLive=*/false);  // the tick table has no room, so the scope row cannot register
+  QCHECK(tick::InstallAt(&Lookup));
+  for (std::size_t i = tick::Count(); i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
+  QCHECK(!scope::InstallNormal().installed);
+  r = Install();
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && SlotIsTheGames());
+  End();
+  Begin(/*scopeLive=*/false);  // off by the key wins over a scope that cannot change: nothing is asked of the scope
+  r = Install(false);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0);
   End();
 }
 
@@ -432,7 +476,7 @@ void TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd() {
   Slot()(g_cs, kHandle);
   std::vector<Line> stats = Lines("combat_fxtrail_stats");
   QCHECK(stats.size() == 1U && stats[0].level == sentinel::LogLevel::kDebug && Has(stats[0].text, "\"final\":0") &&
-         Has(stats[0].text, "\"calls\":16384,\"in_combat\":16384,\"ended\":0,\"level_looks\":1"));
+         Has(stats[0].text, "\"calls\":16384,\"in_combat\":16384,\"ended\":0,\"final\":0"));
   fx::NoteEnd();
   stats = Lines("combat_fxtrail_stats");
   QCHECK(stats.size() == 2U && stats[1].level == sentinel::LogLevel::kInfo && Has(stats[1].text, "\"final\":1"));
@@ -454,13 +498,14 @@ int main() {
   AFailedReadKeepsTheGamesValue();
   AnArenaMatchAndEveryOtherLevelKeepTheGamesValueAndReadNothing();
   ABeforeTheFirstLookNothingIsEnded();
+  ATrueAnswerFromAStoppedTickIsNotBelieved();
   TheGuardFollowsTheLoadedLevelAtTheNextLook();
   ASlotThatDoesNotHoldEffectTimeIsRefusedAndLeftAlone();
   TheLegacySwitchFileIsOnlyToldAbout();
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();
-  ATickTableThatIsFullRefusesTheInstall();
+  AScopeThatCannotChangeRefusesTheInstall();
   ASecondInstallDoesNothing();
   TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd();
   if (quest_test::Failures() != 0) {

@@ -27,6 +27,7 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
 #include "quest/tests/combat_pin_check.h"
+#include "quest/tests/combat_pins.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -38,7 +39,9 @@ using combat_test::Image;
 using combat_test::Line;
 using combat_test::Lines;
 using nevr_quest::combat::ModuleResult;
-using nevr_quest::combat::PinnedWord;
+using nevr_quest::combat::pinned::Word;
+// The tables themselves, not the module's own `kWordPins` (which a bug could shorten): the test puts every pinned word in the image and flips every one.
+const nevr_quest::combat::pinned::Pins kAllWords = {vd::kWords, vd::kWordCount, nullptr, 0};
 
 using RecvFn = void (*)(void*, std::uint64_t, const void*, const void*, std::uint32_t);
 
@@ -134,7 +137,7 @@ void Build(std::uintptr_t slotWord = 0) {
   g_image.Build({{vd::kReceiveVoipSymbol, g_pins.slot, false, false, g_pins.fn}});
   // base + fn is the stand-in's address: the real function is not in the image, so the pin holds the stand-in's offset.
   g_pins.fn = reinterpret_cast<std::uintptr_t>(&RealRecv) - g_image.Base();
-  for (const PinnedWord& w : vd::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  combat_test::PutPins(g_image, &kAllWords, 1);
   *g_image.Slot(g_pins.slot) = slotWord != 0 ? reinterpret_cast<void*>(slotWord) : reinterpret_cast<void*>(&RealRecv);
 }
 RecvFn Slot() { return reinterpret_cast<RecvFn>(*g_image.Slot(g_pins.slot)); }
@@ -178,11 +181,11 @@ void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(std::strcmp(vd::kCurrentPtrSymbol, "_ZN10NRadEngine14CMemoryContext10CurrentPtrEv") == 0);
   QCHECK(std::strcmp(vd::kSetCurrentSymbol, "_ZN10NRadEngine14CMemoryContext10SetCurrentEPNS_10CAllocatorE") == 0);
   QCHECK(std::strcmp(vd::kCurrentSymbol, "_ZN10NRadEngine14CMemoryContext7CurrentEv") == 0);
-  static const PinnedWord kWant[10] = {{0x21c3238, 0xd10203ff}, {0x21c3698, 0x9105a2a0}, {0x21c36b4, 0x97b5dab7}, {0xedcd30, 0xb0013f50},
-                                       {0xedcd34, 0xf946c211},  {0xedcd38, 0x91360210}, {0x23164d8, 0x91006016}, {0x2316504, 0xb9406661},
-                                       {0x2316508, 0xf9400908}, {0x23165a8, 0xb9005269}};
+  static const Word kWant[10] = {{"", 0x21c3238, 0xd10203ff}, {"", 0x21c3698, 0x9105a2a0}, {"", 0x21c36b4, 0x97b5dab7}, {"", 0xedcd30, 0xb0013f50},
+                                       {"", 0xedcd34, 0xf946c211},  {"", 0xedcd38, 0x91360210}, {"", 0x23164d8, 0x91006016}, {"", 0x2316504, 0xb9406661},
+                                       {"", 0x2316508, 0xf9400908}, {"", 0x23165a8, 0xb9005269}};
   QCHECK(vd::kWordCount == 10);
-  for (std::size_t i = 0; i < 10; ++i) QCHECK(vd::kWords[i].vaddr == kWant[i].vaddr && vd::kWords[i].word == kWant[i].word);
+  for (std::size_t i = 0; i < 10; ++i) QCHECK(vd::kWords[i].vaddr == kWant[i].vaddr && vd::kWords[i].word == kWant[i].word && vd::kWords[i].what[0] != '\0');
   QCHECK(combat_test::Fingerprint(vd::kWords, vd::kWordCount) == 0xa2a0b8aa8d6d97a8ULL);
 }
 
@@ -444,7 +447,7 @@ void AMissingOrOtherImageInstallsNothing() {
 void EveryPinnedWordGatesTheInstall() {
   Begin();
   combat_test::EveryPinIsRefused(
-      "combat_voipdrop_install", vd::kWords, vd::kWordCount, g_image, [] {
+      "combat_voipdrop_install", kAllWords, g_image, [] {
         combat_test::StartCapture();
         vd::ResetForTest();
         Build();

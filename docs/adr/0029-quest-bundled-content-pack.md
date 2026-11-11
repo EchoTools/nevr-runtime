@@ -112,10 +112,12 @@ line. A data step that failed or found no data (`kFailed`, `kMissing`) or ended 
 
 ### 4. Platform parity
 
-PC reads content packs from the nevr root through a plugin that serves them (ADR 0028, `docs/reference/content-packs.md`): a different
-path, host-config driven, with its own manifest kind. This record is the Quest data-store overlay and has no PC counterpart. The
-release manifest's `platform` for a pack that is a Quest APK asset is a release-signer matter (an `android-arm64` value) and is not
-this repository's.
+PC serves an installed content pack from the nevr root itself (`src/runtime/content/content_pack.h`, ADR 0028,
+`docs/reference/content-packs.md`): it cannot write the game install, so it hands the game the pack's files at the game's own
+file open and script load instead of placing them. The two share the pack's naming rules (`src/runtime/content/pack_rules.h`: the
+id, a plain file name, a lowercase digest), which `ParsePackJson` applies. This record is the Quest data-store overlay; it serves no
+script. The release manifest's `platform` for a pack that is a Quest APK asset is a release-signer matter (an `android-arm64`
+value) and is not this repository's.
 
 ## Not handled
 

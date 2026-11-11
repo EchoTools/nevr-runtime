@@ -147,6 +147,52 @@ class CheckRelease(unittest.TestCase):
         self.assertEqual(qb.check_release(release, self.base)["event"], "release_keeps_base")
 
 
+class CheckArena(unittest.TestCase):
+    """#2298: the arena APK is the store APK with the release's loader and no combat."""
+
+    STORE = ("AndroidManifest.xml", "lib/arm64-v8a/libr15.so", "lib/arm64-v8a/libovrplatformloader.so",
+             "lib/arm64-v8a/libovrplatformloader_orig.so", "lib/arm64-v8a/lib0123456789abcdef.so")
+
+    def make(self, extra=(), stamp=b"arena"):
+        path = pathlib.Path(tempfile.mkdtemp()) / "arena.apk"
+        self.addCleanup(shutil.rmtree, path.parent)
+        with zipfile.ZipFile(path, "w") as z:
+            for n in (*self.STORE, *extra):
+                z.writestr(n, f"bytes of {n}")
+            if stamp is not None:
+                z.writestr(qb.ARENA_STAMP_ENTRY, stamp)
+        return path
+
+    def refused(self, path):
+        with self.assertRaises(qb.Refused) as caught:
+            qb.check_arena(path)
+        return caught.exception
+
+    def test_a_store_apk_with_the_loader_and_the_arena_stamp_passes(self):
+        self.assertEqual(qb.check_arena(self.make())["event"], "arena_has_no_combat")
+
+    def test_each_combat_entry_is_refused_by_name(self):
+        for entry in (*qb.REFERENCE_ENTRIES, "lib/arm64-v8a/libq15t.so", "lib/arm64-v8a/libnevr_plugin_manifest.so"):
+            with self.subTest(entry=entry):
+                refusal = self.refused(self.make(extra=(entry,)))
+                self.assertEqual(refusal.event, "arena_has_combat_entries")
+                self.assertEqual(refusal.fields["entries"], [entry])
+
+    def test_a_stamp_other_than_arena_or_none_is_refused(self):
+        for stamp in (None, b"", b"combat", b"q15t", b"Arena", b"arena\n"):
+            with self.subTest(stamp=stamp):
+                self.assertEqual(self.refused(self.make(stamp=stamp)).event, "arena_stamp_wrong")
+
+    def test_the_command_line_prints_one_json_line_either_way(self):
+        good, bad = self.make(), self.make(extra=("assets/afk_default_on.txt",))
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(qb.main(["check-arena", "--apk", str(good)]), 0)
+            self.assertEqual(qb.main(["check-arena", "--apk", str(bad)]), 1)
+        self.assertEqual(json.loads(out.getvalue())["event"], "arena_has_no_combat")
+        self.assertEqual(json.loads(err.getvalue())["event"], "arena_has_combat_entries")
+
+
 class Command(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp())

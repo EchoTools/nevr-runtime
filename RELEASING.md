@@ -57,7 +57,7 @@ time, under the owner's go.
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed,
   not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix and perf commits (a breaking change counts
   only on those types) since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release
-  versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never
+  versions"). Every other build stamps `<next>-dev.<N>+<sha>`, where `<next>` is the release the commits since the highest reachable tag lead to (`tools/next_release_version.py`), which sorts after that tag and before `<next>`; it is never
   released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
   **A patch release of an older version** is the one exception: when `main` has moved on and the fix has to reach players
@@ -263,12 +263,22 @@ checks (static initializers, emulated thread-local storage, the pinned libr15 bu
 pool are not a library: the sentinel sets them in its own early combat step (`src/quest/combat/heaps.h`), before `android_main` reads them, so neither APK
 packages an early plugin. The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages the same library.
 Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
-`combat` for the combat APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
+`combat` for the combat APK, `arena` for the arena APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
 (`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).
 No library is an argument to either recipe; a path in the place of the store APK is refused. The build needs an Android NDK r26d
 (`ANDROID_NDK_HOME`), a vcpkg checkout (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`) and
 `config/public-defaults.env`, as `just build-android` does, and the store APK it repacks (`NEVR_STORE_APK`, a file). The variant is published with
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. Neither APK is in the manifest through this document's flow.
+
+**The arena APK.** Each release also gets `nevr-runtime-vX.Y.Z-arena-quest.apk` (with its `.sha256`): the store APK repacked with
+the release's own loader and nothing else, so it has no combat (#2298). `just release-quest-arena-apk vX.Y.Z` builds it into
+`build/quest-release/vX.Y.Z/arena/`: no q15t library and no plugin manifest are built or packaged, and the repack stamps the word
+`arena`. `tools/quest_release_base.py check-arena` refuses the APK, before it is copied out, if it holds any entry of the reference
+build (`assets/afk_default_on.txt`, `libassetpatch.so`), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
+the q15t variant, it is **listed in the manifest**, as the kind `quest-apk-arena` beside the combat `quest-apk` (the reference
+build's repack, whose stamp is empty and which stays the default). `tools/publish_quest_apk.py vX.Y.Z --listed-variant arena`
+puts it up through the signer's `put-quest-apk --kind quest-apk-arena` and keeps the claim with `--extra-out`. The build needs the
+store APK (`NEVR_STORE_APK`) and `just configure`, not the NDK.
 
 ## The Quest half of a release
 
@@ -294,7 +304,7 @@ It runs from a clone of the repository that the publisher keeps for it, named by
    after it.
 4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
    public host, and the signer's claim is kept for the manifest.
-5. Dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
+5. Builds and puts up the arena APK (below), then dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
    `extra_artifacts` and `dry_run=false` (a live publish with no dry run, on the owner's standing word), and watches it.
    A run is accepted only when the jobs that publish (`Commit the manifest record`, `Publish to R2`, `A run that
    published nothing is red`) all concluded `success`; a green run with a skipped one is a failure.
@@ -309,6 +319,23 @@ the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token t
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
 cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default), `NEVR_QUEST_REFERENCE_APK` (the reference build the main APK is repacked from), `NEVR_STORE_APK` (a file: the store APK the variant is repacked from), and the Quest build's inputs: `ANDROID_NDK_HOME` (an NDK r26d directory, the one that holds `toolchains/llvm`; its `source.properties` must say `Pkg.Revision` 26.3.x), `VCPKG_ROOT` (a vcpkg checkout) and `config/public-defaults.env` in the clone the timer runs from. A missing one, a `NEVR_STORE_APK` that is not a file, a directory that is no r26d NDK or no vcpkg checkout, or a clone without the defaults file is a `refused` record that names it, before any step runs (the main release cannot be taken back, so the variant's inputs are checked before it is published), and the run exits 1. The R2 credential is never written into the log or into a command.
+
+**The arena APK in the run.** A tag's manifest is published once, so the arena claim goes into the same `extra_artifacts` as the
+main one. After `publish_apk` and before the dispatch the timer runs, in the tag's worktree and the build slice:
+
+- `arena_gate` runs `put-quest-apk -h` of the signer it built and looks for a `--kind` flag (the signer takes `--kind
+  quest-apk-arena`). A signer without it records `arena_skipped` with the reason `signer_lacks_kind`, no claim is added, and
+  the run is the run without an arena APK;
+- `arena_build` runs `just release-quest-arena-apk vX.Y.Z`; `arena_publish` runs `tools/publish_quest_apk.py vX.Y.Z
+  --listed-variant arena --extra-out <claim>`. The dispatch then carries both claims, the main one first;
+- `verify_live` also requires the live manifest to list the arena artifact with the kind `quest-apk-arena` and the claimed
+  size and sha256.
+
+From the gate on, a failure of an arena step blocks the dispatch: nothing is published to the manifest, and the `failed` record
+carries `part` `arena` and `reason` `arena_blocks_dispatch`. The reason is that a tag can be published only once, so
+publishing without the arena APK would lose it for that tag for good, while a blocked run can be fixed and run again (it counts
+toward the three tries). A tag the manifest already lists, or whose history has `main_complete`, cannot gain an entry, so those
+runs build no arena APK.
 
 **The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
 published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK

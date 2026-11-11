@@ -27,7 +27,8 @@ struct Word {
   const char* text;
   Variant variant;
 };
-constexpr Word kWords[] = {{"q15t", Variant::kQ15t}, {"combat", Variant::kCombat}, {"perf-probe", Variant::kPerfProbe}};
+constexpr Word kWords[] = {{"q15t", Variant::kQ15t}, {"combat", Variant::kCombat}, {"perf-probe", Variant::kPerfProbe},
+                        {"arena", Variant::kArena}};
 
 }  // namespace
 
@@ -37,6 +38,7 @@ const char* VariantName(Variant variant) noexcept {
     case Variant::kQ15t: return "q15t";
     case Variant::kCombat: return "combat";
     case Variant::kPerfProbe: return "perf-probe";
+    case Variant::kArena: return "arena";
   }
   return "none";
 }

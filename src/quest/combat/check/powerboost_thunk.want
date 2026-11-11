@@ -1,0 +1,22 @@
+bti c
+adrp x16, 0x0 <nevr_combat_pb_resolve_entry>
+ reloc R_AARCH64_ADR_PREL_PG_HI21 nevr_combat_pb_cone_ret
+add x16, x16, #0x0
+ reloc R_AARCH64_ADD_ABS_LO12_NC nevr_combat_pb_cone_ret
+ldar x16, [x16]
+cmp x30, x16
+b.eq 0x28 <nevr_combat_pb_resolve_entry+0x28>
+adrp x16, 0x0 <nevr_combat_pb_resolve_entry>
+ reloc R_AARCH64_ADR_PREL_PG_HI21 nevr_combat_pb_next
+add x16, x16, #0x0
+ reloc R_AARCH64_ADD_ABS_LO12_NC nevr_combat_pb_next
+ldar x16, [x16]
+br x16
+stp x29, x30, [sp, #-0x10]!
+mov x29, sp
+add x1, sp, #0x10
+mov x2, x24
+bl 0x38 <nevr_combat_pb_resolve_entry+0x38>
+ reloc R_AARCH64_CALL26 nevr_combat_pb_cone_at
+ldp x29, x30, [sp], #0x10
+ret

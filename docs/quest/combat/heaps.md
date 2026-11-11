@@ -87,7 +87,7 @@ phase. Do not rely on it.
 
 From the disassembly: each is a `mov wN,#0x20` immediate inside a function body
 (the CTableXT growth step, 32 -> 1; `res_heap_patch.py:14-22`), i.e. an instruction word on an executable page. The runtime writes
-no code page at run time (N151), and these cannot be reached through a data slot. They are not this module's: the table-step modules (`docs/quest/q15t/modules/meshstep.md`, `tablestep.md`, `shaderstep.md`, `instmodel.md`) own them. They are only wanted together with R06 (`--resource-table-step-1` beside `--resource-heap-mib=320`,
+no code page at run time (N151), and these cannot be reached through a data slot. They are not this module's: the table-step modules (`docs/quest/combat/meshstep.md`, `tablestep.md`, `shaderstep.md`, `instmodel.md`) own them. They are only wanted together with R06 (`--resource-table-step-1` beside `--resource-heap-mib=320`,
 `the source build's on-list`).
 
 ```
@@ -102,8 +102,8 @@ Query output (verbatim): `word | 196784c | 14048052 | mov | w20, #0x20`, `word |
 `fn | 19677cc | CGMeshListResource | 516`, `fn | 1a06f4c | ConstructInstance | 304`, `fn | 1a0707c | CreateInstance | 292`,
 `fn | 1a078dc | CGInstancedModelResource | 376`. Replacement encodings are the source's (`res_heap_patch.py:46-55`, `0x52800028`, `0x52800034`);
 `mov w8,#1` = `0x52800028` and `mov w20,#1` = `0x52800034` is consistent with the stock encodings (imm16 at bits 20:5: 0x20 -> 0x1).
-The 1a07958 row (CGInstancedModelResource) is not a word row any more: the instmodel module swaps its constructor's GOT word for a
-wrapper that sets the same eight steps to 1 (`docs/quest/q15t/modules/instmodel.md`, `Q15T_INSTMODEL`). The other three rows stay as above.
+The 1a07958 row (CGInstancedModelResource) is not a word row any more: the instmodel module hooks its constructor's JUMP_SLOT with a
+handler that sets the same eight steps to 1 in a combat match (`docs/quest/combat/instmodel.md`). The other three rows stay as above.
 Each function also has a stock sha256 in the source (`res_heap_patch.py:46-55`); I did not recompute those.
 
 ## 4. Logging (AGENTS.md)
@@ -112,8 +112,8 @@ One aggregate line per run, `combat_heaps_install` (Info; Error when a row was r
 `reason`, the counts (`swapped`, `refused`, `left`), the size the game reads through each slot after the step (`resource_mib`, `system_mib`, `gpu_mib`,
 `game_space_mib`: slot -> pointer -> u64, read back, not the intended value), the `device` and the consequence. One `combat_heaps_row` line per row:
 Debug when swapped, Warning for a stock-word mismatch (`reader_word_not_stock`, `rodata_not_stock`), Error for a refused write (the manager's status,
-for example `original_mismatch`, `executable_mapping`), Info for a row left alone by `combat.memsys: false`. The sentinel's `combat_install` line
-(phase `early`) carries `heaps=<status>`. No secret is logged. `src/quest/tests/heaps_test.cpp` asserts every line and field against the real code.
+for example `original_mismatch`, `executable_mapping`), Info for a row left alone by `combat.memsys: false`. The sentinel's `combat_install_module`
+record for `heaps` (phase `early`) carries its `outcome` and `status`. No secret is logged. `src/quest/tests/heaps_test.cpp` asserts every line and field against the real code.
 
 ## 5. Prediction (written before any headset run) and falsifiers
 

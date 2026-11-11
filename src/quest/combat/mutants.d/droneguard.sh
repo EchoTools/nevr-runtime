@@ -7,16 +7,12 @@ H=src/quest/combat/droneguard.h
 # stage 0: a null target is not followed, anything else is
 runm dg_no_null_check     $D "s/  if (s.target == 0) {/  if (false) {/"
 runm dg_always_skips      $D "s/  if (s.target == 0) {/  if (true) {/"
-runm dg_target_off        $T "s/kOffTarget = 0x140,/kOffTarget = 0x138,/"
 runm dg_handle_off        $T "s/kOffHandle = 0x148,/kOffHandle = 0x140,/"
 runm dg_flags_off         $T "s/kOffHandleFlags = 0x16c,/kOffHandleFlags = 0x168,/"
 runm dg_sys_off           $T "s/kOffHandleSys = 0x188,/kOffHandleSys = 0x180,/"
-runm dg_idx_off           $T "s/kOffHandleIdx = 0x190;/kOffHandleIdx = 0x18c;/"
 runm dg_arg_handle        $D "s/^  original(self, handle);\$/  original(self, 0);/"
 runm dg_arg_cs            $D "s/^  original(self, handle);\$/  original(nullptr, handle);/"
 runm dg_no_original       $D "s/^  original(self, handle);\$/  (void)original;/"
-runm dg_unread_skips      $D "/  if (!ReadSnap(cs, \&s)) {  \/\/ doubt/{n;s/    original(self, handle);/    (void)original;/}"
-runm dg_unread_ignored    $D "s/  if (!ReadSnap(cs, \&s)) {  \/\/ doubt: Follow decides.*/  (void)ReadSnap(cs, \&s); if (false) {/"
 # the state line
 runm dg_state_every       $D "s/  if (g_state.exchange(key, std::memory_order_relaxed) == key) return;/  g_state.store(key);/"
 runm dg_state_cap         $H "s/kStateLines = 16;/kStateLines = 17;/"
@@ -57,9 +53,9 @@ runm dg_idx_total_no_cap  $D "s/ \&\& g_idxTotals.fetch_add(1, std::memory_order
 runm dg_idx_uncounted     $D "s/const unsigned n = g_idxSkips.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned n = g_idxSkips.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm dg_idx_why_lost      $D "s/{{\"why\", why}, {\"cs\"/{{\"why\", why ? \"idx ffff\" : \"idx ffff\"}, {\"cs\"/"
 # stage 1 preconditions: its words, both functions, the exact addresses
-runm dg_s1_pins_skipped   $D "s/  if (bad != kIdxWordCount) {/  if (false) {/"
-runm dg_s1_last_pin       $D "s/FirstWordMismatch(base, kIdxWords, kIdxWordCount, \&have, \&readable)/FirstWordMismatch(base, kIdxWords, kIdxWordCount - 1, \&have, \&readable)/"
-runm dg_s1_unreadable_ok  $D "s/{\"found\", readable ? sentinel::HexString(haveText, have) : \"unreadable\"}/{\"found\", sentinel::HexString(haveText, have)}/"
+runm dg_s1_pins_skipped   $D "s/  if (pinned::FirstFailure(base, \&kIdxWordPins, 1, \&word)) {/  if (pinned::FirstFailure(base, \&kIdxWordPins, 0, \&word)) {/"
+runm dg_s1_last_pin       $T "s/kIdxWordPins = {kIdxWords, kIdxWordCount, nullptr, 0};/kIdxWordPins = {kIdxWords, kIdxWordCount - 1, nullptr, 0};/"
+runm dg_s1_unreadable_ok  $D "s/{\"found\", word.readable ? sentinel::HexString(haveText, word.have) : \"unreadable\"}/{\"found\", sentinel::HexString(haveText, word.have)}/"
 runm dg_s1_fns_check      $D "s/  if (fns == nullptr || fns->refresh == nullptr || fns->isValid == nullptr) {/  if (false) {/"
 runm dg_s1_fns_half       $D "s/ || fns->refresh == nullptr || fns->isValid == nullptr) {/) {/"
 runm dg_s1_quiet          $D "s/sentinel::LogLevel::kError, \"combat_droneguard_stage1\",/sentinel::LogLevel::kInfo, \"combat_droneguard_stage1\",/"
@@ -76,10 +72,10 @@ runm dg_slot_const        $T "s/kFollowSlotVaddr = 0x36f1218ULL/kFollowSlotVaddr
 runm dg_fn_const          $T "s/kFollowVaddr = 0x2149764ULL/kFollowVaddr = 0x2149760ULL/"
 runm dg_no_expected       $D "s/  target.expectedOriginal = reinterpret_cast<const void\*>(image.base + pins.fn);/  (void)pins.fn;/"
 runm dg_expected_wrong    $D "s/image.base + pins.fn);/image.base + pins.fn + 4);/"
-runm dg_pins_skipped      $D "s/  if (bad != kWordCount) {/  if (false) {/"
-runm dg_last_pin_skipped  $D "s/FirstWordMismatch(image.base, kWords, kWordCount, \&have, \&readable)/FirstWordMismatch(image.base, kWords, kWordCount - 1, \&have, \&readable)/"
-runm dg_pin_unreadable_ok $D "s/readable ? sentinel::HexString(haveText, have) : \"unreadable\", sentinel::HexString(wantText, kWords/sentinel::HexString(haveText, have), sentinel::HexString(wantText, kWords/"
-runm dg_build_id_skipped  $D "s/  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
+runm dg_pins_skipped        $D "s/  if (pinned::FirstFailure(image.base, \&kWordPins, 1, \&word)) return Refused(\"pinned_word_mismatch\", \&word);/  if (false) return Refused(\"pinned_word_mismatch\", \&word);/"
+runm dg_last_pin_skipped    $T "s/kWordPins = {kWords, kWordCount, nullptr, 0};/kWordPins = {kWords, kWordCount - 1, nullptr, 0};/"
+runm dg_pin_unreadable_ok $D "s/word->readable ? sentinel::HexString(haveText, word->have) : \"unreadable\"/sentinel::HexString(haveText, word->have)/"
+runm dg_build_id_skipped    $D "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
 runm dg_no_build_id_ok    $D "s/  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused(\"no_build_id\");//"
 runm dg_refusal_quiet     $D "s/sentinel::LogFields(sentinel::LogLevel::kError, \"combat_droneguard_install\",/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_droneguard_install\",/"
 runm dg_refused_stage1_on $D "s/  if (!installed \&\& !g_hook.installed()) g_idxOn.store(false, std::memory_order_relaxed);//"
@@ -98,7 +94,7 @@ runm dg_stats_idx_skips   $D "s/{\"idx_skips\", g_idxSkips.load(std::memory_orde
 # the table row (combat_install.cpp), the key and the schema
 CI=src/quest/combat/combat_install.cpp
 runm dg_row_ignores_switch $CI "s/droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on)/droneguard::Install(true, g_config.droneguardStage1.on)/" quest-host-combat combat_install_test
-runm dg_row_end_null      $CI "s/\&DroneguardNormal, \&droneguard::NoteEnd}/\&DroneguardNormal, nullptr}/" quest-host-combat combat_install_test
+runm dg_row_end_null      $CI "s/droneguard, \&droneguard::NoteEnd}/droneguard, nullptr}/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm dg_qc_default_off    $QC "s/  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);/  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r, false);/" quest-host-shared quest_config_test
 runm dg_qc_stage1_on      $QC "s/ReadCombatSwitch(cfg, kCombatDroneguardStage1Key, r, \/\*fallback=\*\/false)/ReadCombatSwitch(cfg, kCombatDroneguardStage1Key, r)/" quest-host-shared quest_config_test
@@ -109,3 +105,13 @@ runm dg_nc_known_key      src/core/nevr_config.cpp "s/\"droneguard\", \"dronegua
 # the fast path is plain loads; a null component goes to the game's function untouched
 runm dg_plain_null_unchecked $D "s/  if (cs == 0) return false;//"
 runm dg_plain_flags_wrong    $D "s/\*reinterpret_cast<const volatile std::uint8_t\*>(cs + kOffHandleFlags)/*reinterpret_cast<const volatile std::uint8_t*>(cs + kOffHandleFlags + 1)/"
+
+# the second stage is a row of its own: its key and its member (combat_install.cpp)
+runm dg_stage1_row_member  $CI "s/\"combat.droneguard_stage1\", \&nevr_quest::CombatConfig::droneguardStage1}/\"combat.droneguard_stage1\", \&nevr_quest::CombatConfig::droneguard}/" quest-host-combat combat_install_test
+runm dg_stage1_row_key     $CI "s/\"combat.droneguard_stage1\", \&nevr_quest/\"combat.droneguard_stage\", \&nevr_quest/" quest-host-combat combat_install_test
+runm dg_stage1_row_step    $CI "s/Module{\"droneguard_stage1\", nullptr, nullptr,/Module{\"droneguard_stage1\", nullptr, \&DroneguardNormal,/" quest-host-combat combat_install_test
+runm dg_row_member         $CI "s/\"combat.droneguard\", \&nevr_quest::CombatConfig::droneguard,/\"combat.droneguard\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
+runm dg_row_key            $CI "s/\"combat.droneguard\", \&nevr_quest/\"combat.droneguards\", \&nevr_quest/" quest-host-combat combat_install_test
+# droneguard asks nothing of the scope: it is not a reader of the scope row
+runm dg_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.droneguard.on;/" quest-host-combat combat_install_test
+# (kOffTarget and kOffHandleIdx are tied to the pinned words by static_assert in droneguard_targets.h: a changed one fails the build)

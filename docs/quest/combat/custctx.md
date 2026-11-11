@@ -71,9 +71,10 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
 
 - **Behaviour.** The destroy and Grow guards act in every level, on purpose: custctx guards the lobby cosmetics renderer, code arena shares, and those faults are crashes
   (a destroy racing a load, a draw table written through NULL); a scope by level would leave the lobby, where cosmetics load, unguarded. A destroy is dropped only when the game
-  would destroy a context it is not tracking, or one whose load or destroy is running. The pool refusal changes what `LoadMeshData` returns, so it is scoped (`level_scope.h`,
-  `InCombatMapOrLobby()`): in an arena match, in a lobby arena players use, with no level loaded and before the scope's first look, a load goes to the game's function unchanged
-  (the trap included) and no pool word is read. `custctx_test` runs 1, 63 and 0 free slots in each of those levels. **Which gate I chose:** the level gate, not a count of the
+  would destroy a context it is not tracking, or one whose load or destroy is running. The pool refusal changes what `LoadMeshData` returns, so it is scoped (`combat_scope.h`,
+  `SeenCombatOrLobby()`, believed only while its look is fresh, `LookIsFresh()`): in an arena match, in a lobby arena players use, with no level loaded, before the scope's first look and
+  after the combat tick stopped, a load goes to the game's function unchanged (the trap included) and, by count (`SetReadCounterForTest`, `level::ScanCalls()`), no pool word is read and no
+  level is scanned. When the scope cannot change (`scope::Live()` is false at install) the refusal never acts and the install line says `pool_refusal` `off_scope_not_live`; the destroy and Grow guards are installed all the same. `custctx_test` runs 1, 63 and 0 free slots in each of those levels. **Which gate I chose:** the level gate, not a count of the
   slots a load needs: the number of layouts one load registers is not readable from the game, and the trap fires only when no slot is free as a layout registers
   (`RegisterRTLayout` 0x19829bc: `ldr w3,[x8,#0x84]`, `ldr x9,[x8,#0x30]`, `sub x10,x3,x9`, `cmp x10,x3`, `b.cc` ok, else `brk`). In a combat map or lobby the margin of 64 free
   slots stays; it is a margin and is not read from the binary.
@@ -88,13 +89,13 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
 ## Gate: no file hash
 
 The gates are the patched build ID, the 34 pinned code words (read before any slot is touched) and each slot's own expected word. A word that differs
-is refused with one Error `combat_custctx_install` line (`reason` `pinned_word_mismatch`, `pin`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The
-pins are `kWords` in `custctx_targets.h`; `got_pinned_test` reads every one in the store libr15. `custctx_test` flips each in turn, reads one from an
+is refused with one Error `combat_custctx_install` line (`reason` `pinned_word_mismatch`, `pin` (the word's name), `vaddr`, `found`, `expected`; `found` is `unreadable` for a page that cannot be read). The
+pins are `kWords` in `custctx_targets.h` (`pinned::Word`; the pool offsets and the element size are tied to them by `static_assert`; checked by `pinned::FirstFailure`); `got_pinned_test` reads every one in the store libr15. `custctx_test` flips each in turn, reads one from an
 unreadable page, and pins the table by a fingerprint.
 
 ## Lines (sentinel log)
 
-- `combat_custctx_install`: `result` `installed|refused|off`, `reason`, the three hooks' status; Info for `installed` and `off` (reason `off_config`), Error for a refusal
+- `combat_custctx_install`: `result` `installed|refused|off`, `reason`, the three hooks' status, `pool_refusal` (`combat_map_or_lobby` or `off_scope_not_live`); Info for `installed` and `off` (reason `off_config`), Error for a refusal
   (`module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `export_missing`, `spare_alloc_failed`, `already_installed`, `slot_refused` with `which`, `hook`, `rollback`).
 - `combat_custctx_loads`, `combat_custctx_load_refused`, `combat_custctx_dropped`, `combat_custctx_drops_total`, `combat_custctx_draw_failure`,
   `combat_custctx_draw_failures_total`, `combat_custctx_full`: the capped lines above.

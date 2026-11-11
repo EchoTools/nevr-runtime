@@ -1,1 +1,0 @@
-On Quest, the parts of a converted combat map that have no lighting data are lit grey instead of black.

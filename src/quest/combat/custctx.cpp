@@ -9,8 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/legacy_switch.h"
-#include "quest/combat/level_scope.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -18,8 +18,6 @@
 namespace nevr_quest::combat::custctx {
 
 namespace {
-
-namespace pinned = sentinel::pinned;
 
 constexpr unsigned kMax = 256, kDropLines = 16, kTotalEvery = 50, kTotalLines = 16, kSpares = 4;
 constexpr unsigned kLoadsEvery = 32, kLoadsLines = 32;
@@ -123,6 +121,13 @@ bool RtLow(std::uint64_t* used, std::uint32_t* cap) noexcept {
   return fr < kLayoutMargin;
 }
 
+// Whether the pool is low, in a combat map or the combat lobby only: the answer is believed only while its look is fresh (combat_scope.h `LookIsFresh`: a tick
+// that stopped makes a true answer false after kStaleAfterMs). Not inlined into the handler: its reads would give the handler's arena path a frame.
+[[gnu::noinline]] bool PoolIsLowInScope(std::uint64_t* used, std::uint32_t* cap) noexcept {
+  if (!scope::LookIsFresh()) return false;
+  return RtLow(used, cap);
+}
+
 std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* model) noexcept {
   bool tracked = false;
   pthread_mutex_lock(&g_mu);
@@ -138,7 +143,7 @@ std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* m
   std::uint32_t cap = 0;
   // The pool refusal acts only while a combat map or the combat lobby is loaded; in an arena match the load reaches the game's function as it is,
   // and no pool word is read. (The trap fires only when no slot is free; the margin below is not read from the game.)
-  const bool low = scope::InCombatMapOrLobby() ? RtLow(&used, &cap) : false;
+  const bool low = scope::SeenCombatOrLobby() && PoolIsLowInScope(&used, &cap);
   const unsigned loads = g_loads.fetch_add(1, std::memory_order_relaxed) + 1;
   if (loads % kLoadsEvery == 0 && g_loadsLines.fetch_add(1, std::memory_order_relaxed) < kLoadsLines) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_loads",
@@ -273,11 +278,13 @@ NEVR_HOOK_RECORD(kLoadRecord, LoadThunk, &LoadHandler);
 NEVR_HOOK_RECORD(kDestroyRecord, DestroyThunk, &DestroyHandler);
 NEVR_HOOK_RECORD(kGrowRecord, GrowThunk, &GrowHandler);
 
-ModuleResult Refused(const char* token, const char* pin = nullptr, const char* found = nullptr, const char* expected = nullptr) noexcept {
-  if (pin != nullptr) {
+ModuleResult Refused(const char* token, const pinned::Failure* word = nullptr) noexcept {
+  if (word != nullptr) {
+    char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_custctx_install",
-                        {{"result", "refused"}, {"reason", token}, {"pin", pin}, {"found", found}, {"expected", expected},
-                         {"consequence", kRefusedConsequence}});
+                        {{"result", "refused"}, {"reason", token}, {"pin", word->what}, {"vaddr", sentinel::HexString(at, word->vaddr)},
+                         {"found", word->readable ? sentinel::HexString(haveText, word->have) : "unreadable"},
+                         {"expected", sentinel::HexString(wantText, word->want)}, {"consequence", kRefusedConsequence}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_custctx_install",
                         {{"result", "refused"}, {"reason", token}, {"consequence", kRefusedConsequence}});
@@ -337,20 +344,12 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
   }
   if (g_loadHook.installed() || g_destroyHook.installed() || g_growHook.installed()) return Refused("already_installed");
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded");
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded");
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id");
-  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
-  std::uint32_t have = 0;
-  bool readable = false;
-  const std::size_t bad = FirstWordMismatch(image.base, kWords, kWordCount, &have, &readable);
-  if (bad != kWordCount) {
-    char at[19];
-    char haveText[19];
-    char wantText[19];
-    return Refused("pinned_word_mismatch", sentinel::HexString(at, kWords[bad].vaddr),
-                   readable ? sentinel::HexString(haveText, have) : "unreadable", sentinel::HexString(wantText, kWords[bad].word));
-  }
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
+  pinned::Failure word;
+  if (pinned::FirstFailure(image.base, &kWordPins, 1, &word)) return Refused("pinned_word_mismatch", &word);
   Fns resolved{};
   if (fns != nullptr) {
     resolved = *fns;
@@ -384,11 +383,12 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
     const sentinel::GotStatus backLoad = RemoveOne<LoadThunk>(g_loadHook);
     return RefuseSlot("Grow", status, backDestroy != sentinel::GotStatus::kOk ? sentinel::GotStatusName(backDestroy) : sentinel::GotStatusName(backLoad));
   }
-  // The refusal needs the level scope; without its tick (the table is full) the refusal never acts and the two other guards still do.
-  const bool scoped = scope::Start();
+  // The refusal needs the combat level answer; when it cannot change (the tick or the scope row's refresh is not installed) the refusal never acts, and the two
+  // other guards, which act in every level, still do: the install says so.
+  const bool scoped = scope::Live();
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"load", "ok"}, {"destroy", "ok"}, {"grow", "ok"},
-                       {"pool_refusal", scoped ? "combat_map_or_lobby" : "off_no_tick"}, {"layout_margin", kLayoutMargin}, {"consequence", kInstalledConsequence}});
+                       {"pool_refusal", scoped ? "combat_map_or_lobby" : "off_scope_not_live"}, {"layout_margin", kLayoutMargin}, {"consequence", kInstalledConsequence}});
   return {true, "installed"};
 }
 

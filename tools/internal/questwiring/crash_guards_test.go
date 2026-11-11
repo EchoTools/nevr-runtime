@@ -8,37 +8,56 @@ import (
 )
 
 // #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and the q15t plugin installs on
-// none of their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test, level_scope_test) drive the
+// none of their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
 // behaviour; these pin what they cannot see: who owns each slot, the table's order, the scope each guard has in arena, the keys.
 
 type guard struct {
 	name    string
 	symbols []string // the dynsym names the module hooks
 	slots   []string // the JUMP_SLOT vaddrs, spelled as the plugin spelled them
-	scope   string   // the level_scope answer the handler asks, or "" when it acts in every level on purpose
+	scope   string   // the combat_scope answer the handler tests first, or "" when it acts in every level on purpose
 	handles int      // the GotHook handles the module declares (hook_budget.h)
 	row     string   // the registration table row, up to the end step
 }
 
 var guards = []guard{
-	{"fxtrail", []string{"CParticleEffectCS10EffectTime"}, []string{"0x36e7b98"}, "scope::InCombatMap()", 1,
-		`Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd,`},
+	{"fxtrail", []string{"CParticleEffectCS10EffectTime"}, []string{"0x36e7b98"}, "scope::SeenCombatMap()", 1,
+		`Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd}`},
 	{"voipdrop", []string{"CR15NetVoipReceiverCS11ReceiveVoip"}, []string{"0x36c5d80"}, "", 1,
-		`Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd,`},
+		`Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd}`},
 	{"custctx", []string{"CR15NetCustomizationRenderer12LoadMeshData", "CR15NetCustomizationRenderer14DestroyContext", "SR15NetCustomDrawDataEE4GrowEv"},
-		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "scope::InCombatMapOrLobby()", 3, `Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd,`},
+		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "scope::SeenCombatOrLobby()", 3,
+		`Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd}`},
 	{"droneguard", []string{"CR15NetFollowPlayerCS6Follow"}, []string{"0x36f1218"}, "", 1,
-		`Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd,`},
-	{"peerclamp", []string{"SBroadcasterData12CleanupPeers"}, []string{"0x36efad8"}, "scope::InCombatMapOrLobby()", 1,
-		`Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd,`},
+		`Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd}`},
+	{"peerclamp", []string{"SBroadcasterData12CleanupPeers"}, []string{"0x36efad8"}, "scope::SeenCombatOrLobby()", 1,
+		`Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd}`},
 }
 
-func TestTheGuardsAreNormalPhaseRowsInThePluginsOrderAfterTheRefreshRate(t *testing.T) {
+func TestTheGuardsAreNormalPhaseRowsInThePluginsOrderAfterTheScopeRowAndSendguardAndBeforeThePfxDecisions(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	prev := `Module{"refresh_rate", nullptr, &RefreshRateNormal}`
+	before(t, table, `Module{"scope", nullptr, &ScopeNormal}`, guards[0].row)
+	prev := `Module{"sendguard", nullptr, &SendguardNormal,`
 	for _, g := range guards {
 		before(t, table, prev, g.row)
 		prev = g.row
+	}
+	// droneguard's second stage is a switch of its own: a row with no step, so the switch is one generated combat_config_switch record
+	stage1 := `Module{"droneguard_stage1", nullptr, nullptr, "combat.droneguard_stage1", &nevr_quest::CombatConfig::droneguardStage1}`
+	before(t, table, guards[3].row, stage1)
+	before(t, table, stage1, guards[4].row)
+	before(t, table, guards[4].row, `Module{"pfx", nullptr, &PfxNormal}`)
+	// the scope's refresh is on while one of the readers of its answer is on, and these three are readers
+	scopeRow := body(t, table, "ModuleResult ScopeNormal()")
+	for _, want := range []string{"g_config.fxtrail.on", "g_config.peerclamp.on", "g_config.custctx.on"} {
+		if !strings.Contains(scopeRow, want) {
+			t.Errorf("ScopeNormal() does not list %s as a reader of the combat level answer", want)
+		}
+	}
+	for _, not := range []string{"g_config.voipdrop.on", "g_config.droneguard.on"} {
+		if strings.Contains(scopeRow, not) {
+			t.Errorf("ScopeNormal() lists %s, which asks nothing of the combat level answer", not)
+		}
 	}
 	// each row reads its own switch from the configuration the constructor's step handed over
 	for _, want := range []string{
@@ -100,10 +119,10 @@ func TestOnlyFxtrailAndPeerclampAreScopedByLevelAndTheOthersActInEveryLevelOnPur
 	for _, g := range guards {
 		code := stripComments(read(t, "src/quest/combat/"+g.name+".cpp"))
 		header := read(t, "src/quest/combat/"+g.name+".h")
-		asks := strings.Contains(code, "level_scope.h") || strings.Contains(code, "scope::")
+		asks := strings.Contains(code, "combat_scope.h") || strings.Contains(code, "scope::")
 		if g.scope == "" {
 			if asks {
-				t.Errorf("%s is a crash-only guard and acts in every level, but it asks the level scope", g.name)
+				t.Errorf("%s is a crash-only guard and acts in every level, but it asks the combat level answer", g.name)
 			}
 			if !strings.Contains(strings.ToLower(header), "every level") {
 				t.Errorf("%s.h does not say that it acts in every level and why", g.name)
@@ -116,13 +135,25 @@ func TestOnlyFxtrailAndPeerclampAreScopedByLevelAndTheOthersActInEveryLevelOnPur
 		if !strings.Contains(header, "Arena") {
 			t.Errorf("%s.h has no Arena paragraph", g.name)
 		}
-		// the scope is asked before any game memory is read in the handler that asks it: arena pays one atomic load and reads nothing
+		// the scope is asked before any game memory is read in the handler that asks it: arena pays one relaxed load and reads nothing
 		at := strings.Index(code, g.scope)
 		start := strings.LastIndex(code[:at], "\n}\n") // the end of the function before the handler: helpers above it are not the handler
 		for _, needle := range []string{"SafeRead(", "SafeRead<"} {
 			if r := strings.Index(code[start+1:at], needle); r >= 0 {
-				t.Errorf("%s reads game memory (%s) in the handler before it asks the level scope", g.name, needle)
+				t.Errorf("%s reads game memory (%s) in the handler before it asks the combat level answer", g.name, needle)
 			}
+		}
+		// the answer is believed only while its look is fresh: the combat body, a separate function, begins with LookIsFresh
+		if !strings.Contains(code, "scope::LookIsFresh()") {
+			t.Errorf("%s.cpp never checks that the look is fresh", g.name)
+		}
+	}
+	// the two guards that need the answer to change refuse the install when it cannot (hudmeter's shape)
+	for _, name := range []string{"fxtrail", "peerclamp"} {
+		code := stripComments(read(t, "src/quest/combat/"+name+".cpp"))
+		before(t, code, "scope::Live()", "lookup(sentinel::pinned::kLibR15")
+		if !strings.Contains(code, `"scope_not_live"`) {
+			t.Errorf("%s.cpp does not refuse with scope_not_live", name)
 		}
 	}
 }
@@ -166,14 +197,23 @@ func TestEachGuardHasItsHookBudgetRowAndNoSwitchFileIsRead(t *testing.T) {
 	}
 }
 
-// custctx's destroy and Grow guards stop crashes and act in every level; only its pool refusal (a changed result of LoadMeshData) is scoped.
+// custctx's destroy and Grow guards stop crashes and act in every level; only its pool refusal (a changed result of LoadMeshData) is scoped, and it is
+// tested before any pool word is read.
 func TestCustctxScopesTheRefusalAndNotTheDestroyAndGrowGuards(t *testing.T) {
 	code := stripComments(read(t, "src/quest/combat/custctx.cpp"))
 	for _, sig := range []string{"std::uint64_t DestroyHandler(", "GrowHandler("} {
 		if b := body(t, code, sig); strings.Contains(b, "scope::") {
-			t.Errorf("%s asks the level scope: that guard acts in every level", sig)
+			t.Errorf("%s asks the combat level answer: that guard acts in every level", sig)
 		}
 	}
 	load := body(t, code, "std::uint64_t LoadHandler(")
-	before(t, load, "scope::InCombatMapOrLobby()", "RtLow(")
+	before(t, load, "scope::SeenCombatOrLobby()", "PoolIsLowInScope(")
+	if strings.Contains(load, "RtLow(") {
+		t.Error("LoadHandler reads the pool itself: it must go through PoolIsLowInScope, which checks the look is fresh")
+	}
+	// the install does not depend on the scope: the destroy and Grow guards install when the answer cannot change
+	install := body(t, code, "ModuleResult InstallAt(")
+	if strings.Contains(install, `"scope_not_live"`) {
+		t.Error("custctx refuses the install when the scope is not live: its destroy and Grow guards need no level")
+	}
 }

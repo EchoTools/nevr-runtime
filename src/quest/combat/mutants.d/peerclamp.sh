@@ -9,17 +9,9 @@ runm pc_stamp_ge          $P "s/ != 0 \&\& stamp > now) {/ != 0 \&\& stamp >= no
 runm pc_stamp_ne          $P "s/ != 0 \&\& stamp > now) {/ != 0 \&\& stamp != now) {/"
 runm pc_no_stamp_test     $P "s/ != 0 \&\& stamp > now) {/ != 0 \&\& stamp + 1 > 0) {/"
 runm pc_no_key_test       $P "s/if (std::memcmp(entry + (kOffKey - kOffNext), invalid, kKeyLen) != 0 \&\& stamp > now) {/if (entry[0] == entry[0] \&\& stamp > now) {/"
-runm pc_key_len           $T "s/kKeyLen = 0x80;/kKeyLen = 0x7f;/"
 # the layout the stock loop reads
-runm pc_stride            $T "s/kStride = 0x948,/kStride = 0x940,/"
-runm pc_head_off          $T "s/kOffHead = 0x554,/kOffHead = 0x550,/"
-runm pc_per_off           $T "s/kOffPerChunk = 0x560,/kOffPerChunk = 0x564,/"
-runm pc_chunks_off        $T "s/kOffChunks = 0x518,/kOffChunks = 0x510,/"
-runm pc_now_off           $T "s/kOffNow = 0x478,/kOffNow = 0x480,/"
+# (kStride, kOffHead, kOffPerChunk, kOffChunks, kOffNow, kOffNext, kOffKey, kOffStamp and kKeyLen are tied to the pinned words by static_assert in peerclamp_targets.h: a changed one fails the build)
 runm pc_sent_off          $T "s/kOffSent = 0x470;/kOffSent = 0x468;/"
-runm pc_key_off           $T "s/kOffKey = 0x18,/kOffKey = 0x10,/"
-runm pc_stamp_off         $T "s/kOffStamp = 0x228;/kOffStamp = 0x220;/"
-runm pc_next_off          $T "s/kOffNext = 0x8,/kOffNext = 0xc,/"
 runm pc_end_marker        $T "s/kEnd = 0xffffffffU;/kEnd = 0xfffffffeU;/"
 # the one write
 runm pc_no_write          $P "s/      \*reinterpret_cast<std::uint64_t\*>(e + kOffStamp) = now;/      (void)now;/"
@@ -47,9 +39,9 @@ runm pc_original_arg      $P "s/^  original(bd);\$/  original(nullptr);/"
 runm pc_original_first     $P "/^  Clamp(reinterpret_cast<std::uintptr_t>(bd));/{N;N;s/\(.*\)\n\(.*\)\n\(.*\)/\3\n\1\n\2/}"
 runm pc_out_of_scope_no_original $P "s/^    original(bd);\$/    (void)original;/"
 # the scope: a combat map or the combat lobby
-runm pc_scope_ignored     $P "s/  if (!scope::InCombatMapOrLobby()) {/  if (false) {/"
-runm pc_scope_inverted    $P "s/  if (!scope::InCombatMapOrLobby()) {/  if (scope::InCombatMapOrLobby()) {/"
-runm pc_scope_map_only    $P "s/  if (!scope::InCombatMapOrLobby()) {/  if (!scope::InCombatMap()) {/"
+runm pc_scope_ignored       $P "s/  if (!scope::SeenCombatOrLobby()) {/  if (false) {/"
+runm pc_scope_inverted      $P "s/  if (!scope::SeenCombatOrLobby()) {/  if (scope::SeenCombatOrLobby()) {/"
+runm pc_scope_map_only      $P "s/  if (!scope::SeenCombatOrLobby()) {/  if (!scope::SeenCombatMap()) {/"
 runm pc_scope_not_counted $P "s/g_inScope.fetch_add(1, std::memory_order_relaxed) + 1;/g_inScope.fetch_add(0, std::memory_order_relaxed) + 1;/"
 # the clamp lines
 runm pc_lines             $H "s/kClampLines = 16;/kClampLines = 17;/"
@@ -68,38 +60,33 @@ runm pc_stats_every_wrong $H "s/kStatsEvery = 4096;/kStatsEvery = 2048;/"
 runm pc_stats_final_never $P "s/  if (g_hook.installed()) LogStats(true);/  (void)g_hook;/"
 runm pc_stats_final_always $P "s/  if (g_hook.installed()) LogStats(true);/  LogStats(true);/"
 runm pc_stats_final_debug $P "s/final ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, \"combat_peerclamp_stats\"/sentinel::LogLevel::kDebug, \"combat_peerclamp_stats\"/"
-runm pc_stats_looks       $P "s/{\"level_looks\", scope::Looks()}/{\"level_looks\", 0}/"
 runm pc_stats_clamped     $P "s/{\"clamped\", g_clamped.load(std::memory_order_relaxed)},/{\"clamped\", 0},/"
 # the install: the slot must hold CleanupPeers itself, the pins gate it, the build ID gates it, kInvalid must be readable, the tick is needed
 runm pc_no_expected_word  $P "s/  target.expectedOriginal = reinterpret_cast<const void\*>(image.base + pins.fn);/  (void)pins.fn;/"
 runm pc_expected_wrong    $P "s/image.base + pins.fn);/image.base + pins.fn + 4);/"
-runm pc_pins_skipped      $P "s/  if (bad != kWordCount) {/  if (false) {/"
-runm pc_last_pin_skipped  $P "s/FirstWordMismatch(image.base, kWords, kWordCount, \&have, \&readable)/FirstWordMismatch(image.base, kWords, kWordCount - 1, \&have, \&readable)/"
-runm pc_pin_unreadable_ok $P "s/readable ? sentinel::HexString(haveText, have) : \"unreadable\"/sentinel::HexString(haveText, have)/"
-runm pc_build_id_skipped  $P "s/  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
+runm pc_pins_skipped        $P "s/  if (pinned::FirstFailure(image.base, \&kWordPins, 1, \&word)) return Refused(\"pinned_word_mismatch\", \&word);/  if (false) return Refused(\"pinned_word_mismatch\", \&word);/"
+runm pc_last_pin_skipped    $T "s/kWordPins = {kWords, kWordCount, nullptr, 0};/kWordPins = {kWords, kWordCount - 1, nullptr, 0};/"
+runm pc_pin_unreadable_ok $P "s/word->readable ? sentinel::HexString(haveText, word->have) : \"unreadable\"/sentinel::HexString(haveText, word->have)/"
+runm pc_build_id_skipped    $P "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
 runm pc_no_build_id_ok    $P "s/  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused(\"no_build_id\");//"
 runm pc_invalid_null      $P "s/ || invalid == 0) return Refused(\"invalid_unreadable\");/) return Refused(\"invalid_unreadable\");/"
 runm pc_invalid_unread_ok $P "s/  if (!SafeRead(image.base + static_cast<std::uintptr_t>(pins.invalid), \&invalid, sizeof(invalid)) || invalid == 0)/  if (false || invalid == 0)/"
 runm pc_invalid_not_kept  $P "s/  g_invalid.store(invalid, std::memory_order_relaxed);//"
-runm pc_no_scope_start    $P "s/  if (!scope::Start()) return Refused(\"tick_table_full\");.*/  (void)scope::Start();/"
-runm pc_scope_start_late  $P "s/  if (!scope::Start()) return Refused(\"tick_table_full\");.*//"
 runm pc_refusal_quiet     $P "s/sentinel::LogFields(sentinel::LogLevel::kError, \"combat_peerclamp_install\",/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_peerclamp_install\",/"
 runm pc_install_level     $P "s/sentinel::LogFields(installed ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, \"combat_peerclamp_install\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_peerclamp_install\"/"
 # the switch
 runm pc_off_ignored       $P "s/  if (!on) {/  if (!on \&\& false) {/"
 runm pc_off_not_off       $P "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
-runm pc_off_installs_tick $P "s/    return {false, \"off_config\", true};/    scope::Start(); return {false, \"off_config\", true};/"
 # the pinned constants
 runm pc_slot_const        $T "s/kCleanupSlotVaddr = 0x36efad8ULL;/kCleanupSlotVaddr = 0x36efad0ULL;/"
 runm pc_real_const        $T "s/kCleanupVaddr = 0x24ef9b0ULL;/kCleanupVaddr = 0x24ef9b8ULL;/"
 runm pc_invalid_const     $T "s/kInvalidWordVaddr = 0x371d538ULL;/kInvalidWordVaddr = 0x371d530ULL;/"
-runm pc_table_word        $T "s/{0x24ef9b0, 0x6db733ed}/{0x24ef9b0, 0x6db733ec}/"
-runm pc_table_last        $T "s/{0xf307ec, 0xd61f0220}/{0xf307f0, 0xd61f0220}/"
-runm pc_table_dropped     $T "s/    {0xf307ec, 0xd61f0220},   \/\/ br x17//"
+runm pc_table_word        $T "s/0x24ef9b0, 0x6db733ed}/0x24ef9b0, 0x6db733ec}/"
+runm pc_table_last        $T "s/0xf307ec, 0xd61f0220}/0xf307f0, 0xd61f0220}/"
 # the table row (combat_install.cpp): the switch is read, in the normal phase, with an end step
 CI=src/quest/combat/combat_install.cpp
 runm pc_row_ignores_switch $CI "s/peerclamp::Install(g_config.peerclamp.on)/peerclamp::Install(true)/" quest-host-combat combat_install_test
-runm pc_row_end_null      $CI "s/\&PeerclampNormal, \&peerclamp::NoteEnd}/\&PeerclampNormal, nullptr}/" quest-host-combat combat_install_test
+runm pc_row_end_null      $CI "s/peerclamp, \&peerclamp::NoteEnd}/peerclamp, nullptr}/" quest-host-combat combat_install_test
 runm pc_row_early         $CI "s/Module{\"peerclamp\", nullptr, \&PeerclampNormal,/Module{\"peerclamp\", \&PeerclampNormal, nullptr,/" quest-host-combat combat_install_test
 # the key
 QC=src/quest/sentinel/quest_config.cpp
@@ -107,3 +94,16 @@ runm pc_qc_default_off    $QC "s/  r.config.combat.peerclamp = ReadCombatSwitch(
 runm pc_qc_key_typo       $QC "s/kCombatPeerclampKey = \"combat.peerclamp\";/kCombatPeerclampKey = \"combat.peerclamps\";/" quest-host-shared quest_config_test
 runm pc_qc_not_assigned   $QC "s/  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);/  (void)ReadCombatSwitch(cfg, kCombatPeerclampKey, r);/" quest-host-shared quest_config_test
 runm pc_nc_known_key      src/core/nevr_config.cpp "s/\"droneguard\", \"droneguard_stage1\", \"peerclamp\"}},/\"droneguard\", \"droneguard_stage1\"}},/" quest-host-shared quest_config_test
+
+# arena pays nothing, by count (the test counts SafeRead calls and level scans on every arena level): a read or a scan before the scope test is killed
+runm pc_reads_before_scope $P "s/^  if (!scope::SeenCombatOrLobby()) {/  { bool okk = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(bd), \&okk); }  if (!scope::SeenCombatOrLobby()) {/"
+runm pc_scan_before_scope  $P "s/^#include \"quest\/combat\/safe_read.h\"/#include \"quest\/combat\/safe_read.h\"\n#include \"quest\/combat\/combat_level.h\"/; s/^  if (!scope::SeenCombatOrLobby()) {/  (void)level::Scan(reinterpret_cast<std::uintptr_t>(bd));  if (!scope::SeenCombatOrLobby()) {/"
+# a true answer older than kStaleAfterMs is not believed
+runm pc_stale_believed     $P "s/  if (!scope::LookIsFresh()) {  \/\/ the tick stopped.*/  if (false) {/"
+# the scope must be able to change, or the hook is not installed
+runm pc_live_unchecked     $P "s/  if (!scope::Live()) return Refused(\"scope_not_live\");//"
+runm pc_live_after_pins    $P "s/  if (!scope::Live()) return Refused(\"scope_not_live\");/  (void)scope::Live();/"
+# the scope row is on while this guard is (combat_install.cpp ScopeNormal)
+runm pc_reader_unlisted    $CI "s/g_config.peerclamp.on || //" quest-host-combat combat_install_test
+runm pc_row_member         $CI "s/\"combat.peerclamp\", \&nevr_quest::CombatConfig::peerclamp,/\"combat.peerclamp\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
+runm pc_row_key            $CI "s/\"combat.peerclamp\", \&nevr_quest/\"combat.peerclamps\", \&nevr_quest/" quest-host-combat combat_install_test

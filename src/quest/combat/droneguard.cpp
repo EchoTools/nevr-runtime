@@ -14,8 +14,6 @@ namespace nevr_quest::combat::droneguard {
 
 namespace {
 
-namespace pinned = sentinel::pinned;
-
 sentinel::GotHook g_hook;
 
 constexpr std::size_t kSpan = kOffHandleIdx + 4 - kOffTarget;  // one read covers every field the guard looks at
@@ -158,11 +156,13 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
 
 NEVR_HOOK_RECORD(kFollowRecord, FollowThunk, &FollowHandler);
 
-ModuleResult Refused(const char* token, const char* pin = nullptr, const char* found = nullptr, const char* expected = nullptr) noexcept {
-  if (pin != nullptr) {
+ModuleResult Refused(const char* token, const pinned::Failure* word = nullptr) noexcept {
+  if (word != nullptr) {
+    char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_droneguard_install",
-                        {{"result", "refused"}, {"reason", token}, {"pin", pin}, {"found", found}, {"expected", expected},
-                         {"consequence", kRefusedConsequence}});
+                        {{"result", "refused"}, {"reason", token}, {"pin", word->what}, {"vaddr", sentinel::HexString(at, word->vaddr)},
+                         {"found", word->readable ? sentinel::HexString(haveText, word->have) : "unreadable"},
+                         {"expected", sentinel::HexString(wantText, word->want)}, {"consequence", kRefusedConsequence}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_droneguard_install",
                         {{"result", "refused"}, {"reason", token}, {"consequence", kRefusedConsequence}});
@@ -172,17 +172,13 @@ ModuleResult Refused(const char* token, const char* pin = nullptr, const char* f
 
 // Stage 1's preconditions: its own words, then both engine functions. Returns the stage-1 state token and writes the stage-1 line.
 const char* PrepareStageOne(std::uintptr_t base, const EngineFns* fns) noexcept {
-  std::uint32_t have = 0;
-  bool readable = false;
-  const std::size_t bad = FirstWordMismatch(base, kIdxWords, kIdxWordCount, &have, &readable);
-  if (bad != kIdxWordCount) {
-    char at[19];
-    char haveText[19];
-    char wantText[19];
+  pinned::Failure word;
+  if (pinned::FirstFailure(base, &kIdxWordPins, 1, &word)) {
+    char at[19], haveText[19], wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_droneguard_stage1",
-                        {{"result", "null_half_only"}, {"reason", "pinned_word_mismatch"}, {"pin", sentinel::HexString(at, kIdxWords[bad].vaddr)},
-                         {"found", readable ? sentinel::HexString(haveText, have) : "unreadable"},
-                         {"expected", sentinel::HexString(wantText, kIdxWords[bad].word)},
+                        {{"result", "null_half_only"}, {"reason", "pinned_word_mismatch"}, {"pin", word.what}, {"vaddr", sentinel::HexString(at, word.vaddr)},
+                         {"found", word.readable ? sentinel::HexString(haveText, word.have) : "unreadable"},
+                         {"expected", sentinel::HexString(wantText, word.want)},
                          {"consequence", "the cache guard is off; only the null-target guard runs"}});
     return "null_half_only";
   }
@@ -227,22 +223,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, 
     return {false, "off_config", true};
   }
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded");
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded");
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id");
-  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
-  std::uint32_t have = 0;
-  bool readable = false;
-  const std::size_t bad = FirstWordMismatch(image.base, kWords, kWordCount, &have, &readable);
-  if (bad != kWordCount) {
-    char at[19];
-    char haveText[19];
-    char wantText[19];
-    return Refused("pinned_word_mismatch", sentinel::HexString(at, kWords[bad].vaddr),
-                   readable ? sentinel::HexString(haveText, have) : "unreadable", sentinel::HexString(wantText, kWords[bad].word));
-  }
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
+  pinned::Failure word;
+  if (pinned::FirstFailure(image.base, &kWordPins, 1, &word)) return Refused("pinned_word_mismatch", &word);
   const char* const stageOne = stage1 ? PrepareStageOne(image.base, fns) : "off";
-  sentinel::GotTarget target(pinned::kLibR15, kFollowSymbol, sentinel::RelocKind::kJumpSlot, pinned::LibR15PatchedBuildId(), pins.slot);
+  sentinel::GotTarget target(sentinel::pinned::kLibR15, kFollowSymbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(), pins.slot);
   target.expectedOriginal = reinterpret_cast<const void*>(image.base + pins.fn);
   target = target.Owned("combat/droneguard");
   FollowThunk::Arm(kFollowRecord);
@@ -264,7 +252,7 @@ ModuleResult Install(bool on, bool stage1) noexcept {
   if (on && stage1) {
     const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
     sentinel::ElfImage image;
-    haveFns = (lookup != nullptr ? lookup : &sentinel::FindLoadedImage)(pinned::kLibR15, &image) && ResolveEngineFns(image.base, &fns);
+    haveFns = (lookup != nullptr ? lookup : &sentinel::FindLoadedImage)(sentinel::pinned::kLibR15, &image) && ResolveEngineFns(image.base, &fns);
   }
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
   return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, kPins, on, stage1, haveFns ? &fns : nullptr);

@@ -68,16 +68,48 @@ using DestroyThunk = sentinel::CallbackThunk<DestroyTag, DestroySig>;
 using GrowThunk = sentinel::CallbackThunk<GrowTag, GrowSig>;
 
 // The code words the three guards were derived from (34 words).
-inline constexpr PinnedWord kWords[] = {
-    {0x1247d90, 0x6db82beb}, {0x1247d94, 0x6d0123e9}, {0x12492fc, 0xb40008a1}, {0x1249300, 0xf81b0ffa}, {0x1249348, 0xf9405668},
-    {0x12493f0, 0x912fe2a9}, {0x1249634, 0xaa1503e1}, {0x1249644, 0x97f29a73}, {0x1249650, 0x340000c0}, {0x124965c, 0x97f23071},
-    {0xef0010, 0xf0013ef0},  {0xef0014, 0xf9437a11},  {0xed5820, 0xb0013f70},  {0xed5824, 0xf9417e11},  {0x124893c, 0xf81d0ff6},
-    {0x1248948, 0xa942a009}, {0x1248950, 0xeb09011f}, {0x1248954, 0x540001a3}, {0x1248958, 0xf9401268}, {0x1248968, 0x9a883134},
-    {0x1248970, 0x5292e309}, {0x1248978, 0x97f3d6a2}, {0x1248984, 0xf9001669}, {0x1248998, 0xf9001a68}, {0x12489c8, 0x97f27a0a},
-    {0x11dc30c, 0xf81d0ff6}, {0x11dc310, 0xa90153f5}, {0x1248910, 0x2a1f03e0}, {0x18829c0, 0xb000f8d3}, {0x18829c4, 0xf9416268},
-    {0x18829c8, 0xb9408503}, {0x18829cc, 0xf9401909}, {0x18829d0, 0xcb09006a}, {0x18829d4, 0xeb03015f},
+inline constexpr pinned::Word kWords[] = {
+    {"LoadMeshData: stp d11, d10, [sp, #-0x80]!", 0x1247d90, 0x6db82beb},
+    {"LoadMeshData: stp d9, d8, [sp, #0x10]", 0x1247d94, 0x6d0123e9},
+    {"DestroyContext: cbz x1, <target>", 0x12492fc, 0xb40008a1},
+    {"DestroyContext: str x26, [sp, #-0x50]!", 0x1249300, 0xf81b0ffa},
+    {"DestroyContext: ldr x8, [x19, #0xa8]", 0x1249348, 0xf9405668},
+    {"DestroyContext: add x9, x21, #0xbf8", 0x12493f0, 0x912fe2a9},
+    {"CreateContext: mov x1, x21", 0x1249634, 0xaa1503e1},
+    {"CreateContext: bl <target>", 0x1249644, 0x97f29a73},
+    {"CreateContext: cbz w0, <target>", 0x1249650, 0x340000c0},
+    {"CreateContext: bl <target>", 0x124965c, 0x97f23071},
+    {"LoadMeshData PLT stub: adrp x16", 0xef0010, 0xf0013ef0},
+    {"LoadMeshData PLT stub: ldr x17, [x16, #0x6f0]", 0xef0014, 0xf9437a11},
+    {"DestroyContext PLT stub: adrp x16", 0xed5820, 0xb0013f70},
+    {"DestroyContext PLT stub: ldr x17, [x16, #0x2f8]", 0xed5824, 0xf9417e11},
+    {"Grow: str x22, [sp, #-0x30]!", 0x124893c, 0xf81d0ff6},
+    {"Grow: ldp x9, x8, [x0, #0x28]", 0x1248948, 0xa942a009},
+    {"Grow: cmp x8, x9", 0x1248950, 0xeb09011f},
+    {"Grow: b.lo <target>", 0x1248954, 0x540001a3},
+    {"Grow: ldr x8, [x19, #0x20]", 0x1248958, 0xf9401268},
+    {"Grow: csel x20, x9, x8, lo", 0x1248968, 0x9a883134},
+    {"Grow: mov w9, #0x9718", 0x1248970, 0x5292e309},
+    {"Grow: bl <target>", 0x1248978, 0x97f3d6a2},
+    {"Grow: str x9, [x19, #0x28]", 0x1248984, 0xf9001669},
+    {"Grow: str x8, [x19, #0x30]", 0x1248998, 0xf9001a68},
+    {"Grow: bl <target>", 0x12489c8, 0x97f27a0a},
+    {"Resize: str x22, [sp, #-0x30]!", 0x11dc30c, 0xf81d0ff6},
+    {"Resize: stp x21, x20, [sp, #0x10]", 0x11dc310, 0xa90153f5},
+    {"libr15: mov w0, wzr", 0x1248910, 0x2a1f03e0},
+    {"RegisterRTLayout: adrp x19", 0x18829c0, 0xb000f8d3},
+    {"RegisterRTLayout: ldr x8, [x19, #0x2c0]", 0x18829c4, 0xf9416268},
+    {"RegisterRTLayout: ldr w3, [x8, #0x84]", 0x18829c8, 0xb9408503},
+    {"RegisterRTLayout: ldr x9, [x8, #0x30]", 0x18829cc, 0xf9401909},
+    {"RegisterRTLayout: sub x10, x3, x9", 0x18829d0, 0xcb09006a},
+    {"RegisterRTLayout: cmp x10, x3", 0x18829d4, 0xeb03015f},
 };
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
+inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
+// The words carry the offsets the guards read: a changed offset in this file fails the build, a different libr15 fails the install.
+static_assert(pinned::LdrWOffset(kWords[30].word) == kPoolCapacityOffset, "the pinned load of the pool capacity does not carry kPoolCapacityOffset");
+static_assert(pinned::LdrXOffset(kWords[31].word) == kPoolFreeOffset, "the pinned load of the pool free count does not carry kPoolFreeOffset");
+static_assert(pinned::MovImmediate(kWords[20].word) == kDrawSize, "the pinned element size does not carry kDrawSize");
 
 // Each slot as a manager target on a libr15 loaded at `base`: it must hold the function itself (base + its address), so a word something else
 // already replaced is refused, not chained over.

@@ -11,8 +11,8 @@
  * restores the memory context; a failed request drops the packet (the game's function is not called). Every other packet, and every doubt (self null, the page size or the vtable unreadable or missing an entry), goes to the game's function with the same arguments. The probe is not a reservation:
  * it narrows the crash to a race, it does not close it.
  *
- * Arena (same APK). It acts in EVERY level, on purpose: it is a guard against a crash in voice code that arena and combat share, and a level scope would leave
- * the crash in place (and could lag a level change). It changes what the game does only where the game would otherwise fault: that packet is dropped. Every
+ * Arena (same APK). It acts in EVERY level, on purpose: it is a guard against a crash in voice code that arena and combat share, and a level answer (combat_scope.h) would leave
+ * the crash in place (and could lag a level change); it asks nothing of it and is not a reader of the scope row. It changes what the game does only where the game would otherwise fault: that packet is dropped. Every
  * other packet reaches the stock function with the same arguments, so an arena match with free memory sees no change. Cost in arena: per voice packet received,
  * one plain 4-byte load of the free head (about 3 ns added on the host; the game dereferences the receiver on every path that reaches the table, so the load is as safe as
  * the stock call) and two relaxed atomic increments in the common case (plus the thunk's own counter); the allocator probe (a never-faulting read of the page size,

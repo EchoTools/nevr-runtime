@@ -50,19 +50,26 @@ using ReceiveVoipThunk = sentinel::CallbackThunk<ReceiveVoipTag, ReceiveVoipSig>
 
 // The code words the guard was derived from: ReceiveVoip's entry, the table address and the FindOrCreate call, the PLT stub, and AllocPage's block,
 // page-size and request loads and the free-head store.
-inline constexpr PinnedWord kWords[] = {
-    {0x21c3238, 0xd10203ff},  // ReceiveVoip: sub sp,sp,#0x80
-    {0x21c3698, 0x9105a2a0},  // add x0,x21,#0x168 (the voice hash table)
-    {0x21c36b4, 0x97b5dab7},  // bl FindOrCreate
-    {0xedcd30, 0xb0013f50},   // PLT stub: adrp
-    {0xedcd34, 0xf946c211},   // ldr x17,[x16,#...]
-    {0xedcd38, 0x91360210},   // add x16,x16,#...
-    {0x23164d8, 0x91006016},  // AllocPage: add x22,x0,#0x18 (the allocator block)
-    {0x2316504, 0xb9406661},  // ldr w1,[x19,#0x64] (the page size)
-    {0x2316508, 0xf9400908},  // ldr x8,[x8,#0x10] (the request)
-    {0x23165a8, 0xb9005269},  // str w9,[x19,#0x50] (the free head)
+inline constexpr pinned::Word kWords[] = {
+    {"ReceiveVoip: sub sp, sp, #0x80", 0x21c3238, 0xd10203ff},
+    {"ReceiveVoip: add x0, x21, #0x168", 0x21c3698, 0x9105a2a0},
+    {"ReceiveVoip: bl <target>", 0x21c36b4, 0x97b5dab7},  // bl FindOrCreate
+    {"FindOrCreate PLT stub: adrp x16", 0xedcd30, 0xb0013f50},
+    {"FindOrCreate PLT stub: ldr x17, [x16, #0xd80]", 0xedcd34, 0xf946c211},   // ldr x17,[x16,#...]
+    {"FindOrCreate PLT stub: add x16, x16, #0xd80", 0xedcd38, 0x91360210},   // add x16,x16,#...
+    {"AllocPage: add x22, x0, #0x18", 0x23164d8, 0x91006016},
+    {"AllocPage: ldr w1, [x19, #0x64]", 0x2316504, 0xb9406661},
+    {"AllocPage: ldr x8, [x8, #0x10]", 0x2316508, 0xf9400908},
+    {"AllocPage: str w9, [x19, #0x50]", 0x23165a8, 0xb9005269},
 };
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
+inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
+// The words carry the offsets the guard reads: a changed offset in this file fails the build, a different libr15 fails the install.
+static_assert(pinned::AddImmediate(kWords[1].word) == kTable, "the pinned address of the voice table does not carry kTable");
+static_assert(pinned::AddImmediate(kWords[6].word) == kPageBlock - kTable, "the pinned allocator block is not at kPageBlock");
+static_assert(pinned::LdrWOffset(kWords[7].word) == kPageBytes - kTable, "the pinned load of the page size is not at kPageBytes");
+static_assert(pinned::LdrXOffset(kWords[8].word) == kVtAlloc, "the pinned request is not vtable slot kVtAlloc");
+static_assert(pinned::LdrWOffset(kWords[9].word) == kFreeHead - kTable, "the pinned store of the free head is not at kFreeHead");
 
 // The slot as a manager target on a libr15 loaded at `base`: it must hold ReceiveVoip itself (base + its address), so a word something else already
 // replaced is refused, not chained over.

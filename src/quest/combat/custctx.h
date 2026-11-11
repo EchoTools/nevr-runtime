@@ -2,11 +2,14 @@
  *
  * What the game does and what each guard does (store libr15; custctx_targets.h has the addresses).
  *  R31 LoadMeshData: loads one player's cosmetics into a context. The guard marks the context live and "load in flight" (under one mutex) before the
- *      game's function runs. While a combat map or the combat lobby is loaded (level_scope.h) it refuses a load, answering 1
+ *      game's function runs. While a combat map or the combat lobby is loaded (combat_scope.h `SeenCombatOrLobby`, believed only while its look is fresh) it refuses a load, answering 1
  *      (the stock failure value: CreateContext passes it to OutputError and, on a nonzero answer, destroys the empty context and answers NULL; the
  *      refusal also writes a game error line), when the render-target layout pool has fewer than kLayoutMargin (64) free slots. The game traps
  *      (brk, in RegisterRTLayout 0x19829bc) only when no slot is free as a layout registers; 64 is a margin for the layouts one load registers and is not
- *      read from the game. In an arena match the load goes to the game's function unchanged, trap included. An unreadable or null pool pointer never refuses.
+ *      read from the game. In an arena match the load goes to the game's function unchanged, trap included: no pool word is read and no level is scanned. An
+ *      unreadable or null pool pointer never refuses. When the combat level answer cannot change (`scope::Live()` is false at install: the tick or the scope
+ *      row's refresh is not installed) the refusal never acts and the install line says `pool_refusal: off_scope_not_live`; the destroy and Grow guards, which
+ *      need no level, are installed all the same.
  *  R32 DestroyContext: the guard runs the game's destroy only for a live context with no load in flight and no destroy already running. Every other
  *      destroy is dropped (answer 0): the destroy of a context being loaded, being destroyed on another thread, or at an address no live context holds
  *      (a stale second destroy). A null context goes to the game's function, which returns at once. More than kMax (256) contexts at once: the
@@ -25,7 +28,8 @@
  *
  * Arena (same APK). The destroy and Grow guards act in EVERY level, on purpose: they guard code arena shares (the lobby, where cosmetics load) and act
  * only where the game would otherwise crash or destroy a context it is not tracking (a destroy racing a load, a draw table written through NULL); a
- * scope by level would leave the lobby unguarded. The pool refusal changes what a load returns, so it is scoped (above): in an arena match it never acts.
+ * scope by level would leave the lobby unguarded. The pool refusal changes what a load returns, so it is scoped (above): in an arena match it never acts, and
+ * the arena path of a load is the two relaxed loads of the scope word and the bookkeeping above, with no read of the game's memory.
  * Everything else passes the game's own arguments to the game's own function. Cost in arena: per cosmetic load (per player join or lobby change): one
  * mutex lock and unlock pair around a scan of the 256-entry table and one atomic load; per destroy: the same lock and scan; per draw-table Grow: one
  * read of the table header. In a combat map or lobby a load also pays three never-faulting reads for the pool state. The rates are not known: `combat_custctx_stats` counts them
@@ -43,8 +47,9 @@
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_custctx_install","result":"installed|refused|off","reason":"ok|off_config|<token>","load":..,"destroy":..,"grow":..,
- *             "layout_margin":64,"consequence":".."}  Info for installed and off, Error for refused (+ `which` and the hook's status for slot_refused,
- *             `rollback` the status of the first removal; pinned_word_mismatch: "pin","found","expected")
+ *             "pool_refusal":"combat_map_or_lobby|off_scope_not_live","layout_margin":64,"consequence":".."}  Info for installed and off, Error for refused
+ *             (+ `which` and the hook's status for slot_refused, `rollback` the status of the first removal; pinned_word_mismatch: "pin" (the word's name),
+ *             "vaddr", "found", "expected")
  *   loads    {"event":"combat_custctx_loads","loads":<n>,"layouts_used":<n>,"layouts_capacity":<n>}  Info at every 32nd load, at most 32 lines
  *   refused  {"event":"combat_custctx_load_refused","layouts_used":..,"layouts_capacity":..,"refused":<n>,"consequence":".."}  Info for the first 16 refusals
  *            and every 50th

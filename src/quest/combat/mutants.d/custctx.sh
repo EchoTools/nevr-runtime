@@ -42,8 +42,6 @@ runm cc_rt_cmp             $F "s/  return fr < kLayoutMargin;/  return fr <= kLa
 runm cc_rt_never_refuses   $F "s/  if (low) {/  if (low \&\& false) {/"
 runm cc_rt_refuse_value    $F "s/  std::uint64_t result = 1;/  std::uint64_t result = 0;/"
 runm cc_rt_unread_low      $F "s/  if (!ok) return false;/  (void)ok;/"
-runm cc_rt_cap_off         $T "s/kPoolCapacityOffset = 0x84/kPoolCapacityOffset = 0x80/"
-runm cc_rt_free_off        $T "s/kPoolFreeOffset = 0x30/kPoolFreeOffset = 0x38/"
 runm cc_rt_used            $F "s/  \*used = c - fr;/  *used = fr;/"
 runm cc_rt_pool_const      $T "s/0x124893cULL, 0x11dc30cULL, 0x379b2c0ULL}/0x124893cULL, 0x11dc30cULL, 0x379b2c8ULL}/"
 runm cc_rt_pool_ignored    $F "s/SafeRead<std::uintptr_t>(g_base + g_pins.rtPool, \&ok)/SafeRead<std::uintptr_t>(g_base + kPins.rtPool + 8, \&ok)/"
@@ -59,7 +57,6 @@ runm cc_grow_cond          $F "s/  if (was.count >= was.capacity) {/  if (was.co
 runm cc_grow_add           $F "s/was.step < was.capacity ? was.capacity : was.step;/was.step;/"
 runm cc_grow_add_max       $F "s/was.step < was.capacity ? was.capacity : was.step;/was.capacity;/"
 runm cc_grow_size          $F "s/(was.capacity + add) \* kDrawSize;/(was.capacity + add) * 0x9700;/"
-runm cc_grow_draw_const    $T "s/kDrawSize = 0x9718;/kDrawSize = 0x9710;/"
 runm cc_grow_keep          $F "s/g_fns.resize(t, wanted, 1);/g_fns.resize(t, wanted, 0);/"
 runm cc_grow_no_resize     $F "s/    g_fns.resize(t, wanted, 1);/    (void)wanted;/"
 runm cc_grow_add0          $F "s/    if (add == 0) return Spare(original, t, was, add, wanted, \"step and capacity 0\");/    (void)0;/"
@@ -117,14 +114,13 @@ runm cc_pinned_fn_grow     $T "s/0x36ed7f0ULL, 0x124893cULL,/0x36ed7f0ULL, 0x124
 runm cc_pinned_fn_resize   $T "s/0x124893cULL, 0x11dc30cULL,/0x124893cULL, 0x11dc308ULL,/"
 runm cc_symbol_load        $T "s/CR15NetCustomizationRenderer12LoadMeshDataERNS0_27/CR15NetCustomizationRenderer12LoadMeshDataERNS0_28/"
 # the pinned words and their gate
-runm cc_pins_skipped       $F "s/  if (bad != kWordCount) {/  if (false) {/"
-runm cc_last_pin_skipped   $F "s/FirstWordMismatch(image.base, kWords, kWordCount, \&have, \&readable)/FirstWordMismatch(image.base, kWords, kWordCount - 1, \&have, \&readable)/"
-runm cc_pin_unreadable_ok  $F "s/readable ? sentinel::HexString(haveText, have) : \"unreadable\"/sentinel::HexString(haveText, have)/"
-runm cc_pin_found_wrong    $F "s/readable ? sentinel::HexString(haveText, have) : \"unreadable\", sentinel::HexString(wantText, kWords\[bad\].word)/readable ? sentinel::HexString(haveText, kWords[bad].word) : \"unreadable\", sentinel::HexString(wantText, kWords[bad].word)/"
-runm cc_pin_word           $T "s/{0x1247d90, 0x6db82beb}/{0x1247d90, 0x6db82bea}/"
-runm cc_pin_last           $T "s/{0x18829d4, 0xeb03015f}/{0x18829d8, 0xeb03015f}/"
-runm cc_pin_dropped        $T "s/ {0x18829d0, 0xcb09006a},//"
-runm cc_build_id_skipped   $F "s/  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
+runm cc_pins_skipped        $F "s/  if (pinned::FirstFailure(image.base, \&kWordPins, 1, \&word)) return Refused(\"pinned_word_mismatch\", \&word);/  if (false) return Refused(\"pinned_word_mismatch\", \&word);/"
+runm cc_last_pin_skipped    $T "s/kWordPins = {kWords, kWordCount, nullptr, 0};/kWordPins = {kWords, kWordCount - 1, nullptr, 0};/"
+runm cc_pin_unreadable_ok  $F "s/word->readable ? sentinel::HexString(haveText, word->have) : \"unreadable\"/sentinel::HexString(haveText, word->have)/"
+runm cc_pin_found_wrong    $F "s/sentinel::HexString(haveText, word->have)/sentinel::HexString(haveText, word->want)/"
+runm cc_pin_word           $T "s/0x1247d90, 0x6db82beb}/0x1247d90, 0x6db82bea}/"
+runm cc_pin_last           $T "s/0x18829d4, 0xeb03015f}/0x18829d8, 0xeb03015f}/"
+runm cc_build_id_skipped    $F "s/  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");//"
 runm cc_no_build_id_ok     $F "s/  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused(\"no_build_id\");//"
 # the switch and the legacy file
 runm cc_off_ignored        $F "s/  if (!on) {/  if (!on \&\& false) {/"
@@ -145,15 +141,26 @@ runm cc_stats_refused      $F "s/{\"loads_refused\", g_refused.load(std::memory_
 # the table row (combat_install.cpp) and the key
 CI=src/quest/combat/combat_install.cpp
 runm cc_row_ignores_switch $CI "s/custctx::Install(g_config.custctx.on)/custctx::Install(true)/" quest-host-combat combat_install_test
-runm cc_row_end_null       $CI "s/\&CustctxNormal, \&custctx::NoteEnd}/\&CustctxNormal, nullptr}/" quest-host-combat combat_install_test
+runm cc_row_end_null       $CI "s/custctx, \&custctx::NoteEnd}/custctx, nullptr}/" quest-host-combat combat_install_test
 runm cc_row_early          $CI "s/Module{\"custctx\", nullptr, \&CustctxNormal,/Module{\"custctx\", \&CustctxNormal, nullptr,/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm cc_qc_default_off     $QC "s/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r, false);/" quest-host-shared quest_config_test
 runm cc_qc_key_typo        $QC "s/kCombatCustctxKey = \"combat.custctx\";/kCombatCustctxKey = \"combat.custctxs\";/" quest-host-shared quest_config_test
 runm cc_qc_not_assigned    $QC "s/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);/  (void)ReadCombatSwitch(cfg, kCombatCustctxKey, r);/" quest-host-shared quest_config_test
 # the pool refusal is scoped to a combat map or lobby (review B2); the scope's tick is asked for at install
-runm cc_scope_ignored      $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/RtLow(\&used, \&cap);/"
-runm cc_scope_inverted     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/!scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/"
-runm cc_scope_map_only     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/scope::InCombatMap() ? RtLow(\&used, \&cap) : false;/"
-runm cc_start_not_asked    $F "s/  const bool scoped = scope::Start();/  const bool scoped = true;/"
-runm cc_start_always_off   $F "s/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"off_no_tick\"}/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"combat_map_or_lobby\"}/"
+runm cc_scope_ignored      $F "s/scope::SeenCombatOrLobby() \&\& PoolIsLowInScope/true \&\& PoolIsLowInScope/"
+runm cc_scope_inverted     $F "s/scope::SeenCombatOrLobby() \&\& PoolIsLowInScope/!scope::SeenCombatOrLobby() \&\& PoolIsLowInScope/"
+runm cc_scope_map_only     $F "s/scope::SeenCombatOrLobby() \&\& PoolIsLowInScope/scope::SeenCombatMap() \&\& PoolIsLowInScope/"
+runm cc_scoped_always_true  $F "s/  const bool scoped = scope::Live();/  const bool scoped = true;/"
+
+# arena pays nothing, by count (the test counts SafeRead calls and level scans on every arena level): a pool read or a scan before the scope test is killed
+runm cc_reads_before_scope $F "s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/  const bool low = (RtLow(\&used, \&cap), false) || (scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap));/"
+runm cc_scan_before_scope  $F "s/^#include \"quest\/combat\/safe_read.h\"/#include \"quest\/combat\/safe_read.h\"\n#include \"quest\/combat\/combat_level.h\"/; s/  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/  (void)level::Scan(0);\n  const bool low = scope::SeenCombatOrLobby() \&\& PoolIsLowInScope(\&used, \&cap);/"
+# a true answer older than kStaleAfterMs is not believed
+runm cc_stale_believed     $F "s/  if (!scope::LookIsFresh()) return false;//"
+# the install does not wait for the scope: the destroy and Grow guards need no level
+runm cc_install_needs_scope $F "s/  const bool scoped = scope::Live();/  if (!scope::Live()) return Refused(\"scope_not_live\");\n  const bool scoped = true;/"
+# the scope row is on while the pool refusal is (combat_install.cpp ScopeNormal)
+runm cc_reader_unlisted    $CI "s/ || g_config.custctx.on//" quest-host-combat combat_install_test
+runm cc_row_member         $CI "s/\"combat.custctx\", \&nevr_quest::CombatConfig::custctx,/\"combat.custctx\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
+runm cc_row_key            $CI "s/\"combat.custctx\", \&nevr_quest/\"combat.custctxs\", \&nevr_quest/" quest-host-combat combat_install_test

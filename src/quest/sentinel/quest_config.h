@@ -47,6 +47,10 @@
 // `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
 // pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
 // value. They only matter in the q15t and combat APKs, where the modules run.
+//
+// `combat.meshstep`, `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false`
+// leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default because the upstream build the
+// community combat port ships turns the same change on (`--resource-table-step-1`, in its wave-2 recipe).
 #pragma once
 
 #include <cstddef>
@@ -154,6 +158,21 @@ struct CombatSwitch {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, on
 };
 
+// A folded combat module's text value (`combat.gate_link_libs`). `source` is kFile when the file gave a string (an empty one included: it means
+// "none"); otherwise the module's default stands and `text` is empty. A fixed buffer, so the configuration stays trivially copyable.
+inline constexpr std::size_t kCombatTextMax = 640;
+struct CombatText {
+  char text[kCombatTextMax] = {};
+  Source source = Source::kAbsent;
+};
+
+// A folded combat module's integer (`combat.powerboost_stage`). `source` is kFile when the file gave an integer in the module's range; otherwise
+// `value` is the module's default.
+struct CombatInt {
+  int value = 0;
+  Source source = Source::kAbsent;
+};
+
 // The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
 // each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
 // example config and the `combat_config` line (combat/combat_install.h).
@@ -164,14 +183,49 @@ struct CombatConfig {
   CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
   CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
-  CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail (combat/fxtrail.h)
+  CombatSwitch meshstep;    // `combat.meshstep`: mesh-list tables grow by 1 in a combat match (combat/meshstep.h)
+  CombatSwitch instmodel;   // `combat.instmodel`: instanced-model tables grow by 1 in a combat match (combat/instmodel.h)
+  CombatSwitch shaderstep;  // `combat.shaderstep`: shader-set tables built by ConstructInstance grow by 1 in a combat match (combat/shaderstep.h)
+  CombatSwitch tablestep;   // `combat.tablestep`: shader-set tables built by CreateInstance grow by 1 in a combat match (combat/tablestep.h)
+  CombatSwitch gatePerm{true, Source::kAbsent};   // `combat.gate_perm`: a Quest in a party may use combat (combat/headset_gates.h)
+  CombatSwitch gateBots{true, Source::kAbsent};   // `combat.gate_bots`: a combat match picks the combat bot body (only where levelname is installed)
+  CombatSwitch gateLink{true, Source::kAbsent};   // `combat.gate_link`: the combat menus are not told this is a Quest
+  CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
+  CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
+  CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)
+  // The three modules of #2185, each on unless the file says false (upstream's shipped build has all three on): gun connect, practice AI bots and
+  // the gun hand default.
+  CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)
+  CombatSwitch aibots;        // `combat.aibots`: EnableScenario once the bots of a combat match are in game (combat/aibots.h)
+  CombatText aibotsScenario;  // `combat.aibots_scenario`: 0-6 or a name or off; unset: RandomAttack
+  CombatSwitch weaponArm;     // `combat.weapon_arm`: a profile whose `weaponarm` is not 1 gets the gun in the right hand once per missing marker (combat/weapon_arm.h)
+  CombatSwitch impactsnd{true, Source::kAbsent};        // `combat.impactsnd`: the impact table's rows and Wwise ids, repaired in combat levels only (combat/impactsnd.h)
+  CombatSwitch impactsndWrite{true, Source::kAbsent};   // `combat.impactsnd_write`: false reads and logs the table and writes nothing to it
+  CombatSwitch decals{true, Source::kAbsent};           // `combat.decals`: the level decals of decals.bin (combat/decals.h); on, and inert without that file (upstream's fxdecal.on)
+  CombatSwitch decalsFlipU{false, Source::kAbsent};     // `combat.decals_flip_u`: mirror the decals' u inside each quad
+  CombatSwitch decalsFlipV{false, Source::kAbsent};     // `combat.decals_flip_v`: mirror the decals' v inside each quad
+  CombatSwitch bvh{true, Source::kAbsent};       // `combat.bvh`: the static BVH answers casts on combat maps only (combat/bvh.h)
+  CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
+  CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
+  CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
+  CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on by default upstream, afk_music.cpp:1
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the q15t plugin's Q15T_SENSORWD was in v6.16.5
+  CombatSwitch ec;      // `combat.ec`: the EC network client and the writer of re33_ec_page (combat/ec.h)
+  CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
+  CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
+  CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
+  CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
+  CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
+  CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)
   CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
   CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)
   CombatSwitch droneguard;  // `combat.droneguard`: the drone's follow update is skipped while its target is null (combat/droneguard.h)
-  CombatSwitch droneguardStage1{false, Source::kAbsent};  // `combat.droneguard_stage1`: also skip a stale cached player (default OFF; needs droneguard)
-  CombatSwitch peerclamp;   // `combat.peerclamp`: a peer's last-received stamp above "now" is pulled down to "now" (combat/peerclamp.h)
-  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
-  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch droneguardStage1{false, Source::kAbsent};  // `combat.droneguard_stage1`: also skip a stale cached player (default OFF, a test switch upstream; needs droneguard)
+  CombatSwitch peerclamp;   // `combat.peerclamp`: a peer's last-received stamp above "now" is pulled down to "now", combat levels only (combat/peerclamp.h)
 };
 
 struct LogEvent {
