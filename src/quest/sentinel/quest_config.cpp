@@ -94,6 +94,8 @@ constexpr const char* kCombatDronekillExplosionKey = "combat.dronekill_explosion
 constexpr const char* kCombatDronekillHoldKey = "combat.dronekill_hold";  // Quest only (default false, CombatConfig::kDronekillHoldDefault, #1737)
 constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
 constexpr const char* kCombatBulletVelocityGuardKey = "combat.bullet_velocity_guard";  // Quest only (default true, #1737 row 031)
+constexpr const char* kCombatTextureQuest2StepDownKey = "combat.texture_quest2_step_down";  // Quest only (default false, #1737)
+constexpr const char* kCombatTextureQuest2LobbyKey = "combat.texture_quest2_lobby";  // Quest only (default true, #1737)
 constexpr const char* kCombatTexelBufferGuardKey = "combat.texel_buffer_guard";  // Quest only (default true, #1650)
 constexpr const char* kCombatSoundSymbolGuardKey = "combat.sound_symbol_guard";  // Quest only (default FALSE, #1737)
 constexpr const char* kCombatFrozenFrameExitKey = "combat.frozen_frame_exit";      // Quest only (default true, #2377)
@@ -588,6 +590,8 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
   r.config.combat.bulletVelocityGuard = ReadCombatSwitch(cfg, kCombatBulletVelocityGuardKey, r);
   r.config.combat.texelBufferGuard = ReadCombatSwitch(cfg, kCombatTexelBufferGuardKey, r);
+  r.config.combat.textureQuest2StepDown = ReadCombatSwitch(cfg, kCombatTextureQuest2StepDownKey, r, false);
+  r.config.combat.textureQuest2Lobby = ReadCombatSwitch(cfg, kCombatTextureQuest2LobbyKey, r);
   r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);
   r.config.combat.frozenFrameExit = ReadCombatSwitch(cfg, kCombatFrozenFrameExitKey, r);
   r.config.combat.frozenFrameExitS = ReadCombatInt(cfg, kCombatFrozenFrameExitSKey, 10, 900, 30, r);

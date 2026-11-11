@@ -1,7 +1,8 @@
 /* The pinned words of the live eye-buffer change's deadlock under #1737: the upload lock and the upload count that a
  * CEngine::Resize waits on, the functions that take and give back an upload slot, and the call path from CEngine::Resize to the
- * wait. Nothing here is hooked or written; a later look-driven Resize reads the two words first (texture_quest2, not in the tree
- * yet). Checked against the store libr15 by src/quest/tests/texture_quality_pinned_test.cpp (the hooks-pinned group, which needs
+ * wait. Nothing here is hooked or written; the Quest 2 step-down (texture_menu_hook.cpp, texture_quality_rules.h) checks the four words
+ * that form the two addresses at install and reads the count and the lock before a look-driven Resize, as a narrowing: its guard is that no
+ * level is loading (docs/quest/combat/texture_quest2.md). Checked against the store libr15 by src/quest/tests/texture_quality_pinned_test.cpp (the hooks-pinned group, which needs
  * the store APK). The reading is written up in docs/quest/combat/texture_quest2.md.
  *
  * Addresses. Every address is an ELF virtual address in the store libr15 (build id in pinned_targets.h). The disassembly and

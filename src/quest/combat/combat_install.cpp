@@ -40,6 +40,7 @@
 #include "quest/combat/shieldgamma.h"
 #include "quest/combat/sound_symbol_guard.h"
 #include "quest/combat/texel_buffer_guard.h"
+#include "quest/combat/texture_quest2.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
@@ -79,6 +80,10 @@ ModuleResult ScopeNormal() noexcept {
 ModuleResult FrozenFrameExitNormal() noexcept {
   return frozen_frame_exit::Install(g_config.frozenFrameExit.on, g_config.frozenFrameExitS.value,
                                     g_config.frozenFrameExitS.source == nevr_quest::Source::kFile);
+}
+// The Quest 2 step-down (#1737): combat's look handed to the texture-quality owner; its lobby switch rides on it.
+ModuleResult TextureQuest2Normal() noexcept {
+  return texture_quest2::Install(g_config.textureQuest2StepDown.on, g_config.textureQuest2Lobby.on);
 }
 ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
 ModuleResult ShieldgammaNormal() noexcept {
@@ -188,6 +193,10 @@ constexpr std::array kModules{
     Module{"frozen_frame_exit", nullptr, &FrozenFrameExitNormal, "combat.frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit,
            &frozen_frame_exit::NoteEnd},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // texture_quest2 (#1737): a tick callback of its own (it reads the init-fiber count, which the scope does not), so after the tick's row; not
+    // a reader of the scope's answer. texture_quest2_lobby is its switch with no step of its own.
+    Module{"texture_quest2_step_down", nullptr, &TextureQuest2Normal, "combat.texture_quest2_step_down", &nevr_quest::CombatConfig::textureQuest2StepDown},
+    Module{"texture_quest2_lobby", nullptr, nullptr, "combat.texture_quest2_lobby", &nevr_quest::CombatConfig::textureQuest2Lobby},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
     Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},

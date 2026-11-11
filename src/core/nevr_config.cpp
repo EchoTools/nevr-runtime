@@ -270,7 +270,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "levelname", "meshstep", "instmodel", "shaderstep",
                   "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "impactsnd", "impactsnd_write", "decals",
                   "decals_flip_u", "decals_flip_v", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard", "music", "sensorwd", "ec", "ec_words",
-                  "ecfx", "powerboost_stage", "dronekill", "dronekill_explosion", "dronekill_hold", "dronemuzzle", "bullet_velocity_guard", "sound_symbol_guard", "texel_buffer_guard", "gunconnect", "aibots", "aibots_scenario", "weapon_arm", "hudmeter", "shieldgamma_gamma",
+                  "ecfx", "powerboost_stage", "dronekill", "dronekill_explosion", "dronekill_hold", "dronemuzzle", "bullet_velocity_guard", "sound_symbol_guard", "texel_buffer_guard", "texture_quest2_step_down", "texture_quest2_lobby", "gunconnect", "aibots", "aibots_scenario", "weapon_arm", "hudmeter", "shieldgamma_gamma",
                   "shieldgamma_tube_mirror", "fxtrail", "voipdrop", "custctx", "droneguard", "droneguard_stage1", "peerclamp", "frozen_frame_exit",
                   "frozen_frame_exit_s"}},
   });

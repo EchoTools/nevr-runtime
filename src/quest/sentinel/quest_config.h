@@ -249,6 +249,11 @@ struct CombatConfig {
   CombatSwitch frozenFrameExit{true, Source::kAbsent};  // `combat.frozen_frame_exit`: a combat game whose frames stop in VR ends (combat/frozen_frame_exit.h)
   CombatInt frozenFrameExitS{30, Source::kAbsent};       // `combat.frozen_frame_exit_s`: its limit in seconds, 10..900, default 30
   CombatSwitch bulletVelocityGuard{true, Source::kAbsent};  // `combat.bullet_velocity_guard`: a FireBullet call with no usable velocity is not made (combat/bullet_velocity_guard.h)
+  // `combat.texture_quest2_step_down`: a Quest 2 whose player chose no texture level is sent Very Low in a settled combat level (combat/texture_quest2.h).
+  // Default OFF (opt-in): the deadlock a live Resize can meet is unobserved and a hang is worse than not stepping down (docs/quest/combat/texture_quest2.md).
+  CombatSwitch textureQuest2StepDown{false, Source::kAbsent};
+  // `combat.texture_quest2_lobby`: the combat lobby (`mpl_lobby_b_combat`, combat-only, combat_level.h) is a step-down place too.
+  CombatSwitch textureQuest2Lobby{true, Source::kAbsent};
   CombatSwitch texelBufferGuard{true, Source::kAbsent};  // `combat.texel_buffer_guard`: a new descriptor set's uniform texel bindings hold a zeroed view (combat/texel_buffer_guard.h)
   CombatSwitch soundSymbolGuard{false, Source::kAbsent};  // `combat.sound_symbol_guard`: in a combat level, a sound post that can only fail is not made (combat/sound_symbol_guard.h; default OFF, a performance guard)
   CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)

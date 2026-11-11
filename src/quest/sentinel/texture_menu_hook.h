@@ -44,6 +44,13 @@
  * A rebuild that fails is undone: the previous level is put back, the engine rebuilt at it, and the failed level is not asked
  * for again. Two levels that give the same eye size (`stock` and Low on one headset) are committed without a rebuild.
  *
+ * The Quest 2 step-down (#1737, texture_quality_rules.h, docs/quest/combat/texture_quest2.md). When combat registers its look
+ * (texture_quality_input.h), the level the apply works towards is texture_quality_rules.h's EffectiveLevel: Very Low on a Quest 2 in a settled
+ * combat level while the player has not chosen a level, else the player's level. A change the look causes is made only in a quiet window: the
+ * look made right before the Resize is fresh and shows no gamespace loading, no gamespace has loaded for 10 s, and the game's upload count and
+ * upload lock (texture_quality_targets.h) read 0; otherwise it is held and looked at again next frame. A Resize the engine refuses turns the
+ * look off for the run. The poller runs the look's gate and writes its lines. With no look registered nothing of this runs.
+ *
  * Nothing on the game's call path logs. A poller thread (`nevr-texture`) wakes twice a second, polls the development property
  * `debug.nevr.texture_level` (a level word or a menu index 0..5, set from adb), and writes one line for the start level, one for
  * each request and one for each change of the applied level; counters (hook_report.h) carry the rest.
@@ -51,6 +58,8 @@
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
 #pragma once
+
+#include <cstdint>
 
 #include "got_hook.h"
 #include "texture_quality.h"
@@ -86,7 +95,14 @@ struct Game {
   sentinel::pinned::VrFlagFn vrDisplayLost = nullptr;
   sentinel::pinned::LocalAppDataDirectoryFn localAppDataDirectory = nullptr;
   sentinel::pinned::EngineResizeFn engineResize = nullptr;  // the function the engine's resize slot must hold
+  // The game's upload count and upload lock (texture_quality_targets.h), read before a look-driven Resize; null: not pinned, and the
+  // step-down is turned off for the run.
+  const std::uint64_t* uploadCount = nullptr;
+  const std::uint32_t* uploadLock = nullptr;
 };
+
+// The clock the step-down's gate and holds read, in CLOCK_MONOTONIC milliseconds (nullptr restores it).
+void SetClockForTest(std::int64_t (*clockMs)() noexcept) noexcept;
 
 // Where the development property is read: copies the value into `out` (at least 92 bytes) and returns its length, or 0.
 using PropertyReader = int (*)(const char* name, char* out) noexcept;
@@ -111,6 +127,9 @@ struct Totals {
   unsigned long long saveFailures;     // the player's choices that could not be written
   bool disabled;                       // the live apply is off for this process
   const char* disabledWhy;
+  unsigned long long lookApplies;      // step-down changes made (a Resize the look caused, down or back up)
+  unsigned long long lookHolds;        // holds begun (a look-driven change that waited for a quiet window)
+  bool lookOff;                        // the step-down is off for the run
 };
 Totals CurrentTotals() noexcept;
 

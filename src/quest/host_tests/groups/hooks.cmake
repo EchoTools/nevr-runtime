@@ -273,6 +273,9 @@ nevr_ht_test(headset_profile_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} $
 # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
 # parse, the index-to-level map and the float truncation. No game, no hook.
 nevr_ht_test(refresh_eye_size_test GROUP hooks NOEXC INCS ${_sent} TIMEOUT 120 SRC src/quest/tests/refresh_eye_size_test.cpp)
+# The Quest 2 step-down's rules (#1737, texture_quality_rules.h): the look's gate (settle, load window, gap, Echo Arena), the level sent and when a
+# look-driven Resize may be made. Pure: no game, no hook, no clock.
+nevr_ht_test(texture_quality_rules_test GROUP hooks NOEXC INCS ${_sent} TIMEOUT 120 SRC src/quest/tests/texture_quality_rules_test.cpp)
 # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back, the
 # level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
 nevr_ht_test(texture_menu_test GROUP hooks HOST INCS ${_sent} TIMEOUT 120
@@ -309,7 +312,8 @@ nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core
       src/quest/integration/module_observers.cpp src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/bullet_velocity_guard.cpp
       src/quest/combat/sound_symbol_guard.cpp src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp
       src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp src/quest/combat/peerclamp.cpp
-      src/quest/combat/frozen_frame_exit.cpp src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp)
+      src/quest/combat/frozen_frame_exit.cpp src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp
+      src/quest/combat/texture_quest2.cpp)
 # The shared core of the CDN texture delivery that resource_request_hook.cpp links (docs/adr/0045-cdn-texture-delivery.md).
 nevr_ht_obj(o_hooks_cargo_shadow GROUP hooks NOEXC INCS ${_sent} SRC src/core/resource_shadow.cpp)
 nevr_ht_obj(o_hooks_cargo_resolver GROUP hooks NOEXC INCS ${_sent} SRC src/core/cargo_resolver.cpp)

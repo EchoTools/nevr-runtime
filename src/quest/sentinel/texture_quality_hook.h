@@ -173,6 +173,12 @@ RequestSource LastRequestSource() noexcept;
 // thread, right before it rebuilds.
 void CommitApplied(Level level) noexcept;
 
+// Whether the player chose a level in this process (#1737, the Quest 2 step-down, texture_quality_rules.h): a configuration word other than
+// `stock` (InstallVia), a change in the menu, the reference input's start rule naming a level, or the development property
+// (texture_menu_hook.cpp). Once set it stays set. A player who chose keeps the level chosen in combat too.
+void NotePlayerChose() noexcept;
+bool PlayerChose() noexcept;
+
 // The number of eye-size queries (ids 5 and 6) the handler has seen; the live apply compares it across a RefreshRTSize call.
 unsigned long long SizeQueries() noexcept;
 

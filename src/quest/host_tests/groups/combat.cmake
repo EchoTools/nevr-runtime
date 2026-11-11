@@ -45,7 +45,7 @@ set(_clevelname src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp)
 set(_credirect src/quest/combat/script_redirect.cpp src/quest/plugin/script_redirect.cpp)
 set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
              src/quest/combat/peerclamp.cpp ${_cffe}
-             src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp)
+             src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp src/quest/combat/texture_quest2.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -301,6 +301,11 @@ nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_
 nevr_ht_test(sound_symbol_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sound_symbol_guard_test.cpp src/quest/combat/sound_symbol_guard.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
+# The Quest 2 step-down's combat input (#1737): the row's install, the look from a model of CR15Game (the loaded tables' class, the init-fiber
+# count as a load, an unreadable count as a load), its spacing and its lines. The owner's use of the look is texture_menu_hook_test's (hooks group).
+nevr_ht_test(texture_quest2_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/combat_texture_quest2_test.cpp src/quest/combat/texture_quest2.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
 # The texel-buffer guard (#1650): the rules, and the real wrappers handed to the game's chain (FindMethod -> vkGetInstanceProcAddr ->
 # vkGetDeviceProcAddr) by the real vk_ext_window against a fake driver: the writes, the zeroed view, its failure, the refusals, the lines.
 nevr_ht_test(texel_buffer_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}

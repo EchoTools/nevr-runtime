@@ -1,11 +1,139 @@
-# Quest 2 eye buffer in combat: is a live eye-buffer change safe during a level load
+# Quest 2 eye buffer one step down in combat
 
-Design record for the question the Quest 2 step-down (#1737) depends on: can the texture-quality live apply
+Design record of the Quest 2 step-down (#1737): on a Quest 2 whose player has not chosen a texture level, the eye buffer is Very Low (1152 x
+1264 per eye, the Quest 2 profile's, `src/quest/headset_profile.h`) while a combat map, or the combat lobby, is loaded and settled, and the
+player's level everywhere else. It also records the question the step-down depends on: can the texture-quality live apply
 (`src/quest/sentinel/texture_menu_hook.h`, a `CEngine::Resize` on the render thread) run while a level load uploads data? ADR 0015
-(`docs/adr/0015-quest-texture-quality.md`) lists the live apply in a match as not established. kotorvr/echoquest-combat's
-afk_texres.cpp header reports a hang in that case (a lead only; nothing is taken from it). This page contains no code. The words it
-names are pinned in `src/quest/sentinel/texture_quality_targets.h` and checked against the store libr15 by
-`src/quest/tests/texture_quality_pinned_test.cpp` (`just test-quest-hooks-pinned`).
+(`docs/adr/0015-quest-texture-quality.md`) lists the live apply in a match as not established, and kotorvr/echoquest-combat's
+afk_texres.cpp header reports a hang in that case (a lead only; nothing is taken from it). The words the analysis names are pinned in
+`src/quest/sentinel/texture_quality_targets.h` and checked against the store libr15 by `src/quest/tests/texture_quality_pinned_test.cpp`
+(`just test-quest-hooks-pinned`).
+
+## Origin
+
+kotorvr/echoquest-combat ships the behaviour as `texresq2` (its afk_texres.cpp; the recipe `qa-1104-aj4-w2z22.json` in that repository's
+trials directory lists `texresq2.on` in its top-level `on_files`, read with `python3 -I`). Its behaviour is taken (Very Low on a Quest 2 in combat,
+a 10 s settle and a 90 s gap as numbers); its mechanism is not. Here the eye size has one owner, texture_quality
+(`src/quest/sentinel/texture_quality_hook.h`, ADR 0039), and combat is an input to it.
+
+## What it does
+
+| Where | Level sent | `reason` |
+|---|---|---|
+| No combat input registered (release APK, or the key false) | the player's | `off` |
+| Not a Quest 2 (`ActiveHeadsetProfile()->id`) | the player's | `not_quest2` |
+| The player chose a level | the player's | `player_choice` |
+| A combat map, or the combat lobby with `combat.texture_quest2_lobby`, the place for 10 s and no level loading for 10 s | Very Low (`Level::kVeryLow`, menu index 0; never `Level::kStock`) | `quest2_combat` |
+| Before that | the player's | `not_in_combat` |
+| After it: an Echo Arena level the place for 10 s with no load for 10 s | the player's | `arena` |
+| After it: no step-down place seen for 90 s | the player's | `no_combat_level` |
+| A look-driven Resize the engine refused, or the upload words not pinned | the player's, for the rest of the run | `look_off` |
+
+"The player chose" (`texture_quality::PlayerChose()`, set once and kept): a `graphics.texture_quality` word other than `stock`
+(`InstallVia`; the menu writes only `very_low` to `ultra`, `texture_quality.h`), a change in the menu (`HandleApply`, where the choice is
+queued for config.yaml), the reference input's start rule naming a level (`ResolveReference`), or the development property
+`debug.nevr.texture_level`. The last one is this unit's choice, not the brief's: a level set by hand is meant to apply.
+
+The rules are `src/quest/sentinel/texture_quality_rules.h` (pure). The look's gate (`LookStep`) runs on the owner's poller thread twice a
+second; the per-frame apply (`ApplyPending`, `src/quest/sentinel/texture_menu_hook.cpp`) works towards `EffectiveLevel`. Combat's look comes
+from `src/quest/combat/texture_quest2.cpp`: a combat-tick callback, every 500 ms, reads the loaded levels (`level::Scan`, the two loaded
+tables, an Echo Arena level winning) and CncaGame's init-fiber count (game + 0x1f08, `combat_level_targets.h` `kFiberCount`: the gamespaces
+still loading); a count that is not 0, or that cannot be read, is a load. It registers itself with the owner through
+`src/quest/sentinel/texture_quality_input.h`; texture_quality includes no combat header.
+
+## The guard: no look-driven Resize in a load window
+
+The two shapes the dispatch named, decided from the code:
+
+- (a) Apply at a moment the game itself resizes. The game resizes on its own only from `CEngine::CheckForResize`, when
+  `CCanvasDisplay::NeedsResize` answers true (the proven reconstructions `ce_engine_check_for_resize.cpp`, confidence M, and
+  `c_canvas_display_needs_resize.cpp`, confidence H, in the r15 reconstruction set): a changed viewport target size, a display that needs a
+  resize, a changed MSAA or split-screen mode, the shadow-map pool, the force word (+0x1d80), the pending word (+0x13a50), or recovery from a
+  lost VR display. None of these is tied to a level load in what was read, and when the game sets the pending word is not read. The existing
+  apply path makes its own Resize every time (`ApplyPending`); it has no hook on `CEngine::Resize` (a vtable slot the apply reads, with no
+  GOT slot), so it cannot wait for the game's. And the game's own Resize has the same exposure as ours (below). So (a) is not supported by the
+  existing path, and would not lower the exposure of the Resize it rides on; it would only avoid adding one.
+- (b) Never in a level load window. Supported: the combat tick can see a load as it happens (the init-fiber table), and the apply already
+  waits, frame by frame, for the engine to be ready. This is what is built.
+
+A look-driven change (a step down, or the way back up while the player has not chosen) is held, and looked at again the next frame,
+unless all of these hold at the frame it would be made (`ResizeHold`):
+
+1. the look combat made is at most 1.5 s old (`kLookFreshMs`) and shows no gamespace loading;
+2. no gamespace has been seen loading for 10 s (`kSettleMs`; the gate's quiet stretch, restarted by every look that sees a load);
+3. the upload count (0x379b400) reads 0 and the upload lock (0x379b780) reads 0, read without taking the lock. This is a narrowing, not the
+   guard: it sees an `Upload` already between its slot and its `End`, and nothing that starts after the read.
+
+The upload words' addresses are used only when the four words that form them (`kLockPage`, `kLockAdd`, `kCountPage`, `kCountLoad`) hold in
+the live libr15 (`texture_menu_hook.cpp` `Install`); otherwise the step-down is off for the run. A change the player makes in the menu keeps
+the menu's own path and does not wait. With `combat.texture_quest2_lobby` true, a lobby -> map -> lobby round trip keeps the look on through
+its load gaps (90 s), so a combat session adds one look-driven Resize when it first settles in combat and one when it settles in Echo Arena
+or leaves combat for 90 s.
+
+## What exposure remains
+
+Inferred, from the analysis below; nothing here was observed on a headset.
+
+- An `Upload` that is not part of a gamespace load: the init-fiber count does not see it. Which callers upload in a settled level (the
+  `CGBuffer` initializers that upload initial data, through 0x182bdf0, created at run time, if any) and on which thread is not shown.
+- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock up to
+  five times over its whole length. Whether a new init fiber reaches an `Upload` inside that time is not shown.
+- An `Upload` taken after the count and lock read: the read narrows, it does not close (the section "What this means" below).
+- The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure.
+- The 10 s settle is upstream's number, not measured here.
+
+Given that the deadlock is unobserved and a hang is worse than not stepping down, `combat.texture_quest2_step_down` is FALSE by default
+here (upstream ships it on); the headset row decides flipping it.
+
+## Switch and default
+
+- `combat.texture_quest2_step_down`, bool, default **false** (opt-in). With it false nothing is registered and nothing of the step-down runs.
+- `combat.texture_quest2_lobby`, bool, default **true**. The combat lobby is `mpl_lobby_b_combat`, a combat-only class
+  (`src/quest/combat/combat_scope.h`; `src/quest/combat/combat_level.h`: on a Quest the arena lobby loads no `mpl_lobby_b_combat` game space,
+  as far as the code shows). With it false every match adds two look-driven Resizes around its load windows. This follows combat_level.h,
+  not the comment beside `refresh_rate_lobby` in `src/quest/sentinel/quest_config.h` ("arena shares the lobby levels").
+- Both keys are read only in the combat variants (`combat::Active()`); the row is in `src/quest/combat/combat_install.cpp`.
+
+## Log lines (sentinel log)
+
+- `combat_texture_quest2_install` Info (`result` installed|off, `reason`, `lobby`), Error on a refusal (`inactive`, `tick_not_installed`,
+  `tick_table_full`).
+- `combat_texture_quest2_look` Info, once per change of the class or of loading (a load begins or ends): `where`, `loading`, `fibers` (-1:
+  unreadable), `looks`; at most 64 per run.
+- `texture_quality_level_rule` Info, from the poller, once per change of the level sent or its reason: `level_asked`, `level_sent`,
+  `reason`, `where`, `quest2`, `player_chose`, `unlogged`; at most 32, then one notice, and the next line's `unlogged` counts the rest.
+- `texture_quality_level_held` Info, once per hold (not per frame): `level_from`, `level_to`, `hold`
+  (stale_look|loading|settling|uploads|lock), `uploads`, `lock`, `quiet_ms`, `holds`.
+- `texture_quality_level_rule_off` Warning, once: `why` (resize_failed|upload_words_unavailable).
+- `texture_menu_upload_words` Warning at install when a word that forms the two addresses differs: `what`, `va`, `expected`, `actual`.
+- The existing `texture_quality_applied` line records each change of the applied level, the step-down's included.
+
+## Arena cost
+
+With the key false: none (the per-frame apply reads one null pointer). With it true, in every level of a combat APK, arena included: the tick
+callback reads the clock once per frame and, every 500 ms, makes one `Scan` and one 8-byte read; the per-frame apply computes
+`EffectiveLevel` from a few atomics, and reads the clock, the look and the two upload words only while a look-driven change is pending.
+Nothing is hooked. Not measured on a headset.
+
+## Tests
+
+`src/quest/tests/texture_quality_rules_test.cpp` (the gate, the level, the hold), `src/quest/tests/texture_menu_hook_test.cpp` (the real
+apply: Very Low in a quiet window, held on the count, the lock, a load, a stale look, the way back up held too, the player's choice, the
+property, not a Quest 2, no input, a refused Resize, unpinned words), `src/quest/tests/texture_quality_hook_test.cpp` (a configured level is a
+choice), `src/quest/tests/combat_texture_quest2_test.cpp` (the row and the look), and `src/quest/combat/mutants.d/texture_quest2.sh`.
+The guard against the deadlock itself is proven by none of them: it rests on the inference below.
+
+## Headset row
+
+Quest 2 combat APK with `combat.texture_quest2_step_down: true`: lobby -> combat match -> arena match. Expected: `level_sent":"very_low"` with
+`reason":"quest2_combat"` in combat and `arena` in arena; the game's `Creating OVR swap chain with size 1152 x 1264`; `texture_quality_level_held`
+lines where a load was near; no hang across 5 lobby -> Dyson joins (upstream's repro). A Quest 3 shows `not_quest2`; a menu pick of Low keeps
+Low in combat (`player_choice`).
+
+## Platform
+
+PC: not applicable. The PC eye buffer is not a per-headset table (ADR 0015, "Not established", the PC paragraph: the game's own render scale is
+the PC control).
 
 ## Status of each statement
 
@@ -119,7 +247,7 @@ Measured, read whole. When `currframe` is not the GPU frame, the deferred-destro
 and gives the lock back (`stlr wzr,[x22]` at 0x1888be0). It never reads the upload count, so it cannot wait on an upload. ReVault
 lists two reads of 0x379b478 (0x18848d4, 0x1888b08) and no write: who sets the pointer is not shown.
 
-## What this means for the Quest 2 step-down
+## What this means for a look-driven Resize
 
 Inferred. A look-driven Resize is safe to start only if no upload slot is taken (count 0 at 0x379b400) and no thread holds the upload
 lock (0 at 0x379b780) for the whole Resize, and reading the two words first cannot ensure that. `FlushGPU` gives the lock back at
@@ -136,6 +264,8 @@ The game's own Resize (a display change) has the same exposure.
 - Which thread runs `CGUploader::Upload` during a level load. Its buffer callers are the `CGBuffer` initializers that upload initial
   data (through 0x182bdf0); the thread they run on is not read.
 - That the hang happens on a headset; the step is the inference above, and the upstream report is a lead.
+- That no `Upload` runs in a settled level outside a gamespace load, and that the 10 s settle covers what a load leaves behind.
+- That the game resizes on its own at a level load (choice (a) above): when the pending word +0x13a50 is set is not read.
 - The eight unreconstructed functions read whole: `CGS::FlushGPU`, `CGDisplay::Resize`, the reaper 0x18ebb48, the allocator 0x18ebd38,
   both `CGUploader::Upload` and both `End`. Each is queued for a byte-checked reconstruction; until then their behaviour beyond the
   pinned words is inferred.

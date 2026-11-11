@@ -1404,7 +1404,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // The sound-symbol guard (#1737): off unless the file says true (a performance guard, as upstream ships it).
                       {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, false},
                       // The texel-buffer guard (#1650): on unless the file says false (the reference build ships g40guard on).
-                      {"texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard, true}};
+                      {"texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard, true},
+                      // The Quest 2 step-down (#1737): off unless the file says true (opt-in: the deadlock is unobserved; upstream ships it on), and its
+                      // lobby switch on (the combat lobby is combat-only).
+                      {"texture_quest2_step_down", &nevr_quest::CombatConfig::textureQuest2StepDown, false},
+                      {"texture_quest2_lobby", &nevr_quest::CombatConfig::textureQuest2Lobby, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

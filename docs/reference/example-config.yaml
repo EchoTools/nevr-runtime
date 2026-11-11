@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, the two combat.texture_quest2 keys, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -417,6 +417,19 @@ combat:
   # was made and `combat_texel_buffer_guard_end` what was written. `false` requests nothing. A value that is not a boolean keeps the default, with a
   # warning that names the key. Read once at launch. Default (absent): true.
   # texel_buffer_guard: false
+
+  # Quest only. A boolean. On a Quest 2 whose player chose no texture level (graphics.texture_quality absent or `stock`, no change in the menu), the
+  # eye buffer is Very Low (1152 x 1264 per eye) in a settled combat map, and the player's level everywhere else (src/quest/combat/texture_quest2.h,
+  # docs/quest/combat/texture_quest2.md). The change is a live Resize, made only when no level has been loading for 10 s and the game's upload count
+  # and lock read 0: a Resize while a level load uploads can hang the game (inferred, not observed). Off by default for that reason (upstream ships
+  # it on); the headset row decides. The sentinel log lines `combat_texture_quest2_install`, `texture_quality_level_rule`,
+  # `texture_quality_level_held` and `texture_quality_level_rule_off` say what it did. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch. Default (absent): false.
+  # texture_quest2_step_down: true
+
+  # Quest only. A boolean. With texture_quest2_step_down, the combat lobby (mpl_lobby_b_combat, combat-only) is stepped down too, so a lobby -> map
+  # -> lobby round trip makes no Resize in its load windows. Default (absent): true.
+  # texture_quest2_lobby: false
 
   # Quest only. A boolean. A combat game whose frames stop for frozen_frame_exit_s seconds while the headset is in VR, in a combat map or the
   # combat lobby, is ended: its activity is finished, and after a 5 s grace the process ends with exit code 1, so the player lands in Home

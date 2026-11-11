@@ -30,6 +30,8 @@
 #include "quest/tests/test_check.h"
 #include "texture_menu.h"
 #include "texture_menu_hook.h"
+#include "texture_quality_input.h"
+#include "texture_quality_rules.h"
 
 namespace {
 
@@ -176,6 +178,7 @@ void Reset(tq::Level configLevel = tq::Level::kLow, bool fromConfig = true) {
   g_property = "";
   tm::ResetForTest();
   tq::ResetForTest();
+  nevr_quest::texture_quality::input::ResetForTest();
   SysThunk::Reset();
   CheckThunk::Reset();
   ApplyThunk::Reset();
@@ -984,6 +987,7 @@ void ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing() 
     tm::PollOnceForTest();
     QCHECK(CountLines("texture_quality_saved") == 0 && ReadConfig(dir).empty());  // nothing written to config.yaml
     QCHECK(tm::CurrentTotals().saveWrites == 0);
+    QCHECK(!tq::PlayerChose());  // the platform default is not the player's level (#1737 step-down)
     RemoveSettingsDirectory(dir);
   }
 }
@@ -1000,6 +1004,7 @@ void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing() {
   QCHECK(tm::PollOnceForTest() > 0);
   QCHECK(CountLines("\"source\":\"reference_rule\"") == 1);
   QCHECK(CountLines("\"reference_file\":\"read\"") == 1);
+  QCHECK(tq::PlayerChose());  // the level the reference rule names is the player's: the step-down leaves it (#1737)
   tm::PollOnceForTest();
   QCHECK(ReadConfig(dir).empty() && tm::CurrentTotals().saveWrites == 0);  // derived, not chosen
   RemoveSettingsDirectory(dir);
@@ -1476,9 +1481,253 @@ void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
   QCHECK(settings.find("\"result\":\"rewritten\",\"rows\":1,\"pages\":1,\"hand_flip_rows\":1}") != std::string::npos);
 }
 
+
+// ---- the Quest 2 step-down (#1737, texture_quality_rules.h) ------------------------------------------------------------------
+
+namespace rules = nevr_quest::texture_quality::rules;
+namespace qin = nevr_quest::texture_quality::input;
+
+std::int64_t g_nowMs = 100000;
+std::int64_t NowMs() noexcept { return g_nowMs; }
+rules::Look g_look;
+int g_lookCalls = 0;
+rules::Look FakeLook() noexcept {
+  ++g_lookCalls;
+  return g_look;
+}
+std::uint64_t g_uploadCount = 0;
+std::uint32_t g_uploadLock = 0;
+
+void SetLook(rules::Where where, bool loading) {
+  g_look.where = where;
+  g_look.loading = loading;
+  g_look.atMs = g_nowMs;
+}
+
+// Polls every 500 ms for `ms`, the look made fresh before each poll (the tick looks as often).
+void PollFor(std::int64_t ms) {
+  for (std::int64_t t = 0; t < ms; t += 500) {
+    g_nowMs += 500;
+    g_look.atMs = g_nowMs;
+    tm::PollOnceForTest();
+  }
+}
+
+// A headset whose configuration names no level (`stock`, the default), the look registered, the upload words free, the clock ours, and the
+// menu's first delivery made: the player's level is Low (the headset's stock size), applied without a rebuild.
+void ResetStepDown(bool registered = true, bool quest2 = true, bool withWords = true) {
+  Reset(tq::Level::kStock, false);
+  tq::SetHeadsetProfile(quest2 ? &headset_profile::kQuest2 : &headset_profile::kQuest3);
+  g_natW = quest2 ? 1440 : kQ3W;
+  g_natH = quest2 ? 1584 : kQ3H;
+  g_nowMs = 100000;
+  g_look = rules::Look{};
+  g_lookCalls = 0;
+  g_uploadCount = 0;
+  g_uploadLock = 0;
+  tm::SetClockForTest(&NowMs);
+  tm::Game game = TheGame();
+  if (withWords) {
+    game.uploadCount = &g_uploadCount;
+    game.uploadLock = &g_uploadLock;
+  }
+  tm::ArmForTest(game, tq::Level::kStock, false, &FakeProperty);
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
+  if (registered) {
+    rules::StepDownSwitches switches;
+    switches.lobby = true;
+    qin::RegisterStepDown(&FakeLook, switches);
+  }
+  Eye();
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  Deliver(settings);  // the load: Low (the default index)
+  Frame();            // stock and Low are one size: committed without a rebuild
+  QCHECK(tq::LatchedLevel() == tq::Level::kLow);
+  g_resizeCalls = 0;
+  g_resizeRc = 0;
+  g_sizesAtResize.clear();
+}
+
+// Into a combat map, settled: the gate turns on after 10 s with no load.
+void SettleInCombat() {
+  SetLook(rules::Where::kCombatMap, false);
+  PollFor(rules::kSettleMs + 500);
+}
+
+void AQuest2InASettledCombatMapIsSentVeryLowInAQuietWindow() {
+  ResetStepDown();
+  Capture log;
+  SetLook(rules::Where::kCombatMap, false);
+  PollFor(rules::kSettleMs - 500);
+  Frame();
+  QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);  // not settled yet
+  PollFor(1000);
+  Frame();
+  QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
+  QCHECK(!g_sizesAtResize.empty() && g_sizesAtResize.back() == std::make_pair(1152, 1264));  // the Quest 2 Very Low, refreshed first
+  QCHECK(tm::CurrentTotals().lookApplies == 1);
+  const std::string rule = LineWith("\"level_sent\":\"very_low\"");
+  QCHECK(rule.find("\"event\":\"texture_quality_level_rule\"") != std::string::npos && rule.find("\"level\":\"info\"") != std::string::npos);
+  QCHECK(rule.find("\"reason\":\"quest2_combat\"") != std::string::npos && rule.find("\"where\":\"combat_map\"") != std::string::npos);
+  QCHECK(rule.find("\"level_asked\":\"low\"") != std::string::npos && rule.find("\"quest2\":1") != std::string::npos);
+  // Settled in Echo Arena, the player's level comes back, in a quiet window too.
+  SetLook(rules::Where::kEchoArena, false);
+  PollFor(rules::kSettleMs + 500);
+  Frame();
+  QCHECK(g_resizeCalls == 2 && tq::LatchedLevel() == tq::Level::kLow);
+  QCHECK(CountLines("\"reason\":\"arena\"") == 1);
+  QCHECK(tm::CurrentTotals().lookApplies == 2);
+}
+
+void ALookDrivenResizeWaitsForTheUploadCountAndLock() {
+  ResetStepDown();
+  Capture log;
+  SettleInCombat();
+  g_uploadCount = 1;
+  Frame();
+  Frame();
+  QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+  tm::PollOnceForTest();
+  const std::string held = LineWith("\"event\":\"texture_quality_level_held\"");
+  QCHECK(held.find("\"hold\":\"uploads\"") != std::string::npos && held.find("\"uploads\":1") != std::string::npos);
+  QCHECK(held.find("\"level_from\":\"low\"") != std::string::npos && held.find("\"level_to\":\"very_low\"") != std::string::npos);
+  QCHECK(CountLines("texture_quality_level_held") == 1 && tm::CurrentTotals().lookHolds == 1);  // one line per hold, not per frame
+  g_uploadCount = 0;
+  g_uploadLock = 1;
+  Frame();
+  QCHECK(g_resizeCalls == 0);
+  g_uploadLock = 0;
+  Frame();
+  QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
+  // The way back up is the look's too: it waits as well.
+  SetLook(rules::Where::kEchoArena, false);
+  PollFor(rules::kSettleMs + 500);
+  g_uploadCount = 2;
+  Frame();
+  QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
+  g_uploadCount = 0;
+  Frame();
+  QCHECK(g_resizeCalls == 2 && tq::LatchedLevel() == tq::Level::kLow);
+}
+
+void ALookDrivenResizeWaitsWhileALevelLoads() {
+  ResetStepDown();
+  SettleInCombat();
+  SetLook(rules::Where::kCombatMap, true);  // a load began after the poller's last look: the look made at the Resize sees it
+  Frame();
+  QCHECK(g_resizeCalls == 0);
+  PollFor(500);  // the gate sees it too: the quiet stretch starts again
+  SetLook(rules::Where::kCombatMap, false);
+  PollFor(rules::kSettleMs - 1000);
+  Frame();
+  QCHECK(g_resizeCalls == 0);  // 8.5 s after the load ended (the first quiet poll)
+  PollFor(1500);
+  Frame();
+  QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
+  // A stale look holds too.
+  SetLook(rules::Where::kEchoArena, false);
+  PollFor(rules::kSettleMs + 500);
+  g_nowMs += rules::kLookFreshMs + 1;
+  Frame();
+  QCHECK(g_resizeCalls == 1);
+}
+
+void APlayerChoiceStandsInCombat() {
+  ResetStepDown();
+  Capture log;
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  Deliver(settings);  // the same index: no choice
+  QCHECK(!tq::PlayerChose());
+  SetMsaa(settings, 2);
+  Deliver(settings);  // the player picks Medium
+  QCHECK(tq::PlayerChose());
+  Frame();
+  QCHECK(tq::LatchedLevel() == tq::Level::kMedium);
+  SettleInCombat();
+  Frame();
+  QCHECK(tq::LatchedLevel() == tq::Level::kMedium);
+  QCHECK(CountLines("\"reason\":\"player_choice\"") >= 1 && CountLines("\"reason\":\"quest2_combat\"") == 0);
+}
+
+void AStepDownMadeStandsAsideForAMenuChoiceAtOnce() {
+  ResetStepDown();
+  SettleInCombat();
+  Frame();
+  QCHECK(tq::LatchedLevel() == tq::Level::kVeryLow);
+  g_uploadCount = 3;  // the menu's own path is unchanged: it does not wait
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  Deliver(settings);
+  SetMsaa(settings, 3);
+  Deliver(settings);  // High
+  Frame();
+  QCHECK(tq::LatchedLevel() == tq::Level::kHigh && g_resizeCalls == 2);
+}
+
+void ADevelopmentPropertyIsAChoice() {
+  ResetStepDown();
+  QCHECK(!tq::PlayerChose());
+  g_property = "medium";
+  tm::PollOnceForTest();
+  QCHECK(tq::PlayerChose());
+}
+
+void NotAQuest2OrNoLookRegisteredSendsThePlayersLevel() {
+  {
+    ResetStepDown(/*registered=*/true, /*quest2=*/false);
+    Capture log;
+    SettleInCombat();
+    Frame();
+    QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+    QCHECK(CountLines("\"reason\":\"not_quest2\"") == 1);
+  }
+  ResetStepDown(/*registered=*/false);
+  Capture log;
+  SettleInCombat();
+  Frame();
+  QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+  QCHECK(CountLines("texture_quality_level_rule") == 0 && g_lookCalls == 0);  // nothing of the step-down runs
+}
+
+void ARefusedLookResizeTurnsTheStepDownOffForTheRun() {
+  ResetStepDown();
+  Capture log;
+  SettleInCombat();
+  g_resizeRc = 5;
+  Frame();
+  QCHECK(tq::LatchedLevel() == tq::Level::kLow && tm::CurrentTotals().lookOff);
+  g_resizeRc = 0;
+  const int calls = g_resizeCalls;
+  PollFor(1000);
+  Frame();
+  QCHECK(g_resizeCalls == calls && tq::LatchedLevel() == tq::Level::kLow);
+  const std::string off = LineWith("\"event\":\"texture_quality_level_rule_off\"");
+  QCHECK(off.find("\"why\":\"resize_failed\"") != std::string::npos);
+  QCHECK(CountLines("texture_quality_level_rule_off") == 1);
+}
+
+void UnpinnedUploadWordsTurnTheStepDownOff() {
+  ResetStepDown(true, true, /*withWords=*/false);
+  Capture log;
+  SettleInCombat();
+  Frame();
+  QCHECK(g_resizeCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+  QCHECK(LineWith("texture_quality_level_rule_off").find("\"why\":\"upload_words_unavailable\"") != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
+  AQuest2InASettledCombatMapIsSentVeryLowInAQuietWindow();
+  ALookDrivenResizeWaitsForTheUploadCountAndLock();
+  ALookDrivenResizeWaitsWhileALevelLoads();
+  APlayerChoiceStandsInCombat();
+  AStepDownMadeStandsAsideForAMenuChoiceAtOnce();
+  ADevelopmentPropertyIsAChoice();
+  NotAQuest2OrNoLookRegisteredSendsThePlayersLevel();
+  ARefusedLookResizeTurnsTheStepDownOffForTheRun();
+  UnpinnedUploadWordsTurnTheStepDownOff();
   ALevelAskedForIsAppliedAtTheNextFrameInTheEnginesOrder();
   TheSizesFollowTheHeadset();
   ARequestForTheAppliedLevelDoesNothing();

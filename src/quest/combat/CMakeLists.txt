@@ -51,6 +51,7 @@ add_library(nevr_quest_combat STATIC
   table_step.cpp
   tablestep.cpp
   texel_buffer_guard.cpp
+  texture_quest2.cpp
   voipdrop.cpp
   wallfire.cpp
   weapon_arm.cpp)
