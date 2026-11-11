@@ -19,6 +19,7 @@
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/join_hold.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
@@ -302,6 +303,10 @@ VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
+  // #1737 (101f): accepts the join hold queued go to the game here, on the game thread and after this frame's service
+  // messages (so a held accept is never overtaken); one atomic read when nothing is held.
+  nevr_join_hold::ReleaseDue(m_context->GetBroadcaster(), m_context->GetSessionState().lobbySessionId.c_str());
+
   // Telemetry: snapshot game state and process responses
   if (m_telemetry && m_telemetry->IsActive()) {
     m_telemetry->SnapshotIfDue();
@@ -455,6 +460,9 @@ VOID GameServerLib::EndSession() {
 
 void GameServerLib::EndServerSession(nevr_server_timestep::SessionEndCause cause) {
   const std::string endingSessionId = m_context->GetSessionState().lobbySessionId;
+  // #1737 (101f): the session is over (the game ended it, or the service did and this is the second call): held accepts are
+  // dropped, never forwarded to the next session. A reconnect's EndSession (below) does not come through here.
+  nevr_join_hold::OnSessionEnd(nevr_server_timestep::SessionEndCauseName(cause), endingSessionId.c_str());
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
     return nevr_game_server::SendProtobufEnvelope(*m_wsClient, envelope);
   };

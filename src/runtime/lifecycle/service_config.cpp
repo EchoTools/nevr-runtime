@@ -460,6 +460,14 @@ int NevrCfgFrameStatsMode(int* recognised) {
   return static_cast<int>(mode);
 }
 
+const char* NevrCfgJoinHoldMs() {
+  return AccessorBoundary("NevrCfgJoinHoldMs", [&]() -> const char* {
+    const std::optional<std::string> value = NevrCfg().GetString("network.join_hold_ms");
+    if (!value || value->empty()) return nullptr;
+    return InternCStr(*value, "NevrCfgJoinHoldMs");
+  });
+}
+
 int NevrCfgUpdateEnabled() {
   const std::optional<bool> enabled = NevrCfg().GetBool("update.enabled");
   return enabled.has_value() ? (*enabled ? 1 : 0) : -1;

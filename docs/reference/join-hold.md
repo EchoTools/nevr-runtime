@@ -3,13 +3,41 @@
 The join hold holds a dedicated server's lobby accepts while a session's level set is loading. It reads three
 functions of `echovr.exe`. This page records them, the server chain that reaches them, what was read and what was
 inferred, and the live-run evidence still owed. The three are pinned in `src/runtime/hook/addresses.h` (section
-"Level-load state the join hold reads") and in `tools/hook_identity_manifest.json`. Nothing hooks them yet.
+"Level-load state the join hold reads") and in `tools/hook_identity_manifest.json`. With `network.join_hold_ms` above 0 on a dedicated server, `src/runtime/server/join_hold.cpp`
+detours two of them (`LoadLevel` and `EnableGameSpaces`); `Enable` is validated and never hooked. With the key at 0, the default, nothing is hooked.
 
 The binary is `echovr.exe`, sha256 `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043`, 35397120
 bytes, image base 0x140000000. The ReVault `echovr` project holds the same file. Addresses here are VAs. `addresses.h`
 stores RVAs, the form of its neighbours; the manifest stores VAs.
 
 Tags on the chain: **[R]** read in ReVault decompilation or bytes; **[I]** inferred, with the basis given; **[N]** not read.
+
+## The hold
+
+`network.join_hold_ms` (config.yaml, section `network`) is the longest wait, in milliseconds. 0, the default, is off: no hook is
+installed and every accept is forwarded at once. A value from 1 to 499 is raised to 500 and one above 15000 is lowered to it, each with a
+Warning; text that is not a whole number is off with a Warning. A client never installs it.
+
+What is held is the server's forward of the service's accept (`LobbyAcceptPlayersSuccessV2`, `kLobbyEntrantsAccept` in
+`src/runtime/server/gameserver_callbacks.cpp`): a copy of the encoded bytes is queued with its arrival time and no game function is
+patched. The failure message is not held. Accepts go to the game in arrival order, and once one is queued every later one queues behind it.
+
+The gate (`src/runtime/server/join_hold_rules.h`, `Gate`):
+
+- A session create arms it, expecting a load. A `LoadLevel` entry counts a load in flight and closes it; a `LoadLevel` exit counts it done.
+- An `EnableGameSpaces` return opens it only when no load is in flight and a load was seen since the arm, so a return left over from the
+  lobby cannot open it during the session's own load. It then stays closed for 200 ms after the last activity (`kSettleMs`).
+- At `join_hold_ms` after the front accept arrived, everything is released anyway (Warning `reason=timeout`) and the gate disarms: it fails
+  open, and it also ends a load count stuck by a `LoadLevel` that never returned.
+- The service's `CODE_ENDED`, `EndServerSession` and the next session create drop what is held (Warning `dropped=<n>`). A reconnect's
+  `EndSession` does not.
+
+A session whose levels are already loaded calls no `LoadLevel`; its accepts wait for the timeout.
+
+Both prologues are checked before either detour goes in; a mismatch logs `join hold not armed` (Warning, expected and actual bytes) and
+leaves the game untouched. This is not `ServerFatal`: the hold is optional.
+
+Per accept, the `EnableGameSpaces` return and each release, `[NEVR.GAMESERVER] join hold ...` lines carry counts and the session id.
 
 ## The three functions
 

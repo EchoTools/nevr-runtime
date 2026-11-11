@@ -147,6 +147,14 @@ TEST(NevrConfig, ParsesTypedScalars) {
   EXPECT_FALSE(cfg.Empty());
 }
 
+// #1737 (101f): network.join_hold_ms is read by NevrCfgJoinHoldMs (a direct getter, no flat key), so it must be a known
+// key: an unknown key under a known section is counted and warned about.
+TEST(NevrConfig, NetworkJoinHoldMsIsAKnownKey) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("network:\n  join_hold_ms: 5000\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.GetString("network.join_hold_ms").value_or(""), "5000");
+}
+
 TEST(NevrConfig, StringList) {
   SetEnv("NEVR_TEST_HTTP_KEY", "secretvalue");
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(kSampleYaml);

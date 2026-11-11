@@ -228,6 +228,8 @@ set(PATCHES_SOURCES
     "server/telemetry_streamer.cpp"
     "server/bearer_reconnect_auth.cpp"
     "server/upnp.cpp"
+    # #1737: the join hold on a dedicated server (pure logic in server/join_hold_rules.h).
+    "server/join_hold.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -1138,6 +1140,11 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_arena_rules_hook DISCOVERY_MODE PRE_TEST)
 
     # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
+    add_executable(test_join_hold tests/test_join_hold.cpp)
+    set_source_files_properties(tests/test_join_hold.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_join_hold PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_join_hold PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_join_hold DISCOVERY_MODE PRE_TEST)
     add_executable(test_server_bots tests/test_server_bots.cpp)
     set_source_files_properties(tests/test_server_bots.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_bots PRIVATE ${CMAKE_SOURCE_DIR}/src)

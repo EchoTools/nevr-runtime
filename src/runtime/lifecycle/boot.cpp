@@ -40,6 +40,7 @@
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
 #include "runtime/patch/server_frame_wait_install.h"
+#include "runtime/server/join_hold.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/self_provenance.h"
@@ -900,6 +901,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // #2109: a server's frame wait answers raw pings as they arrive and never ends a frame early; with it, the overrun
   // delta-time patch. A client logs that it does not apply (N122/N124).
   nevr_server_frame_wait::Install(g_isServer != FALSE);
+  // #1737 (101f): a server with network.join_hold_ms above 0 holds the service's accepts while the session's levels load
+  // (docs/reference/join-hold.md); off by default, and a client or a server with the key off logs that it does not
+  // apply (N122/N124). Server-only (N131/N146): this runs in the deferred bootstrap, after the original call.
+  nevr_join_hold::Install(g_isServer != FALSE);
 
   // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
   // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs
