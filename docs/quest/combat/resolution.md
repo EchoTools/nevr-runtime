@@ -87,8 +87,8 @@ slot at VA `0x37de328` (ELF `0x36de328`), which holds the function's address.
 So in the shipped code the only calls that reach the flag pass 0 (`Render`) or the constant's value (`ApplyRuntimeGfxSettings`, inferred 0),
 and no code path in the database passes 1 that this file has found.
 
-**What upstream says it does (not reproduced).** `kotorvr/echoquest-combat` at `c5a67e8`, `tools/fxlane/afk_drr-1829a420.cpp` and the
-`afk_drr.cpp` header, describes a test-only step in which the runtime calls `SetEnableAutoResolution(1)` every frame on a combat level, with
+**What upstream says it does (not reproduced).** `kotorvr/echoquest-combat` at `c5a67e8`, its fxlane afk_drr source and the
+afk_drr header, describes a test-only step in which the runtime calls `SetEnableAutoResolution(1)` every frame on a combat level, with
 `SetAutoResolutionFrameRate` and `SetAutoResolutionMinScale`, and says the game's `CR15Game::Render` resets the flag. It also says the
 OpenXR extension is not needed for Echo's controller, which uses its own GPU timer, and that enabling the OpenXR extension adds about
 0.7 ms of CPU per frame. Those are upstream's measurements on their own device runs. This file did not reproduce them, and the reset in `Render` is the
@@ -136,7 +136,7 @@ while paused and once the match ends (on leaving state 9). What 0 to 4 mean to V
 argument `(kR15QuestEnableDynamicFoveation != 0)`, folded to 1 (see the constants table). `ApplyRuntimeGfxSettings` runs at boot
 (`CR15Game::InitEngine`) and from the settings translator (decompile comment).
 
-**Upstream's foveation (not reproduced).** `afk_ffr.cpp` in the same upstream commit hooks EchoFrame's property read, a runtime that is
+**Upstream's foveation (not reproduced).** The afk_ffr source in the same upstream commit hooks EchoFrame's property read, a runtime that is
 not on the stock path, and sets the rings to medium (Quest 3) or high (Quest 2). Its header reports GPU-bound combat at medium. That is
 upstream's claim and it describes a different runtime.
 
