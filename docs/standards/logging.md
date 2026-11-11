@@ -107,7 +107,7 @@ for row.
 
 | Tag                   | Component                                     |
 | --------------------- | --------------------------------------------- |
-| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection)  |
+| `[NEVR.WS]`           | ws-bridge (WebSocket proxy, login injection); the session router's lines on PC and Quest; one Info `service frames conn=<n> role=<config\|login\|matchmaker> format=<evr\|unknown>` line per service connection at its first frame (`compat/service_frames.h`, #568): `evr` when the frame starts with the EVR marker, `unknown` otherwise (the bridge does not decode a protobuf Envelope, so it never says `protobuf`); written once per connection by the PC bridge's own path and by the router, never per frame. A matchmaker that shares the login session's remote writes none (the login connection's line covers that remote). On the router the `conn` and `role` are those of the connection that owns the remote (the session remote reports conn=0 role=config), and the router's record carries no `[NEVR.WS]` tag of its own on Quest (bare `service frames ...`; on PC the bridge's log hook adds it) |
 | `[NEVR.GAMESERVER]`   | GameServerLib (lobby registration, sessions)  |
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
@@ -776,7 +776,7 @@ structured call (ADR 0027) writes as its own key.
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
-| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
+| Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s ip_len=%zu"` | Already compliant — carries server_id and ip (an address that parses as IPv4 or IPv6 as written, anything else through `Escape`) with its length |
 | State transition | `"[NETGAME] Logging in..."` | `"[NEVR.PATCH] netgame state from=%s to=%s"` |
 | Crash dump | `"=== CRASH DUMP ==="` | `"[NEVR.CRASH] exception code=0x%08lX name=%s rip=0x%llX"` |
 
