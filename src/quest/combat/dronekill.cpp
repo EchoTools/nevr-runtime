@@ -363,7 +363,7 @@ __attribute__((noinline)) bool TryHold(const NodeData& d) noexcept {
   bool already = false;
   std::uint64_t actor = 0, space = 0, gctx = 0;
   pthread_mutex_lock(&g_mu);
-  if (const Group* g = g_table.SoleCandidate(NowMs(), &candidates, &dead)) {
+  if (const Group* g = g_table.SoleCandidate(&candidates, &dead)) {
     number = g->x.number;
     index = g->handle;
     already = g->x.holdOpen;
@@ -1146,29 +1146,45 @@ void CallCounts(std::uint64_t (&out)[kHookCount]) noexcept {
   out[3] = AttackThunk::Calls();
 }
 
+// The no-level answers in a row while the scope is on (the tick thread only).
+std::uint32_t g_leave_asks = 0;
+
 // The scope, asked of combat_level (a combat map, never a lobby: the drones are a combat map's). A change is one line, with each hook's calls over
 // the scope that ended; leaving the scope empties the tables, so nothing is due outside a combat map.
+// Leaving waits for kLeaveAsks no-level answers in a row. combat_level cannot tell a game it could not read from a game with no combat map (an
+// unreadable table, row or game, 0 included, is no level: Scan skips it), so a single answer is no proof the map ended; and a drop with the map
+// still loaded leaves the held components on for good. Entering is immediate.
 __attribute__((noinline)) void RefreshScope(std::uintptr_t game) noexcept {
   std::uint64_t level_id = 0;
   const bool in = level::Classify(game, /*lobby=*/false, &level_id) == level::Kind::kCombatOrLobby;  // an unreadable game (0 included) is no level
-  if (in == g_inScope.load(std::memory_order_relaxed)) return;
+  const bool was = g_inScope.load(std::memory_order_relaxed);
+  if (in || !was) g_leave_asks = 0;
+  if (in == was) return;
   if (!in) {
+    if (++g_leave_asks < kLeaveAsks) {
+      sentinel::LogFields(LogLevel::kDebug, "combat_dronekill_scope_wait",
+                          {{"no_level_asks", g_leave_asks}, {"needed", kLeaveAsks},
+                           {"msg", "no combat map was read: dronekill stays in its scope until the answer has been the same for the asks it needs"}});
+      return;
+    }
+    g_leave_asks = 0;
     pthread_mutex_lock(&g_mu);
     int dropped = 0;  // held components the level takes with it: open holds, queued explosions' and those waiting to go off
     for (const Group& g : g_table.t.g) dropped += g.used && g.x.holdOpen ? 1 : 0;
     for (const auto& x : g_fx.s) dropped += x.used ? x.nheld : 0;
     for (const OffRetry& r : g_offs.r) dropped += r.used ? 1 : 0;
     if (dropped != 0) {
-      sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_hold",
-                          {{"step", "dropped"}, {"count", dropped},
-                           {"msg", "the combat map ended with held components: they are dropped with its game space, which is unloaded"}});
+      sentinel::LogFields(LogLevel::kWarn, "combat_dronekill_hold",
+                          {{"step", "dropped"}, {"count", dropped}, {"no_level_asks", kLeaveAsks},
+                           {"msg", "no combat map was read for several asks in a row: dronekill forgets its held components, and nothing turns them off, "
+                                   "so they stay on (that the game space is gone is not established)"}});
     }
     g_table = Table();
     g_touch.Clear();
     g_guns.Clear();
     g_chases.Clear();
     g_aux_space = nullptr;
-    g_fx.Clear();    // the level is gone: its explosions and holds with it (the held components' game space is unloaded)
+    g_fx.Clear();    // the scope is over: its explosions and holds with it
     g_offs.Clear();
     g_any_due.store(false, std::memory_order_release);
     pthread_mutex_unlock(&g_mu);
@@ -1518,6 +1534,7 @@ void ResetForTest() noexcept {
   g_entryInfo.store(nullptr);
   for (std::uint64_t& s : g_scopeSince) s = 0;
   g_scopeSinceMs = 0;
+  g_leave_asks = 0;
   g_clock_ms = nullptr;
   g_test_calls = nullptr;
   SetInstallForTest(nullptr, nullptr, nullptr);

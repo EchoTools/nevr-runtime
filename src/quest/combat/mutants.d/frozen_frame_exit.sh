@@ -71,3 +71,4 @@ runm ffe_not_a_scope_reader $CI "s/ || g_config.frozenFrameExit.on//" quest-host
 QC=src/quest/sentinel/quest_config.cpp
 runm ffe_limit_range        $QC "s/kCombatFrozenFrameExitSKey, 10, 900, 30, r)/kCombatFrozenFrameExitSKey, 10, 901, 30, r)/" quest-host-shared quest_config_test
 runm ffe_key_unread         $QC "s/  r.config.combat.frozenFrameExit = ReadCombatSwitch(cfg, kCombatFrozenFrameExitKey, r);//" quest-host-shared quest_config_test
+runm ffe_tick_halted $F "s/^  if (g_halted.load(std::memory_order_acquire)) return;\$/  (void)0;/"  # Tick ignores a halted watch (a stamp that raced the halt can fire)

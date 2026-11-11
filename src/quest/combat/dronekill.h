@@ -27,14 +27,14 @@
  * That is NOT established: a ReVault read of Enter (ELF 0x273b700, VA 0x283b700) suggests it, the proven reconstruction does not hold
  * that function, and its reconstruction is requested (the reconstruct pipeline's NEEDED list). The hold stays off until that reconstruction
  * shows the one effect; turning it on by default is one constant (quest_config.h `dronekillHold`). With it on, a hold is taken only when
- * exactly one drone group can still run its end (Enter has not looked its actor up yet; a shot-down drone's end still runs within
- * kSwallowMs, so it counts), that group is alive, its actor has the component, the system's DisableComponent is the read shape and its game
+ * exactly one drone group can still run its end (Enter has not looked its actor up yet; a shot-down drone counts until its own end has been
+ * seen, however long that takes), that group is alive, its actor has the component, the system's DisableComponent is the read shape and its game
  * space's invoke-immediate word reads; otherwise the real Enter runs at once (the game's behaviour, then the expiry opens by actor as above).
  * A held component goes off through the same stage-1 path as a kill's (OffOne): kFxSoundHoldMs after the explosion, at once when the drone
  * was already dead, had no context or the queue was full, or kFxSoundHoldMs after the hold when no damageable off came. When OffOne cannot
  * turn it off (the component was looked up again and differs, the game space defers the disable for kDueMs, or the off list is full) the
- * component STAYS ON and nothing turns it off: one Warning `combat_dronekill_hold` step `stays_on` says so. When the combat map ends with
- * holds open, one Info line (step `dropped`, `count`) says they went with the level.
+ * component STAYS ON and nothing turns it off: one Warning `combat_dronekill_hold` step `stays_on` says so. When the scope ends (kLeaveAsks no-level
+ * answers in a row) with holds open, one Warning (step `dropped`, `count`) says dronekill forgot them and they stay on.
  *
  * The kill feed. The EC client hands each first-time 'K' datagram (a drone's health ran out on the server) to OnKilled: the install registers it
  * with ec::OnDroneKilled (ec.h). Without an EC server no 'K' arrives and `kill` never fires; lock-on, gun, chase and shot do not need it.
@@ -44,7 +44,7 @@
  *
  * Arena (same APK). Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module
  * acts only while a combat map is loaded (combat_level.h `Classify`, asked by the module's own tick every kScopeFrames frames and kept in one
- * atomic, InCombatScope). Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
+ * atomic, InCombatScope; the scope ends after kLeaveAsks no-level answers in a row, so a failed read does not end it). Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
  * AttackTarget after its call, Actor after its call when no drone Enter is in flight; OnKilled drops the 'K'; the tick clears the tables when the
  * scope ends. An arena level writes only the one `combat_dronekill_scope` line per change of scope; the process writes the final
  * `combat_dronekill_stats` record at its end whenever the module is installed, with zero counts if no combat map was seen.
@@ -63,6 +63,7 @@
  *   hook     {"event":"combat_dronekill_hook","hook":"<name>","status":"<GotStatus>"}  Info when installed, Error otherwise
  *   install  {"event":"combat_dronekill_install","result":"installed|refused|off","reason":"..",..}  one per step
  *   scope    {"event":"combat_dronekill_scope","in_combat":0|1,"level":"0x..",..}  one per change of scope
+ *   scope_wait {"event":"combat_dronekill_scope_wait","no_level_asks":n,"needed":3,..}  Debug, per no-level answer that did not yet end the scope
  *   stats    {"event":"combat_dronekill_stats","enter_drone":n,..,"expired":n,"final":0|1}  Debug every kStatsEvery drone Enters, Info at the process end
  *   expired  {"event":"combat_dronekill_expired","index":n,"group":n,"tid":n,..}  Info per drone end that found a live group, the first 16 of a run
  *   log_cap  {"event":"combat_dronekill_log_cap","lines":"expired","cap":16,..}  Warning, once, at the drone end past the cap
@@ -72,7 +73,7 @@
  *                      Warning per explosion not run, the first 16
  *   hold               {"event":"combat_dronekill_hold","index":n,"group":n,"step":"held|released|off_next_tick|let_go|not_held|end_open|end_not_open|stays_on|dropped",..}
  *                      Debug, the first 64; stays_on: Warning, the first 16 (a held component that could not be turned off stays on);
- *                      dropped: Info, the held components a combat map's end took with it
+ *                      dropped: Warning, the held components the end of the scope left on
  * and the acting lines (`combat_dronekill_component`, `_release`, `_off`, `_k`, `_touch`, `_gun`, `_chase`, `_note`), each capped per kind with a
  * `combat_dronekill_cap` line when the cap is reached.
  *
@@ -145,6 +146,9 @@ Result InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Words& wo
 // The game's frame tick (combat_tick.h): every kScopeFrames frames it asks combat_level whether a combat map is loaded (the scope); in scope it
 // runs the due work (disables after a 'K', the touch interact on and off, the chase velocities); one atomic load while nothing is due.
 inline constexpr std::uint32_t kScopeFrames = 32;
+// Leaving the scope takes this many no-level answers in a row (one ask every kScopeFrames frames): the level read cannot tell an unreadable game from
+// one with no combat map, so one answer does not end the scope. Entering takes one.
+inline constexpr std::uint32_t kLeaveAsks = 3;
 void Tick(std::uintptr_t game) noexcept;
 
 // Whether a combat map is loaded, as the tick last saw it (false before the first tick: fail closed). The one place the module asks.

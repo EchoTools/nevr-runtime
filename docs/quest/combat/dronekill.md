@@ -79,7 +79,7 @@ this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope)
 
 Out of scope: Enter and FireBulletLocal call the game's function and return before anything else (no shot frame, so dronemuzzle passes too);
 AttackTarget returns after its call; Actor returns after its call when no drone Enter is in flight on any thread (always, out of scope); a
-'K' is dropped; the tick does nothing after its level ask; leaving the scope empties the group, touch, gun and chase tables, so nothing from a
+'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-level answers in a row, because `combat_level` cannot tell an unreadable game from one with no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
 combat map is acted on later. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
 measurement a headset run gives). `dronekill_test` (`TestArenaLevelsAreLeftAlone`, `TestScopeEndsAtTheLevelChange`) drives a drone's Enter,
 an Actor, a shot, an attack, a 'K' and 65 ticks on `mpl_arena_a`, `mpl_lobby_b2`, `mpl_lobby_b_combat` and no level, and checks that each hook

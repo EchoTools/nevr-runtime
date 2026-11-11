@@ -64,8 +64,10 @@ const char* ProductionEndingCause() noexcept {
   if (process_end::Ending()) return "process_end";
   const auto* app = reinterpret_cast<const unsigned char*>(g_appSource.load(std::memory_order_acquire)());
   if (app != nullptr) {
-    int destroyRequested = 0;
-    std::memcpy(&destroyRequested, app + sentinel::glue::kAppDestroyRequested, sizeof(destroyRequested));
+    // One relaxed atomic load, not a memcpy: the glue's thread writes the word while this watchdog thread reads it, and a plain read of a word
+    // another thread writes is a data race (a torn or hoisted read is undefined). The word is an aligned int, so the load is one instruction.
+    static_assert(sentinel::glue::kAppDestroyRequested % alignof(int) == 0, "destroyRequested must be an aligned int for the atomic load");
+    const int destroyRequested = __atomic_load_n(reinterpret_cast<const int*>(app + sentinel::glue::kAppDestroyRequested), __ATOMIC_RELAXED);
     if (destroyRequested != 0) return "destroy_requested";
   }
   return nullptr;
@@ -274,6 +276,9 @@ void Halt(const char* cause, std::int64_t last) noexcept {
 
 void Tick() noexcept {
   if (g_fired.load(std::memory_order_acquire)) return;
+  // The watch is off for good once halted. A submit that passed Stamp's own halted test just before Halt cleared the stamp can arm it again after
+  // Halt (the test and the exchange are two steps), so Stamp's test alone does not keep a halted watch from firing.
+  if (g_halted.load(std::memory_order_acquire)) return;
   std::int64_t last = g_lastSubmitMs.load(std::memory_order_acquire);
   if (const char* cause = g_endingCause.load(std::memory_order_acquire)()) {
     Halt(cause, last);

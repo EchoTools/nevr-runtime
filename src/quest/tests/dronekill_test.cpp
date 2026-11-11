@@ -820,6 +820,14 @@ static void LoadLevels(std::initializer_list<const char*> names) {
   g_game.words[kCount0 / 8] = static_cast<uintptr_t>(row);
 }
 
+// Ticks until the module has asked the level `asks` times (it asks on the frames whose count is a multiple of kScopeFrames), the last ask included.
+static void TickAsks(unsigned asks) {
+  for (unsigned done = 0; done < asks;) {
+    if (CurrentStats().ticks % kScopeFrames == 0) ++done;
+    Tick(GameAddress());
+  }
+}
+
 static uintptr_t V(const void* fn) { return reinterpret_cast<uintptr_t>(fn) - g_base; }
 static Pins Slots() {
   return {kSlotActor, V(reinterpret_cast<void*>(&FakeActor)), kSlotEnter, V(reinterpret_cast<void*>(&FakeEnter)), g_fire_slot,
@@ -2239,10 +2247,11 @@ static void TestArenaLevelsAreLeftAlone() {
     CHECK(r.ok, "install");
     if (level[0] != 0) LoadLevels({level});
     else LoadLevels({});
+    SetScopeForTest(false);  // the module starts out of scope (fail closed); the harness's Reset puts it in one
     g_lines.clear();
     Tick(GameAddress());  // the first tick asks the level
     CHECK(!InCombatScope(), "%s: in scope", level);
-    CHECK(HasLine("combat_dronekill_scope in_combat=0", 1), "%s: no scope line", level);
+    CHECK(!HasLine("combat_dronekill_scope "), "%s: a scope line with no change of scope", level);
     ExpectInert(level[0] != 0 ? level : "no level");
     // on an arena level no counter moves and no D11 line goes out; the stats record is written only at the process end (NoteEnd, not run here)
     CHECK(!HasLine("combat_dronekill_stats") && !HasLine("combat_dronekill_expired"), "%s: a stats or expired line on an arena level", level);
@@ -2255,6 +2264,7 @@ static void TestArenaLevelsAreLeftAlone() {
   CHECK(InCombatScope() && HasLine("combat_dronekill_scope in_combat=1", 1), "a combat map is not the scope");
   // no game (0): out of scope
   Reset(Words{});
+  SetScopeForTest(false);
   Tick(0);
   CHECK(!InCombatScope(), "no game is in scope");
 }
@@ -2262,6 +2272,7 @@ static void TestArenaLevelsAreLeftAlone() {
 // A combat map, then an arena level: the dead group the server named is not turned off in the arena, the tables are empty, and the line on the way
 // out carries each hook's calls over the combat scope; back on a combat map the module acts again.
 static void TestScopeEndsAtTheLevelChange() {
+  CHECK(kLeaveAsks == 3, "the scope ends after %u no-level answers, want 3", kLeaveAsks);
   Result r = Reset(Words{});
   CHECK(r.ok, "install");
   g_lines.clear();
@@ -2279,9 +2290,15 @@ static void TestScopeEndsAtTheLevelChange() {
   CallEnter(&s);  // the dead group's component on again: due at the next tick
   g_lines.clear();
   g_dis.clear();
-  Tick(GameAddress());  // the 32nd: the arena level
+  TickAsks(2);  // the arena level read, but not for long enough to end the scope: the due work still runs
+  CHECK(InCombatScope() && !HasLine("combat_dronekill_scope in_combat=0"), "the scope ended before the third no-level answer");
+  CHECK(HasLine("combat_dronekill_scope_wait", 0), "no scope_wait line for a no-level answer that ended nothing");
+  const size_t beforeLeave = g_dis.size();
+  g_lines.clear();
+  TickAsks(1);  // the last answer
   CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1) && HasLine("enter_calls="), "the scope line on the way out");
-  CHECK(g_dis.empty(), "a component was turned off in the arena");
+  CHECK(g_dis.size() == beforeLeave, "a component was turned off in the arena");
+  g_dis.clear();
   ExpectInert("after the change");
   // back to a combat map: it acts again
   LoadLevels({"mpl_combat_fission"});
@@ -2309,7 +2326,8 @@ static void TestScopeEndsAtTheLevelChange() {
   CallEnter(&d);
   OnKilled(0x11);
   LoadLevels({"mpl_arena_a"});
-  for (uint32_t i = 0; i < kScopeFrames + 1; ++i) Tick(GameAddress());  // out at the 33rd tick (n = 32)
+  TickAsks(kLeaveAsks);
+  CHECK(!InCombatScope(), "not out of scope");
   LoadLevels({"mpl_combat_dyson"});
   const uint32_t before = CurrentStats().due_runs;
   for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());  // back in at n = 64, then one tick in scope
@@ -2322,7 +2340,7 @@ static void TestScopeEndsAtTheLevelChange() {
   Reset(Words{});
   CallEnter(&d);
   LoadLevels({"mpl_arena_a"});
-  for (uint32_t i = 0; i < kScopeFrames + 1; ++i) Tick(GameAddress());
+  TickAsks(kLeaveAsks);
   LoadLevels({"mpl_combat_dyson"});
   for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
   CHECK(InCombatScope(), "not back in scope");
@@ -2829,21 +2847,27 @@ static void TestExplosion() {
     Tick(GameAddress());
     CHECK(NcaOffs() == 1, "a hold whose group a release took over stayed held");
   }
-  {  // the level changes before the tick: the queued explosion goes with it (its context belongs to the unloaded level)
+  {  // the scope ends while an explosion waits with a held component: both go with it, and the held component stays on (a Warning says so)
     CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
-    OnKilled(0xabcd0011u);
+    CHECK(!FirstOff(), "not held");
+    EndOf();
+    const uint64_t t0 = g_ms;
     LoadLevels({"mpl_arena_a"});
-    Tick(GameAddress());
+    TickAsks(kLeaveAsks);
     CHECK(!InCombatScope(), "the arena level did not end the scope");
+    CHECK(g_entry_calls.size() == 2, "the expiry's explosion did not run in the asks before the scope ended (%zu)", g_entry_calls.size());
+    CHECK(HasLine("step=dropped", 2) && HasLine("count=1"), "the held component the queued explosion kept was dropped without a Warning");
     LoadLevels({"mpl_combat_dyson"});
     for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
     CHECK(InCombatScope(), "the combat level did not start the scope again");
+    g_entry_calls.clear();
+    g_ms = t0 + 2500;
     Release();
-    CHECK(!FirstOff(), "not held");  // due work again: a tick that runs the explosion queue
+    CHECK(!FirstOff(), "not held");  // due work again: a tick that runs whatever the queue and the off list still hold
     Tick(GameAddress());
-    CHECK(g_entry_calls.empty(), "an explosion queued before the level changed ran after it");
+    CHECK(g_entry_calls.empty() && NcaOffs() == 0, "work queued before the scope ended ran after it");
   }
   {  // out of a combat map: the first-system off is the game's alone
     CHECK(Reset(Held()).ok, "install");
@@ -2944,17 +2968,33 @@ static void TestExplosionDeadEndsWhileAnotherLive() {
   Release();
   OnKilled(kDmgHandle & 0xffff);
   CHECK(FirstOff() && HasLine("why=dead_group"), "a dead drone's first-system off was held");
-  // a dead drone released more than kSwallowMs ago no longer counts: its end ran or will not run
+  // a drone shot down long after its release (40 s: past the swallow window) whose end script runs later, while another drone is live: the
+  // dead drone's first-system off is not the live one's, so no hold is taken. Nothing in the code bounds when a dead drone's end runs, so a dead
+  // group stays a candidate until its own end has been seen, not for a time.
   CHECK(Reset(Held()).ok, "install");
   ArmExplosion();
   g_actor_val = 0xA1;
   Release(kDmgHandle);
-  OnKilled(kDmgHandle & 0xffff);
-  g_ms += dk::kSwallowMs + 1;
   g_actor_val = 0xB2;
   Release(0x00050012);
-  CHECK(!FirstOff() && HasLine("step=held"), "a dead drone released more than kSwallowMs ago kept a live one's first-system off from being held");
+  g_ms += 40000;
+  OnKilled(kDmgHandle & 0xffff);  // A shot down 40 s after its release, while B is out
+  Tick(GameAddress());
+  g_actor_val = 0xA1;
+  g_lines.clear();
+  CHECK(FirstOff(), "A's first-system off (40 s after its release) was held as B's: A's real Enter was skipped");
+  CHECK(HasLine("step=not_held") && HasLine("why=ambiguous") && CurrentStats().held == 0, "the not_held line for a drone shot down 40 s after its release");
+  EndOf(kDmgHandle);
+  g_actor_val = 0xB2;
+  CHECK(!FirstOff() && HasLine("step=held"), "B's first-system off was not held once A's end was seen");
   g_actor_val = 0;
+  // a dead group whose end was seen is no candidate however young; a dead group whose end was not seen stays one however old
+  CHECK(Reset(Held()).ok, "install");
+  ArmExplosion();
+  Release(kDmgHandle);
+  OnKilled(kDmgHandle & 0xffff);
+  g_ms += 3600000;  // an hour: nothing bounds the end script
+  CHECK(FirstOff() && HasLine("why=dead_group"), "a dead drone whose end is not seen was no candidate after an hour (its off was held as another's)");
 }
 
 // ---- a hold is taken only when it can be let go (#1737 review), and a held component that cannot be turned off says it stays on
@@ -3026,15 +3066,36 @@ static void TestExplosionHoldNeedsOff() {
     Tick(GameAddress());
     CHECK(NcaOffs() == 1, "a hold the table's clear took away stayed held");
   }
-  {  // the combat map ends with a hold open: one line says it went with the level
+  {  // the scope ends with a hold open: one Warning says dronekill forgot it and it stays on
     CHECK(Reset(Held()).ok, "install");
     ArmExplosion();
     Release();
     CHECK(!FirstOff(), "not held");
     LoadLevels({"mpl_arena_a"});
-    for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
+    TickAsks(kLeaveAsks);
     CHECK(!InCombatScope(), "the arena level did not end the scope");
-    CHECK(HasLine("step=dropped", 1) && HasLine("count=1"), "the open hold was dropped with the level without a line");
+    CHECK(HasLine("step=dropped", 2) && HasLine("count=1") && HasLine("stay on"), "the open hold was dropped without a Warning that it stays on");
+    CHECK(!HasLine("unloaded"), "the drop line claims the game space is unloaded, which nothing established");
+    CHECK(NcaOffs() == 0, "a dropped hold was turned off");
+  }
+  {  // a read that fails once while the map is still loaded drops nothing: the hold goes off on time afterwards
+    CHECK(Reset(Held()).ok, "install");
+    ArmExplosion();
+    Release();
+    const uint64_t t0 = g_ms;
+    CHECK(!FirstOff(), "not held");
+    LoadLevels({});  // the game reads as no level (an unreadable table reads the same)
+    TickAsks(2);
+    CHECK(InCombatScope() && !HasLine("step=dropped"), "two failed reads ended the scope or dropped a hold");
+    LoadLevels({"mpl_combat_dyson"});
+    TickAsks(1);  // the map reads again: the count starts over
+    LoadLevels({});
+    TickAsks(2);
+    CHECK(InCombatScope() && !HasLine("step=dropped"), "the no-level count was not reset by a read that found the map");
+    LoadLevels({"mpl_combat_dyson"});
+    g_ms = t0 + 2500;
+    TickAsks(1);
+    CHECK(NcaOffs() == 1 && HasLine("step=let_go") && !HasLine("step=dropped"), "a hold across two failed reads was not let go on time (%d)", NcaOffs());
   }
 }
 

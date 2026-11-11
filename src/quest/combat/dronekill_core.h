@@ -280,15 +280,17 @@ struct Table {
     }
 
     // The explosion's hold (#1737). The first-system off arrives before Enter has looked its actor up, so the group it belongs to is
-    // known only when exactly one group can still run its end script: a group whose damageable off has not been seen, alive, or dead
-    // (a 'K') and released no more than kSwallowMs ago (a shot-down drone's script still runs its end within the swallow window, while
-    // its components are held off). That group when it is alive, else null (*candidates = the groups counted; *dead = the one found is
-    // dead, so the off is its own and not a live drone's).
-    Group* SoleCandidate(uint64_t nowMs, int* candidates, bool* dead) {
+    // known only when exactly one group can still run its end script: a group whose damageable off has not been seen (`ended` unset), alive
+    // or dead (a 'K'). A dead group stays a candidate until its own end has been seen, for as long as that takes: nothing in the code bounds
+    // when a shot-down drone's end script runs, and a time bound let the wrong-drone case back (A shot down long after its release, its end
+    // later, B live: B's component held, A's real Enter skipped). The table cannot grow: it has kGroups slots and a release reuses the one
+    // released first. A count above 1 is `ambiguous`: the real Enter runs. That group when it is alive, else null (*candidates = the groups
+    // counted; *dead = the one found is dead, so the off is its own and not a live drone's).
+    Group* SoleCandidate(int* candidates, bool* dead) {
         Group* one = nullptr;
         int n = 0;
         for (auto& g : t.g) {
-            if (!g.used || g.x.ended || (g.dead && nowMs - g.opened > kSwallowMs)) continue;
+            if (!g.used || g.x.ended) continue;
             ++n;
             one = &g;
         }

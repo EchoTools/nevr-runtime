@@ -97,7 +97,7 @@ Nothing new. dronekill's `CEnableComponentNode::Enter` handler (in a combat map 
 |---|---|
 | the damageable's ON (a release) | keep the page's `kDroneCtx` word with the drone's group (0 = none) |
 | the first-system off (`kNcaPhysics`, enable 0), the hold off | the real Enter runs, untouched; then its actor names the drone's group (the one live group of that actor whose end is not seen), whose expiry opens with nothing held (`end_open`; none or two such groups: `end_not_open`) |
-| the same, the hold on, exactly one group can still run its end (one whose damageable off is not seen: alive, or dead and released no more than 25 s ago), it is alive, its component resolves under its actor and game space, the system's DisableComponent is the read shape and its game space's invoke-immediate word reads | the real Enter is not run; the component is held |
+| the same, the hold on, exactly one group can still run its end (one whose damageable off is not seen: alive, or dead, however long ago it was released: nothing bounds when a shot-down drone's end script runs, so a dead group stays a candidate until its own end is seen), it is alive, its component resolves under its actor and game space, the system's DisableComponent is the read shape and its game space's invoke-immediate word reads | the real Enter is not run; the component is held |
 | the same, the hold on, any of that not so (no such group, two or more, the one dead, the component not resolved, the shape or the word not readable) | the real Enter runs at once (the game's behaviour); a `not_held` line; then the expiry opens by actor as with the hold off |
 | the damageable's off, the group was alive, its expiry open, a context kept | the explosion is queued; with a held component, that goes off 2500 ms after the explosion (`sound_delay_ms` 2500), else nothing is held (`sound_delay_ms` 0) |
 | the damageable's off, the group already dead (shot down) | a held component goes off at the next tick, no explosion |
@@ -107,7 +107,7 @@ Nothing new. dronekill's `CEnableComponentNode::Enter` handler (in a combat map 
 | a 'K' for a live group (kill word on) | the explosion is queued, holding nothing; an open hold goes off at the next tick |
 | a second 'K' for the same drone | nothing (the shared kill rule finds no live group) |
 | the queue full (8) | a held component goes off at the next tick; Warning `queue_full` |
-| the combat map ends with holds open, queued or waiting to go off | they are dropped with its game space; one Info `combat_dronekill_hold` line, step `dropped`, with the `count` |
+| the scope ends (3 asks in a row, 32 frames apart, read no combat map) with holds open, queued or waiting to go off | dronekill forgets them and nothing turns them off, so they stay on; one Warning `combat_dronekill_hold` line, step `dropped`, with the `count`. One or two such answers end nothing (a read that failed while the map is loaded is not the map ending); each is a Debug `combat_dronekill_scope_wait` line. That their game space is gone is not established |
 
 The explosion runs at dronekill's tick (the game thread, outside any script node): both entry words are read from the page and each must be
 the drone library's entry (above), the kept context must be readable, its state word at +0x18 is saved, zeroed before each entry and put back
@@ -129,7 +129,7 @@ off.
 - `combat_dronekill_hold`: `index`, `group`, `step`, `why`, `ctx_match` (1, 0, or -1 when not measured), `msg`. Steps `held`, `released` (it
   went off), `off_next_tick` (handed to the tick's off list), `let_go`, `not_held` (`why`: `no_live_group`, `ambiguous`, `dead_group`, `already_held`, `no_system`, `no_shape`, `no_disable_shape`,
   `owner_unreadable`, `no_component`, `group_changed`), `end_open` and `end_not_open` are Debug, the first 64; `stays_on` is Warning, the
-  first 16 (its own budget); `dropped` is Info, with `count`, once per combat map that ends with held components.
+  first 16 (its own budget); `dropped` is Warning, with `count` and `no_level_asks`, once per scope that ends with held components.
 - `combat_dronekill_stats` gains `explosions` and `held`; `combat_dronekill_install` gains `explosion` and `hold`.
 
 ### Arena cost

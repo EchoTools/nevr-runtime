@@ -23,5 +23,5 @@ runm dk_fx_count src/quest/combat/dronekill.cpp "s/  g_explosions.fetch_add(1, s
 runm dk_fx_heldcount src/quest/combat/dronekill.cpp "s/  g_held.fetch_add(1, std::memory_order_relaxed);/  (void)0;/" quest-host-combat dronekill_test
 runm dk_fx_tick src/quest/combat/dronekill.cpp "s/  if (g_explosion) FxTick(now);/  if (false) FxTick(now);/" quest-host-combat dronekill_test
 runm dk_fx_due src/quest/combat/dronekill.cpp "s/ \&\& !g_fx.Any() \&\& !g_offs.Any() \&\& !g_table.AnyHold())/)/" quest-host-combat dronekill_test
-runm dk_fx_scopeclear src/quest/combat/dronekill.cpp "s/    g_fx.Clear();    \/\/ the level is gone/    \/\/ the level is gone/" quest-host-combat dronekill_test
+runm dk_fx_scopeclear src/quest/combat/dronekill.cpp "s/    g_fx.Clear();    \/\/ the scope is over/    \/\/ the scope is over/" quest-host-combat dronekill_test
 runm dk_fx_reuse src/quest/combat/dronekill.cpp "s/      if (g != nullptr \&\& g->x.holdOpen) continue;/      if (g != nullptr || nopen > 0) continue;/" quest-host-combat dronekill_test

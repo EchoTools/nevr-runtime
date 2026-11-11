@@ -4,8 +4,8 @@
 runm dk_h_key src/quest/combat/dronekill.cpp "s/  g_hold = words.hold \&\& words.explosion;/  g_hold = words.explosion;/" quest-host-combat dronekill_test
 runm dk_h_needsfx src/quest/combat/dronekill.cpp "s/  g_hold = words.hold \&\& words.explosion;/  g_hold = words.hold;/" quest-host-combat dronekill_test
 runm dk_h_gate src/quest/combat/dronekill.cpp "s/  if (g_hold \&\& !d.enable \&\& d.system == kNcaPhysics \&\& TryHold(d)) return;/  if (g_explosion \&\& !d.enable \&\& d.system == kNcaPhysics \&\& TryHold(d)) return;/" quest-host-combat dronekill_test
-runm dk_h_liveonly src/quest/combat/dronekill_core.h "s/            if (!g.used || g.x.ended || (g.dead \&\& nowMs - g.opened > kSwallowMs)) continue;/            if (!g.used || g.dead || nowMs == 0) continue;/" quest-host-combat dronekill_test
-runm dk_h_window src/quest/combat/dronekill_core.h "s/            if (!g.used || g.x.ended || (g.dead \&\& nowMs - g.opened > kSwallowMs)) continue;/            if (!g.used || g.x.ended || (g.dead \&\& nowMs - g.opened > ~0ull)) continue;/" quest-host-combat dronekill_test
+runm dk_h_liveonly src/quest/combat/dronekill_core.h "s/            if (!g.used || g.x.ended) continue;/            if (!g.used || g.dead) continue;/" quest-host-combat dronekill_test
+runm dk_h_window src/quest/combat/dronekill_core.h "s/            if (!g.used || g.x.ended) continue;/            if (!g.used || g.x.ended || (g.dead \&\& g.opened < 2000)) continue;/" quest-host-combat dronekill_test  # a dead group stops being a candidate by its age (the removed 25 s bound)
 runm dk_h_deadone src/quest/combat/dronekill_core.h "s/        return n == 1 \&\& !one->dead ? one : nullptr;/        return n == 1 ? one : nullptr;/" quest-host-combat dronekill_test
 runm dk_h_deadwhy src/quest/combat/dronekill_core.h "s/        \*dead = n == 1 \&\& one->dead;/        *dead = false;/" quest-host-combat dronekill_test
 runm dk_h_ended src/quest/combat/dronekill.cpp "s/  g.x.ended = true;  \/\/ its end script ran/  (void)0;  \/\/ its end script ran/" quest-host-combat dronekill_test
@@ -21,3 +21,11 @@ runm dk_h_takeover src/quest/combat/dronekill.cpp "s/      else direct\[ndirect+
 runm dk_h_direct src/quest/combat/dronekill.cpp "s/  if (o.direct) return HeldOffNow(/  if (false) return HeldOffNow(/" quest-host-combat dronekill_test
 runm dk_h_dropped src/quest/combat/dronekill.cpp "s/    if (dropped != 0) {/    if (false) {/" quest-host-combat dronekill_test
 runm dk_h_alltakeover src/quest/combat/dronekill.cpp "s/      if (g.used \&\& g.x.holdOpen) open\[nopen++\] = FxHeld{g.x.held, g.x.number, g.handle};/      if (d.system == kDamageable \&\& g.used \&\& g.x.holdOpen) open[nopen++] = FxHeld{g.x.held, g.x.number, g.handle};/" quest-host-combat dronekill_test
+# the scope ends after kLeaveAsks no-level answers in a row, and a drop says the held components stay on (#1737 re-review)
+runm dk_i_leave1 src/quest/combat/dronekill.h "s/inline constexpr std::uint32_t kLeaveAsks = 3;/inline constexpr std::uint32_t kLeaveAsks = 1;/" quest-host-combat dronekill_test
+runm dk_i_leave2 src/quest/combat/dronekill.h "s/inline constexpr std::uint32_t kLeaveAsks = 3;/inline constexpr std::uint32_t kLeaveAsks = 2;/" quest-host-combat dronekill_test
+runm dk_i_nocount src/quest/combat/dronekill.cpp "s/    if (++g_leave_asks < kLeaveAsks) {/    if (g_leave_asks < kLeaveAsks) {/" quest-host-combat dronekill_test
+runm dk_i_noreset src/quest/combat/dronekill.cpp "s/  if (in || !was) g_leave_asks = 0;/  if (false) g_leave_asks = 0;/" quest-host-combat dronekill_test
+runm dk_i_info src/quest/combat/dronekill.cpp "s/      sentinel::LogFields(LogLevel::kWarn, \"combat_dronekill_hold\",/      sentinel::LogFields(LogLevel::kInfo, \"combat_dronekill_hold\",/" quest-host-combat dronekill_test
+runm dk_i_unloaded src/quest/combat/dronekill.cpp "s/\"so they stay on (that the game space is gone is not established)\"/\"the game space is unloaded\"/" quest-host-combat dronekill_test
+runm dk_i_nowait src/quest/combat/dronekill.cpp "s/\"combat_dronekill_scope_wait\"/\"combat_dronekill_scope_w\"/" quest-host-combat dronekill_test

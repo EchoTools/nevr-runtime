@@ -363,10 +363,35 @@ void AnEndingProcessIsNotAFreeze() {
     ffe::Tick();
     ffe::Tick();
     QCHECK(!ffe::Fired() && Lines("combat_frozen_frame_exit_halted").size() == 1U);
-    ffe::NoteEnd();
+    ffe::NoteEnd();  // calls Halt again: the second call writes nothing
+    QCHECK(Lines("combat_frozen_frame_exit_halted").size() == 1U);
     QCHECK(Has(Lines("combat_frozen_frame_exit_counts")[0].text, "\"fired\":0,\"halted\":1"));
     Finish_();
   }
+}
+
+// A submit that passed Stamp's halted test just before the halt arms the stamp again after it (the test and the exchange are two steps; the clock
+// read between them is where the test makes the process begin to end). The halted watch must still not fire.
+void CauseThenTick() {
+  g_cause = "quit";
+  ffe::SetEndingCauseForTest(&Cause);
+  ffe::Tick();  // the watchdog halts the watch
+  g_cause = nullptr;
+}
+void ATickAfterHaltNeverFiresEvenWithAStampThatRacedIt() {
+  Armed();
+  g_onRead = &CauseThenTick;
+  ffe::NoteSubmit();  // Stamp: not halted -> clock read (the halt happens here) -> exchange
+  QCHECK(ffe::Halted() && ffe::LastSubmitMs() != 0);  // the stamp armed after the halt
+  g_now = 90000;
+  ffe::Tick();
+  g_now = 91001;
+  ffe::Tick();
+  QCHECK(!ffe::Fired() && g_steps.empty() && Lines("combat_frozen_frame_exit").empty());
+  ffe::NoteSubmit();  // and a later submit does not count
+  QCHECK(ffe::Submits() == 2U);
+  ffe::NoteEnd();
+  Finish_();
 }
 
 // The production check of the three signals, with no seam on the cause: a QUIT's (or FinishActivity's) finish, the end step, and the glue's
@@ -653,6 +678,7 @@ int main() {
   ALeaveOrAnArenaLevelForgetsTheFirstLook();
   AnEndingProcessIsNotAFreeze();
   AnEndBegunBeforeTheFireIsNotAFreeze();
+  ATickAfterHaltNeverFiresEvenWithAStampThatRacedIt();
   NoteEndHaltsTheWatch();
   TheProductionCheckSeesQuitProcessEndAndDestroy();
   FiresRecordBeforeFinisher();
