@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -403,6 +403,14 @@ combat:
   # drops, and `combat_sound_symbol_guard_total` counts them at the end. A value that is not a boolean keeps the default, with a warning that names
   # the key. Read once at launch. Default (absent): false.
   # sound_symbol_guard: true
+
+  # Quest only. A boolean. A new Vulkan descriptor set's uniform texel buffer bindings hold a zeroed view until the game writes its own, so a
+  # binding the game has not written yet reads zeros, not an unmapped address (src/quest/combat/texel_buffer_guard.h). It hooks no game code: the
+  # game's lookups of vkCreateDescriptorSetLayout and vkAllocateDescriptorSets get its two wrappers through vk_ext_window; it acts in every level.
+  # The sentinel log line `combat_texel_buffer_guard_install` says what was requested, `combat_texel_buffer_guard_zero_view` whether the zeroed view
+  # was made and `combat_texel_buffer_guard_end` what was written. `false` requests nothing. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch. Default (absent): true.
+  # texel_buffer_guard: false
 
   # Quest only. A boolean. A combat game whose frames stop for frozen_frame_exit_s seconds while the headset is in VR, in a combat map or the
   # combat lobby, is ended: its activity is finished, and after a 5 s grace the process ends with exit code 1, so the player lands in Home

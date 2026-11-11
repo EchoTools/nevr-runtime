@@ -21,6 +21,8 @@
 #include "quest/combat/boosterpool.h"
 #include "quest/combat/bullet_velocity_guard.h"
 #include "quest/combat/sound_symbol_guard.h"
+#include "quest/combat/texel_buffer_guard.h"
+#include "quest/sentinel/vk_ext_window.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/aibots.h"
 #include "quest/combat/combat_tick.h"
@@ -356,7 +358,7 @@ void ALongTableWritesEveryModuleRecordAndAWholePhaseLine() {
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 49);
+  QCHECK(count == 50);
   const auto at = [&](const char* name) -> std::size_t {
     for (std::size_t i = 0; i < count; ++i) {
       if (std::strcmp(table[i].name, name) == 0) return i;
@@ -366,9 +368,13 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
   QCHECK(count >= 2 && std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
   QCHECK(count >= 2 && std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
   // the script redirect (#2189): the first normal row, before the tick, where the q15t plugin's init registered it; no switch
-  QCHECK(count >= 3 && std::strcmp(table[2].name, "script_redirect") == 0 && table[2].early == nullptr && table[2].normal != nullptr &&
-         table[2].switchKey == nullptr && table[2].end == nullptr);
-  QCHECK(2 < at("tick"));
+  // the texel-buffer guard (#1650): early, right after memsys (its requests go to vk_ext_window before the game's first lookup), with its switch and end
+  QCHECK(count >= 3 && std::strcmp(table[2].name, "texel_buffer_guard") == 0 && table[2].early != nullptr && table[2].normal == nullptr &&
+         table[2].end != nullptr && table[2].switchKey != nullptr && std::strcmp(table[2].switchKey, "combat.texel_buffer_guard") == 0 &&
+         table[2].switchMember == &nevr_quest::CombatConfig::texelBufferGuard);
+  QCHECK(count >= 4 && std::strcmp(table[3].name, "script_redirect") == 0 && table[3].early == nullptr && table[3].normal != nullptr &&
+         table[3].switchKey == nullptr && table[3].end == nullptr);
+  QCHECK(3 < at("tick"));
   const std::size_t gates = at("gates"), bvhRow = at("bvh"), bvhGate = at("bvh_gate"), bvhTouch = at("bvh_touch"), wallfire = at("wallfire"),
                     sendguard = at("sendguard"), pfx = at("pfx"), pfxtev = at("pfxtev"), sensorwd = at("sensorwd"), music = at("music");
   const std::size_t ec = at("ec"), ecfx = at("ecfx"), dronekill = at("dronekill"), dronemuzzle = at("dronemuzzle"), powerboost = at("powerboost");
@@ -495,7 +501,8 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2 && early.off == 0);
+  // heaps and memsys refuse (no libr15 here); the texel-buffer guard hooks nothing of libr15, so its requests go in (vk_ext_window takes them)
+  QCHECK(early.ran && early.modules == 3 && early.installed == 1 && early.failed == 2 && early.off == 0);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
   // (#2177) with the impact sounds (#2183) after the first and the level decals after the last, the EC client, NEUTRON effects, dronekill,
   // dronemuzzle and POWER BOOST (#2187), the headset gates (#2180), the static BVH and the wall-fire check (#2182: the BVH is refused for want of a
@@ -511,7 +518,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
-    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\"");
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded texel_buffer_guard=requested\"");
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
@@ -519,10 +526,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
                "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=module_not_loaded aibots=module_not_loaded weapon_arm=module_not_loaded gates=module_not_loaded bvh=module_not_loaded "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=module_not_loaded music=module_not_loaded\""));
-    // one record per module with a step, early first: 2 early and 38 normal
+    // one record per module with a step, early first: 3 early and 38 normal
     const std::vector<Line> records = Lines("combat_install_module");
-    QCHECK(records.size() == 40U && Has(records[0].text, "\"phase\":\"early\"") && Has(records[1].text, "\"phase\":\"early\"") &&
-           Has(records[2].text, "\"phase\":\"normal\""));
+    QCHECK(records.size() == 41U && Has(records[0].text, "\"phase\":\"early\"") && Has(records[1].text, "\"phase\":\"early\"") &&
+           Has(records[2].text, "\"phase\":\"early\"") && Has(records[3].text, "\"phase\":\"normal\""));
     // an installed or off module's record is Info, a refused one's a Warning, and its outcome says which
     for (const Line& r : records) {
       const bool failed = Has(r.text, "\"outcome\":\"failed\"");
@@ -530,7 +537,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
       QCHECK(r.level == (failed ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo));
     }
     QCHECK(Has(records.back().text, "\"module\":\"music\",\"outcome\":\"failed\",\"status\":\"module_not_loaded\""));
-    QCHECK(Has(Lines("combat_install_module")[12].text, "\"module\":\"decals\",\"outcome\":\"off\",\"status\":\"no_table\""));
+    QCHECK(Has(Lines("combat_install_module")[13].text, "\"module\":\"decals\",\"outcome\":\"off\",\"status\":\"no_table\""));
     // the script redirect's own line (#2189): the host registry refuses here (no lib<hash>_q15t.so beside this program), an Error with the
     // registry's answer and the nine hashes it was asked for
     const std::vector<Line> redirect = Lines("combat_script_redirect_install");
@@ -560,13 +567,13 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   combat::SetConfig(cfg);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.modules == 2 && early.installed == 0 && early.failed == 1 && early.off == 1);
+  QCHECK(early.modules == 3 && early.installed == 1 && early.failed == 1 && early.off == 1);
   QCHECK(normal.modules == 38 && normal.installed == 3 && normal.failed == 32 && normal.off == 3);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
-    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=off memsys=module_not_loaded\"" && Has(lines[0].text, "\"off\":1"));
-    QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key or with nothing to act on; the others keep"));
+    QCHECK(ResultsOf(lines[0]) == "\"results\":\"heaps=off memsys=module_not_loaded texel_buffer_guard=requested\"" && Has(lines[0].text, "\"off\":1"));
+    QCHECK(Has(lines[0].text, "1 of 3 combat modules installed in this phase; 1 off by its config key or with nothing to act on; the others keep"));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick
     QCHECK(Has(ResultsOf(lines[1]), "sendguard=off_config fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded peerclamp=scope_not_live pfx=installed pfxtev=installed"));
     QCHECK(Has(lines[1].text, "\"off\":3"));
@@ -718,8 +725,9 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   const std::vector<Line> records = Lines("combat_config_switch");
   // per call, in the table's order: the table steps with impactsnd and its write key after meshstep and decals with its two flip keys after
   // shaderstep (#2183), ec, ecfx, dronekill and dronemuzzle (#2187), gunconnect, aibots and weapon_arm (#2185), bvh's three switches, wallfire's and sendguard's (#2182, #2179), the
-  // levelname's (#2181), the watchdog's and the combat music's (#2184), then the two keys of the EC client and POWER BOOST that are not a boolean (#2187)
-  const char* const order[] = {"frozen_frame_exit", "meshstep",      "impactsnd",     "impactsnd_write", "tablestep", "instmodel", "shaderstep",
+  // levelname's (#2181), the watchdog's and the combat music's (#2184), then the two keys of the EC client and POWER BOOST that are not a boolean (#2187);
+  // the texel-buffer guard's (#1650) first, its row being early
+  const char* const order[] = {"texel_buffer_guard", "frozen_frame_exit", "meshstep",      "impactsnd",     "impactsnd_write", "tablestep", "instmodel", "shaderstep",
                                "decals",        "decals_flip_u", "decals_flip_v",   "ec",        "ecfx",      "dronekill",
                                "dronekill_explosion", "bullet_velocity_guard", "sound_symbol_guard", "dronemuzzle",   "gunconnect",    "aibots",          "weapon_arm", "bvh",           "bvh_gate",        "bvh_touch", "wallfire",  "sendguard",
                                "fxtrail",       "voipdrop",      "custctx",         "droneguard", "droneguard_stage1", "peerclamp",
@@ -1082,6 +1090,37 @@ void TheBotsRowTellsTheModuleWhetherThisIsADevelopmentBuild() {
 }
 
 // The bullet-velocity guard (#1737 row 031) switched off by its key is off, not failed, and its row reads the key the configuration step set.
+// The texel-buffer guard's row reads its key (#1650): off by the file, it requests nothing (vk_ext_window has no request; the game's lookups are
+// the driver's) and the early phase counts it off; on, its two requests are registered.
+void TheTexelBufferGuardRowReadsItsKey() {
+  nevr_quest::vk_window::ResetForTest();
+  nevr_quest::combat::texel_buffer_guard::ResetForTest();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.texelBufferGuard = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(cfg);
+  const combat::Outcome off = combat::InstallEarly();
+  QCHECK(off.modules == 3 && off.off == 1 && off.installed == 0 && off.failed == 2);
+  const std::vector<Line> lines = Lines("combat_install");
+  QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), "texel_buffer_guard=off"));
+  const std::vector<Line> install = Lines("combat_texel_buffer_guard_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"off_config\""));
+  // nothing was registered: a request for the same name by another requester is not a duplicate
+  std::atomic<void*> real{nullptr};
+  QCHECK(nevr_quest::vk_window::RequestDeviceFunction("vkAllocateDescriptorSets", reinterpret_cast<nevr_quest::vk_window::ProcFn>(&Done), &real,
+                                                      "test") == nevr_quest::vk_window::RequestStatus::kOk);
+  nevr_quest::vk_window::ResetForTest();
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  Process(bv::Variant::kCombat);
+  const combat::Outcome on = combat::InstallEarly();
+  QCHECK(on.modules == 3 && on.off == 0 && on.installed == 1);
+  QCHECK(nevr_quest::vk_window::RequestDeviceFunction("vkAllocateDescriptorSets", reinterpret_cast<nevr_quest::vk_window::ProcFn>(&Done), &real,
+                                                      "test") == nevr_quest::vk_window::RequestStatus::kDuplicate);
+  nevr_quest::vk_window::ResetForTest();
+  nevr_quest::combat::texel_buffer_guard::ResetForTest();
+  Done();
+}
+
 void TheBulletVelocityGuardSwitchedOffByItsKeyIsCountedOff() {
   nevr_quest::combat::bullet_velocity_guard::ResetForTest();
   Process(bv::Variant::kCombat);
@@ -1643,6 +1682,7 @@ int main() {
   TheBotsRowTellsTheModuleWhetherThisIsADevelopmentBuild();
   TheEcRowsReadTheirKeysFromTheResolvedSection();
   TheBulletVelocityGuardSwitchedOffByItsKeyIsCountedOff();
+  TheTexelBufferGuardRowReadsItsKey();
   TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff();
   TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem();
   TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection();

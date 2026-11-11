@@ -1,6 +1,8 @@
 // The pins of src/quest/combat/texel_buffer_guard_targets.h, checked against the store libr15 (the hooks-pinned group).
 // Each word is read from the file at its ELF address and compared with its encoding; the gctx word is a GLOB_DAT relocation for the
-// gctx object; the object is gContext's .dynsym object and lies in .bss; the gctx load's adrp and ldr name the word; every slot offset agrees with the store instruction that fills it.
+// gctx object; the object is gContext's .dynsym object and lies in .bss; the gctx load's adrp and ldr name the word; every slot offset agrees with the store instruction that fills it;
+// the lookup chain (FindMethod -> vkGetInstanceProcAddr -> vkGetDeviceProcAddr -> the two functions) names its strings, calls through
+// vk_ext_window's FindMethod slot and stores each answer in the table word the next lookup loads.
 #include <elf.h>
 #include <sys/mman.h>
 
@@ -114,6 +116,25 @@ std::uint64_t AdrpPage(std::uint32_t word, std::uint64_t pc) {
   return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc & ~static_cast<std::uint64_t>(0xfff)) + (imm << 12));
 }
 
+// The address an `adrp xN` at `page` and an `add xN,xN,#imm` after it name together.
+std::uint64_t AdrpAdd(const nevr_quest::combat::pinned::Word& page, const nevr_quest::combat::pinned::Word& add) {
+  return AdrpPage(page.word, page.vaddr) + nevr_quest::combat::pinned::AddImmediate(add.word);
+}
+
+// The target of a `bl` at pc: pc + imm26 * 4, sign-extended.
+std::uint64_t BlTarget(std::uint32_t word, std::uint64_t pc) {
+  std::int64_t imm = static_cast<std::int64_t>(word & 0x3ffffffU);
+  if ((imm & (1 << 25)) != 0) imm -= (1 << 26);
+  return static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + imm * 4);
+}
+
+// The NUL-terminated string at a virtual address of the store file equals `text`.
+bool StringAt(const LoadedElf& elf, std::uint64_t vaddr, const char* text) {
+  const std::size_t n = std::strlen(text) + 1;
+  if (elf.mem == nullptr || vaddr + n > elf.span) return false;
+  return std::memcmp(static_cast<const char*>(elf.mem) + vaddr, text, n) == 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -178,6 +199,45 @@ int main(int argc, char** argv) {
   QCHECK((tb::kLoadGctxPage.word & 0x9f000000U) == 0x90000000U);
   QCHECK((tb::kLoadGctxPage.word & 0x1fU) == 29);
   QCHECK(AdrpPage(tb::kLoadGctxPage.word, tb::kLoadGctxPage.vaddr) + LdrXOffset(tb::kLoadGctxBase.word) == tb::kGctxWordVaddr);
+
+  // The lookup chain (the header's "How the guard reaches the slots"). Each name is the file's string at its address.
+  for (const tb::Name& n : tb::kNames) {
+    const bool same = StringAt(elf, n.vaddr, n.text);
+    if (!same) std::fprintf(stderr, "string mismatch: \"%s\" not at 0x%llx\n", n.text, static_cast<unsigned long long>(n.vaddr));
+    QCHECK(same);
+  }
+  // Each adrp/add pair before a lookup names the string of the function it asks for.
+  QCHECK(AdrpAdd(tb::kGipaNamePage, tb::kGipaNameOffset) == tb::kNameGetInstanceProcAddr.vaddr);
+  QCHECK(AdrpAdd(tb::kGdpaNamePage, tb::kGdpaNameOffset) == tb::kNameGetDeviceProcAddr.vaddr);
+  QCHECK(AdrpAdd(tb::kCreateLayoutNamePage, tb::kCreateLayoutNameOffset) == tb::kNameCreateDescriptorSetLayout.vaddr);
+  QCHECK(AdrpAdd(tb::kAllocateNamePage, tb::kAllocateNameOffset) == tb::kNameAllocateDescriptorSets.vaddr);
+  // Each pair sits right before its call: the name for FindMethod two words before the bl, the others two words before the blr.
+  QCHECK(tb::kGipaNameOffset.vaddr + 4 == tb::kFindMethodCall.vaddr && tb::kFindMethodCall.vaddr + 4 == tb::kStoreGipa.vaddr);
+  QCHECK(tb::kGdpaNameOffset.vaddr + 8 == tb::kStoreGdpa.vaddr);
+  QCHECK(tb::kCreateLayoutNameOffset.vaddr + 8 == tb::kFillCreateDescriptorSetLayout.vaddr);
+  QCHECK(tb::kAllocateNameOffset.vaddr + 8 == tb::kFillAllocateDescriptorSets.vaddr);
+  // The FindMethod call goes through the stub that reads FindMethod's JUMP_SLOT, the slot vk_ext_window hooks.
+  QCHECK(BlTarget(tb::kFindMethodCall.word, tb::kFindMethodCall.vaddr) == tb::kFindMethodStubVaddr);
+  QCHECK(tb::kFindMethodStubPage.vaddr == tb::kFindMethodStubVaddr && tb::kFindMethodStubLoad.vaddr == tb::kFindMethodStubVaddr + 4);
+  QCHECK(AdrpPage(tb::kFindMethodStubPage.word, tb::kFindMethodStubPage.vaddr) + LdrXOffset(tb::kFindMethodStubLoad.word) ==
+         tb::kFindMethodSlotVaddr);
+  const GotTarget findMethod = pinned::LibR15FindMethod();
+  QCHECK(findMethod.slotVaddr.has_value() && *findMethod.slotVaddr == tb::kFindMethodSlotVaddr);
+  const GotTarget findMethodStock{pinned::kLibR15, findMethod.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, tb::kFindMethodSlotVaddr};
+  const SlotResolution findSlot = ResolveSlot(elf.image, findMethodStock, kAarch64Relocs);
+  QCHECK_STATUS(findSlot.status, GotStatus::kOk);
+  // The table's words: FindMethod's answer is stored at word 0 and called for vkGetDeviceProcAddr; its answer is stored at 0x88 and
+  // called for the two functions. Every one of those loads and stores is through x29 (the table) with x0 or x8.
+  QCHECK(LdrXOffset(tb::kStoreGipa.word) == tb::kSlotGetInstanceProcAddr && LdrXOffset(tb::kLoadGipa.word) == tb::kSlotGetInstanceProcAddr);
+  QCHECK(LdrXOffset(tb::kStoreGdpa.word) == tb::kSlotGetDeviceProcAddr);
+  QCHECK(LdrXOffset(tb::kLoadGdpaForCreateLayout.word) == tb::kSlotGetDeviceProcAddr);
+  QCHECK(LdrXOffset(tb::kLoadGdpaForAllocate.word) == tb::kSlotGetDeviceProcAddr);
+  for (const nevr_quest::combat::pinned::Word* w : {&tb::kStoreGipa, &tb::kLoadGipa, &tb::kStoreGdpa, &tb::kLoadGdpaForCreateLayout,
+                                                    &tb::kLoadGdpaForAllocate}) {
+    QCHECK(((w->word >> 5) & 0x1fU) == 29);
+  }
+  QCHECK((tb::kStoreGipa.word & 0x1fU) == 0 && (tb::kStoreGdpa.word & 0x1fU) == 0);  // str x0
+  QCHECK((tb::kLoadGipa.word & 0x1fU) == 8 && (tb::kLoadGdpaForCreateLayout.word & 0x1fU) == 8);  // ldr x8
 
   if (quest_test::Failures() == 0) std::printf("texel_buffer_guard_pinned_test: ok (%s)\n", buildId);
   return quest_test::Failures() == 0 ? 0 : 1;

@@ -50,6 +50,7 @@ add_library(nevr_quest_combat STATIC
   sound_symbol_guard.cpp
   table_step.cpp
   tablestep.cpp
+  texel_buffer_guard.cpp
   voipdrop.cpp
   wallfire.cpp
   weapon_arm.cpp)

@@ -39,6 +39,7 @@
 #include "quest/combat/script_redirect.h"
 #include "quest/combat/shieldgamma.h"
 #include "quest/combat/sound_symbol_guard.h"
+#include "quest/combat/texel_buffer_guard.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
@@ -61,6 +62,8 @@ nevr_quest::CombatConfig g_config;
 ModuleResult ScriptRedirectNormal() noexcept { return script_redirect::Install(); }
 ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
 ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+// The texel-buffer guard (#1650): its two requests go to vk_ext_window before the game's first Vulkan lookup, so its row is early.
+ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(g_config.texelBufferGuard.on); }
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
@@ -166,6 +169,11 @@ ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.pee
 constexpr std::array kModules{
     Module{"heaps", &HeapsEarly, nullptr},
     Module{"memsys", &MemsysEarly, nullptr},
+    // texel_buffer_guard (#1650): registers two device-function requests with vk_ext_window (no hook of its own); early, because the requests must
+    // be in before install_vk_ext_window and the game's first lookup. It touches no slot a plugin could hook (README rule 8). Acts in every level
+    // (README rule 9, a default the game replaces before any read).
+    Module{"texel_buffer_guard", &TexelBufferGuardEarly, nullptr, "combat.texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard,
+           &texel_buffer_guard::End},
     // script_redirect (#2189): first of the normal rows (script_redirect.h), so a script load the later rows' installs cause is already redirected.
     Module{"script_redirect", nullptr, &ScriptRedirectNormal},
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers

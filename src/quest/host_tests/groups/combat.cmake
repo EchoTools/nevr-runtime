@@ -44,7 +44,8 @@ set(_clevelname src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp)
 # The script redirect's row (#2189): the combat module and the host registry it registers with; every program that links combat_install.cpp takes both.
 set(_credirect src/quest/combat/script_redirect.cpp src/quest/plugin/script_redirect.cpp)
 set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
-             src/quest/combat/peerclamp.cpp ${_cffe})
+             src/quest/combat/peerclamp.cpp ${_cffe}
+             src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -300,6 +301,10 @@ nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_
 nevr_ht_test(sound_symbol_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sound_symbol_guard_test.cpp src/quest/combat/sound_symbol_guard.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
+# The texel-buffer guard (#1650): the rules, and the real wrappers handed to the game's chain (FindMethod -> vkGetInstanceProcAddr ->
+# vkGetDeviceProcAddr) by the real vk_ext_window against a fake driver: the writes, the zeroed view, its failure, the refusals, the lines.
+nevr_ht_test(texel_buffer_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/texel_buffer_guard_test.cpp src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp)
 # The impact sounds (#2183, docs/adr/0046; moved from the q15t plugin's impactsnd): the real handlers through the two thunks, installed by the real
 # GotHook into the load JUMP_SLOT and the Shutdown vtable word (ABS64) of a libr15 image built in memory, against a fake impact table, a fake loader and
 # Shutdown, a fake clock and a fake CR15Game that says which level is loaded. Every assertion of the plugin's test about the table, the loaders, the tick and

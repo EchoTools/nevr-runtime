@@ -1400,7 +1400,9 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // The frozen-frame exit (#2377): on unless the file says false (upstream's hangwd is on by default too; D8 (a), the combat APK only).
                       {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},
                       // The sound-symbol guard (#1737): off unless the file says true (a performance guard, as upstream ships it).
-                      {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, false}};
+                      {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, false},
+                      // The texel-buffer guard (#1650): on unless the file says false (the reference build ships g40guard on).
+                      {"texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

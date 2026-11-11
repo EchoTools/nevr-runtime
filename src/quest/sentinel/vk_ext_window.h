@@ -26,14 +26,26 @@
  * fits). A GotHook on the FindMethod slot, and a pass-through hook on the VrApi slot whose only purpose is to hold the
  * real function (CallbackThunk::Original).
  *
+ * Device functions another component wraps (ADR 0039: this file owns the game's Vulkan lookups; a requester is an input). libr15 gets
+ * vkGetDeviceProcAddr through the vkGetInstanceProcAddr this file hands it, and every device function it keeps in its table through
+ * that (texel_buffer_guard_targets.h pins the stores). A component registers a request before the game's first lookup
+ * (RequestDeviceFunction: a name, its wrapper, where to publish the real function, and its own name), at most kMaxDeviceRequests.
+ * When at least one is registered, the vkGetInstanceProcAddr wrapper answers "vkGetDeviceProcAddr" with a wrapper of its own, which
+ * answers a requested name with the requester's wrapper (after publishing the real function where the request said) and every other
+ * name with the driver's function. With no request (every APK where no requester registers) the game gets the driver's
+ * vkGetDeviceProcAddr, as before. The first lookup of vkGetDeviceProcAddr closes the table: a later request is refused (kSealed).
+ *
  * Logging, after the driver has answered and never while game code is on the stack: one `vk_ext_window` line per
  * property call that carries a buffer (the first kMaxLoggedCalls), saying what was done and why, and one
- * `vk_ext_window_install` line.
+ * `vk_ext_window_install` line. The device lookup writes one `vk_ext_window_device_lookup` line when the game first asks for
+ * vkGetDeviceProcAddr (`result` wrapped|real, `requests`), and one `vk_ext_window_device_function` line the first time each
+ * requested name is handed out (`name`, `requester`).
  *
  * Built with -fno-exceptions (callback_thunk.h).
  */
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -89,13 +101,38 @@ std::size_t CountTokens(const char* list) noexcept;
 // required outside, capacity 0 or above kMaxWindow, total above kFullCapacity) reorder is false and `out` is untouched.
 WindowPlan BuildWindow(const char* driver, std::size_t total, std::size_t capacity, const char* vrapi, char* out) noexcept;
 
+// ---- device functions another component wraps -----------------------------------------------------------------------
+
+using ProcFn = void (*)();
+inline constexpr std::size_t kMaxDeviceRequests = 8;
+
+enum class RequestStatus {
+  kOk,
+  kNull,       // a null name, wrapper, publish word or requester
+  kFull,       // kMaxDeviceRequests are registered
+  kDuplicate,  // the name is already requested with another wrapper or publish word (the same request again is kOk)
+  kSealed,     // the game has already asked for vkGetDeviceProcAddr: the request could never be served
+};
+const char* RequestStatusName(RequestStatus status) noexcept;  // "ok", "null", "full", "duplicate", "sealed"
+
+// Registers `wrapper` as the answer to the game's vkGetDeviceProcAddr(device, `name`). Before the wrapper is handed out, the driver's
+// function is stored in `*realOut` (release order), so the wrapper can always reach it. `name` and `requester` must outlive the
+// process (string literals). Call before the game's first Vulkan lookup (the constructor); not thread-safe against a lookup.
+RequestStatus RequestDeviceFunction(const char* name, ProcFn wrapper, std::atomic<void*>* realOut, const char* requester) noexcept;
+
+// The driver's vkGetInstanceProcAddr and vkGetDeviceProcAddr as the game's lookups returned them (null before), and the instance the
+// game passed when it asked for vkGetDeviceProcAddr (null before). A requester uses them to reach functions it does not wrap.
+ProcFn RealInstanceProcAddr() noexcept;
+ProcFn RealDeviceProcAddr() noexcept;
+void* LookupInstance() noexcept;
+
 // ---- the hooks -------------------------------------------------------------------------------------------------------
 
 // Arms the two handlers and installs their thunks in libr15.so; one line {"event":"vk_ext_window_install",...} says what
 // was installed. True only when both slots hold their thunks.
 bool Install() noexcept;
 
-// Arms the handlers without touching a GOT slot, and clears all state.
+// Arms the handlers without touching a GOT slot, and clears all state (the device requests included).
 void ArmForTest() noexcept;
 void ResetForTest() noexcept;
 
