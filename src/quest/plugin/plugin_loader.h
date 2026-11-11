@@ -23,6 +23,7 @@
 #include "quest/plugin/plugin_identity.h"
 #include "quest/plugin/plugin_image.h"
 #include "quest/plugin/plugin_plan.h"
+#include "runtime/ext/plugin_manifest.h"
 
 namespace nevr_quest::plugin {
 
@@ -117,6 +118,12 @@ class Loader {
   std::size_t PendingFor(PluginPhase phase) const;
   const std::vector<PlanEntry>& Entries() const { return entries_; }
 
+  // What the login carries as `nevr_plugins`: one entry per plan entry, in plan order, in the PC's shape
+  // (runtime/ext/plugin_manifest.h, serialized by the same BuildPluginManifest). `error` is the record's reason token, so a
+  // service reads the same word the `plugin_load` record carries; an entry still waiting for its moment says "pending".
+  // Plugin args never appear.
+  std::vector<PluginManifestEntry> Report() const;
+
   // Writes the platform's current main level into every context already handed out, so a plugin that kept its pointer sees
   // a level change (#1106). Game thread, once per frame. A plugin reading the two fields while they are stored sees the old
   // or the new value: each is one aligned 8-byte store, and nothing else in the context changes.
@@ -127,6 +134,7 @@ class Loader {
   // (a deque never moves an element).
   struct LoadedPlugin {
     std::string name;
+    std::string entryName;  // the plan entry's name (the config.yaml or manifest name), which Report matches on
     std::string description;
     NevrLoadedPluginInfo info{};
   };

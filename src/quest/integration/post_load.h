@@ -59,12 +59,23 @@ struct PostLoadActions {
 // from a test). Not for use while dlopen can run on another thread.
 void SetPostLoadActions(const PostLoadActions& actions);
 
-// A function the dlopen hook calls for every non-null handle, before the actions above run and whether or not any is wanted.
-// It must not throw and must not call game code. The crash-first hook uses it to hook the provider libraries' sigaction and
-// signal slots when they load (sentinel/crash_first_hook.h, #1605). Set once at install; null: none. Not cleared by
+// The functions the dlopen hook calls for every non-null handle, before the actions above run and whether or not any is wanted, in
+// a fixed table (module_observers.cpp): the first slot is SetModuleLoadedObserver's, the others are added with
+// AddModuleLoadedObserver, and every observer is called in slot order. Each must not throw and must not call game code. The
+// crash-first hook sets the first to hook the provider libraries' sigaction and signal slots when they load
+// (sentinel/crash_first_hook.h, #1605); the EC client adds one to hook their WriteLogV slots (combat/ec.h, #2187). Not cleared by
 // SetPostLoadActions.
 using ModuleLoadedFn = void (*)(const char* name, void* handle) noexcept;
+inline constexpr int kModuleLoadedObservers = 4;
+// Sets the first slot (null: none).
 void SetModuleLoadedObserver(ModuleLoadedFn fn) noexcept;
+// Adds `fn` to the first free slot after the first. True when it is in the table (added now, or already there); false for null or
+// a full table. Safe from any thread: a dlopen that races the add sees the observer or not, never a torn slot.
+bool AddModuleLoadedObserver(ModuleLoadedFn fn) noexcept;
+// Calls every observer with `name` and `handle` (AfterDlopen does, for a non-null handle).
+void NotifyModuleLoaded(const char* name, void* handle) noexcept;
+// Empties every slot (tests).
+void ClearModuleLoadedObserversForTest() noexcept;
 
 // True while at least one action is still wanted and unsettled.
 bool PostLoadPending() noexcept;

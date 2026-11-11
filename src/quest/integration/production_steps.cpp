@@ -274,6 +274,7 @@ nevr_quest_login::BuildInfo ThisBuild() {
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;
+  build.plugin_report = [] { return nevr_quest::plugin::LoginReport(); };
   return build;
 }
 

@@ -178,8 +178,8 @@ is; an arena level that is loaded wins; a lobby arena players use is no class). 
 closed: a look older than one second is not believed (`kStaleAfterSeconds`), so a tick that stopped leaves every hook calling the game's function; when the tick
 comes back after such a gap with the scope open, it writes one Warning `combat_bvh_scope_stale` (`gap_s`, `stale_after_s`, `level`). The arena path
 of a query is one relaxed load of a false value, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope
-because the q15t plugin answered in every level; the levels left out are the Echo Arena levels and the lobbies arena players use. KNOWN-WRONG #2246: this is the
-module's own cached answer; combat_scope (F19) is the shared one and this module switches to it when it lands.
+because the q15t plugin answered in every level; the levels left out are the Echo Arena levels and the lobbies arena players use. KNOWN-WRONG #2168: this is the
+module's own cached answer; combat_scope (F19, #2186) is the shared one, and this module has not switched to it yet.
 
 
 ## 5. Behaviour

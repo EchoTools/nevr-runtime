@@ -119,11 +119,12 @@ func TestExportHygiene_NoBreakpadLeak(t *testing.T) {
 	}
 }
 
-// Only the two entry points the loader needs are exported. Everything else,
-// including the hook API and its test seams, is hidden (-fvisibility=hidden).
+// Only the two entry points the loader needs and the EC script libraries' page are exported. Everything else,
+// including the hook API and its test seams, is hidden (-fvisibility=hidden). re33_ec_page is a data symbol: the EC
+// script libraries find it with dlsym(RTLD_DEFAULT, "re33_ec_page") (src/quest/sentinel/ec_page.h, #2187).
 func TestExportAllowlist(t *testing.T) {
 	requireArtifact(t)
-	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true}
+	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true, "re33_ec_page": true}
 	dyn := run(t, "nm", "-D", "--defined-only", soPath(t))
 	for _, line := range strings.Split(dyn, "\n") {
 		fields := strings.Fields(line)
@@ -131,8 +132,35 @@ func TestExportAllowlist(t *testing.T) {
 			continue
 		}
 		if name := fields[len(fields)-1]; !allowed[name] {
-			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad)", name)
+			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad, re33_ec_page)", name)
 		}
+	}
+}
+
+// The EC script libraries' page is exported as data: 4096 bytes in .bss (src/quest/sentinel/ec_page.h, #2187). A page that is
+// missing, or exported as a function or with another size, is a page the scripts cannot use as echovr.exe's image base.
+func TestEcPageIsAnExportedDataPage(t *testing.T) {
+	requireArtifact(t)
+	dyn := run(t, "nm", "-D", "--defined-only", "-S", soPath(t))
+	found := false
+	for _, line := range strings.Split(dyn, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 || fields[3] != "re33_ec_page" {
+			continue
+		}
+		found = true
+		if fields[1] != "0000000000001000" {
+			t.Errorf("re33_ec_page has size %s, want 0x1000: %s", fields[1], line)
+		}
+		if fields[2] != "B" && fields[2] != "b" {
+			t.Errorf("re33_ec_page is not a .bss data symbol (type %s): %s", fields[2], line)
+		}
+		if !strings.HasSuffix(fields[0], "000") {
+			t.Errorf("re33_ec_page is not 4096-aligned: %s", line)
+		}
+	}
+	if !found {
+		t.Errorf("re33_ec_page is not a dynamic export of the sentinel")
 	}
 }
 
