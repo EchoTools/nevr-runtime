@@ -7,12 +7,18 @@
 //
 // No clock and no lock: the caller passes the time and calls it from one thread, or holds its own lock. Header-only and dependency-free,
 // so PC (runtime/combat/dronefix.cpp) and Quest (quest/combat/ecfx.cpp) use the same budget. Tests: runtime/tests/test_ecfx_rules.cpp
-// (LineBudget), quest/tests/ecfx_test.cpp (the Quest's drain lines).
+// (BurstThenCount), quest/tests/ecfx_test.cpp (the Quest's drain lines).
+//
+// Not the Quest combat guards' `nevr_quest::combat::LineBudget` (quest/combat/line_budget.h): that one is a cap with one notice and
+// writes no count, because each of those modules' stats line counts every event. Here the count lines are the only count, and the
+// header builds for PC as well (that one writes through the sentinel's log). Nor the per-window limiters (`RecordLimiter` in
+// runtime/compat/lobby_frame.h, `RepeatLimiter` in quest/social/lobby_full_layout.h), which write `burst` lines in every window: here
+// the burst is written once per process and every later line is a count.
 #include <stdint.h>
 
 namespace nevr {
 
-class LineBudget {
+class BurstThenCount {
  public:
   enum class Verdict {
     kCounted,  // counted only: no line now
@@ -26,7 +32,7 @@ class LineBudget {
     uint64_t sinceLine;  // events since the last line was written (kCount), else 0
   };
 
-  constexpr LineBudget(unsigned burst, uint64_t everyMs) : burst_(burst), everyMs_(everyMs) {}
+  constexpr BurstThenCount(unsigned burst, uint64_t everyMs) : burst_(burst), everyMs_(everyMs) {}
 
   // One event at nowMs.
   Line Event(uint64_t nowMs) {

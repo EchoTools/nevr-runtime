@@ -49,7 +49,7 @@ func TestWallFxDueDrainsThroughTheSharedRuleWithTheEntryCheckOff(t *testing.T) {
 		"AcquireSRWLockExclusive(&g_wall_lines_lock);",
 		"g_wall_refused_total += static_cast<uint64_t>(c.refused);",
 		"g_wall_nowall_total += static_cast<uint64_t>(c.nowall);",
-		"const nevr::LineBudget::Line l = bad ? g_wall_lines.Event(now) : g_wall_lines.Flush(now);",
+		"const nevr::BurstThenCount::Line l = bad ? g_wall_lines.Event(now) : g_wall_lines.Flush(now);",
 		"g_wall_lines_pending.store(g_wall_lines.Pending(), std::memory_order_relaxed);",
 		"ReleaseSRWLockExclusive(&g_wall_lines_lock);",
 		"ReportWallRefusals(l, c, refused, nowall);")
@@ -66,7 +66,7 @@ func TestWallFxDueDrainsThroughTheSharedRuleWithTheEntryCheckOff(t *testing.T) {
 func TestTheRefusalWarningsSayWhenTheyStopAndCount(t *testing.T) {
 	t.Parallel()
 	src := code(t, dronefix)
-	if !strings.Contains(src, "nevr::LineBudget g_wall_lines{16, 10000};") {
+	if !strings.Contains(src, "nevr::BurstThenCount g_wall_lines{16, 10000};") {
 		t.Error("the NEUTRON refusal Warnings no longer have their 16-line, 10 s budget")
 	}
 	ordered(t, "ReportWallRefusals", body(t, src, "void ReportWallRefusals("),
@@ -86,7 +86,7 @@ func TestTheRefusalWarningsSayWhenTheyStopAndCount(t *testing.T) {
 func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 	t.Parallel()
 	src := code(t, dronefix)
-	if !strings.Contains(src, "nevr::LineBudget g_fault_lines{5, 10000};") {
+	if !strings.Contains(src, "nevr::BurstThenCount g_fault_lines{5, 10000};") {
 		t.Error("the follow update's fault Warnings no longer have their 5-line, 10 s budget")
 	}
 	if strings.Contains(src, "InterlockedIncrement(&g_faults) <= 5") {
@@ -95,7 +95,7 @@ func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 	ordered(t, "FaultLines", body(t, src, "void FaultLines("),
 		"if (!faulted && !g_fault_lines_pending.load(std::memory_order_relaxed)) return;",
 		"AcquireSRWLockExclusive(&g_fault_lines_lock);",
-		"const nevr::LineBudget::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);",
+		"const nevr::BurstThenCount::Line l = faulted ? g_fault_lines.Event(now) : g_fault_lines.Flush(now);",
 		"g_fault_lines_pending.store(g_fault_lines.Pending(), std::memory_order_relaxed);",
 		"ReleaseSRWLockExclusive(&g_fault_lines_lock);",
 		"if (l.verdict == V::kWrite)",
@@ -119,7 +119,7 @@ func TestTheFollowFaultWarningsSayWhenTheyStopAndCount(t *testing.T) {
 func TestTheQuestDrainRecordsSayWhenTheyStopAndCount(t *testing.T) {
 	t.Parallel()
 	src := code(t, questEcfx)
-	for _, s := range []string{"constexpr unsigned kLineCap = 96;", "nevr::LineBudget g_lineBudget{kLineCap, kLineEveryMs};", "constexpr std::uint64_t kLineEveryMs = 10000;"} {
+	for _, s := range []string{"constexpr unsigned kLineCap = 96;", "nevr::BurstThenCount g_lineBudget{kLineCap, kLineEveryMs};", "constexpr std::uint64_t kLineEveryMs = 10000;"} {
 		if !strings.Contains(src, s) {
 			t.Errorf("%s no longer has %q", questEcfx, s)
 		}
@@ -136,9 +136,9 @@ func TestTheQuestDrainRecordsSayWhenTheyStopAndCount(t *testing.T) {
 	}
 	ordered(t, "TickOnce", tick, "}, &c);", "BudgetLine(g_lineBudget.Flush(now));")
 	ordered(t, "BudgetLine", body(t, src, "void BudgetLine("),
-		"if (l.verdict == nevr::LineBudget::Verdict::kCapped) {",
+		"if (l.verdict == nevr::BurstThenCount::Verdict::kCapped) {",
 		"\"combat_ecfx_lines\"",
-		"} else if (l.verdict == nevr::LineBudget::Verdict::kCount) {",
+		"} else if (l.verdict == nevr::BurstThenCount::Verdict::kCount) {",
 		"\"combat_ecfx_sum\"")
 }
 

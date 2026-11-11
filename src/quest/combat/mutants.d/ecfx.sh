@@ -2,7 +2,7 @@
 # bent once; src/quest/tests/ecfx_test.cpp must fail on every one (the rules' mutants are also killed by PC's test_ecfx_rules).
 # Sourced by ../mutants.sh. The run judges ecfx_test (the complete wall library); ecfx_test_missing is the same program on the other library.
 C=src/runtime/patch/ecfx_rules.h
-B=src/core/line_budget.h
+B=src/core/burst_then_count.h
 F=src/quest/combat/ecfx.cpp
 runm ecfx_stale        $C "s#const bool stale = last \&\& nowMs - last > kStaleMs;#const bool stale = false;#"
 runm ecfx_stale_edge   $C "s#nowMs - last > kStaleMs#nowMs - last >= kStaleMs#"
@@ -45,8 +45,8 @@ runm ecfx_cap_96       $F "s#kLineCap = 96;#kLineCap = 95;#"
 runm ecfx_ran_ungated  $F "s#^      if (LineDue(now)) {#      if ((void)LineDue(now), true) {#"
 runm ecfx_drain_ungated $F "s#^    if (LineDue(now))\$#    if ((void)LineDue(now), true)#"
 runm ecfx_no_flush     $F "s#^  BudgetLine(g_lineBudget.Flush(now));.*##"
-runm ecfx_no_cap_line  $F "s#if (l.verdict == nevr::LineBudget::Verdict::kCapped) {#if (false) {#"
-runm ecfx_no_count_line $F "s#} else if (l.verdict == nevr::LineBudget::Verdict::kCount) {#} else if (false) {#"
+runm ecfx_no_cap_line  $F "s#if (l.verdict == nevr::BurstThenCount::Verdict::kCapped) {#if (false) {#"
+runm ecfx_no_count_line $F "s#} else if (l.verdict == nevr::BurstThenCount::Verdict::kCount) {#} else if (false) {#"
 runm lb_burst_edge     $B "s#if (total_ <= burst_) return#if (total_ < burst_) return#"
 runm lb_no_cap         $B "s#if (total_ == uint64_t{burst_} + 1) return#if (false) return#"
 runm lb_every_edge     $B "s#if (nowMs - lastLine_ >= everyMs_) return#if (nowMs - lastLine_ > everyMs_) return#"

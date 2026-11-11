@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "core/line_budget.h"
+#include "core/burst_then_count.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx_core.h"
 #include "quest/combat/legacy_switch.h"
@@ -39,10 +39,10 @@ std::atomic<bool> g_gateOn{false};
 std::uint64_t g_lastMs = 0;                     // the tick only
 std::atomic_flag g_running = ATOMIC_FLAG_INIT;  // one drain at a time, whatever calls the tick
 void* g_lib = nullptr;                          // our own reference to the wall lib, held for the process: it is never unmapped
-// The ran and drain records' budget (nevr::LineBudget, the tick only): the first kLineCap are each written, then one
+// The ran and drain records' budget (nevr::BurstThenCount, the tick only): the first kLineCap are each written, then one
 // combat_ecfx_lines record says the later ones are counted, then a combat_ecfx_sum record with the counts at most every
 // kLineEveryMs and once none has come for kLineEveryMs.
-nevr::LineBudget g_lineBudget{kLineCap, kLineEveryMs};
+nevr::BurstThenCount g_lineBudget{kLineCap, kLineEveryMs};
 struct Totals {
   long long ran = 0, notRun = 0, boom = 0, sound = 0, refused = 0, stale = 0;
 };
@@ -79,12 +79,12 @@ std::uint32_t* Gate() noexcept { return reinterpret_cast<std::uint32_t*>(sentine
 std::uint64_t* Queue() noexcept { return reinterpret_cast<std::uint64_t*>(sentinel::EcPage() + kQueueOff); }
 
 // The budget's own records: the cap, then the counts.
-void BudgetLine(const nevr::LineBudget::Line& l) noexcept {
-  if (l.verdict == nevr::LineBudget::Verdict::kCapped) {
+void BudgetLine(const nevr::BurstThenCount::Line& l) noexcept {
+  if (l.verdict == nevr::BurstThenCount::Verdict::kCapped) {
     sentinel::LogFields(LogLevel::kInfo, "combat_ecfx_lines",
                         {{"records", static_cast<long long>(l.total)},
                          {"msg", "later combat_ecfx_ran and combat_ecfx_drain records are counted, not logged; combat_ecfx_sum follows at most every 10 s"}});
-  } else if (l.verdict == nevr::LineBudget::Verdict::kCount) {
+  } else if (l.verdict == nevr::BurstThenCount::Verdict::kCount) {
     sentinel::LogFields(g_totals.notRun ? LogLevel::kWarn : LogLevel::kInfo, "combat_ecfx_sum",
                         {{"records", static_cast<long long>(l.total)}, {"since_last", static_cast<long long>(l.sinceLine)}, {"ran", g_totals.ran},
                          {"not_run", g_totals.notRun}, {"boom_freed", g_totals.boom}, {"sound_repeats", g_totals.sound}, {"refused", g_totals.refused},
@@ -93,8 +93,8 @@ void BudgetLine(const nevr::LineBudget::Line& l) noexcept {
 }
 // One would-be record at `now`: true when it is written; else the budget's own record, if one is due, is written instead.
 bool LineDue(std::uint64_t now) noexcept {
-  const nevr::LineBudget::Line l = g_lineBudget.Event(now);
-  if (l.verdict == nevr::LineBudget::Verdict::kWrite) return true;
+  const nevr::BurstThenCount::Line l = g_lineBudget.Event(now);
+  if (l.verdict == nevr::BurstThenCount::Verdict::kWrite) return true;
   BudgetLine(l);
   return false;
 }
@@ -240,7 +240,7 @@ void ResetForTest() noexcept {
   g_lastMs = 0;
   g_attached = false;
   g_told_waiting = false;
-  g_lineBudget = nevr::LineBudget{kLineCap, kLineEveryMs};
+  g_lineBudget = nevr::BurstThenCount{kLineCap, kLineEveryMs};
   g_totals = Totals();
   g_installed = false;
 }
