@@ -470,13 +470,14 @@ constexpr uint32_t CHASSIS_SHOWN = 0x2C;        // mailbox +2C: SERIES-10 ONLY s
 constexpr uint32_t WANT_CHASSIS = 0x80;         // in +13 (the value asked for): a SERIES-10 ONLY ask, bit 0 the value
 //: RULES page 2 row 3, POINT RATE: a multiplier on how fast a held capture point's points rise
 //: (tools/fix_point_rate.py scales the capture-point script's time step by mailbox +2D / 4).
+// nEVR port (#600): that is runtime/combat/point_rate.h here, hooks on the capture point script, not a patched file.
 //: The server keeps it in quarters; a podium asks for a step up / down (+13 = 40h | 1 / 40h),
 //: which the client turns into the value it wants (40h | quarters << 8: sent twice, so a step
 //: would have been taken twice);
 //: every client puts it at +2D and writes the row's text, which the page shows through the
 //: pointer at +24 (tools/fix_rules_pages.py).
 volatile LONG g_rate = 4;                       // server: POINT RATE in quarters (4 = x1)
-constexpr uint32_t RATE_SHOWN = 0x2D, RATE_TEXT = 0x24;
+constexpr uint32_t RATE_SHOWN = nevr_combat::rules::kPointRate, RATE_TEXT = 0x24;
 constexpr uint32_t WANT_RATE = 0x40;            // in +13: a POINT RATE ask, bit 0 = up
 const uint8_t kRateSteps[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};   // 0.25x .. 2.5x in quarters
 
