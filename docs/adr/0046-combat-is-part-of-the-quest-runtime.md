@@ -22,7 +22,7 @@ and is built by its CMake, so the boundary separates nothing. What it costs:
   `mprotect` and compare-and-swap), outside the manager's registry; ADR 0034 names it (H1, H2). Where the sentinel holds a slot first,
   q15t's install refuses by code: #2000, the refresh-rate and clock-level hooks (not yet seen in a headset log).
 - **Two owners of one behaviour.** q15t's clock module and the sentinel's `clock_levels` both decide the clock levels (ADR 0039 O1).
-- **Switches outside the config.** 35 files under `files/q15t` turn modules on or off (`module_switch.h` and module-local copies); 41
+- **Switches outside the config.** 35 files under `files/q15t` turn modules on or off (module_switch.h and module-local copies); 41
   build options set the defaults. N133 says every config key is read from `config.yaml`.
 - **A second library for timing.** heaps and memsys must act before `android_main` reads the heap sizes, so they are a second plugin in
   the loader's early phase, which depends on a constructor-time `dlopen` never observed on a headset (ADR 0019 P10).
