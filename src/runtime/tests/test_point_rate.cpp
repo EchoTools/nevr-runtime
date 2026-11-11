@@ -295,7 +295,11 @@ TEST_F(PointRateInstalled, EachChangeOfHowThePointsRiseIsLoggedOnce) {
   Set(rules::Pause::kOff, 0);
   Call(kOrange);
   EXPECT_EQ(Count("point rate: points rise changed from rate=8 held=1 to rate=0 held=0 paused=0"), 1);
-  EXPECT_EQ(Count("point rate: points rise changed"), 3) << "one line a change, none a frame";
+  Set(rules::Pause::kResuming, 0);
+  Call(kBlue);
+  EXPECT_EQ(Count("point rate: points rise changed from rate=0 held=0 to rate=0 held=1 paused=2"), 1)
+      << "straight to the resume countdown: held, with PAUSE's own value";
+  EXPECT_EQ(Count("point rate: points rise changed"), 4) << "one line a change, none a frame";
 }
 
 TEST_F(PointRateInstalled, TheFrameTimeIsReadAsAQword) {
