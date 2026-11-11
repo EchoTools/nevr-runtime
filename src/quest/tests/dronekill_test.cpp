@@ -231,35 +231,35 @@ static void TestCore() {
   Joined j = tb.On(0xa0, model, 1, 3, 1000);
   CHECK(j.pending && j.group == 0, "pending");
   j = tb.On(0xa0, model, 2, 4, 1100);
-  CHECK(j.pending && tb.pendingN == 2, "pending 2");
+  CHECK(j.pending && tb.t.pendingN == 2, "pending 2");
   j = tb.On(0xd0, kDamageable, 9, 0x00050011, 1200);
-  CHECK(!j.pending && j.group == 1 && j.pendingJoined == 2 && tb.pendingN == 0, "release takes the pending");
-  CHECK(tb.Newest()->n == 3 && (tb.Newest()->handle & 0xffff) == 0x11 && tb.Newest()->comps[0].sysSym == kDamageable, "group shape");
+  CHECK(!j.pending && j.group == 1 && j.pendingJoined == 2 && tb.t.pendingN == 0, "release takes the pending");
+  CHECK(tb.Newest()->n == 3 && (tb.Newest()->handle & 0xffff) == 0x11 && tb.Newest()->comps[0].x.sysSym == kDamageable, "group shape");
   j = tb.On(0xb0, sound, 5, 6, 1300);
   CHECK(!j.pending && j.group == 1 && tb.Newest()->n == 4, "join the newest group");
   j = tb.On(0xb0, sound, 5, 6, 1200 + kJoinMs);
-  CHECK(j.pending && tb.pendingN == 1, "exactly 5 s: no longer joins");
+  CHECK(j.pending && tb.t.pendingN == 1, "exactly 5 s: no longer joins");
   j = tb.On(0xd0, kDamageable, 9, 0x22, 1200 + kJoinMs + kPendingMs);
-  CHECK(j.group == 2 && j.pendingJoined == 0 && tb.pendingN == 0, "pending of 3 s or more not taken");
+  CHECK(j.group == 2 && j.pendingJoined == 0 && tb.t.pendingN == 0, "pending of 3 s or more not taken");
   j = tb.On(0xd0, kDamageable, 9, 0x70011, 20000);
   CHECK(j.group == 3, "group 3");
   Group* g = tb.Killed(0xabc0011);
-  CHECK(g && g->number == 3 && g->dead, "K: low 16 bits, newest");
+  CHECK(g && g->x.number == 1 && g->dead, "K: low 16 bits, first in table order (D9)");
   g = tb.Killed(0x11);
-  CHECK(g && g->number == 1, "K: the older one next");
+  CHECK(g && g->x.number == 3, "K: the next one (D9)");
   CHECK(tb.Killed(0x11) == nullptr, "K: then none");
   uint32_t live[kGroups];
   CHECK(tb.Live(live, kGroups) == 1 && live[0] == 0x22, "live list");
   Table big;
   big.On(0xd0, kDamageable, 9, 1, 0);
   for (int i = 0; i < kGroupComps + 5; ++i) big.On(0xb0, sound, i, i, 10);
-  CHECK(big.Newest()->n == kGroupComps && big.Newest()->overflow == 6, "overflow counted");
+  CHECK(big.Newest()->n == kGroupComps && big.Newest()->x.overflow == 6, "overflow counted");
   Table pend;
-  for (int i = 0; i < kPending + 3; ++i) pend.On(0xb0, sound, i, i, 10 + i);
-  CHECK(pend.pendingN == kPending && pend.pendingDropped == 3 && pend.pending[0].compSym == 3, "oldest pending dropped");
+  for (int i = 0; i < kPending + 7; ++i) pend.On(0xb0, sound, i, i, 10 + i);
+  CHECK(pend.t.pendingN == 7 && pend.t.pendingDropped == 16 && pend.t.pending[0].x.compSym == 16, "the 17th empties the list, then is added (D6)");
   Table many;
   for (int i = 0; i < kGroups + 2; ++i) many.On(0xd0, kDamageable, 9, 100 + i, i * 10000);
-  CHECK(many.made == kGroups + 2 && many.Newest()->number == kGroups + 2 && many.Killed(100) == nullptr && many.Killed(101) == nullptr, "group ring");
+  CHECK(many.made == kGroups + 2 && many.Newest()->x.number == kGroups + 2 && many.Killed(100) == nullptr && many.Killed(101) == nullptr, "group ring");
   Table la;
   la.On(0xd0, kDamageable, 9, 0x5a, 0, 0xac70);
   CHECK(!la.LiveComp(0xe0, 100) && la.LiveActor(0xac70) && !la.LiveActor(0xbeef) && !la.LiveActor(0), "live actor");
@@ -287,9 +287,9 @@ static void TestCore() {
   s1.On(0xa0, model, 2, 4, 1000, B, S, O);
   s1.On(0xa0, model, 3, 5, 1000, 0, S, O);
   j = s1.On(0xd0, kDamageable, 9, 0x11, 1100, A, S, O);
-  CHECK(j.group == 1 && j.pendingJoined == 2 && s1.pendingN == 1 && s1.pending[0].actor == B, "C1: own actor's pending");
+  CHECK(j.group == 1 && j.pendingJoined == 2 && s1.t.pendingN == 1 && s1.t.pending[0].actor == B, "C1: own actor's pending");
   j = s1.On(0xd0, kDamageable, 9, 0x12, 1200, B, S, O);
-  CHECK(j.group == 2 && j.pendingJoined == 1 && s1.pendingN == 0, "C1 second");
+  CHECK(j.group == 2 && j.pendingJoined == 1 && s1.t.pendingN == 0, "C1 second");
   j = s1.On(0xb0, sound, 5, 6, 9000, A, S, O);
   CHECK(!j.pending && j.group == 1, "an actor's component joins its own group at any age");
   j = s1.On(0xb0, sound, 5, 7, 1300, 0, S, O);
@@ -302,35 +302,48 @@ static void TestCore() {
   s1.On(0xb0, sound, 5, 6, 9100, A, S, O);
   CHECK(s1.ByNumber(1)->n == n1, "duplicates once");
   g = s1.Killed(0x11, 10000, true);
-  CHECK(g && g->number == 1 && g->dead && g->due == (1u << g->n) - 1 && g->dueMs == 10000, "R2 due");
+  CHECK(g && g->x.number == 1 && g->dead && g->x.due == (1u << g->n) - 1 && g->x.dueMs == 10000, "R2 due");
   Due dd[64];
   int n = s1.TakeDue(10500, dd, 64);
-  CHECK(n == g->n && dd[0].c.sysSym == kDamageable && dd[0].c.owner == O && dd[0].c.space == S && dd[0].c.actor == A, "due components");
+  CHECK(n == g->n && dd[0].c.x.sysSym == kDamageable && dd[0].c.x.owner == O && dd[0].c.x.space == S && dd[0].c.actor == A, "due components");
   for (int i = 0; i < n; ++i)
     if (i != 1) s1.Done(dd[i].number, dd[i].idx);
   CHECK(s1.AnyDue() && s1.TakeDue(10600, dd, 64) == 1 && dd[0].idx == 1, "one left");
   CHECK(s1.TakeDue(10000 + kDueMs, dd, 64) == 0 && !s1.AnyDue() && s1.expired == 1, "due bits expire");
   g = s1.Killed(0x12);
-  CHECK(g && g->number == 2 && g->due == 0 && !s1.AnyDue(), "stage-0 K sets no bit");
+  CHECK(g && g->x.number == 2 && g->x.due == 0 && !s1.AnyDue(), "stage-0 K sets no bit");
   j = s1.On(0xa0, model, 1, 3, 1100 + kSwallowMs - 1, A, S, O);
   CHECK(j.again && j.group == 1 && !j.pending && s1.AnyDue() && s1.TakeDue(1100 + kSwallowMs - 1, dd, 64) == 1 && dd[0].c.handle == 3, "R3");
   s1.Done(dd[0].number, dd[0].idx);
   j = s1.On(0xa0, model, 1, 3, 1100 + kSwallowMs, A, S, O);
-  CHECK(!j.again && !s1.AnyDue(), "R3 expires at 25 s");
+  CHECK(j.again && s1.AnyDue() && s1.TakeDue(1100 + kSwallowMs, dd, 64) == 1, "R3 at exactly 25 s is still again (D8)");
+  s1.Done(dd[0].number, dd[0].idx);
+  j = s1.On(0xa0, model, 1, 3, 1100 + kSwallowMs + 1, A, S, O);
+  CHECK(!j.again && !s1.AnyDue(), "R3 ends after 25 s (D8)");
   Table r;
   r.On(0xd0, kDamageable, 9, 0x11, 0, A, S, O);
   r.Killed(0x11, 5, true);
   j = r.On(0xd0, kDamageable, 9, 0x11, 40000, A, S, O);
-  CHECK(j.group == 2 && r.ByNumber(1) == nullptr && !r.ByNumber(2)->dead && r.ByNumber(2)->due == 0 && !r.AnyDue(), "C2 slot reuse");
+  CHECK(j.group == 2 && r.ByNumber(1) == nullptr && !r.ByNumber(2)->dead && r.ByNumber(2)->x.due == 0 && !r.AnyDue(), "C2 slot reuse");
   j = r.On(0xb0, sound, 5, 6, 40100, A, 0x7000, O);
-  CHECK(r.spaceClears == 1 && r.ByNumber(2) == nullptr && j.pending && r.pendingN == 1 && r.space == 0x7000, "another space clears the table");
+  CHECK(r.t.spaceClears == 1 && r.ByNumber(2) == nullptr && j.pending && r.t.pendingN == 1 && r.t.space == 0x7000, "another space clears the table");
   Table m;
   for (int i = 0; i < kGroups + 1; ++i) m.On(0xd0, kDamageable, 9, 100 + i, i * 10000);
   CHECK(m.ByNumber(1) == nullptr && m.ByNumber(2) && m.ByNumber(kGroups + 1), "oldest slot taken");
+  // D7: two live groups of one actor: the first in table order takes the next component of that actor
+  Table d7a;
+  d7a.On(0xd0, kDamageable, 9, 0x31, 1000, A);
+  d7a.On(0xd0, kDamageable, 9, 0x32, 2000, A);
+  CHECK(d7a.On(0xb0, sound, 7, 9, 2500, A).group == 1, "D7: first live group of the actor in table order");
+  // D7: two groups released in the same millisecond: the first in table order takes a component of no actor
+  Table d7b;
+  d7b.On(0xd0, kDamageable, 9, 0x41, 3000, 0);
+  d7b.On(0xd0, kDamageable, 9, 0x42, 3000, 0);
+  CHECK(d7b.On(0xb0, sound, 7, 9, 3100, 0).group == 1, "D7: the first in table order on a release-time tie");
 
   // touch
   TouchTable tt;
-  Comp a = {0x1000, kR14Touch, kR14Touch, 0x00010005, 0}, b = {0x1000, kR14Touch, kR14Touch, 0x00020006, 0};
+  Comp a = {0x1000, 0x00010005, 0, 0, QComp{kR14Touch, kR14Touch, 0, 0}}, b = {0x1000, 0x00020006, 0, 0, QComp{kR14Touch, kR14Touch, 0, 0}};
   const int sa = tt.Deployed(a, 1000);
   CHECK(tt.t[sa].state == kTouchReOn && tt.AnyDue(), "touch RE-ON");
   int due[kTouches];
@@ -363,14 +376,19 @@ static void TestCore() {
     TouchTable t3;
     int slots[kTouches];
     for (int i = 0; i < kTouches; ++i) {
-      Comp c = {0x1000, kR14Touch, kR14Touch, static_cast<uint32_t>(0x100 + i), 0};
+      Comp c;
+      c.system = 0x1000;
+      c.x.sysSym = kR14Touch;
+      c.x.compSym = kR14Touch;
+      c.handle = static_cast<uint32_t>(0x100 + i);
+      c.at = 0;
       slots[i] = t3.Deployed(c, 1000 + 10 * (kTouches - i));  // the first is the youngest, the last the oldest
     }
     bool distinct = true;
     for (int i = 0; i < kTouches; ++i)
       for (int k = 0; k < i; ++k) distinct &= slots[i] != slots[k];
     CHECK(distinct, "16 records did not take 16 slots");
-    Comp extra = {0x1000, kR14Touch, kR14Touch, 0x999, 0};
+    Comp extra = {0x1000, 0x999, 0, 0, QComp{kR14Touch, kR14Touch, 0, 0}};
     CHECK(t3.Deployed(extra, 5000) == slots[kTouches - 1], "the 17th did not take the oldest slot");
     // OFF-DUE keeps its own clock: bound at 6000, still due 1999 ms later
     TouchTable t4;
@@ -464,7 +482,7 @@ static void TestPinnedConstants() {
   CHECK(kNetPhysics == 0x8FEE6557F995E4A3ull && kNetPhysicsPhys == 0x170, "net physics");
   CHECK(kJoinMs == 5000 && kPendingMs == 3000 && kSwallowMs == 25000 && kDueMs == 2000 && kLockMs == 120000 && kChaseMs == 100, "times");
   CHECK(kScopeFrames == 32, "the scope is asked every 32 frames");
-  CHECK(kGroupComps == 20 && kGroups == 8 && kPending == 20 && kTouches == 16 && kGuns == 32 && kChases == 16, "table sizes");
+  CHECK(kGroupComps == 20 && kGroups == 8 && kPending == 16 && kTouches == 16 && kGuns == 32 && kChases == 16, "table sizes");
   CHECK(kChaseSpeed == 7.0f && kChaseDistance == 7.0f && kChaseGain == 2.0f && kChaseAbove == 0.5f, "chase constants");
   CHECK(kAtIdx == 0xc8 && kAtRecs == 0xf8 && kAtStride == 0x90 && kAtTransforms == 0x130 && kAtPhysics == 0x138, "auto-target offsets");
   CHECK(kAtHasTarget == 0x63 && kAtTransform == 0x7c && kAtTargetIdx == 0x80 && kAtPhysIdx == 0x84 && kAtTargetSys == 0x88, "auto-target record offsets");
@@ -1640,6 +1658,22 @@ static void TestGun() {
   for (int i = 0; i < g_ncomps; ++i)
     if (g_comps[i].sym == 0) g_comps[i].sym = dk::kPort;
 
+  {  // D4: the gun state is kept by the node's actor symbol, not the captured SActor: two drones share one gun state,
+     // and a port Enter after the second drone's hidden gun follows it
+    Reset(Words{});
+    g_actor_val = 0xa1;
+    ND gunA = Drone(dk::kNcaModel, dk::kGun, 1);
+    CallEnter(&gunA);
+    g_actor_val = 0xb2;
+    ND gunB = Drone(dk::kNcaModel, dk::kGun, 0);
+    CallEnter(&gunB);
+    g_enters.clear();
+    g_actor_val = 0xa1;
+    ND portA = Drone(dk::kNcaModel, dk::kPort, 1);
+    CallEnter(&portA);
+    CHECK(g_enters.size() == 2 && g_enters[1].copy.enable == 0, "D4: one gun state for every drone: the first drone's port follows the second's hidden gun (%zu enters)", g_enters.size());
+    g_actor_val = 0;
+  }
   // the port follows the gun: a port Enter that differs from the gun's state gets one more Enter with the gun's state
   g_enters.clear();
   ND gun2 = Drone(dk::kNcaModel, dk::kGun, 1);
@@ -2205,6 +2239,8 @@ static void TestArenaLevelsAreLeftAlone() {
     CHECK(!InCombatScope(), "%s: in scope", level);
     CHECK(HasLine("combat_dronekill_scope in_combat=0", 1), "%s: no scope line", level);
     ExpectInert(level[0] != 0 ? level : "no level");
+    // on an arena level no counter moves and no D11 line goes out; the stats record is written only at the process end (NoteEnd, not run here)
+    CHECK(!HasLine("combat_dronekill_stats") && !HasLine("combat_dronekill_expired"), "%s: a stats or expired line on an arena level", level);
   }
   // a combat map: in scope, one line saying so
   Reset(Words{});
@@ -2351,6 +2387,128 @@ static void TestProductionStep() {
   ResetForTest();
 }
 
+// ---- D11 and the stats record (#2359)
+
+static bool StatsHas(const char* name, unsigned long long v) {
+  char needle[64];
+  std::snprintf(needle, sizeof needle, " %s=%llu ", name, v);
+  for (const auto& l : g_lines)
+    if (l.text.find("combat_dronekill_stats") != std::string::npos && l.text.find(needle) != std::string::npos) return true;
+  return false;
+}
+
+// D11: a drone's damageable going off is the drone's end: its group is dead, and a component of it that goes on again is held off (R3)
+static void TestD11DroneEnd() {
+  Reset(Words{});
+  g_lines.clear();
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+  ND snd = Drone(kSound, kSound, 1);
+  CallEnter(&snd);
+  ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&off);
+  CHECK(HasLine("combat_dronekill_expired", 1) && HasLine("group=1"), "the drone's end writes no expired line");
+  CHECK(CurrentStats().expired == 1, "the drone's end is not counted: %u", CurrentStats().expired);
+  OnKilled(0xabcd0011u);
+  CHECK(HasLine("result=no_live_group"), "the ended group is still live for a K");
+  ND again = Drone(kSound, kSound, 1);
+  CallEnter(&again);
+  CHECK(HasLine("combat_dronekill_reenabled", 1), "a component of the ended group is not held off");
+}
+
+// F5 (#2359 review): a drone that K killed and then expires is a repeat end. Its group is already dead, so the end counts and logs nothing
+static void TestD11KilledThenExpired() {
+  Reset(Only(true, false, false, false, false));
+  g_lines.clear();
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+  OnKilled(kDmgHandle & 0xffff);
+  CHECK(HasLine("combat_dronekill_k ") && HasLine("result=shut_down"), "K did not shut the drone's group down");
+  ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&off);
+  CHECK(!HasLine("combat_dronekill_expired"), "a drone K killed and then expired wrote an expired line");
+  CHECK(CurrentStats().expired == 0, "a drone K killed and then expired was counted as an end: %u", CurrentStats().expired);
+}
+
+// D11 notice: the first 16 expired lines are written, the 17th drone end writes the one notice, and the count goes on past the cap
+static void TestD11LogCap() {
+  Reset(Words{});
+  g_lines.clear();
+  for (int i = 0; i < 17; ++i) {
+    ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+    CallEnter(&rel);
+    ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+    CallEnter(&off);
+  }
+  CHECK(CountLine("combat_dronekill_expired", 1) == 16, "%d expired lines for 17 drone ends", CountLine("combat_dronekill_expired", 1));
+  CHECK(CountLine("combat_dronekill_log_cap", 2) == 1 && HasLine("lines=expired"), "no notice at the 17th drone end");
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+  ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&off);
+  CHECK(CountLine("combat_dronekill_expired", 1) == 16 && CountLine("combat_dronekill_log_cap", 2) == 1, "the 18th drone end writes a line or a second notice");
+  CHECK(CurrentStats().expired == 18, "the count stops at the cap: %u", CurrentStats().expired);
+}
+
+// The stats record (#2359): every counter CurrentStats() returns, and expired, written once at the process end (Info, final 1)
+static void TestStatsRecord() {
+  Reset(Words{});
+  g_lines.clear();
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+  ND snd = Drone(kSound, kSound, 1);
+  CallEnter(&snd);
+  ND other{0x55, 0, kSound, kSound, 1};
+  CallEnter(&other);
+  CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{1, 2, 3}, 1);
+  CallAttack(reinterpret_cast<void*>(0x6001), 1);
+  OnKilled(0xabcd0011u);
+  Tick(GameAddress());
+  ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&off);
+  const Stats s = CurrentStats();
+  // K killed the drone before its end, so the end is a repeat and expired stays 0 (a live end is counted in TestStatsRecordLiveEnd)
+  CHECK(s.enter_drone == 3 && s.enter_other == 1 && s.fires == 1 && s.attacks == 1 && s.ticks >= 1 && s.due_runs >= 1 && s.expired == 0 && s.capturing == 0,
+        "the counters: drone %u other %u fires %u attacks %u ticks %u due %u expired %u", s.enter_drone, s.enter_other, s.fires, s.attacks, s.ticks,
+        s.due_runs, s.expired);
+  g_lines.clear();
+  NoteEnd();
+  CHECK(CountLine("combat_dronekill_stats", 1) == 1 && StatsHas("final", 1), "no final stats record");
+  CHECK(StatsHas("enter_drone", s.enter_drone) && StatsHas("enter_other", s.enter_other) && StatsHas("fires", s.fires) &&
+            StatsHas("attacks", s.attacks) && StatsHas("ticks", s.ticks) && StatsHas("due_runs", s.due_runs) && StatsHas("capturing", s.capturing) &&
+            StatsHas("expired", s.expired),
+        "a counter is missing from the stats record");
+}
+
+// The stats record's expired counter on a live end (#2359 review): a drone that ends while its group is alive is counted once
+static void TestStatsRecordLiveEnd() {
+  Reset(Words{});
+  g_lines.clear();
+  ND rel = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&rel);
+  ND off = Drone(dk::kDamageable, dk::kDamageable, 0);
+  CallEnter(&off);
+  CHECK(CurrentStats().expired == 1, "a live drone end is not counted: %u", CurrentStats().expired);
+  g_lines.clear();
+  NoteEnd();
+  CHECK(CountLine("combat_dronekill_stats", 1) == 1 && StatsHas("expired", 1), "the live end is not in the stats record");
+}
+
+// The Debug stats line every kStatsEvery drone Enters, and none before it
+static void TestStatsPeriodic() {
+  Reset(Words{});
+  g_lines.clear();
+  for (unsigned i = 0; i < kStatsEvery - 1; ++i) {
+    ND off = Drone(kSound, kSound, 0);
+    CallEnter(&off);
+  }
+  CHECK(CountLine("combat_dronekill_stats") == 0, "a stats line before %u drone Enters", kStatsEvery);
+  ND off = Drone(kSound, kSound, 0);
+  CallEnter(&off);
+  CHECK(CountLine("combat_dronekill_stats", 0) == 1 && StatsHas("final", 0) && StatsHas("enter_drone", kStatsEvery),
+        "no Debug stats line at %u drone Enters", kStatsEvery);
+}
+
 int main() {
   sentinel::SetLogSink(&Sink);
   TestCore();
@@ -2366,6 +2524,12 @@ int main() {
   TestKillRules();
   TestEnterLookups();
   TestGun();
+  TestD11DroneEnd();
+  TestD11KilledThenExpired();
+  TestD11LogCap();
+  TestStatsRecord();
+  TestStatsRecordLiveEnd();
+  TestStatsPeriodic();
   TestLockOn();
   TestFire();
   TestChase();

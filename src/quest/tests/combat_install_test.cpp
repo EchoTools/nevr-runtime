@@ -571,6 +571,7 @@ void TheRealStepsConsultTheGate() {
     QCHECK(Lines("combat_impactsnd_install").empty() && Lines("combat_impactsnd_refused").empty() && Lines("combat_decals_install").empty());
     combat::NoteProcessEnd();
     QCHECK(Lines("combat_sendguard_stats").empty());
+    QCHECK(Lines("combat_dronekill_stats").empty());  // the arena build: no module installed, no stats record
     Done();
   }
 }
@@ -1217,7 +1218,7 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
 }  // namespace
 
 // The static BVH's and the wall-fire check's rows read their keys from the resolved section (#2182): each switch the file turned off reaches its module, and each
-// is one generated `combat_config_switch` record (bvh_gate and bvh_touch are rows with no step of their own). The default is on, as q15t-upstream has it.
+// is one generated `combat_config_switch` record (bvh_gate and bvh_touch are rows with no step of their own). The default is on, as echoquest-combat has it.
 void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -1394,7 +1395,7 @@ void TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled() {
   combat::InstallNormal();
   g_lines.clear();
   combat::NoteProcessEnd();
-  for (const char* event : {"combat_fxtrail_stats", "combat_voipdrop_stats", "combat_custctx_stats", "combat_droneguard_stats", "combat_peerclamp_stats"}) {
+  for (const char* event : {"combat_fxtrail_stats", "combat_voipdrop_stats", "combat_custctx_stats", "combat_droneguard_stats", "combat_peerclamp_stats", "combat_dronekill_stats"}) {
     QCHECK(Lines(event).empty());
   }
   Done();

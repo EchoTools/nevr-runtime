@@ -15,9 +15,13 @@
 #include "runtime/combat/balance_values.h"
 #include "runtime/combat/cat_compat.h"
 #include "runtime/combat/cat_links.h"
+#include "runtime/combat/clock_pause.h"
 #include "runtime/combat/combat_settings.h"
 #include "runtime/combat/dot_script.h"
 #include "runtime/combat/equip_cell.h"
+#include "runtime/combat/orb_pause.h"
+#include "runtime/combat/rules_button.h"
+#include "runtime/combat/rules_state.h"
 #include "runtime/combat/script_guard.h"
 #include "runtime/combat/shared_magazine.h"
 #include "runtime/combat/station_cells.h"
@@ -170,9 +174,19 @@ void Install(std::uintptr_t gameBase, bool isServer) {
              : !veilnet::EventDispatchHooked() ? "event_dispatch_not_hooked"
                                                : "slot_setter_filter_not_installed");
 
+    // PAUSE gives the players the pre-match spawn orbs, and the orbs say when the match is live (orb_pause.h): both go
+    // through the RULES mailbox VeilNet's match control keeps, so they register with it.
+    // PAUSE also holds Combat's clocks (clock_pause.h), read from the same mailbox.
+    if (veilnet::MatchControlStarted()) {
+      orb_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+      clock_pause::Register(reinterpret_cast<volatile std::uint8_t*>(gameBase + rules::kMailboxRva));
+    }
+
     // TEAM READY (a podium terminal button) works with more than one player and for demo accounts: hooks on Combat's
     // game-mode script, installed when it loads (team_ready.h). It needs nothing of VeilNet's.
     if (at(Group::kMatchControl).on) team_ready::Register();
+    // The podium's RULES button is pressable in Combat (rules_button.h); it too needs nothing of VeilNet's.
+    if (at(Group::kMatchControl).on) rules_button::Register();
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
     // logging.md Rule 11: the settings PowerBoost (and MEDIGUN, when on) just read, by where each came from; the per-key
