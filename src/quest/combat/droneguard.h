@@ -27,7 +27,7 @@
  * line names why. It registers in combat::InstallNormal()'s table at the position the plugin installed it (after custctx, before peerclamp).
  *
  * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, four plain loads from the component (Follow loads [cs+0xc8] as its first data access, so the
- * game dereferences the same object on every call; a null component goes to the game's function) and a compare of the state key; stage 1 adds a RefreshCache call, a
+ * game dereferences the same object on every call; a null component goes to the game's function) a compare of the state key and, for a call with a target, one relaxed load of the open-run count (0 unless a component is skipped: the run tables are scanned only then); stage 1 adds a RefreshCache call, a
  * never-faulting read of the refreshed cache and, for a resolved player, an IsComponentValid call. Host numbers are
  * in docs/quest/combat/droneguard.md; not measured on a headset.
  *
@@ -42,14 +42,16 @@
  *   stage1    {"event":"combat_droneguard_stage1","result":"on|null_half_only","reason":"ok|pinned_word_mismatch|engine_functions_missing",...}  Info / Error
  *   state     {"event":"combat_droneguard_state","target":"set|0","handle_sys":"set|0","idx_unresolved":"yes|no","raw190":"%08x","flags16c":"%02x","cs":"0x.."}
  *             Info, on the first call and on every change of (index word, flags byte, target null, handle system null), at most kStateLines
- *   skip      {"event":"combat_droneguard_skip","cs":"0x..",...}  Info, the first skip of a component's run of skips (a run belongs to the component, up to
- *             16 at once), at most kRunLines in a process; {"event":"combat_droneguard_skips","skips":<n>}  Info, every
+ *   skip      {"event":"combat_droneguard_skip","cs":"0x..",...}  Info, the first skip of a component's run of skips (a run belongs to the component; a run holds one of kRunSlots
+ *             slots from its first skip until its target arrives, or until a later run needs a slot while it is older than kRunStaleSeconds: the game gives no signal
+ *             that a component died, so such a run is dropped and counted in runs_stale, and a table full of fresh runs writes one Warning
+ *             combat_droneguard_run_table_full and counts each refused run in run_table_full), at most kRunLines in a process; {"event":"combat_droneguard_skips","skips":<n>}  Info, every
  *             kTotalEvery skips, at most kTotalLines; {"event":"combat_droneguard_target_set","skips":<n>}  Info, when a component's target arrives after skips, at most kRunLines in a process
  *   idx skip  {"event":"combat_droneguard_idx_skip","why":"idx ffff|handle-sys 0|refused but cached","cs":"0x.."}, {"event":"combat_droneguard_idx_skips","idx_skips":<n>},
  *             {"event":"combat_droneguard_idx_resolved","idx_skips":<n>}  Info, as above
  *   cap       {"event":"combat_droneguard_log_cap","lines":"state|skip|skips|target_set|idx_skip|idx_skips|idx_resolved","cap":<n>,"msg":".."}  Warning, once per
  *             kind, written by the first line over its cap (line_budget.h); the counts go on in the stats line
- *   stats     {"event":"combat_droneguard_stats","calls":<n>,"skips":<n>,"idx_skips":<n>,"final":0|1,"consequence":".."}  Debug every kStatsEvery calls, Info once at
+ *   stats     {"event":"combat_droneguard_stats","calls":<n>,"skips":<n>,"idx_skips":<n>,"runs":<n>,"target_set":<n>,"runs_stale":<n>,"run_table_full":<n>,"final":0|1,"consequence":".."}  Debug every kStatsEvery calls, Info once at
  *             the end of the process when the guard is installed
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
@@ -69,6 +71,8 @@ inline constexpr unsigned kStatsEvery = 16384;  // a Debug stats line every this
 inline constexpr unsigned kTotalEvery = 600;    // a skip total every this many skips
 inline constexpr unsigned kTotalLines = 8;      // at most this many totals of each kind
 inline constexpr unsigned kStateLines = 16;     // at most this many state lines
+inline constexpr unsigned kRunSlots = 16;       // components with a run open at once, per table (null-target runs, stage-1 runs)
+inline constexpr unsigned kRunStaleSeconds = 30;  // a run older than this is stale: its slot may be reclaimed and its target-set line is not written
 inline constexpr unsigned kRunLines = 8;        // at most this many lines of each run kind (skip, target_set, idx_skip, idx_resolved) in a process
 
 // The two words the install pins: the slot and the function it must hold. The host test supplies a stand-in's address.
@@ -94,6 +98,10 @@ struct Stats {
   std::uint64_t calls;      // every Follow call that reached the handler (the thunk's counter)
   std::uint64_t skips;      // skipped because the target was null
   std::uint64_t idxSkips;   // skipped by stage 1
+  std::uint64_t runs;       // null-target runs begun (a component's first skip after a call with a target)
+  std::uint64_t targetSets; // runs ended by the target arriving inside the stale window (each is a target_set event)
+  std::uint64_t runsStale;  // runs older than kRunStaleSeconds, dropped without a line (either table)
+  std::uint64_t runTableFull;  // runs that found no slot and no stale one to take (either table)
 };
 Stats CurrentStats() noexcept;
 
@@ -101,6 +109,11 @@ Stats CurrentStats() noexcept;
 void NoteEnd() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
+
+// How many times a call with a target scanned a run table (0 while no run is open).
+unsigned RunScansForTest() noexcept;
+// The clock the stale rule reads, in milliseconds (production: CLOCK_MONOTONIC). nullptr restores production; ResetForTest also does.
+void SetClockForTest(std::int64_t (*now)() noexcept) noexcept;
 
 // How the install finds libr15 (production: the loaded image). nullptr restores production.
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;

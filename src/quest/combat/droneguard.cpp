@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "quest/combat/line_budget.h"
 #include "quest/combat/safe_read.h"
@@ -34,32 +35,79 @@ std::atomic<unsigned> g_skips{0}, g_totals{0}, g_idxSkips{0}, g_idxTotals{0}, g_
 std::atomic<unsigned> g_skipLines{0}, g_targetSetLines{0}, g_idxSkipLines{0}, g_idxResolvedLines{0};
 
 // The components whose follow update is being skipped right now, one table for the null-target runs and one for the stage-1 runs: a run belongs to the component
-// (a drone with no target skipped every frame beside a drone with one is one run, not a line a frame). A table that is full keeps counting and writes no run line.
-constexpr unsigned kRunSlots = 16;
+// (a drone with no target skipped every frame beside a drone with one is one run, not a line a frame).
+//
+// When a slot is released: when the component's target arrives (End) or when a later run needs a slot and this one began more than kRunStaleSeconds ago (Begin). The game
+// gives no signal that a follow component died, so a run whose component is gone would otherwise hold its slot for the life of the process: a run older than the window is
+// stale, its slot is reclaimed and counted (runsStale), and its target-set line is not written (a component at a reused address never had those skips). A table that is
+// full even of fresh runs says so once (combat_droneguard_run_table_full), counts every refused run and writes no line for it.
+//
+// Cost (ADR 0038): `open` counts the runs held. End, which every call with a target makes, returns at once when it is 0 (the common case: no drone is without its target), so the
+// table is scanned only while a run is open. The clock is read only to open or end a run, never on the common path.
+using ClockFn = std::int64_t (*)() noexcept;
+std::int64_t MonotonicMs() noexcept {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+std::atomic<ClockFn> g_clock{&MonotonicMs};
+std::int64_t NowMs() noexcept { return g_clock.load(std::memory_order_relaxed)(); }
+std::atomic<unsigned> g_runScans{0};  // table scans End made (the by-count test of the early-out)
+std::atomic<unsigned> g_runs{0}, g_targetSets{0}, g_runsStale{0}, g_runTableFull{0};
+std::atomic<bool> g_fullSaid{false};
+
+enum class Began { kNew, kInRun, kFull };
+enum class Ended { kNone, kEnded, kStale };
+constexpr std::int64_t kStaleMs = static_cast<std::int64_t>(kRunStaleSeconds) * 1000;
+
 struct RunTable {
   std::atomic<std::uintptr_t> cs[kRunSlots];
-  // True when `c` was not in a run and now is (the caller writes the first-skip line).
-  bool Begin(std::uintptr_t c) noexcept {
-    std::atomic<std::uintptr_t>* freeSlot = nullptr;
-    for (auto& slot : cs) {
-      const std::uintptr_t v = slot.load(std::memory_order_relaxed);
-      if (v == c) return false;
-      if (v == 0 && freeSlot == nullptr) freeSlot = &slot;
+  std::atomic<std::int64_t> since[kRunSlots];
+  std::atomic<unsigned> open;
+  Began Begin(std::uintptr_t c) noexcept {
+    int freeAt = -1;
+    for (unsigned i = 0; i < kRunSlots; ++i) {
+      const std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
+      if (v == c) return Began::kInRun;
+      if (v == 0 && freeAt < 0) freeAt = static_cast<int>(i);
     }
-    if (freeSlot == nullptr) return false;
-    std::uintptr_t none = 0;
-    return freeSlot->compare_exchange_strong(none, c, std::memory_order_relaxed);
+    const std::int64_t now = NowMs();
+    if (freeAt < 0) {  // full: reclaim the first slot whose run is stale
+      for (unsigned i = 0; i < kRunSlots; ++i) {
+        if (now - since[i].load(std::memory_order_relaxed) > kStaleMs) {
+          g_runsStale.fetch_add(1, std::memory_order_relaxed);
+          since[i].store(now, std::memory_order_relaxed);
+          cs[i].store(c, std::memory_order_relaxed);
+          return Began::kNew;
+        }
+      }
+      return Began::kFull;
+    }
+    since[freeAt].store(now, std::memory_order_relaxed);
+    cs[freeAt].store(c, std::memory_order_relaxed);
+    open.fetch_add(1, std::memory_order_relaxed);
+    return Began::kNew;
   }
-  // True when `c` was in a run and now is not (the caller writes the run-ended line).
-  bool End(std::uintptr_t c) noexcept {
-    for (auto& slot : cs) {
-      std::uintptr_t v = c;
-      if (slot.load(std::memory_order_relaxed) == c && slot.compare_exchange_strong(v, 0, std::memory_order_relaxed)) return true;
+  // kEnded: `c` was in a run and now is not (the caller writes the run-ended line). kStale: it was, and the run is older than the window (no line).
+  Ended End(std::uintptr_t c) noexcept {
+    if (open.load(std::memory_order_relaxed) == 0) return Ended::kNone;
+    g_runScans.fetch_add(1, std::memory_order_relaxed);
+    for (unsigned i = 0; i < kRunSlots; ++i) {
+      if (cs[i].load(std::memory_order_relaxed) != c) continue;
+      const bool stale = NowMs() - since[i].load(std::memory_order_relaxed) > kStaleMs;
+      cs[i].store(0, std::memory_order_relaxed);
+      open.fetch_sub(1, std::memory_order_relaxed);
+      if (stale) g_runsStale.fetch_add(1, std::memory_order_relaxed);
+      return stale ? Ended::kStale : Ended::kEnded;
     }
-    return false;
+    return Ended::kNone;
   }
   void Clear() noexcept {
-    for (auto& slot : cs) slot.store(0, std::memory_order_relaxed);
+    for (unsigned i = 0; i < kRunSlots; ++i) {
+      cs[i].store(0, std::memory_order_relaxed);
+      since[i].store(0, std::memory_order_relaxed);
+    }
+    open.store(0, std::memory_order_relaxed);
   }
 };
 RunTable g_skipRuns, g_idxRuns;
@@ -96,9 +144,14 @@ void LogStats(bool final) noexcept {
                       {{"calls", FollowThunk::Calls()},
                        {"skips", g_skips.load(std::memory_order_relaxed)},
                        {"idx_skips", g_idxSkips.load(std::memory_order_relaxed)},
+                       {"runs", g_runs.load(std::memory_order_relaxed)},
+                       {"target_set", g_targetSets.load(std::memory_order_relaxed)},
+                       {"runs_stale", g_runsStale.load(std::memory_order_relaxed)},
+                       {"run_table_full", g_runTableFull.load(std::memory_order_relaxed)},
                        {"final", final ? 1 : 0},
                        {"consequence", "calls is every Follow call the game made, skips those not made because the target was null, idx_skips those stage 1 "
-                                       "did not make; their sum over the run's time is the call rate of Follow"}});
+                                       "did not make; runs and target_set count the null-target runs begun and ended by a target (runs_stale those dropped as older than the stale window, "
+                                       "run_table_full those refused a slot); their sum over the run's time is the call rate of Follow"}});
 }
 
 // One line on the first call and on every change of (raw index word, flag byte, target null, handle system null), at most kStateLines. Read-only: the
@@ -134,8 +187,20 @@ const char* IdxSkip(std::uintptr_t cs) noexcept {
 }
 
 // The first skip of a component's run, and every kTotalEvery-th skip of the process (at most kTotalLines of them).
+void NoteTableFull(const char* table) noexcept {
+  g_runTableFull.fetch_add(1, std::memory_order_relaxed);
+  if (g_fullSaid.exchange(true, std::memory_order_relaxed)) return;
+  sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_droneguard_run_table_full",
+                      {{"table", table}, {"slots", kRunSlots},
+                       {"consequence", "every slot holds a run younger than the stale window, so this component's run writes no line; its skips are still made and counted, and every "
+                                       "refused run is counted in run_table_full in the stats line"}});
+}
+
 void LogSkipRun(std::uintptr_t cs, unsigned n) noexcept {
-  if (g_skipRuns.Begin(cs)) {
+  const Began began = g_skipRuns.Begin(cs);
+  if (began == Began::kFull) NoteTableFull("skip");
+  if (began == Began::kNew) {
+    g_runs.fetch_add(1, std::memory_order_relaxed);
     if (LineBudget(&g_skipLines, kRunLines, "droneguard", "skip", "further first-skip lines are not written; combat_droneguard_skips and the stats line count the skips")) {
       char c[19];
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_skip",
@@ -149,7 +214,9 @@ void LogSkipRun(std::uintptr_t cs, unsigned n) noexcept {
 }
 
 void LogIdxSkipRun(std::uintptr_t cs, const char* why, unsigned n) noexcept {
-  if (g_idxRuns.Begin(cs)) {
+  const Began began = g_idxRuns.Begin(cs);
+  if (began == Began::kFull) NoteTableFull("idx_skip");
+  if (began == Began::kNew) {
     if (LineBudget(&g_idxSkipLines, kRunLines, "droneguard", "idx_skip", "further first-skip lines are not written; combat_droneguard_idx_skips and the stats line count the skips")) {
       char c[19];
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_skip",
@@ -178,7 +245,9 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
     LogSkipRun(cs, n);
     return;
   }
-  if (g_skipRuns.End(cs) &&
+  const Ended ended = g_skipRuns.End(cs);
+  if (ended == Ended::kEnded) g_targetSets.fetch_add(1, std::memory_order_relaxed);
+  if (ended == Ended::kEnded &&
       LineBudget(&g_targetSetLines, kRunLines, "droneguard", "target_set", "further target-set lines are not written; the stats line still counts every skip")) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_target_set", {{"skips", g_skips.load(std::memory_order_relaxed)}});
   }
@@ -188,7 +257,7 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
       LogIdxSkipRun(cs, why, n);
       return;
     }
-    if (g_idxRuns.End(cs) &&
+    if (g_idxRuns.End(cs) == Ended::kEnded &&
         LineBudget(&g_idxResolvedLines, kRunLines, "droneguard", "idx_resolved", "further idx-resolved lines are not written; the stats line still counts every skip")) {
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_idx_resolved", {{"idx_skips", g_idxSkips.load(std::memory_order_relaxed)}});
     }
@@ -301,8 +370,13 @@ ModuleResult Install(bool on, bool stage1) noexcept {
 }
 
 Stats CurrentStats() noexcept {
-  return {FollowThunk::Calls(), g_skips.load(std::memory_order_relaxed), g_idxSkips.load(std::memory_order_relaxed)};
+  return {FollowThunk::Calls(), g_skips.load(std::memory_order_relaxed), g_idxSkips.load(std::memory_order_relaxed),
+          g_runs.load(std::memory_order_relaxed), g_targetSets.load(std::memory_order_relaxed), g_runsStale.load(std::memory_order_relaxed),
+          g_runTableFull.load(std::memory_order_relaxed)};
 }
+
+unsigned RunScansForTest() noexcept { return g_runScans.load(std::memory_order_relaxed); }
+void SetClockForTest(std::int64_t (*now)() noexcept) noexcept { g_clock.store(now != nullptr ? now : &MonotonicMs, std::memory_order_relaxed); }
 
 void NoteEnd() noexcept {
   if (g_hook.installed()) LogStats(true);
@@ -322,6 +396,13 @@ void ResetForTest() noexcept {
   g_stateLines.store(0);
   g_skipRuns.Clear();
   g_idxRuns.Clear();
+  g_runScans.store(0);
+  g_runs.store(0);
+  g_targetSets.store(0);
+  g_runsStale.store(0);
+  g_runTableFull.store(0);
+  g_fullSaid.store(false);
+  g_clock.store(&MonotonicMs);
   g_skipLines.store(0);
   g_targetSetLines.store(0);
   g_idxSkipLines.store(0);

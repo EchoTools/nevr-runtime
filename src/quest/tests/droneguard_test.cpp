@@ -307,6 +307,89 @@ void AFlappingComponentIsCappedAndTheCapSaysSo() {
   End();
 }
 
+// ---- the table of runs (review: arena cost, slots that are never freed) ----
+
+std::int64_t g_nowMs = 100000;
+std::int64_t FakeNowMs() noexcept { return g_nowMs; }
+
+// With no run open the common path (a set target) scans nothing: the table is asked only while a run is open. Counted, not timed.
+void WithNoRunOpenACallWithATargetScansNoTable() {
+  const FollowFn hook = Installed(false);
+  World(kTarget);
+  for (int i = 0; i < 1000; ++i) hook(g_cs, 1);
+  QCHECK(g_realCalls == 1000 && dg::RunScansForTest() == 0);
+  World(0);
+  hook(g_cs, 1);  // a run opens: the next call with a target has a table to ask
+  Put64(0x140, kTarget);
+  hook(g_cs, 1);
+  QCHECK(dg::RunScansForTest() == 1);
+  for (int i = 0; i < 1000; ++i) hook(g_cs, 1);  // and the run is closed: no scan again
+  QCHECK(dg::RunScansForTest() == 1);
+  End();
+}
+
+// There is no signal that a follow component died, so a run that began more than kRunStaleSeconds ago is stale: its target-set line is dropped and counted, not
+// written for skips a component at a reused address never had; the slot is reclaimed by a later run.
+void ARunOfAComponentThatDiedIsStaleAndItsTargetSetLineIsNotWritten() {
+  const FollowFn hook = Installed(false);
+  dg::SetClockForTest(&FakeNowMs);
+  g_nowMs = 100000;
+  World(0);
+  hook(g_cs, 1);  // component A: a run begins, then it dies (never called again)
+  QCHECK(Lines("combat_droneguard_skip").size() == 1U);
+  g_nowMs += (dg::kRunStaleSeconds + 1) * 1000;
+  Put64(0x140, kTarget);  // a new component at the same address, with a target
+  hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_target_set").empty() && g_realCalls == 1);
+  QCHECK(dg::CurrentStats().runsStale == 1 && dg::CurrentStats().targetSets == 0);
+  // a run inside the window ends with its line
+  World(0);
+  g_nowMs = 100000;
+  Put64(0x140, 0);
+  hook(g_cs, 1);
+  g_nowMs += (dg::kRunStaleSeconds - 1) * 1000;
+  Put64(0x140, kTarget);
+  hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_target_set").size() == 1U && dg::CurrentStats().targetSets == 1 && dg::CurrentStats().runsStale == 1);
+  End();
+}
+
+// A full table says so once and counts; a slot whose run is stale is reclaimed by the next run, so the table cannot fill up for good.
+alignas(16) std::uint8_t g_many[dg::kRunSlots + 1][0x200];
+void AFullTableSaysSoAndAStaleSlotIsReclaimed() {
+  const FollowFn hook = Installed(false);
+  dg::SetClockForTest(&FakeNowMs);
+  g_nowMs = 100000;
+  World(0);
+  for (auto& comp : g_many) std::memcpy(comp, g_cs, sizeof(g_cs));
+  for (unsigned i = 0; i < dg::kRunSlots; ++i) hook(g_many[i], 1);
+  QCHECK(dg::CurrentStats().runs == dg::kRunSlots && dg::CurrentStats().runTableFull == 0 && Lines("combat_droneguard_run_table_full").empty());
+  hook(g_many[dg::kRunSlots], 1);  // the 17th component: no slot
+  hook(g_many[dg::kRunSlots], 1);
+  QCHECK(dg::CurrentStats().runs == dg::kRunSlots && dg::CurrentStats().runTableFull == 2);
+  const std::vector<Line> full = Lines("combat_droneguard_run_table_full");
+  QCHECK(full.size() == 1U && full[0].level == sentinel::LogLevel::kWarn && Has(full[0].text, "\"slots\":16") && Has(full[0].text, "counted"));
+  g_nowMs += (dg::kRunStaleSeconds + 1) * 1000;
+  hook(g_many[dg::kRunSlots], 1);  // the other slots are stale now: this run takes one
+  QCHECK(dg::CurrentStats().runs == dg::kRunSlots + 1 && dg::CurrentStats().runsStale == 1 && dg::CurrentStats().runTableFull == 2);
+  End();
+}
+
+// The stats line counts the runs and the target-set events, so nothing is lost after a cap.
+void TheStatsLineCountsRunsAndTargetSets() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  for (int frame = 0; frame < 100; ++frame) {
+    Put64(0x140, frame % 2 == 0 ? 0 : kTarget);
+    hook(g_cs, 1);
+  }
+  QCHECK(dg::CurrentStats().runs == 50 && dg::CurrentStats().targetSets == 50);
+  dg::NoteEnd();
+  const std::vector<Line> stats = Lines("combat_droneguard_stats");
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"runs\":50,\"target_set\":50"));
+  End();
+}
+
 // 4. State lines: the first call and every change of (index, flags, target null, system null), at most 16; read-only.
 void TheStateLineFollowsTheCacheAndIsCapped() {
   const FollowFn hook = Installed(false);
@@ -432,6 +515,19 @@ void ACacheThatTurnsUnreadableAfterTheRefreshGoesToFollow() {
   g_poison = nullptr;
   QCHECK(g_realCalls == 1 && g_refreshCalls == 1 && dg::CurrentStats().idxSkips == 0);
   munmap(pg, 4096);
+  End();
+}
+
+// The stage-1 table is as bounded as the null-target one: a 17th component with a stale cache finds it full, and the one Warning names it.
+void AFullStageOneTableSaysSo() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  g_valid = false;
+  for (auto& comp : g_many) std::memcpy(comp, g_cs, sizeof(g_cs));
+  for (unsigned i = 0; i <= dg::kRunSlots; ++i) hook(g_many[i], 1);
+  QCHECK(g_realCalls == 0 && dg::CurrentStats().idxSkips == dg::kRunSlots + 1 && dg::CurrentStats().runTableFull == 1);
+  const std::vector<Line> full = Lines("combat_droneguard_run_table_full");
+  QCHECK(full.size() == 1U && Has(full[0].text, "\"table\":\"idx_skip\""));
   End();
 }
 
@@ -685,7 +781,7 @@ void TheFinalStatsCountBothKindsOfSkip() {
   QCHECK(dg::CurrentStats().skips == 2 && dg::CurrentStats().idxSkips == 3 && dg::CurrentStats().calls == 5);
   dg::NoteEnd();
   const std::vector<Line> stats = Lines("combat_droneguard_stats");
-  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"calls\":5,\"skips\":2,\"idx_skips\":3,\"final\":1"));
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"calls\":5,\"skips\":2,\"idx_skips\":3,\"runs\":"));
   End();
 }
 
@@ -699,8 +795,13 @@ int main() {
   TheTargetArrivingEndsTheRunOfSkips();
   TwoComponentsEachCalledEveryFrameWriteOneSkipLineAndNoTargetSetLine();
   TwoComponentsWithNoTargetEachWriteTheirOwnSkipLine();
+  WithNoRunOpenACallWithATargetScansNoTable();
+  ARunOfAComponentThatDiedIsStaleAndItsTargetSetLineIsNotWritten();
+  AFullTableSaysSoAndAStaleSlotIsReclaimed();
+  TheStatsLineCountsRunsAndTargetSets();
   AFlappingComponentIsCappedAndTheCapSaysSo();
   TheStateLineFollowsTheCacheAndIsCapped();
+  AFullStageOneTableSaysSo();
   ANullSystemGoesToFollow();
   AHealthyPlayerIsRefreshedThenChecked();
   TheCacheTheRefreshWroteDecides();
