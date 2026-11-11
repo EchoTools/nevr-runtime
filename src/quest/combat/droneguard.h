@@ -27,7 +27,7 @@
  * line names why. It registers in combat::InstallNormal()'s table at the position the plugin installed it (after custctx, before peerclamp).
  *
  * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, four plain loads from the component (Follow loads [cs+0xc8] as its first data access, so the
- * game dereferences the same object on every call; a null component goes to the game's function) a compare of the state key and, for a call with a target, one relaxed load of the open-run count (0 unless a component is skipped: the run tables are scanned only then); stage 1 adds a RefreshCache call, a
+ * game dereferences the same object on every call; a null component goes to the game's function) a compare of the state key and, for a call with a target, one relaxed load of the open-run count (0 unless a run is open: the run tables are scanned only while it is above 0, which is while a component is skipped and for at most kRunStaleSeconds after a run whose component died, because the scan releases stale slots); stage 1 adds a RefreshCache call, a
  * never-faulting read of the refreshed cache and, for a resolved player, an IsComponentValid call. Host numbers are
  * in docs/quest/combat/droneguard.md; not measured on a headset.
  *

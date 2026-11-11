@@ -354,8 +354,30 @@ void ARunOfAComponentThatDiedIsStaleAndItsTargetSetLineIsNotWritten() {
   End();
 }
 
-// A full table says so once and counts; a slot whose run is stale is reclaimed by the next run, so the table cannot fill up for good.
+// Components other than g_cs, each with its own bytes.
 alignas(16) std::uint8_t g_many[dg::kRunSlots + 1][0x200];
+// One component dies mid-run (its run never ends). The early-out must not be off for good: calls with a target scan while that run is open, the scan releases it once
+// it is stale, and after that they scan nothing again.
+void ADeadRunIsReleasedByTheScanAndTheEarlyOutComesBack() {
+  const FollowFn hook = Installed(false);
+  dg::SetClockForTest(&FakeNowMs);
+  g_nowMs = 100000;
+  World(kTarget);
+  std::memcpy(g_many[0], g_cs, sizeof(g_cs));  // the live component, always with a target
+  World(0);
+  hook(g_cs, 1);  // component A begins a run and dies: it is never called again
+  for (int i = 0; i < 10; ++i) hook(g_many[0], 1);
+  QCHECK(dg::RunScansForTest() == 10 && dg::CurrentStats().runsStale == 0);  // inside the window the open run is scanned for
+  g_nowMs += (dg::kRunStaleSeconds + 1) * 1000;
+  for (int i = 0; i < 32; ++i) hook(g_many[0], 1);  // a sweep is every 32nd scan: one of these finds the dead run stale and releases it
+  const unsigned drained = dg::RunScansForTest();
+  QCHECK(drained > 10 && drained <= 42 && dg::CurrentStats().runsStale == 1 && dg::CurrentStats().targetSets == 0);
+  for (int i = 0; i < 1000; ++i) hook(g_many[0], 1);
+  QCHECK(dg::RunScansForTest() == drained && Lines("combat_droneguard_target_set").empty());
+  End();
+}
+
+// A full table says so once and counts; a slot whose run is stale is reclaimed by the next run, so the table cannot fill up for good.
 void AFullTableSaysSoAndAStaleSlotIsReclaimed() {
   const FollowFn hook = Installed(false);
   dg::SetClockForTest(&FakeNowMs);
@@ -797,6 +819,7 @@ int main() {
   TwoComponentsWithNoTargetEachWriteTheirOwnSkipLine();
   WithNoRunOpenACallWithATargetScansNoTable();
   ARunOfAComponentThatDiedIsStaleAndItsTargetSetLineIsNotWritten();
+  ADeadRunIsReleasedByTheScanAndTheEarlyOutComesBack();
   AFullTableSaysSoAndAStaleSlotIsReclaimed();
   TheStatsLineCountsRunsAndTargetSets();
   AFlappingComponentIsCappedAndTheCapSaysSo();

@@ -43,7 +43,8 @@ std::atomic<unsigned> g_skipLines{0}, g_targetSetLines{0}, g_idxSkipLines{0}, g_
 // full even of fresh runs says so once (combat_droneguard_run_table_full), counts every refused run and writes no line for it.
 //
 // Cost (ADR 0038): `open` counts the runs held. End, which every call with a target makes, returns at once when it is 0 (the common case: no drone is without its target), so the
-// table is scanned only while a run is open. The clock is read only to open or end a run, never on the common path.
+// table is scanned only while `open` is above 0: while a run is open, and for at most kRunStaleSeconds after the last run that never ended (a dead component), because the scan
+// releases every stale slot it passes. The clock is read only inside that scan (for this component's slot, and for the others on every 32nd scan) and to open a run, never on the common path.
 using ClockFn = std::int64_t (*)() noexcept;
 std::int64_t MonotonicMs() noexcept {
   timespec ts{};
@@ -58,49 +59,70 @@ std::atomic<bool> g_fullSaid{false};
 
 enum class Began { kNew, kInRun, kFull };
 enum class Ended { kNone, kEnded, kStale };
+constexpr unsigned kSweepEvery = 32;  // a power of two
 constexpr std::int64_t kStaleMs = static_cast<std::int64_t>(kRunStaleSeconds) * 1000;
 
 struct RunTable {
   std::atomic<std::uintptr_t> cs[kRunSlots];
   std::atomic<std::int64_t> since[kRunSlots];
   std::atomic<unsigned> open;
+  // A slot is claimed and released by compare_exchange, so if Follow ever runs on two threads one claims a slot once and one release decrements `open` once.
   Began Begin(std::uintptr_t c) noexcept {
-    int freeAt = -1;
-    for (unsigned i = 0; i < kRunSlots; ++i) {
-      const std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
-      if (v == c) return Began::kInRun;
-      if (v == 0 && freeAt < 0) freeAt = static_cast<int>(i);
-    }
-    const std::int64_t now = NowMs();
-    if (freeAt < 0) {  // full: reclaim the first slot whose run is stale
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      int freeAt = -1;
       for (unsigned i = 0; i < kRunSlots; ++i) {
-        if (now - since[i].load(std::memory_order_relaxed) > kStaleMs) {
-          g_runsStale.fetch_add(1, std::memory_order_relaxed);
-          since[i].store(now, std::memory_order_relaxed);
-          cs[i].store(c, std::memory_order_relaxed);
-          return Began::kNew;
-        }
+        const std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
+        if (v == c) return Began::kInRun;
+        if (v == 0 && freeAt < 0) freeAt = static_cast<int>(i);
+      }
+      const std::int64_t now = NowMs();
+      if (freeAt >= 0) {
+        std::uintptr_t none = 0;
+        if (!cs[freeAt].compare_exchange_strong(none, c, std::memory_order_relaxed)) continue;  // another thread took it: look again
+        since[freeAt].store(now, std::memory_order_relaxed);
+        open.fetch_add(1, std::memory_order_relaxed);
+        return Began::kNew;
+      }
+      for (unsigned i = 0; i < kRunSlots; ++i) {  // full: reclaim the first slot whose run is stale (the slot stays counted in `open`)
+        std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
+        if (v == 0 || now - since[i].load(std::memory_order_relaxed) <= kStaleMs) continue;
+        if (!cs[i].compare_exchange_strong(v, c, std::memory_order_relaxed)) continue;
+        g_runsStale.fetch_add(1, std::memory_order_relaxed);
+        since[i].store(now, std::memory_order_relaxed);
+        return Began::kNew;
       }
       return Began::kFull;
     }
-    since[freeAt].store(now, std::memory_order_relaxed);
-    cs[freeAt].store(c, std::memory_order_relaxed);
-    open.fetch_add(1, std::memory_order_relaxed);
-    return Began::kNew;
+    return Began::kFull;
   }
   // kEnded: `c` was in a run and now is not (the caller writes the run-ended line). kStale: it was, and the run is older than the window (no line).
+  // The scan also releases every other slot whose run is stale (a component that died mid-run never calls End), so `open` drains to 0 within
+  // kRunStaleSeconds of the last death and the common path is free again.
   Ended End(std::uintptr_t c) noexcept {
     if (open.load(std::memory_order_relaxed) == 0) return Ended::kNone;
-    g_runScans.fetch_add(1, std::memory_order_relaxed);
+    // The clock costs more than the scan, so it is read for a slot that is this component's, and for the other slots only on every kSweepEvery-th scan.
+    const bool sweep = (g_runScans.fetch_add(1, std::memory_order_relaxed) & (kSweepEvery - 1)) == 0;
+    std::int64_t now = 0;
+    bool haveNow = false;
+    Ended result = Ended::kNone;
     for (unsigned i = 0; i < kRunSlots; ++i) {
-      if (cs[i].load(std::memory_order_relaxed) != c) continue;
-      const bool stale = NowMs() - since[i].load(std::memory_order_relaxed) > kStaleMs;
-      cs[i].store(0, std::memory_order_relaxed);
+      std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
+      if (v == 0) continue;
+      bool stale = false;
+      if (v == c || sweep) {
+        if (!haveNow) {
+          now = NowMs();
+          haveNow = true;
+        }
+        stale = now - since[i].load(std::memory_order_relaxed) > kStaleMs;
+      }
+      if (v != c && !stale) continue;
+      if (!cs[i].compare_exchange_strong(v, 0, std::memory_order_relaxed)) continue;
       open.fetch_sub(1, std::memory_order_relaxed);
       if (stale) g_runsStale.fetch_add(1, std::memory_order_relaxed);
-      return stale ? Ended::kStale : Ended::kEnded;
+      if (v == c) result = stale ? Ended::kStale : Ended::kEnded;
     }
-    return Ended::kNone;
+    return result;
   }
   void Clear() noexcept {
     for (unsigned i = 0; i < kRunSlots; ++i) {
