@@ -56,9 +56,43 @@ class LockSwap {
   float own_;
 };
 
+// What the last edge line said: (held << 32) | the bits of the lock time in effect; all ones: none yet.
+constexpr std::uint64_t kNoneYet = ~std::uint64_t{0};
+std::atomic<std::uint64_t> g_last_state{kNoneYet};
+
+// One Info line when the countdown's lock time in effect or its hold changes, never per call: the countdown node runs
+// every frame. The first state is logged only when the fix acts (paused, or the RULES page's unlock time in effect),
+// so a match on the map's own unlock time that never pauses logs nothing.
+void LogChange(float own, rules::Pause paused) {
+  const float lock = EffectiveLock(Rules(), own);
+  const std::uint32_t held = paused != rules::Pause::kOff ? 1u : 0u;
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &lock, sizeof bits);
+  const std::uint64_t now = (std::uint64_t{held} << 32) | bits;
+  if (g_last_state.load(std::memory_order_relaxed) == now) return;
+  const std::uint64_t was = g_last_state.exchange(now);
+  if (was == now || (was == kNoneYet && held == 0 && lock == own)) return;
+  float was_lock = own;
+  std::uint32_t was_held = 0;
+  if (was != kNoneYet) {
+    const auto b = static_cast<std::uint32_t>(was);
+    std::memcpy(&was_lock, &b, sizeof b);
+    was_held = static_cast<std::uint32_t>(was >> 32);
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.COMBAT] unlock time: countdown changed from lock=%g held=%u to lock=%g held=%u paused=%u map_lock=%g "
+      "script=%016llx (%s)",
+      static_cast<double>(was_lock), was_held, static_cast<double>(lock), held, static_cast<unsigned>(paused),
+      static_cast<double>(own), static_cast<unsigned long long>(kScript),
+      held != 0     ? "PAUSE is on or resuming: the capture point's unlock countdown stands still"
+      : lock != own ? "the RULES page's unlock time, in minutes, not the map's own"
+                    : "the map's own unlock time");
+}
+
 std::uint64_t Countdown(void* node) {
   const std::uint8_t* context = ContextOfNode(node);
   std::uint8_t* globals = GlobalsOfContext(context);
+  LogChange(Read<float>(globals + kLockTime), Rules().Paused());
   if (Rules().Paused() == rules::Pause::kOff) {
     const LockSwap swap(globals);
     return g_countdown(node);
@@ -150,6 +184,7 @@ void ResetForTest() {
   g_countdown = nullptr;
   g_lock_left = nullptr;
   g_getter = g_state_pack = g_typed_getter = nullptr;
+  g_last_state = kNoneYet;
 }
 #endif
 

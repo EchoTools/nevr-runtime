@@ -245,6 +245,35 @@ TEST_F(UnlockTimeInstalled, ThePauseHoldsTheCountdown) {
   EXPECT_EQ(Float(globals_ + ut::kCountdownStart), -15.0f);
 }
 
+TEST_F(UnlockTimeInstalled, EachChangeOfTheCountdownsLockOrHoldIsLoggedOnce) {
+  Load();
+  SetT(0.0f);
+  Countdown();
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed"), 0) << "the map's own unlock time, not paused: nothing logged";
+  SetT(2704.0f);
+  Countdown();
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed from lock=30 held=0 to lock=45 held=0 paused=0 map_lock=30 "
+                  "script=b7d10bcffcb2a780"),
+            1);
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kOn);
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed from lock=45 held=0 to lock=45 held=1 paused=1"), 1);
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kResuming);
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed"), 2) << "resuming is still held: no new line";
+  box_[rules::kPausedShown] = 0;
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed from lock=45 held=1 to lock=45 held=0 paused=0"), 1);
+  SetT(0.0f);
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kResuming);
+  Countdown();
+  EXPECT_EQ(Count("unlock time: countdown changed from lock=45 held=0 to lock=30 held=1 paused=2 map_lock=30"), 1)
+      << "T cleared and straight to the resume countdown";
+  EXPECT_EQ(Count("unlock time: countdown changed"), 4) << "one line a change, none a frame";
+}
+
 TEST_F(UnlockTimeInstalled, StockAfterTheFree) {
   Load();
   sh::OnUnloading(ut::kScript, base_);
