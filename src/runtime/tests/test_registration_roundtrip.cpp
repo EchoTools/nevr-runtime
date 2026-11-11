@@ -142,6 +142,7 @@ nevr_game_server::RegistrationParams SampleParams() {
   params.installedLevels = {0x576ed3f8428ebc4bULL, 0x0123456789abcdefULL};  // mpl_arena_a, and a value for the round trip
   params.regions = {"us-east", "eu_west"};
   params.guilds = {"111", "222"};
+  params.features = {"echocombat", "echocombat_medigun"};  // #2333: field 13
   return params;
 }
 
@@ -165,6 +166,15 @@ TEST(RegistrationEnvelope, CarriesEveryParameterAndAFormattedVersion) {
   EXPECT_EQ(std::vector<uint64_t>(r.installed_levels().begin(), r.installed_levels().end()), params.installedLevels);
   EXPECT_EQ(std::vector<std::string>(r.regions().begin(), r.regions().end()), params.regions);
   EXPECT_EQ(std::vector<std::string>(r.guilds().begin(), r.guilds().end()), params.guilds);
+  EXPECT_EQ(std::vector<std::string>(r.features().begin(), r.features().end()), params.features);
+}
+
+// #2333: a server whose combat module started nothing states no feature; the field stays empty, as the service reads it.
+TEST(RegistrationEnvelope, ServerWithNoFeaturesSendsNone) {
+  nevr_game_server::RegistrationParams params = SampleParams();
+  params.features.clear();
+  const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
+  EXPECT_EQ(envelope.game_server_registration().features_size(), 0);
 }
 
 TEST(RegistrationRoundTrip, FakeServerDbReceivesTheRegistrationAndTheClientParsesTheSuccess) {
@@ -204,6 +214,7 @@ TEST(RegistrationRoundTrip, FakeServerDbReceivesTheRegistrationAndTheClientParse
             params.installedLevels);
   EXPECT_EQ(std::vector<std::string>(registration.regions().begin(), registration.regions().end()), params.regions);
   EXPECT_EQ(std::vector<std::string>(registration.guilds().begin(), registration.guilds().end()), params.guilds);
+  EXPECT_EQ(std::vector<std::string>(registration.features().begin(), registration.features().end()), params.features);
 
   const auto deadline = std::chrono::steady_clock::now() + kWait;
   while (std::chrono::steady_clock::now() < deadline) {

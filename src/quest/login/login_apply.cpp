@@ -284,12 +284,27 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
     return Decline(user, log, Outcome::JsonWriteFailed, d, 2);
   }
 
+  // Best effort, after the identity is in: a refusal restores these fields (ApplyFieldsAtomically) and, when the key was
+  // absent, removes whatever array the game's writer started, so the login goes out as it would have without them.
+  long long plugin_written = 0;
+  std::string plugin_failed;  // the first refused key name, never a value
+  if (!plan.plugin_fields.empty()) {
+    const bool had_key = json.TypeOf("nevr_plugins") != JsonType::Absent;
+    if (ApplyFieldsAtomically(plan.plugin_fields, json, plugin_failed)) {
+      plugin_written = 1;
+    } else {
+      if (!had_key) json.Clear("nevr_plugins");
+    }
+  }
   const LogKv d[] = {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
                      Text("hmd_serial_source", plan.hmd_serial_source.c_str()),
                      Num("fields", static_cast<long long>(plan.fields.size())),
                      Num("skipped", static_cast<long long>(plan.skipped)),
                      Num("kept_client_class", static_cast<long long>(plan.kept_client_class)),
-                     Num("kept_measured", static_cast<long long>(plan.kept_measured))};
+                     Num("kept_measured", static_cast<long long>(plan.kept_measured)),
+                     Num("plugin_fields", static_cast<long long>(plan.plugin_fields.size())),
+                     Num("plugins_written", plugin_written),
+                     Text("plugins_refused_path", plugin_failed.c_str())};
   EmitLoginRecord(log, Level::Info, Outcome::Rewritten, d, sizeof(d) / sizeof(d[0]));
   return Outcome::Rewritten;
 }

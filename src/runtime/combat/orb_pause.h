@@ -53,6 +53,8 @@ void Register(volatile std::uint8_t* mailbox);
 
 #ifdef NEVR_TEST_HOOKS
 void ResetForTest();
+/// The slot stays replaced but the table's module pointer is gone, as in the window around a free.
+void ForgetModuleForTest();
 #endif
 
 }  // namespace nevr_combat::orb_pause

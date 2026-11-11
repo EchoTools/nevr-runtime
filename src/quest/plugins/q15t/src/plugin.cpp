@@ -5,30 +5,13 @@
 #include <cstdint>
 #include <cstring>
 
-#include "aibots.h"
-#include "custctx.h"
-#include "droneguard.h"
-#include "dronekill.h"
-#include "dronemuzzle.h"
-#include "ec.h"
-#include "ecfx.h"
 #include "nevr/plugin_interface.h"
-#include "fxtrail.h"
 #include "game_tick.h"
-#include "gunconnect.h"
-#include "hudmeter.h"
 #include "levelname.h"
 #include "boosterpool.h"
-#include "music.h"
-#include "peerclamp.h"
 #include "plugin_log.h"
-#include "powerboost.h"
 #include "script_redirect.h"
-#include "sensorwd.h"
-#include "shieldgamma.h"
 #include "module_switch.h"
-#include "voipdrop.h"
-#include "weapon_arm.h"
 
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
@@ -36,62 +19,10 @@
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
 #endif
-// T-26: a new profile starts with the gun on the right hand, once per user id (weapon_arm.h). Plugin behaviour.
-#ifndef Q15T_T26
-#define Q15T_T26 0
-#endif
 // Gameplay and fix modules (src/<m>.{h,cpp}, docs/quest/q15t/modules/<m>.md). CMakeLists.txt owns the options and their defaults (each with the
-// reason, from the module's doc); like Q15T_T26, the default HERE is 0, so a build that names no option installs none of them and the
+// reason, from the module's doc); the default HERE is 0, so a build that names no option installs none of them and the
 // perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
 // step (src/quest/combat/heaps.h, memsys.h).
-#ifndef Q15T_FXTRAIL
-#define Q15T_FXTRAIL 0
-#endif
-#ifndef Q15T_VOIPDROP
-#define Q15T_VOIPDROP 0
-#endif
-#ifndef Q15T_CUSTCTX
-#define Q15T_CUSTCTX 0
-#endif
-#ifndef Q15T_DRONEGUARD
-#define Q15T_DRONEGUARD 0  // Q15T_DRONEGUARD_IDX (the second stage) is read by droneguard.cpp itself
-#endif
-#ifndef Q15T_PEERCLAMP
-#define Q15T_PEERCLAMP 0
-#endif
-#ifndef Q15T_GUNCONNECT
-#define Q15T_GUNCONNECT 0
-#endif
-#ifndef Q15T_AIBOTS
-#define Q15T_AIBOTS 0
-#endif
-#ifndef Q15T_EC
-#define Q15T_EC 0
-#endif
-#ifndef Q15T_ECFX  // needs Q15T_EC
-#define Q15T_ECFX 0
-#endif
-#ifndef Q15T_DRONEKILL
-#define Q15T_DRONEKILL 0
-#endif
-#ifndef Q15T_DRONEMUZZLE  // needs Q15T_DRONEKILL
-#define Q15T_DRONEMUZZLE 0
-#endif
-#ifndef Q15T_POWERBOOST  // 0 off, 1 read-only, 2 swallow, 3 cone (cone sends from ec's net tick: needs Q15T_EC)
-#define Q15T_POWERBOOST 0
-#endif
-#ifndef Q15T_HUDMETER
-#define Q15T_HUDMETER 0
-#endif
-#ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
-#define Q15T_SHIELDGAMMA 0
-#endif
-#ifndef Q15T_MUSIC
-#define Q15T_MUSIC 0
-#endif
-#ifndef Q15T_SENSORWD
-#define Q15T_SENSORWD 0
-#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -103,20 +34,11 @@
 NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 
 // What this binary was compiled with, as one string in .rodata: `just build-quest-q15t` reads it back from the built library and
-// refuses a build whose defaults are not the shipped ones (a stale CMake cache once built a library with the ec words empty).
-#ifdef Q15T_EC_DEFAULT_WORDS
-#define Q15T_MARK_EC_WORDS Q15T_EC_DEFAULT_WORDS
-#else
-#define Q15T_MARK_EC_WORDS ""
-#endif
-#ifndef Q15T_ECFX_DEFAULT_ON
-#define Q15T_ECFX_DEFAULT_ON 0
-#endif
+// refuses a build whose defaults are not the shipped ones.
 #define Q15T_MARK_STR2(x) #x
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
-    "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
+    "q15t-config levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -133,57 +55,9 @@ bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->
 
 // Every compiled-in module, by name, for the init line.
 constexpr char kCompiledModules[] =
-#if Q15T_FXTRAIL
-    "fxtrail "
-#endif
-#if Q15T_VOIPDROP
-    "voipdrop "
-#endif
-#if Q15T_CUSTCTX
-    "custctx "
-#endif
-#if Q15T_DRONEGUARD
-    "droneguard "
-#endif
-#if Q15T_PEERCLAMP
-    "peerclamp "
-#endif
-#if Q15T_GUNCONNECT
-    "gunconnect "
-#endif
-#if Q15T_AIBOTS
-    "aibots "
-#endif
-#if Q15T_EC
-    "ec "
-#endif
-#if Q15T_ECFX
-    "ecfx "
-#endif
-#if Q15T_DRONEKILL
-    "dronekill "
-#endif
-#if Q15T_DRONEMUZZLE
-    "dronemuzzle "
-#endif
-#if Q15T_POWERBOOST
-    "powerboost "
-#endif
-#if Q15T_HUDMETER
-    "hudmeter "
-#endif
-#if Q15T_SHIELDGAMMA
-    "shieldgamma "
-#endif
 #if Q15T_LEVELNAME
     "levelname "
     "boosterpool "
-#endif
-#if Q15T_MUSIC
-    "music "
-#endif
-#if Q15T_SENSORWD
-    "sensorwd "
 #endif
     "";
 
@@ -253,19 +127,9 @@ NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
 NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-  if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
-  // shieldgamma (what is drawn), ecfx (rides ec).
-  if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
+  // Modules that change what a player experiences or what the game computes (per their docs, the others skip, add or answer game
+  // logic). Not here: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's now.
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
-  if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
   return caps;
 }
 
@@ -276,11 +140,10 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   const bool covers_id = Covers(ctx, offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id));
   const bool quest = (ctx->flags & NEVR_HOST_PLATFORM_QUEST) != 0;
   const char* id = covers_id && ctx->game_build_id != nullptr ? ctx->game_build_id : "";
-  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID}, {"t26", Q15T_T26 ? "1" : "0"},
-                                {"modules", kCompiledModules}};
-  Log(NEVR_LOG_INFO, "q15t init", start, 4);
+  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID}, {"modules", kCompiledModules}};
+  Log(NEVR_LOG_INFO, "q15t init", start, 3);
   if (!quest || !covers_id || std::strcmp(id, Q15T_BUILD_ID) != 0) {
-    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 4);
+    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 3);
     return 0;  // loaded, nothing installed
   }
   RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
@@ -288,86 +151,12 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   // levelname and its companion boosterpool: built in, less the kill file `levelname.off` (the runtime's headset gates read `combat.levelname`
   // for the same fact: the bot-body gate needs the full-size global_mp that levelname loads).
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
+  // KNOWN-WRONG #2168: unused: no module of the plugin registers a game tick, so want_tick stays false and the tick below is never installed. It is removed when the fold ends.
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
-  // The modules, in an order the docs fix: ecfx, powerboost's net tick and dronekill's kill feed after ec;
-  // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
+  // The modules, in an order the docs fix (bvh, wallfire, impactsnd, decals, ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).
+  // Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
-#if Q15T_FXTRAIL
-  ReportModule("fxtrail", InstallFxTrail(base));
-#endif
-#if Q15T_VOIPDROP
-  ReportModule("voipdrop", InstallVoipDrop(base));
-#endif
-#if Q15T_CUSTCTX
-  ReportModule("custctx", InstallCustCtx(base));
-#endif
-#if Q15T_DRONEGUARD
-  ReportModule("droneguard", InstallDroneGuard(base));
-#endif
-#if Q15T_PEERCLAMP
-  ReportModule("peerclamp", InstallPeerClamp(base));
-#endif
-  [[maybe_unused]] bool ec_on = false;
-#if Q15T_EC
-  {
-    const InstallResult r = InstallEc(base);
-    ReportModule("ec", r);
-    ec_on = r.status == SwapStatus::kOk;
-  }
-#endif
-#if Q15T_ECFX
-  ReportModule("ecfx", InstallEcfx(base));
-#endif
-#if Q15T_DRONEKILL
-  {
-    DroneKillFns fns{};
-    if (!ResolveDroneKillFns(base, &fns)) {
-      ReportModuleRefused("dronekill", "engine_export_missing");
-    } else {
-      const DroneKillInstall dk = InstallDroneKill(base, DroneKillWords{}, fns);
-      const InstallResult hooks[] = {dk.actor, dk.enter, dk.fire, dk.attack};
-      ReportModule("dronekill", FirstFailure(dk.ok, hooks, 4));
-      if (dk.ok && dk.needs_tick) AddModuleTick("dronekill", &DroneKillTick, &want_tick);
-#if Q15T_EC
-      if (dk.ok) {  // the server's "drone killed" datagrams reach `kill` through ec's recvfrom wrapper
-        EcOnDroneKilled(&DroneKillOnKilled);
-        const NevrLogField f[] = {{"module", "dronekill"}, {"feed", "ec recvfrom"}, {"ec_on", ec_on ? "1" : "0"}};
-        Log(NEVR_LOG_INFO, "module link", f, 3);
-      }
-#endif
-    }
-  }
-#endif
-#if Q15T_DRONEMUZZLE
-  if (!DroneKillShotActive()) {
-    ReportModuleRefused("dronemuzzle", "needs_dronekill_shot");
-  } else {
-    const DroneMuzzleInstall dm = InstallDroneMuzzle(base);
-    const InstallResult hooks[] = {dm.teleport, dm.fire};
-    ReportModule("dronemuzzle", FirstFailure(dm.ok, hooks, 2));
-    if (dm.ok) AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick);
-  }
-#endif
-#if Q15T_POWERBOOST > 0
-  {
-    bool net_tick = false;
-#if Q15T_POWERBOOST >= 3 && Q15T_EC
-    net_tick = ec_on && EcOnNetTick(&PowerboostNetTick);  // stage 3 sends from ec's recvfrom wrapper; without it the stage is refused
-#endif
-    const InstallResult r = InstallPowerboost(base, Q15T_POWERBOOST, net_tick);
-    ReportModule("powerboost", r);
-#if Q15T_POWERBOOST >= 3
-    if (r.status == SwapStatus::kOk) AddModuleTick("powerboost", &PowerboostGameTick, &want_tick);
-#endif
-  }
-#endif
-#if Q15T_HUDMETER
-  ReportModule("hudmeter", InstallHudmeter(base));
-#endif
-#if Q15T_SHIELDGAMMA
-  ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
-#endif
 #if Q15T_LEVELNAME
   if (levelname_on) {
     ReportModule("levelname", InstallLevelName(base));
@@ -377,36 +166,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     off.reason = "off_file";  // levelname.off turns the pair off together
     ReportModule("levelname", off);
     ReportModule("boosterpool", off);
-  }
-#endif
-#if Q15T_SENSORWD
-  ReportModule("sensorwd", InstallSensorWd(base));
-  AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
-#endif
-#if Q15T_MUSIC
-  {
-    const InstallResult r = InstallMusic(base);
-    ReportModule("music", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("music", &MusicTick, &want_tick);
-  }
-#endif
-#if Q15T_GUNCONNECT
-  InitGunConnect(base, GunConnectFns{});  // an all-null table: resolved from the loaded game library on the first tick
-  ReportModuleTick("gunconnect", AddGameTick(&GunConnectTick), &want_tick);
-#endif
-#if Q15T_AIBOTS
-  InitAiBots(base, AiBotsFns{});
-  ReportModuleTick("aibots", AddGameTick(&AiBotsTick), &want_tick);
-#endif
-#if Q15T_T26
-  {
-    WeaponArmFns arm_fns{};
-    if (ResolveWeaponArmFns(&arm_fns)) {
-      InitWeaponArm(ctx->base_addr, arm_fns);
-      AddModuleTick("weapon_arm", &WeaponArmTick, &want_tick);
-    } else {
-      Log(NEVR_LOG_ERROR, "t26 not installed: an engine export is missing (not the pinned build?)");
-    }
   }
 #endif
   if (want_tick) {

@@ -73,7 +73,7 @@ endforeach()
 nevr_ht_obj(o_shared_hook_log GROUP shared NOEXC SRC src/quest/sentinel/hook_log.cpp)
 nevr_ht_test(login_rewrite_test GROUP shared HOST DEFS NEVR_QUEST_TESTING TIMEOUT 120
   OBJS o_shared_login_apply o_shared_login_prerequisites o_shared_login_standin o_shared_hook_log
-  SRC src/quest/login/login_rewrite.cpp src/runtime/compat/login_profile.cpp src/quest/tests/login_rewrite_test.cpp)
+  SRC src/quest/login/login_rewrite.cpp src/runtime/compat/login_profile.cpp src/runtime/ext/plugin_manifest.cpp src/quest/tests/login_rewrite_test.cpp)
 # Quest login prerequisites: the handler bodies driven through a fake Platform SDK and the game's four callbacks. The install
 # (login_prerequisites_install.cpp) needs libpnsovr.so for real slots; build-android compiles it and test-quest-hooks-pinned
 # resolves its slots in the real library.

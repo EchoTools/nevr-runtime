@@ -41,6 +41,7 @@ constexpr std::uint64_t kMainLoop = 0x1509ee2745041c7eULL;
 // pre_match's low dword with other high bits: a set value that is not pre_match.
 constexpr std::uint64_t kNotPreMatch = (std::uint64_t{0xdeadbeef} << 32) | (op::kPreMatch & 0xffffffffULL);
 constexpr std::uint32_t kOtherCallerRva = 0x20000;
+constexpr std::uint32_t kRaxCallerRva = 0x20100;
 
 std::vector<std::string> g_logged;
 void CaptureLog(EchoVR::LogLevel, const CHAR* message) { g_logged.push_back(message); }
@@ -54,7 +55,7 @@ std::uint64_t g_value = 0;  // what the stand-in engine writes for any field
 int g_engine_calls = 0;
 std::uint64_t EngineAccessor(void*, std::uint64_t, void* out) {
   ++g_engine_calls;
-  std::memcpy(out, &g_value, sizeof g_value);
+  if (out != nullptr) std::memcpy(out, &g_value, sizeof g_value);
   return 0x55;
 }
 
@@ -100,14 +101,20 @@ TEST(OrbPauseField, OnlyTheSpawnAccessFieldInsideTheNodeIsActedOn) {
   const rules::RulesState r(box);
   g_value = kMainLoop;
   std::uint64_t out = 0;
-  op::ReadField(&EngineAccessor, kSpawnField, false, r, nullptr, kSpawnField, &out);
+  EXPECT_EQ(op::ReadField(&EngineAccessor, kSpawnField, false, r, nullptr, kSpawnField, &out), 0x55u)
+      << "the engine's result, which the script's callers return";
   EXPECT_EQ(out, kMainLoop) << "outside the node";
   EXPECT_EQ(box[rules::kMatchLive], 0);
   op::ReadField(&EngineAccessor, kSpawnField, true, r, nullptr, kSpawnField + 1, &out);
   EXPECT_EQ(out, kMainLoop) << "another field";
-  op::ReadField(&EngineAccessor, kSpawnField, true, r, nullptr, (std::uint64_t{0xffff} << 32) | kSpawnField, &out);
+  EXPECT_EQ(op::ReadField(&EngineAccessor, kSpawnField, true, r, nullptr, (std::uint64_t{0xffff} << 32) | kSpawnField, &out),
+            0x55u) << "the engine's result, also when acted on";
   EXPECT_EQ(out, op::kPreMatch) << "the id is a dword: the register's upper half does not matter";
   EXPECT_EQ(box[rules::kMatchLive], 1);
+  box[rules::kMatchLive] = 7;
+  EXPECT_EQ(op::ReadField(&EngineAccessor, kSpawnField, true, r, nullptr, kSpawnField, nullptr), 0x55u)
+      << "no out: nothing read or written";
+  EXPECT_EQ(box[rules::kMatchLive], 7);
 }
 
 class OrbPauseInstalled : public ::testing::Test {
@@ -144,6 +151,14 @@ class OrbPauseInstalled : public ::testing::Test {
     Rel32(o, kOtherCallerRva, op::kAccessorSlotRva);
     Emit(o, {0x48, 0x8b, 0x44, 0x24, 0x28, 0x48, 0x83, 0xc4, 0x38, 0xc3});  // mov rax, [rsp+0x28]; add rsp, 0x38; ret
     std::memcpy(base_ + kOtherCallerRva, o.data(), o.size());
+    // A caller that returns the accessor's rax, as the script's callers at 0x2BB29 and 0x30CC9 do.
+    std::vector<std::uint8_t> x;
+    Emit(x, {0x48, 0x83, 0xec, 0x38, 0x8b, 0x15});
+    Rel32(x, kRaxCallerRva, op::kSpawnAccessFieldIdRva);
+    Emit(x, {0x4c, 0x8d, 0x44, 0x24, 0x28, 0x31, 0xc9, 0xff, 0x15});
+    Rel32(x, kRaxCallerRva, op::kAccessorSlotRva);
+    Emit(x, {0x48, 0x83, 0xc4, 0x38, 0xc3});  // add rsp, 0x38; ret (rax is the accessor's)
+    std::memcpy(base_ + kRaxCallerRva, x.data(), x.size());
     void* engine = reinterpret_cast<void*>(&EngineAccessor);
     std::memcpy(base_ + op::kAccessorSlotRva, &engine, sizeof engine);
     std::memcpy(base_ + op::kSpawnAccessFieldIdRva, &kSpawnField, sizeof kSpawnField);
@@ -160,6 +175,7 @@ class OrbPauseInstalled : public ::testing::Test {
     g_value = value;
     return reinterpret_cast<std::uint64_t (*)(void*)>(base_ + op::kNodeRva)(nullptr);
   }
+  std::uint64_t RaxCaller() { return reinterpret_cast<std::uint64_t (*)()>(base_ + kRaxCallerRva)(); }
   std::uint64_t Other(std::uint64_t value) {
     g_value = value;
     return reinterpret_cast<std::uint64_t (*)()>(base_ + kOtherCallerRva)();
@@ -195,6 +211,51 @@ TEST_F(OrbPauseInstalled, PauseGivesThePreMatchOrbsAndTheOrbsSayWhenTheMatchIsLi
   EXPECT_EQ(box_[rules::kMatchLive], 7);
   sh::OnUnloading(op::kScript, base_);
   EXPECT_EQ(Node(kMainLoop), kMainLoop) << "stock after the free";
+}
+
+TEST_F(OrbPauseInstalled, TheAccessorsResultReachesTheScript) {
+  op::Register(box_);
+  sh::OnLoaded(op::kScript, base_);
+  g_value = kMainLoop;
+  EXPECT_EQ(RaxCaller(), 0x55u) << "the replaced slot returns the engine's rax";
+}
+
+TEST_F(OrbPauseInstalled, WithoutTheModuleTheSlotOnlyPassesThrough) {
+  op::Register(box_);
+  sh::OnLoaded(op::kScript, base_);
+  op::ForgetModuleForTest();
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kOn);
+  EXPECT_EQ(Node(kMainLoop), kMainLoop) << "no field id to compare: the engine's value";
+  EXPECT_EQ(box_[rules::kMatchLive], 0);
+  const std::uint32_t zero = 0;
+  std::memcpy(base_ + op::kSpawnAccessFieldIdRva, &zero, sizeof zero);
+  EXPECT_EQ(Node(kMainLoop), kMainLoop) << "field 0 is not taken for spawn_access";
+  EXPECT_EQ(box_[rules::kMatchLive], 0);
+  g_value = kMainLoop;
+  EXPECT_EQ(RaxCaller(), 0x55u) << "the engine's result";
+}
+
+TEST_F(OrbPauseInstalled, EachChangeIsLoggedOnce) {
+  op::Register(box_);
+  sh::OnLoaded(op::kScript, base_);
+  Node(op::kPreMatch);
+  Node(op::kPreMatch);
+  EXPECT_EQ(Count("orb pause: match live from=unset to=0 script=e57332952e1cd478 paused=0"), 1);
+  Node(kMainLoop);
+  Node(kMainLoop);
+  EXPECT_EQ(Count("orb pause: match live from=0 to=1 script=e57332952e1cd478 paused=0"), 1);
+  EXPECT_EQ(Count("orb pause: pre-match orbs"), 0) << "no swap yet";
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kOn);
+  Node(kMainLoop);
+  Node(kMainLoop);
+  EXPECT_EQ(Count("orb pause: pre-match orbs started script=e57332952e1cd478 paused=1"), 1);
+  box_[rules::kPausedShown] = static_cast<std::uint8_t>(rules::Pause::kResuming);
+  Node(kMainLoop);
+  Node(kMainLoop);
+  EXPECT_EQ(Count("orb pause: pre-match orbs stopped script=e57332952e1cd478 paused=2"), 1);
+  Node(op::kPreMatch);
+  EXPECT_EQ(Count("orb pause: match live from=1 to=0 script=e57332952e1cd478 paused=2"), 1);
+  EXPECT_EQ(Count("orb pause: match live"), 3) << "one line per change, none per frame";
 }
 
 TEST_F(OrbPauseInstalled, RegisteringTwiceAddsTheRowsOnce) {
