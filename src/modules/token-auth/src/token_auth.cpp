@@ -313,7 +313,7 @@ nevr_token_auth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string
     }
     nevr_token_auth::DevicePollResponse parsed = nevr_token_auth::ParseDevicePollResponse(response);
     parsed.http_code = httpCode;
-    parsed.body_prefix = nevr_token_auth::PollBodyPrefix(response);
+    parsed.body_bytes = response.size();
     return parsed;
 }
 

@@ -833,27 +833,30 @@ TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
 }
 
 // The wait used to be silent while the server answered "pending": a loop that polls and is told pending
-// could not be told from one that does not run (#397).
-TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndTheBody) {
+// could not be told from one that does not run (#397). The line carries the HTTP code, the status and the body's
+// size, never the body text (logging Rule 4, #2378): a verified poll's body holds the tokens.
+TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndTheBodySize) {
   FakeDeviceAuthFlow fake;
-  nevr_token_auth::DevicePollResponse pending =
-      nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
+  const std::string pendingBody = "{\"status\":\"authorization_pending\"}";
+  nevr_token_auth::DevicePollResponse pending = nevr_token_auth::ParseDevicePollResponse(pendingBody);
   pending.http_code = 200;
-  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}");
-  nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
+  pending.body_bytes = pendingBody.size();
+  const std::string expiredBody = "{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}";
+  nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse(expiredBody);
   expired.http_code = 200;
-  expired.body_prefix = "{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}";
-  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix);
+  expired.body_bytes = expiredBody.size();
   fake.poll_sequence = {pending, pending, expired};
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
-                     "poll #1 http=200 status=pending server_status=\"authorization_pending\" "
-                     "body=\"{\"status\":\"authorization_pending\"}\""));
+                     "poll #1 http=200 status=pending server_status=\"authorization_pending\" body_bytes=" +
+                         std::to_string(pendingBody.size())));
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #2 http=200 status=pending"));
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
-                     "poll #3 http=200 status=expired server_status=\"expired\" "
-                     "body=\"{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}\""));
+                     "poll #3 http=200 status=expired server_status=\"expired\" body_bytes=" +
+                         std::to_string(expiredBody.size())));
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Info, "body=\""));
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Info, "{\"status\""));
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status"));
 }
 
@@ -861,7 +864,6 @@ TEST(DeviceAuthFlow, AnUnknownStatusIsAWarningAndStillPending) {
   FakeDeviceAuthFlow fake;
   nevr_token_auth::DevicePollResponse odd = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"weird\"}");
   odd.http_code = 200;
-  odd.body_prefix = "{\"status\":\"weird\"}";
   nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
   fake.poll_sequence = {odd, expired};
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
@@ -937,20 +939,6 @@ TEST(DeviceAuthFlow, ATransportFailureIsLoggedAsHttpNoneNotSilence) {
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #1 http=none status=error"));
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status")) << "an error is not an unknown status";
-}
-
-// #2244: the poll body is logged as the server sent it, the code and any tokens included. Control characters become '.'
-// so one body is one line; the cap is the log line's own.
-TEST(PollBodyPrefix, IsTheBodyAsSentCappedAtTheLineLength) {
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}"),
-            "{\"code\":\"SECRET-1\",\"status\":\"x\"}");
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(5000, 'a')).size(), 1024U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), 10).size(), 10U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01"), "a.b.");
-  const std::string verified =
-      "{\"status\":\"verified\",\"access_token\":\"eyJhbGciOiJIUzI1NiJ9.payload.sig\",\"refresh_token\":\"r\"}";
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(verified), verified);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}"), "{\"token\":\"legacy-secret\"}");
 }
 
 TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo) {
