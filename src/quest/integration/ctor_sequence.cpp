@@ -71,7 +71,6 @@ const char* StepName(StepId id) {
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
     case StepId::kInstallIrradianceDefault: return "install_irradiance_default";
-    case StepId::kInstallUiMipsSplash: return "install_ui_mips_splash";
     case StepId::kInstallWizardMetric: return "install_wizard_metric";
     case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
@@ -351,9 +350,6 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The grey default irradiance texture (#2091): every launch, no counters. The hooks must be in place before the engine runs
     // CGEngineResources::Initialize, which is after the constructor.
     r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });
-
-    // The UI top mip (#961) and the splash skip (#962): they read libr15 only, so they run on every launch, social or not (#2096).
-    r.Run(StepId::kInstallUiMipsSplash, [&] { return steps.InstallUiMipsAndSplash(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {
