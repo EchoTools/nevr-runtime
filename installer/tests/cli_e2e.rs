@@ -1042,6 +1042,36 @@ fn the_record_names_its_owner_and_a_record_owned_by_another_installer_is_refused
 }
 
 #[test]
+fn a_recorded_install_whose_backup_is_gone_or_whose_dbgcore_is_back_exits_2_and_changes_nothing() {
+    // #781: the game's file already equals the package's host, so the run takes the recorded branch. That branch must refuse
+    // as the update does: exit 2 (needs the player), and no file or record changed.
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", dir]);
+    assert_eq!(code, 0, "{out} {err}");
+    let record = w.nevr.path().join("installer").join("nevr-install.txt");
+    let text = std::fs::read_to_string(&record).unwrap();
+    let backup = text.lines().find_map(|l| l.strip_prefix("backup=")).expect("the record names the backup").to_string();
+    let moved = format!("{backup}.moved");
+    std::fs::rename(&backup, &moved).unwrap();
+    let before = tree_of(w.game.path());
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", dir, "--version", "1.0.0"]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("the backup named in nevr-install.txt is gone"), "{out}");
+    assert_eq!(tree_of(w.game.path()), before);
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), text, "the record is not rewritten");
+    std::fs::rename(&moved, &backup).unwrap();
+
+    std::fs::write(w.game.path().join("dbgcore.dll"), b"a dbgcore that came back").unwrap();
+    let before = tree_of(w.game.path());
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", dir, "--version", "1.0.0"]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("a dbgcore.dll exists again"), "{out}");
+    assert_eq!(tree_of(w.game.path()), before);
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), text, "the record is not rewritten");
+}
+
+#[test]
 fn the_2017_builds_win7_folder_is_matched_too() {
     let w = world(false);
     let l = launcher_install();
