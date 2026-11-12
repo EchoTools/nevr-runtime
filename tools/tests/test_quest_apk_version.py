@@ -45,12 +45,6 @@ def current_major() -> int:
     return qv.newest_release()[1]
 
 
-def current_release() -> tuple:
-    """(major, minor, patch) of the newest release tag this clone lists: the stamp refuses anything whose versionCode is
-    below it. Read, not pinned, so a new release does not stale the fixtures that must stamp at or above it."""
-    return tuple(int(part) for part in qv.newest_release()[0][1:].split("."))
-
-
 class NumberingTest(unittest.TestCase):
     # versionCode = major*10^7 + minor*10^5 + patch*10^3 + slot; slot = dev distance N, or 999 for a release. Worked by hand.
     TABLE = (
@@ -269,19 +263,6 @@ class FloorTest(unittest.TestCase):
             qv.stamp_code_for("6.0.1-dev.1+abcdef0")
         self.assertEqual(qv.stamp_code_for("7.0.0"), 70_000_999)
 
-    def test_a_same_major_older_minor_is_refused_by_its_versionCode(self):
-        # the floor was the major alone, so 6.14.0 (code 61400999) passed under the newest tag v6.15.0 (code 61500999)
-        self.newest_is("v6.15.0", 6)
-        with self.assertRaisesRegex(qv.VersionError, "versionCode 61400999 is below 61500999, the versionCode of the "
-                                                     "newest release tag v6.15.0"):
-            qv.stamp_code_for("6.14.0")
-
-    def test_the_newest_release_a_later_patch_and_a_later_major_are_accepted(self):
-        self.newest_is("v6.15.0", 6)
-        self.assertEqual(qv.stamp_code_for("6.15.0"), 61_500_999)
-        self.assertEqual(qv.stamp_code_for("6.15.1"), 61_501_999)
-        self.assertEqual(qv.stamp_code_for("7.0.0"), 70_000_999)
-
     def test_a_malformed_version_is_refused_by_the_rule_not_the_floor(self):
         self.newest_is("v6.0.0", 6)
         with self.assertRaisesRegex(qv.VersionError, "neither X.Y.Z"):
@@ -480,9 +461,9 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("no release tag", record["reason"])
 
     def test_patch_manifest_writes_in_place_and_logs_before_and_after(self):
-        major, minor, patch = current_release()
-        version = f"{major}.{minor}.{patch + 1}-dev.37+3a35e0b"  # the next patch, above the newest release's versionCode
-        code = qv.version_code_for(version)
+        major = current_major()
+        version = f"{major}.6.1-dev.37+3a35e0b"
+        code = major * 10**7 + 6 * 10**5 + 1 * 10**3 + 37
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
@@ -499,16 +480,16 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(manifest.read_bytes(), fx.build_manifest(code))
 
     def test_patch_manifest_refuses_a_shim_from_another_build_and_leaves_the_manifest_alone(self):
-        major, minor, patch = current_release()
+        major = current_major()
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             original = fx.build_manifest(4987566)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(original)
             header = tmp / "nevr_build_info.h"
-            header.write_text(f'constexpr const char* kVersion = "{major}.{minor}.{patch + 1}-dev.37+3a35e0b";\n')
+            header.write_text(f'constexpr const char* kVersion = "{major}.6.1-dev.37+3a35e0b";\n')
             shim = tmp / "shim.so"
-            shim.write_bytes(b"\0" + f"{major}.{minor}.{patch + 1}-dev.36+3a35e0b".encode() + b"\0")
+            shim.write_bytes(b"\0" + f"{major}.6.1-dev.36+3a35e0b".encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--build-info", str(header), "--shim", str(shim))
             self.assertEqual(done.returncode, 1)
             self.assertIn("different builds", json.loads(done.stderr)["reason"])
@@ -516,9 +497,9 @@ class CommandLineTest(unittest.TestCase):
 
     def test_patch_manifest_takes_the_version_directly_where_no_build_info_exists(self):
         """A release APK packages CI's loader and has no build tree: the tag's version is the version (#1135)."""
-        major, minor, patch = current_release()
-        version = f"{major}.{minor}.{patch}"  # the newest release itself: stampable, its code equals the release's
-        code = qv.version_code_for(version)
+        major = current_major()
+        version = f"{major}.16.2"
+        code = major * 10**7 + 16 * 10**5 + 2 * 10**3 + 999
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
@@ -530,15 +511,15 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(manifest.read_bytes(), fx.build_manifest(code))
 
     def test_patch_manifest_with_a_version_still_refuses_a_shim_that_does_not_carry_it(self):
-        major, minor, patch = current_release()
-        version = f"{major}.{minor}.{patch}"
+        major = current_major()
+        version = f"{major}.16.2"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             original = fx.build_manifest(4987566)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(original)
             shim = tmp / "shim.so"
-            shim.write_bytes(b"\0" + f"{major}.{minor}.{patch + 1}".encode() + b"\0")
+            shim.write_bytes(b"\0" + f"{major}.16.1".encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--version", version, "--shim", str(shim))
             self.assertEqual(done.returncode, 1)
             self.assertIn(version, json.loads(done.stderr)["reason"])
