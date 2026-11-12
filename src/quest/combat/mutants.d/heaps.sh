@@ -140,6 +140,9 @@ runm h_missing_mib         $F "s/{\"system_mib\", SystemBytesFor(headset_profile
 runm h_off_store_skipped   $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (heapsOn) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
 # the refusal path: the switch is stored only when an image lookup is given, so a refused step (no lookup) keeps the value of the step before it
 runm h_refused_store_skipped $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (lookup != nullptr) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
+# the build-ID refusals: each logs the switch its step was handed, which the test pins on both refusals (no_build_id and build_id_mismatch)
+runm h_refused_build_id_memsys $F "s/return Refused(\"build_id_mismatch\", profile);/{ g_systemOn.store(!systemOn, std::memory_order_relaxed); return Refused(\"build_id_mismatch\", profile); }/"
+runm h_refused_no_build_id_memsys $F "s/return Refused(\"no_build_id\", profile);/{ g_systemOn.store(!systemOn, std::memory_order_relaxed); return Refused(\"no_build_id\", profile); }/"
 # the holder (quest/headset_active.h) and the identity step that fills it; each is killed by the test named after it
 runm h_holder_null_q2      src/quest/headset_active.h "s/  return profile != nullptr ? profile : \\&headset_profile::kGeneric;/  return profile != nullptr ? profile : \\&headset_profile::kQuest2;/"
 runm h_step_not_stored     src/quest/integration/headset_identity_step.cpp "s/^  headset_active::SetActive(match.profile);/  (void)match;/" quest-host-hooks headset_profile_test

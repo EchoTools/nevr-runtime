@@ -303,6 +303,31 @@ void TheMemsysFieldIsTheValueTheStepWasHanded() {
   }
 }
 
+// The memsys field of the two build-ID refusals is the value the step was handed, true and false alike. Each refusal follows an installed
+// step that left the other value, so a refusal that stored nothing would log that value and fail here. The module_not_loaded path is pinned
+// above; these two were checked for their status only.
+void TheBuildIdRefusalsLogTheValueTheStepWasHanded() {
+  for (const bool sys : {false, true}) {
+    const char* const want = sys ? "\"memsys\":1," : "\"memsys\":0,";
+    Begin();
+    Build();
+    QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, !sys).installed);
+    End();
+    Begin();
+    Build(false, pinned::kLibR15StockBuildId);
+    QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, sys).status, "build_id_mismatch") == 0);
+    std::vector<Line> install = Lines("combat_heaps_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"build_id_mismatch\"") && Has(install[0].text, want));
+    End();
+    Begin();
+    Build(false, nullptr, /*note=*/false);
+    QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, sys).status, "no_build_id") == 0);
+    install = Lines("combat_heaps_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"no_build_id\"") && Has(install[0].text, want));
+    End();
+  }
+}
+
 void AnImageThatIsNotThePatchedLibr15IsRefusedBeforeAnyWord() {
   Begin();
   QCHECK(std::strcmp(heaps::InstallAt(nullptr, hp::kQuest3, true, true).status, "module_not_loaded") == 0);
@@ -598,6 +623,7 @@ int main() {
   ASlotThatNamesAFunctionIsNeverWritten();
   TheSwitchesTurnTheModuleOrTheSystemHeapOff();
   TheMemsysFieldIsTheValueTheStepWasHanded();
+  TheBuildIdRefusalsLogTheValueTheStepWasHanded();
   AnImageThatIsNotThePatchedLibr15IsRefusedBeforeAnyWord();
   TheStepRunsOnce();
   TheRowLinesCarryTheirFields();
