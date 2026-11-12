@@ -2,8 +2,9 @@
 // warning (runtime/compat/peer_timeout_log.h). Pure: every time is passed in; no sleep, no clock.
 //
 // Mutants (one line each, run against peer_timeout_log.cpp):
-//   M1 FormatCommunicationTimeout: gap = now - last (clamp dropped)   -> ClampsAClockThatReadsEarlier fails.
-//   M2 FormatCommunicationTimeout: print gap_s from the wrong field   -> ServerLine names the gap 15.033.
+//   M1 FormatPeerRemoved: gap = now - last (clamp dropped)            -> ClampsAClockThatReadsEarlier fails.
+//   M2 FormatPeerRemoved: gap_s printed at half the gap                -> ServerLineNamesPeerSlotLastReceiveAndGap fails.
+//   M8 LevelForRemovalReason: "communication timeout" at Info          -> TimeoutsAreWarnings fails.
 //   M3 RecordSend: sends_ not incremented                              -> SendStateCountsSends fails.
 //   M4 CheckNoSend: `>=` changed to `>`                                -> WarnsExactlyAtFiveSeconds fails.
 //   M5 CheckNoSend: warned_ never set                                  -> WarnsOncePerSilence fails.
@@ -19,8 +20,10 @@
 
 namespace {
 
-using nevr_peer_timeout_log::CommTimeoutRecord;
-using nevr_peer_timeout_log::FormatCommunicationTimeout;
+using nevr_peer_timeout_log::PeerRemoval;
+using nevr_peer_timeout_log::FormatPeerRemoved;
+using nevr_peer_timeout_log::LevelForRemovalReason;
+using nevr_peer_timeout_log::RemovalLevel;
 using nevr_peer_timeout_log::FormatInGameSendState;
 using nevr_peer_timeout_log::FormatNoSendWarning;
 using nevr_peer_timeout_log::SendTracker;
@@ -37,10 +40,10 @@ constexpr std::uint64_t kEarlyClock = 100ULL;
 constexpr std::uint64_t kLateClock = 900ULL;
 
 TEST(PeerTimeoutServer, ServerLineNamesPeerSlotLastReceiveAndGap) {
-    const CommTimeoutRecord record{0, "10.0.8.50:6794", kLastReceive, kRemoval};
-    const std::string line = FormatCommunicationTimeout(record);
+    const PeerRemoval record{0, "communication timeout", "10.0.8.50:6794", kLastReceive, kRemoval};
+    const std::string line = FormatPeerRemoved(record);
     EXPECT_EQ(line.rfind("[NEVR.GAMESERVER] ", 0), 0u) << line;
-    EXPECT_NE(line.find("peer communication timeout"), std::string::npos) << line;
+    EXPECT_NE(line.find("peer removed reason=communication timeout"), std::string::npos) << line;
     EXPECT_NE(line.find("slot=0"), std::string::npos) << line;
     EXPECT_NE(line.find("address=10.0.8.50:6794"), std::string::npos) << line;
     EXPECT_NE(line.find("last_receive_us=37029000"), std::string::npos) << line;
@@ -49,9 +52,30 @@ TEST(PeerTimeoutServer, ServerLineNamesPeerSlotLastReceiveAndGap) {
 }
 
 TEST(PeerTimeoutServer, ClampsAClockThatReadsEarlier) {
-    const CommTimeoutRecord record{3, "10.0.0.1:1", kLateClock, kEarlyClock};
-    const std::string line = FormatCommunicationTimeout(record);
+    const PeerRemoval record{3, "communication timeout", "10.0.0.1:1", kLateClock, kEarlyClock};
+    const std::string line = FormatPeerRemoved(record);
     EXPECT_NE(line.find("gap_s=0.000"), std::string::npos) << line;
+}
+
+TEST(PeerTimeoutRemoval, TimeoutsAreWarnings) {
+    EXPECT_EQ(LevelForRemovalReason("communication timeout"), RemovalLevel::kWarning);
+    EXPECT_EQ(LevelForRemovalReason("connect timeout"), RemovalLevel::kWarning);
+    EXPECT_EQ(LevelForRemovalReason("disconnect timeout"), RemovalLevel::kWarning);
+    EXPECT_EQ(LevelForRemovalReason("no connect received"), RemovalLevel::kWarning);
+}
+
+TEST(PeerTimeoutRemoval, DisconnectsAndUnknownReasonsAreInfo) {
+    EXPECT_EQ(LevelForRemovalReason("disconnect received"), RemovalLevel::kInfo);
+    EXPECT_EQ(LevelForRemovalReason("disconnect acknowledged"), RemovalLevel::kInfo);
+    EXPECT_EQ(LevelForRemovalReason("disconnected"), RemovalLevel::kInfo);
+    EXPECT_EQ(LevelForRemovalReason("something new"), RemovalLevel::kInfo);
+}
+
+TEST(PeerTimeoutRemoval, TheReasonIsKeptInTheLine) {
+    const PeerRemoval record{2, "disconnect received", "10.0.0.2:2", kLateClock, kLateClock + kSecond};
+    const std::string line = FormatPeerRemoved(record);
+    EXPECT_NE(line.find("reason=disconnect received"), std::string::npos) << line;
+    EXPECT_NE(line.find("gap_s=1.000"), std::string::npos) << line;
 }
 
 TEST(PeerTimeoutClient, NoSendsReadsNone) {

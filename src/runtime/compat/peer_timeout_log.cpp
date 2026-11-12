@@ -29,10 +29,18 @@ std::string FormatLastSend(const SendTracker& tracker) {
 
 }  // namespace
 
-std::string FormatCommunicationTimeout(const CommTimeoutRecord& record) {
-    const std::uint64_t gap = record.now_us > record.last_receive_us ? record.now_us - record.last_receive_us : 0;
-    return "[NEVR.GAMESERVER] peer communication timeout slot=" + std::to_string(record.slot) +
-           " address=" + record.address + " last_receive_us=" + std::to_string(record.last_receive_us) +
+RemovalLevel LevelForRemovalReason(std::string_view reason) {
+    if (reason == "communication timeout" || reason == "connect timeout" || reason == "disconnect timeout" ||
+        reason == "no connect received") {
+        return RemovalLevel::kWarning;
+    }
+    return RemovalLevel::kInfo;
+}
+
+std::string FormatPeerRemoved(const PeerRemoval& removal) {
+    const std::uint64_t gap = removal.now_us > removal.last_receive_us ? removal.now_us - removal.last_receive_us : 0;
+    return "[NEVR.GAMESERVER] peer removed reason=" + removal.reason + " slot=" + std::to_string(removal.slot) +
+           " address=" + removal.address + " last_receive_us=" + std::to_string(removal.last_receive_us) +
            " gap_s=" + FormatSeconds(gap);
 }
 

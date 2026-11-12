@@ -30,15 +30,12 @@ inline constexpr std::array<std::uint8_t, 18> kDestroyPeerPrologue{
 inline constexpr std::array<std::uint8_t, 16> kBroadcasterSendPrologue{
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x4C, 0x89, 0x48, 0x20, 0x44, 0x89, 0x40, 0x18, 0x55};
 
-// The game's reason text for the communication-timeout removal (CleanupPeers' branch).
-inline constexpr const char* kCommunicationTimeoutReason = "communication timeout";
-
 // The game's functions as the hooks found them, set by Install before PatchDetour.
 using DestroyPeerFn = void (*)(std::int64_t* self, std::uint64_t index, const char* reason);
 extern DestroyPeerFn OriginalDestroyPeer;
 extern EchoVR::BroadcasterSendFunc* OriginalBroadcasterSend;
 
-// Installs the hook for this run's role: DestroyPeer on a server, Send on a client. Each prologue is checked before
+// Installs the hooks for this run's role: DestroyPeer on both roles, Send on a client only. Each prologue is checked before
 // anything is written; a mismatch is logged as a Warning and that hook is not installed. Returns true when the hook is
 // in place.
 bool Install(std::uintptr_t gameBase, bool isServer);

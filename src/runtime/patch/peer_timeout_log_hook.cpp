@@ -64,19 +64,20 @@ bool PrologueMatches(const char* name, std::uintptr_t va, const std::uint8_t* wa
 }  // namespace
 
 bool Install(std::uintptr_t gameBase, bool isServer) {
-    if (isServer) {
-        const std::uintptr_t va = gameBase + nevr_patch_addresses::DESTROY_PEER;
-        if (!PrologueMatches("DestroyPeer", va, kDestroyPeerPrologue.data(), kDestroyPeerPrologue.size())) return false;
-        OriginalDestroyPeer = reinterpret_cast<DestroyPeerFn>(va);
-        if (!PatchDetour(&OriginalDestroyPeer, reinterpret_cast<PVOID>(DestroyPeerHook), "PeerTimeoutDestroyPeer")) {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer timeout log hook not installed name=DestroyPeer va=0x%llX",
-                static_cast<unsigned long long>(va));
-            return false;
-        }
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] peer timeout log installed name=DestroyPeer va=0x%llX",
-            static_cast<unsigned long long>(va));
-        return true;
+    // DestroyPeer runs on a client too (its own host peer can be removed), so it is hooked on both roles.
+    const std::uintptr_t destroyVa = gameBase + nevr_patch_addresses::DESTROY_PEER;
+    if (!PrologueMatches("DestroyPeer", destroyVa, kDestroyPeerPrologue.data(), kDestroyPeerPrologue.size())) {
+        return false;
     }
+    OriginalDestroyPeer = reinterpret_cast<DestroyPeerFn>(destroyVa);
+    if (!PatchDetour(&OriginalDestroyPeer, reinterpret_cast<PVOID>(DestroyPeerHook), "PeerTimeoutDestroyPeer")) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer removal log hook not installed name=DestroyPeer va=0x%llX",
+            static_cast<unsigned long long>(destroyVa));
+        return false;
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] peer removal log installed name=DestroyPeer va=0x%llX",
+        static_cast<unsigned long long>(destroyVa));
+    if (isServer) return true;
     const std::uintptr_t va = gameBase + nevr_patch_addresses::BROADCASTER_SEND;
     if (!PrologueMatches("BroadcasterSend", va, kBroadcasterSendPrologue.data(), kBroadcasterSendPrologue.size())) {
         return false;
@@ -93,28 +94,25 @@ bool Install(std::uintptr_t gameBase, bool isServer) {
 }
 
 void DestroyPeerHook(std::int64_t* self, std::uint64_t index, const char* reason) {
-    if (reason != nullptr && std::strcmp(reason, kCommunicationTimeoutReason) == 0) {
-        // The same arithmetic as the game's DestroyPeer: the peer's slot is index in the chunk table.
-        auto* bytes = reinterpret_cast<std::uint8_t*>(self);
-        const auto capacity = *reinterpret_cast<const std::uint32_t*>(bytes + kBroadcasterCapacityOffset);
-        if (capacity == 0) {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer communication timeout not logged slot=%llu capacity=0",
-                static_cast<unsigned long long>(index));
-            OriginalDestroyPeer(self, index, reason);
-            return;
-        }
+    // The same arithmetic as the game's DestroyPeer: the peer's record is index in the chunk table. A capacity of 0
+    // is not a table the game can index, so nothing is read and the original runs unchanged.
+    auto* bytes = reinterpret_cast<std::uint8_t*>(self);
+    const auto capacity = *reinterpret_cast<const std::uint32_t*>(bytes + kBroadcasterCapacityOffset);
+    if (capacity != 0 && reason != nullptr) {
         const auto bucket = index / capacity;
         const auto slot = index % capacity;
         auto* chunk = *reinterpret_cast<std::uint8_t* const*>(
             *reinterpret_cast<std::uint8_t* const*>(bytes + kBroadcasterChunksOffset) + bucket * sizeof(void*));
         const auto* peer = chunk + slot * kPeerRecordSize;
-        nevr_peer_timeout_log::CommTimeoutRecord record{};
-        record.slot = index;
-        record.address = reinterpret_cast<const char*>(peer + kPeerAddressOffset);
-        record.last_receive_us = *reinterpret_cast<const std::uint64_t*>(peer + kPeerLastReceiveOffset);
-        record.now_us = *reinterpret_cast<const std::uint64_t*>(bytes + kBroadcasterNowOffset);
-        Log(EchoVR::LogLevel::Warning, "%s",
-            nevr_peer_timeout_log::FormatCommunicationTimeout(record).c_str());
+        nevr_peer_timeout_log::PeerRemoval removal{};
+        removal.slot = index;
+        removal.reason = reason;
+        removal.address = reinterpret_cast<const char*>(peer + kPeerAddressOffset);
+        removal.last_receive_us = *reinterpret_cast<const std::uint64_t*>(peer + kPeerLastReceiveOffset);
+        removal.now_us = *reinterpret_cast<const std::uint64_t*>(bytes + kBroadcasterNowOffset);
+        const auto level = nevr_peer_timeout_log::LevelForRemovalReason(removal.reason);
+        Log(level == nevr_peer_timeout_log::RemovalLevel::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+            "%s", nevr_peer_timeout_log::FormatPeerRemoved(removal).c_str());
     }
     OriginalDestroyPeer(self, index, reason);
 }

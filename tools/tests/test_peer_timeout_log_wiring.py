@@ -32,13 +32,14 @@ class ServerHook(unittest.TestCase):
         self.assertIn("nevr_patch_addresses::DESTROY_PEER", read(HOOK))
         self.assertIn("constexpr uintptr_t DESTROY_PEER = 0xF7BC60;", read("src/runtime/hook/addresses.h"))
 
-    def test_warning_is_gated_on_the_communication_timeout_reason(self):
-        self.assertIn('std::strcmp(reason, kCommunicationTimeoutReason) == 0', read(HOOK))
-        self.assertIn('kCommunicationTimeoutReason = "communication timeout"', read(HEADER))
+    def test_every_removal_is_logged_at_its_reasons_level(self):
+        body = read(HOOK)
+        self.assertIn("LevelForRemovalReason(removal.reason)", body)
+        self.assertIn("FormatPeerRemoved(removal)", body)
 
     def test_the_peer_record_is_read_before_the_original_destroys_it(self):
         body = read(HOOK)
-        self.assertLess(body.index("FormatCommunicationTimeout"), body.rindex("OriginalDestroyPeer(self, index, reason)"))
+        self.assertLess(body.index("FormatPeerRemoved(removal)"), body.rindex("OriginalDestroyPeer(self, index, reason)"))
 
     def test_every_argument_is_forwarded(self):
         self.assertIn("OriginalDestroyPeer(self, index, reason);", read(HOOK))

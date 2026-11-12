@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace nevr_peer_timeout_log {
 
@@ -24,17 +25,23 @@ namespace nevr_peer_timeout_log {
 // written. The game's own communication timeout (the broadcaster's +0x488, 15 s) is read from the game, not named here.
 inline constexpr std::uint64_t kNoSendWarnMicros = 5'000'000ULL;
 
-// The one communication-timeout removal the server logs.
-struct CommTimeoutRecord {
-    std::uint64_t slot;            // the peer's index in the broadcaster's peer table
-    std::string address;           // the peer's address text, as the game prints it (peer record +0x1a0)
+// How the log writes a removal: the reason's own level. A timeout is a Warning (the peer was silent past a limit); a
+// disconnect the peer asked for, or one the game acknowledged, is Info. An unknown reason is Info, with the text kept.
+enum class RemovalLevel { kWarning, kInfo };
+RemovalLevel LevelForRemovalReason(std::string_view reason);
+
+// One peer the game removed (CBroadcaster::DestroyPeer, the reason the caller passes).
+struct PeerRemoval {
+    std::uint64_t slot;             // the peer's index in the broadcaster's peer table
+    std::string reason;             // the game's reason text (the caller's string)
+    std::string address;            // the peer's address text, as the game prints it (peer record +0x1a0)
     std::uint64_t last_receive_us;  // the game's last-received stamp for the peer (peer record +0x228)
     std::uint64_t now_us;           // the broadcaster's clock at the removal (broadcaster record +0x478)
 };
 
-// "[NEVR.GAMESERVER] peer communication timeout slot=.. address=.. last_receive_us=.. gap_s=S.mmm"
+// "[NEVR.GAMESERVER] peer removed reason=.. slot=.. address=.. last_receive_us=.. gap_s=S.mmm"
 // The gap is now_us minus last_receive_us, clamped at 0 when the clock reads earlier than the stamp.
-std::string FormatCommunicationTimeout(const CommTimeoutRecord& record);
+std::string FormatPeerRemoved(const PeerRemoval& removal);
 
 // Tracks the client's sends to its host while it is in game.
 class SendTracker {
