@@ -18,6 +18,8 @@
 
 #include "runtime/tests/bootstrap_attach/abi.h"
 
+#include <cstdio>
+
 #include "runtime/host/host_entry.h"
 #include "runtime/host/path_buffer.h"
 #include "runtime/host/runtime_load.h"
@@ -56,9 +58,24 @@ extern "C" __declspec(dllexport) std::size_t nevr_host_test_FlushesOnAttachThrea
   return nevr_host::BootstrapDiagnostics::FlushesOnAttachThread();
 }
 
+// The process's last flush, reported by the child itself (#1375): the parent cannot read the child's memory, so each
+// child says on its standard output how many journal writes its last flush skipped for the log lock, and its pid.
+// Written with kernel32 only: the process is ending and the CRT is not used here.
+void WriteExitFlushLine(bool process_terminating) {
+  if (!process_terminating) return;
+  char line[128] = {};
+  const int length = std::snprintf(line, sizeof(line), "bootstrap attach child: exit flush pid=%lu skipped=%zu\n",
+                                   static_cast<unsigned long>(GetCurrentProcessId()),
+                                   nevr_host::BootstrapDiagnostics::ExitFlushSkippedForTest());
+  if (length <= 0) return;
+  DWORD written = 0;
+  WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), line, static_cast<DWORD>(length), &written, nullptr);
+}
+
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
   if (reason == DLL_PROCESS_DETACH) {
     nevr_host::OnProcessDetach(reserved != nullptr);
+    WriteExitFlushLine(reserved != nullptr);
     return TRUE;
   }
   if (reason != DLL_PROCESS_ATTACH) return TRUE;

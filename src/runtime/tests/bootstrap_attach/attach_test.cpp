@@ -922,6 +922,15 @@ void RequireRecordFromEachPid(const std::vector<nlohmann::json>& records, const 
   std::fprintf(stderr, "bootstrap attach test: step %s has no record from pid(s):", step);
   for (const unsigned long long pid : missing) std::fprintf(stderr, " %llu", pid);
   std::fprintf(stderr, " (of %zu children)\n", pids.size());
+  // What each missing child did leave, so the failure shows how far its journal got (#1375).
+  for (const unsigned long long pid : missing) {
+    std::fprintf(stderr, "bootstrap attach test: pid %llu left host_attach records:", pid);
+    for (const nlohmann::json& record : records) {
+      if (record.value("event", "") != "host_attach" || record.value("pid", 0ull) != pid) continue;
+      std::fprintf(stderr, " %s#%llu", record.value("step", "").c_str(), record.value("seq", 0ull));
+    }
+    std::fprintf(stderr, "\n");
+  }
   Fail(message);
 }
 
