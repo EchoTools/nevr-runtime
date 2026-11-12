@@ -28,7 +28,7 @@ constexpr std::uintptr_t kMarkAllowed = 1;
 // ---- state: plain atomics and PODs, no constructors ----
 // An entry belongs to one CBVHTree: `owner` is that object's address (0 = free). Writers (build, free) hold g_treeMutex; a query reads `owner` alone, with an
 // acquire load, so the hot path takes no lock. A freed entry keeps its bytes until it is built again, and the next entry built is the one after the last built
-// (g_cursor), so a freed entry is the last one to be handed out again.
+// (g_cursor) and takes the first free one, so a freed entry is reused after the free entries ahead of the cursor, and at once when it is the only free one.
 struct Entry {
   std::uintptr_t owner;
   std::uint64_t data;  // the SBVHTreeData address this tree was built from

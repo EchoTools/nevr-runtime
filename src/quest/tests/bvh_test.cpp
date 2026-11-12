@@ -981,7 +981,8 @@ void AShutdownOfATreeWithoutAnEntryFreesNothing() {
 }
 
 // A cast on a CBVHTree after its Shutdown: the word is cleared, so the game's function answers; a copy of the old word names a freed entry, so it does too;
-// and the freed entry is the last one handed out again, so the copy does not name the next tree's entry either.
+// and with free entries ahead of the cursor the next build takes one of those, not the freed entry, so the copy does not name the next tree's entry here either
+// (when the freed entry is the only free one it is reused at once: TheLastEntryOfTheSearchIsUsed).
 void ACastOnAShutDownTreeIsTheGamesOwn() {
   Begin();
   Build();

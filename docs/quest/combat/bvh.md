@@ -75,11 +75,16 @@ trees per process (a combat map load builds about 3). The key is the game's tree
 `ReleaseTree(self)` frees the entry whose owner is `self`. It is not keyed by the SBVHTreeData address (two CBVHTrees on one resource each own an entry, so one's Shutdown
 cannot free the other's) and not by the word read from the object (a copy of a word, or garbage that names a live entry, frees nothing: `AShutdownOfATreeWithoutAnEntryFreesNothing`).
 A CBVHTree with no entry (an arena level's, a refused one) frees nothing and writes no line. The next free entry is searched from the one after the last built
-(`g_cursor`), so a freed entry is the last of the table to be handed out again; its bytes are not cleared until it is built again.
+(`g_cursor`) and the first free one found is taken, so a freed entry is reused after the other free entries ahead of the cursor, and at once (by the very next build)
+when it is the only free one, or when every entry from the cursor up to it is in use (`TheLastEntryOfTheSearchIsUsed`); its bytes are not cleared until it is built again.
+The order is not a safety margin: the arguments below rest on the premise stated under "Threads" (no cast in flight across a Shutdown), not on a number of builds.
 - *A stale pointer.* After our Shutdown handler the CBVHTree's word is 0 and the game's function answers. A copy of the old word names a freed entry: `TreeOf` reads the
   entry's `owner` with an acquire load and a free entry answers `nullptr`, so the game's function answers (`ACastOnAShutDownTreeIsTheGamesOwn`). Once that entry is built again
-  for another CBVHTree, a copy of the old word would answer from the new tree; the game does not keep a copy (it reads the word from the CBVHTree it found that frame, section 6
-  item 4), and the entry is the last of the 64 to be reused.
+  for another CBVHTree, a copy of the old word would answer from the new tree. That the game does not keep a copy of the word is **inferred, not established**:
+  section 6 item 4 shows how a cast's arguments are read (the CBVHTree object is the one the game found that frame; of the proven tree's `CStaticRaycastCS` and `CBVHTree` functions only `Shutdown` names `this + 0x148`, to call `CBVHTree::Shutdown`), not that no
+  function stores the word or the object. What would establish it: every function that reaches `CBVHTree::Intersect`/`Occluded` (the callers of their PLT stubs,
+  and of `CncaGame::StaticRaycast` and `StaticRaycastOccluded`) reconstructed or disassembled, each shown to compute `CStaticRaycastCS + 0x148` inside the same call and
+  keep it in no field, global or queue. If the game does keep a copy past a Shutdown, a cast on it answers from another tree's entry once that entry is built again, and the premise under "Threads" does not cover that case.
 - *Threads.* The hooks run on whatever thread the game calls from. The writers (build, free, count) hold `g_treeMutex`; a query takes no lock: it reads the word, the entry's
   `owner` (acquire; a build stores `owner` last, with release, so a query that sees an owner sees the whole tree) and then the entry's five fields. Established (a proven
   reconstruction, `CStaticRaycastCS::Shutdown`, 0x1812748): the game calls `CBVHTree::Shutdown` first and `CResourceInstance::UnloadAndShutdown`, which releases the resource
@@ -88,8 +93,9 @@ A CBVHTree with no entry (an arena level's, a refused one) frees nothing and wri
   own level teardown, and the three callers whose casts the tree answers (DualStaticRaycast, `SR15PatrolSM::Update`) are not shown to run on another thread at that moment
   (the threads those callers and the level teardown run on are not reconstructed). Two windows remain if that premise is wrong. (1) A query that read the
   word before Shutdown cleared it, and still traverses when the game frees the blocks, reads freed game memory; the same window the game's own tree would have, not one this
-  module adds, and not closed by a lock here. (2) A query reading an entry while it is built for another tree sees a mixed `Tree`; that needs 63 other builds between the free and
-  the read (the cursor), each build costing about a millisecond of page probes, so it is not reachable within one cast.
+  module adds, and not closed by a lock here. (2) A query reading an entry while it is built for another tree sees a mixed `Tree`; the entry's reuse can follow the free at once (see above), so
+  this window is closed only by the same premise as (1), that no cast is in flight across a Shutdown. The build's page probes (about a millisecond) lengthen the
+  free-to-reuse gap but do not bound it.
 
 Install (`InstallAt`): the legacy switch files are warned about; the three switches are reported by the configuration step, one generated `combat_config_switch` record each (the table rows `bvh`, `bvh_gate`, `bvh_touch`); off is one Info line
 (`combat_bvh_install` `off_config`) and nothing is touched. Otherwise **all or none**: the gate goes in first (until its hook is in, no cast is marked, so a tree
@@ -301,3 +307,6 @@ for a look on time and not when the scope was shut); a level that is not a comba
 no scan and no clock read; the cached answer starts false; the 10 s summary; the pinned constants).
 Mutants: `src/quest/combat/mutants.d/bvh_core.sh` (rules of `bvh_core.h`, target `bvh_core_test`) and `src/quest/combat/mutants.d/bvh.sh` (rules of `bvh.cpp`,
 `bvh.h`, `bvh_targets.h`), run with `src/quest/combat/mutants.sh bvh` and `bvh_core`.
+Two mutants of `bvh.sh` survive `bvh_test`: `bvh_base_published` (the gate's image base stored as 0) and `bvh_gate_ret_base` (the base not subtracted from the caller's
+return address). `TheCallersGateAnswersTheListedCastsOnly` learns the allowed return from the gate's own record, so a wrong base is consistent with itself; the test that
+kills them is #2383.
