@@ -55,6 +55,10 @@ Close Echo VR, then either:
 - if you installed by hand: delete `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and copy
   `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original` over `bin\win10\BugSplat64.dll`.
 
+Your plugins stay in `%LOCALAPPDATA%\nevr\echovr\plugins`, and the uninstaller leaves them there. If you go back to an
+older release that loads plugins from the folder beside `echovr.exe`, copy the files from `%LOCALAPPDATA%\nevr\echovr\plugins`
+into that folder by hand. Until you do, that release starts without them.
+
 ## Known issues
 
 You do not need to report these:
