@@ -1184,7 +1184,7 @@ fn a_stage_download_that_fails_logs_the_whole_base() {
     assert_eq!(stored.status.code(), Some(0), "{}", String::from_utf8_lossy(&stored.stdout));
     let base = "https://user:s3cret-token@127.0.0.1:1/nevr-runtime";
     let o = Command::new(bin)
-        .args(["pc", "stage", "--root", nevr.to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", base, "--pins", pins, "--now", NOW])
+        .args(["pc", "stage", "--root", nevr.to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", base, "--pins", pins, "--now", NOW, "--dev-nevr-root"])
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(1), "{}", String::from_utf8_lossy(&o.stdout));

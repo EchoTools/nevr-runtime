@@ -128,9 +128,10 @@ fn run(w: &World, base: &str, current: &Value, extra: &[&str]) -> (i32, Value, S
 }
 
 fn run_at(w: &World, base: &str, current: &Value, extra: &[&str], now: &str) -> (i32, Value, String) {
+    // The root is a temporary folder, which the host does not load from, so every run here is a dev run (#1383).
     let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "stage", "--root", w.root.path().to_str().unwrap(), "--base", base, "--pins", w.pins.to_str().unwrap(), "--now", now])
-        .args(["--current-json", &current.to_string()])
+        .args(["--current-json", &current.to_string(), "--dev-nevr-root"])
         .args(extra)
         .output()
         .unwrap();
@@ -504,6 +505,24 @@ fn stage_needs_a_root_and_writes_nothing_without_one() {
     assert_eq!(o.status.code(), Some(1));
 }
 
+#[test]
+fn stage_refuses_a_root_the_host_does_not_load_from_unless_a_dev_run_names_it() {
+    // Without `--dev-nevr-root` the temporary root is not the folder the game loads nEVR from: the stage exits 2 before it
+    // fetches anything or makes a folder under the root (#1383).
+    let w = world();
+    let base = publish(&w, &Opts::new());
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
+        .args(["pc", "stage", "--root", w.root.path().to_str().unwrap(), "--base", &base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .args(["--current-json", &current("0.9.0", b"old runtime").to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stdout));
+    assert!(!w.root.path().join("update").exists(), "a refused stage makes no folder under the root");
+    let refusal = log(&w).into_iter().rfind(|r| r["event"] == "nevr_root").expect("the refusal is logged");
+    assert_eq!((refusal["level"].as_str(), refusal["ok"].as_bool()), (Some("ERROR"), Some(false)), "{refusal}");
+    assert!(refusal["reason"].as_str().unwrap_or("").contains("--dev-nevr-root"), "{refusal}");
+}
+
 #[allow(dead_code)]
 fn _unused(_: &Path) {}
 
@@ -527,7 +546,7 @@ fn a_c_program_stages_through_nevr_pc_stage_and_ends_the_run_once() {
         .output().expect("cc is installed");
     assert!(cc.status.success(), "{}", String::from_utf8_lossy(&cc.stderr));
 
-    let cfg = json!({"platform": "pc", "nevr_root": w.root.path(), "base": base, "pins": format!("T {}\n", w.key.b64), "now": NOW}).to_string();
+    let cfg = json!({"platform": "pc", "nevr_root": w.root.path(), "dev_nevr_root": true, "base": base, "pins": format!("T {}\n", w.key.b64), "now": NOW}).to_string();
     let o = Command::new(&bin).arg(&cfg).arg(w.root.path()).arg(current("0.9.0", b"old runtime").to_string()).output().unwrap();
     let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     assert!(o.status.success(), "stdout: {out}\nstderr: {err}");
