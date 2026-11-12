@@ -332,6 +332,18 @@ class PageContent(unittest.TestCase):
         for stale in ("does no signature or hash check", "no separate runtime file", "compiled into `BugSplat64.dll` together with the runtime"):
             self.assertFalse(names(section, stale), f"the host section still says {stale!r}")
 
+    def test_the_host_loads_the_runtime_from_the_nevr_root_and_not_beside_the_host(self):
+        section = doc_text().split("## What the PC host checks", 1)[1].split("## What to tell the player when a check fails", 1)[0]
+        self.assertFalse(names(section, "beside `BugSplat64.dll`"), "the host section still says the runtime sits beside the host")
+        for needle in ("`ResolveRuntimePathFrom`", "`%LOCALAPPDATA%`", "`NEVR_ROOT`", "development build"):
+            self.assertTrue(names(section, needle), f"the host section lacks {needle!r}")
+
+    def test_the_manifest_status_names_the_installer_default_base_and_no_absence(self):
+        text = doc_text()
+        self.assertFalse(names(text, "no live manifest is published"), "the page still says no live manifest is published")
+        self.assertTrue(names(text, "`DEFAULT_BASE`"), "the page does not name the installer's default base")
+        self.assertTrue(names(text, "`installer/src/fetch.rs:9`"), "the page does not cite where DEFAULT_BASE is set")
+
 
 NEEDED_TOOLS = ("minisign", "jq", "sha256sum", "base64", "curl", "dd", "date", "od", "sed")
 
