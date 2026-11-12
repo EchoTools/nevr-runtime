@@ -327,7 +327,7 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
 }
 
 // On a q15t or combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
-void AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined() {
+void ACombatVariantApkOwnsTheRuleAndSaysWhatItCombined() {
   for (const bv::Variant variant : {bv::Variant::kQ15t, bv::Variant::kCombat}) {
     World(variant);
     const combat::ModuleResult r = InstallRule();
@@ -836,7 +836,7 @@ int main() {
   TheHeadsetIsTheIdentityStepsProfile();
   ARequestAboveTheLevelRateInALevelIsKept();
   ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
-  AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();
+  ACombatVariantApkOwnsTheRuleAndSaysWhatItCombined();
   TheInstallLineFollowsTheKeysAndTheHeadset();
   AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall();
   AComSessionFromArenaToCombatAndBack();

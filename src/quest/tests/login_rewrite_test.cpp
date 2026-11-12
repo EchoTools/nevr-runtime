@@ -239,8 +239,8 @@ std::vector<PluginManifestEntry> SamplePluginReport() {
   loaded.api_version = 7;
   loaded.capabilities = 5;
   PluginManifestEntry failed;
-  failed.name = "q15t";
-  failed.file = "libq15t.so";
+  failed.name = "broken";
+  failed.file = "libbroken.so";
   failed.required = true;
   failed.error = "build_id_unsupported";
   PluginManifestEntry off;

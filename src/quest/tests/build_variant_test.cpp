@@ -78,7 +78,7 @@ void TheNamesAreTheWordsAndNoneForNoVariant() {
 }
 
 // Only the q15t and combat variants run the folded combat modules (docs/adr/0046 rule 5); a plain release and the measurement build do not.
-void OnlyTheQ15tAndCombatVariantsRunFoldedCombat() {
+void OnlyTheCombatVariantsRunFoldedCombat() {
   QCHECK(!bv::RunsFoldedCombat(bv::Variant::kNone));
   QCHECK(bv::RunsFoldedCombat(bv::Variant::kQ15t));
   QCHECK(bv::RunsFoldedCombat(bv::Variant::kCombat));
@@ -162,7 +162,7 @@ int main() {
   AnEmptyStampIsAPlainReleaseNamedByTheStamp();
   AnythingElseIsNoVariantWithItsReason();
   TheNamesAreTheWordsAndNoneForNoVariant();
-  OnlyTheQ15tAndCombatVariantsRunFoldedCombat();
+  OnlyTheCombatVariantsRunFoldedCombat();
   TheFileIsReadBesideTheLibrary();
   TheLibraryDirectoryIsThatOfTheExtractedFile();
   if (quest_test::Failures() != 0) {

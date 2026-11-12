@@ -608,8 +608,8 @@ func TestSensorDoesNotExemptAnonymousNamespaceFunctions(t *testing.T) {
 // ---- the assembly entry's record ----------------------------------------------------------------------
 
 func TestRecordEntryErrorsAcceptsThunksAndReviewedAsmEntries(t *testing.T) {
-	names := map[uint64]string{0x100: "ThunkEntry", 0x200: "q15t_fire_thunk"}
-	reviewed := []*regexp.Regexp{regexp.MustCompile(`^q15t_fire_thunk$`)}
+	names := map[uint64]string{0x100: "ThunkEntry", 0x200: "probe_fire_thunk"}
+	reviewed := []*regexp.Regexp{regexp.MustCompile(`^probe_fire_thunk$`)}
 	if errs := recordEntryErrors(names, map[uint64]bool{0x100: true}, map[uint64]int{0x100: 1, 0x200: 1}, reviewed); len(errs) != 0 {
 		t.Fatalf("a thunk entry and a reviewed assembly entry, one record each, must pass, got %v", errs)
 	}
@@ -625,11 +625,11 @@ func TestRecordEntryErrorsRejectsAnUnreviewedEntry(t *testing.T) {
 }
 
 func TestRecordEntryErrorsRejectsADoubledOrStaleEntry(t *testing.T) {
-	names := map[uint64]string{0x200: "q15t_fire_thunk"}
-	reviewed := []*regexp.Regexp{regexp.MustCompile(`^q15t_fire_thunk$`), regexp.MustCompile(`^q15t_gone_thunk$`)}
+	names := map[uint64]string{0x200: "probe_fire_thunk"}
+	reviewed := []*regexp.Regexp{regexp.MustCompile(`^probe_fire_thunk$`), regexp.MustCompile(`^probe_gone_thunk$`)}
 	errs := recordEntryErrors(names, nil, map[uint64]int{0x200: 2}, reviewed)
 	joined := strings.Join(errs, "\n")
-	if !strings.Contains(joined, "has 2 hook records") || !strings.Contains(joined, "q15t_gone_thunk") {
+	if !strings.Contains(joined, "has 2 hook records") || !strings.Contains(joined, "probe_gone_thunk") {
 		t.Fatalf("a doubled record and a reviewed name with no record must both fail, got %v", errs)
 	}
 }
@@ -729,7 +729,7 @@ func TestFramesProbeAsmEntryWithoutCFIFails(t *testing.T) {
 	}
 }
 
-// The q15t shape: the same body as an __attribute__((naked)) function with no CFI. clang gives it an FDE under "zR", so the walk
+// The naked-entry shape: the same body as an __attribute__((naked)) function with no CFI. clang gives it an FDE under "zR", so the walk
 // passes it; its one row is CFA=sp, which is wrong after the stp and at the bl, and the entry's text check fails it.
 func TestFramesProbeAsmEntryNakedFails(t *testing.T) {
 	a, v := probeAsm(t, "naked")

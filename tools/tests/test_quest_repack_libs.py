@@ -1364,7 +1364,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
         lines = [f"{SHA(p.read_bytes())}  {p.name}\n" for p in sorted(self.libs.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
         (self.libs / "SHA256SUMS").write_text("".join(lines))
 
-    def test_the_nine_redirected_libraries_are_staged_under_their_q15t_names_and_no_stock_name_is(self):
+    def test_the_nine_redirected_libraries_are_staged_under_their_redirect_names_and_no_stock_name_is(self):
         self.assertEqual(libs.stage_libs(self.libs, self.stage, self.store), [])
         staged = self.stage / "lib/arm64-v8a"
         for name in self.NINE:

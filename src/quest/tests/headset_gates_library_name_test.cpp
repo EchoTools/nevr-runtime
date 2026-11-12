@@ -27,7 +27,7 @@ extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
     info->dli_fname = "";
     return 1;
   }
-  info->dli_fname = g_dladdrMode == 1 ? "/nonexistent/libq15t_script.so" : nullptr;
+  info->dli_fname = g_dladdrMode == 1 ? "/nonexistent/libscript.so" : nullptr;
   return g_dladdrMode == 1 ? 0 : 1;
 }
 

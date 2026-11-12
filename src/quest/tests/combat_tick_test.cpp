@@ -373,7 +373,7 @@ void ARefusedInstallLeavesTheSlotAloneAndSaysWhy() {
 
 // The q15t variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
 // the combat variant: the game's function runs once, then combat's callbacks, and nothing logs `unexpected_original`.
-void OnAQ15tApkTheRunnersStepInstallsTheTickAlone() {
+void OnACombatVariantApkTheRunnersStepInstallsTheTickAlone() {
   World(bv::Variant::kQ15t);
   static const combat::Module kTable[] = {{"tick", nullptr, [](void) noexcept -> combat::ModuleResult {
                                              const bool ok = tick::InstallAt(&Lookup);
@@ -520,7 +520,7 @@ int main() {
   TheVptrIsReadOncePerObjectNotOncePerFrame();
   ARefusedInstallLeavesTheSlotAloneAndSaysWhy();
   OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone();
-  OnAQ15tApkTheRunnersStepInstallsTheTickAlone();
+  OnACombatVariantApkTheRunnersStepInstallsTheTickAlone();
   AWrapperAlreadyInTheSlotIsTheFunctionTheThunkCalls();
   TheRecheckIsEvery256FramesExactly();
   GameIsTheLastObjectThatPassedTheCheck();

@@ -143,7 +143,7 @@ void TestHandlerRedirectsARegisteredScriptLibrary() {
   namespace sr = nevr_quest::script_redirect;
   sr::ResetForTest();
   const char* const base = std::getenv("TMPDIR");
-  std::string dir = std::string(base != nullptr && base[0] != '\0' ? base : "/tmp") + "/q15t_dlopen_hook_XXXXXX";
+  std::string dir = std::string(base != nullptr && base[0] != '\0' ? base : "/tmp") + "/script_dlopen_hook_XXXXXX";
   QCHECK(mkdtemp(dir.data()) != nullptr);
   const std::string file = dir + "/lib37f88adb0d8066f7_q15t.so";
   if (std::FILE* f = std::fopen(file.c_str(), "wb")) {
