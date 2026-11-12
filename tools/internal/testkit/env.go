@@ -43,9 +43,10 @@ func Env(t T, extra ...string) []string {
 	return env
 }
 
-// EnvAt is Env for a caller that has no test (cmd/test-go-tools, which runs a test suite for people), and it reads
-// nothing from the process's environment: PATH and the Go caches come from getenv, and when getenv has no GOCACHE or
-// GOMODCACHE they come from `goBin env` (goBin "" means there is none to ask, and the variable is left out). The
+// EnvAt is Env for a caller that has no test (cmd/test-go-tools, which runs a test suite for people). It takes every
+// value from getenv: PATH and the Go caches come from getenv, and when getenv has no GOCACHE or GOMODCACHE they come
+// from `goBin env`, which inherits the process's environment, not getenv (goBin "" means there is none to ask, and the
+// variable is left out). The
 // directories are made below root, which the caller removes. It also sets GOFLAGS=-count=1: go test's result cache
 // lives in the shared GOCACHE and cannot see the files a child process reads, so a kit-started go test never takes a
 // cached pass.

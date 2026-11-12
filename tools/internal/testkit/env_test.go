@@ -364,8 +364,13 @@ func TestEnvAsksGoAgainWhenTheCallersEnvironmentChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ambient caches are cleared for this test, whatever the caller's environment holds: a set GOMODCACHE or GOCACHE
+	// is an answer go env gives for every HOME, and the test would then pass with the memo keyed on the binary alone.
+	// An empty value is unset to go, so the answers below come from HOME.
 	t.Setenv("GOENV", "off")
 	t.Setenv("GOPATH", "")
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("GOCACHE", "")
 	noCaches := func(string) string { return "" }
 	for _, home := range []string{t.TempDir(), t.TempDir()} {
 		t.Setenv("HOME", home)
@@ -373,9 +378,11 @@ func TestEnvAsksGoAgainWhenTheCallersEnvironmentChanges(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := goEnv(t, "GOMODCACHE")
-		if got, _ := lookup(env, "GOMODCACHE"); got != want {
-			t.Errorf("with HOME=%q: GOMODCACHE = %q, want go env's %q for that HOME", home, got, want)
+		for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
+			want := goEnv(t, key)
+			if got, _ := lookup(env, key); got != want {
+				t.Errorf("with HOME=%q: %s = %q, want go env's %q for that HOME", home, key, got, want)
+			}
 		}
 	}
 }
