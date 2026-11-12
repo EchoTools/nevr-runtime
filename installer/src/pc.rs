@@ -781,6 +781,13 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         verify_file(&b, &orig).map_err(|e| format!("{e} (delete the bad copy by hand)"))?;
         write_log(&b, &orig, "", &host.display().to_string())?;
         backup = b.display().to_string();
+    } else if writes_host {
+        // The host an update or an adoption replaces is kept too, so a kill mid-apply cannot lose its bytes (#1245). The
+        // record does not name this copy: uninstall never restores it.
+        let b = fresh(&aside, &format!("{HOST}.replaced-{st}"));
+        put(&b, &host_bytes).map_err(|e| io(&b, e))?;
+        undo.push(Undo::Remove { what: "host_replaced_copy", path: b.clone() });
+        write_log(&b, &orig, "", &host.display().to_string())?;
     }
     if action == Action::First || action == Action::Adopt {
         if obs.dbgcore_present {
@@ -817,6 +824,13 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
             undo.push(Undo::Move { what: "runtime_aside", from: to.clone(), to: runtime.clone() });
             write_log(&runtime, "", obs.runtime_sha.as_deref().unwrap_or(""), &to.display().to_string())?;
             runtime_aside = to.display().to_string();
+        }
+        // A runtime an update replaces is kept too (#1245). The record does not name this copy: uninstall never restores it.
+        if let Some(prior) = prior_runtime.as_ref().filter(|p| action != Action::First && sha256_hex(p.as_slice()) != ours_rt) {
+            let to = fresh(&aside, &format!("{RUNTIME}.replaced-{st}"));
+            put(&to, prior).map_err(|e| io(&to, e))?;
+            undo.push(Undo::Remove { what: "runtime_replaced_copy", path: to.clone() });
+            write_log(&to, &sha256_hex(prior), "", "")?;
         }
         // The runtime first: until the host is replaced nothing loads it.
         put(&runtime, &pkg.runtime).map_err(|e| io(&runtime, e))?;

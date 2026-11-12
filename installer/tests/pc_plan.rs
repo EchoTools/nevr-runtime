@@ -178,6 +178,18 @@ fn an_update_replaces_a_host_this_install_put_there_and_keeps_the_first_original
 }
 
 #[test]
+fn an_update_keeps_the_host_and_the_runtime_it_replaces_in_the_aside_folder() {
+    // #1245: the prior bytes are on disk before the overwrite, so a kill mid-apply loses nothing.
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let (plan, end) = run(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert_eq!((plan.action, end.state), (Some(Action::Update), "installed"), "{}", end.reason);
+    assert_eq!(fs::read(aside_named(&w, "BugSplat64.dll.replaced-")).unwrap(), HOST_A);
+    assert_eq!(fs::read(aside_named(&w, "nevr-runtime.dll.replaced-")).unwrap(), RT_A);
+    assert!(!w.record().get("runtime_aside").unwrap_or("").contains("replaced-"), "the record does not name the copy");
+}
+
+#[test]
 fn the_same_package_twice_is_unchanged() {
     let w = world();
     run(&w, &pkg(HOST_A, RT_A));
