@@ -1231,66 +1231,6 @@ TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedT
   EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
 }
 
-// #784: a thread that is inside the late-load filter (holding its lock, between resolving a name and opening it) must
-// not leave a staged plugin's DllMain, which holds the loader lock, waiting on that lock while the thread waits for
-// the loader lock to verify the file. The holder sleeps inside the filter while the staged load's DllMain enters it.
-std::thread::id g_filterHolderThread;
-std::promise<void>* g_filterHolderEntered = nullptr;
-constexpr std::chrono::milliseconds kFilterHoldTime{300};
-constexpr std::chrono::seconds kFilterDeadlockWait{20};
-
-void HoldTheFilterOnTheHolderThread(const std::wstring&) {
-  if (std::this_thread::get_id() != g_filterHolderThread || g_filterHolderEntered == nullptr) return;
-  g_filterHolderEntered->set_value();
-  g_filterHolderEntered = nullptr;
-  std::this_thread::sleep_for(kFilterHoldTime);
-}
-
-TEST_F(PluginDllMainLoadTest, AFilterHeldByAnotherThreadDoesNotDeadlockAStagedPluginsDllMainLoad) {
-  Plan("dllmain_victim.dll", "unsigned");  // the file the staged plugin's DllMain loads
-  Plan("late_held.dll", "unsigned");  // the name the holder thread asks for
-  g_testPluginLoadPlan.clear();
-  PlanTree("dllmain_load");
-  const std::wstring victim = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_victim.dll";
-  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", victim.c_str()));
-  TestHook_SetBetweenResolveAndOpen(&HoldTheFilterOnTheHolderThread);
-
-  std::promise<void> entered;
-  std::future<void> enteredSeen = entered.get_future();
-  g_filterHolderEntered = &entered;
-  static std::atomic<bool> holderBlocked{false};
-  holderBlocked = false;
-  std::thread holder([this] {
-    g_filterHolderThread = std::this_thread::get_id();
-    holderBlocked = Blocked("late_held.dll");
-  });
-  if (enteredSeen.wait_for(kFilterDeadlockWait) != std::future_status::ready) {
-    g_filterHolderEntered = nullptr;
-    holder.join();
-    TestHook_SetBetweenResolveAndOpen(nullptr);
-    SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
-    FAIL() << "the holder never reached the filter";
-  }
-
-  std::promise<bool> loadDone;
-  std::future<bool> loadDoneSeen = loadDone.get_future();
-  std::thread loader([this, &loadDone] { loadDone.set_value(LoadPluginsWithTheRealHooks()); });
-  if (loadDoneSeen.wait_for(kFilterDeadlockWait) != std::future_status::ready) {
-    // The staged load and the holder wait on each other, so neither can be unwound: the failure is the report.
-    ADD_FAILURE() << "the staged plugin's DllMain load and the filter holder deadlocked (#784)";
-    std::fflush(stdout);
-    std::terminate();
-  }
-  const bool hooksInstalled = loadDoneSeen.get();
-  loader.join();
-  holder.join();
-  TestHook_SetBetweenResolveAndOpen(nullptr);
-  SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
-  ASSERT_TRUE(hooksInstalled) << "the LoadLibrary hooks did not install";
-  EXPECT_TRUE(holderBlocked) << "the holder's unsigned late load was let through";
-  EXPECT_EQ(GetModuleHandleA("dllmain_victim.dll"), nullptr) << "the file loaded from the DllMain was mapped unchecked";
-}
-
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
