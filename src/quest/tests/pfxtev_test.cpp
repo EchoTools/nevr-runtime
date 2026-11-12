@@ -39,6 +39,15 @@ int Count(const char* event, int level = -1) {
   }
   return c;
 }
+// The text of the last line of an event ("" when there is none).
+std::string LastText(const char* event) {
+  const std::string key = std::string("\"event\":\"") + event + "\"";
+  std::string out;
+  for (const Line& l : g_lines) {
+    if (Has(l.text, key)) out = l.text;
+  }
+  return out;
+}
 constexpr int kInfo = static_cast<int>(sentinel::LogLevel::kInfo);
 constexpr int kWarn = static_cast<int>(sentinel::LogLevel::kWarn);
 
@@ -58,6 +67,13 @@ void TheEventTierHasSixIdsThatAreTheHashesOfTheirEffectNames() {
                                "pfx_test_combat_plrdeath_s10_arm2_follow",  "pfx_test_combat_plrdeath_s10_arm1_follow"};
   QCHECK(sizeof(names) / sizeof(names[0]) == tev::kIdCount);
   for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(tev::kIds[i] == EchoVR::CSymbol64Hash(names[i]));
+}
+
+// The first call of the process, before any Install or reset: the switch is on and the counters are zero (the module's statics, not a reset).
+void TheSwitchIsOnInAFreshProcess() {
+  QCHECK(tev::CurrentStats().allowed == 0 && tev::CurrentStats().refused == 0);
+  QCHECK(tev::AllowsIn(tev::kIds[0], true));
+  QCHECK(tev::CurrentStats().allowed == 1 && tev::CurrentStats().refused == 0);
 }
 
 // Default on before the install (the decision is taken, then the counters and lines are cleared).
@@ -90,10 +106,87 @@ void WithTheSwitchOffEveryEventIdIsRefusedAndTheNonEventPasses() {
 void PastTheCapOneWarningIsWrittenAndTheRestAreOnlyCounted() {
   Fresh();
   tev::Install(true);
-  for (int i = 0; i < 100; ++i) tev::AllowsIn(tev::kIds[0], true);
+  for (int i = 0; i < 64; ++i) tev::AllowsIn(tev::kIds[0], true);
   QCHECK(Count("combat_pfxtev_decision", kInfo) == 64);
+  QCHECK(Count("combat_pfxtev_log_cap") == 0);  // the 64th decision is still a line; the Warning is the 65th's
+  tev::AllowsIn(tev::kIds[0], true);
   QCHECK(Count("combat_pfxtev_log_cap", kWarn) == 1);
+  for (int i = 65; i < 100; ++i) tev::AllowsIn(tev::kIds[0], true);
+  QCHECK(Count("combat_pfxtev_decision", kInfo) == 64);
+  QCHECK(Count("combat_pfxtev_log_cap") == 1);
   QCHECK(tev::CurrentStats().allowed == 100);
+  // The Warning comes after the 64th line and says what was capped.
+  int decisionsBefore = 0;
+  bool seen = false;
+  for (const Line& l : g_lines) {
+    if (Has(l.text, "\"event\":\"combat_pfxtev_log_cap\"")) {
+      seen = true;
+      QCHECK(Has(l.text, "\"cap\":64") && Has(l.text, "counted but not written"));
+      break;
+    }
+    if (Has(l.text, "\"event\":\"combat_pfxtev_decision\"")) ++decisionsBefore;
+  }
+  QCHECK(seen && decisionsBefore == 64);
+}
+
+// Past the cap a decision is still made and counted, and a refused one is still refused: the cap limits the lines, not the answers.
+void PastTheCapTheAnswersAreStillRight() {
+  Fresh();
+  tev::Install(false);  // the switch off: every event id refused
+  for (int i = 0; i < 100; ++i) QCHECK(!tev::AllowsIn(tev::kIds[2], true));
+  QCHECK(tev::CurrentStats().refused == 100 && tev::CurrentStats().allowed == 0);
+  Fresh();
+  tev::Install(true);  // the switch on, outside a combat map: refused
+  for (int i = 0; i < 100; ++i) QCHECK(!tev::AllowsIn(tev::kIds[2], false));
+  QCHECK(tev::CurrentStats().refused == 100 && tev::CurrentStats().allowed == 0);
+  Fresh();
+  tev::Install(true);  // allowed past the cap too
+  for (int i = 0; i < 100; ++i) QCHECK(tev::AllowsIn(tev::kIds[2], true));
+  QCHECK(tev::CurrentStats().allowed == 100);
+}
+
+// The install line states the switch, why, which key and what it means.
+void TheInstallLineStatesTheSwitchAndItsConsequence() {
+  Fresh();
+  const nevr_quest::combat::ModuleResult on = tev::Install(true);
+  QCHECK(on.installed && std::string(on.status) == "installed");
+  const std::string onText = LastText("combat_pfxtev_install");
+  QCHECK(Has(onText, "\"state\":\"on\"") && Has(onText, "\"reason\":\"default\"") && Has(onText, "\"switch\":\"combat.pfxtev\""));
+  QCHECK(Has(onText, "may be created in combat maps") && !Has(onText, "are refused"));
+  Fresh();
+  const nevr_quest::combat::ModuleResult off = tev::Install(false);
+  QCHECK(!off.installed && std::string(off.status) == "off_config");
+  const std::string offText = LastText("combat_pfxtev_install");
+  QCHECK(Has(offText, "\"state\":\"off\"") && Has(offText, "\"reason\":\"off_config\"") && Has(offText, "\"switch\":\"combat.pfxtev\""));
+  QCHECK(Has(offText, "are refused") && !Has(offText, "may be created"));
+}
+
+// A decision line names the id (16 lower-case hex digits), the answer, and why: the switch when it is off (whatever the level), else the level.
+void TheDecisionLineNamesTheIdTheAnswerAndTheReason() {
+  struct Case {
+    bool switchOn, inCombatMap;
+    const char* result;
+    const char* reason;
+  };
+  const Case cases[] = {{true, true, "allowed", "switch"}, {true, false, "refused", "level"}, {false, true, "refused", "switch"}, {false, false, "refused", "switch"}};
+  for (const Case& c : cases) {
+    Fresh();
+    tev::Install(c.switchOn);
+    g_lines.clear();
+    QCHECK(tev::AllowsIn(tev::kIds[1], c.inCombatMap) == (std::string(c.result) == "allowed"));
+    QCHECK(Count("combat_pfxtev_decision", kInfo) == 1);
+    const std::string text = LastText("combat_pfxtev_decision");
+    char id[24];
+    std::snprintf(id, sizeof id, "%016llx", static_cast<unsigned long long>(tev::kIds[1]));
+    QCHECK(Has(text, std::string("\"id\":\"") + id + "\""));
+    QCHECK(Has(text, std::string("\"result\":\"") + c.result + "\""));
+    QCHECK(Has(text, std::string("\"reason\":\"") + c.reason + "\""));
+    if (std::string(c.result) == "allowed") {
+      QCHECK(Has(text, "may create this event effect") && !Has(text, "may not create"));
+    } else {
+      QCHECK(Has(text, "may not create this event effect"));
+    }
+  }
 }
 
 // Arena shares the APK: an event id is created only while a combat map is loaded; outside one it is refused even with the switch on, and
@@ -134,6 +227,8 @@ void TheKillFileIsNotReadAndIsWarnedAbout() {
     if (Has(l.text, "combat_pfxtev_legacy_switch") && Has(l.text, "combat.pfxtev: false")) named = true;
   }
   QCHECK(named);
+  const std::string legacy = LastText("combat_pfxtev_legacy_switch");
+  QCHECK(Has(legacy, "\"file\":\"pfxtev.off\"") && Has(legacy, "no longer read and changes nothing"));
   std::remove(file.c_str());
   rmdir(dir);
   tev::SetLegacyDirForTest(nullptr);
@@ -162,11 +257,15 @@ void PrintTheCostOfADecision() {
 
 int main() {
   const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
+  TheSwitchIsOnInAFreshProcess();  // first: nothing has reset the module's state yet
   TheEventTierHasSixIdsThatAreTheHashesOfTheirEffectNames();
   TheSwitchIsOnBeforeTheInstall();
   WithTheSwitchOnEveryEventIdIsAllowedAndEachDecisionIsOneLine();
   WithTheSwitchOffEveryEventIdIsRefusedAndTheNonEventPasses();
   PastTheCapOneWarningIsWrittenAndTheRestAreOnlyCounted();
+  PastTheCapTheAnswersAreStillRight();
+  TheInstallLineStatesTheSwitchAndItsConsequence();
+  TheDecisionLineNamesTheIdTheAnswerAndTheReason();
   AnEventIdIsAllowedOnACombatMapOnly();
   TheKillFileIsNotReadAndIsWarnedAbout();
   PrintTheCostOfADecision();

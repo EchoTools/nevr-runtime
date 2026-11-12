@@ -16,6 +16,8 @@
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/headset_gates.h"
 
+#include <dlfcn.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -39,6 +41,21 @@ extern "C" char __start_gate_bots[], __stop_gate_bots[];
 extern "C" char __start_gate_link[], __stop_gate_link[];
 extern "C" char __start_gate_zz[], __stop_gate_zz[];
 
+// The two continuations the entries reach (headset_gates.cpp): the host entries call them with the caller's return address and no Bind frame, so a test that
+// wants a frame (the Bind's sp and its saved return address) calls them itself.
+extern "C" std::int32_t nevr_combat_headset_dispatch(std::uintptr_t bindSp, std::uintptr_t ret);
+extern "C" std::int32_t nevr_combat_party_dispatch(void* self, std::uint32_t index, std::uintptr_t ret);
+
+// dladdr, as LibraryName asks it: while g_fakeLibrary is set every address is in that file (a Bind's caller can be named at will); else libc's answer.
+static const char* g_fakeLibrary = nullptr;
+extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
+  using RealDladdr = int (*)(const void*, Dl_info*);
+  static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
+  if (g_fakeLibrary == nullptr) return real(address, info);
+  info->dli_fname = g_fakeLibrary;
+  return 1;
+}
+
 namespace {
 
 namespace hg = nevr_quest::combat::headset_gates;
@@ -48,7 +65,15 @@ using EchoVR::CSymbol64Hash;
 
 constexpr std::int32_t kRealKind = 3;  // CVR::HeadsetType() answers 3, the Quest kind, in this build
 
-extern "C" __attribute__((noinline)) std::int32_t PartyReal(void*, std::uint32_t) { return kRealKind; }
+std::uintptr_t g_partySelf = 0;  // what the game's party function was last called with
+std::uint32_t g_partyIndex = 0;
+constexpr std::uintptr_t kPartySelfArg = 0x1230;
+constexpr std::uint32_t kPartyIndexArg = 7;
+extern "C" __attribute__((noinline)) std::int32_t PartyReal(void* self, std::uint32_t index) {
+  g_partySelf = reinterpret_cast<std::uintptr_t>(self);
+  g_partyIndex = index;
+  return kRealKind;
+}
 extern "C" __attribute__((noinline)) std::int32_t HeadsetReal() { return kRealKind; }
 
 using PartyFn = std::int32_t (*)(void*, std::uint32_t);
@@ -57,11 +82,11 @@ using HeadFn = std::int32_t (*)();
 // The callers: one function per range the gates name, and one outside every range. `volatile` keeps the call from being a tail call, so the
 // return address is inside the function.
 __attribute__((noinline, section("gate_perm"))) std::int32_t PartyCallerPerm(PartyFn f) {
-  volatile std::int32_t r = f(nullptr, 0);
+  volatile std::int32_t r = f(reinterpret_cast<void*>(kPartySelfArg), kPartyIndexArg);
   return r;
 }
 __attribute__((noinline)) std::int32_t PartyCallerOut(PartyFn f) {
-  volatile std::int32_t r = f(nullptr, 0);
+  volatile std::int32_t r = f(reinterpret_cast<void*>(kPartySelfArg), kPartyIndexArg);
   return r;
 }
 __attribute__((noinline, section("gate_bots"))) std::int32_t HeadCallerBots(HeadFn f) {
@@ -307,6 +332,8 @@ void TheDefaultPolicyIsTheTwentyOneLibraries() {
   }
   QCHECK(lobby == 1);
   QCHECK(text.size() + 1 < hg::kMaxLinkLibsText);
+  // The list itself: one name changed is a menu that keeps the real answer (or a library that gets the wrong one).
+  QCHECK(text == "lib555db38933fef859.so,lib1da85b18cbad6297.so,lib4e984de06cafe2ab.so,lib2d5ebd0e1895f269.so,libcab86dd5921bafc7.so,lib5e311be23be97835.so,libbad7ce9b6c6df2cb.so,libf36316e246f2ca21.so,lib8325751e75df5860.so,lib18000621255c6ea5.so,lib1f28bd4fa7d724fb.so,lib3ded824fccc2bf6d.so,lib5ddc3dcdad4a3ed5.so,lib8515ab072bc095a8.so,libb56c58de2b68fc61.so,libb7882b9d804f86c1.so,libb8bd659eb6ed3927.so,libbc170a382fda5499.so,libd280bb8333ad45ed.so,libfb4ad3853db57943.so,libf808c072bb49da47.so");
 }
 
 // The answers, through the slots: a call that returns into a gate's range answers the gate's value, every other caller the real one. All three
@@ -371,6 +398,8 @@ void AnEmptyRangeGatesNothing() {
     sw.bots = false;
     sw.linkLibs = "all";
     QCHECK(Installed(sw));
+    const std::vector<Line> hooks = Lines("combat_gates_hook");
+    QCHECK(hooks.size() == 1U && Has(hooks[0].text, "\"slot\":\"headset\"") && Has(hooks[0].text, "\"gates\":\"link\""));
     const HeadFn head = HeadSlot();
     QCHECK(HeadCallerLink(head) == hg::kLinkHeadset);
     QCHECK(HeadCallerBots(head) == kRealKind && HeadCallerOut(head) == kRealKind);  // the empty bot range must gate nothing, not everything
@@ -386,6 +415,8 @@ void AnEmptyRangeGatesNothing() {
     sw.perm = false;
     sw.link = false;
     QCHECK(Installed(sw));
+    const std::vector<Line> hooks = Lines("combat_gates_hook");
+    QCHECK(hooks.size() == 1U && Has(hooks[0].text, "\"slot\":\"headset\"") && Has(hooks[0].text, "\"gates\":\"bots\""));
     const HeadFn head = HeadSlot();
     QCHECK(HeadCallerBots(head) == hg::kNotQuest);
     QCHECK(HeadCallerLink(head) == kRealKind && HeadCallerOut(head) == kRealKind);
@@ -398,6 +429,8 @@ void AnEmptyRangeGatesNothing() {
     sw.bots = false;
     sw.link = false;
     QCHECK(Installed(sw));
+    const std::vector<Line> hooks = Lines("combat_gates_hook");
+    QCHECK(hooks.size() == 1U && Has(hooks[0].text, "\"slot\":\"party\"") && Has(hooks[0].text, "\"gates\":\"perm\""));
     QCHECK(HeadSlot() == &HeadsetReal);  // neither gate on the headset slot: the slot is not touched
     QCHECK(PartyCallerPerm(PartySlot()) == hg::kNotQuest);
     End();
@@ -442,6 +475,10 @@ void TheBotGateActsOnlyWhereACombatMapOrLobbyIsLoaded() {
   QCHECK(scoped.size() == 8U);
   if (scoped.size() == 8U) {
     QCHECK(Has(scoped[0].text, "\"gate\":\"bots\"") && Has(scoped[0].text, "\"reason\":\"no_game\""));
+    for (std::size_t i = 0; i < scoped.size(); ++i) {
+      QCHECK(scoped[i].level == sentinel::LogLevel::kInfo);
+      QCHECK(Has(scoped[i].text, "\"n\":" + std::to_string(i + 1)));  // the first eight, counted from 1
+    }
     QCHECK(Has(scoped[1].text, "\"reason\":\"echo_arena\"") && Has(scoped[5].text, "\"reason\":\"echo_arena\"") &&
            Has(scoped[6].text, "\"reason\":\"other_level\""));
   }
@@ -576,7 +613,99 @@ void AForeignSlotWordIsRefusedAndLeftAlone() {
   if (install.size() == 1U) {
     QCHECK(Has(install[0].text, "\"gate_perm\":\"original_mismatch\"") && Has(install[0].text, "\"gate_bots\":\"installed\"") &&
            Has(install[0].text, "\"gate_link\":\"installed\""));
+    QCHECK(Has(install[0].text, "\"result\":\"partial\"") && Has(install[0].text, "\"reason\":\"gate_refused\""));
+    QCHECK(Has(install[0].text, "leaves the game's own behaviour for its part"));  // the refused consequence, not the installed one
   }
+  const hg::Ranges ranges = hg::RangesForTest();
+  QCHECK(ranges.permLo == 0 && ranges.permHi == 0);  // a refused gate leaves no range published
+  QCHECK(ranges.botsLo != ranges.botsHi && ranges.linkLo != ranges.linkHi);
+  const std::vector<Line> hooks = Lines("combat_gates_hook");
+  QCHECK(hooks.size() == 2U);
+  if (hooks.size() == 2U) {
+    QCHECK(hooks[0].level == sentinel::LogLevel::kError && Has(hooks[0].text, "\"slot\":\"party\"") && Has(hooks[0].text, "\"gates\":\"perm\"") &&
+           Has(hooks[0].text, std::string("\"symbol\":\"") + hg::kPartySymbol + "\"") && Has(hooks[0].text, "\"status\":\"original_mismatch\""));
+    QCHECK(hooks[1].level == sentinel::LogLevel::kInfo && Has(hooks[1].text, "\"slot\":\"headset\"") &&
+           Has(hooks[1].text, std::string("\"symbol\":\"") + hg::kHeadsetSymbol + "\"") && Has(hooks[1].text, "\"status\":\"installed\""));
+  }
+  End();
+}
+
+// The headset slot is one entry for two gates: a foreign word there refuses both, publishes neither range and leaves the party gate alone.
+void AForeignHeadsetSlotRefusesBothGatesOnIt() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  *g_image.Slot(g_pins.headsetSlot) = reinterpret_cast<void*>(0x4242420);
+  const nevr_quest::combat::ModuleResult r = hg::Install(AllLibs());
+  QCHECK(!r.installed && std::strcmp(r.status, "partial") == 0);
+  QCHECK(*g_image.Slot(g_pins.headsetSlot) == reinterpret_cast<void*>(0x4242420));
+  QCHECK(PartyCallerPerm(PartySlot()) == hg::kNotQuest);  // the other slot's gate went in
+  const hg::Ranges ranges = hg::RangesForTest();
+  QCHECK(ranges.botsLo == 0 && ranges.botsHi == 0 && ranges.linkLo == 0 && ranges.linkHi == 0);
+  QCHECK(ranges.permLo != ranges.permHi);
+  const std::vector<Line> install = Lines("combat_gates_install");
+  QCHECK(install.size() == 1U);
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kError);
+    QCHECK(Has(install[0].text, "\"result\":\"partial\"") && Has(install[0].text, "\"reason\":\"gate_refused\""));
+    QCHECK(Has(install[0].text, "\"gate_perm\":\"installed\"") && Has(install[0].text, "\"gate_bots\":\"original_mismatch\"") &&
+           Has(install[0].text, "\"gate_link\":\"original_mismatch\""));
+  }
+  const std::vector<Line> hooks = Lines("combat_gates_hook");
+  QCHECK(hooks.size() == 2U);
+  if (hooks.size() == 2U) {
+    QCHECK(hooks[1].level == sentinel::LogLevel::kError && Has(hooks[1].text, "\"slot\":\"headset\"") && Has(hooks[1].text, "\"gates\":\"bots,link\"") &&
+           Has(hooks[1].text, std::string("\"symbol\":\"") + hg::kHeadsetSymbol + "\"") && Has(hooks[1].text, "\"status\":\"original_mismatch\""));
+  }
+  End();
+}
+
+// Both slots foreign: nothing is installed, the result is refused, and no range is left published.
+void ABothForeignSlotsAreRefusedAndNothingIsPublished() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  *g_image.Slot(g_pins.partySlot) = reinterpret_cast<void*>(0x4242420);
+  *g_image.Slot(g_pins.headsetSlot) = reinterpret_cast<void*>(0x4242428);
+  const nevr_quest::combat::ModuleResult r = hg::Install(AllLibs());
+  QCHECK(!r.installed && std::strcmp(r.status, "refused") == 0);
+  const hg::Ranges ranges = hg::RangesForTest();
+  QCHECK(ranges.permLo == 0 && ranges.permHi == 0 && ranges.botsLo == 0 && ranges.botsHi == 0 && ranges.linkLo == 0 && ranges.linkHi == 0);
+  const std::vector<Line> install = Lines("combat_gates_install");
+  QCHECK(install.size() == 1U);
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"result\":\"refused\"") &&
+           Has(install[0].text, "\"reason\":\"gate_refused\""));
+    QCHECK(Has(install[0].text, "\"gate_perm\":\"original_mismatch\"") && Has(install[0].text, "\"gate_bots\":\"original_mismatch\"") &&
+           Has(install[0].text, "\"gate_link\":\"original_mismatch\""));
+  }
+  End();
+}
+
+// The bot gate reads the loaded levels of the game the tick saw, so it registers a tick callback; with the table full it is refused alone.
+void DummyTick(std::uintptr_t) noexcept {}
+void AFullTickTableRefusesTheBotGateAlone() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) QCHECK(nevr_quest::combat::tick::Add(&DummyTick));
+  const nevr_quest::combat::ModuleResult r = hg::Install(AllLibs());
+  QCHECK(!r.installed && std::strcmp(r.status, "partial") == 0);
+  const std::vector<Line> install = Lines("combat_gates_install");
+  QCHECK(install.size() == 1U);
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kError);
+    QCHECK(Has(install[0].text, "\"gate_perm\":\"installed\"") && Has(install[0].text, "\"gate_bots\":\"tick_table_full\"") &&
+           Has(install[0].text, "\"gate_link\":\"installed\""));
+  }
+  const std::vector<Line> hooks = Lines("combat_gates_hook");
+  QCHECK(hooks.size() == 2U && Has(hooks[1].text, "\"gates\":\"link\""));
+  const hg::Ranges ranges = hg::RangesForTest();
+  QCHECK(ranges.botsLo == ranges.botsHi);  // the bot gate's range is empty
+  const HeadFn head = HeadSlot();
+  QCHECK(HeadCallerBots(head) == kRealKind);  // not installed: the real answer in a combat map
+  QCHECK(HeadCallerLink(head) == hg::kLinkHeadset && PartyCallerPerm(PartySlot()) == hg::kNotQuest);
+  QCHECK(nevr_quest::combat::tick::Count() == nevr_quest::combat::tick::kMaxCallbacks);
   End();
 }
 
@@ -606,10 +735,17 @@ void APinnedWordThatDiffersRefusesItsGateAlone() {
       if (Has(l.text, "pinned_word_mismatch")) {
         ++mismatches;
         QCHECK(l.level == sentinel::LogLevel::kWarn && Has(l.text, std::string("\"gate\":\"") + c.name + "\""));
-        QCHECK(Has(l.text, "\"vaddr\":\"0x") && Has(l.text, "\"have\":\"0x") && Has(l.text, "\"want\":\"0x"));
+        char vaddr[40], have[40], want[40];
+        std::snprintf(vaddr, sizeof vaddr, "\"vaddr\":\"0x%016llx\"", static_cast<unsigned long long>(changed->vaddr));
+        std::snprintf(have, sizeof have, "\"have\":\"0x%016llx\"", static_cast<unsigned long long>(changed->word ^ 1U));
+        std::snprintf(want, sizeof want, "\"want\":\"0x%016llx\"", static_cast<unsigned long long>(changed->word));
+        QCHECK(Has(l.text, vaddr) && Has(l.text, have) && Has(l.text, want));
       }
     }
     QCHECK(mismatches == 1);
+    const std::vector<Line> install = Lines("combat_gates_install");
+    QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+    if (install.size() == 1U) QCHECK(Has(install[0].text, std::string("\"gate_") + c.name + "\":\"pinned_word_mismatch\""));
     // The gate that was refused answers the real value; the others answer theirs.
     const PartyFn party = PartySlot();
     const HeadFn head = HeadSlot();
@@ -672,7 +808,7 @@ void TheInstallLineNamesEachGateAndWhy() {
     const std::vector<Line> install = Lines("combat_gates_install");
     QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
     if (install.size() == 1U) {
-      QCHECK(Has(install[0].text, "\"result\":\"off\"") && Has(install[0].text, "\"gate_perm\":\"off_config\"") &&
+      QCHECK(Has(install[0].text, "\"result\":\"off\"") && Has(install[0].text, "\"reason\":\"off_config\"") && Has(install[0].text, "\"gate_perm\":\"off_config\"") &&
              Has(install[0].text, "\"gate_bots\":\"off_config\"") && Has(install[0].text, "\"gate_link\":\"off_config\""));
     }
     End();
@@ -758,6 +894,19 @@ void AConfiguredPolicyReplacesTheDefault() {
   QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"none\"") && Has(policy[0].text, "\"source\":\"config\""));
   QCHECK(HeadCallerLink(HeadSlot()) == kRealKind);  // none: the real answer everywhere
   End();
+  {  // an empty text is configured too, and reads as none
+    Begin();
+    Build();
+    CombatMapLoaded();
+    hg::Switches empty;
+    empty.linkLibs = "";
+    QCHECK(Installed(empty));
+    const std::vector<Line> emptyPolicy = Lines("combat_gates_link_policy");
+    QCHECK(emptyPolicy.size() == 1U && Has(emptyPolicy[0].text, "\"libs\":\"none\"") && Has(emptyPolicy[0].text, "\"source\":\"config\""));
+    QCHECK(emptyPolicy[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(HeadCallerLink(HeadSlot()) == kRealKind);
+    End();
+  }
 }
 
 // The first eight gated answers of the permission and bot gates are logged with the caller's address and the real answer; the rest are counted.
@@ -831,6 +980,10 @@ void ARefusedStepTouchesNothingAndSaysWhy() {
     QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
     const std::vector<Line> install = Lines("combat_gates_install");
     QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"module_not_loaded\""));
+    if (install.size() == 1U) {
+      QCHECK(Has(install[0].text, "\"result\":\"refused\"") && Has(install[0].text, "\"gate_perm\":\"not_tried\"") &&
+             Has(install[0].text, "\"gate_bots\":\"not_tried\"") && Has(install[0].text, "\"gate_link\":\"not_tried\""));
+    }
     End();
   }
   {
@@ -841,6 +994,8 @@ void ARefusedStepTouchesNothingAndSaysWhy() {
     hg::SetImageLookupForTest(&Lookup);
     const nevr_quest::combat::ModuleResult r = hg::Install({});
     QCHECK(!r.installed && std::strcmp(r.status, "build_id_mismatch") == 0);
+    const std::vector<Line> install = Lines("combat_gates_install");
+    QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"build_id_mismatch\""));
     End();
   }
   {
@@ -849,8 +1004,288 @@ void ARefusedStepTouchesNothingAndSaysWhy() {
     QCHECK(Installed(AllLibs()));
     const nevr_quest::combat::ModuleResult again = hg::Install({});
     QCHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0);
+    const std::vector<Line> install = Lines("combat_gates_install");
+    QCHECK(install.size() == 2U);
+    if (install.size() == 2U) {
+      QCHECK(install[1].level == sentinel::LogLevel::kWarn && Has(install[1].text, "\"reason\":\"already_ran\""));
+    }
     End();
   }
+}
+
+
+// A build with no build-ID note is refused before any slot, with its own token and nothing tried.
+void ABuildWithNoIdIsRefusedBeforeAnySlot() {
+  Begin();
+  g_image.Build({{hg::kPartySymbol, hg::kPins.partySlot, false, false, hg::kPins.partyFn},
+                 {hg::kHeadsetSymbol, hg::kPins.headsetSlot, false, false, hg::kPins.headsetFn}},
+                nullptr, /*note=*/false);
+  hg::SetImageLookupForTest(&Lookup);
+  const nevr_quest::combat::ModuleResult r = hg::Install({});
+  QCHECK(!r.installed && std::strcmp(r.status, "no_build_id") == 0);
+  const std::vector<Line> install = Lines("combat_gates_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+  if (install.size() == 1U) {
+    QCHECK(Has(install[0].text, "\"reason\":\"no_build_id\"") && Has(install[0].text, "\"gate_perm\":\"not_tried\""));
+  }
+  End();
+}
+
+// No lookup at all is a refusal, not a call through a null function.
+void AnInstallWithNoLookupIsRefused() {
+  Begin();
+  const nevr_quest::combat::ModuleResult r = hg::InstallAt(nullptr, hg::kPins, {});
+  QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
+  End();
+}
+
+// A pinned word that cannot be read (its page is gone) is a mismatch that says so, not a word of zeros that happens to differ.
+void AnUnreadablePinnedWordRefusesItsGateAndSaysSo() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  const std::uintptr_t page = (g_image.Base() + hg::kWords[0].vaddr) & ~static_cast<std::uintptr_t>(0xfff);
+  QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_NONE) == 0);
+  const nevr_quest::combat::ModuleResult r = hg::Install(AllLibs());
+  QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ | PROT_WRITE) == 0);
+  QCHECK(!r.installed && std::strcmp(r.status, "partial") == 0);
+  int mismatches = 0;
+  for (const Line& l : Lines("combat_gates_hook")) {
+    if (!Has(l.text, "pinned_word_mismatch")) continue;
+    ++mismatches;
+    char vaddr[40], want[40];
+    std::snprintf(vaddr, sizeof vaddr, "\"vaddr\":\"0x%016llx\"", static_cast<unsigned long long>(hg::kWords[0].vaddr));
+    std::snprintf(want, sizeof want, "\"want\":\"0x%016llx\"", static_cast<unsigned long long>(hg::kWords[0].word));
+    QCHECK(Has(l.text, "\"gate\":\"perm\"") && Has(l.text, vaddr) && Has(l.text, want) && Has(l.text, "\"have\":\"unreadable\""));
+  }
+  QCHECK(mismatches == 1);
+  End();
+}
+
+// The game's code is read-only in the real image: the word check reads it, it never asks to write.
+void PinnedWordsInReadOnlyCodeAreRead() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  for (const hg::Word& w : hg::kWords) {
+    const std::uintptr_t page = (g_image.Base() + w.vaddr) & ~static_cast<std::uintptr_t>(0xfff);
+    QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ) == 0);
+  }
+  QCHECK(Installed(AllLibs()));
+  for (const hg::Word& w : hg::kWords) {
+    const std::uintptr_t page = (g_image.Base() + w.vaddr) & ~static_cast<std::uintptr_t>(0xfff);
+    QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ | PROT_WRITE) == 0);
+  }
+  End();
+}
+
+// With nothing installed the continuations have no game function to call: the answer is 0, and no range gates anything.
+void ACallBeforeTheInstallGetsZeroFromTheMissingGamesFunction() {
+  Begin();
+  QCHECK(nevr_combat_party_dispatch(nullptr, 0, 0) == 0);
+  QCHECK(nevr_combat_headset_dispatch(0, 0) == 0);
+  End();
+}
+
+// The game's party function is called with the entry's own arguments, whether or not the gate answers for that caller.
+void ThePartyCallReachesTheGamesFunctionWithItsArguments() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  g_partySelf = 0;
+  g_partyIndex = 0;
+  QCHECK(PartyCallerPerm(PartySlot()) == hg::kNotQuest);
+  QCHECK(g_partySelf == kPartySelfArg && g_partyIndex == kPartyIndexArg);
+  g_partySelf = 0;
+  g_partyIndex = 0;
+  QCHECK(PartyCallerOut(PartySlot()) == kRealKind);
+  QCHECK(g_partySelf == kPartySelfArg && g_partyIndex == kPartyIndexArg);
+  End();
+}
+
+std::uintptr_t HexField(const std::string& text, const char* key) {
+  const std::string at = std::string("\"") + key + "\":\"0x";
+  const std::size_t pos = text.find(at);
+  if (pos == std::string::npos) return 0;
+  return static_cast<std::uintptr_t>(std::strtoull(text.c_str() + pos + at.size(), nullptr, 16));
+}
+
+// The first eight gated answers of each gate are logged at Info with the gate's name, its running count, the caller's return address (inside the gate's own
+// range) and the real answer.
+void TheAnsweredLinesNameTheGateTheCountAndTheCaller() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  for (int i = 0; i < 12; ++i) {
+    PartyCallerPerm(PartySlot());
+    HeadCallerBots(HeadSlot());
+  }
+  const std::vector<Line> answered = Lines("combat_gates_answered");
+  QCHECK(answered.size() == 16U);
+  int perm = 0, bots = 0;
+  for (const Line& l : answered) {
+    QCHECK(l.level == sentinel::LogLevel::kInfo);
+    const bool isPerm = Has(l.text, "\"gate\":\"perm\"");
+    const bool isBots = Has(l.text, "\"gate\":\"bots\"");
+    QCHECK(isPerm != isBots);
+    int& count = isPerm ? perm : bots;
+    ++count;
+    const std::uintptr_t ret = HexField(l.text, "return_address");
+    const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(isPerm ? __start_gate_perm : __start_gate_bots);
+    const std::uintptr_t hi = reinterpret_cast<std::uintptr_t>(isPerm ? __stop_gate_perm : __stop_gate_bots);
+    QCHECK(ret >= lo && ret < hi);
+    QCHECK(Has(l.text, "\"real_answer\":3"));
+    QCHECK(Has(l.text, "\"n\":" + std::to_string(count)));
+  }
+  QCHECK(perm == 8 && bots == 8);
+  QCHECK(hg::CurrentStats().partyGated == 12 && hg::CurrentStats().botsGated == 12);
+  End();
+}
+
+// ---- the Bind's frame and the library policy ------------------------------------------------------------------------------------------
+// The host entry passes no Bind frame, so these call the continuation themselves: the entry's sp (a frame, 16-byte aligned, the saved return address at
+// sp + 0x18) and a return address inside the link range. The fake dladdr names the library the saved address is in.
+
+struct alignas(16) BindFrame {
+  std::uintptr_t words[8];
+};
+constexpr std::uintptr_t kSavedLr = 0x1000;  // any address: the fake dladdr names all of them
+
+std::int32_t LinkCall(const char* lib, bool misaligned = false) {
+  static BindFrame frame;
+  for (std::uintptr_t& w : frame.words) w = 0;
+  frame.words[3] = kSavedLr;  // sp + 0x18
+  frame.words[4] = kSavedLr;  // what a frame read from sp + 8 would find
+  const std::string path = std::string("/data/app/") + lib;
+  g_fakeLibrary = path.c_str();
+  const std::uintptr_t sp = reinterpret_cast<std::uintptr_t>(&frame) + (misaligned ? 8 : 0);
+  const std::int32_t r = nevr_combat_headset_dispatch(sp, reinterpret_cast<std::uintptr_t>(__start_gate_link));
+  g_fakeLibrary = nullptr;
+  return r;
+}
+bool Answers(const char* spec, const char* lib) {
+  hg::SetLinkGateLibs(spec);
+  const std::int32_t r = LinkCall(lib);
+  QCHECK(r == hg::kLinkHeadset || r == kRealKind);
+  return r == hg::kLinkHeadset;
+}
+
+void TheBindsCallerIsReadFromItsFrame() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  hg::SetLinkGateLibs("libA.so");
+  QCHECK(LinkCall("libA.so") == hg::kLinkHeadset);                  // the saved return address at sp + 0x18 names the library
+  QCHECK(LinkCall("libB.so") == kRealKind);                         // another library: the real answer
+  QCHECK(LinkCall("libA.so", /*misaligned=*/true) == kRealKind);    // a frame that is not 16-byte aligned names nothing
+  const std::vector<Line> binds = Lines("combat_gates_headset_bind");
+  QCHECK(binds.size() == 3U);
+  if (binds.size() == 3U) {
+    QCHECK(binds[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(binds[0].text, "\"lib\":\"libA.so\"") && Has(binds[0].text, "\"answered\":\"link\"") && Has(binds[0].text, "\"real_answer\":3") &&
+           Has(binds[0].text, "\"calls\":1"));  // the file name, not the directory
+    QCHECK(Has(binds[1].text, "\"lib\":\"libB.so\"") && Has(binds[1].text, "\"answered\":\"real\"") && Has(binds[1].text, "\"real_answer\":3"));
+    QCHECK(Has(binds[2].text, "\"lib\":\"unknown\"") && Has(binds[2].text, "\"answered\":\"real\""));
+  }
+  End();
+}
+
+void TheLinkPolicyAnswersTheLibrariesItNames() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  // all, none, empty
+  QCHECK(Answers("all", "libA.so"));
+  QCHECK(!Answers("none", "libA.so"));
+  QCHECK(!Answers("", "libA.so"));
+  // a list: comma, space, tab and any mix of them separate; a name is a part of the library's file name, not a prefix or all of it
+  QCHECK(Answers("libA.so,libB.so", "libA.so") && Answers("libA.so,libB.so", "libB.so") && !Answers("libA.so,libB.so", "libC.so"));
+  QCHECK(Answers("libA.so libB.so", "libA.so") && Answers("libA.so libB.so", "libB.so") && !Answers("libA.so libB.so", "libC.so"));
+  QCHECK(Answers("libA.so\tlibB.so", "libA.so") && Answers("libA.so\tlibB.so", "libB.so") && !Answers("libA.so\tlibB.so", "libC.so"));
+  QCHECK(Answers(" ,\t libA.so ,, libB.so \t", "libA.so") && Answers(" ,\t libA.so ,, libB.so \t", "libB.so") && !Answers(" ,\t libA.so ,, libB.so \t", "libC.so"));
+  QCHECK(Answers("libA.so, ", "libA.so") && !Answers("libA.so, ", "libZ.so"));  // a trailing separator is no empty name that matches everything
+  QCHECK(Answers("libA", "libA.so") && Answers("A.so", "libA.so") && !Answers("A.so", "libB.so"));
+  QCHECK(!Answers("libA.so", "libA.sx"));
+  // all wins over names, wherever it stands; none is dropped from a list
+  QCHECK(Answers("all libA.so", "libC.so") && Answers("libA.so all", "libC.so"));
+  QCHECK(Answers("none libA.so", "libA.so") && !Answers("none libA.so", "libnone.so") && !Answers("none", "libnone.so"));
+  // `all` and `none` are whole words: a longer word is a name
+  QCHECK(!Answers("allx", "libfoo.so") && Answers("allx", "liballx.so"));
+  QCHECK(!Answers("nonex", "libfoo.so") && Answers("nonex", "libnonex.so"));
+  // a later list replaces an earlier one, and the name's end is where its text ended (the row holds the stale tail of the longer one)
+  QCHECK(Answers("libVERYLONGNAMEEEEEEEEEE.so", "libVERYLONGNAMEEEEEEEEEE.so"));
+  QCHECK(Answers("libA.so", "libA.so") && !Answers("libA.so", "libA.sx"));
+  // 32 names fit, a 33rd is dropped; the first and the 32nd answer
+  std::string many;
+  for (int i = 1; i <= 33; ++i) many += (i > 1 ? " x" : "x") + std::string(i < 10 ? "0" : "") + std::to_string(i);
+  QCHECK(Answers(many.c_str(), "libx01.so") && Answers(many.c_str(), "libx32.so") && !Answers(many.c_str(), "libx33.so"));
+  // a name of 47 characters fits (the longest file name the gate keeps), and answers a library of that name
+  const std::string longest(47, 'q');
+  QCHECK(Answers(longest.c_str(), longest.c_str()));
+  QCHECK(hg::LinkGateLibsSeen() < 64);
+  End();
+}
+
+// Each library's first bind and its 64th are logged, once each; another library has its own count.
+void TheMenuGateLogsEachLibraryOnceAndItsSixtyFourthBind() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  for (int i = 1; i <= 63; ++i) QCHECK(LinkCall("libA.so") == hg::kLinkHeadset);
+  QCHECK(Lines("combat_gates_headset_bind").size() == 1U);
+  QCHECK(LinkCall("libA.so") == hg::kLinkHeadset);  // the 64th
+  std::vector<Line> binds = Lines("combat_gates_headset_bind");
+  QCHECK(binds.size() == 2U);
+  if (binds.size() == 2U) QCHECK(Has(binds[1].text, "\"lib\":\"libA.so\"") && Has(binds[1].text, "\"calls\":64"));
+  for (int i = 65; i <= 130; ++i) QCHECK(LinkCall("libA.so") == hg::kLinkHeadset);
+  QCHECK(Lines("combat_gates_headset_bind").size() == 2U);  // neither the 65th nor the 128th
+  QCHECK(LinkCall("libB.so") == hg::kLinkHeadset);
+  binds = Lines("combat_gates_headset_bind");
+  QCHECK(binds.size() == 3U);
+  if (binds.size() == 3U) QCHECK(Has(binds[2].text, "\"lib\":\"libB.so\"") && Has(binds[2].text, "\"calls\":1"));
+  QCHECK(hg::LinkGateLibsSeen() == 2);
+  hg::SetLinkGateLibs("libA.so");
+  QCHECK(LinkCall("libC.so") == kRealKind);  // a library the policy leaves out is named in the line, and said not to be answered
+  binds = Lines("combat_gates_headset_bind");
+  QCHECK(binds.size() == 4U);
+  if (binds.size() == 4U) QCHECK(Has(binds[3].text, "\"lib\":\"libC.so\"") && Has(binds[3].text, "\"answered\":\"real\""));
+  End();
+}
+
+// A library slot that an earlier run used starts its count at 1 again.
+void AReusedLibrarySlotStartsItsCountAtOne() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  QCHECK(LinkCall("libA.so") == hg::kLinkHeadset);
+  const std::vector<Line> binds = Lines("combat_gates_headset_bind");
+  QCHECK(binds.size() == 1U);
+  if (binds.size() == 1U) QCHECK(Has(binds[0].text, "\"calls\":1"));
+  End();
+}
+
+// Sixty-four libraries are remembered; one more is answered and has no count and no line.
+void SixtyFourLibrariesAreRemembered() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  for (int i = 0; i < 70; ++i) {
+    char name[32];
+    std::snprintf(name, sizeof name, "lib%02d.so", i);
+    QCHECK(LinkCall(name) == hg::kLinkHeadset);
+  }
+  QCHECK(hg::LinkGateLibsSeen() == 64);
+  QCHECK(Lines("combat_gates_headset_bind").size() == 64U);
+  QCHECK(LinkCall("lib00.so") == hg::kLinkHeadset);  // one that is in the table counts on, silently
+  QCHECK(Lines("combat_gates_headset_bind").size() == 64U);
+  End();
 }
 
 }  // namespace
@@ -876,6 +1311,21 @@ int main() {
   TheMenuGateLogsTheFirstBindOfALibrary();
   ALegacySwitchFileIsAWarningAndChangesNothing();
   ARefusedStepTouchesNothingAndSaysWhy();
+  AForeignHeadsetSlotRefusesBothGatesOnIt();
+  ABothForeignSlotsAreRefusedAndNothingIsPublished();
+  AFullTickTableRefusesTheBotGateAlone();
+  ABuildWithNoIdIsRefusedBeforeAnySlot();
+  AnInstallWithNoLookupIsRefused();
+  AnUnreadablePinnedWordRefusesItsGateAndSaysSo();
+  PinnedWordsInReadOnlyCodeAreRead();
+  ACallBeforeTheInstallGetsZeroFromTheMissingGamesFunction();
+  ThePartyCallReachesTheGamesFunctionWithItsArguments();
+  TheAnsweredLinesNameTheGateTheCountAndTheCaller();
+  TheBindsCallerIsReadFromItsFrame();
+  TheLinkPolicyAnswersTheLibrariesItNames();
+  TheMenuGateLogsEachLibraryOnceAndItsSixtyFourthBind();
+  AReusedLibrarySlotStartsItsCountAtOne();
+  SixtyFourLibrariesAreRemembered();
   if (quest_test::Failures() == 0) std::printf("headset_gates_test: all checks pass\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

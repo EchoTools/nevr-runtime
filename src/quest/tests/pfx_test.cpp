@@ -74,6 +74,12 @@ void LoadLevels(std::initializer_list<const char*> names) {
   g_game.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
 }
 
+// 0: the first call of the process, before any Install or reset: the gate reads off (a fresh process has not decided; the static starts false).
+void TheGateReadsOffInAFreshProcess() {
+  QCHECK(!pfx::GateOn());
+  QCHECK(!pfx::GateOpenIn(GameAddress()));
+}
+
 // 1 and 2: the decision from the one fact, the key.
 void TheDecisionIsOnByDefaultAndOffOnlyWithTheKeyFalse() {
   const pfx::GateDecision on = pfx::Decide(true);
@@ -106,6 +112,8 @@ void TheInstallStoresTheDecisionAndWritesOneLine() {
     QCHECK(Has(lines[0].text, "\"state\":\"on\""));
     QCHECK(Has(lines[0].text, "\"reason\":\"default\""));
     QCHECK(Has(lines[0].text, "\"switch\":\"combat.pfx\""));
+    QCHECK(Has(lines[0].text, "\"scope\":\"combat_map\""));
+    QCHECK(Has(lines[0].text, "installs no hook") && !Has(lines[0].text, "stays shut"));  // the on message, not the off one
   }
   Fresh();
   const nevr_quest::combat::ModuleResult off = pfx::Install(false);
@@ -116,6 +124,7 @@ void TheInstallStoresTheDecisionAndWritesOneLine() {
   if (offLines.size() == 1U) {
     QCHECK(offLines[0].level == sentinel::LogLevel::kInfo);  // a choice, not a failure
     QCHECK(Has(offLines[0].text, "\"state\":\"off\"") && Has(offLines[0].text, "\"reason\":\"off_config\""));
+    QCHECK(Has(offLines[0].text, "stays shut") && !Has(offLines[0].text, "installs no hook"));  // the off message, not the on one
   }
 }
 
@@ -138,6 +147,7 @@ void TheKillFileIsNotReadAndIsWarnedAbout() {
   if (w.size() == 1U) {
     QCHECK(w[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(w[0].text, "\"file\":\"pfx.off\"") && Has(w[0].text, "combat.pfx: false"));
+    QCHECK(Has(w[0].text, "no longer read and changes nothing"));  // the kill file is said to change nothing, which the GateOn check above shows
   }
   std::remove(file.c_str());
   rmdir(dir);
@@ -200,6 +210,7 @@ void PrintTheCostOfTheGateInAnArenaLevel() {
 
 int main() {
   const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
+  TheGateReadsOffInAFreshProcess();  // first: nothing has reset the module's state yet
   TheDecisionIsOnByDefaultAndOffOnlyWithTheKeyFalse();
   TheGateReadsOffUntilTheInstallHasDecided();
   TheInstallStoresTheDecisionAndWritesOneLine();
