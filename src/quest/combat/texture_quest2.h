@@ -11,7 +11,7 @@
  * Resize while it reads so). The owner's poller and render thread read the published words (texture_quality_input.h); this module reads no
  * game memory on their threads.
  *
- * Why the guard is the load window (docs/quest/combat/texture_quest2.md "The guard"). A live Resize takes the game's upload lock up to nine times among the calls read (the calls of CGDisplay::Resize after 0x18348f8 are not read, so the total is not bounded by this reading) and,
+ * Why the guard is the load window (docs/quest/combat/texture_quest2.md "The guard"). A live Resize reaches the game's upload lock at up to thirteen sites among the calls read (the calls of CGDisplay::Resize after 0x18348f8 are not read, so the total is not bounded by this reading) and,
  * holding it, waits for the upload count to reach 0; an upload taken and not yet submitted on another thread while it waits is the deadlock
  * (inferred, not observed). The owner therefore makes a look-driven Resize only while no gamespace has loaded for 10 s, and reads the upload count
  * and lock first as a narrowing, not as the guard.

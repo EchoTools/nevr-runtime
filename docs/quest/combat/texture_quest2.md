@@ -86,8 +86,7 @@ Inferred, from the analysis below; nothing here was observed on a headset.
   is not seen by either measure.
 - An `Upload` that is not part of a gamespace load: the init-fiber count does not see it. Which callers upload in a settled level (the
   `CGBuffer` initializers that upload initial data, through 0x182bdf0, created at run time, if any) and on which thread is not shown.
-- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock up to
-  nine times among the calls read (the calls after 0x18348f8 are not read, so its total is not bounded by this reading). Whether a new init fiber reaches an `Upload` inside that time is not shown.
+- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize reaches the upload lock at up to thirteen sites among the calls read (the calls after 0x18348f8 are not read, so its total is not bounded by this reading). Whether a new init fiber reaches an `Upload` inside that time is not shown.
 - An `Upload` taken after the count and lock read: the read narrows, it does not close (the section "What this means" below).
 - The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure. The menu's Resize (a change the player makes,
   `ApplyPending` with no look behind it) is made with no hold: no load window, no upload word is read.
@@ -192,11 +191,9 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
-canvas needs a resize (its reconstruction). So one Resize takes the upload lock up to nine times among the calls read: once in `FlushGPU`, once in each of the four direct
-body calls of `CGDisplay::Resize` (kind 0xe), and once in each of the four `DeferredDestroy(SGImage&)` calls, which reach the body
-(kind 0xa) only on the last reference. None of the eight runs when `CCanvas::BeforeResize` answers non-zero:
+canvas needs a resize (its reconstruction). So one Resize reaches the upload lock at up to thirteen sites among the calls read: once in `FlushGPU`, once in each of the four direct body calls of `CGDisplay::Resize` (kind 0xe), and, in each of the four `DeferredDestroy(SGImage&)` calls, twice: once in the body (kind 0xa) and once in `DeferredFree` (0x18888b0), which takes the same lock on the same equal-frame condition. The body and `DeferredFree` are reached only on the last reference. None of the eight runs when `CCanvas::BeforeResize` answers non-zero:
 `CCanvasDisplay::Resize` returns before `CGDisplay::Resize` (`src/reconstruction/r15/ccanvas_display_resize.cpp:79`). Each take sits
-behind the body's own tests (a null handle returns first; the take is on the immediate path only), so each of the nine is a take that
+behind the body's own tests (a null handle returns first; the upload lock is taken on the immediate path, and the queue path takes the lock whose pointer is at 0x379b478, an open item below), so each of the thirteen sites is a take that
 can occur, not a count of takes that do. The calls after 0x18348f8 in `CGDisplay::Resize` are not read. Their `bl` sites are
 0x1834928 (`CGSurfaceManager::DestroyDisplay`), 0x1834944 (`CreateDisplay`), 0x1834974 and 0x18349b8 (`CSymbol64::String`),
 0x1834988 and 0x18349cc (`CreateRenderTargetFromDisplay`), 0x1834a00 (`PresentDisplay`) and 0x1834a70 (`CErrMsg::CreateAndAddError`).

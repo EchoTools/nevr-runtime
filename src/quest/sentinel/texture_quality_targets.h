@@ -33,11 +33,13 @@
  * So a Resize that reaches either wait while a slot is taken and not yet submitted (between an Upload and its End, on another
  * thread) spins with the lock held, and that End waits for the lock: neither returns.
  * Each wait is skipped when its input is null: FlushGPU returns with no lock and no currframe store when gctx + 0xb50 is 0 (cbz at
- * 0x18e08e0), and the deferred-destroy body returns on a null handle before it reads currframe (cbz x1 at 0x1888aa8). So one
- * Resize takes the upload lock up to nine times among the calls read: FlushGPU's take, the body's immediate-path take in each of
- * the four direct calls of CGDisplay::Resize, and the same take in each of the four DeferredDestroy(SGImage&) calls below, which call
- * the body with kind 0xa on the last reference (0x1888c24..0x1888c34). Each take sits behind the body's own tests (a null handle returns
- * first, and the take is on the immediate path only), so each is a take that can occur, not a count. The calls after 0x18348f8 in
+ * 0x18e08e0), and the deferred-destroy body returns on a null handle before it reads currframe (cbz x1 at 0x1888aa8). So one Resize reaches the upload lock at up to thirteen sites among the calls read:
+ * FlushGPU's take; the body's immediate-path take in each of the four direct calls of CGDisplay::Resize;
+ * and in each of the four DeferredDestroy(SGImage&) calls below, the body's take (kind 0xa, on the last
+ * reference, 0x1888c24..0x1888c34) and then DeferredFree's take (0x18888b0, the same lock on the same
+ * equal-frame condition, called at 0x1888c3c). Each take sits behind the body's own tests (a null handle
+ * returns first). The upload lock is taken on the immediate path; the queue path takes the lock whose
+ * pointer is at 0x379b478, an open item in texture_quest2.md, so each site is a take that can occur, not a count. The calls after 0x18348f8 in
  * CGDisplay::Resize are not read, so the total for one Resize is not bounded by this reading.
  *
  * The path from CEngine::Resize (each call is a bl; a call through the PLT names the stub, whose JUMP_SLOT names the callee):
