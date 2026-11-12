@@ -120,6 +120,22 @@ class NamingInventoryTest(unittest.TestCase):
         found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
         self.assertEqual(found, set(), out)
 
+    def test_every_prefix_component_of_a_reconstruction_namespace_is_the_games(self):
+        # naming.md: the game's prefix keeps the game's spelling, so each component before the last is checked, not only
+        # the first. Line 1 has a lower-case second component, line 2 a project-spelled one; line 3 is allowed (the control).
+        path = "src/reconstruction/r15/c.cpp"
+        lines = [
+            "namespace NRadEngine::" "xtool::" "NRadGame {",                  # 1 finding: lower-case second component
+            "namespace NRadEngine::" "NevrX::" "nevr_reconstruction {",       # 2 finding: project-spelled second component
+            "namespace NRadEngine::" "NRadGame::" "nevr_reconstruction {",    # 3 allowed: the game's prefix
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, {1, 2}, out)
+
     def test_a_category_can_be_selected_and_summarised(self):
         out = self.inventory("--category", "pascal-namespaces")
         self.assertIn("== pascal-namespaces (1)", out)
