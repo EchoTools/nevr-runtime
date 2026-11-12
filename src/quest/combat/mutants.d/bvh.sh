@@ -21,6 +21,12 @@ runm bvh_rollback         src/quest/combat/bvh.cpp "s/  for (int i = doneCount -
 runm bvh_refusal_status   src/quest/combat/bvh.cpp "s/return {false, sentinel::GotStatusName(got)};\n    }\n    done/XX/;0,/return {false, sentinel::GotStatusName(got)};/s//return {false, \"hook_refused\"};/"
 runm bvh_refusal_hook     src/quest/combat/bvh.cpp "s/Refused(\"hook_refused\", p.name, sentinel::GotStatusName(got), 0);/Refused(\"hook_refused\", \"\", sentinel::GotStatusName(got), 0);/"
 runm bvh_refusal_level    src/quest/combat/bvh.cpp "s/  sentinel::LogFields(sentinel::LogLevel::kError, \"combat_bvh_install\",/  sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_bvh_install\",/"
+# every combat_bvh_install line names the gate and touch switches the step was handed (#2382): on each line in turn, bvh_touch named from the gate switch
+runm bvh_refusal_handed_all    src/quest/combat/bvh.cpp 's/^  const int handed = g_lastSwitches.load(std::memory_order_relaxed);/  const int handed = 7;/'
+runm bvh_refusal_switches_crossed src/quest/combat/bvh.cpp 's/{"bvh_touch", (handed \& 4) != 0 ? 1 : 0},/{"bvh_touch", (handed \& 2) != 0 ? 1 : 0},/'
+runm bvh_off_switches_crossed  src/quest/combat/bvh.cpp '/{{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},$/{n;s/{"bvh_touch", switches.touch ? 1 : 0},/{"bvh_touch", switches.gate ? 1 : 0},/}'
+runm bvh_already_switches_crossed src/quest/combat/bvh.cpp 's/{"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},/{"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.gate ? 1 : 0},/'
+runm bvh_installed_switches_crossed src/quest/combat/bvh.cpp '/{"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},$/{n;s/{"bvh_touch", switches.touch ? 1 : 0},/{"bvh_touch", switches.gate ? 1 : 0},/}'
 runm bvh_installed_early  src/quest/combat/bvh.cpp "s/^  g_installed.store(true, std::memory_order_release);\$/  g_installed.store(switches.gate, std::memory_order_release);/"
 runm bvh_touch_always     src/quest/combat/bvh.cpp "s/  if (switches.touch) {/  if (true) {/"
 runm bvh_touch_fatal      src/quest/combat/bvh.cpp "s/    touchOn = got == sentinel::GotStatus::kOk;/    touchOn = true;/"

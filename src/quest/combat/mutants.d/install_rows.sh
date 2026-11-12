@@ -13,7 +13,6 @@
 # ffe_not_a_scope_reader).
 #
 # Not listed (no host test can tell them from the original: on the host the module refuses before it reads the switch, and its lines do not carry it):
-#   ir_fn_bvh_gate_off, ir_fn_bvh_touch_off   BvhNormal hands gate/touch false (logged only on an installed BVH; the host refuses scope_not_live)
 #   ir_fn_droneguard_stage1_on/_off   DroneguardNormal hands a fixed stage1 (logged only on an installed guard)
 #   ir_fn_booster_needs_false  BoosterPoolNormal hands `false` for levelname::Installed() (levelname is never installed on the host)
 runm ir_fn_heaps_off src/quest/combat/combat_install.cpp 's#^ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config\.heaps\.on, g_config\.memsys\.on); }$#ModuleResult HeapsEarly() noexcept { return heaps::Install(false, g_config.memsys.on); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
@@ -74,7 +73,9 @@ runm ir_fn_gate_link_on src/quest/combat/combat_install.cpp 's#^  switches\.link
 runm ir_fn_gate_link_off src/quest/combat/combat_install.cpp 's#^  switches\.link = g_config\.gateLink\.on;$#  switches.link = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_bvh_on src/quest/combat/combat_install.cpp 's#^  switches\.bvh = g_config\.bvh\.on;$#  switches.bvh = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_bvh_off src/quest/combat/combat_install.cpp 's#^  switches\.bvh = g_config\.bvh\.on;$#  switches.bvh = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_bvh_gate_off src/quest/combat/combat_install.cpp 's#^  switches\.gate = g_config\.bvhGate\.on;$#  switches.gate = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_bvh_touch_on src/quest/combat/combat_install.cpp 's#^  switches\.touch = g_config\.bvhTouch\.on;$#  switches.touch = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_bvh_touch_off src/quest/combat/combat_install.cpp 's#^  switches\.touch = g_config\.bvhTouch\.on;$#  switches.touch = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_wallfire_off src/quest/combat/combat_install.cpp 's#^  return wallfire::Install(g_config\.wallfire\.on);$#  return wallfire::Install(false);#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_pfx_on src/quest/combat/combat_install.cpp 's#^ModuleResult PfxNormal() noexcept { return pfx::Install(g_config\.pfx\.on); }$#ModuleResult PfxNormal() noexcept { return pfx::Install(true); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_pfx_off src/quest/combat/combat_install.cpp 's#^ModuleResult PfxNormal() noexcept { return pfx::Install(g_config\.pfx\.on); }$#ModuleResult PfxNormal() noexcept { return pfx::Install(false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key

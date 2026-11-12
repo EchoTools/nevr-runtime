@@ -56,8 +56,11 @@
  * Lines (sentinel log):
  *   switch    one {"event":"combat_config_switch","module":"bvh|bvh_gate|bvh_touch","key":"combat.bvh|..","on":0|1,"source":"default|config"} per key, generated from the
  *             registration table by the configuration step (combat_install.h); the module writes none
- *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,"msg":".."}
+ *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,
+ *             "bvh_gate":0|1,"bvh_touch":0|1,"msg":".."}
  *             Info for installed and off (`reason` `off_config`), Error for a refusal (`reason` is the cause, `hook` the one that stopped it).
+ *             `gate` and `touch` are what was installed (on an installed line); `bvh_gate` and `bvh_touch`, on every line (a refusal included), are
+ *             the `combat.bvh_gate` and `combat.bvh_touch` values the step was handed.
  *   freed     {"event":"combat_bvh_tree_freed","tree":"0x..","data":"0x..","cause":"shutdown|reinitialize","in_use":<n>,"msg":".."}  Info: the CBVHTree's entry is free again
  *   tree      {"event":"combat_bvh_tree","result":"built|none|refused|skipped","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x..","level":"0x..","scope":"combat|arena|other|unknown"}
  *   hit       {"event":"combat_bvh_first_hit",...} and {"event":"combat_bvh_first_block",...}  once each: the first answered hit and blocked segment

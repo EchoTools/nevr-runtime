@@ -50,7 +50,7 @@ std::atomic<std::uintptr_t> g_lastGateReturn{0};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
-std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a test seam)
+std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a refusal names gate and touch from it; a test seam)
 
 std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_freed{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
 std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
@@ -380,8 +380,10 @@ void WarnLegacySwitches() noexcept {
 }
 
 void Refused(const char* reason, const char* hook, const char* status, int error) noexcept {
+  const int handed = g_lastSwitches.load(std::memory_order_relaxed);  // InstallAt stores the switches it was handed before any refusal
   sentinel::LogFields(sentinel::LogLevel::kError, "combat_bvh_install",
                       {{"result", "refused"}, {"reason", reason}, {"hook", hook}, {"status", status}, {"error", error},
+                       {"bvh_gate", (handed & 2) != 0 ? 1 : 0}, {"bvh_touch", (handed & 4) != 0 ? 1 : 0},
                        {"msg", "the static BVH is not installed: nothing was changed, so no cast is answered from the level and the game keeps its stub"}});
 }
 
@@ -406,12 +408,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   if (!switches.bvh) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},
+                         {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
                          {"msg", "combat.bvh is false: the game keeps its stubbed static BVH and no cast is answered from the level"}});
     return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_install",
-                        {{"result", "refused"}, {"reason", "already_ran"}, {"msg", "a second step installs nothing"}});
+                        {{"result", "refused"}, {"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
+                         {"msg", "a second step installs nothing"}});
     return {false, "already_ran"};
   }
   // The query hooks act only while the combat level answer says a combat map or the combat lobby is loaded: when that answer cannot change (the tick
@@ -494,6 +498,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"hooks", hooks}, {"gate", switches.gate ? 1 : 0}, {"touch", touchOn ? 1 : 0},
                        {"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},
+                       {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
                        {"msg", "CBVHTree answers from the game's own static BVH on a combat map or in the combat lobby; every other level, an Echo Arena "
                                "level included, keeps the game's own answers"}});
   return {true, "installed"};

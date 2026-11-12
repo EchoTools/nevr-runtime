@@ -101,7 +101,9 @@ Install (`InstallAt`): the legacy switch files are warned about; the three switc
 (`combat_bvh_install` `off_config`) and nothing is touched. Otherwise **all or none**: the gate goes in first (until its hook is in, no cast is marked, so a tree
 installed a moment later answers none), then Initialize, Shutdown, Intersect, Occluded; the first the manager refuses (a slot that does not hold the pinned
 function, a different libr15, a slot outside the writable segments) removes the ones already hooked and is one Error line that names the hook and the
-manager's status. Touch goes in last, and its refusal is an Error line but not fatal. One `combat_bvh_install` line states the result and the hook count.
+manager's status. Touch goes in last, and its refusal is an Error line but not fatal. One `combat_bvh_install` line states the result and the hook count,
+and every `combat_bvh_install` line, a refusal and the off line included, names the `combat.bvh_gate` and `combat.bvh_touch` values the step was handed
+(`bvh_gate`, `bvh_touch`, 0 or 1).
 The scope's refresh rides the combat tick: with no room in the tick table the module refuses (`tick_table_full`) rather than install and never answer.
 
 Switches (config.yaml, `combat:`): `bvh` (default true, as upstream, afk_bvh.cpp:121 "ON BY DEFAULT", `:365-367` off only with `debug.echoquestcombat.bvh=0`),

@@ -1340,6 +1340,36 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 
 }  // namespace
 
+// Every combat_bvh_install line names the gate and touch switches the step was handed (#2382), on every path: the gate handed off and the touch hook
+// on, so a line that drops either, or names one for the other, shows.
+void EveryInstallLineNamesTheSwitchesItWasHanded() {
+  const std::string named = "\"bvh_gate\":0,\"bvh_touch\":1";
+  {  // installed, then a second step refused already_ran
+    Begin();
+    Build();
+    QCHECK(Installed(Gateless()));
+    QCHECK(Count(Event("combat_bvh_install") + ",\"result\":\"installed\"") == 1 && Count(named) == 1);
+    QCHECK(std::strcmp(bvh::Install(Gateless()).status, "already_ran") == 0);
+    QCHECK(Count("\"reason\":\"already_ran\"," + named) == 1);
+    End();
+  }
+  {  // off by combat.bvh: the two others it was handed are named too
+    Begin();
+    Build();
+    bvh::Switches off = Gateless();
+    off.bvh = false;
+    QCHECK(bvh::Install(off).off);
+    QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"") == 1 && Count(named) == 1);
+    End();
+  }
+  {  // refused: no libr15
+    Begin();
+    QCHECK(std::strcmp(bvh::Install(Gateless()).status, "module_not_loaded") == 0);
+    QCHECK(Count("\"reason\":\"module_not_loaded\"") == 1 && Count(named) == 1);
+    End();
+  }
+}
+
 int main() {
   QCHECK(!bvh::InCombatOrLobby());  // before anything: no combat map is known, so the hooks would call the game's functions
   char tmpl[] = "/tmp/combat-bvh-XXXXXX";
@@ -1369,6 +1399,7 @@ int main() {
   ASlotThatDoesNotHoldItsPinnedFunctionRefusesAllOfIt();
   ARefusedStepTouchesNothingAndSaysWhy();
   TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved();
+  EveryInstallLineNamesTheSwitchesItWasHanded();
   rmdir(g_dir.c_str());
   if (quest_test::Failures() == 0) std::printf("bvh_test: all checks pass\n");
   return quest_test::Failures() == 0 ? 0 : 1;

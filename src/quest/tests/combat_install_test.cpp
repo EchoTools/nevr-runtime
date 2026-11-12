@@ -1882,6 +1882,27 @@ void TheDecalsRowHandsTheModuleItsFlipKeys() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// bvh refuses on the host (the combat level answer cannot change: no tick) before it reads its gate or touch switch, and its refusal names the two
+// values the row handed it (#2382): the gate on and the touch hook off, then the other way round, each set by the file.
+void TheBvhRowHandsTheModuleItsGateAndTouchKeys() {
+  for (const bool gate : {true, false}) {
+    nevr_quest::combat::bvh::ResetForTest();
+    nevr_quest::combat::wallfire::ResetForTest();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.bvhGate = {gate, nevr_quest::Source::kFile};
+    cfg.bvhTouch = {!gate, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    const std::vector<Line> install = Lines("combat_bvh_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"scope_not_live\"") &&
+           Has(install[0].text, gate ? "\"bvh_gate\":1,\"bvh_touch\":0" : "\"bvh_gate\":0,\"bvh_touch\":1"));
+    QCHECK(NoLineIsCut());
+    Done();
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1928,6 +1949,7 @@ int main() {
   TheHeapsRowHandsTheModuleItsMemsysKey();
   TheImpactsndRowHandsTheModuleItsWriteKey();
   TheDecalsRowHandsTheModuleItsFlipKeys();
+  TheBvhRowHandsTheModuleItsGateAndTouchKeys();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
