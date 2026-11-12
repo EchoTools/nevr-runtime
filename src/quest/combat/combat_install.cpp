@@ -73,7 +73,8 @@ ModuleResult RefreshRateNormal() noexcept {
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
                          g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
-                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on || g_config.weaponArm.on;
+                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on || g_config.weaponArm.on ||
+                         g_config.dronekill.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -218,6 +219,7 @@ constexpr std::array kModules{
     Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
     // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    // dronekill reads the combat level answer (#2382), so it comes after the `scope` row, and its switch is one of ScopeNormal()'s readers.
     Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill, &dronekill::NoteEnd},
     // dronekill_explosion (#1737): a switch of dronekill's with no step of its own (as impactsnd_write), read by DronekillNormal.
     Module{"dronekill_explosion", nullptr, nullptr, "combat.dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion},

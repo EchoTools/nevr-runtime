@@ -281,21 +281,20 @@ nevr_ht_rerun(ecfx_test_missing ecfx_test GROUP combat ARGS missing $<TARGET_FIL
 # dronekill (#2187, docs/adr/0046): the real handlers through the four CallbackThunks, installed by the real GotHook into four JUMP_SLOTs of a libr15
 # image built in memory, against a fake game laid out as the module reads it. The group, touch, gun and chase rules, the kill feed, all-or-none
 # installs, the per-thread state, and the scope: on an Echo Arena level, a lobby or no level every hook only calls the game's function. The EC
-# client is the stand-in ec_stub.cpp. got_pinned_test resolves the four relocations in the real libr15.
+# client is the stand-in ec_stub.cpp. got_pinned_test resolves the four relocations in the real libr15. The scope is the real combat level answer
+# (combat_scope.cpp, #2382): each test frame runs its refresh before the module's tick, and a scope that cannot change refuses the step.
 nevr_ht_test(dronekill_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/dronekill_test.cpp src/quest/combat/dronekill.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/tests/ec_stub.cpp)
+  SRC src/quest/tests/dronekill_test.cpp src/quest/combat/dronekill.cpp ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # dronemuzzle (#2187): the two entries (on the host, the C++ stand-ins the module builds there) through the real GotHook into two JUMP_SLOTs of a
 # libr15 image built in memory, called from FireBulletLocal's call site and from another; the continuations' rules, the frame tick, both orders
 # against another handler on the slot (#2219), the refusals. The arm64 entries are check/dronemuzzle.sh's (disassembly, ldar, qemu).
 nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp src/quest/combat/combat_level.cpp
-      src/quest/combat/combat_tick.cpp src/quest/tests/ec_stub.cpp)
+  SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # The bullet-velocity guard (#1737 row 031): the rule, and the real handler through the real thunk installed by the real GotHook into FireBullet's
 # JUMP_SLOT of a libr15 image built in memory, alone and below dronemuzzle's entry (and refused above it); the refusals, the switch, the lines.
 nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/bullet_velocity_guard_test.cpp src/quest/combat/bullet_velocity_guard.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp
-      src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp src/quest/tests/ec_stub.cpp)
+      ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # The sound-symbol guard (#1737): the rule, and the real handler through the real caller-aware thunk installed by the real GotHook into Play3DSound's
 # JUMP_SLOT of a libr15 image built in memory, called from three sites (two stand in for PlaySound's and the bullet site's); the combat level answer it
 # reads, the arena path, the refusals over every pinned word and record, the switch, the lines and the arena-path cost.

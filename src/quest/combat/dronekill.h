@@ -43,12 +43,14 @@
  * file to warn about; the switch is `combat.dronekill`, default true: the reference build ships `dronekill2.on` (all five words) and the q15t plugin built it on (`Q15T_DRONEKILL`).
  *
  * Arena (same APK). Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module
- * acts only while a combat map is loaded (combat_level.h `Classify`, asked by the module's own tick every kScopeFrames frames and kept in one
- * atomic, InCombatScope; the scope ends after kLeaveAsks no-level answers in a row, so a failed read does not end it). Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
+ * acts only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h `InCombatMap` on one
+ * `LastLook()` record, asked by the module's own tick every kScopeFrames frames and kept in one atomic, InCombatScope; the scope ends after kLeaveAsks
+ * no-combat-map answers in a row, so a failed read does not end it, and a stale answer is no combat map). The module is a reader of the scope row:
+ * `combat.dronekill` is in combat_install.cpp `ScopeNormal()`'s list, and the step refuses (`scope_not_live`) when the answer cannot change.
+ * Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
  * AttackTarget after its call, Actor after its call when no drone Enter is in flight; OnKilled drops the 'K'; the tick clears the tables when the
  * scope ends. An arena level writes only the one `combat_dronekill_scope` line per change of scope; the process writes the final
  * `combat_dronekill_stats` record at its end whenever the module is installed, with zero counts if no combat map was seen.
- * The scope asks `combat_level` directly; moving it to `combat/combat_scope.h`'s `InCombatMap` is tracked in #2382. `InCombatScope()` is the one place that changes.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
  *
@@ -132,8 +134,9 @@ struct Result {
   bool needsTick = false;     // kill / lockon / chase are on: the tick has due work to run
 };
 
-// The step (combat_install.cpp): `on` is `combat.dronekill`. Off: one line, nothing installed. On: the loaded libr15 (its build ID), the six
-// functions, the tick (the scope), the four hooks, the kill feed. Fixed status tokens: "installed", "off", "already_ran", "module_not_loaded",
+// The step (combat_install.cpp): `on` is `combat.dronekill`. Off: one line, nothing installed. On: refused (`scope_not_live`) when the combat level
+// answer cannot change (combat_scope.h `Live`), else the loaded libr15 (its build ID), the six functions, the tick (the scope), the four hooks, the
+// kill feed. Fixed status tokens: "installed", "off", "already_ran", "scope_not_live", "module_not_loaded",
 // "no_build_id", "build_id_mismatch", "engine_export_missing", "tick_table_full", "no_find", "slot_not_pinned_function", "no_thread_key",
 // "hook_failed".
 ModuleResult Install(bool on, const Words& words = Words{}) noexcept;
@@ -143,11 +146,13 @@ ModuleResult Install(bool on, const Words& words = Words{}) noexcept;
 // FireBulletLocal is hooked when lockon or shot is on, AttackTarget when chase is on. One line per hook and one summary line.
 Result InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Words& words, const Fns& fns) noexcept;
 
-// The game's frame tick (combat_tick.h): every kScopeFrames frames it asks combat_level whether a combat map is loaded (the scope); in scope it
+// The game's frame tick (combat_tick.h): every kScopeFrames frames it asks the combat level answer (combat_scope.h) whether a combat map is loaded
+// (the scope); in scope it
 // runs the due work (disables after a 'K', the touch interact on and off, the chase velocities); one atomic load while nothing is due.
 inline constexpr std::uint32_t kScopeFrames = 32;
-// Leaving the scope takes this many no-level answers in a row (one ask every kScopeFrames frames): the level read cannot tell an unreadable game from
-// one with no combat map, so one answer does not end the scope. Entering takes one.
+// Leaving the scope takes this many no-combat-map answers in a row (one ask every kScopeFrames frames, 267 ms or more at the headset's 72 Hz to 120 Hz,
+// so each ask reads a later look than the last: the answer looks every 250 ms): a look cannot tell an unreadable game from one with no combat map, so one
+// answer does not end the scope. Entering takes one.
 inline constexpr std::uint32_t kLeaveAsks = 3;
 void Tick(std::uintptr_t game) noexcept;
 

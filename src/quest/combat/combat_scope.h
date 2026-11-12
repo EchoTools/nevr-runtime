@@ -103,6 +103,9 @@ bool SeenEchoArena(const Look& look) noexcept;
 
 // True while a combat map is loaded and no Echo Arena level is (and the answer is fresh).
 inline bool InCombatMap() noexcept { return SeenCombatMap() && LookIsFresh(); }
+// The same rule on a record already taken (LastLook), so a caller that also names the record's level (dronekill's change line) decides and explains from
+// one look, not from two reads that can see two looks.
+inline bool InCombatMap(const Look& look) noexcept { return look.fresh && (look.bits & (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }
 
 // True while a combat map or the combat lobby is loaded and no Echo Arena level is (and the answer is fresh).
 inline bool InCombatOrLobby() noexcept { return SeenCombatOrLobby() && LookIsFresh(); }

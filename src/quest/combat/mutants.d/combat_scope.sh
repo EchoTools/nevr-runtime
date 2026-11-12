@@ -93,3 +93,7 @@ runm lr_bits_after_close        $C "/^  detail::g_bits.store(bits, std::memory_o
 runm lr_stamp_after_close       $C "/^  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);\$/d; s/^  CloseLook(seq);\$/&\n  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);/"
 runm lr_closed_seam_not_called  $C "s/^  if (closed != nullptr) closed();\$/  (void)closed;/"
 runm sea_record_ignores_stale   $C "s/^bool SeenEchoArena(const Look\\& look) noexcept { return !look.fresh || /bool SeenEchoArena(const Look\\& look) noexcept { return /"
+# InCombatMap on a record (dronekill's change line): the freshness, the arena and the lobby rules, each dropped once
+runm icm_record_ignores_stale   $H 's/^inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& /inline bool InCombatMap(const Look\& look) noexcept { return /'
+runm icm_record_ignores_arena   $H 's/^\(inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& \)(look.bits \& (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }/\1(look.bits \& kBitCombatMap) != 0; }/'
+runm icm_record_lobby           $H 's/^\(inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& \)(look.bits \& (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }/\1(look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0; }/'

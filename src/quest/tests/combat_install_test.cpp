@@ -529,7 +529,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed texture_quest2_step_down=off meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
-               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded "
+               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=scope_not_live "
                "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=scope_not_live weapon_arm=scope_not_live gates=module_not_loaded bvh=scope_not_live "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=scope_not_live music=module_not_loaded\""));
@@ -871,6 +871,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.aibots = {false, nevr_quest::Source::kFile};           // practice AI bots read the scope too (#2382)
   off.bvh = {false, nevr_quest::Source::kFile};              // the static BVH reads the scope too (#2382)
   off.weaponArm = {false, nevr_quest::Source::kFile};        // the gun hand default reads the scope too (#2382)
+  off.dronekill = {false, nevr_quest::Source::kFile};        // dronekill reads the scope too (#2382)
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -884,7 +885,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
-  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (eleven readers are on by default)
+  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (twelve readers are on by default)
   gammaOnly.hudmeter = {false, nevr_quest::Source::kFile};  // the gamma alone is a reader
   gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
   gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
@@ -1151,7 +1152,7 @@ void TheBulletVelocityGuardSwitchedOffByItsKeyIsCountedOff() {
   const combat::Outcome o = combat::InstallNormal();
   QCHECK(o.modules == 39 && o.off == 4 && o.installed == 3 && o.failed == 32);  // decals is off too: no decals.bin on the host
   const std::vector<Line> lines = Lines("combat_install");
-  if (o.off != 3 || o.installed != 3 || o.failed != 32)
+  if (o.modules != 39 || o.off != 4 || o.installed != 3 || o.failed != 32)
     std::fprintf(stderr, "bullet_velocity_guard off by its key: installed=%zu failed=%zu off=%zu %s\n", o.installed, o.failed, o.off,
                  lines.empty() ? "" : ResultsOf(lines[0]).c_str());
   QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), " bullet_velocity_guard=off sound_symbol_guard=off dronemuzzle="));
@@ -1193,7 +1194,7 @@ void TheEcAndDroneModulesSwitchedOffByTheirKeyAreCountedOff() {
     combat::SetConfig(one);
     const combat::Outcome o = combat::InstallNormal();
     QCHECK(o.modules == 39 && o.off == 4 && o.installed == 3 && o.failed == 32);  // decals is off too: no decals.bin on the host
-    if (o.modules != 38 || o.off != 3 || o.installed != 3 || o.failed != 32)
+    if (o.modules != 39 || o.off != 4 || o.installed != 3 || o.failed != 32)
       std::fprintf(stderr, "%s off by its key: installed=%zu failed=%zu off=%zu\n", c.name, o.installed, o.failed, o.off);
     const std::vector<Line> lines = Lines("combat_install");
     QCHECK(lines.size() == 1U && Has(ResultsOf(lines[0]), std::string(" ") + c.name + "=off ") && Has(lines[0].text, "\"off\":4"));
@@ -1539,7 +1540,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true},      // the scanner-sphere watchdog (#2382) reads the scope too
                         {"aibots", &nevr_quest::CombatConfig::aibots, true},          // practice AI bots (#2382) read the scope too
                         {"bvh", &nevr_quest::CombatConfig::bvh, true},                // the static BVH (#2382) reads the scope too
-                        {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true}};  // the gun hand default (#2382) reads the scope too
+                        {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true},   // the gun hand default (#2382) reads the scope too
+                        {"dronekill", &nevr_quest::CombatConfig::dronekill, true}};   // dronekill (#2382) reads the scope too
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1556,6 +1558,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.aibots = {false, nevr_quest::Source::kFile};
     cfg.bvh = {false, nevr_quest::Source::kFile};
     cfg.weaponArm = {false, nevr_quest::Source::kFile};
+    cfg.dronekill = {false, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();

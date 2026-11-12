@@ -66,20 +66,21 @@ Warning, an Error when one cannot be removed). Last, the kill feed: `ec::OnDrone
   system's game space is inside the invoke-immediate window (`[[system+0x80]+0x368] != 0`), and the drone is locally controlled
   (`IsLocallyControlled`; fails closed: any unreadable or unknown thing is "not local" and writes nothing).
 - **Tick**: `dronekill::Tick(game)` runs the reference build's net tick body (its EC module called it at the end of each recvfrom on the game's socket)
-  once per frame on the game thread (combat_tick.h), and asks combat_level for the scope every 32 frames. A disable/enable that would have to be queued (invoke-immediate word 0) is **not** done by the
+  once per frame on the game thread (combat_tick.h), and asks the combat level answer (combat_scope.h) for the scope every 32 frames. A disable/enable that would have to be queued (invoke-immediate word 0) is **not** done by the
   module (the queue push races its drain): it waits (due bits expire after 2 s).
 
 ## Arena (same APK)
 
 Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module acts only while a
-combat map is loaded: `dronekill::Tick` asks `combat_level::Classify(game, lobby=false)` every 32 frames (`kScopeFrames`) and keeps the answer in
+combat map is loaded and no Echo Arena level is: `dronekill::Tick` asks the combat level answer every 32 frames (`kScopeFrames`), one `combat_scope.h`
+`LastLook()` record judged by `InCombatMap(look)` (a combat map, no Echo Arena level, fresh), whose level the change line names, and keeps the answer in
 one atomic, read by `InCombatScope()` (false before the first tick: fail closed). The combat lobby is not the scope (no drone is in it as far as
-this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). Moving the scope to `combat_scope.h`'s
-`InCombatMap` (on main) is tracked in #2382; `InCombatScope` is the one place that changes.
+this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). The module is one of the scope row's readers (`combat.dronekill` is in
+`ScopeNormal()` in `combat_install.cpp`), and its step refuses with `scope_not_live` when the answer cannot change.
 
 Out of scope: Enter and FireBulletLocal call the game's function and return before anything else (no shot frame, so dronemuzzle passes too);
 AttackTarget returns after its call; Actor returns after its call when no drone Enter is in flight on any thread (always, out of scope); a
-'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-level answers in a row, because `combat_level` cannot tell an unreadable game from one with no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
+'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-combat-map answers in a row, because a look cannot tell an unreadable game from one with no combat map, and the answer's freshness rule bounds only an answer the tick stopped refreshing; a stale answer counts as no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
 combat map is acted on later. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
 measurement a headset run gives). `dronekill_test` (`TestArenaLevelsAreLeftAlone`, `TestScopeEndsAtTheLevelChange`) drives a drone's Enter,
 an Actor, a shot, an attack, a 'K' and 65 ticks on `mpl_arena_a`, `mpl_lobby_b2`, `mpl_lobby_b_combat` and no level, and checks that each hook
@@ -96,7 +97,7 @@ on top of the game's own function; the thunk entry is `CallbackThunk::Entry`, sh
 | `SComponentNodeUtils::Actor` | 35 + the counter | 24: a frame, the game's call, one relaxed `ldr` of the in-flight count, `cbz`, the return | 59 + the counter | once per node that looks an actor up (Enter's among them) |
 | `CR15NetAutoTargetCS::FireBulletLocal` | 37 + the counter | 8: as Enter's, a tail call | 45 + the counter | once per auto-target shot (drones; none in arena as far as read) |
 | `CR15NetAutoTargetCS::AttackTarget` | 23 + the counter | 15: a frame, the game's call, `ldrb`, `tbnz`, the return | 38 + the counter | once per frame per auto-target with a target |
-| the frame tick (`combat_tick.h`) | | 23 instructions + the counter's `__aarch64_ldadd8_relax` on 31 frames of 32; on the 32nd also `RefreshScope` (combat_level `Classify`: reads by `process_vm_readv`) | | once per frame |
+| the frame tick (`combat_tick.h`) | | 23 instructions + the counter's `__aarch64_ldadd8_relax` on 31 frames of 32; on the 32nd also `RefreshScope` (one `LastLook()` of the combat level answer: a sequence-count read and a clock read, no read of the game; the level scan is the scope row's, four times a second while a reader is on) | | once per frame |
 
 No system call, lock, allocation or log line on any hook path out of scope. Not measured on a headset: how often arena's scripts run Enter and
 Actor (the `combat_dronekill_scope` line carries the counts of each scope when it ends).
@@ -179,7 +180,8 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
 - `combat_dronekill_install`: `"result":"installed"` with the five words, `explosion` (`combat.dronekill_explosion`), `hold` (`combat.dronekill_hold`), `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
   `component_lookups`; `"result":"off"` (`off_config`); `"result":"refused"` with `reason` (the status token), `why` and the consequence (Error).
 - `combat_dronekill_link`: the kill feed is registered with ec. `combat_dronekill_tick_first`: the frame tick runs.
-- `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change.
+- `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change. `level` is
+  the level of the look that decided it (`combat_scope.h` `Look::level`: the Echo Arena level, else the combat map, else the combat lobby; 0 none).
 - `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"explosions":n,"held":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`); `explosions` and `held` are the drone explosion's (docs/quest/combat/drone_explosion.md, with its own lines).
 - `combat_dronekill_expired` `{"index":n,"group":n,"tid":n}`: Info, the drone's end: its damageable went off while its group was live. A drone that K killed and then ends writes none and is not counted. The first 16 of a run.
 - `combat_dronekill_log_cap` `{"lines":"expired","cap":16}`: Warning, once, written by the drone end past the cap; the stats record goes on counting.

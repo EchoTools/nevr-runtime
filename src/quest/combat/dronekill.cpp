@@ -14,7 +14,7 @@
 #include <ctime>
 #include <initializer_list>
 
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill_core.h"
 #include "quest/combat/line_budget.h"
@@ -1146,17 +1146,20 @@ void CallCounts(std::uint64_t (&out)[kHookCount]) noexcept {
   out[3] = AttackThunk::Calls();
 }
 
-// The no-level answers in a row while the scope is on (the tick thread only).
+// The no-combat-map answers in a row while the scope is on (the tick thread only).
 std::uint32_t g_leave_asks = 0;
 
-// The scope, asked of combat_level (a combat map, never a lobby: the drones are a combat map's). A change is one line, with each hook's calls over
+// The scope, asked of the combat level answer (combat_scope.h: a combat map and no Echo Arena level, never a lobby: the drones are a combat map's). One
+// record (LastLook) decides and names the level on the change line, so the two cannot be of two looks. A change is one line, with each hook's calls over
 // the scope that ended; leaving the scope empties the tables, so nothing is due outside a combat map.
-// Leaving waits for kLeaveAsks no-level answers in a row. combat_level cannot tell a game it could not read from a game with no combat map (an
-// unreadable table, row or game, 0 included, is no level: Scan skips it), so a single answer is no proof the map ended; and a drop with the map
-// still loaded leaves the held components on for good. Entering is immediate.
-__attribute__((noinline)) void RefreshScope(std::uintptr_t game) noexcept {
-  std::uint64_t level_id = 0;
-  const bool in = level::Classify(game, /*lobby=*/false, &level_id) == level::Kind::kCombatOrLobby;  // an unreadable game (0 included) is no level
+// Leaving waits for kLeaveAsks no-combat-map answers in a row. A look cannot tell a game it could not read from a game with no combat map (an unreadable
+// table, row or game, 0 included, is no level: combat_scope.h "Fails closed"), so a single answer is no proof the map ended; and a drop with the map still
+// loaded leaves the held components on for good. The answer's freshness rule does not replace this: it bounds a combat answer the tick stopped
+// refreshing, not a look that missed the map (a stale answer is no combat map, counted like any other). Entering is immediate.
+__attribute__((noinline)) void RefreshScope() noexcept {
+  const scope::Look look = scope::LastLook();
+  const bool in = scope::InCombatMap(look);
+  const std::uint64_t level_id = look.level;
   const bool was = g_inScope.load(std::memory_order_relaxed);
   if (in || !was) g_leave_asks = 0;
   if (in == was) return;
@@ -1388,6 +1391,9 @@ ModuleResult Install(bool on, const Words& words) noexcept {
     return {false, "off", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_installed.load(std::memory_order_acquire)) return {false, Refuse(Result{}, "already_ran", "a second step installs nothing").status};
+  // The scope is the combat level answer (combat_scope.h): when it cannot change (the tick or the scope row's refresh is not installed) the module
+  // would never act, so nothing is looked up or hooked.
+  if (!scope::Live()) return {false, Refuse(Result{}, "scope_not_live", "the combat level answer cannot change: the tick or its refresh is not installed").status};
   const sentinel::ImageLookup override = g_lookup.load(std::memory_order_acquire);
   const sentinel::ImageLookup lookup = override != nullptr ? override : &sentinel::FindLoadedImage;
   const Pins* const pinsOverride = g_pinsOverride.load(std::memory_order_acquire);
@@ -1401,7 +1407,7 @@ ModuleResult Install(bool on, const Words& words) noexcept {
     if (!lookup(pinned::kLibR15, &image)) return {false, Refuse(Result{}, "module_not_loaded", "libr15.so is not loaded").status};
     if (!ResolveFns(image.base, &fns)) return {false, Refuse(Result{}, "engine_export_missing", "a function dronekill calls is not at its pin").status};
   }
-  // The tick is the scope: without it the module could never act, so it is registered before any hook goes in.
+  // The tick asks the scope and runs the due work: without it the module could never act, so it is registered before any hook goes in.
   if (!tick::Add(&Tick)) return {false, Refuse(Result{}, "tick_table_full", "the combat tick has no room for the scope").status};
   const Result r = InstallAt(lookup, pins, words, fns);
   if (!r.ok) return {false, r.status};
@@ -1411,14 +1417,14 @@ ModuleResult Install(bool on, const Words& words) noexcept {
   return {true, r.status};
 }
 
-void Tick(std::uintptr_t game) noexcept {
+void Tick(std::uintptr_t /*game*/) noexcept {  // the game is the scope row's to read (combat_scope.h); this tick reads its answer
   if (!g_installed.load(std::memory_order_acquire)) return;
   const std::uint32_t n = g_ticks.fetch_add(1, std::memory_order_relaxed);
   if (n == 0) {
     sentinel::LogFields(LogLevel::kInfo, "combat_dronekill_tick_first",
                         {{"msg", "dronekill's frame tick runs: the scope is asked every 32 frames and due work runs in a combat map"}});
   }
-  if (n % kScopeFrames == 0) RefreshScope(game);
+  if (n % kScopeFrames == 0) RefreshScope();
   if (!g_inScope.load(std::memory_order_relaxed)) return;
   TickBody();
 }

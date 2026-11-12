@@ -499,6 +499,29 @@ void TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed() {
   End();
 }
 
+// The questions on a record already taken (InCombatMap(look)), for a caller that also names the level of the look it decided on (dronekill's change
+// line): the same rule as the live question, on one record.
+void TheRecordQuestionsAnswerAsTheLiveOnes() {
+  Begin();
+  QCHECK(!scope::InCombatMap(scope::Look{}) && !scope::InCombatMap(scope::LastLook()));  // no look yet
+  LookAt({"mpl_combat_dyson"});
+  QCHECK(scope::InCombatMap(scope::LastLook()) && scope::InCombatMap());
+  LookAt({"mpl_combat_gauss", "mpl_arena_a"});  // a transition: arena wins
+  QCHECK(!scope::InCombatMap(scope::LastLook()) && !scope::InCombatMap());
+  LookAt({"mpl_lobby_b_combat"});  // the combat lobby is not a combat map
+  QCHECK(!scope::InCombatMap(scope::LastLook()) && !scope::InCombatMap());
+  LookAt({"mpl_lobby_b_combat", "mpl_combat_fission"});
+  QCHECK(scope::InCombatMap(scope::LastLook()) && scope::InCombatMap());
+  // staleness: believed at the limit, not a millisecond after; the record keeps its classes
+  const std::int64_t looked = g_nowMs;
+  g_nowMs = looked + scope::kStaleAfterMs;
+  QCHECK(scope::InCombatMap(scope::LastLook()));
+  g_nowMs = looked + scope::kStaleAfterMs + 1;
+  const scope::Look stale = scope::LastLook();
+  QCHECK((stale.bits & scope::kBitCombatMap) != 0 && !stale.fresh && !scope::InCombatMap(stale) && !scope::InCombatMap());
+  End();
+}
+
 // A record read while a look is being written is not handed out (its fields could be of two looks): the read gives up after kLookReadTries and answers
 // "no look, not fresh", so SeenEchoArena is true. Once the write ends, the new look is read whole.
 scope::Look g_midWrite;
@@ -592,6 +615,7 @@ int main() {
   ATickThatIsNotInstalledRegistersNothing();
   AFullTickTableRefusesAndTheAnswerStaysFalse();
   TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed();
+  TheRecordQuestionsAnswerAsTheLiveOnes();
   AHalfWrittenLookIsNeverHandedOut();
   AClosedLookIsWholeTheMomentItCloses();
   if (quest_test::Failures() == 0) std::printf("combat_scope_test: all checks passed\n");
