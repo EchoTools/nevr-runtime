@@ -78,7 +78,7 @@
  * per-shot print upstream measured. Not shown: that the game loads no bank from anywhere else (the OBB's other files are the two
  * manifests, and the APK holds no .bnk), and the run-time rate at which the default reaches the site.
  *
- * Upstream: `kotorvr/echoquest-combat`, runtime/native/afkxr/afk_fx.cpp (the sound guards, around lines 5148-5264).
+ * Upstream: `kotorvr/echoquest-combat`, runtime/native/afkxr/afk_fx.cpp (the sound guards, the `fxsndguard` switch).
  *
  * PC (echovr.exe): echovr.exe CSoundCS::PlaySound is VA 0x1403f94c0, its play call is 0x14020b780, OutputError (0x14151ee70) is called at
  * 0x14020b8c1 after PostSoundEvent with no test of the symbol for 0, and whether that call faults on PC is not established.
@@ -187,6 +187,7 @@ inline constexpr pinned::Word kDropWords[] = {
     {"PostSoundEvent: cbz w0 (PostEvent returned 0)", 0x25492d0, 0x340003c0},
     {"PostSoundEvent: mov w8, #-1 (the playing id)", 0x25493cc, 0x12800008},
     {"PostSoundEvent: add x8, x8, #0x4f4 (the error type key)", 0x25493f0, 0x9113d108},
+    {"PostSoundEvent: and x8, x8, #~7 (the quad's address, aligned down to 0x31ec4f0)", 0x25493f4, 0x927df108},
     {"PostSoundEvent: ldr x2, [x8]", 0x25493f8, 0xf9400102},
     {"PostSoundEvent: cbz x0 (no debug name for the symbol)", 0x25493fc, 0xb4000340},
     {"PostSoundEvent: add x3, x3, #0x568 (the invalid-id format)", 0x2549474, 0x9115a063},
@@ -205,6 +206,31 @@ inline constexpr pinned::Quad kDropQuads[] = {
 };
 inline constexpr pinned::Pins kDropPins = {kDropWords, sizeof(kDropWords) / sizeof(kDropWords[0]), kDropQuads,
                                            sizeof(kDropQuads) / sizeof(kDropQuads[0])};
+
+// The -1 path PlaySound takes when a post returns -1 (the words 0x1706998 to 0x1706a04, and the two words before them that set x20 and x19).
+// The install does not check these: the pinned test reads them. x20 is PlaySound's x4 (`mov x20,x4`) and x19 its x3 (`mov x19,x3`).
+inline constexpr pinned::Word kMinusOneWords[] = {
+    {"PlaySound: mov x20,x4 (the second of the -1 words)", 0x1706944, 0xaa0403f4},
+    {"PlaySound: mov x19,x3 (the first of the -1 words)", 0x1706948, 0xaa0303f3},
+    {"PlaySound: cmn x19,#1", 0x1706998, 0xb100067f},
+    {"PlaySound: b.eq 0x17069d4 (x19 = -1)", 0x170699c, 0x540001c0},
+    {"PlaySound: cmn x20,#1", 0x17069a0, 0xb100069f},
+    {"PlaySound: b.eq 0x1706a00 (x20 = -1: return -1)", 0x17069a4, 0x540002e0},
+    {"PlaySound: adrp x2,0x2c4e000 (the node line)", 0x17069b4, 0x9000aa42},
+    {"PlaySound: add x2,x2,#0x2dc (0x2c4e2dc, the node line)", 0x17069bc, 0x910b7042},
+    {"PlaySound: mov x3,x19 (the node id)", 0x17069c8, 0xaa1303e3},
+    {"PlaySound: bl WriteLog (the node line)", 0x17069cc, 0x97e113e5},
+    {"PlaySound: b 0x1706a00 (after the node line)", 0x17069d0, 0x1400000c},
+    {"PlaySound: cmn x20,#1 (x19 = -1 path)", 0x17069d4, 0xb100069f},
+    {"PlaySound: b.eq 0x1706a00 (x19 = -1, x20 = -1)", 0x17069d8, 0x54000140},
+    {"PlaySound: adrp x2,0x2c4e000 (the second line)", 0x17069e8, 0x9000aa42},
+    {"PlaySound: mov x3,x0 (the symbol's string)", 0x17069ec, 0xaa0003e3},
+    {"PlaySound: add x2,x2,#0x307 (0x2c4e307, the second line)", 0x17069f0, 0x910c1c42},
+    {"PlaySound: bl WriteLog (the second line)", 0x17069fc, 0x97e113d9},
+    {"PlaySound: mov w0,#-1 (the return value)", 0x1706a00, 0x12800000},
+    {"PlaySound: mov w1,#1", 0x1706a04, 0x52800021},
+};
+inline constexpr pinned::Pins kMinusOnePins = {kMinusOneWords, sizeof(kMinusOneWords) / sizeof(kMinusOneWords[0]), nullptr, 0};
 
 // The functions the drop paragraphs name, by symbol, with the JUMP_SLOT each is called through (the PLT stubs the words call).
 inline constexpr const char* kCreateEmitterSymbol = "_ZN10NRadEngine12CSoundPlayer13CreateEmitterEPKcjj";

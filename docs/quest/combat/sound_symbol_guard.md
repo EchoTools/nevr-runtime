@@ -8,8 +8,7 @@ combat APKs and in no other.
 
 ## Origin
 
-The fxsndguard switch of kotorvr's echoquest-combat: runtime/native/afkxr/afk_fx.cpp, its sound guards (the lines are named in
-`sound_symbol_guard_targets.h`), read as text. What is taken is the behaviour (a sound post whose symbol cannot play is not made). The symbol list,
+The fxsndguard switch of kotorvr's echoquest-combat: runtime/native/afkxr/afk_fx.cpp, its sound guards (`sound_symbol_guard_targets.h` names the switch, not the lines), read as text. What is taken is the behaviour (a sound post whose symbol cannot play is not made). The symbol list,
 the call-site gate, the drop value and the scope are this tree's, from the measurements in `sound_symbol_guard_targets.h`'s header comment.
 Upstream's third value, `0x0f986c58c7b3d4fb`, is the error record's type key that PostSoundEvent passes to CErrMsg::CreateAndAddError, not a
 sound symbol, so neither it nor its low word `0xc7b3d4fb` is listed.
@@ -56,13 +55,10 @@ The gate. A post is dropped only when all three hold:
 A dropped post returns 0 without calling Play3DSound: Play3DSound's own answer when audio is disabled (`mov w0, wzr` at 0x134b488). PlaySound
 branches on the answer with `cmn w0, #1; b.ne` at 0x1706990: any answer but -1 is taken to PlaySound's epilogue (0x1706a04), so a 0 never
 enters the -1 path. That PlaySound then prints nothing and treats 0 as a start is inferred, because PlaySound is not reconstructed
-(reconstruction pending). The same inference covers what a 0 does to PlaySound's returned handle: its playing id is then 0, Wwise's invalid id,
+(not established: the function is not in the proven reconstruction tree). The same inference covers what a 0 does to PlaySound's returned handle: its playing id is then 0, Wwise's invalid id,
 where a failed post would give -1 (`bfi x8, x0, #32` at 0x1706a14), the same value the game already returns when audio is disabled.
 
-The -1 path, which a returned -1 would enter, is read from the words 0x1706998 to 0x1706a00 and has three outcomes, set by the two words PlaySound
-keeps in x19 and x20 (`mov x20, x4` at 0x1706944, `mov x19, x3` at 0x1706948): with x20 = -1 it calls nothing and returns -1; with x20 not -1
-and x19 = -1 it loads "Sound failed to play from %s" (.rodata 0x2c4e307); with neither word -1 it loads "Sound failed to play from node %llx
-in %s." (.rodata 0x2c4e2dc) and calls WriteLog. Which words a dropped post's caller passes is not established (the callers are not
+The -1 path, which a returned -1 would enter, is read from the words 0x1706944 and 0x1706948 (`mov x20, x4`, `mov x19, x3`: the two words PlaySound keeps in x20 and x19) and the words 0x1706998 to 0x1706a04 (`kMinusOneWords` in `sound_symbol_guard_targets.h`). It has three outcomes. With x20 = -1 nothing is logged and it returns -1 (both entries branch to 0x1706a00, at 0x17069a4 and 0x17069d8). With x19 not -1 and x20 not -1 it loads "Sound failed to play from node %llx in %s." (.rodata 0x2c4e2dc) and calls WriteLog (0x17069cc). With x19 = -1 and x20 not -1 it loads "Sound failed to play from %s" (.rodata 0x2c4e307) and calls WriteLog (0x17069fc). Which words a dropped post's caller passes is not established (the callers are not
 reconstructed), so whether a returned -1 prints a line for every drop is not established. The bullet site ignores the answer. Every post that
 is not dropped reaches Play3DSound with the same four arguments (the whole x1 register included), and its answer is returned.
 

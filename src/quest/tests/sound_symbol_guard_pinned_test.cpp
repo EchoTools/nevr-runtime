@@ -209,6 +209,7 @@ int main(int argc, char** argv) {
   // What a dropped post leaves undone and where the invalid-id record is made and written: the words and .rodata quads, and each function
   // those words call through a PLT stub, by its JUMP_SLOT and its definition.
   CheckWords(r15, sg::kDropPins, "sound drop");
+  CheckWords(r15, sg::kMinusOnePins, "sound -1 path");
   for (const sg::Called& called : sg::kCalled) {
     CheckSlotPin(r15, called.symbol, RelocKind::kJumpSlot, called.slot, called.symbol);
     CheckDefinedAt(r15, called.symbol, called.fn);

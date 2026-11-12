@@ -7,8 +7,7 @@ install table (`src/quest/combat/combat_install.h`), immediately above `dronemuz
 
 ## Origin
 
-The fireguard switch of kotorvr's echoquest-combat: runtime/native/afkxr/afk_fx.cpp, its `HookFire` hook and the "guards" block (the lines are named
-in `bullet_velocity_guard_targets.h`), read as text. What is taken is the behaviour (a FireBullet call with a near-zero or non-finite velocity is
+The fireguard switch of kotorvr's echoquest-combat: runtime/native/afkxr/afk_fx.cpp, its `HookFire` hook and the "guards" block (the switch's hook and block are named in `bullet_velocity_guard_targets.h`, not by line), read as text. What is taken is the behaviour (a FireBullet call with a near-zero or non-finite velocity is
 not made). The mechanism, the threshold and the lines are this tree's: a `CallbackThunk` through the hook manager, and the squared-length rule
 dronemuzzle already applied to drone shots.
 
