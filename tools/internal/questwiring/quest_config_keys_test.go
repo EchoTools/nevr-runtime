@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// #2382 (G7 review of 1630dda61, B1): docs/reference/example-config.yaml says "The Quest reads exactly these keys: ...", and that
-// sentence drifted from src/quest/sentinel/quest_config.cpp (assets.* and network.invite_codes were missing). Nothing pinned it. This
-// test derives the keys the Quest reader looks up from its source, derives the keys the sentence claims, and requires equality. The
-// sentence uses shorthand ("the three combat.refresh_rate keys", "the combat.gate_* keys", "the six crash-guard keys (fxtrail, ...)"),
+// docs/reference/example-config.yaml says "The Quest reads exactly these keys: ...". This test requires that sentence to name exactly
+// the keys src/quest/sentinel/quest_config.cpp looks up: it derives the reader's keys from its source, derives the keys the sentence
+// names, and requires equality. The sentence uses shorthand ("the three combat.refresh_rate keys", "the combat.gate_* keys", "the six crash-guard keys (fxtrail, ...)"),
 // so the expansion below understands exactly those forms and fails on any other one.
 
 const (
@@ -185,9 +184,9 @@ func TestTheExampleConfigSentenceListsExactlyTheKeysTheQuestReads(t *testing.T) 
 	}
 }
 
-// #2382: the PC's hand list of the keys the Quest reads (test_nevr_config.cpp, KnownPathsCoverEveryKeyTheQuestReads) must hold
-// every key quest_config.cpp reads. That list was missing network.invite_codes, so the two builds' key lists disagreed. Equality
-// is not required here: the C++ list may name a key the reader does not read (the schema check covers that side).
+// The PC's hand list of the keys the Quest reads (test_nevr_config.cpp, KnownPathsCoverEveryKeyTheQuestReads) must hold every key
+// quest_config.cpp looks up, so the PC test and the Quest reader agree on the key set. Equality is not required here: the C++ list
+// may name a key the reader does not read (the schema check covers that side).
 func TestTheCppKnownPathsListHoldsEveryKeyTheQuestReads(t *testing.T) {
 	t.Parallel()
 	reader := readerKeys(t)
