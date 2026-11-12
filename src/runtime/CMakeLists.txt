@@ -1787,6 +1787,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_menu_press PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_press DISCOVERY_MODE PRE_TEST)
 
+    # #1857: the press hook's decision, a press on the PLUGINS card (patch/plugins_card.h): header only, pure.
+    add_executable(test_plugins_card tests/test_plugins_card.cpp)
+    set_source_files_properties(tests/test_plugins_card.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugins_card PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugins_card PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_plugins_card DISCOVERY_MODE PRE_TEST)
+
     # #896, #906, docs/adr/0017: the UI text writer (patch/ui_text.h): header only, pure.
     add_executable(test_ui_text tests/test_ui_text.cpp)
     set_source_files_properties(tests/test_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

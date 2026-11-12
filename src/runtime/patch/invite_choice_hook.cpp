@@ -16,6 +16,7 @@
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/menu_press.h"
+#include "runtime/patch/plugins_card.h"
 
 // CncaGameSpace::SendComponentEvent (echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
 // R8D = flags. The game's own code reads the event at once (word 0 on entry, word 2 as the sender), so the observer
@@ -56,6 +57,11 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
   const nevr_menu_press::Sender sender =
       nevr_menu_press::ReadPress(reader, static_cast<std::uintptr_t>(space), event, &press);
   Log(EchoVR::LogLevel::Debug, "%s", nevr_menu_press::PressLine(press, sender, seen).c_str());
+  // #1857: a click on the PLUGINS card. One Info line per press: a press is a click by the player, about one per second at
+  // most, and it is the first line an operator or a tester looks for.
+  if (nevr_plugins_card::IsPluginsPress(press)) {
+    Log(EchoVR::LogLevel::Info, "%s", nevr_plugins_card::PluginsPressLine(press, seen).c_str());
+  }
 
   nevr_invite_choices::Event e;
   const nevr_invite_choices::Read read =

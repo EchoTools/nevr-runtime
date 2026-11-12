@@ -1,5 +1,5 @@
 """#1857: the press log is emitted from the wizard observer's path (one detour on SendComponentEvent, never a second), at
-Debug, and its tag is in the logging standard. The line and the memory walk are tested by
+Debug, the press on the PLUGINS card is decided there and written once at Info, and the tag is in the logging standard. The line and the memory walk are tested by
 src/runtime/tests/test_menu_press.cpp; these are source sensors for what that cannot see: the call in the hook, its level,
 and the tag row. Each check takes the text it reads, so a test can hand it a broken copy and see it fail."""
 from __future__ import annotations
@@ -28,6 +28,14 @@ def hook_problems(hook: str) -> list[str]:
         problems.append(f"expected one nevr_menu_press::ReadPress call, found {code.count('nevr_menu_press::ReadPress(')}")
     if not re.search(r'Log\(\s*EchoVR::LogLevel::Debug,\s*"%s",\s*nevr_menu_press::PressLine\(', code):
         problems.append("the press line is not logged at Debug through nevr_menu_press::PressLine")
+    if '#include "runtime/patch/plugins_card.h"' not in code:
+        problems.append("the hook does not include patch/plugins_card.h")
+    if code.count("nevr_plugins_card::IsPluginsPress(") != 1:
+        problems.append(
+            f"expected one nevr_plugins_card::IsPluginsPress call, found {code.count('nevr_plugins_card::IsPluginsPress(')}"
+        )
+    if not re.search(r'Log\(\s*EchoVR::LogLevel::Info,\s*"%s",\s*nevr_plugins_card::PluginsPressLine\(', code):
+        problems.append("the plugins press line is not logged at Info through nevr_plugins_card::PluginsPressLine")
     if code.count("PatchDetour(") != 2:
         problems.append("the hook no longer has exactly the two PatchDetour call sites of its one detour (Install and EnsureHook)")
     return problems
@@ -51,6 +59,17 @@ class MenuPressWiringTest(unittest.TestCase):
             'Log(EchoVR::LogLevel::Debug, "%s", nevr_menu_press::PressLine(',
             'Log(EchoVR::LogLevel::Info, "%s", nevr_menu_press::PressLine(',
         )
+        self.assertNotEqual(hook_problems(text), [])
+
+    def test_hook_check_fails_when_the_press_line_is_logged_at_debug(self):
+        text = HOOK.read_text().replace(
+            'Log(EchoVR::LogLevel::Info, "%s", nevr_plugins_card::PluginsPressLine(',
+            'Log(EchoVR::LogLevel::Debug, "%s", nevr_plugins_card::PluginsPressLine(',
+        )
+        self.assertNotEqual(hook_problems(text), [])
+
+    def test_hook_check_fails_without_the_decision(self):
+        text = HOOK.read_text().replace("nevr_plugins_card::IsPluginsPress(", "nevr_plugins_card::IsNothing(")
         self.assertNotEqual(hook_problems(text), [])
 
     def test_hook_check_fails_without_the_read(self):
