@@ -328,17 +328,6 @@ into the runtime.
 Requires CMake 4.0+, Ninja, and MinGW (`x86_64-w64-mingw32-g++`) to
 cross-compile from Linux. Dependencies come from the vcpkg manifest.
 
-Prerequisites for a fresh checkout (Linux or WSL):
-
-1. **vcpkg and `VCPKG_ROOT`.** Point `VCPKG_ROOT` at a vcpkg checkout (https://github.com/microsoft/vcpkg).
-2. **`buf`** on `PATH`. `tools/proto_stamp.py` needs it to generate `gen/` (`just proto`).
-3. **Submodules.** Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in the checkout.
-   Without them `extern/` is empty and the build stops on `extern/minhook`.
-4. **`config/public-defaults.env`.** The build embeds four public client defaults from this file. CI fills it from
-   Actions variables, and a local build needs the file present or CMake stops with `missing .../config/public-defaults.env`.
-5. **Line endings.** Clone inside the WSL filesystem, or with `core.autocrlf input`. A checkout on a Windows drive,
-   made by Windows git, has CRLF endings and recipes fail with `env: $'bash\r'`.
-
 ```sh
 just                # list recipes
 just build          # build desktop targets

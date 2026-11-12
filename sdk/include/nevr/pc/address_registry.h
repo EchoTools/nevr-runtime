@@ -82,7 +82,7 @@ static constexpr uint64_t VA_CREATE_SESSION = 0x14015e920;
 // On Wine, SwitchToThread doesn't yield, burning ~35% CPU. Patch to RET.
 // Source: echovr-reconstruction/src/NRadEngine/Core/CTiming.h
 // CPrecisionSleep::Wait — hybrid WaitableTimer + BusyWait frame pacer (361 bytes).
-// Signature: void(int64_t microseconds)  (#1441: the binary reads rcx only; rdx and r8 are its own QPC locals)
+// Signature: void(int64_t microseconds, int64_t unknown, LARGE_INTEGER* unknown2)
 // On Wine, the WaitableTimer phase spins instead of sleeping.
 static constexpr uint64_t VA_PRECISION_SLEEP_WAIT = 0x1401CE0B0;
 
@@ -105,12 +105,9 @@ static constexpr uint64_t VA_CJSON_GET_FLOAT = 0x1405FCA60;
 
 // --- Grab Hands ---
 
-// Source: PC binary analysis (#1441). This is NOT CR15TouchInteractCS::SetCanBeGrabbed and not a setter.
-// 0x140909f10 is an element destructor: it calls the MSVC eh vector destructor iterator (0x1414ed6d8) on five
-// 0xC8-byte elements at this+0x50 of a 0x5C8-byte type. It never reads a second argument, so calling it as
-// SetCanBeGrabbed(this, true) destroys five sub-objects of `this`. Do not call it as a setter. The constant is kept
-// because plugins compile against it; the real setter's address is not located here.
-// Signature: void __fastcall (void* this)
+// Source: CR15TouchInteractCS::SetCanBeGrabbed (PC binary analysis)
+// Setter controlling whether a touch-interact component can be grabbed by other players.
+// Signature: void __fastcall (void* this, bool canBeGrabbed)
 static constexpr uint64_t VA_SET_CAN_BE_GRABBED = 0x140909f10;
 
 // --- Log Filter ---
