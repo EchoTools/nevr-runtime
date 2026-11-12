@@ -1009,36 +1009,40 @@ static bool KeptCounters(const Stats& now, const Stats& kept) {
 
 static void LeavePickTests() {
   ResetAll();
-  InstallOk();
+  // 'V' is not carried by this install (types=PTO), so the 'V' below is counted as dropped (ec_rules.h, BasicState::Client)
+  InstallOk("types=PTO");
   CHECK(OnNetTick(&NetTick), "no tick slot");
   g_tick_calls = 0;
   GameTalks(7);
   Step(g_now100);
   Stats s = StatsNow();
   CHECK(s.haveServer && s.serverFd == 7, "setup: the game's send did not pick the server (fd %d)", s.serverFd);
-  // a token, a kill, an M and an A from the server on the game socket, in scope, before the leave
+  // a token, a kill, an M, an A and an uncarried V from the server on the game socket, in scope, before the leave
   g_in.push_back(Veil('T', 0x00020001, Server(), SPort()));
   g_in.push_back(Veil('K', 0x00020002, Server(), SPort()));
   g_in.push_back(Veil('M', 0x00020003, Server(), SPort()));
   g_in.push_back(Veil('A', 0, Server(), SPort()));
-  for (int i = 0; i < 4; ++i) {
+  g_in.push_back(Veil('V', 0x00020004, Server(), SPort()));
+  for (int i = 0; i < 5; ++i) {
     uint8_t rb[64];
     sockaddr_in rf{};
     socklen_t rl = sizeof rf;
     GameRecv(7, rb, sizeof rb, 0, reinterpret_cast<sockaddr*>(&rf), &rl);
   }
   const Stats kept = StatsNow();
-  CHECK(kept.tokens == 1 && kept.kills == 1 && kept.medi == 1 && kept.answers == 1 && kept.types != 0,
-        "setup: the counters before the leave are not all set (tokens %llu, kills %llu, medi %llu, answers %llu, types %x)",
+  CHECK(kept.tokens == 1 && kept.kills == 1 && kept.medi == 1 && kept.answers == 1 && kept.dropped == 1 && kept.types != 0,
+        "setup: the counters before the leave are not all set (tokens %llu, kills %llu, medi %llu, answers %llu, dropped %llu, types %x)",
         static_cast<unsigned long long>(kept.tokens), static_cast<unsigned long long>(kept.kills), static_cast<unsigned long long>(kept.medi),
-        static_cast<unsigned long long>(kept.answers), kept.types);
+        static_cast<unsigned long long>(kept.answers), static_cast<unsigned long long>(kept.dropped), kept.types);
   ForceScopeForTest(0);
   CHECK(!RefreshScope(g_now100 / 10000), "setup: still in scope");
   CHECK(HasLine("\"in_scope\":0") && HasLine("forgets the server"), "the leave's scope line does not say the server pick is forgotten");
   s = StatsNow();
-  CHECK(KeptCounters(s, kept), "the leave changed the carried types or a counter: types %x to %x, tokens %llu to %llu, kills %llu to %llu",
+  CHECK(KeptCounters(s, kept),
+        "the leave changed the carried types or a counter: types %x to %x, tokens %llu to %llu, kills %llu to %llu, dropped %llu to %llu",
         kept.types, s.types, static_cast<unsigned long long>(kept.tokens), static_cast<unsigned long long>(s.tokens),
-        static_cast<unsigned long long>(kept.kills), static_cast<unsigned long long>(s.kills));
+        static_cast<unsigned long long>(kept.kills), static_cast<unsigned long long>(s.kills), static_cast<unsigned long long>(kept.dropped),
+        static_cast<unsigned long long>(s.dropped));
   AdvanceMs(3000);
   ForceScopeForTest(1);
   CHECK(RefreshScope(g_now100 / 10000), "setup: not back in scope");
@@ -1048,8 +1052,9 @@ static void LeavePickTests() {
   CHECK(g_sent.empty(), "the first step back, 3000 ms out and no send by the game since, sent %zu packet(s), the first '%c' on the last scope's fd %d",
         g_sent.size(), g_sent.empty() ? '-' : static_cast<char>(g_sent[0].bytes[4]), g_sent.empty() ? -1 : g_sent[0].fd);
   CHECK(!s.haveServer, "the first step back kept the last scope's server (fd %d)", s.serverFd);
-  CHECK(KeptCounters(s, kept), "the first step back after the leave changed the carried types or a counter: types %x, tokens %llu, kills %llu",
-        s.types, static_cast<unsigned long long>(s.tokens), static_cast<unsigned long long>(s.kills));
+  CHECK(KeptCounters(s, kept),
+        "the first step back after the leave changed the carried types or a counter: types %x, tokens %llu, kills %llu, dropped %llu",
+        s.types, static_cast<unsigned long long>(s.tokens), static_cast<unsigned long long>(s.kills), static_cast<unsigned long long>(s.dropped));
   uint8_t buf[64];
   sockaddr_in from{};
   socklen_t fl = sizeof from;

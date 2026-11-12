@@ -152,3 +152,5 @@ runm ec_leave_pick_line  $E "s#\"forgets the server (back in scope, the game's f
 # the leave resets the whole state where it clears the pick (#2390): the two clears become g_st = State(). The pick is the same either way, so only
 # the kept counters and the carried types (LeavePickTests, KeptCounters) tell the two apart
 runm ec_leave_keeps_counters $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        g_st = State();#; s#^        g_st.best = -1;#        (void)0;#"
+# the leave also clears the dropped count (#2390): one line after the pick's clear, so the uncarried-type count of LeavePickTests (KeptCounters) is checked
+runm ec_leave_keeps_dropped $E "s#^        g_st.best = -1;#        g_st.best = -1;\n        g_st.dropped = 0;#"
