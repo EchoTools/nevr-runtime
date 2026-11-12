@@ -34,9 +34,11 @@ The velocity is the fifth argument (x4, `const C3Vector&`). At FireBulletLocal's
 FireBulletLocal's own by-value velocity parameter (`C3Vector dir`, arriving in s0..s2 and spilled to its stack): `&dir`, with the bullet's handle
 in w1, the third argument in x2 (below), the transform in x3, two zero words in w5 and w6 and the damage float in s0 (below). The
 reconstruction is `CR15NetAutoTargetCS::FireBulletLocal`, VA 0x220bff8. FireBulletLocal reads `dir` and never writes it between its entry and
-that call. x2 is typed in the header as a `CComponentHandle<CR15NetGunCS>` by reference (`bullet_velocity_guard.h`), while the reconstruction
-passes a 0x50-byte spawn record built from the weapon record (`fire_bullet_local.cpp:275`); the two disagree, and the guard does not read x2.
-s0 is the damage float, which the reconstruction loads from the weapon record at +0x70 (`fire_bullet_local.cpp:280-281`).
+that call. x2 is a `CComponentHandle<CR15NetGunCS>` passed by value: the mangled name of FireBullet in `dronemuzzle_targets.h` has no reference mark, and
+the header (`bullet_velocity_guard.h`) says the same. The object is 0x50 bytes (nevr-giveyouup `fire_bullet_local.cpp:90`, the proven tree's `CComponentHandle` size).
+The proven tree's caller (nevr-giveyouup, `src/reconstruction/r15/fire_bullet_local.cpp:275-279`) fills the object it passes with a copy of the
+weapon record, so what its fields hold is not established. The guard does not read x2.
+s0 is the damage float, which that caller loads from the weapon record at +0x70 (nevr-giveyouup `fire_bullet_local.cpp:280-281`).
 
 The guard and dronemuzzle see the same vector. dronemuzzle's continuation acts only on that one call (its entry compares the return address with
 FireBulletLocal's, ELF 0x210c2a4), and skips on dronekill's shot velocity, which dronekill copies from the same by-value parameter on entry to

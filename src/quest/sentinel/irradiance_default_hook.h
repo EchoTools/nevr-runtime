@@ -1,4 +1,4 @@
-/* The default irradiance texture is grey, not black (#2091, #1737 unit U25).
+/* The default irradiance texture is grey, not black (#2091, #1737).
  *
  * Why. Converted combat maps have areas outside every irradiance volume, and they come out black with the stock engine. The
  * reference combat build uploads the "Default 3D Texture" with the texel 0xff6b6b6b (R, G and B 0x6b, A 0xff; grey, about 0.42)

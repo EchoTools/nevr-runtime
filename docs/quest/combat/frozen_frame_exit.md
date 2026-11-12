@@ -1,7 +1,7 @@
 # Frozen-frame exit
 
 A combat game whose frames stop for `combat.frozen_frame_exit_s` seconds (default 30) while the headset is in VR is ended, so the player
-lands in Home instead of a frozen view (#2377, #1737 row G6A-045). The module is `src/quest/combat/frozen_frame_exit.h`; its pins are
+lands in Home instead of a frozen view (#2377, #1737). The module is `src/quest/combat/frozen_frame_exit.h`; its pins are
 `src/quest/combat/frozen_frame_exit_targets.h`, checked by `src/quest/tests/frozen_frame_exit_pinned_test.cpp`; its host test is
 `src/quest/tests/frozen_frame_exit_test.cpp`.
 
@@ -211,12 +211,12 @@ Measured, section. The word is in `.bss`: the store file's section table gives `
 Status: pinned. `src/quest/combat/frozen_frame_exit_targets.h` pins the word's address and its place in `.bss` (from the section
 table: `.bss` 0x3761180, size 0x713b8), the writer (`adrp`, `add`, the EnterVrMode call, `str`) and both clearers (the SessionActive
 test, the NativeWindow call and its null test, the LeaveVrMode calls and the zero stores in `UpdateTracking` and `ShutdownGraphics`); `src/quest/tests/frozen_frame_exit_pinned_test.cpp`
-checks them against the store file. `ShutdownGraphics` has a byte-checked reconstruction; `UpdateTracking` and `DoVRSubmission` are queued
-for one, so what this page says they do beyond the pinned words is read from their disassembly.
+checks them against the store file. `ShutdownGraphics` has a byte-checked reconstruction; `UpdateTracking` and `DoVRSubmission` are not in the proven reconstruction tree
+(not established), so what this page says they do beyond the pinned words is read from their disassembly.
 
 Inferred. The word is cleared only by game code: `UpdateTracking` runs on the main thread, from the per-frame clock update (the call at ELF 0x11fd744 in
 `CR15Game::UpdateClock`, ELF 0x11fd724, through a PLT stub; that the stub reaches `UpdateTracking` is read from the disassembly and not pinned), so if that thread is blocked (inside `vrapi_SubmitFrame2` too) while the headset is off or the system menu is
-open, the word stays set. `UpdateTracking` has no byte-checked reconstruction (queued in NEEDED.tsv), so this rests on its disassembly and on
+open, the word stays set. `UpdateTracking` has no byte-checked reconstruction (not established: the function is not in the proven reconstruction tree), so this rests on its disassembly and on
 the pinned words, not on a whole reconstruction. That is the false-exit path the second look and the headset row's pause cases address.
 
 Inferred, against upstream. Upstream's flag is set when EnterVrMode returns a session and cleared at LeaveVrMode. The word

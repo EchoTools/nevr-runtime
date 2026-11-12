@@ -288,7 +288,7 @@ nevr_ht_test(dronekill_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # against another handler on the slot (#2219), the refusals. The arm64 entries are check/dronemuzzle.sh's (disassembly, ldar, qemu).
 nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
-# The bullet-velocity guard (#1737 row 031): the rule, and the real handler through the real thunk installed by the real GotHook into FireBullet's
+# The bullet-velocity guard (#1737): the rule, and the real handler through the real thunk installed by the real GotHook into FireBullet's
 # JUMP_SLOT of a libr15 image built in memory, alone and below dronemuzzle's entry (and refused above it); the refusals, the switch, the lines.
 nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/bullet_velocity_guard_test.cpp src/quest/combat/bullet_velocity_guard.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp

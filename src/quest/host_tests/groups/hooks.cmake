@@ -235,7 +235,7 @@ nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_
 # a missing file, an unknown or padded word, a file too long, a link and a directory, read from a temporary directory.
 nevr_ht_test(build_variant_test GROUP hooks ${_hf} TIMEOUT 120
   SRC src/quest/tests/build_variant_test.cpp src/quest/sentinel/build_variant.cpp)
-# The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
+# The grey default irradiance texture (#2091, #1737): the real handlers through the two thunk entries against models of
 # CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
 # Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the
 # call site in the real libr15; row_hooks_install_test activates the row.

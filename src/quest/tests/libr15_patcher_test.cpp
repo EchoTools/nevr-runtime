@@ -2433,7 +2433,7 @@ TEST(TheShippedToolRefusesAFileThatIsNotThePinnedLibr15) {
   for (const std::string& f : {stock, report, so, se}) std::remove(f.c_str());
 }
 
-// ---- the input's own references to the slot area (#1737, row C8) ----------------------------------------------------------
+// ---- the input's own references to the slot area (#1737) ----------------------------------------------------------
 
 constexpr std::uint64_t kRefAt = 0x1400600;  // free text: no row's word and no fixture word
 std::uint32_t AddImmLsl12(unsigned rd, unsigned rn, unsigned imm12) { return AddImm(rd, rn, imm12) | (1u << 22); }

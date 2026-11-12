@@ -25,7 +25,7 @@
  * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Origin. The reference build's `runtime/native/afkxr/afk_dronemuzzle.cpp` (kotorvr's echoquest-combat; its thunks at lines 145-182), which ports
- * EchoCombat `c14c3e0a` `plugin/dronefix.cpp`: the muzzle transform df 916-941, FireBullet df 943-1019 (shooter velocity df 1012, tracers
+ * EchoCombat's `plugin/dronefix.cpp`: the muzzle transform df 916-941, FireBullet df 943-1019 (shooter velocity df 1012, tracers
  * df 1014), the frame time df 132-147 (df 136, df 138-147), the shot log cap df 56.
  *
  * Lines (sentinel log):

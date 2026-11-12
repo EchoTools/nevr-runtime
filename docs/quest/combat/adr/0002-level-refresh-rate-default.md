@@ -1,6 +1,6 @@
 # ADR 0002: the level refresh-rate rule is on by default, for combat maps only
 
-Status: accepted (#1737, row G6A-040); amended for arena (#2172). Supersedes the default in ADR 0001; ADR 0001's timing analysis stands.
+Status: accepted (#1737); amended for arena (#2172). Supersedes the default in ADR 0001; ADR 0001's timing analysis stands.
 
 ## Context
 

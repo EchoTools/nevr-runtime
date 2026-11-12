@@ -227,7 +227,7 @@ constexpr std::array kModules{
     Module{"dronekill_explosion", nullptr, nullptr, "combat.dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion},
     // dronekill_hold (#1737): the same, the explosion's hold (default off), read by DronekillNormal.
     Module{"dronekill_hold", nullptr, nullptr, "combat.dronekill_hold", &nevr_quest::CombatConfig::dronekillHold},
-    // bullet_velocity_guard (#1737 row 031): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
+    // bullet_velocity_guard (#1737): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
     // that slot must stay the newest hook there (a later install is refused slot_held_by_entry), so the guard installs first and the entry calls it.
     Module{"bullet_velocity_guard", nullptr, &BulletVelocityGuardNormal, "combat.bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, &bullet_velocity_guard::NoteEnd},
     // sound_symbol_guard (#1737): a caller-aware thunk on Play3DSound's slot (no other hook there); it reads the combat level answer, so after `scope`,

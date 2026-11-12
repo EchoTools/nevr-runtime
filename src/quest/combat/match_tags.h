@@ -1,4 +1,4 @@
-/* Combat name tags (MatchTagDisplay) are on by default (#2090, #1737 unit U24).
+/* Combat name tags (MatchTagDisplay) are on by default (#2090, #1737).
  *
  * What the game does (store libr15; addresses are the ELF vaddr, pinned_targets.h). The CR15Game constructor (C1 and C2 are one
  * function, 0x11fce34) stores the default SR15GameSettings into the game object twice, from two 16-byte literals in .rodata:

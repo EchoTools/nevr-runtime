@@ -2,7 +2,7 @@
 // R3), the F3 touch table, the F5 gun table and the F7 chase table. Nothing here calls the game or reads game memory.
 //
 // Origin. The reference build's `runtime/native/afkxr/afk_dronekill_core.h` (kotorvr's echoquest-combat; 325 of this file's 354 distinct lines
-// are that file's), which ports EchoCombat `c14c3e0a` `plugin/dronefix.cpp` ("df"): the groups df 434-560 (Newest df 461-468), TouchLive
+// are that file's), which ports EchoCombat's `plugin/dronefix.cpp` ("df"): the groups df 434-560 (Newest df 461-468), TouchLive
 // df 778-793, the touch rule df 731-835 (Deployed df 772, LockedOn df 810-826), the gun table df 700-729 and the chase table df 1037-1095
 // (df 1077-1082). The differences from that file: the namespace, the 'K' ring (the reference build's recvfrom thread pushes into it; here
 // dronekill::OnKilled does the table work itself) and Comp's members, which carry initializers so that the tables are constant-initialised

@@ -52,8 +52,10 @@ namespace nevr_quest::combat::bullet_velocity_guard {
 inline constexpr unsigned kSkipLines = 10;              // skip lines written one by one per process
 inline constexpr std::uint64_t kSkipEveryMs = 10000;    // then a counted line at most this often while skips continue
 
-// FireBullet(CR15NetBulletCS* x0, SCompactPoolHandle x1, CComponentHandle<CR15NetGunCS> (by reference) x2, float s0, const CQuaternion& x3,
-// const C3Vector& x4, unsigned w5, unsigned w6), as dronemuzzle.h declares it. FireBulletLocal (ELF 0x210bff8) passes its velocity argument as x4.
+// FireBullet(CR15NetBulletCS* x0, SCompactPoolHandle x1, CComponentHandle<CR15NetGunCS> x2, float s0, const CQuaternion& x3,
+// const C3Vector& x4, unsigned w5, unsigned w6): x2 is passed by value (the mangled name in dronemuzzle_targets.h has no reference mark),
+// a 0x50-byte object whose contents are not established (the proven tree's fire_bullet_local.cpp:275-279 fills it with a copy of the weapon
+// record). FireBulletLocal (ELF 0x210bff8) passes its velocity argument as x4.
 using FireSig = std::uint64_t(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float damage, const void* quat, const void* vel,
                               std::uint64_t remote, std::uint64_t flag);
 struct FireTag {};

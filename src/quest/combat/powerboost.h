@@ -34,7 +34,7 @@
  * Owner (ADR 0039). This file owns the five words.
  *
  * Origin. The reference build's runtime/native/afkxr/afk_powerboost.cpp (1357409; docs/audits/2026-11-05-q15t-origin-citations.md rows
- * 244-254, 273), and the EchoCombat c14c3e0a plugin/powerboost.cpp rules it ports: the cone filter :574-623, the link state :487-505, the
+ * 244-254, 273), and the EchoCombat plugin/powerboost.cpp rules it ports: the cone filter :574-623, the link state :487-505, the
  * owner's 0.3 m :585, the +z axis :224, the diagnostic rate :610-620, the 30 s use window :500-504. runtime/patch/powerboost_rules.h names the rest.
  *
  * Lines (sentinel log), each a `combat_powerboost_*` event:

@@ -25,7 +25,7 @@
  * first-system off and turns the same component off kFxSoundHoldMs after the explosion. That is safe only if CEnableComponentNode::Enter,
  * for a disable, has no effect but the component's disable (vtable +0x210, now or through its game space's deferred queue, owner +0x368).
  * That is NOT established: a ReVault read of Enter (ELF 0x273b700, VA 0x283b700) suggests it, the proven reconstruction does not hold
- * that function, and its reconstruction is requested (the reconstruct pipeline's NEEDED list). The hold stays off until that reconstruction
+ * that function, and the function is not in the proven reconstruction tree, so that is not established. The hold stays off until a reconstruction of it
  * shows the one effect; turning it on by default is one constant (quest_config.h `dronekillHold`). With it on, a hold is taken only when
  * exactly one drone group can still run its end (Enter has not looked its actor up yet; a shot-down drone counts until its own end has been
  * seen, however long that takes), that group is alive, its actor has the component, the system's DisableComponent is the read shape and its game
@@ -61,7 +61,7 @@
  * AttackTarget once per frame per drone that has a target. Not measured on a headset: the `combat_dronekill_scope` line carries each hook's call
  * count over the scope that ended. The out-of-scope path of each is counted in docs/quest/combat/dronekill.md ("Arena cost").
  *
- * Origin. The reference build's `runtime/native/afkxr/afk_dronekill.cpp` (kotorvr's echoquest-combat), which ports EchoCombat `c14c3e0a`
+ * Origin. The reference build's `runtime/native/afkxr/afk_dronekill.cpp` (kotorvr's echoquest-combat), which ports EchoCombat's
  * `plugin/dronefix.cpp`: LockedOn df 805-827, ChaseTarget df 1059-1095 (no target df 1069-1076, the chase table df 1093).
  *
  * Lines (sentinel log):

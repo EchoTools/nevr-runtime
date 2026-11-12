@@ -1,4 +1,4 @@
-/* The frozen-frame exit (#2377, #1737 row G6A-045; docs/quest/combat/frozen_frame_exit.md): a combat game whose frames stop for
+/* The frozen-frame exit (#2377, #1737; docs/quest/combat/frozen_frame_exit.md): a combat game whose frames stop for
  * `combat.frozen_frame_exit_s` seconds (default 30) while the headset is in VR is ended, so the player lands in Home instead of a frozen view.
  *
  * What it reads. Two things, and it hooks nothing:
@@ -28,7 +28,7 @@
  * Arena on the same APK: `NoteSubmit` is one relaxed load and a branch per submit (the scope word has no combat bit), no clock read, no write; the
  * watchdog disarms. A release APK: the row never runs, so `NoteSubmit` reads an empty scope word and returns.
  *
- * Switch. `combat.frozen_frame_exit` (default true, as upstream's hangwd is on unless its `hangwd.off` file or property turns it off; #1737 G6A-045) and
+ * Switch. `combat.frozen_frame_exit` (default true, as upstream's hangwd is on unless its `hangwd.off` file or property turns it off; #1737) and
  * `combat.frozen_frame_exit_s` (10..900, default 30; anything else: the default, with the configuration step's Warning).
  *
  * Origin. The hangwd watchdog of kotorvr/echoquest-combat, runtime/native/afkxr/afk_capture.cpp (namespace hangwd: Beat in the SubmitFrame2 wrapper,

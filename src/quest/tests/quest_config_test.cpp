@@ -1397,7 +1397,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion, true},
                       // Its hold (#1737): off unless the file says true (CEnableComponentNode::Enter's one effect is not established).
                       {"dronekill_hold", &nevr_quest::CombatConfig::dronekillHold, false},
-                      // The bullet-velocity guard (#1737 row 031): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
+                      // The bullet-velocity guard (#1737): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
                       {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},
                       // The frozen-frame exit (#2377): on unless the file says false (upstream's hangwd is on by default too; D8 (a), the combat APK only).
                       {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},

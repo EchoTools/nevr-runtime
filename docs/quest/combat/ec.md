@@ -207,4 +207,4 @@ reference build's; the code refuses an implausible list and re-checks the three 
 The combat plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h` (imported in #1591), ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
 afk_ec_core.h, afk_ecfx.cpp, afk_ecfx_core.h (pinned `1357409` in docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-211).
 The EC network rules are EchoCombat v2.0.0's VeilNet (plugin/veilnet.cpp), shared with PC in `src/runtime/patch/ec_rules.h`. The NEUTRON
-deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686), EchoCombat `c14c3e0a`.
+deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686).

@@ -104,7 +104,7 @@
 //                                    on every launch, right after the credits step; its counters are registered with the
 //                                    others (step 3). The switch (`diagnostics.clock_levels_override`, default off)
 //                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
-//      InstallIrradianceDefault      the default irradiance texture is grey, not black (#2091, #1737 U25): one GOT hook on
+//      InstallIrradianceDefault      the default irradiance texture is grey, not black (#2091, #1737): one GOT hook on
 //                                    CGEngineResources::Initialize (JUMP_SLOT 0x36fba08) and the row `irradiance_default.upload`
 //                                    of the patched libr15 (ADR 0021), on every launch, right after the clock-level
 //                                    arming; no counters. Initialize runs after the constructor, so the hooks are in place before the
