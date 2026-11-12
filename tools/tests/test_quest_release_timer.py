@@ -51,6 +51,7 @@ PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "p
 NDK_PROPERTIES = "Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"  # r26d
 APK_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"  # the variant word the repack stamps; the APK carries no plugin library
 HEAD = "c0ffee" + "0" * 34
+OLD_HEAD = "beef" + "0" * 36  # a checkout behind origin/main (#1945)
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
 ARENA_CLAIM = {"name": f"nevr-runtime-{TAG}-arena-quest.apk", "sha256": "cd" * 32, "size": 9}
@@ -83,6 +84,7 @@ class Fake:
         self.apk_entries = {APK_ENTRY: b"q15t"}  # what the APK the variant recipe writes holds: no plugin library
         self.signer_usage = ""  # what `put-quest-apk -h` prints on standard error: empty is a signer without `--kind` (#2298)
         self.arena_listed = True  # the live manifest lists the arena APK once the release is published
+        self.ancestor = False  # whether HEAD is an ancestor of origin/main: only then is a clean checkout fast-forwarded (#1945)
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -90,6 +92,7 @@ class Fake:
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
             (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
+            (f"{repo} merge-base --is-ancestor", "checkout.ancestor"), (f"{repo} merge --ff-only", "checkout.ff"),
             ("put-quest-apk", "arena_gate"), ("release-quest-arena-apk", "arena_build"), (" --listed-variant ", "arena_publish"),
             ("curl", "manifest"),
             ("auth token", "token"), (" fetch origin main", "build_signer.fetch"),
@@ -129,6 +132,11 @@ class Fake:
             return completed(argv, 0, self.head + "\n")
         if step == "checkout.main":
             return completed(argv, 0, self.main + "\n")
+        if step == "checkout.ancestor":
+            return completed(argv, 0 if self.ancestor else 1)
+        if step == "checkout.ff":
+            self.head = self.main
+            return completed(argv)
         if step == "tags.local":
             return completed(argv, 0, "".join(f"{n}\t{o}\t{c or ''}\n" for n, (o, c) in self.local_tags.items()))
         if step == "tags.remote":
@@ -653,6 +661,36 @@ class CheckoutGuard(TimerCase):
         self.assertEqual(fake.steps()[:4], ["checkout.fetch", "checkout.status", "checkout.head", "checkout.main"])
         checkout = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "checkout")
         self.assertEqual(checkout["head"], HEAD)
+
+    def test_a_clean_checkout_behind_origin_main_is_fast_forwarded_and_the_run_continues(self) -> None:
+        fake = Fake(self.root)
+        fake.head, fake.ancestor = OLD_HEAD, True
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(fake.steps()[:6], ["checkout.fetch", "checkout.status", "checkout.head", "checkout.main",
+                                            "checkout.ancestor", "checkout.ff"])
+        advanced = next(e for e in self.events() if e["event"] == "checkout_fast_forward")
+        self.assertEqual((advanced["from_sha"], advanced["to_sha"]), (OLD_HEAD, HEAD))
+        checkout = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "checkout")
+        self.assertEqual(checkout["head"], HEAD)
+
+    def test_a_dirty_checkout_behind_origin_main_is_refused_and_not_advanced(self) -> None:
+        fake = Fake(self.root)
+        fake.head, fake.ancestor, fake.dirty = OLD_HEAD, True, " M tools/quest_release_timer.py\n"
+        self.assertEqual(self.run_timer(fake), 1)
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("not clean", refused[0]["error"])
+        self.assertNotIn("checkout.ff", fake.steps())
+
+    def test_a_checkout_that_has_diverged_from_origin_main_is_refused_and_not_merged(self) -> None:
+        fake = Fake(self.root)
+        fake.head = OLD_HEAD  # ancestor stays False: HEAD is not behind origin/main
+        self.assertEqual(self.run_timer(fake), 1)
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("origin/main", refused[0]["error"])
+        self.assertNotIn("checkout.ff", fake.steps())
+        self.assertNotIn("token", fake.steps())
 
 
 class GameDataSurvives(TimerCase):
