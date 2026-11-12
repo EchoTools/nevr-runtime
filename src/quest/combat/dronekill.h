@@ -43,9 +43,10 @@
  * file to warn about; the switch is `combat.dronekill`, default true: the reference build ships `dronekill2.on` (all five words) and the combat plugin imported in #1591 built it on.
  *
  * Arena (same APK). Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module
- * acts only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h `InCombatMap` on one
- * `LastLook()` record, asked by the module's own tick every kScopeFrames frames and kept in one atomic, InCombatScope; the scope ends after kLeaveAsks
- * no-combat-map answers in a row, so a failed read does not end it). Each handler tests that atomic; every in-scope body (EnterInScope, FireInScope,
+ * acts only while its scope is on: a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h
+ * `InCombatMap` on one `LastLook()` record, asked by the module's own tick every kScopeFrames frames and kept in one atomic, InCombatScope; the
+ * scope ends after kLeaveAsks no-combat-map answers in a row, so a failed read does not end it). Until it ends, for up to 2 x kScopeFrames frames
+ * after the first such answer (the leave window, dronekill.md), the tick's due work and the in-scope bodies still run. Each handler tests that atomic; every in-scope body (EnterInScope, FireInScope,
  * AttackInScope) and OnKilled then check `scope::LookIsFresh()` (src/quest/combat/README.md rule 9), so while the game tick is stopped a combat
  * answer older than kStaleAfterMs passes every call to the game and drops the 'K', though the atomic still says combat; at an ask that runs, a stale
  * or missing look is a no-combat-map answer. The module is a reader of the scope row:
