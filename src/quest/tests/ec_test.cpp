@@ -1432,8 +1432,25 @@ static void ArenaTests() {
   LoadLevels({"mpl_combat_dyson"});
   AdvanceMs(250);
   CHECK(LookAndAsk(), "a combat map is not in scope");
+  // the step of this in-scope look sets the page's answer word (the server states EchoCombat) and the net tick runs on the game's socket (a datagram
+  // that is not ours, from the server): the stale leave below must clear the word and stop the tick
+  ServerStates(true);
+  Step(g_now100);
+  CHECK(Load32(EcPage() + kQuestEcServer) == 1, "setup: the step did not set the answer word");
+  g_in.push_back(Plain(40));
+  int ticks = g_tick_calls;
+  uint8_t gb[64];
+  sockaddr_in gfrom{};
+  socklen_t gfl = sizeof gfrom;
+  GameRecv(7, gb, sizeof gb, 0, reinterpret_cast<sockaddr*>(&gfrom), &gfl);
+  CHECK(g_tick_calls == ticks + 1, "setup: a game datagram in scope did not run the net tick");
   AdvanceMs(1001);
   CHECK(!RefreshScope(g_now100 / 10000) && HasLine("\"in_scope\":0,\"level_class\":\"stale\""), "a stale combat answer kept the scope");
+  CHECK(Load32(EcPage() + kQuestEcServer) == 0, "the stale leave kept the answer word");
+  g_in.push_back(Plain(40));
+  ticks = g_tick_calls;
+  GameRecv(7, gb, sizeof gb, 0, reinterpret_cast<sockaddr*>(&gfrom), &gfl);
+  CHECK(g_tick_calls == ticks, "after the stale leave a game datagram still ran the net tick");
   // a transition: an Echo Arena level still loaded beside a combat map wins
   LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
   AdvanceMs(250);
@@ -1443,6 +1460,61 @@ static void ArenaTests() {
   ForceScopeForTest(-1);
   InstallOk();
   CHECK(!InCombatScope() && HasLine("\"level_class\":\"no_look\""), "no look reads as in scope");
+}
+
+// ===================== the scope's one look per decision, and the line that names it (ec.cpp RefreshScope) =====================
+// RefreshScope reads the combat level answer once per decision, so `in`, the class and the level on the `combat_ec_scope` line are of one look.
+// The read seam fires at each read of the answer; the second read of a decision is the one a second reader would make, so the seam writes a new
+// look there. A decision that reads twice can then name an Echo Arena look as its class or level, or decide `in` from another look than the line.
+static int g_oneLookReads = 0;
+static void WriteArenaOnSecondRead() {
+  if (++g_oneLookReads != 2) return;
+  LoadLevels({"mpl_arena_a"});
+  AdvanceMs(300);
+  nevr_quest::combat::scope::Refresh(GameAddress());
+}
+static std::string ScopeLine(bool in, const char* cls, std::uint64_t level) {
+  char hex[19];
+  return std::string("\"in_scope\":") + (in ? "1" : "0") + ",\"level_class\":\"" + cls + "\",\"level\":\"" + sentinel::HexString(hex, level) + "\"";
+}
+static void ScopeLineCase(const char* level, bool in, const char* cls, std::uint64_t expectLevel, const char* what) {
+  ResetAll();
+  ForceScopeForTest(-1);
+  InstallOk();
+  LoadLevels({level});
+  AdvanceMs(300);
+  const bool got = LookAndAsk();
+  const std::string want = ScopeLine(in, cls, expectLevel);
+  CHECK(got == in, "%s: in scope is %d", what, got ? 1 : 0);
+  CHECK(HasLine(want.c_str()), "%s: the scope line is not %s", what, want.c_str());
+}
+static void OneLookTests() {
+  // a test's forced scope names the class of the in-scope answer and no level (the look is none)
+  ResetAll();
+  CHECK(RefreshScope(g_now100 / 10000) && HasLine(ScopeLine(true, "combat_or_lobby", 0).c_str()), "forced in scope: the scope line is not combat_or_lobby");
+  // the scope line's class and level are those of the look that decides, for each class
+  ScopeLineCase("mpl_combat_dyson", true, "combat_or_lobby", EchoVR::CSymbol64Hash("mpl_combat_dyson"), "a combat map");
+  ScopeLineCase("mpl_lobby_b_combat", true, "combat_or_lobby", EchoVR::CSymbol64Hash("mpl_lobby_b_combat"), "the combat lobby");
+  ScopeLineCase("mpl_lobby_b", false, "other", 0, "the arena lobby mpl_lobby_b");
+  // one look per decision: the answer is read once, so a look written between two reads is not named in the line
+  ResetAll();
+  ForceScopeForTest(-1);
+  InstallOk();
+  LoadLevels({"mpl_arena_a"});
+  AdvanceMs(300);
+  nevr_quest::combat::scope::Refresh(GameAddress());
+  CHECK(!RefreshScope(g_now100 / 10000), "setup: an Echo Arena level is in scope");
+  LoadLevels({"mpl_combat_dyson"});
+  AdvanceMs(300);
+  nevr_quest::combat::scope::Refresh(GameAddress());
+  g_oneLookReads = 0;
+  nevr_quest::combat::scope::SetLookReadSeamForTest(&WriteArenaOnSecondRead);
+  const bool in = RefreshScope(g_now100 / 10000);
+  nevr_quest::combat::scope::SetLookReadSeamForTest(nullptr);
+  CHECK(g_oneLookReads == 1, "the decision read the combat level answer %d times: a second read can see a second look", g_oneLookReads);
+  CHECK(in, "the decision made on the look it read is not in scope");
+  CHECK(HasLine(ScopeLine(true, "combat_or_lobby", EchoVR::CSymbol64Hash("mpl_combat_dyson")).c_str()),
+        "the scope line does not name the look that decided (a second read named another look)");
 }
 
 static void PageTests() {
@@ -1474,6 +1546,7 @@ int main() {
   PlatformTests();
   ConfigTests();
   ArenaTests();
+  OneLookTests();
   PageTests();
   sentinel::SetLogSink(nullptr);
   if (g_fail == 0) std::printf("ec_test: all checks passed\n");

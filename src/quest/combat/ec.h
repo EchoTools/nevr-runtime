@@ -25,7 +25,10 @@
  * Arena (same APK). Every hook is installed while a player is in an arena match. The scope is `InCombatScope()`: a cached atomic the ec thread
  * refreshes at most every 250 ms from one record of the combat level answer (combat_scope.h `LastLook`, read whole on this thread; `InCombatOrLobby`
  * on it, and its class and level on the `combat_ec_scope` line); it is true only while a combat map or the combat lobby is loaded and the answer is
- * fresh, so the arena lobbies, an Echo Arena level and an answer the game thread stopped refreshing for a second are out of scope. The module is a
+ * fresh, so the arena lobbies, an Echo Arena level and an answer the game thread stopped refreshing for a second are out of scope. A torn read of
+ * the answer (no whole record in four tries) is named `no_look` and is out of scope until the next read, 250 ms later (it fails closed). A level
+ * change reaches this thread within about 500 ms: the look is made at most every 250 ms and this thread reads at most every 250 ms, plus up to one
+ * game frame. The module is a
  * reader of the scope row (`combat.ec` is in combat_install.cpp `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer
  * cannot change. Out of scope the recvfrom and
  * sendto handlers call libc and return (one acquire load and a branch above the thunk), no datagram is consumed, no net tick runs, the thread

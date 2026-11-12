@@ -122,7 +122,9 @@ Arena and combat run on the same APK, so every hook above is installed while a p
 an atomic the ec thread refreshes at most every 250 ms from one record of the combat level answer (`combat_scope.h` `LastLook()`, read whole on
 that thread, judged by `InCombatOrLobby(look)`), true only while a combat map (`mpl_combat_*`) or the combat lobby (`mpl_lobby_b_combat`) is loaded
 and the answer is fresh. A combat answer older than 1 s (the game thread stopped refreshing it) is out: the client leaves the scope until the tick is
-back, and its line names the class `stale`. The module is one of the scope row's readers (`combat.ec` is in `ScopeNormal()` in `combat_install.cpp`),
+back, and its line names the class `stale`. A torn read of the answer (no whole record in four tries) is named `no_look` and takes the client out of
+scope until the next read, 250 ms later (it fails closed). A level change reaches the client within about 500 ms: the game thread's look is made at most
+every 250 ms and this thread reads at most every 250 ms, plus up to one game frame. The module is one of the scope row's readers (`combat.ec` is in `ScopeNormal()` in `combat_install.cpp`),
 and its install refuses with `scope_not_live` when the answer cannot change. An Echo Arena level is out, and so are the
 lobbies arena players use (`mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena`, `_b_social`), which are no Echo Arena level. Out of scope:
 

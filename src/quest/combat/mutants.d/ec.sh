@@ -129,3 +129,14 @@ runm ec_arena_normal_runs src/quest/combat/combat_install.cpp "s#  if (!Active()
 runm ec_capped_pred     $R 's#|| consumed < kMaxConsumePerCall) return false;#|| consumed <= kMaxConsumePerCall) return false;#'
 runm ec_capped_count    $E 's#g_capped.fetch_add(1, std::memory_order_relaxed);#(void)0;#'
 runm ec_capped_summary  $E 's#{"capped", g_capped.load()}, ##'
+# one look per decision (#2382, F1): RefreshScope's `in`, class and level are of the one look it read (ec.cpp ~:534-535, ~:550)
+runm ec_one_look_in     $E "s#scope::InCombatOrLobby(look);#scope::InCombatOrLobby(scope::LastLook());#"
+runm ec_one_look_class  $E "s#: scope::ClassOf(look);#: scope::ClassOf(scope::LastLook());#"
+runm ec_one_look_level  $E "s#sentinel::HexString(levelText, look.level)#sentinel::HexString(levelText, scope::LastLook().level)#"
+# the scope line's tokens and level (#2382, F2): the class of a look and its level, as the line names them
+runm ec_other_forced    $E "s#: scope::ClassOf(look);#: (in ? scope::LookClass::kOther : scope::ClassOf(look));#"
+runm ec_other_token     $E "s#scope::LookClassName(cls)},#cls == scope::LookClass::kOther ? \"combat_or_lobby\" : scope::LookClassName(cls)},#"
+runm ec_level_zero      $E "s#sentinel::HexString(levelText, look.level)#sentinel::HexString(levelText, look.level * 0)#"
+runm ec_forced_class_swap $E "s#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);#(in ? scope::LookClass::kOther : scope::LookClass::kCombatOrLobby) : scope::ClassOf(look);#"
+# the stale leave clears the server and the answer word (#2382, F3)
+runm ec_stale_leave_keeps $E "s#^    if (!in) {  // leaving#    if (false) {  // leaving#"
