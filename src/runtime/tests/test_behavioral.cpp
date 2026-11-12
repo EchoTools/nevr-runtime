@@ -1109,6 +1109,56 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoa
   EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
 }
 
+// #1193: the System32 pins (#768) load each name from the System32 directory by its full path, with
+// LOAD_LIBRARY_SEARCH_SYSTEM32. The test points the pins at the fixture tree's own directory, which stands in for
+// System32, so a name that is only in that directory loads only when the pin names it by path.
+class PinnedSystemLibraryTest : public PluginSignatureGateTest {
+ protected:
+  void SetUp() override {
+    PluginSignatureGateTest::SetUp();
+    dir_ = fixtures_ + "/" + manifest_["trees"]["import_ok"]["dir"].get<std::string>();
+    ASSERT_NE(GetFileAttributesA((dir_ + "\\dep.dll").c_str()), INVALID_FILE_ATTRIBUTES) << dir_;
+    ASSERT_NE(GetFileAttributesA((dir_ + "\\importer.dll").c_str()), INVALID_FILE_ATTRIBUTES) << dir_;
+    ASSERT_EQ(GetModuleHandleA("dep.dll"), nullptr) << "dep.dll is already loaded: nothing to tell apart";
+    ASSERT_EQ(GetModuleHandleA("importer.dll"), nullptr) << "importer.dll is already loaded: nothing to tell apart";
+    char cwd[MAX_PATH] = {};
+    ASSERT_GT(GetCurrentDirectoryA(MAX_PATH, cwd), 0u);
+    cwd_ = cwd;
+  }
+
+  void TearDown() override {
+    TestHook_SetPinDirectory(nullptr);
+    SetCurrentDirectoryA(cwd_.c_str());
+    PluginSignatureGateTest::TearDown();
+  }
+
+  std::string dir_;
+  std::string cwd_;
+};
+
+// dep.dll has no file in System32, so the only way this pin loads it is by the path the pin gives. Loading by the bare
+// name finds nothing, because the flag searches System32 alone.
+TEST_F(PinnedSystemLibraryTest, APinLoadsTheNamedFileFromItsPathNotByItsBareName) {
+  TestHook_SetPinDirectory(dir_.c_str());
+  ASSERT_TRUE(SetCurrentDirectoryA(cwd_.c_str()));
+  std::string failed;
+  DWORD error = 0;
+  EXPECT_TRUE(TestHook_PinSystemLibraries({"dep.dll"}, &failed, &error)) << failed << " error " << error;
+}
+
+// importer.dll needs dep.dll. The current directory is the fixture directory, which the default search order reaches,
+// so dep.dll is found there unless the pin's flag keeps the search to System32. The pin must refuse.
+TEST_F(PinnedSystemLibraryTest, APinnedLibrarysDependenciesResolveFromSystem32Only) {
+  TestHook_SetPinDirectory(dir_.c_str());
+  ASSERT_TRUE(SetCurrentDirectoryA(dir_.c_str()));
+  std::string failed;
+  DWORD error = 0;
+  EXPECT_FALSE(TestHook_PinSystemLibraries({"importer.dll"}, &failed, &error))
+      << "the pin found dep.dll outside System32";
+  EXPECT_EQ(failed, "importer.dll");
+  EXPECT_EQ(error, static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
+}
+
 // #769: the loader's own load of a staged plugin is not checked twice, because the loader checked the file first. That
 // exemption is for the loader's call. The plugin's DllMain runs inside the same call, with the loader lock held, and
 // a load it makes is the plugin's own: it has to be checked like any other, even by the path being loaded.

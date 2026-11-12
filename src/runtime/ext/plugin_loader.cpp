@@ -225,6 +225,7 @@ bool PluginFileStaysInDirectory(const std::string& file) {
 thread_local bool t_pinning = false;  // PluginLoadFilter ignores the loads made while this thread pins
 #ifdef NEVR_TEST_HOOKS
 bool g_failPinning = false;  // a test makes every pin fail with ERROR_ACCESS_DENIED
+std::string g_pinDirectory;  // a test names the directory the pins load from instead of System32 (empty: System32)
 #endif
 
 class PinnedModules {
@@ -246,12 +247,16 @@ class PinnedModules {
       *error = GetLastError();
       return false;
     }
+    std::string directory = system;
+#ifdef NEVR_TEST_HOOKS
+    if (!g_pinDirectory.empty()) directory = g_pinDirectory;
+#endif
     struct Pinning {
       Pinning() { t_pinning = true; }
       ~Pinning() { t_pinning = false; }
     } pinning;
     for (const std::string& name : names) {
-      HMODULE m = LoadLibraryExA((std::string(system) + "\\" + name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+      HMODULE m = LoadLibraryExA((directory + "\\" + name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #ifdef NEVR_TEST_HOOKS
       if (g_failPinning) {
         if (m != nullptr) FreeLibrary(m);
@@ -276,6 +281,14 @@ class PinnedModules {
  private:
   std::vector<HMODULE> modules_;
 };
+
+#ifdef NEVR_TEST_HOOKS
+// A test's pin: the libraries are freed when this returns.
+bool PinForTest(const std::vector<std::string>& names, std::string* failed, DWORD* error) {
+  PinnedModules pins;
+  return pins.Pin(names, failed, error);
+}
+#endif
 
 // #741 (ADR 0010): the plugin file, open for reading with FILE_SHARE_READ only, so no Windows process can
 // write to it or replace it while it is held. StageOne verifies the signature on it and keeps it open
@@ -1597,6 +1610,10 @@ void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPlu
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
 void TestHook_SetAfterDependenciesChecked(void (*hook)()) { g_afterDependenciesChecked = hook; }
 void TestHook_FailPinning(bool fail) { g_failPinning = fail; }
+void TestHook_SetPinDirectory(const char* directory) { g_pinDirectory = directory != nullptr ? directory : ""; }
+bool TestHook_PinSystemLibraries(const std::vector<std::string>& names, std::string* failed, DWORD* error) {
+  return PinForTest(names, failed, error);
+}
 
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
 
