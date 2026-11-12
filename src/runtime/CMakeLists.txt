@@ -107,6 +107,8 @@ set(PATCHES_SOURCES
     "content/content_pack_install.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
+    # #2336: the bullet spawn's one detour; PowerBoost's drop and DroneFix's tracer rule are filters on it.
+    "combat/bullet_spawn_hook.cpp"
     "combat/dronefix.cpp"
     "combat/powerboost.cpp"
     "combat/veilnet.cpp"
@@ -2109,6 +2111,17 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_write_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_write_gate PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_combat_write_gate DISCOVERY_MODE PRE_TEST)
+
+    # #2336: the bullet spawn's one detour (runtime/combat/bullet_spawn_hook.h) under MinHook against a fake game image: both
+    # filters run in order for one call, a drop stops the rest, and a second detour on the spawn is still refused by the gate.
+    add_executable(test_combat_bullet_spawn tests/test_combat_bullet_spawn.cpp combat/bullet_spawn_hook.cpp combat/write_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_combat_bullet_spawn.cpp combat/bullet_spawn_hook.cpp combat/write_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_bullet_spawn PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_combat_bullet_spawn PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_bullet_spawn PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_combat_bullet_spawn DISCOVERY_MODE PRE_TEST)
 
     # The combat module's group defaults and the balance transform's merge (runtime/combat): pure headers.
     add_executable(test_combat_settings tests/test_combat_settings.cpp)

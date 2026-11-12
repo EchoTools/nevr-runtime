@@ -42,6 +42,7 @@
 // keeps its hooks, its clock reads and its lines.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/bullet_spawn_hook.h"  // nEVR port: the bullet spawn has one detour, shared with PowerBoost (#2336)
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -981,10 +982,8 @@ Pose *__fastcall MuzzleTransform(void *transforms, Pose *out, uint32_t index) {
 // (+0xcd90a0 hands both to it). A drone bullet got some player's instead of the drone's, so
 // a second streak ran off to another spot (0,0,0). For a drone shot (t_velocity set) the
 // record gets the spawn point and no shooter velocity.
-constexpr uintptr_t BULLET_SPAWN_RVA = 0xce2020;
-constexpr uint8_t BULLET_SPAWN_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55 };
-using bullet_spawn_fn = void(__fastcall *)(uint8_t *, uint64_t, void *, float, const Pose *, const float *, int, uint32_t);
-bullet_spawn_fn Real_BulletSpawn = nullptr;
+// nEVR port (#2336): the spawn's one detour is bullet_spawn_hook.h's, shared with PowerBoost; this rule is its after filter.
+constexpr uintptr_t BULLET_SPAWN_RVA = nevr_combat::bullet_spawn::kRva;
 volatile LONG g_tracers = 0;
 
 // (logging builds) the first WATCH_TOTAL drone bullets, logged each frame for 1.5 s from the
@@ -1034,9 +1033,10 @@ void WatchBullet(uint8_t *, uint32_t) {}
 void WatchDue() {}
 #endif
 
-void __fastcall Hooked_BulletSpawn(uint8_t *sys, uint64_t index, void *ref, float speed, const Pose *pose,
-                                   const float *velocity, int remote, uint32_t flags) {
-    Real_BulletSpawn(sys, index, ref, speed, pose, velocity, remote, flags);
+void AfterBulletSpawn(const nevr_combat::bullet_spawn::Call &call) {  // nEVR port (#2336): after the game's spawn
+    uint8_t *sys = call.sys;
+    const uint64_t index = call.index;
+    const Pose *pose = static_cast<const Pose *>(call.pose);
     g_bullet_cs = sys;
     if (!t_velocity || !pose) return;
     EC_TRY {
@@ -1552,7 +1552,9 @@ void DroneHitsDue() {                                           // (server, once
 
 void InstallChase(uintptr_t base) {
     auto attack = (uint8_t *)(base + ATTACK_RVA), spawn = (uint8_t *)(base + BULLET_SPAWN_RVA);
-    if (memcmp(attack, ATTACK_BYTES, sizeof ATTACK_BYTES) || memcmp(spawn, BULLET_SPAWN_BYTES, sizeof BULLET_SPAWN_BYTES)) {
+    // nEVR port (#2336): the spawn's bytes are checked here as before, and by bullet_spawn_hook.cpp before its one detour.
+    if (memcmp(attack, ATTACK_BYTES, sizeof ATTACK_BYTES) ||
+        memcmp(spawn, nevr_combat::bullet_spawn::kPrologue, sizeof nevr_combat::bullet_spawn::kPrologue)) {
         LogWarning("AttackTarget / bullet spawn prologue mismatch -- the drone stays put, tracers as stock");
         return;
     }
@@ -1562,12 +1564,17 @@ void InstallChase(uintptr_t base) {
     g_set_velocity = (void *)(base + SET_VELOCITY_RVA);
     BulletDamage = (bullet_damage_fn)(base + BULLET_DAMAGE_RVA);
     Real_Attack = (attack_fn)attack;
-    Real_BulletSpawn = (bullet_spawn_fn)spawn;
+    // nEVR port (#2336): the spawn rule is a filter on the shared detour, set before the transaction and cleared when it fails,
+    // so the two still go in together or not at all.
+    if (!nevr_combat::bullet_spawn::SetAfter(base, AfterBulletSpawn, kCatModule)) {
+        LogWarning("AttackTarget / bullet spawn hook failed");
+        return;
+    }
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID &)Real_Attack, Hooked_Attack);
-    DetourAttach(&(PVOID &)Real_BulletSpawn, Hooked_BulletSpawn);
     LONG rc = DetourTransactionCommit();
+    if (rc != NO_ERROR) nevr_combat::bullet_spawn::SetAfter(base, nullptr, kCatModule);
     if (rc == NO_ERROR)
         Log("hooked AttackTarget and bullet spawn: a drone chases its target (%.0f m/s, holds %.0f m)", dk::kChaseSpeed, dk::kChaseDistance);
     else

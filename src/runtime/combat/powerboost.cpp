@@ -81,6 +81,7 @@
 // diagnostic lines are built with ECHOCOMBAT_LOG. Settings: PowerBoost.ini next to the DLL.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/bullet_spawn_hook.h"  // nEVR port: the bullet spawn has one detour, shared with DroneFix (#2336)
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -2341,7 +2342,7 @@ void __fastcall Hooked_GunFire(void *cs, uint32_t handle, float charge, void *a4
             g_party_pulse_at ? (unsigned long long)(now - g_party_pulse_at) : 0ull);
         g_party_shot_at = now;                             // its muzzle flash becomes the party effect
         g_party_bullet_until = now + 300;                  // and its bullet (spawned after the fire call) is dropped
-        t_party_fire = true;                               // ... with no bullet (Hooked_BulletSpawn)
+        t_party_fire = true;                               // ... with no bullet (DropBulletSpawn)
         Real_GunFire(cs, handle, charge, a4, a5, a6, a7, a8);
         t_party_fire = false;
         return;
@@ -2351,20 +2352,19 @@ void __fastcall Hooked_GunFire(void *cs, uint32_t handle, float charge, void *a4
 
 // The bullet system's spawn (+0xce2020, from FireBulletLocal; DroneFix hooks it too): none while a
 // party gun's shot is being fired on this thread.
-constexpr uintptr_t BULLET_SPAWN_RVA = 0xce2020;
-constexpr uint8_t BULLET_SPAWN_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55 };
-using bullet_spawn_fn = void(__fastcall *)(uint8_t *, uint64_t, void *, float, const void *, const float *, int, uint32_t);
-bullet_spawn_fn Real_BulletSpawn = nullptr;
-void __fastcall Hooked_BulletSpawn(uint8_t *sys, uint64_t a2, void *a3, float a4, const void *pose, const float *v, int a7, uint32_t a8) {
+// nEVR port (#2336): the spawn's one detour is bullet_spawn_hook.h's, shared with DroneFix; this rule is its drop filter,
+// which runs first, as his hook wrapped DroneFix's.
+bool g_spawn_filter_set = false;
+bool DropBulletSpawn(const nevr_combat::bullet_spawn::Call &) {
     // [party] drop_bullet (live, default 1). (Keeping the bullet did not stop the Pulsar firing by
     // itself, tested 2026-11-05.)
     if ((t_party_fire || (!g_server && GetTickCount64() < g_party_bullet_until)) &&
         GetPrivateProfileIntA("party", "drop_bullet", 1, g_ini_path)) {
         static volatile LONG logged = 0;
         if (InterlockedIncrement(&logged) <= 10) Log("PARTY GUN: bullet not spawned");
-        return;
+        return true;
     }
-    Real_BulletSpawn(sys, a2, a3, a4, pose, v, a7, a8);
+    return false;
 }
 
 using input_fn = int(__cdecl *)(void *session, unsigned type, void *state);
@@ -2522,11 +2522,9 @@ void InstallMedigun(uint8_t *base) {
     if (g_medigun_on && Check(base + GUN_FIRE_RVA, GUN_FIRE_BYTES, sizeof(GUN_FIRE_BYTES), "FireIntegratedGunLocal")) {  // nEVR port
         Real_GunFire = (fire_fn)(base + GUN_FIRE_RVA);
         AttachTracked(&(PVOID &)Real_GunFire, Hooked_GunFire);
-        if (base[BULLET_SPAWN_RVA] == 0xe9 ||               // DroneFix's hook already there: chain on it
-            Check(base + BULLET_SPAWN_RVA, BULLET_SPAWN_BYTES, sizeof(BULLET_SPAWN_BYTES), "bullet spawn")) {
-            Real_BulletSpawn = (bullet_spawn_fn)(base + BULLET_SPAWN_RVA);
-            AttachTracked(&(PVOID &)Real_BulletSpawn, Hooked_BulletSpawn);
-        }
+        // nEVR port (#2336): one detour, shared with DroneFix, which checks the bytes; this sets the filter on it (or
+        // installs it, when DroneFix has not). Unset again when this install's transaction fails, and at Uninstall.
+        g_spawn_filter_set = nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(base), DropBulletSpawn, kCatModule);
     }
     if (g_medigun_on) ReadMedigunIni(g_ini_path);  // nEVR port
     if (Check(base + SYSTEMS_FIND_RVA, SYSTEMS_FIND_BYTES, sizeof(SYSTEMS_FIND_BYTES), "systems by name") &&
@@ -2667,6 +2665,10 @@ bool Install(bool server) {
         g_player_symbol = (uint64_t *)(base + PLAYER_SYMBOL_RVA);
     }
     LONG rc = DetourTransactionCommit();
+    if (rc != NO_ERROR && g_spawn_filter_set) {             // nEVR port (#2336): the filter goes with the failed transaction
+        nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(base), nullptr, kCatModule);
+        g_spawn_filter_set = false;
+    }
     if (rc == NO_ERROR) Log("hooked HealServer and ProcessDamageServer (%s)", g_server ? "server" : "client");
     else LogError("hook failed (%ld)", rc);
     g_hooked = rc == NO_ERROR;
@@ -2683,6 +2685,8 @@ void Uninstall() {
         if (g_apply_hooked) DetourDetach(&(PVOID &)Real_Apply, Hooked_Apply);
         for (LONG i = 0; i < g_ntracked && i < 32; ++i) DetourDetach(g_tracked[i].real, g_tracked[i].hook);
         DetourTransactionCommit();
+        if (g_spawn_filter_set) nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)), nullptr, kCatModule);  // nEVR port (#2336)
+        g_spawn_filter_set = false;
         g_hooked = g_send_hooked = g_apply_hooked = false;
         g_ntracked = 0;
     }
