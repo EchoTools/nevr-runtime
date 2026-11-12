@@ -48,7 +48,10 @@
  *   ELF 0x189c8fc  bl 0xf46d40                  RenderDrawData<CGDrawData>(renderer, ctx, 18, key): the same stub as the eye pass's pool-11 call
  *   ELF 0x189c900  ldr x8,[x24,#0x1200]         the return site
  * So the frame key the pool-18 draw passes is the pass's own u64 argument, passed through unchanged, as the eye pass passes its own (x21,
- * its x4) to pool 11: a pool-18 draw made after the pool-11 call can pass x3 of that call. The constants are set on the command buffer
+ * its x4) to pool 11: a pool-18 draw made after the pool-11 call can pass x3 of that call.
+ * The six words that carry x4, x2 and x1 into x21, x20 and x22 at the entry, and x22, x20 and x21 into the call's x0, x1 and x3,
+ * are pinned (`kEyeArgWords`). That nothing between the entry and the call writes x20, x21 or x22 is a scan of the listing, which
+ * the test does not make: it is not pinned. The constants are set on the command buffer
  * before the draw. The function has no other load from gctx+0x368 in its 852 bytes (a scan of the listing, not made by the test), so its own
  * code sets the constants once and does not put other values back; what the pools it draws after the return site (0x1d, 0x1f, 0x20, 0x1c,
  * 0x1e, through CGDrawData::Render) do with the command buffer's state is not established (the function is not in the proven reconstruction tree).
@@ -117,13 +120,13 @@
  *
  *
  * Drift from the upstream reference (kotorvr/echoquest-combat), recorded here, not carried as fact:
- *   1. The label of the word at ELF 0x3753258 (VA 0x3853258). Upstream (afk_fx.cpp:645) calls it "u32 frame slot MainAndroid indexes
+ *   1. The label of the word at ELF 0x3753258 (VA 0x3853258). Upstream labels it "u32 frame slot MainAndroid indexes
  *      pools with (x 39 pools)". Measured: Render indexes its pool table with its own u64 argument, `mul x24,x4,#0x27` at VA
  *      0x199e864, not with a memory word. The word is read as s1 with s0 (`ldp w10,w9,[x29]`, x29 = 0x3853254) in the mesh loops at
  *      VA 0x199eab8 to 0x199f090, and it has 47 read xrefs and one write (VA 0x198bed4). The label is wrong for the pool-11 path.
- *   2. The kP18Frame index. Upstream afk_fx.cpp:669 reads that word as the frame index `fi` and takes the pool-18 entry at
+ *   2. The kP18Frame index. Upstream (its pool-18 stat in afk_fx.cpp) reads that word as the frame index `fi` and takes the pool-18 entry at
  *      `fi * 39 + 18`, for its stat line. Because the word is s1, that stat reads the wrong pool entry. The frame key that the
- *      pool-11 call passes is the u64 in x3 at the call (x21 in Render), and a pool-18 draw made at the same site should pass the same.
+ *      pool-11 call passes is the u64 in x3 at the call (x21 in Render), and whether a pool-18 draw made at the same site passes the same value is not established.
  *   3. The build name. Upstream names its libr15 build "4911ef7f"; the file these pins are measured on has build id
  *      b243509c08ce677aeb95fa348016949b3fc45230 (see texel_buffer_guard_targets.h).
  */
@@ -148,6 +151,15 @@ inline constexpr std::uint32_t kPool11CallWord = 0x97da9f12U;  // bl 0xf46d40
 inline constexpr std::uint64_t kPool11ReturnVaddr = 0x189f0fcULL;  // the call's return address: kPool11CallVaddr + 4
 inline constexpr std::uint32_t kPool11ReturnWord = 0x910de2d7U;   // add x23,x22,#0x378
 inline constexpr std::uint32_t kPool11Pool = 11;                 // ERenderPool value passed in w2
+// The eye pass's argument moves: the entry copies x4, x2 and x1 into x21, x20 and x22, and the call before the pool-11 draw passes x22, x20 and x21 as its x0, x1 and x3.
+inline constexpr pinned::Word kEyeArgWords[] = {
+    {"Render entry: mov x21,x4 (the frame key)", 0x189e878ULL, 0xaa0403f5U},
+    {"Render entry: mov x20,x2 (the thread context)", 0x189e87cULL, 0xaa0203f4U},
+    {"Render entry: mov x22,x1 (the renderer)", 0x189e880ULL, 0xaa0103f6U},
+    {"pool-11 call: mov x0,x22 (the renderer)", 0x189f0ecULL, 0xaa1603e0U},
+    {"pool-11 call: mov x1,x20 (the thread context)", 0x189f0f0ULL, 0xaa1403e1U},
+    {"pool-11 call: mov x3,x21 (the frame key)", 0x189f0f4ULL, 0xaa1503e3U},
+};
 
 // The PLT stub the call goes through, and its JUMP_SLOT word.
 inline constexpr std::uint64_t kThunkVaddr = 0xf46d40ULL;

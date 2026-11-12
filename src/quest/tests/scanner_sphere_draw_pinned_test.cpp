@@ -224,6 +224,7 @@ int main(int argc, char** argv) {
   };
   const List lists[] = {
       {sd::kWords, std::size(sd::kWords)},           {sd::kLowresWords, std::size(sd::kLowresWords)},
+      {sd::kEyeArgWords, std::size(sd::kEyeArgWords)},
       {sd::kCmdBufferWords, std::size(sd::kCmdBufferWords)}, {sd::kPsoWords, std::size(sd::kPsoWords)},
       {sd::kCreateBlendStateWords, std::size(sd::kCreateBlendStateWords)}, {sd::kFillWords, std::size(sd::kFillWords)},
   };
