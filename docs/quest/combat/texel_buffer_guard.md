@@ -100,6 +100,10 @@ is passed to the driver and neither served nor counted as a second device.
   set under the mutex, and one driver `vkUpdateDescriptorSets` call when a set has a uniform texel binding. Once per process: the buffer, its
   memory and its view (64 KiB of host-visible memory). How often the game allocates sets (at load only, or per frame) is not established: the
   Debug count line at powers of two and the end line's `sets` give the rate. Not measured on a headset.
+- **Cost of the device check (every level).** Each call of either wrapper first runs `ServesDevice`: a compare-exchange on the first-device slot, a
+  read-modify-write on one shared cache line. It runs after the driver call, in arena too, and also after the guard is off. A plain acquire load
+  before it would skip the store once the first device is taken; it is not made, because no test can observe that store (the result is the same).
+  Calls per frame (the wrappers' calls in a 60 s window over the frames in it, ADR 0038 section 2): not measured. Added time per frame: not measured.
 
 ## Not shown
 

@@ -180,7 +180,7 @@ constexpr std::array kModules{
     Module{"memsys", &MemsysEarly, nullptr},
     // texel_buffer_guard (#1650): registers two device-function requests with vk_ext_window (no hook of its own); early, because the requests must
     // be in before install_vk_ext_window and the game's first lookup. It touches no slot a plugin could hook (README rule 8). Acts in every level
-    // (README rule 9, a default the game replaces before any read).
+    // (README rule 9, its second exception: a default for a value the API leaves undefined until it is written).
     Module{"texel_buffer_guard", &TexelBufferGuardEarly, nullptr, "combat.texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard,
            &texel_buffer_guard::End},
     // script_redirect (#2189): first of the normal rows (script_redirect.h), so a script load the later rows' installs cause is already redirected.

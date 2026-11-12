@@ -30,7 +30,9 @@
  * recycled pool); a read of a binding the game wrote sees what the game wrote. In arena that is a change for such a read, from undefined to
  * zeros, which the API's rule makes acceptable. Cost per allocation: one driver call and a
  * table look-up per set under one mutex; per layout created: one walk of its bindings. Not per frame unless the game allocates sets per frame
- * (not established: the count line at powers of two shows how often).
+ * (not established: the count line at powers of two shows how often). Each call of either wrapper, in every level and also after the guard is
+ * off, first runs ServesDevice: a compare-exchange on the first-device slot (a read-modify-write on one shared cache line). A plain load before
+ * it would skip the store once the device is taken; that is not made, because no test can observe the store. Calls per frame: not measured.
  *
  * Which APKs (ADR 0046 rule 5). The combat variants: the early step of combat_install.h registers the request, before
  * install_vk_ext_window and before the game's first Vulkan lookup. Switch: `combat.texel_buffer_guard`, default true (the reference build
