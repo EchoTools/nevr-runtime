@@ -1922,6 +1922,35 @@ void TheDroneguardRowHandsTheModuleItsStageOneKey() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// The booster pool's row hands it whether levelname installed (#2382): with levelname installed on an image of the four words it hooks, the booster
+// pool is told so and goes on to its own install, which finds no libr15 on the host; told otherwise it would answer needs_levelname.
+void TheBoosterRowHandsTheModuleWhetherLevelnameInstalled() {
+  namespace ln = nevr_quest::combat::levelname;
+  ln::ResetForTest();
+  nevr_quest::combat::boosterpool::ResetForTest();
+  Process(bv::Variant::kCombat);
+  combat_test::Image image;
+  std::vector<combat_test::Reloc> relocs;
+  for (const std::uint64_t slot : ln::targets::kSlots) relocs.push_back({ln::targets::kSymbol, slot, false, false, ln::targets::kFnVaddr, /*abs64=*/true});
+  image.Build(relocs);
+  for (const std::uint64_t slot : ln::targets::kSlots) image.Put<std::uintptr_t>(slot, image.Base() + ln::targets::kFnVaddr);
+  static const combat_test::Image* g_levelImage = nullptr;
+  g_levelImage = &image;
+  ln::SetImageLookupForTest([](const char*, sentinel::ElfImage* out) {
+    *out = g_levelImage->Elf();
+    return true;
+  });
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "levelname=installed boosterpool=module_not_loaded"));
+  QCHECK(Lines("combat_boosterpool_install").size() == 1U && Has(Lines("combat_boosterpool_install")[0].text, "\"reason\":\"module_not_loaded\""));
+  ln::ResetForTest();
+  ln::SetImageLookupForTest(nullptr);
+  nevr_quest::combat::boosterpool::ResetForTest();
+  image.Drop();
+  Done();
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1970,6 +1999,7 @@ int main() {
   TheDecalsRowHandsTheModuleItsFlipKeys();
   TheBvhRowHandsTheModuleItsGateAndTouchKeys();
   TheDroneguardRowHandsTheModuleItsStageOneKey();
+  TheBoosterRowHandsTheModuleWhetherLevelnameInstalled();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
