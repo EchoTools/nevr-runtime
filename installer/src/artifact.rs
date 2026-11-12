@@ -3,12 +3,12 @@
 //! only interrupted keeps its `.part` file so the next run resumes it.
 
 use crate::error::{Error, Result};
-use crate::fetch::{fetch_capped, sha256_file, Failure};
+use crate::fetch::{fetch_capped, sha256_reader, Failure};
 use crate::manifest::Artifact;
 use crate::util::hex;
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,28 +25,45 @@ fn part_path(out: &Path) -> PathBuf {
 }
 
 /// Downloads `url` to `out`, checking the artifact's size and sha256. On success `out` exists and is complete.
+///
+/// The `.part` file is held under an exclusive lock from before its length is read until the download is renamed
+/// into place (#1384). A second download to the same output refuses with a message that names the file, and the
+/// bytes already in it are left alone; the lock is released when this call returns.
 pub fn download(url: &str, art: &Artifact, out: &Path) -> Result<Fetched> {
     let part = part_path(out);
     let _ = fs::remove_file(out);
-    let mut start = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&part)
+        .map_err(|e| Error::new(8, format!("{}: {e}", part.display())))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(Error::new(8, format!("{} is locked by another download; run again when it has finished", part.display())));
+        }
+        Err(TryLockError::Error(e)) => return Err(Error::new(8, format!("{}: cannot lock: {e}", part.display()))),
+    }
+    let part_err = |e: std::io::Error| Error::new(8, format!("{}: {e}", part.display()));
+    let mut start = file.metadata().map(|m| m.len()).unwrap_or(0);
     if start > art.size {
-        let _ = fs::remove_file(&part);
         start = 0;
     }
     let mut resumed_from = start;
+    if start == 0 {
+        file.set_len(0).map_err(part_err)?;
+    } else {
+        file.seek(SeekFrom::Start(start)).map_err(part_err)?;
+    }
     loop {
-        let mut file = if start == 0 {
-            File::create(&part)
-        } else {
-            OpenOptions::new().append(true).open(&part)
-        }
-        .map_err(|e| Error::new(8, format!("{}: {e}", part.display())))?;
         match fetch_capped(url, start, art.size, &mut file) {
             Ok(_) => break,
             Err(Failure::Refused(_)) if start > 0 => {
                 // The server did not honour the range: start again from zero, once.
-                drop(file);
-                let _ = fs::remove_file(&part);
+                file.set_len(0).map_err(part_err)?;
+                file.seek(SeekFrom::Start(0)).map_err(part_err)?;
                 start = 0;
                 resumed_from = 0;
             }
@@ -58,12 +75,15 @@ pub fn download(url: &str, art: &Artifact, out: &Path) -> Result<Fetched> {
             Err(Failure::Interrupted(m)) => return Err(Error::new(8, format!("{m} (the partial download is kept for a resume)"))),
         }
     }
-    let (size, sha) = sha256_file(&part).map_err(|e| Error::new(8, format!("{}: {e}", part.display())))?;
+    file.seek(SeekFrom::Start(0)).map_err(part_err)?;
+    let (size, sha) = sha256_reader(&mut file).map_err(part_err)?;
     if size != art.size {
+        drop(file);
         let _ = fs::remove_file(&part);
         return Err(Error::new(8, format!("size is {size}, the manifest says {}", art.size)));
     }
     if sha != art.sha256 {
+        drop(file);
         let _ = fs::remove_file(&part);
         return Err(Error::new(8, "sha256 differs from the manifest"));
     }
