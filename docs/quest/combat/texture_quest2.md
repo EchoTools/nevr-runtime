@@ -191,9 +191,9 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
-canvas needs a resize (its reconstruction). So one Resize reaches the upload lock at up to thirteen sites among the calls read: once in `FlushGPU`, once in each of the four direct body calls of `CGDisplay::Resize` (kind 0xe), and, in each of the four `DeferredDestroy(SGImage&)` calls, twice: once in the body (kind 0xa) and once in `DeferredFree` (0x18888b0), which takes the same lock on the same equal-frame condition. The body and `DeferredFree` are reached only on the last reference. None of the eight runs when `CCanvas::BeforeResize` answers non-zero:
+canvas needs a resize (its reconstruction). So one Resize reaches the upload lock at up to thirteen sites among the calls read: once in `FlushGPU`, once in each of the four direct body calls of `CGDisplay::Resize` (kind 0xe), and, in each of the four `DeferredDestroy(SGImage&)` calls, twice: once in the body (kind 0xa) and once in `DeferredFree` (0x18888b0), which takes the same lock on the same equal-frame condition. The body and `DeferredFree` are reached only on the last reference. None of those eight calls (all of them read, at 0x1834878 to 0x18348f8) runs when `CCanvas::BeforeResize` answers non-zero:
 `CCanvasDisplay::Resize` returns before `CGDisplay::Resize` (`src/reconstruction/r15/ccanvas_display_resize.cpp:79`). Each take sits
-behind the body's own tests (a null handle returns first; the upload lock is taken on the immediate path, and the queue path takes the lock whose pointer is at 0x379b478, an open item below), so each of the thirteen sites is a take that
+behind the body's own tests (a null handle returns first; the upload lock is taken on the immediate path, and the queue path takes the lock whose pointer is at 0x379b478, an open item below; `DeferredFree`'s own queue path, at 0x188891c, takes the lock whose pointer word is 0x379b488 (`ldr x21,[x9,#0x488]` at 0x1888920), and what stores that word is not established), so each of the thirteen sites is a take that
 can occur, not a count of takes that do. The calls after 0x18348f8 in `CGDisplay::Resize` are not read. Their `bl` sites are
 0x1834928 (`CGSurfaceManager::DestroyDisplay`), 0x1834944 (`CreateDisplay`), 0x1834974 and 0x18349b8 (`CSymbol64::String`),
 0x1834988 and 0x18349cc (`CreateRenderTargetFromDisplay`), 0x1834a00 (`PresentDisplay`) and 0x1834a70 (`CErrMsg::CreateAndAddError`).
@@ -298,6 +298,6 @@ The game's own Resize (a display change) has the same exposure.
   pinned words is inferred.
 - When the init-fiber count (game + 0x1f08) returns to 0 against the end of a gamespace's uploads: `UpdateGameSpaceInit` (ELF 0x17ecc7c) has no
   reconstruction yet.
-- Who writes the queue lock pointer at 0x379b478.
+- Who writes the queue lock pointers at 0x379b478 (the deferred-destroy body) and 0x379b488 (`DeferredFree`'s queue path).
 - What `SubmitPendingTemporaryCommandBuffers` and the call through gctx + 0xf8 do in `FlushGPU`, and what `CGDisplay::Resize` runs
   between its four destroys.

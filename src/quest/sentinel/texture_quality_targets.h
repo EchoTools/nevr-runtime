@@ -39,7 +39,8 @@
  * reference, 0x1888c24..0x1888c34) and then DeferredFree's take (0x18888b0, the same lock on the same
  * equal-frame condition, called at 0x1888c3c). Each take sits behind the body's own tests (a null handle
  * returns first). The upload lock is taken on the immediate path; the queue path takes the lock whose
- * pointer is at 0x379b478, an open item in texture_quest2.md, so each site is a take that can occur, not a count. The calls after 0x18348f8 in
+ * pointer is at 0x379b478, an open item in texture_quest2.md (DeferredFree's own queue path takes the lock whose pointer is at
+ * 0x379b488, not established), so each site is a take that can occur, not a count. The calls after 0x18348f8 in
  * CGDisplay::Resize are not read, so the total for one Resize is not bounded by this reading.
  *
  * The path from CEngine::Resize (each call is a bl; a call through the PLT names the stub, whose JUMP_SLOT names the callee):
