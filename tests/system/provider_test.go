@@ -107,7 +107,7 @@ func TestPlatformCode_WirePayloadOffset(t *testing.T) {
 		accountIDLen    = 8
 
 		platformCodeOffset = markerLen + symbolLen + lengthLen + uuidLen // 40
-		accountIDOffset    = platformCodeOffset + platformCodeLen         // 48
+		accountIDOffset    = platformCodeOffset + platformCodeLen        // 48
 	)
 
 	// These offsets must match the Nakama server's Stream method in
