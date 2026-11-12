@@ -50,9 +50,9 @@ process.
    listed in the manifest's `empty` list. A blob is one stock-format chunk: one zstd frame whose decompressed bytes are the buffer.
    The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
    this decision (see Not claimed).
-5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json` (kept by
-   hash), `v1/manifest.json` (the current copy, short cache). A test device names `v1/test/manifest.json` through `assets.cdn_url`;
-   `v1/manifest.json` holds no label in this decision. The manifest-publish token is held by the project owner's delegate;
+5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json.zst` (kept by
+   hash), `v1/manifest.json.zst` (the current copy, short cache). A test device names `v1/test/manifest.json.zst` through `assets.cdn_url`;
+   `v1/manifest.json.zst` holds no label in this decision. The manifest-publish token is held by the project owner's delegate;
    whether an R2 token can be limited to a key prefix is open and not needed here.
 6. **Objects are appended to a few store files and hashed once.** A blob is streamed into `store-<n>.pack` (at most 4 GiB: the engine's
    chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cargo_validate.h`); when size, header
