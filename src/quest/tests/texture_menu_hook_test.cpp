@@ -841,6 +841,8 @@ void ADocumentOfAnotherShapeIsPassedThroughAndSaysSo() {
   QCHECK(tm::PollOnceForTest() >= 2);
   const std::string menu = LineWith("\"document\":\"menu_settings\"");
   QCHECK(menu.find("\"result\":\"shape_mismatch\"") != std::string::npos && menu.find("\"level\":\"warn\"") != std::string::npos);
+  // #1823: the line says which walk found no row and the document's top-level keys.
+  QCHECK(menu.find("\"shape_site\":\"menu_rows\"") != std::string::npos && menu.find("\"top_keys\":\"pages\"") != std::string::npos);
   const std::string settings = LineWith("\"document\":\"gamesettings_config\"");
   QCHECK(settings.find("\"result\":\"not_json\"") != std::string::npos);
 }

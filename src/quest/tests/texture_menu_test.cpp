@@ -234,6 +234,20 @@ void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
   QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty());
 }
 
+// #1823: a document of another shape says which walk found no row and what its top-level keys are, for the texture_menu_json line.
+void AShapeMismatchNamesTheWalkAndTheTopLevelKeys() {
+  const tm::Result menu = tm::RewriteMenuSettings(R"({"pages": [{"name": "P", "rows": []}], "version": 2})", 1);
+  QCHECK(menu.status == tm::Status::kShapeMismatch);
+  QCHECK(menu.shapeSite == "menu_rows");
+  QCHECK(menu.topKeys == "pages,version");
+  const tm::Result settings = tm::RewriteGameSettings(R"json({"quest": {"pages": ["GRAPHICS (1/3)"]}})json");
+  QCHECK(settings.status == tm::Status::kShapeMismatch);
+  QCHECK(settings.shapeSite == "settings_rows");
+  QCHECK(settings.topKeys == "quest");
+  QCHECK(tm::RewriteMenuSettings("[1, 2, 3]", 1).topKeys == "[array]");
+  QCHECK(tm::RewriteGameSettings("42").topKeys == "[scalar]");
+}
+
 void AMenuWithoutTheRowIsLeftAlone() {
   const tm::Result noRow = tm::RewriteMenuSettings(R"({"pages": [{"name": "DISPLAY", "rows": [{"path": "graphics|fullscreen"}]}]})", 1);
   QCHECK(noRow.status == tm::Status::kShapeMismatch && noRow.text.empty() && noRow.rows == 0);
@@ -299,6 +313,7 @@ int main() {
   TheSettingsDocumentStopsHidingTheHandFlipSetting();
   ANotOfferedRowAddsNoRowAndKeepsTheStockEntry();
   AMenuWithoutTheRowIsLeftAlone();
+  AShapeMismatchNamesTheWalkAndTheTopLevelKeys();
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();
   TheRewriteDoesNotChangeItsOwnOutput();
