@@ -762,10 +762,11 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 // source missing (the fields say unknown), and a party field read wrongly (the size, the id, the leader).
 // With the social facade not installed (partySource false) the state is still set, but the record must say unknown:
 // nothing feeds that state in a run without the facade, so its contents are not the client's party (#1525).
-void CheckLobbySuccessRecord(bool partySource) {
+// With the facade installed and no party (inParty false) the record must say none: the state is read and holds no party.
+void CheckLobbySuccessRecord(bool partySource, bool inParty = true) {
   nevr_social_party::State& party = nevr_social_party::Global();
   party.SetSelf(5);
-  {
+  if (inParty) {
     std::string joined;
     nevr_social_party::AppendLe(joined, 7, 8);   // the party id
     nevr_social_party::AppendLe(joined, 42, 8);  // the party's owner
@@ -837,8 +838,9 @@ void CheckLobbySuccessRecord(bool partySource) {
   // ms (300 ms or more, and well under the limit of a minute).
   std::string golden = lobby_record_golden::kSuccessNoRequestNoParty;
   const std::string noParty = "party_id=none party_size=0 party_leader=no";
-  const std::string expectedParty =
-      partySource ? "party_id=7 party_size=2 party_leader=no" : "party_id=unknown party_size=unknown party_leader=unknown";
+  const std::string expectedParty = !partySource ? "party_id=unknown party_size=unknown party_leader=unknown"
+                                    : inParty   ? "party_id=7 party_size=2 party_leader=no"
+                                                : noParty;
   const std::size_t noPartyAt = golden.find(noParty);
   QCHECK(noPartyAt != std::string::npos);
   if (noPartyAt != std::string::npos) golden.replace(noPartyAt, noParty.size(), expectedParty);
@@ -872,6 +874,8 @@ void TestLobbySuccessReachingTheGameIsRecorded() { CheckLobbySuccessRecord(true)
 
 void TestLobbySuccessWithoutAPartySourceSaysUnknown() { CheckLobbySuccessRecord(false); }
 
+void TestLobbySuccessWithInstalledFacadeAndNoPartySaysNone() { CheckLobbySuccessRecord(true, false); }
+
 int main() {
   TestUpgradeKeepsCloseFrameSentWithResponse();
   TestLoginRelayTapAndSideChannel();
@@ -887,6 +891,7 @@ int main() {
   TestReconnectedLoginSocketIsToldItsLoginWasRemoved();
   TestLobbySuccessReachingTheGameIsRecorded();
   TestLobbySuccessWithoutAPartySourceSaysUnknown();
+  TestLobbySuccessWithInstalledFacadeAndNoPartySaysNone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
