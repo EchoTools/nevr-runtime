@@ -955,6 +955,28 @@ TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
   EXPECT_EQ(viaHook, expected);
 }
 
+// #788: a unix symbolic link to the plugins directory, made outside it (Proton reaches a game path through a symlinked
+// Steam library). Wine's final-path query does not resolve that link, so the name is matched by identity. The unsigned
+// file it names is refused like any other late load. The link is made before the filter is installed and removed after
+// the query; a Windows directory link is removed with RemoveDirectoryW and a unix one falls back to DeleteFileW.
+TEST_F(PluginDependencyGateTest, ALateLoadThroughALinkToThePluginsDirectoryIsRefused) {
+  Plan("late_via_link.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  std::wstring wideDir(pluginsDir_.begin(), pluginsDir_.end());
+  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size());
+  const std::wstring link = root + L"nevr_dir_link";
+  const std::wstring target = wideDir.substr(0, wideDir.size() - 1);  // the plugins directory, no trailing backslash
+  DeleteFileW(link.c_str());
+  ASSERT_TRUE(CreateSymbolicLinkW(link.c_str(), target.c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY)) << GetLastError();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring viaLink = link + L"\\late_via_link.dll";
+  for (wchar_t& c : viaLink) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  const bool blocked = nevr_dll_load_hook::IsLoadBlocked(viaLink.c_str(), nullptr);
+  if (!RemoveDirectoryW(link.c_str())) DeleteFileW(link.c_str());
+  EXPECT_TRUE(blocked) << "an unsigned file loaded through a link to the plugins directory was let through";
+  EXPECT_TRUE(TestLogContains("refused a later load of late_via_link.dll: unsigned"));
+}
+
 // A plugin's own DllMain loading another file runs inside the loader's own load of that plugin, with the loader
 // lock held. The file it loads is not the one the loader checked.
 TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
