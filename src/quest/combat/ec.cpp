@@ -539,6 +539,13 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
     g_lastClass = cls;
     if (!in) {  // leaving: no game socket for the net tick, the page's answer word cleared and the step's copy of it (the first step back writes it)
       // g_gameSrc is not cleared: it is read only behind a match of g_gameFd (RecvInScope), and the step writes it before it writes g_gameFd
+      {
+        // the server pick is forgotten (#2390): out of scope the sendto hook does not watch the game's sends, so the last scope's socket and
+        // address are not known to be the game's when the client comes back; the game's first send in scope picks the server, as after the install
+        LockG l;
+        for (Dest& d : g_st.dests) d = Dest{};
+        g_st.best = -1;
+      }
       g_gameFd.store(-1, std::memory_order_relaxed);
       Store32(sentinel::EcPage() + kQuestEcServer, 0);
       g_loop.pageAns = false;
@@ -549,7 +556,8 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
                          {"level_class", scope::LookClassName(cls)},
                          {"level", sentinel::HexString(levelText, look.level)},
                          {"msg", in ? "a combat map or the combat lobby is loaded: the EC client acts"
-                                    : "no combat map or combat lobby is loaded: the EC client passes every call to the game and sends nothing"}});
+                                    : "no combat map or combat lobby is loaded: the EC client passes every call to the game, sends nothing and "
+                                      "forgets the server (back in scope, the game's first send picks it)"}});
   }
   return in;
 }

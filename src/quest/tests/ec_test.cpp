@@ -996,6 +996,49 @@ static void LeaveTests() {
   CHECK(Load32(EcPage() + kQuestEcServer) == 1, "back in scope on a server that states EchoCombat, the step left the page's +0x40 word at 0");
 }
 
+// The leave forgets the server pick (ec.cpp RefreshScope, the `if (!in)` block; #2390). Out of scope the sendto hook does not watch the game's
+// sends, so the last scope's socket and address are not known to be the game's when the client comes back. The first step back, 3000 ms out and
+// with no send by the game since, sends nothing (no hello to the last scope's server through its socket) and follows no socket for the net tick;
+// the game's next send picks the server, and the hello goes to it in its 2 s slot.
+static void LeavePickTests() {
+  ResetAll();
+  InstallOk();
+  CHECK(OnNetTick(&NetTick), "no tick slot");
+  g_tick_calls = 0;
+  GameTalks(7);
+  Step(g_now100);
+  Stats s = StatsNow();
+  CHECK(s.haveServer && s.serverFd == 7, "setup: the game's send did not pick the server (fd %d)", s.serverFd);
+  ForceScopeForTest(0);
+  CHECK(!RefreshScope(g_now100 / 10000), "setup: still in scope");
+  CHECK(HasLine("\"in_scope\":0") && HasLine("forgets the server"), "the leave's scope line does not say the server pick is forgotten");
+  AdvanceMs(3000);
+  ForceScopeForTest(1);
+  CHECK(RefreshScope(g_now100 / 10000), "setup: not back in scope");
+  g_sent.clear();
+  Step(g_now100);
+  s = StatsNow();
+  CHECK(g_sent.empty(), "the first step back, 3000 ms out and no send by the game since, sent %zu packet(s), the first '%c' on the last scope's fd %d",
+        g_sent.size(), g_sent.empty() ? '-' : static_cast<char>(g_sent[0].bytes[4]), g_sent.empty() ? -1 : g_sent[0].fd);
+  CHECK(!s.haveServer, "the first step back kept the last scope's server (fd %d)", s.serverFd);
+  uint8_t buf[64];
+  sockaddr_in from{};
+  socklen_t fl = sizeof from;
+  g_in.push_back(Plain(20, Server(), SPort()));
+  GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
+  CHECK(g_tick_calls == 0, "after the first step back a datagram on the last scope's game socket ran the net tick: %d", g_tick_calls);
+  // the game sends to its server on another socket: that is the server, and the hello goes to it
+  uint8_t b[8] = {};
+  GameSend(9, b, sizeof b, 0x0a000002, SPort());
+  g_sent.clear();
+  AdvanceMs(2000);
+  Step(g_now100);
+  s = StatsNow();
+  CHECK(s.haveServer && s.serverFd == 9 && s.serverAddr == 0x0a000002, "the game's send back in scope did not pick its server (fd %d)", s.serverFd);
+  CHECK(g_sent.size() == 1 && g_sent[0].fd == 9 && g_sent[0].addr == 0x0a000002 && g_sent[0].bytes[4] == 'H',
+        "the hello did not go to the server the game sends to: %zu sent, the first on fd %d", g_sent.size(), g_sent.empty() ? -1 : g_sent[0].fd);
+}
+
 static void StepTests() {
   // use counters -> packets twice to the server, hello every 2 s, server line once
   ResetAll();
@@ -1466,7 +1509,9 @@ static void ArenaTests() {
   AdvanceMs(250);
   CHECK(LookAndAsk(), "a combat map is not in scope");
   // the step of this in-scope look sets the page's answer word (the server states EchoCombat) and the net tick runs on the game's socket (a datagram
-  // that is not ours, from the server): the stale leave below must clear the word and stop the tick
+  // that is not ours, from the server): the stale leave below must clear the word and stop the tick. The game sends first: the leave above forgot
+  // the server pick (#2390), so this scope's server is the one the game sends to in it.
+  GameTalks();
   ServerStates(true);
   Step(g_now100);
   CHECK(Load32(EcPage() + kQuestEcServer) == 1, "setup: the step did not set the answer word");
@@ -1574,6 +1619,7 @@ int main() {
   WrapperTests();
   NetTickTests();
   LeaveTests();
+  LeavePickTests();
   StepTests();
   HideTests();
   SelectionTests();

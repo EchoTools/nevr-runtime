@@ -144,3 +144,8 @@ runm ec_stale_leave_keeps $E "s#^    if (!in) {  // leaving#    if (false) {  //
 # the answer word (the first step back leaves the word at 0)
 runm ec_leave_fd        $E "s#^      g_gameFd.store(-1, std::memory_order_relaxed);#      (void)0;#"
 runm ec_leave_ans       $E "s#^      g_loop.pageAns = false;#      (void)0;#"
+# the leave forgets the server pick, one line at a time (#2390): without either clear, the first step back sends the hello through the last
+# scope's socket to its server; and the leave's scope line says the pick is forgotten
+runm ec_leave_pick_dests $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        (void)0;#"
+runm ec_leave_pick_best  $E "s#^        g_st.best = -1;#        (void)0;#"
+runm ec_leave_pick_line  $E "s#\"forgets the server (back in scope, the game's first send picks it)\"#\"\"#"
