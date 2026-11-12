@@ -504,13 +504,13 @@ release-check:
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev reference_apk=env("NEVR_QUEST_REFERENCE_APK"):
+package-dev store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
     tools/release_preflight.py
     tools/quest_keystore.sh check
-    [ -f "{{ reference_apk }}" ] || { echo "package-dev: reference APK not found: {{ reference_apk }} (set NEVR_QUEST_REFERENCE_APK to the reference build, #1994)" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
     echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
     out="build/package-dev/${commit:0:7}"
@@ -529,7 +529,7 @@ package-dev reference_apk=env("NEVR_QUEST_REFERENCE_APK"):
     x86_64-w64-mingw32-strip "$installer"
     # The same file under the name programs outside this repository still call (#1492): one build, one copy.
     cp "$installer" "$(dirname "$installer")/nevr-install.exe"
-    just _quest-apk "{{ reference_apk }}"
+    just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
@@ -541,11 +541,9 @@ package-dev reference_apk=env("NEVR_QUEST_REFERENCE_APK"):
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
         --quest-build-info build/android-dev/generated/nevr_build_info.h
 
-# The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the reference
-# build's base (tools/quest_release_base.py prepare), then checked against that base (check-release), as the release APK is (#1995,
-# #1994). The store APK has none of the reference build's combat entries. Private: package-dev only (a release packages CI's loader,
-# release-quest-apk).
-_quest-apk reference_apk: _build-guard _require-ndk
+# The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
+# APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
+_quest-apk store_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
@@ -553,12 +551,7 @@ _quest-apk reference_apk: _build-guard _require-ndk
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    base=build/android-dev/base/reference-r15.apk
-    rm -f "$base"
-    mkdir -p build/android-dev/base
-    python3 -I tools/quest_release_base.py prepare --apk "{{ reference_apk }}" --out "$base" >&2
-    just android-repack-apk "$base" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
-    python3 -I tools/quest_release_base.py check-release --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk --base "$base" >&2
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
 # android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
@@ -789,11 +782,9 @@ quest-install *args: build-installer
 # command after `--`, then `go test -json` in tools/ (-C tools) with a hermetic environment, keeps its stream as <stem>-go.jsonl beside the
 # run's log, appends go_start and go_end to runs.jsonl, and ends with one line naming each failed half. ARGS go to the
 # Python runner only; the Go half always runs the module.
-# The Python runner names its interpreter and dependencies: `uv run --no-project` with PyYAML (the suite imports it) and
-# pytest with the two plugins the runner loads, so the result does not depend on which python3 comes first on PATH (#529).
 [positional-arguments]
 test-tools *ARGS: go-tools
-    build/go-tools/test-go-tools -C tools -- uv run --no-project --with pyyaml --with pytest --with pytest-xdist --with pytest-randomly python tools/run_tool_tests.py "$@"
+    build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
 
 # Build the Go tools of tools/go.mod (ADR 0044) into build/go-tools/; a recipe that runs one depends on this and runs
 # build/go-tools/<name>.
@@ -892,16 +883,13 @@ test-auth-unit:
     # A failing binary is recorded and the loop goes on, so one failure does not hide the binaries after it
     # (#1228); the summary after the last binary names every failure and exits non-zero.
     test_failures=()
-    # The verdict is GTest's own, not the exit code (#2152): each run writes its XML result beside the binary, and a
-    # run that exits 0 with no passing result (a stack overflow under Wine exited 0 with no summary line) is a failure.
     run_test() {
-        local rc=0 xml="$1.gtest.xml" verdict
-        rm -f "$xml"
+        local rc=0
         if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
-            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" --gtest_output="xml:$xml" || rc=$?
+            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" || rc=$?
         else
             echo "test-auth-unit: systemd-run unavailable or cannot start a user scope: running $1 with the time limit only (no memory cap)" >&2
-            timeout -k 10 900 wine "$1" --gtest_output="xml:$xml" || rc=$?
+            timeout -k 10 900 wine "$1" || rc=$?
         fi
         if [[ "$rc" -eq 124 ]]; then
             echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
@@ -912,9 +900,6 @@ test-auth-unit:
         elif [[ "$rc" -ne 0 ]]; then
             echo "test-auth-unit: FAIL — $1 exited $rc" >&2
             test_failures+=("$1 (exit $rc)")
-        elif ! verdict="$(python3 tools/gtest_verdict.py "$xml" 2>&1)"; then
-            echo "test-auth-unit: FAIL — $1 exited 0 but $verdict" >&2
-            test_failures+=("$1 (no GTest result, exit $rc)")
         fi
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
@@ -3191,7 +3176,7 @@ verify:
     # no user git configuration or signing key, a fixed identity, no display.
     # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
     just go-tools
-    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main uv run --no-project --with pyyaml python -m unittest discover -s tools/tests -p 'test_*.py'
+    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.

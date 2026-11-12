@@ -204,10 +204,6 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 	cmd := exec.CommandContext(ctx, goPath, goArgs...)
 	cmd.Dir = moduleDir
 	cmd.Env = env
-	// A tool that dies without its cleanup (SIGKILL, a crash) must not leave go running, or a fake that holds a
-	// worktree (remove-worktree refuses a process with its cwd inside). The kernel kills the child when its parent
-	// thread exits; the tool's own grace kill covers the normal paths.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) } // go test stops its test binaries on SIGINT
 	cmd.WaitDelay = opts.goGrace
 	cmd.Stdout = io.MultiWriter(stream, col)
@@ -291,8 +287,7 @@ func runPython(opts options, ctx context.Context, argv []string, getenv func(str
 	cmd.Stdin = stdinFor(stdin)
 	cmd.Stdout = io.MultiWriter(stdout, scan)
 	cmd.Stderr = stderr
-	// Pdeathsig: as for the go half above, the python half does not outlive the tool that started it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = opts.leftoverDelay
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
