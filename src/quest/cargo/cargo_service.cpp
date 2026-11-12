@@ -32,10 +32,28 @@ nevr_quest::data::AllAssetsResult FirstRun(nevr_cargo::Env& env, const nevr_carg
                                            const std::function<bool()>& keep_going) {
   nevr_cargo::RunConfig held = config;
   held.first_run = true;
-  const nevr_cargo::RunResult r = RunOnce(env, held, publish, keep_going);
+  // Ok needs a shadow handed to the publisher, from the boot mount of what the store held or from the fetch: a store that is whole but
+  // mounts nothing (every served label off, every entry refused) leaves the engine with no asset source, which is the failure this worker is for.
+  std::size_t published = 0;
+  const nevr_cargo::Publish give = [publish, &published](std::unique_ptr<nevr_cargo::Mounted> set) {
+    ++published;
+    publish(set.release());  // the publisher keeps the set for the life of the process: the engine may be filling a request from its shadow
+  };
+  env.MakeDirs(held.dir);  // as Start does: the device's free space is asked of a directory that exists
+  nevr_cargo::MountFromCache(env, held, give);
+  const nevr_cargo::RunResult r = nevr_cargo::FetchAndMount(env, held, give, keep_going);
   nevr_quest::data::AllAssetsResult out;
-  out.ok = r.manifest_loaded && r.failed == 0 && std::string(r.stopped).empty();
-  if (!out.ok) out.message = kFirstRunFailedMessage;
+  out.ok = r.manifest_loaded && r.failed == 0 && std::string(r.stopped).empty() && published != 0;
+  if (!out.ok) {
+    out.message = kFirstRunFailedMessage;
+    env.Event(nevr_cargo::EventLevel::kError, "cargo_first_run",
+              {{"result", "failed"},
+               {"manifest_loaded", r.manifest_loaded ? "true" : "false"},
+               {"failed", r.failed},
+               {"stopped", r.stopped},
+               {"published", published},
+               {"consequence", "the launch ends with a message: the engine cannot start on stub manifests with no asset source"}});
+  }
   return out;
 }
 

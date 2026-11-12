@@ -47,6 +47,10 @@ class WholeGameWiring(unittest.TestCase):
         mode = re.search(r"options\.all_assets\s*=\s*(sentinel::ActiveConfig\(\)\.assets)\.wholeGame", self.body)
         self.assertIsNotNone(mode)
 
+    def test_the_background_fetch_is_not_started_in_the_whole_game_mode(self) -> None:
+        body = code("src/quest/integration/production_steps.cpp")
+        self.assertRegex(body, r"if\s*\(\s*ok\s*&&\s*!assets\.wholeGame\s*\)\s*nevr_quest::cargo::Start\(")
+
     def test_no_known_wrong_marker_for_2398_remains(self) -> None:
         for path in ("src/quest/sentinel/entry.cpp", "docs/adr/0045-cdn-texture-delivery.md"):
             self.assertNotIn("KNOWN-WRONG #2398", read(path), path)

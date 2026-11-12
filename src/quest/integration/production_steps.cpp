@@ -624,7 +624,10 @@ class ProductionSteps final : public Steps {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
-    if (ok) nevr_quest::cargo::Start(sentinel::ActiveConfig().assets);
+    // Not in the whole-game mode: the data step's first-run worker (cargo::FirstRun, #2398) is then the one writer of the store, and a second
+    // fetch from here would append to the same store files with no lock between the two.
+    const nevr_quest::AssetsChoice& assets = sentinel::ActiveConfig().assets;
+    if (ok && !assets.wholeGame) nevr_quest::cargo::Start(assets);
     return ok;
   }
 

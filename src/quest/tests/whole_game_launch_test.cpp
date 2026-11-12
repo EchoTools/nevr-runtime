@@ -193,12 +193,49 @@ void ADownloadThatCannotFinishEndsTheLaunchWithTheMessageNotTheNoWorkerWarning()
   QCHECK(g_published.empty());  // nothing mounted from a store that is not whole
 }
 
+void AStoreThatIsWholeButMountsNothingEndsTheLaunchWithTheMessage() {
+  g_cargoLines.clear();
+  g_published.clear();
+  Launch launch;
+  nevr_quest::AssetsChoice assets;
+  assets.manifest = kManifestPath;
+  assets.wholeGame = true;
+  assets.labels = {{"game", "off"}};  // the manifest loads, no label is served, so no object is wanted and no shadow is made
+  launch.config.all_assets_ready = qc::MakeFirstRunWorker(assets, launch.scratch.Path("nevr/cache"), &launch.transport, &Publish);
+  const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
+  QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);  // not ok: the engine would have no asset source
+  QCHECK(g_published.empty());
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", "failed") < g_cargoLines.size());
+}
+
+void AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored() {
+  g_cargoLines.clear();
+  g_published.clear();
+  Launch launch;
+  // The object's bytes hash to its name, but its frame header says 248 bytes and the manifest says 999.
+  const std::string frame = cargo_test::MakeFrame(248, 40);
+  const json doc = {{"schema", "nevr-cargo-manifest"},
+                    {"schema_version", 1},
+                    {"labels", {{"game", {{"entries", {{{"platform", "android-arm64"}, {"type", "0xe2efe7289d5985b8"}, {"name", "0x3fa6d25bc24a7b01"},
+                                                         {"format", "zstd-frame"}, {"sha256", Sha256Hex(frame.data(), frame.size())},
+                                                         {"size", frame.size()}, {"bytes", 999}, {"align", 16}, {"stock_size", 999}}}}}}}}};
+  launch.transport.server[std::string(kBase) + kManifestPath] = cargo_test::ZstdFrameOf(doc.dump());
+  launch.transport.server[std::string(kBase) + "blobs/sha256/" + Sha256Hex(frame.data(), frame.size())] = frame;
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
+  QCHECK(r.outcome == qd::StepOutcome::kFailed);
+  QCHECK(g_published.empty());
+  QCHECK(data_test::ReadFile(launch.scratch.Path("nevr/cache/store-0.pack")).empty());  // nothing of it is stored
+}
+
 }  // namespace
 
 int main() {
   sentinel::SetLogSink(&Sink);
   AWholeGameLaunchDownloadsEveryObjectAndMountsTheShadowBeforeTheStepReturns();
   ADownloadThatCannotFinishEndsTheLaunchWithTheMessageNotTheNoWorkerWarning();
+  AStoreThatIsWholeButMountsNothingEndsTheLaunchWithTheMessage();
+  AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "whole_game_launch_test: %d check(s) failed\n", quest_test::Failures());

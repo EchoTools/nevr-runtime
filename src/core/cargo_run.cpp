@@ -265,12 +265,23 @@ Downloaded Download(Env& env, const RunConfig& config, Store& store, const Entry
 // the prefetch's Open does not carry, so the adapter keeps each object's size from the plan it was built from.
 class PrefetchSink : public ObjectSink {
  public:
-  PrefetchSink(std::unique_ptr<Store::Writer> writer, std::string sha256, std::uint64_t bytes)
-      : writer_(std::move(writer)), sha256_(std::move(sha256)), bytes_(bytes) {}
+  PrefetchSink(std::unique_ptr<Store::Writer> writer, std::string sha256, std::uint64_t size, std::uint64_t bytes)
+      : writer_(std::move(writer)), sha256_(std::move(sha256)), size_(size), bytes_(bytes),
+        head_needed_(static_cast<std::size_t>(std::min<std::uint64_t>(kMaxFrameHeaderBytes, size))) {}
   StoreStatus Write(const void* data, std::size_t length) override {
+    // The frame's own header is held to the manifest as the background fetch holds it (Download): the SHA-256 covers the frame's bytes,
+    // not the decompressed size its header states.
+    if (head_have_ < head_needed_) {
+      const std::size_t take = std::min(length, head_needed_ - head_have_);
+      std::copy_n(static_cast<const unsigned char*>(data), take, head_ + head_have_);
+      head_have_ += take;
+    }
+    if (!head_checked_ && head_have_ == head_needed_ && CheckFrame(head_, head_have_, size_, bytes_) != Rule::kNone) return StoreStatus::kIoError;
+    head_checked_ = head_checked_ || head_have_ == head_needed_;
     return writer_->Write(data, length) ? StoreStatus::kOk : StoreStatus::kIoError;
   }
   StoreStatus Commit() override {
+    if (!head_checked_ && CheckFrame(head_, head_have_, size_, bytes_) != Rule::kNone) return StoreStatus::kIoError;  // shorter than any header
     committed_ = true;
     return writer_->Commit(sha256_, bytes_) ? StoreStatus::kOk : StoreStatus::kIoError;
   }
@@ -281,7 +292,12 @@ class PrefetchSink : public ObjectSink {
  private:
   std::unique_ptr<Store::Writer> writer_;
   std::string sha256_;
+  std::uint64_t size_;
   std::uint64_t bytes_;
+  std::size_t head_needed_;
+  unsigned char head_[kMaxFrameHeaderBytes] = {};
+  std::size_t head_have_ = 0;
+  bool head_checked_ = false;
   bool committed_ = false;
 };
 
@@ -298,10 +314,11 @@ class StorePrefetch : public PrefetchStore {
     const char* why = "";
     std::unique_ptr<Store::Writer> writer = store_.Begin(size, &why);
     if (!writer) {
-      *status = StoreStatus::kIoError;
+      // no_store_file: the store has no room left for another file of objects; too_large and open_failed are the store's other refusals.
+      *status = std::string(why) == "no_store_file" ? StoreStatus::kNoSpace : StoreStatus::kIoError;
       return nullptr;
     }
-    return std::unique_ptr<ObjectSink>(new PrefetchSink(std::move(writer), sha256, bytes_[sha256]));
+    return std::unique_ptr<ObjectSink>(new PrefetchSink(std::move(writer), sha256, size, bytes_[sha256]));
   }
 
  private:
