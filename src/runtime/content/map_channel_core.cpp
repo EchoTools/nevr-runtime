@@ -74,17 +74,8 @@ std::vector<std::string> SplitCsv(const std::string& text) {
 }
 
 bool ParseKeyText(const std::string& text, PinnedKey* out) {
-  std::size_t from = 0;
-  while (from < text.size()) {
-    std::size_t end = text.find('\n', from);
-    if (end == std::string::npos) end = text.size();
-    const std::string line = Trim(text.substr(from, end - from));
-    from = end + 1;
-    if (line.empty() || line.rfind("untrusted comment:", 0) == 0) continue;
-    *out = PinnedKey{};
-    return nevr_minisign::ParsePublicKey(line, &out->key);
-  }
-  return false;
+  *out = PinnedKey{};
+  return nevr_minisign::ParsePublicKeyText(text, &out->key);
 }
 
 namespace {

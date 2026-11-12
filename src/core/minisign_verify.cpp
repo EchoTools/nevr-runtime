@@ -1,5 +1,6 @@
 #include "core/minisign_verify.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "monocypher-ed25519.h"
@@ -72,6 +73,21 @@ bool StartsWith(std::string_view text, std::string_view prefix) {
 }
 
 }  // namespace
+
+bool ParsePublicKeyText(std::string_view text, PublicKey* out) {
+  constexpr std::string_view kSpace = " \t\r";
+  while (!text.empty()) {
+    const std::size_t end = std::min(text.find('\n'), text.size());
+    std::string_view line = text.substr(0, end);
+    text.remove_prefix(std::min(end + 1, text.size()));
+    const std::size_t first = line.find_first_not_of(kSpace);
+    if (first == std::string_view::npos) continue;
+    line = line.substr(first, line.find_last_not_of(kSpace) + 1 - first);
+    if (StartsWith(line, "untrusted comment:")) continue;
+    return ParsePublicKey(line, out);
+  }
+  return false;
+}
 
 bool ParsePublicKey(std::string_view base64_line, PublicKey* out) {
   std::vector<std::uint8_t> blob;

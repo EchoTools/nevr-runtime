@@ -522,6 +522,25 @@ TEST(Minisign, PublicKeyAndBase64AreStrict) {
   EXPECT_FALSE(nevr_minisign::ParsePublicKey("", &key));
 }
 
+TEST(Minisign, PublicKeyTextTakesAWholePubFileOrTheBareLine) {
+  const std::string good = "RWTA7pyFRwI9NPbeZVbRJxtiA0YsG3jolqhV8mxuCEP0AUb24092wkuy";
+  nevr_minisign::PublicKey bare, key;
+  ASSERT_TRUE(nevr_minisign::ParsePublicKey(good, &bare));
+  const auto same = [&] { return key.key_id == bare.key_id && key.pk == bare.pk; };
+
+  EXPECT_TRUE(nevr_minisign::ParsePublicKeyText(good, &key) && same());
+  key = {};
+  EXPECT_TRUE(nevr_minisign::ParsePublicKeyText("untrusted comment: minisign public key 344E0247859CEEC0\n" + good + "\n",
+                                                &key) &&
+              same());
+  key = {};
+  EXPECT_TRUE(nevr_minisign::ParsePublicKeyText("\r\n untrusted comment: minisign public key\r\n  " + good + " \r\n", &key) &&
+              same());
+  EXPECT_FALSE(nevr_minisign::ParsePublicKeyText("untrusted comment: minisign public key\n", &key));
+  EXPECT_FALSE(nevr_minisign::ParsePublicKeyText("", &key));
+  EXPECT_FALSE(nevr_minisign::ParsePublicKeyText("not a key\n" + good, &key));
+}
+
 TEST(MapConstants, EqualTheSharedConstantsFile) {
   const json c = json::parse(ReadVector("constants.json"));
   EXPECT_EQ(c.at("kStockBytesMinSize").get<std::uint64_t>(), nevr_maps::kStockBytesMinSize);

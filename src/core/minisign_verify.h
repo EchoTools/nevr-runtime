@@ -30,6 +30,10 @@ struct PublicKey {
 
 bool ParsePublicKey(std::string_view base64_line, PublicKey* out);
 
+// A whole .pub file or its bare key line: blank lines and the "untrusted comment:" line are skipped, the first other
+// line (trimmed) must be the key.
+bool ParsePublicKeyText(std::string_view text, PublicKey* out);
+
 Verdict Verify(std::string_view message, std::string_view minisig, const std::vector<PublicKey>& keys,
                std::array<std::uint8_t, 8>* key_id_out, std::string* trusted_comment_out);
 

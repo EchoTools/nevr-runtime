@@ -87,7 +87,7 @@ bool ChoiceFromConfig(const MapsConfig& config, MapsChoice* out, std::string* ba
     for (std::size_t i = 0; i < lines.size(); ++i) {
       nevr_maps::PinnedKey key;
       key.official = official;
-      if (!nevr_minisign::ParsePublicKey(lines[i], &key.key)) {
+      if (!nevr_minisign::ParsePublicKeyText(lines[i], &key.key)) {
         *bad_key = std::string(name) + "[" + std::to_string(i) + "]";
         return false;
       }
