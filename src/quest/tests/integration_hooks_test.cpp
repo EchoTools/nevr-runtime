@@ -281,6 +281,7 @@ struct RealCounterSteps final : Steps {
   bool InstallCreditsText() override { return true; }
   bool InstallMenuCards() override { return true; }
   bool InstallIrradianceDefault() override { return true; }
+  bool InstallUiMipsAndSplash() override { return true; }
   bool WizardMetricWanted() override { return false; }  // the invite switch is not on main (ADR 0017 slice S1)
   bool InstallWizardMetric() override { return true; }
   bool ArmClockLevels(bool counted, bool) override { return counted; }
