@@ -341,7 +341,8 @@ inline std::vector<std::string> StockPins(Resource res) {
 /// exist.
 using RegisterFn = bool (*)(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                             const char* label);
-void Install(RegisterFn reg = &RegisterResourceTransform);
+/// Returns how many of the ten registrations the seam took (#1479).
+std::size_t Install(RegisterFn reg = &RegisterResourceTransform);
 
 #ifdef NEVR_TEST_HOOKS
 /// Replaces the stock digests the transforms accept (a test has no game bytes) and forgets what was served.
