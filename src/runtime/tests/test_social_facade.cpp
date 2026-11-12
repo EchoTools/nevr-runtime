@@ -1588,6 +1588,9 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
       R"({"op":"fire","action":"refresh_recently_met"})",
       R"({"op":"fire","action":"refresh_friends"})",
       R"({"op":"fire","action":"find_arena"})",
+      R"({"op":"fire","action":"clear_new_unlocks"})",
+      R"({"op":"fire","action":"clear_new_unlocks","seed":3})",
+      R"({"op":"fire","action":"add_new_unlocks","item":"0x81a2b3c4d5e6f708"})",
       R"({"op":"fire","action":"party_join_failed_callback","code":2})",
   };
   for (const char* line : good) {

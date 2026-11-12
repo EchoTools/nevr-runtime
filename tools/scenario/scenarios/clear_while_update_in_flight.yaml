@@ -1,0 +1,24 @@
+# A clear fired while a profile update is unacknowledged (unlocks lead, INFLIGHT-PREDICTION.md): an add sends update A, the
+# clear follows one runner step later, before the service's ack. Prediction: no send follows the ack, and the stored list
+# keeps A's entries. The last step is the one the prediction expects to FAIL (no send within 30 s of the ack); every
+# sent and succeeded line is read from the console log by hand. Needs the account to hold at least one stored entry so the
+# clear has a count to clear, and an item it does not hold yet so the add changes the list.
+name: clear_while_update_in_flight
+description: add one item so an update is in flight, fire the clear before the ack, and see whether a send follows the ack
+steps:
+  - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: add one item, so update A goes out
+    fire: {action: add_new_unlocks, item: '0x81869f816d19265b'}
+  - name: the add ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] add_new_unlocks item=0x81869f816d19265b count_before=\d+ count_after=\d+', timeout: 10}
+  - name: fire the clear before the ack
+    fire: {action: clear_new_unlocks}
+  - name: the clear ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] clear_new_unlocks count_before=\d+ count_after=0 user=present dirty_flags_before=0x[0-9a-f]+ dirty_flags_after=0x[0-9a-f]+', timeout: 10}
+  - name: the service acknowledged an update
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}
+  - name: a send follows the ack (the prediction expects this step to fail)
+    expect_log: {pattern: '\[NSUSER\] sent profile update: ', timeout: 30}

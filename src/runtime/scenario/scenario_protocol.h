@@ -148,6 +148,17 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     if (!ok && error->empty()) *error = "fire " + action + " needs a non-empty \"key\"";
   } else if (action == "refresh_friends" || action == "find_arena") {
     ok = true;
+  } else if (action == "add_new_unlocks") {
+    // The game's AddNewUnlocks (CR15NetGame, echovr.exe 0x140152c30) with one item: a 64-bit symbol as a "0x..." hex string.
+    std::string hex;
+    ok = text("item", true, &hex) && hex.size() > 2 && hex.size() <= 18 && hex.rfind("0x", 0) == 0 &&
+         hex.find_first_not_of("0123456789abcdefABCDEF", 2) == std::string::npos;
+    if (ok) cmd.number = std::stoull(hex.substr(2), nullptr, 16);
+    if (!ok && error->empty()) *error = "fire add_new_unlocks needs \"item\": a \"0x...\" hex symbol of up to 16 digits";
+  } else if (action == "clear_new_unlocks") {
+    // The game's "clear all new unlocks" (CR15NetGame, echovr.exe 0x1401a06c0). Optional "seed": when the game holds no
+    // new unlocks the call returns at once, so a seed count is written first so the clear path runs.
+    ok = !j.contains("seed") || u64("seed", 1000, &cmd.number);
   } else if (action == "party_join_failed_callback") {
     ok = u64("code", 0xFFFF, &cmd.number);
   } else if (action == "refresh_recently_met") {
@@ -195,7 +206,7 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
-             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, "
+             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, clear_new_unlocks, add_new_unlocks, "
              "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning, early_quit_feature_flags, dispatch_event, ui_text, "
              "invite_resolve and invite_create";
     return false;

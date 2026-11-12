@@ -246,6 +246,31 @@ constexpr std::uint64_t kFindIfPartyHostVA = 0x14016AFC0;
 constexpr std::array<std::uint8_t, 16> kFindIfPartyHostPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
                                                                    0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x48, 0x8B, 0xDA};
 constexpr std::uint64_t kSymbolEchoArena = 0xCB60A4DE7E1CAF73ULL;  // "echo_arena" (symbol_corpus.cpp)
+
+// The game's "clear all new unlocks" (echovr.exe FUN_1401a06c0, size 131): returns at once when the count at
+// netGame+0x51c50 is 0; else zeroes it, sets the profile's "newunlocks" key, queues it into the CNSUser's pending
+// changes (0x140615030, which ORs the dirty bit 0x1 into CNSUser+0x9c) and dispatches delegate_onnewunlockschanged.
+// The CNSUser is the pointer at netGame+0x28d0 (revault disassembly, 0x1401a06c6-0x1401a0738).
+constexpr std::uint64_t kClearNewUnlocksVA = 0x1401A06C0;
+constexpr std::array<std::uint8_t, 16> kClearNewUnlocksPrologue = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83,
+                                                                   0xB9, 0x50, 0x1C, 0x05, 0x00, 0x00, 0x48, 0x8B};
+constexpr std::uintptr_t kNewUnlocksCountOffset = 0x51C50;
+constexpr std::uintptr_t kNetGameUserOffset = 0x28D0;
+constexpr std::uintptr_t kUserDirtyFlagsOffset = 0x9C;
+using ClearNewUnlocksFn = void (*)(void* netGame);
+
+// CR15NetGame::AddNewUnlocks (echovr.exe 0x140152c30, size 331; revault auto-names it MergeSortedArrays<...>): appends each
+// symbol of the view to the sorted array at netGame+0x51c20 (count at +0x51c50), sorts it, sets the profile's "newunlocks"
+// key to null, re-appends every array entry, queues the key (0x140615030) and raises delegate_onnewunlockschanged. The
+// second argument is a view {data, count}. First 16 bytes read from revault's disassembly of 0x140152c30.
+constexpr std::uint64_t kAddNewUnlocksVA = 0x140152C30;
+constexpr std::array<std::uint8_t, 16> kAddNewUnlocksPrologue = {0x40, 0x55, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89,
+                                                                 0x5C, 0x24, 0x40, 0x48, 0x8B, 0xE9, 0x48, 0x89};
+struct SymbolView {
+  const std::uint64_t* data;
+  std::uint64_t count;
+};
+using AddNewUnlocksFn = void (*)(void* netGame, const SymbolView* items);
 using FindIfPartyHostFn = void (*)(void* netGame, void* request);
 
 constexpr std::uint64_t kRefreshRecentlyMetHandlerVA = 0x14019B870;
@@ -494,6 +519,52 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
     std::memcpy(request.data() + 0x10, &unset, sizeof(unset));
     std::memcpy(request.data() + 0x18, &unset, sizeof(unset));
     find(netGame, request.data());
+    return std::string();
+  }
+  if (cmd.action == "add_new_unlocks") {
+    auto* add = reinterpret_cast<AddNewUnlocksFn>(
+        Checked(kAddNewUnlocksVA, kAddNewUnlocksPrologue, "add new unlocks", &error));
+    if (add == nullptr) return error;
+    auto* bytes = static_cast<std::uint8_t*>(netGame);
+    std::uint64_t countBefore = 0;
+    std::memcpy(&countBefore, bytes + kNewUnlocksCountOffset, sizeof(countBefore));
+    const std::uint64_t item = cmd.number;
+    const SymbolView view{&item, 1};
+    add(netGame, &view);
+    std::uint64_t countAfter = 0;
+    std::memcpy(&countAfter, bytes + kNewUnlocksCountOffset, sizeof(countAfter));
+    Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] add_new_unlocks item=0x%016llx count_before=%llu count_after=%llu",
+        static_cast<unsigned long long>(item), static_cast<unsigned long long>(countBefore),
+        static_cast<unsigned long long>(countAfter));
+    return std::string();
+  }
+  if (cmd.action == "clear_new_unlocks") {
+    auto* clear = reinterpret_cast<ClearNewUnlocksFn>(
+        Checked(kClearNewUnlocksVA, kClearNewUnlocksPrologue, "clear new unlocks", &error));
+    if (clear == nullptr) return error;
+    auto* bytes = static_cast<std::uint8_t*>(netGame);
+    std::uint64_t countBefore = 0;
+    std::memcpy(&countBefore, bytes + kNewUnlocksCountOffset, sizeof(countBefore));
+    if (countBefore == 0 && cmd.number != 0) {
+      const std::uint64_t seeded = cmd.number;
+      std::memcpy(bytes + kNewUnlocksCountOffset, &seeded, sizeof(seeded));
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] clear_new_unlocks seeded the count: 0 -> %llu (the game held none)",
+          static_cast<unsigned long long>(seeded));
+    }
+    void* user = nullptr;
+    std::memcpy(&user, bytes + kNetGameUserOffset, sizeof(user));
+    std::uint32_t dirtyBefore = 0;
+    std::uint32_t dirtyAfter = 0;
+    if (user != nullptr) std::memcpy(&dirtyBefore, static_cast<std::uint8_t*>(user) + kUserDirtyFlagsOffset, sizeof(dirtyBefore));
+    clear(netGame);
+    std::uint64_t countAfter = 0;
+    std::memcpy(&countAfter, bytes + kNewUnlocksCountOffset, sizeof(countAfter));
+    if (user != nullptr) std::memcpy(&dirtyAfter, static_cast<std::uint8_t*>(user) + kUserDirtyFlagsOffset, sizeof(dirtyAfter));
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SCENARIO] clear_new_unlocks count_before=%llu count_after=%llu user=%s dirty_flags_before=0x%x "
+        "dirty_flags_after=0x%x",
+        static_cast<unsigned long long>(countBefore), static_cast<unsigned long long>(countAfter),
+        user != nullptr ? "present" : "null", dirtyBefore, dirtyAfter);
     return std::string();
   }
   if (cmd.action == "party_join") {
