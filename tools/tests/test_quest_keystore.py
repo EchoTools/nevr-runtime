@@ -12,15 +12,11 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "tools/tests"))
-import signal_exit  # noqa: E402
-
 SCRIPT = REPO / "tools/quest_keystore.sh"
 JUSTFILE = REPO / "justfile"
 PASSPHRASE = "fixture-pass-7f3a91"
@@ -133,9 +129,6 @@ def stop_tool(proc: subprocess.Popen, tool_log: pathlib.Path, bound_s: float) ->
     if expired:
         raise AssertionError(f"the tool (pid {proc.pid}) did not exit within {bound_s} s of SIGTERM; "
                              f"its log: {tool_log.read_text()!r}")
-
-
-SIGNAL_EXIT_BOUND_S = 20
 
 
 class QuestKeystoreTest(unittest.TestCase):
@@ -411,15 +404,15 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertEqual(self.left_behind(), [])
 
     def assert_shredded_after_signal(self, sig, parent_ignores_sigint=False):
-        # A shell starts a background job (nohup, &) with SIGINT and SIGHUP ignored and the child inherits them, and a
-        # non-interactive bash cannot trap a signal that was ignored on entry. The script is started with SIGINT and
-        # the signal under test at their defaults, so the result does not depend on how the test run was started.
+        # A shell starts a background job with SIGINT ignored and the child inherits it, and a non-interactive bash
+        # cannot trap a signal that was ignored on entry. The script is started with the default disposition so the
+        # result does not depend on how the test run was started.
         if parent_ignores_sigint:
             previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
             self.addCleanup(signal.signal, signal.SIGINT, previous)
         proc = subprocess.Popen([str(SCRIPT), "with", "sleep", "30"], env=self.env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                preexec_fn=signal_exit.default_signals(signal.SIGINT, sig))
+                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         deadline = time.time() + 20
         while time.time() < deadline and not [p for p in self.run_dir.rglob("*") if p.is_file()]:
@@ -427,7 +420,8 @@ class QuestKeystoreTest(unittest.TestCase):
         keys = [p for p in self.run_dir.rglob("*") if p.is_file()]
         self.assertTrue(keys, "the keystore was never copied")
         key = keys[0]
-        signal_exit.signal_to_exit(self, proc, sig, SIGNAL_EXIT_BOUND_S)
+        proc.send_signal(sig)
+        proc.communicate(timeout=20)
         self.assert_shredded(key)
         self.assertEqual(self.left_behind(), [])
 
