@@ -2,7 +2,7 @@
 
 Files: `src/quest/combat/memsys.{h,cpp}`, `src/quest/combat/memsys_targets.h` (the pins), `src/quest/tests/memsys_test.cpp`,
 `src/quest/tests/heap_step_test.cpp`, `src/quest/tests/got_pinned_test.cpp`. The module is the sentinel's early combat step, registered after `heaps`
-(`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no other. Switch: `combat.memsys` (default true) in
+(`src/quest/combat/combat_install.cpp`): it runs in the combat APKs and in no other. Switch: `combat.memsys` (default true) in
 `config.yaml`; false installs nothing here and also leaves the System heap (`docs/quest/combat/heaps.md`, R07) as the game has it.
 
 Origins: the layout-pool raise and the 21 pinned words are afk_memsys.cpp:11-17,65-77,96-105 of the reference build's source

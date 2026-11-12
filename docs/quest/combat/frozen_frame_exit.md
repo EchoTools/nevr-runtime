@@ -25,7 +25,7 @@ QUIT's activity finish followed by `process_end::EndWithExitCode`. No line of up
   below, including its pause cases, is the release gate for the first release that carries the module: a release is not cut until that row passes.
 - `combat.frozen_frame_exit_s`, integer seconds, 10..900, default 30 (upstream's bound and range). Anything else: the default, with the
   configuration step's Warning naming the key.
-- Which APKs: the q15t and combat variants, where `combat::Active()` is true; the row runs from the combat install table's normal step, after
+- Which APKs: the combat variants, where `combat::Active()` is true; the row runs from the combat install table's normal step, after
   `scope`. Its switch is one of the readers that keep the `scope` row on (`ScopeNormal()` in `src/quest/combat/combat_install.cpp`).
 
 ## What it does

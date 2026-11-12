@@ -4,7 +4,7 @@ Status: accepted (#1737, row G6A-040); amended for arena (#2172). Supersedes the
 
 ## Context
 
-#1737 asks for every behaviour the q15t source build gives a Quest player. That build's final shipped on-list turns on two
+#1737 asks for every behaviour the reference build gives a Quest player. That build's final shipped on-list turns on two
 refresh-rate files: `hzlobby90.on` and `hz72q2.on` (the source build's hz module, header comment). Its rule:
 
 - the level rate while a combat map (`mpl_combat_dyson`, `_combustion`, `_fission`, `_gauss`) or a lobby level
@@ -28,7 +28,7 @@ always keeps the game's rate.
 The rule is on by default and lives in `src/quest/combat/refresh_rate.cpp`, the one owner of the refresh rate (ADR 0039): the
 render-configuration handler asks it for the rate `vrapi_SetDisplayRefreshRate` is called with, and a game-thread tick
 (`src/quest/combat/combat_tick.h`) looks at the loaded gamespaces' levels every 0.5 s and re-asks through the slot on a change. It runs where the
-combat modules run (the q15t and combat APKs, `combat::Active()`) and, within them, only on a combat map; anywhere else the game's own rate
+combat modules run (the combat APKs, `combat::Active()`) and, within them, only on a combat map; anywhere else the game's own rate
 stands. The level answer is `src/quest/combat/combat_level.h`; its ids are CSymbol64 values of the names above, checked against
 `EchoVR::CSymbol64Hash` by the host test. Three `combat:` keys in `config.yaml`, read once at launch, switch its parts: `refresh_rate: false`
 (witness only), `refresh_rate_lobby: true` (the combat lobby too; off by default) and `refresh_rate_quest2_72: false` (a Quest 2 uses 90). The

@@ -56,6 +56,18 @@ var deletedPluginAllowed = map[string][]allowance{
 	"src/quest/combat/sensorwd.h": {
 		{"v6.16.5:src/quest/plugins/" + deletedWord + "/CMakeLists.txt", "a file at the released tag v6.16.5, the evidence for the switch's default"},
 	},
+	"docs/quest/combat/sensorwd.md": {
+		{"v6.16.5:src/quest/plugins/" + deletedWord + "/CMakeLists.txt", "a file at the released tag v6.16.5, the evidence for the switch's default"},
+	},
+	"docs/quest/combat/adr/0003-weapon-arm-new-profile.md": {
+		{"files/" + deletedWord, "the data directory on players' devices, where their gun-hand markers are (legacy_switch.h kDataSubdir)"},
+	},
+	"docs/quest/combat/weapon_arm.md": {
+		{"files/" + deletedWord, "the data directory on players' devices, where their gun-hand markers are (legacy_switch.h kDataSubdir)"},
+	},
+	"docs/reference/example-config.yaml": {
+		{"files/" + deletedWord, "the data directory on players' devices, which a player looks in (legacy_switch.h kDataSubdir)"},
+	},
 	// One entry per file. A change that keeps a name adds its entry above this line.
 }
 

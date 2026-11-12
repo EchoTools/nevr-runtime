@@ -2,10 +2,10 @@
 
 Files: `src/quest/combat/impactsnd.{h,cpp}`, `src/quest/combat/impactsnd_targets.h` (the pins), `src/quest/combat/thread_word.h`,
 `src/quest/tests/impactsnd_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/impactsnd.sh`. The module is a step of the sentinel's
-normal combat step (`src/quest/combat/combat_install.cpp`), registered before `decals`: it runs in the `q15t` and `combat` APKs and in no other. Switches
+normal combat step (`src/quest/combat/combat_install.cpp`), registered before `decals`: it runs in the combat APKs and in no other. Switches
 (`config.yaml`, `combat:`): `impactsnd` and `impactsnd_write` (default true each; false reads and logs the table and writes nothing to it).
 
-Origin: the reference build's the reference build's `afk_impactsnd` source (v1 to v6; rows R12 to R16), by way of the q15t plugin's impactsnd module, which this moves. Every pinned
+Origin: the reference build's `afk_impactsnd` source (v1 to v6; rows R12 to R16), by way of the impactsnd module of the combat plugin imported in #1591. Every pinned
 address of the module is in that file: D `0x37af8d0` (`:74`), `kSoundSettings` `0x37af6a0` (`:75`), the hit-code words `0x21208b4`... (`:79-80`),
 `LoadSoundSettings` `0x2121d04` (`:86`), the rows' ids (`:103-119`) (upstream's numbering is the ELF vaddr used here; the disassembly's is 0x100000 higher). R17,
 the table lock around `CR15NetBulletCS::Shutdown`, is ours. Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly).

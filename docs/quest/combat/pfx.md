@@ -1,7 +1,7 @@
 # Module `pfx` (the particle-effect renderer's gate)
 
 Files: `src/quest/combat/pfx.{h,cpp}`, `src/quest/tests/pfx_test.cpp`, `src/quest/combat/legacy_switch.h`. The module is a normal combat step
-(`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
+(`src/quest/combat/combat_install.h`): it runs in the combat APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
 `combat.pfx`, true unless the file says false.
 
 Origin: the gate reconstructs the renderer switch of kotorvr's echoquest-combat repository (commit c5a67e8): `On()` at native/afkxr/afk_pfx.cpp:6958, and the

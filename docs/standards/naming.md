@@ -119,7 +119,7 @@ events and its config key, so a grep for the name finds all of it.
   `<name>_rules_test.cpp` for the shared rules header).
 - A component's name states the area once: inside `src/quest/combat/` it is `music`, not `combat_music`. The area's own
   infrastructure, which is no component (`combat_install`, `combat_tick`, `combat_level`), carries the area's name.
-- The name a component had upstream (a q15t-upstream module, an EchoCombat plugin file, a reference-build `afk_*` file)
+- The name a component had upstream (an echoquest-combat module, an EchoCombat plugin file, a reference-build `afk_*` file)
   MUST NOT be a stem, namespace, event, key or doc name. It survives in one place: the origin note ADR 0046 rule 9
   requires at the top of the component's header, which cites the upstream file and line at its commit. A string the
   game's content or another binary resolves by name (an export such as `re33_ec_page`, a config key a released build

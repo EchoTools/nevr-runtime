@@ -4,7 +4,7 @@ Files: `src/quest/combat/texel_buffer_guard.{h,cpp}`, `src/quest/combat/texel_bu
 `src/quest/combat/texel_buffer_guard_targets.h` (the pins), `src/quest/tests/texel_buffer_guard_test.cpp`,
 `src/quest/tests/texel_buffer_guard_pinned_test.cpp`, `src/quest/combat/mutants.d/texel_buffer_guard.sh`, and the device-function requests of
 `src/quest/sentinel/vk_ext_window.{h,cpp}` (tested in `src/quest/tests/vk_ext_window_test.cpp`). An early-phase row of the combat install table
-(`src/quest/combat/combat_install.h`), after `memsys`: it runs in the `q15t` and `combat` APKs and in no other.
+(`src/quest/combat/combat_install.h`), after `memsys`: it runs in the combat APKs and in no other.
 
 ## Origin
 

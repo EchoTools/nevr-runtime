@@ -2,7 +2,7 @@
 
 Files: `src/quest/combat/heaps.{h,cpp}`, `src/quest/combat/heaps_targets.h` (the pins), `src/quest/tests/heaps_test.cpp`,
 `src/quest/tests/heap_step_test.cpp` (the step against a model of the start of `android_main`), `src/quest/tests/got_pinned_test.cpp` (the pins in the
-real libr15). The module is the sentinel's early combat step (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and
+real libr15). The module is the sentinel's early combat step (`src/quest/combat/combat_install.h`): it runs in the combat APKs and
 in no other. Switches in `config.yaml` (docs/adr/0046 rule 4): `combat.heaps` (default true) turns the module off; `combat.memsys: false` leaves the
 System heap (R07) as the game has it, because the System heap and the render-target pool are one memory change (`docs/quest/combat/memsys.md`).
 
@@ -42,7 +42,7 @@ sentinel log, `combat_heaps_install result=installed` with `resource_mib` 320, `
 
 ## 1b. What an arena match on the combat APK gets
 
-The sizes are read once at the start of the process and cannot be scoped by level, so an arena match on a q15t or combat APK runs with them too: heap
+The sizes are read once at the start of the process and cannot be scoped by level, so an arena match on a combat APK runs with them too: heap
 sizes totalling 1600 MiB against 806 MiB stock (+794 MiB; +666 MiB on a Quest 2), and a 1024-slot layout pool (`docs/quest/combat/memsys.md`). Both wrappers run about
 once per process: libr15 has one call through each PLT stub (Alloc from InitCommon at 0x19818c8, `CSysJava::Init` from `android_main` at 0x10784e4). The cost
 of the sizes is unmeasured: whether the allocator commits or only reserves the memory, and the headroom on a Quest 2, are open. The headset row

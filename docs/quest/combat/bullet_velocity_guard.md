@@ -3,7 +3,7 @@
 Files: `src/quest/combat/bullet_velocity_guard.{h,cpp}`, `src/quest/combat/bullet_velocity_guard_targets.h` (the pins),
 `src/runtime/combat/bullet_velocity_guard_rules.h` (the rule, one definition for PC and Quest), `src/quest/tests/bullet_velocity_guard_test.cpp`,
 `src/quest/tests/bullet_velocity_guard_pinned_test.cpp`, `src/quest/combat/mutants.d/bullet_velocity_guard.sh`. A normal-phase row of the combat
-install table (`src/quest/combat/combat_install.h`), immediately above `dronemuzzle`'s: it runs in the `q15t` and `combat` APKs and in no other.
+install table (`src/quest/combat/combat_install.h`), immediately above `dronemuzzle`'s: it runs in the combat APKs and in no other.
 
 ## Origin
 

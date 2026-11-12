@@ -3,7 +3,7 @@
 Files: `src/quest/combat/shaderstep.{h,cpp}`, `shaderstep_targets.h`, `table_step.{h,cpp}` (the step correction), `src/quest/tests/shaderstep_test.cpp`,
 `shaderstep_tablestep_test.cpp`, `src/quest/combat/mutants.d/shaderstep.sh`.
 Switch: `combat.shaderstep` in `config.yaml` (default `true`). The plugin's `shaderstep.off` is not read; one found in its data directory is a
-Warning (`combat_shaderstep_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
+Warning (`combat_shaderstep_legacy_switch`) that names the key. Runs in the combat APKs only (`combat::Active()`).
 
 ## What the game does (store libr15, build ID b243509c; disassembly VA = ELF vaddr + 0x100000)
 

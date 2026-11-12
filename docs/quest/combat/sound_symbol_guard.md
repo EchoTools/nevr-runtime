@@ -4,7 +4,7 @@ Files: `src/quest/combat/sound_symbol_guard.{h,cpp}`, `src/quest/combat/sound_sy
 module stands on), `src/runtime/combat/sound_symbol_guard_rules.h` (the rule, one definition for PC and Quest),
 `src/quest/tests/sound_symbol_guard_test.cpp`, `src/quest/tests/sound_symbol_guard_pinned_test.cpp`, `src/quest/combat/mutants.d/sound_symbol_guard.sh`.
 A normal-phase row of the combat install table (`src/quest/combat/combat_install.h`), directly after `bullet_velocity_guard`'s: it runs in the
-`q15t` and `combat` APKs and in no other.
+combat APKs and in no other.
 
 ## Origin
 

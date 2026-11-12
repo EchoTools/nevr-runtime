@@ -209,7 +209,7 @@ when the tick comes back after such a gap with the scope open, the scope row wri
 module is one of the scope row's readers (`combat.bvh` is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the
 answer cannot change. The module's own tick reads the same answer, keeps the value it read last and writes `combat_bvh_scope` (`from`, `to`) when it changes
 (combat_scope has no change callback; the level is on the scope row's `combat_scope_change` line). The arena path of a query is one relaxed load of the scope
-word, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope because the q15t plugin answered in every
+word, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope because the combat plugin imported in #1591 answered in every
 level; the levels left out are the Echo Arena levels and the lobbies arena players use. Initialize's question (is the level being loaded a combat map or the
 combat lobby, the init fibers included) is asked of `combat_level.h` directly, by decision: the combat level answer describes the levels already loaded, as
 of its last look, and would skip a combat map that is still building.

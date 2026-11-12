@@ -5,7 +5,7 @@ The timing analysis below stands. Not observed on a headset.
 
 ## Question
 
-The source build (q15t) runs combat matches at 90 Hz and every other place at the game's own rate (120 Hz on a Quest).
+The reference build runs combat matches at 90 Hz and every other place at the game's own rate (120 Hz on a Quest).
 A hypothesis: 90 Hz exists so that match timing matches the Rift CV1 (90 Hz), which would make it a correctness or parity
 setting the plugin must always apply, not a performance setting to A/B.
 

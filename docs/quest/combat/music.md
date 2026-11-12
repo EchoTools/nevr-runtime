@@ -1,7 +1,7 @@
 # Module `music` (combat music, one instance at a time)
 
 Files: `src/quest/combat/music.{h,cpp}`, `src/quest/combat/music_targets.h`, `src/quest/tests/music_test.cpp`, `src/quest/combat/legacy_switch.h`. A normal combat step, in the
-`q15t` and `combat` APKs only. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.music`, true unless the file says false.
+combat APKs only. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.music`, true unless the file says false.
 
 Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (the store file; the running process checks the patched copy's id, `LibR15PatchedBuildId`).
 ELF vaddr = disassembly VA - 0x100000.
@@ -9,13 +9,13 @@ ELF vaddr = disassembly VA - 0x100000.
 ## Provenance
 
 The module is in kotorvr's (Ducky's) echoquest-combat: `runtime/native/afkxr/afk_music.cpp` at c5a67e8, whole file, and at the same addresses (`:51-52`: slot `0x36d76e8`,
-function `0x2549264`). It came into this tree with the q15t plugin import (#1591) and moved here from `src/quest/plugins/q15t/src/music.{h,cpp}`. What is ours: the scope
+function `0x2549264`). It came into this tree with the combat plugin import (#1591). What is ours: the scope
 (upstream acts on every Play), the typed thunk and the manager install, the 29 code-word pins (upstream pins none), the binary-search bank, and the log lines.
 
 ## Default
 
 On. kotorvr's build has the module on by default (`afk_music.cpp:1`, "ON by default"), with `music.off` or a system property as its off switch (`afk_music.cpp:31`,
-`:174-193`), and the plugin's `Q15T_MUSIC` was on. **No headset run of ours has shown it acting:** every q15t session in the integration runs (`run-quest2-2044`, `-handflip4`, `-sheet7`) logs the
+`:174-193`), and the combat plugin built it on. **No headset run of ours has shown it acting:** every session that loaded that plugin in the integration runs (`run-quest2-2044`, `-handflip4`, `-sheet7`) logs the
 plugin's install of the module (`music on ... status=ok`) and no `music play` or `music post` line, because none reached a combat map; the one log with a combat match is the reference build's
 (`run-quest2-sheet8`, `EchoQuestCombat: music: play b1b06cfb obj 8: stops first ...`), which is not this code. Its headset row therefore requires the acting lines below.
 

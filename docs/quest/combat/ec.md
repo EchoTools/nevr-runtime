@@ -73,7 +73,7 @@ WriteLog-slot hook would see is missed, and the one further caller is the other 
 the 25 words (each library's own `bl`) and the stub's four words before it hooks; a word that differs refuses that library's hook
 (`writelog_body_not_known`, `writelogv_stub_not_known`) and leaves the net pair in.
 
-The q15t plugin hooked WriteLog itself and rebuilt the va_list in a C wrapper that called the owner's WriteLogV; an assembly entry that keeps
+The combat plugin imported in #1591 hooked WriteLog itself and rebuilt the va_list in a C wrapper that called the owner's WriteLogV; an assembly entry that keeps
 x0..x7, v0..v7 and the stack and `br`s on was the other choice. The WriteLogV thunk needs neither and the frame sensor checks it like any thunk.
 
 ### The platform libraries
@@ -154,8 +154,8 @@ the PR body (ADR 0038).
 | `combat.ec_words` | absent: `types=VPTO equip hide` | `types=<letters of VPTO>` (the types carried; none, empty or another letter: 'T' only), `equip` / `noequip`, `hide`, `loctoken=<s>` (TEST: a LOC token every s seconds, 1..600). |
 | `combat.ecfx` | true | NEUTRON effects on ec's net tick (needs ec). |
 
-The defaults are echoquest-combat's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the q15t
-plugin shipped them. The plugin's files `ec.on`, `ec.off`, `ec_preset1.on` .. `ec_preset3.on` and `neutronfx.on` are not read; one found in the
+The defaults are echoquest-combat's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the combat
+plugin imported in #1591 shipped them. The plugin's files `ec.on`, `ec.off`, `ec_preset1.on` .. `ec_preset3.on` and `neutronfx.on` are not read; one found in the
 plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_legacy_switch`) that names the key.
 
 ## Lines (sentinel log)
@@ -202,7 +202,7 @@ reference build's; the code refuses an implausible list and re-checks the three 
 
 ## Origin
 
-The q15t plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h`, ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
+The combat plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h` (imported in #1591), ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
 afk_ec_core.h, afk_ecfx.cpp, afk_ecfx_core.h (pinned `1357409` in docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-211).
 The EC network rules are EchoCombat v2.0.0's VeilNet (plugin/veilnet.cpp), shared with PC in `src/runtime/patch/ec_rules.h`. The NEUTRON
 deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686), EchoCombat `c14c3e0a`.

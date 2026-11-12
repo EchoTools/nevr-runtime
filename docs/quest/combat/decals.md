@@ -2,14 +2,14 @@
 
 Files: `src/quest/combat/decals.{h,cpp}`, `src/quest/combat/decals_core.h` (the table, the level rule and the state machine, game-free), `src/quest/combat/decals_targets.h`
 (the pins), `src/quest/tests/decals_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/decals.sh`. The module is a step of the sentinel's normal
-combat step (`src/quest/combat/combat_install.cpp`), registered after `impactsnd`: it runs in the `q15t` and `combat` APKs and in no other.
+combat step (`src/quest/combat/combat_install.cpp`), registered after `impactsnd`: it runs in the combat APKs and in no other.
 
 Switches (`config.yaml`, `combat:`): `decals` (default true: it draws nothing and installs no hook without a `decals.bin`), `decals_flip_u` and `decals_flip_v`
 (default false; mirror the uv inside each quad). The plugin's `decals.off`, `decalflipu.on` and `decalflipv.on` are no longer read: one found in the plugin's data
 directory is a Warning (`combat_decals_legacy_switch`) that names the key. `decals.bin` is a data file and is read where it was.
 
 Origin: the reference build's static level decals (the reference build's `afk_fx` source, the `fxdecal` block `:4540-4606`: `decals.bin`, the `ADC1` table, the dynamic-mesh nodes, the bullet
-system's UpdateMovement and Shutdown as the host), by way of the q15t plugin's decals module, which this moves. The slots `0x370dbc8`, `0x36933e8` and the function
+system's UpdateMovement and Shutdown as the host), by way of the decals module of the combat plugin imported in #1591. The slots `0x370dbc8`, `0x36933e8` and the function
 `0x2124290` are in that file (upstream's numbering is the ELF vaddr used here). The level scope below is ours.
 
 ## What it does
@@ -27,7 +27,7 @@ room exists, the arena's copy of the war room's groups is hidden, so the ships a
 
 Searched in this order, the first readable file wins (the `combat_decals_install` line `reason: no_table` is written when none is readable):
 
-1. the plugin's old data directory, `decals.bin`, being `/sdcard/Android/data/<package>/files/q15t`;
+1. the data directory's `decals.bin` (`legacy_switch.h` `legacy::Directory`);
 2. `/sdcard/Android/data/<package>/files/afk/decals.bin`;
 3. `/sdcard/Android/media/<package>/files/afk/decals.bin`.
 
@@ -135,8 +135,8 @@ the count; Warning `combat_decals_legacy_switch` for each plugin switch file fou
 `combat.decals`, `combat.decals_flip_u`, `combat.decals_flip_v` (above). The module acts on a game space only when that space's own level is a combat map
 (`combat_level.h` `IsCombatMap`) or the war room (`mpl_combat_war_room`, the drop ship, which is no arena level). A table group that names any other level, an
 arena level included, is never drawn, and a game space in an arena level, an arena lobby or the combat lobby creates no node. The SDK's `LevelGate`
-(`sdk/include/nevr/level_gate.h`) is the PC plugin API's gate over the host's main level; the q15t plugin never used it for decals, so nothing moves off it and
-it stays for plugins.
+(`sdk/include/nevr/level_gate.h`) is the PC plugin API's gate over the host's main level; this module's gate is its own table, not that gate, which
+stays for plugins.
 
 ### Arena cost (ADR 0038)
 

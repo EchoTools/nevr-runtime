@@ -3,7 +3,7 @@
 Files: `src/quest/combat/tablestep.{h,cpp}`, `tablestep_targets.h`, `table_step.{h,cpp}` (the step correction), `src/quest/tests/tablestep_test.cpp`,
 `shaderstep_tablestep_test.cpp`, `src/quest/combat/mutants.d/tablestep.sh`.
 Switch: `combat.tablestep` in `config.yaml` (default `true`). The plugin's `tablestep.off` is not read; one found in its data directory is a
-Warning (`combat_tablestep_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
+Warning (`combat_tablestep_legacy_switch`) that names the key. Runs in the combat APKs only (`combat::Active()`).
 
 ## What the stock code does (store libr15, build ID b243509c; disassembly VA = ELF vaddr + 0x100000)
 

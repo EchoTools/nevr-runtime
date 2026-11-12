@@ -71,7 +71,7 @@ game's own radius check, as it does a radius that is not finite.
 
 ## Arena
 
-The q15t and combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
+The combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
 loaded and no Echo Arena level is: the game tick asks the combat level answer (`combat_scope.h`) once every 32 frames (and when the CR15Game
 changes), one `LastLook()` record judged by `InCombatOrLobby(look)`, and keeps the answer in an atomic. Before a tick has seen a look the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
 continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. The module is one of the scope row's readers
@@ -96,7 +96,7 @@ scope changes 64) are announced once by a `combat_powerboost_capped` line.
 
 ## Headset row (owed)
 
-On a q15t or combat APK, in a combat match on a server that runs EchoCombat's PowerBoost plugin, with someone using POWER BOOST:
+On a combat APK, in a combat match on a server that runs EchoCombat's PowerBoost plugin, with someone using POWER BOOST:
 `combat_powerboost_install` with `"stage":3`; `combat_powerboost_scope` with `"in_combat":1`; `combat_powerboost_use` (`"why":"queued node heal"`)
 for a use of ours; `combat_powerboost_swallow` for the server's relayed markers; `combat_powerboost_cone` lines with `LINK` / `no`; and
 `combat_powerboost_link_marker` with `"sent":1` after a use of ours. In an arena match on the same APK: `combat_powerboost_scope` with

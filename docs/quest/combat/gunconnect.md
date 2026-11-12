@@ -1,7 +1,7 @@
 # Module `gunconnect` (the local player's guns get `Connect(local user)`)
 
 Files: `src/quest/combat/gunconnect.{h,cpp}`, `gunconnect_targets.h`, `gamespace.{h,cpp}`, `netgame_targets.h`, `pinned_words.h`, `src/quest/tests/gunconnect_test.cpp`,
-`src/quest/combat/mutants.d/gunconnect.sh`. A normal combat step (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in
+`src/quest/combat/mutants.d/gunconnect.sh`. A normal combat step (`src/quest/combat/combat_install.h`): it runs in the combat APKs and in no other. Switch in
 `config.yaml` (docs/adr/0046 rule 4): `combat.gunconnect`, on unless the file says false.
 
 On Quest offline practice the local player's guns are never connected, so they do not fire. `CR15NetGunCS::Connect(cs, local user id)` connects every gun whose owner slot is that
@@ -11,8 +11,8 @@ user's; online the lobby-member event does it within a frame, offline nothing do
 
 kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_gunconnect.cpp`: the header :1-24, the constants :91-93, `FindCs` :186-218, `ReadLocal` :222-240,
 `HasCombatTag` :242-254, `CountGuns` :256-296, `FixPass` :312-358. The addresses are in that file at the same numbers as ours (`kFnConnect = 0x2153438, kFnHasTag = 0x1723760,
-kFnUserActor = 0x1251654, kTagCombat = 0x37af288`, `kGunCsVptr = 0x3696050`), which are ELF virtual addresses; the disassembly's are 0x100000 more. The q15t plugin reconstructed
-it (`gunconnect.cpp`); this module is that reconstruction moved into the runtime, so the commits that move it credit kotorvr. Not ported: the diagnostic and the tick-callback
+kFnUserActor = 0x1251654, kTagCombat = 0x37af288`, `kGunCsVptr = 0x3696050`), which are ELF virtual addresses; the disassembly's are 0x100000 more. The combat plugin imported in #1591 reconstructed
+it (`gunconnect.cpp`); this module is that reconstruction, so the commits that brought it here credit kotorvr. Not ported: the diagnostic and the tick-callback
 registry.
 
 ## Behaviour

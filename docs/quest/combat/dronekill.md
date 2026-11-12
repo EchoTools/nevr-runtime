@@ -15,8 +15,8 @@ df 731-835, the gun table df 700-729, the chase table df 1037-1095).
 ## Switch and default
 
 `combat.dronekill` in `config.yaml`, a boolean, default **true**: the reference build ships `dronekill2.on` (all five words: kill, lockon, gun,
-chase, shot) and the q15t plugin built the module on. `false` installs nothing. The five words are not keys: all five are on (`dronekill::Words{}`).
-There is no switch file and no legacy file: the q15t plugin had none for this module.
+chase, shot) and the combat plugin imported in #1591 built the module on. `false` installs nothing. The five words are not keys: all five are on (`dronekill::Words{}`).
+There is no switch file and no legacy file for this module.
 
 ## What it hooks
 
@@ -214,7 +214,7 @@ Not shown on this machine: any of it (no headset run in this unit).
 
 `dronekill_test` (the `combat` host-test group) runs the real module and its four thunks, installed by the real GotHook into four JUMP_SLOTs of a
 libr15 image built in memory, against a fake game laid out as the module reads it (component systems with the real read-shape words, a fake
-auto-target system, real `SafeRead`). Its file header says which checks carry the q15t plugin's test's assertions and which are new; the fixture, the log form and the
+auto-target system, real `SafeRead`). Its file header says which checks carry the combat plugin's test's assertions (#1591) and which are new; the fixture, the log form and the
 API names are the runtime's. Mutants: the six lists, run with
 `src/quest/combat/mutants.sh dronekill` (and `dronekill_b` .. `dronekill_f`, each naming `dronekill_test`); the results are in the PR.
 Not mutated: equivalent mutants (a `!ptr` test in front of a `SafeRead(ptr + n)`, the `g_fns.find` guard after

@@ -1,7 +1,7 @@
 # Module `aibots` (practice AI bots get a scenario each combat match)
 
 Files: `src/quest/combat/aibots.{h,cpp}`, `aibots_targets.h`, `netgame_targets.h`, `pinned_words.h`, `src/quest/tests/aibots_test.cpp`, `src/quest/combat/mutants.d/aibots.sh`. A normal
-combat step: the `q15t` and `combat` APKs only. Switches in `config.yaml`: `combat.aibots` (on unless false) and `combat.aibots_scenario` (a text; unset is RandomAttack).
+combat step: the combat APKs only. Switches in `config.yaml`: `combat.aibots` (on unless false) and `combat.aibots_scenario` (a text; unset is RandomAttack).
 
 Shipped EC never starts an AI scenario, so the Practice AI bots stand still. `CR15NetAIScenarios::Update` does nothing until `EnableScenario` creates one, and its only caller is a script
 node no Quest script contains. The module calls `EnableScenario(scenarios, state)` the way that node does, from the game tick.
@@ -9,8 +9,8 @@ node no Quest script contains. The module calls `EnableScenario(scenarios, state
 ## Origin
 
 kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_aibots.cpp`: the header :1-27, the constants :52-62, `ParseScenario` :158, `ReadRequest` :167 and
-`afk_aibots_tick` :306-346 (the request protocol and the constants are the reference build's; `kEnableFirstWord` is at :61). The q15t plugin reconstructed it (`aibots.cpp`); this module is
-that reconstruction moved into the runtime, so the commits that move it credit kotorvr. Not ported: the watcher thread and its scan for the CR15Game (the tick passes it), the debug dump
+`afk_aibots_tick` :306-346 (the request protocol and the constants are the reference build's; `kEnableFirstWord` is at :61). The combat plugin imported in #1591 reconstructed it (`aibots.cpp`); this module is
+that reconstruction, so the commits that brought it here credit kotorvr. Not ported: the watcher thread and its scan for the CR15Game (the tick passes it), the debug dump
 and `aibots.done`.
 
 ## Behaviour

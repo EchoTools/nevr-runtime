@@ -12,7 +12,7 @@ between the store and the combat build), and the player switches it back.
 
 ## Behaviour
 
-1 Hz on the game thread until done. The profile id is `CR15NetGame::ClientProfile()`'s `xplatformid`. A marker file `t26arm.<id>` in `/sdcard/Android/data/<package>/files/q15t/` means the
+1 Hz on the game thread until done. The profile id is `CR15NetGame::ClientProfile()`'s `xplatformid`. A marker file `t26arm.<id>` in `/sdcard/Android/data/<package>/files/q15t/` (the data directory, `legacy_switch.h` `kDataSubdir`) means the
 profile was handled in an earlier launch: nothing is done. Otherwise, in a combat map, the local `R14NetPlayerEquipment` component system is found in the two gamespace tables, held for 3
 passes, and then:
 - `GetWeaponArm == 1`: the marker only;
