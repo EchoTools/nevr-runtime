@@ -1,10 +1,7 @@
 # KNOWN-WRONG #2189: the lines of each file that still name the deleted combat plugin (deleted_plugin_name_test.go). Only shrinks.
 RELEASING.md	10
-docs/adr/0034-one-hook-manager-per-process.md	7
-docs/adr/0035-every-shipped-file-and-reconstruction-traces-to-its-source.md	1
-docs/adr/0039-one-owner-per-game-behaviour.md	3
 docs/adr/0040-every-build-names-its-variant.md	3
-docs/adr/0046-combat-is-part-of-the-quest-runtime.md	19
+docs/adr/0046-combat-is-part-of-the-quest-runtime.md	4
 justfile	6
 src/quest/combat/combat_active.h	1
 src/quest/combat/combat_install.h	1
