@@ -3,6 +3,8 @@
 // provider and config alias table, a fake resource-set registry, and LOCAL .nevrmap files signed with a test dev key.
 #include "runtime/tests/map_channel_test_fixture.h"
 
+#include <stdexcept>
+
 namespace {
 
 // ---- the synthetic script DLL (test_map_scripts.cpp's stock shape: one export, setup_bindings, a ret) ----
@@ -712,6 +714,24 @@ TEST(MapChannelWorker, ARequestRunsExactlyOneMorePassAndASecondOneWaitsTenMinute
   while (worker.Passes() < 3) Sleep(1);
   EXPECT_TRUE(worker.Stop(std::chrono::milliseconds(2000)));
   EXPECT_EQ(passes.load(), 3);
+}
+
+TEST(MapChannelWorker, APassThatThrowsEndsThereAndTheNextRequestRunsAnother) {
+  std::atomic<int> passes{0};
+  FetchWorker worker(
+      [&](const std::function<bool()>&) -> nevr_maps::FetchReport {
+        if (++passes == 1) throw std::runtime_error("disk full mid-index");
+        return nevr_maps::FetchReport{};
+      },
+      [] { return std::uint64_t{0}; });
+  worker.Start();
+  while (worker.Passes() < 1) Sleep(1);
+  EXPECT_EQ(worker.FailedPasses(), 1u);
+  EXPECT_TRUE(worker.Request());
+  while (worker.Passes() < 2) Sleep(1);
+  EXPECT_EQ(worker.FailedPasses(), 1u);
+  EXPECT_TRUE(worker.Stop(std::chrono::milliseconds(2000)));
+  EXPECT_EQ(passes.load(), 2);
 }
 
 TEST(MapChannelWorker, AStopThatTimesOutLeavesTheWorkerAliveAndDoesNotCrash) {

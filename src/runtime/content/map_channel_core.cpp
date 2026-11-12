@@ -304,7 +304,11 @@ void FetchWorker::Run() {
   std::unique_lock<std::mutex> lock(mutex_);
   while (!stop_) {
     lock.unlock();
-    pass_([this] { return keep_going_.load(); });
+    try {
+      pass_([this] { return keep_going_.load(); });
+    } catch (...) {
+      failed_passes_.fetch_add(1);  // escaping this thread would end the game; the next pass starts clean
+    }
     passes_.fetch_add(1);
     lock.lock();
     wake_.wait(lock, [this] { return stop_ || requested_; });

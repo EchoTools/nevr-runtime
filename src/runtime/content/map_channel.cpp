@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <exception>
 
 #include "core/config_alias.h"
 #include "core/logging.h"
@@ -109,7 +110,9 @@ MapPin PinOf(const nevr_maps::MountedMap& m) {
 
 }  // namespace
 
-void Boot(std::uintptr_t game_base, bool is_server) {
+namespace {
+
+void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   static bool s_booted = false;
   if (s_booted) return;
   s_booted = true;
@@ -244,6 +247,18 @@ void Boot(std::uintptr_t game_base, bool is_server) {
       local.maps.size(), expected.size(), is_server ? 1 : 0);
 }
 
+}  // namespace
+
+// The stock maps never wait on the channel: whatever goes wrong in it is logged and the boot goes on.
+void Boot(std::uintptr_t game_base, bool is_server) {
+  try {
+    BootUnguarded(game_base, is_server);
+  } catch (const std::exception& e) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map_start reason=exception what=\"%s\" (nothing more is mounted or fetched this run)", e.what());
+  }
+}
+
 void StartFetch() {
   Channel* ch = g_channel;
   if (ch == nullptr || !ch->cdn || ch->worker) return;
@@ -255,7 +270,15 @@ void StartFetch() {
   }
   ch->worker = std::make_unique<FetchWorker>(
       [ch](const std::function<bool()>& keep_going) {
-        return nevr_maps::FetchAll(*ch->env, *ch->fs, ch->config, ch->deferred, ch->deriver.get(), NowUtc(), keep_going);
+        try {
+          return nevr_maps::FetchAll(*ch->env, *ch->fs, ch->config, ch->deferred, ch->deriver.get(), NowUtc(),
+                                     keep_going);
+        } catch (const std::exception& e) {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.MAPS] map_done reason=exception what=\"%s\" (the cache keeps what it had; the next pass starts over)",
+              e.what());
+          throw;
+        }
       },
       [ch] { return ch->env->NowMs(); });
   ch->worker->Start();
@@ -284,8 +307,16 @@ void RequestFetch(const std::string& id) {
 
 void Tick() {
   if (g_channel == nullptr) return;
-  nevr_config_alias_hook::ReconcileIfFrameMoved();
-  nevr_map_session_pin::Tick();
+  try {
+    nevr_config_alias_hook::ReconcileIfFrameMoved();
+    nevr_map_session_pin::Tick();
+  } catch (const std::exception& e) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_tick reason=exception what=\"%s\" (logged once)", e.what());
+    }
+  }
 }
 
 }  // namespace nevr_map_channel

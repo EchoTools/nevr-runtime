@@ -204,6 +204,7 @@ class FetchWorker {
   // waits up to `wait` for the worker to finish.
   bool Stop(std::chrono::milliseconds wait);
   std::size_t Passes() const { return passes_.load(); }
+  std::size_t FailedPasses() const { return failed_passes_.load(); }  // passes that ended in an exception
 
  private:
   void Run();
@@ -216,7 +217,7 @@ class FetchWorker {
   bool any_extra_ = false;
   std::uint64_t last_extra_ms_ = 0;
   std::atomic<bool> keep_going_{true};
-  std::atomic<std::size_t> passes_{0};
+  std::atomic<std::size_t> passes_{0}, failed_passes_{0};
   std::thread thread_;
 };
 
