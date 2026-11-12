@@ -28,10 +28,13 @@ using nevr_peer_timeout_log::kNoSendWarnMicros;
 
 constexpr std::uint64_t kSecond = 1'000'000ULL;
 
-// The numbers of the observed run (docs in the trace): last server record for peer 0 at 09:36:37.029, removal at
-// 09:36:52.062, a gap of 15.033 s. Stamps are relative microseconds here.
+// Stamps are microseconds on one clock. The gap of the case below is 15.033 s, the size of a communication timeout
+// (15 s) plus its polling offset; the numbers are fixtures, not measurements of a run.
 constexpr std::uint64_t kLastReceive = 37'029'000ULL;
 constexpr std::uint64_t kRemoval = 52'062'000ULL;
+constexpr std::uint64_t kSendsInRun = 30ULL;
+constexpr std::uint64_t kEarlyClock = 100ULL;
+constexpr std::uint64_t kLateClock = 900ULL;
 
 TEST(PeerTimeoutServer, ServerLineNamesPeerSlotLastReceiveAndGap) {
     const CommTimeoutRecord record{0, "10.0.8.50:6794", kLastReceive, kRemoval};
@@ -46,7 +49,7 @@ TEST(PeerTimeoutServer, ServerLineNamesPeerSlotLastReceiveAndGap) {
 }
 
 TEST(PeerTimeoutServer, ClampsAClockThatReadsEarlier) {
-    const CommTimeoutRecord record{3, "10.0.0.1:1", 900, 100};
+    const CommTimeoutRecord record{3, "10.0.0.1:1", kLateClock, kEarlyClock};
     const std::string line = FormatCommunicationTimeout(record);
     EXPECT_NE(line.find("gap_s=0.000"), std::string::npos) << line;
 }
@@ -109,11 +112,11 @@ TEST(PeerTimeoutClient, RearmsAfterASend) {
 TEST(PeerTimeoutClient, NoWarnWhileSendsOccurEveryOneSecond) {
     SendTracker tracker;
     tracker.EnterInGame(0);
-    for (std::uint64_t t = 1; t <= 30; ++t) {
+    for (std::uint64_t t = 1; t <= kSendsInRun; ++t) {
         tracker.RecordSend(t * kSecond);
         EXPECT_FALSE(tracker.CheckNoSend(t * kSecond + kSecond / 2).has_value()) << "t=" << t;
     }
-    EXPECT_EQ(tracker.Sends(), 30u);
+    EXPECT_EQ(tracker.Sends(), kSendsInRun);
 }
 
 }  // namespace

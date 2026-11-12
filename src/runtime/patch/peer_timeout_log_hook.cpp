@@ -45,13 +45,15 @@ bool PrologueMatches(const char* name, std::uintptr_t va, const std::uint8_t* wa
     const auto* site = reinterpret_cast<const BYTE*>(va);
     if (nevr::ValidatePrologue(site, want, count)) return true;
     constexpr char kHex[] = "0123456789abcdef";
+    constexpr unsigned kNibbleBits = 4;
+    constexpr unsigned kNibbleMask = 0xF;
     std::string expected;
     std::string actual;
     for (std::size_t i = 0; i < count; ++i) {
-        expected += kHex[(want[i] >> 4) & 0xF];
-        expected += kHex[want[i] & 0xF];
-        actual += kHex[(site[i] >> 4) & 0xF];
-        actual += kHex[site[i] & 0xF];
+        expected += kHex[(want[i] >> kNibbleBits) & kNibbleMask];
+        expected += kHex[want[i] & kNibbleMask];
+        actual += kHex[(site[i] >> kNibbleBits) & kNibbleMask];
+        actual += kHex[site[i] & kNibbleMask];
     }
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] peer timeout log hook refused name=%s va=0x%llX expected=%s actual=%s", name,
@@ -95,6 +97,12 @@ void DestroyPeerHook(std::int64_t* self, std::uint64_t index, const char* reason
         // The same arithmetic as the game's DestroyPeer: the peer's slot is index in the chunk table.
         auto* bytes = reinterpret_cast<std::uint8_t*>(self);
         const auto capacity = *reinterpret_cast<const std::uint32_t*>(bytes + kBroadcasterCapacityOffset);
+        if (capacity == 0) {
+            Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer communication timeout not logged slot=%llu capacity=0",
+                static_cast<unsigned long long>(index));
+            OriginalDestroyPeer(self, index, reason);
+            return;
+        }
         const auto bucket = index / capacity;
         const auto slot = index % capacity;
         auto* chunk = *reinterpret_cast<std::uint8_t* const*>(

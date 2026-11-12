@@ -2,6 +2,7 @@
 
 #include "runtime/compat/peer_timeout_log.h"
 
+#include <cstddef>
 #include <cstdio>
 
 namespace nevr_peer_timeout_log {
@@ -9,10 +10,12 @@ namespace {
 
 constexpr std::uint64_t kMicrosPerSecond = 1'000'000ULL;
 constexpr std::uint64_t kMicrosPerMilli = 1'000ULL;
+// Room for "%llu.%03llu": the largest 64-bit seconds value is 20 digits, plus the point and the milliseconds.
+constexpr std::size_t kSecondsTextSize = 32;
 
 // Microseconds as "S.mmm" seconds, integer arithmetic only.
 std::string FormatSeconds(std::uint64_t micros) {
-    char buffer[32];
+    char buffer[kSecondsTextSize];
     std::snprintf(buffer, sizeof(buffer), "%llu.%03llu",
                   static_cast<unsigned long long>(micros / kMicrosPerSecond),
                   static_cast<unsigned long long>((micros % kMicrosPerSecond) / kMicrosPerMilli));
