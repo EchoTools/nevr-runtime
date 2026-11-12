@@ -103,6 +103,13 @@ std::uint64_t Touch(std::uint64_t key) noexcept {
   return 0;
 }
 
+// Counts one request the key table or the line cap dropped. The count is written at 1, 2, 4, 8 ... so a session's log states
+// its own loss with a line per power of two, never a line per drop (docs/standards/logging.md Rule 16 shape).
+void CountUnlogged() noexcept {
+  const std::uint64_t count = g_unlogged.fetch_add(1, std::memory_order_relaxed) + 1;
+  if ((count & (count - 1)) == 0) sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_unlogged", {{"count", count}});
+}
+
 // The same as Touch for the cargo keys: how many times this key has been served, or 0 when it found no slot.
 std::uint64_t TouchCargo(std::uint64_t key) noexcept {
   const std::size_t home = static_cast<std::size_t>(key % kCargoSlots);
@@ -199,7 +206,7 @@ void NoteReleaseFailure(std::uint64_t type, std::uint64_t name, std::uint64_t in
   const std::uint64_t seen = Touch(KeyOf(type, name, index));
   if (seen == 0) {
     // No slot for this key: its repeats cannot be told apart, so each is a candidate for the window.
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_tableFullSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_table_full",
                           {{"slots", kKeySlots}, {"probe_limit", kProbeLimit}});
@@ -222,7 +229,7 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
           std::uint64_t ret, const void* caller, const unsigned char* request) noexcept {
   const std::uint64_t seen = Touch(KeyOf(type, name, index));
   if (seen == 0) {
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_tableFullSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_table_full",
                           {{"slots", kKeySlots}, {"probe_limit", kProbeLimit}});
@@ -231,7 +238,7 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
   }
   if ((seen & (seen - 1)) != 0) return;
   if (g_lineTicket.fetch_add(1, std::memory_order_relaxed) >= kMaxLines) {
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_capSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_cap", {{"max_lines", kMaxLines}});
     }

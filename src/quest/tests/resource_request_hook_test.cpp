@@ -569,6 +569,38 @@ void TheKeyTableIsBoundedAndSaysSoOnce() {
   QCHECK(rr::CurrentTotals().lines >= linesAtFull);
 }
 
+// A key the table could not take is counted, and the count is written at 1, 2, 4, 8 ... so a session's log states how many
+// requests it dropped without a line per drop.
+void TheUnloggedCountIsWrittenAsItGrows() {
+  Reset(1);
+  g_fill.allHits = true;
+  unsigned char request[layout::kRequestBytes] = {};
+  unsigned long long keys = 0;
+  while (keys < 30000 && Lines("resource_request_table_full").empty()) {
+    Call(kBaseType, 0x10000 + keys, 0, request);
+    ++keys;
+  }
+  // Keep asking for new keys until 1000 are dropped: the probe window is full only once the table is nearly full.
+  for (std::uint64_t i = 0; i < 200000 && rr::CurrentTotals().unlogged < 1000; ++i) Call(kBaseType, 0xa00000 + i, 0, request);
+  const unsigned long long dropped = rr::CurrentTotals().unlogged;
+  QCHECK(dropped >= 1000);
+  // The writes are at 1, 2, 4 ... up to the largest power of two not above the count the table holds.
+  std::size_t expected = 0;
+  unsigned long long largest = 0;
+  for (unsigned long long p = 1; p <= dropped; p *= 2) {
+    ++expected;
+    largest = p;
+  }
+  const std::vector<std::string> lines = Lines("resource_request_unlogged");
+  QCHECK(lines.size() == expected);
+  unsigned long long want = 1;
+  for (const std::string& l : lines) {
+    QCHECK(std::stoull(Field(l, "count")) == want);
+    want *= 2;
+  }
+  QCHECK(largest * 2 > dropped);
+}
+
 void TheLineCountIsBoundedAndSaysSoOnce() {
   Reset(1);
   g_fill.allHits = true;
@@ -1164,6 +1196,7 @@ int main() {
   ConcurrentCallsOfOneKeyLogEachPowerOfTwoExactlyOnce();
   TheKeyTableIsBoundedAndSaysSoOnce();
   TheLineCountIsBoundedAndSaysSoOnce();
+  TheUnloggedCountIsWrittenAsItGrows();
   TheCountersAreRegisteredAndARefusedOneIsSaid();
   WithoutLibr15TheInstallIsRefusedAndSaysWhy();
   TheManifestSearchFindsEveryKeyAndOnlyThoseKeys();
