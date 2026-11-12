@@ -23,7 +23,8 @@
  * kOverlayLines of them in all (docs/adr/0018-quest-resource-request-log.md).
  *
  * Bounds. The key table holds kKeySlots keys and looks at most kProbeLimit slots for one; a key that finds no slot is
- * counted and logged as one `resource_request_table_full` warning, once. At most kMaxLines request lines are written;
+ * counted and logged as one `resource_request_table_full` warning, once, and the count of dropped requests is written as
+ * `resource_request_unlogged` at 1, 2, 4, 8 ... drops. At most kMaxLines request lines are written;
  * the next is replaced by one `resource_request_cap` warning, once. Both limits leave the game's call untouched.
  *
  * Release failures (#1797). A build that is not a development build writes `resource_request_miss` for a call that returned
