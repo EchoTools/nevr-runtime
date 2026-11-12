@@ -6,7 +6,7 @@
 //   <sha256 lowercase hex>.blob   the bytes; the name IS the SHA-256 of the contents
 //   index.json                    {"version":1,"overrides":[{"type":"0x..","name":"0x..","sha256":"..","label":".."}]}
 //                                 which blob stands in for which (type, name) resource
-//   <sha256>.<pid>.<tick>.tmp     a write in progress, never read
+//   <sha256>.<pid>.<tick>.<seq>.tmp  a write in progress, never read
 //
 // Rules, each pinned by test_asset_cache.cpp:
 //   * A blob is trusted only after it is read and hashed again: Load() compares the SHA-256 of the bytes it read
@@ -111,6 +111,9 @@ struct EvictReport {
 /// Test support: every write (a blob, the index) stops with ERROR_DISK_FULL once it has written this many bytes
 /// ("write temp" step) and, like a kill, removes nothing it wrote. The default, UINT64_MAX, never stops.
 void SetWriteFailureAfterBytesForTest(std::uint64_t bytes);
+
+/// Test support: the temp path WriteAtomically would use for `tempStem` in `dir`. Two calls never return one path.
+std::wstring TempPathForTest(const std::wstring& dir, const std::wstring& tempStem);
 
 /// Applies the size cap. `referenced` is the set of keys the index names.
 EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::set<std::string>& referenced);

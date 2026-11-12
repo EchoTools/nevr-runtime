@@ -729,10 +729,17 @@ DWORD WINAPI HoldLogLock(void* raw) {
 
 // A mutex name no other test process shares, so two runs under one wineserver cannot hold each other's lock.
 std::wstring UniqueMutexName(const wchar_t* tag) {
+  static LONG counter = 0;
+  const LONG sequence = InterlockedIncrement(&counter);
   wchar_t name[128] = {};
-  swprintf(name, 128, L"Local\\nevr-test-log-%ls-%lu-%llu", tag, static_cast<unsigned long>(GetCurrentProcessId()),
-           static_cast<unsigned long long>(GetTickCount64()));
+  swprintf(name, 128, L"Local\\nevr-test-log-%ls-%lu-%llu-%ld", tag, static_cast<unsigned long>(GetCurrentProcessId()),
+           static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(sequence));
   return std::wstring(name);
+}
+
+// Two calls with one tag in one clock tick must not name the same mutex (the tick alone does not separate them).
+TEST(BootstrapDiagnostics, TwoMutexNamesForOneTagDiffer) {
+  EXPECT_NE(UniqueMutexName(L"same-tag"), UniqueMutexName(L"same-tag"));
 }
 
 // The log mutex of this process is named `name` for the scope; the old one is closed first and the
