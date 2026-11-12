@@ -17,6 +17,7 @@
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/log/builtin_filter.h"
 #include "runtime/patch/gpu_score.h"
 
 namespace nevr_render_config_hook {
@@ -363,6 +364,8 @@ void Poll(std::uint64_t nowUs) {
     const std::string line = g_collector->Poll(nowUs / 1000);
     if (!line.empty()) {
       Log(EchoVR::LogLevel::Info, "%s", line.c_str());
+      // #1846: the adapter the GPU-hung notice names when the game's System Info comes after its HUNG line.
+      nevr_builtin_log_filter::NoteRuntimeAdapter(g_collector->GpuName().c_str(), g_collector->GpuDriver().c_str());
       // Once, with the first line: what the observers saw, so a `settings_source=unknown` or `menu_or_json` explains itself
       // (observers installed after the game's boot Apply call, or a boot return address that is not the one the game uses).
       if (!g_traceLogged.exchange(true)) {
