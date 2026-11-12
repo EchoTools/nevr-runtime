@@ -201,11 +201,11 @@ func TestExtractThenVerifyPasses(t *testing.T) {
 	sum := mustExtract(t, root, out)
 
 	// 8 records, 1 of them of 0 bytes; the three records of 100 'a' bytes are one object: 5 objects, 2 saved.
-	if sum.Records != 8 || sum.Entries != 7 || sum.ZeroByteRecords != 1 || sum.ObjectsWritten != 5 || sum.ObjectsDedup != 2 {
+	if sum.Records != 8 || sum.Entries != 7 || sum.ZeroByteRecords != 1 || sum.ObjectsWritten != 5 || sum.RecordsWithObject != 7 || sum.Objects != 5 {
 		t.Errorf("summary = %+v", sum)
 	}
-	if sum.ObjectsWritten+sum.ObjectsDedup != sum.Entries {
-		t.Errorf("written %d + deduplicated %d is not the %d records that have bytes", sum.ObjectsWritten, sum.ObjectsDedup, sum.Entries)
+	if sum.RecordsWithObject != sum.Entries {
+		t.Errorf("records_with_object %d is not the %d records that have bytes", sum.RecordsWithObject, sum.Entries)
 	}
 	if sum.RecordsByType["0x0000000000000010"] != 5 || sum.RecordsByType["0x0000000000000020"] != 1 || len(sum.RecordsByType) != 4 {
 		t.Errorf("records_by_type = %v", sum.RecordsByType)
@@ -308,8 +308,8 @@ func TestAnObjectAlreadyPresentIsNotRewritten(t *testing.T) {
 		}
 	}
 	again := mustExtract(t, root, out)
-	if again.ObjectsWritten != 0 || again.ObjectsDedup != 7 {
-		t.Errorf("a second run wrote %d objects and deduplicated %d, want 0 and 7", again.ObjectsWritten, again.ObjectsDedup)
+	if again.ObjectsWritten != 0 || again.RecordsWithObject != 7 || again.Objects != 5 {
+		t.Errorf("a second run wrote %d objects, has %d records with an object and %d objects, want 0, 7 and 5", again.ObjectsWritten, again.RecordsWithObject, again.Objects)
 	}
 	for _, f := range files {
 		fi, err := os.Stat(filepath.Join(blobs, f.Name()))
@@ -499,7 +499,7 @@ func TestARunIsRecordedInTheToolsLog(t *testing.T) {
 			t.Fatalf("not a JSON line: %q", line)
 		}
 		seen = append(seen, rec["event"].(string))
-		if rec["event"] == "written" && (rec["entries"] != float64(7) || rec["objects_written"] != float64(5) || rec["objects_deduplicated"] != float64(2)) {
+		if rec["event"] == "written" && (rec["entries"] != float64(7) || rec["objects_written"] != float64(5) || rec["records_with_object"] != float64(7) || rec["objects"] != float64(5)) {
 			t.Errorf("written record = %v", rec)
 		}
 	}
@@ -897,5 +897,32 @@ func TestObjectsIsCountedFromTheOutputDirectory(t *testing.T) {
 	var sum summary
 	if err := json.Unmarshal([]byte(again.stdout), &sum); err != nil || sum.ObjectsWritten != 0 {
 		t.Errorf("the second run wrote %d objects (%v)", sum.ObjectsWritten, err)
+	}
+}
+
+// `records_with_object` is the records that point at an object (the entries, whatever this run wrote), `objects` the unique
+// objects they point at; there is no `objects_deduplicated`.
+func TestTheSummaryCountsRecordsWithAnObjectAndTheUniqueObjects(t *testing.T) {
+	t.Parallel()
+	root := fixture(t, "win10")
+	out := filepath.Join(t.TempDir(), "out")
+	for _, run := range []string{"the run that wrote the objects", "a run over objects already present"} {
+		r := runTool(t, extractArgs(root, out)...)
+		if r.code != 0 {
+			t.Fatalf("exit %d: %s", r.code, r.stderr)
+		}
+		var sum map[string]any
+		if err := json.Unmarshal([]byte(r.stdout), &sum); err != nil {
+			t.Fatal(err)
+		}
+		if sum["records_with_object"] != float64(7) || sum["objects"] != float64(5) {
+			t.Errorf("%s: records_with_object = %v, objects = %v, want 7 and 5", run, sum["records_with_object"], sum["objects"])
+		}
+		if _, old := sum["objects_deduplicated"]; old {
+			t.Errorf("%s: the summary still has objects_deduplicated", run)
+		}
+		if _, ok := sum["bytes_saved_by_dedup"]; ok {
+			t.Errorf("%s: the summary has a bytes_saved_by_dedup the tool does not know", run)
+		}
 	}
 }

@@ -121,7 +121,7 @@ type summary struct {
 	ZeroByteRecords    int            `json:"zero_byte_records"`
 	Objects            int            `json:"objects"` // the unique objects in the output directory, counted there
 	ObjectsWritten     int            `json:"objects_written"`
-	ObjectsDedup       int            `json:"objects_deduplicated"`
+	RecordsWithObject  int            `json:"records_with_object"` // the records that point at an object: the entries
 	StockChunkBytes    uint64         `json:"stock_chunk_bytes"`
 	StockChunkPlain    uint64         `json:"stock_chunk_decompressed_bytes"`
 	RecordBytes        uint64         `json:"record_bytes"`
@@ -221,7 +221,6 @@ type store struct {
 	mu      sync.Mutex
 	claimed map[string]bool
 	written int
-	dedup   int
 	bytes   uint64
 	largest largest
 }
@@ -241,7 +240,6 @@ func (s *store) path(sum string) string { return filepath.Join(s.dir, sum) }
 func (s *store) put(sum string, frame []byte) error {
 	s.mu.Lock()
 	if s.claimed[sum] {
-		s.dedup++
 		s.mu.Unlock()
 		return nil
 	}
@@ -257,9 +255,6 @@ func (s *store) put(sum string, frame []byte) error {
 		if fi.Size() != int64(len(frame)) {
 			return fmt.Errorf("object %s is on disk with %d bytes, the frame is %d", sum, fi.Size(), len(frame))
 		}
-		s.mu.Lock()
-		s.dedup++
-		s.mu.Unlock()
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -573,13 +568,13 @@ feed:
 		return nil, err
 	}
 	sum.ObjectsWritten = objects.written
-	sum.ObjectsDedup = objects.dedup
+	sum.RecordsWithObject = len(entries)
 	sum.ObjectBytes = objects.bytes
 	sum.LargestObject = objects.largest
 	sum.CargoRules = cargoRulesOf(entries, len(empties), len(body), objects.bytes)
 	sum.ElapsedMS = time.Since(start).Milliseconds()
 	log.Info("written", "out", o.out, "entries", sum.Entries, "zero_byte", sum.ZeroByteRecords, "objects_written", sum.ObjectsWritten,
-		"objects_deduplicated", sum.ObjectsDedup, "object_bytes", sum.ObjectBytes, "stock_chunk_bytes", sum.StockChunkBytes,
+		"records_with_object", sum.RecordsWithObject, "objects", sum.Objects, "object_bytes", sum.ObjectBytes, "stock_chunk_bytes", sum.StockChunkBytes,
 		"manifest_bytes", len(body), "elapsed_ms", sum.ElapsedMS)
 	return sum, nil
 }
