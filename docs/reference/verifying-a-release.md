@@ -1439,7 +1439,8 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
   between the check and the load. It checks the file with the verifier of ADR 0010
   (`nevr_plugin_signature::VerifyPluginFile`, with the pinned policy of `src/runtime/ext/plugin_pins.cpp`): an embedded
   Authenticode signature whose digest matches, a chain to the pinned Microsoft Identity Verification Root CA 2020, the
-  pinned signing-profile EKU, a bound RFC 3161 timestamp, and a denylist.
+  pinned signing-profile EKU, and a bound RFC 3161 timestamp. The host's policy has no denylist (`plugin_pins.h:29`); the
+  denylist is in the runtime's `ProductionPolicy` (`plugin_pins.cpp:179`).
 - `DecideVerify` in the same file holds the whole decision: a file that is absent is not loaded; one that cannot be
   opened for reading is refused in every build; a readable file the verifier accepted is loaded; a readable file it did
   not accept is refused in a release build. The build for plugin developers (`nevr_plugin_pins::IsDevBuild`) loads such a
