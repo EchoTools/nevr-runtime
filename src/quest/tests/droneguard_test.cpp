@@ -185,7 +185,7 @@ void TheThunkTakesTheSlotAndTheLineSaysSo() {
   if (install.size() == 1U) {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(combat_test::Golden(install[0].text) ==
-           "\"event\":\"combat_droneguard_install\",\"result\":\"installed\",\"reason\":\"ok\",\"hook\":\"ok\",\"stage1\":\"off\","
+           "\"event\":\"combat_droneguard_install\",\"result\":\"installed\",\"reason\":\"ok\",\"hook\":\"ok\",\"stage1\":\"off\",\"droneguard_stage1\":0,"
            "\"consequence\":\"the drone's follow update is skipped while its target is null instead of crashing the game, in every level\"}");
   }
   End();
@@ -714,7 +714,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
     QCHECK(combat_test::Golden(install[0].text) ==
-           "\"event\":\"combat_droneguard_install\",\"result\":\"off\",\"reason\":\"off_config\",\"consequence\":\"combat.droneguard is false: the "
+           "\"event\":\"combat_droneguard_install\",\"result\":\"off\",\"reason\":\"off_config\",\"droneguard_stage1\":1,\"consequence\":\"combat.droneguard is false: the "
            "game's own Follow runs for every component, and a drone with no orbit target faults it\"}");
   }
   End();
@@ -809,6 +809,29 @@ void TheFinalStatsCountBothKindsOfSkip() {
 
 }  // namespace
 
+// Every combat_droneguard_install line names the stage-1 switch the step was handed (#2382), on every path, with stage 1 handed on (its default is
+// off, so a line that drops it shows): installed, refused for want of libr15, and refused for a pinned word that differs. The off line is the golden
+// line of TheSwitchOffInstallsNothingAndSaysSo.
+void EveryInstallLineNamesTheStageOneSwitchItWasHanded() {
+  const std::string named = "\"droneguard_stage1\":1";
+  Installed(true);
+  std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, named));
+  End();
+  Begin();
+  const dg::EngineFns f = Fns();
+  QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, true, &f).status, "module_not_loaded") == 0);
+  install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") && Has(install[0].text, named));
+  End();
+  Begin();
+  g_image.Put<std::uint32_t>(dg::kWords[0].vaddr, dg::kWords[0].word ^ 0x00010000U);
+  QCHECK(std::strcmp(Install(true, true, &f).status, "pinned_word_mismatch") == 0);
+  install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"pinned_word_mismatch\"") && Has(install[0].text, named));
+  End();
+}
+
 int main() {
   ThePinsAreTheReadelfAndDisassemblyPins();
   TheThunkTakesTheSlotAndTheLineSaysSo();
@@ -840,6 +863,7 @@ int main() {
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();
+  EveryInstallLineNamesTheStageOneSwitchItWasHanded();
   ASecondInstallDoesNothing();
   TheGuardHasNoLevelScope();
   TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd();

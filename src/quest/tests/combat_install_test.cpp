@@ -1903,6 +1903,25 @@ void TheBvhRowHandsTheModuleItsGateAndTouchKeys() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// droneguard refuses on the host (no libr15) before it tries its stage 1, and its refusal names the combat.droneguard_stage1 value the row handed it
+// (#2382): off, then on, each set by the file.
+void TheDroneguardRowHandsTheModuleItsStageOneKey() {
+  for (const bool stage1 : {false, true}) {
+    nevr_quest::combat::droneguard::ResetForTest();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.droneguardStage1 = {stage1, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    const std::vector<Line> install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") &&
+           Has(install[0].text, std::string("\"droneguard_stage1\":") + (stage1 ? "1" : "0")));
+    QCHECK(NoLineIsCut());
+    Done();
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1950,6 +1969,7 @@ int main() {
   TheImpactsndRowHandsTheModuleItsWriteKey();
   TheDecalsRowHandsTheModuleItsFlipKeys();
   TheBvhRowHandsTheModuleItsGateAndTouchKeys();
+  TheDroneguardRowHandsTheModuleItsStageOneKey();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

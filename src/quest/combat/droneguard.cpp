@@ -30,6 +30,8 @@ struct Snap {  // the span [cs+0x140, cs+0x194)
 // Stage 1's engine functions, set before the thunk is armed and read-only after; whether stage 1 runs.
 EngineFns g_f{};
 std::atomic<bool> g_idxOn{false};
+// combat.droneguard_stage1 as the step was handed it (InstallAt's `stage1`), for the refusal lines: InstallAt stores it before any line.
+std::atomic<bool> g_stage1Asked{false};
 std::atomic<unsigned> g_skips{0}, g_totals{0}, g_idxSkips{0}, g_idxTotals{0}, g_stateLines{0};
 // The lines written of each kind (a budget each, line_budget.h).
 std::atomic<unsigned> g_skipLines{0}, g_targetSetLines{0}, g_idxSkipLines{0}, g_idxResolvedLines{0};
@@ -295,10 +297,12 @@ ModuleResult Refused(const char* token, const pinned::Failure* word = nullptr) n
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_droneguard_install",
                         {{"result", "refused"}, {"reason", token}, {"pin", word->what}, {"vaddr", sentinel::HexString(at, word->vaddr)},
                          {"found", word->readable ? sentinel::HexString(haveText, word->have) : "unreadable"},
+                         {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},
                          {"expected", sentinel::HexString(wantText, word->want)}, {"consequence", kRefusedConsequence}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "combat_droneguard_install",
-                        {{"result", "refused"}, {"reason", token}, {"consequence", kRefusedConsequence}});
+                        {{"result", "refused"}, {"reason", token}, {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},
+                         {"consequence", kRefusedConsequence}});
   }
   return {false, token};
 }
@@ -349,9 +353,10 @@ bool ResolveEngineFns(std::uintptr_t base, EngineFns* out) noexcept {
 }
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, bool stage1, const EngineFns* fns) noexcept {
+  g_stage1Asked.store(stage1, std::memory_order_relaxed);
   if (!on) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_droneguard_install",
-                        {{"result", "off"}, {"reason", "off_config"},
+                        {{"result", "off"}, {"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},
                          {"consequence", "combat.droneguard is false: the game's own Follow runs for every component, and a drone with no orbit target faults it"}});
     return {false, "off_config", true};
   }
@@ -373,7 +378,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, 
   if (!installed && !g_hook.installed()) g_idxOn.store(false, std::memory_order_relaxed);
   sentinel::LogFields(installed ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_droneguard_install",
                       {{"result", installed ? "installed" : "refused"}, {"reason", installed ? "ok" : "slot_refused"},
-                       {"hook", sentinel::GotStatusName(status)}, {"stage1", installed ? stageOne : "off"},
+                       {"hook", sentinel::GotStatusName(status)}, {"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},
                        {"consequence", installed ? kConsequence : kRefusedConsequence}});
   if (!installed) return {false, sentinel::GotStatusName(status)};
   return {true, stage1 && std::strcmp(stageOne, "on") != 0 ? "installed_null_half" : "installed"};

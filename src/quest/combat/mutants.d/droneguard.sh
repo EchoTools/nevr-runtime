@@ -74,6 +74,12 @@ runm dg_install_level     $D "s/sentinel::LogFields(installed ? sentinel::LogLev
 # the switch
 runm dg_off_ignored       $D "s/  if (!on) {/  if (!on \&\& false) {/"
 runm dg_off_not_off       $D "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
+# every combat_droneguard_install line names the stage-1 switch the step was handed (#2382): the record unset, then each line's field fixed at the default
+runm dg_stage1_asked_unset      $D 's/^  g_stage1Asked.store(stage1, std::memory_order_relaxed);$//'
+runm dg_pin_refusal_stage1_fixed $D 's/^                         {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},$/                         {"droneguard_stage1", 0},/'
+runm dg_refusal_stage1_fixed    $D 's/{"reason", token}, {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},/{"reason", token}, {"droneguard_stage1", 0},/'
+runm dg_off_stage1_fixed        $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 0},/'
+runm dg_installed_stage1_fixed  $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", 0},/'
 # the stats
 runm dg_stats_never       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  (void)calls;/"
 runm dg_stats_every       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  if (calls != ~0ULL) LogStats(false);/"

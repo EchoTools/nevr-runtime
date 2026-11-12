@@ -67,7 +67,8 @@ fingerprint.
 ## Lines (sentinel log)
 
 - `combat_droneguard_install`: `result` `installed|refused|off`, `reason` (`ok`, `off_config`, `module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `slot_refused`), `hook`, `stage1`
-  (`off|on|null_half_only`), `consequence`. Info for installed and off, Error for refused. The table's status for an installed guard whose stage 1 was asked and is not available is `installed_null_half`.
+  (`off|on|null_half_only`), `droneguard_stage1` (the `combat.droneguard_stage1` value the step was handed, 0 or 1, on every line, a refusal and the off line
+  included), `consequence`. Info for installed and off, Error for refused. The table's status for an installed guard whose stage 1 was asked and is not available is `installed_null_half`.
 - `combat_droneguard_stage1`: `result` `on|null_half_only`, `reason`; Info for on, Error otherwise.
 - `combat_droneguard_state`, `combat_droneguard_skip`, `combat_droneguard_skips`, `combat_droneguard_target_set`, `combat_droneguard_idx_skip`, `combat_droneguard_idx_skips`, `combat_droneguard_idx_resolved`: Info, capped as above.
 - `combat_droneguard_run_table_full`: Warning, once per process, naming the table (`skip` or `idx_skip`) and `slots`; every refused run is counted in `run_table_full` of the stats line.

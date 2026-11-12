@@ -38,7 +38,9 @@
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_droneguard_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,
- *              "stage1":"off|on|null_half_only","consequence":".."}  Info for installed and off, Error for refused (+ pinned_word_mismatch: "pin","found","expected")
+ *              "stage1":"off|on|null_half_only","droneguard_stage1":0|1,"consequence":".."}  Info for installed and off, Error for refused (+ pinned_word_mismatch:
+ *              "pin","found","expected"); `stage1` is what runs, `droneguard_stage1` (every line, a refusal included) the `combat.droneguard_stage1` value
+ *              the step was handed
  *   stage1    {"event":"combat_droneguard_stage1","result":"on|null_half_only","reason":"ok|pinned_word_mismatch|engine_functions_missing",...}  Info / Error
  *   state     {"event":"combat_droneguard_state","target":"set|0","handle_sys":"set|0","idx_unresolved":"yes|no","raw190":"%08x","flags16c":"%02x","cs":"0x.."}
  *             Info, on the first call and on every change of (index word, flags byte, target null, handle system null), at most kStateLines
