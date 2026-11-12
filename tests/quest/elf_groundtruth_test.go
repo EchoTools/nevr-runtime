@@ -171,9 +171,15 @@ func TestEcPageIsAnExportedDataPage(t *testing.T) {
 func TestNoEmulatedTLSInHookPath(t *testing.T) {
 	requireArtifact(t)
 	syms := run(t, "nm", soPath(t))
-	seen, bad := emutlsCheck(syms)
-	for _, line := range bad {
-		t.Errorf("emulated TLS variable that is not libc++abi's: %s", line)
+	seen := 0
+	for _, line := range strings.Split(syms, "\n") {
+		if !strings.Contains(line, "__emutls_v.") {
+			continue
+		}
+		seen++
+		if !strings.Contains(line, "__cxxabiv1") {
+			t.Errorf("emulated TLS variable that is not libc++abi's: %s", line)
+		}
 	}
 	if seen == 0 {
 		t.Errorf("no __emutls_v.* symbol at all: the allowlist is not looking at what it thinks it is")
