@@ -21,8 +21,8 @@
  * names an arena level, or a bullet system of an arena match, draws nothing and creates nothing. This is the one answer to "is this combat?" that the
  * other combat modules use; there is no second level list here. The SDK's `LevelGate` (sdk/include/nevr/level_gate.h) is the PC plugin API's
  * per-context gate over the host's main level; the q15t plugin never used it for decals (its gate was this module's table), so nothing moves off it, and
- * it stays for plugins. Switching to combat_scope (#2246's cached answer) is not useful here: the question is about one game space's level, which the
- * handler reads from the system it was called with.
+ * it stays for plugins. The combat level answer (combat_scope.h, the loaded levels as a whole) does not answer this module's question, by decision:
+ * the question is about one game space's level, which the handler reads from the system it was called with.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h), and only with `combat.decals` true and a
  * readable decals.bin: with `combat.decals` false or no table the module installs nothing and an arena match pays nothing.

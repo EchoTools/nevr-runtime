@@ -22,8 +22,9 @@
  * Nothing is copied.
  *
  * Callers (#1631). The renderer's caller runs once per effect create (about 3,450 creates while a lobby loads), so it MUST NOT call `InCombatMap`
- * or `GateOpenIn` (the direct level scan, about 3 us a call) per create. It takes the cached map-only answer of combat_scope, which a level change
- * refreshes; that replaces `InCombatMap` here once #2246 adds `combat_scope::InCombatMap()`.
+ * or `GateOpenIn` (the direct level scan, about 3 us a call) per create. It reads `GateOn()` and the combat level answer's map-only question,
+ * combat_scope.h `scope::InCombatMap()` (one relaxed load and a test outside a combat map), which the scope row refreshes four times a second; its
+ * module is then one of `ScopeNormal()`'s readers. `InCombatMap(game)` and `GateOpenIn(game)` here stay for a caller that asks once, at a level change.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_pfx_install","state":"on|off","reason":"default|off_config","switch":"combat.pfx","scope":"combat_map","msg":".."}

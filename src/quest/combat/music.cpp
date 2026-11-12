@@ -95,8 +95,8 @@ std::uint32_t PostBothStops(tgt::Thunk::Fn original, void* self, std::uint32_t o
   return 2;
 }
 
-// Not combat_scope (F19, #2186; PR #2246): that answer is cached from the loaded tables, and this ask is made once per Play with the init-fiber table
-// read as well, which is the point (a map still building). When combat_scope is on main this stays a direct ask.
+// A direct ask of combat_level.h, not combat_scope.h, by decision: the combat level answer is cached from the loaded tables as of its last look, and
+// this ask is made once per Play with the init-fiber table read as well, which is the point (a map still building is the map whose music it is).
 bool InCombatMapNow() noexcept {
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game == 0) return false;  // no frame has run yet: the level is unknown, so the Play goes through untouched

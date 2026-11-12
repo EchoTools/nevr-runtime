@@ -32,8 +32,8 @@ the switch off.
 
 No frame runs this module: the install step runs once per process and no caller of `GateOn` or `GateOpenIn` exists in the tree. A caller takes
 `GateOpenIn` (or `InCombatMap`) at a level change and keeps the answer; `InCombatMap` is the level scan, a few `process_vm_readv` reads, and is not for
-a per-frame or per-create call: the renderer creates about 3,450 effects while a lobby loads, so its caller takes the cached map-only answer of combat_scope
-(#2246 adds `InCombatMap()` there), never this scan. `pfx_test` prints the measured host cost of both calls; on the machine that built this change `GateOn` took about 10 ns and `InCombatMap` about
+a per-frame or per-create call: the renderer creates about 3,450 effects while a lobby loads, so its caller reads the cached map-only answer of
+`combat_scope.h` (`scope::InCombatMap()`, one relaxed load and a test outside a combat map), never this scan. `pfx_test` prints the measured host cost of both calls; on the machine that built this change `GateOn` took about 10 ns and `InCombatMap` about
 3 µs per call (x86 host, in an arena level, not a headset).
 
 ## What is not ported
