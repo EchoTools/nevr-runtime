@@ -1,0 +1,6 @@
+# Owner probes for custom maps (probe builds only). Copy this file into %LOCALAPPDATA%\nevr\echovr\.
+# Each probe stays off until its line says on. The probes read this file once, at the game's first frame.
+rules: off        # P-RULES: logs the cached zone point values and the main level
+skew: off         # P-SKEW: the server pins probe@2; the client logs when it sees the pin
+skew_expect: none # P-SKEW client: none (log only), probe@1 (leave on any other version) or missing (leave)
+sublevel: off     # P-SUBLEVEL: level tables (A) against Enable/Disable (B)
