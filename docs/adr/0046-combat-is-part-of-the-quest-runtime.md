@@ -15,10 +15,10 @@ per game behaviour) and ADR 0040 (every build names its variant). Tracking issue
 
 The combat behaviour that the q15t and combat APKs add is a plugin, q15t: `libq15t.so` and `libq15t_early.so`, built from
 src/quest/plugins/q15t/ by this tree's CMake and packaged beside the sentinel by the variant recipes (`release-quest-variant-apk`,
-`release-quest-combat-apk` in `justfile`). The plugin boundary kept combat code apart from the runtime; the code is in this public tree
+`release-quest-combat-apk` in `justfile`). KNOWN-WRONG #2389: src/quest/plugins/q15t/ is not in the tree (src/quest/plugins holds only `autopilot`), and `justfile` (the variant APK, around line 644) says it carries no plugin library. The plugin boundary kept combat code apart from the runtime; the code is in this public tree
 and is built by its CMake, so the boundary separates nothing. What it costs:
 
-- **A second hook mechanism.** q15t writes GOT and vtable words itself (src/quest/plugins/q15t/src/got_swap.cpp: its own lock,
+- **A second hook mechanism.** KNOWN-WRONG #2389: the q15t write path described here is not in the tree. q15t writes GOT and vtable words itself (src/quest/plugins/q15t/src/got_swap.cpp: its own lock,
   `mprotect` and compare-and-swap), outside the manager's registry; ADR 0034 names it (H1, H2). Where the sentinel holds a slot first,
   q15t's install refuses by code: #2000, the refresh-rate and clock-level hooks (not yet seen in a headset log).
 - **Two owners of one behaviour.** q15t's clock module and the sentinel's `clock_levels` both decide the clock levels (ADR 0039 O1).
