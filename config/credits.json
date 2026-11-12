@@ -5,7 +5,8 @@
     {"id": "thanks", "ingame": "THANKS"},
     {"id": "testers", "ingame": "TESTERS"},
     {"id": "lounge-staff", "ingame": "ECHO VR LOUNGE STAFF"},
-    {"id": "supporters", "ingame": "SUPPORTERS"}
+    {"id": "supporters", "ingame": "SUPPORTERS"},
+    {"id": "special-thanks", "ingame": "SPECIAL THANKS", "order": ["Teth", "Glow", "Spritz"]}
   ],
   "sections": [
     {"id": "projects", "title": "Projects"},
@@ -182,6 +183,16 @@
       ]
     },
     {
+      "name": "Glow",
+      "section": null,
+      "headings": ["special-thanks"],
+      "link": "",
+      "what": "",
+      "sources": [
+        "named by the project owner, 11-12"
+      ]
+    },
+    {
       "name": "h4ck3r210",
       "section": "thanks",
       "headings": ["thanks"],
@@ -287,6 +298,16 @@
       ]
     },
     {
+      "name": "Spritz",
+      "section": null,
+      "headings": ["special-thanks"],
+      "link": "",
+      "what": "",
+      "sources": [
+        "named by the project owner, 11-12"
+      ]
+    },
+    {
       "name": "sprockee",
       "section": "thanks",
       "headings": ["thanks"],
@@ -304,6 +325,16 @@
       "what": "Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "Teth",
+      "section": null,
+      "headings": ["special-thanks"],
+      "link": "",
+      "what": "",
+      "sources": [
+        "named by the project owner, 11-12"
       ]
     },
     {
@@ -345,7 +376,8 @@
     "sprockee is listed exactly once in each rendered list: in the thanks group, in alphabetical order, never first. No heading, README line or project-owner text is given to the name. tools/tests/test_credits.py enforces this.",
     "The thanks group is the six credit strings of the community installer's patcher, spelled exactly as the patcher spells them: configs/libr15.so.yaml lines 306 to 348 at 93a2a055 in the echoApkPatch repository, which is not public. The facts are recorded here and no text is copied from it.",
     "Everyone named as having tested in #nevr-runtime-testing is also under the testers heading, whatever other heading they have. One person is one entry: Trodd- is shown with the dash under People and under Testers.",
-    "marshmallow_mia is the patcher's spelling and belongs to the thanks group only; the README shows the person once, as marshmallow-mia."
+    "marshmallow_mia is the patcher's spelling and belongs to the thanks group only; the README shows the person once, as marshmallow-mia.",
+    "The special-thanks group is the last in-game group, three names the project owner gave and no README line; its order is fixed by the heading's order list and is never sorted."
   ],
   "closing": "Thank you to everyone in #nevr-runtime-testing, named or not."
 }

@@ -149,6 +149,7 @@ class SharedFile(unittest.TestCase):
                  "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "he_is_the_cat", "marshmallow-mia",
                            "Nebula", "spike4887", "TekEmperor", "Trodd-", "zebra"]},
                 {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo", "MyGuyChromium"]},
+                {"id": "special-thanks", "ingame": "SPECIAL THANKS", "names": ["Teth", "Glow", "Spritz"]},
             ],
         )
 
@@ -433,7 +434,13 @@ class SharedFile(unittest.TestCase):
             elif line:
                 lists[heading] += line.split("   ")
         self.assertTrue(lists)
+        # The exemption is the heading's own declared `order` list: a heading that declares one shows its names in
+        # that order, not alphabetically, so it is checked against that list; every other heading is alphabetical.
+        declared = {h["ingame"]: h["order"] for h in self.data["headings"] if "order" in h}
         for heading, names in lists.items():
+            if heading in declared:
+                self.assertEqual(names, declared[heading], f"in-game {heading} shows its declared order")
+                continue
             self.assertEqual(names, order(names), f"in-game {heading}")
 
 
@@ -550,10 +557,13 @@ class IngameText(unittest.TestCase):
             "SUPPORTERS\n\n"
             "Furo   MyGuyChromium\n"
             "\n\n\n"
+            "SPECIAL THANKS\n\n"
+            "Teth   Glow   Spritz\n"
+            "\n\n\n"
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
         self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nbabs   brysonak   chinmayee5599   DC Coffey\n"))
-        self.assertEqual(expected.count("\n"), 29, "rows: 3 + 2 + 3 + 1 for the four groups; 8 + 7 + 8 + 6 lines")
+        self.assertEqual(expected.count("\n"), 35, "rows: 3 + 2 + 3 + 1 + 1 for the five groups; 8 + 7 + 8 + 6 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
@@ -716,6 +726,89 @@ class IngameText(unittest.TestCase):
 
     def test_a_heading_with_one_name_renders_one_line(self):
         self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": ["Solo"]})), b"ONE\n\nSolo\n\n\n\n")
+
+
+class FixedOrder(unittest.TestCase):
+    """A heading may declare `order`: the names it shows, in that order, on the in-game page. A heading without
+    `order` lists its names in file order, four across. Entries here are written in alphabetical order, so a fixed
+    order that is not alphabetical is what the rendering has to follow."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tool = load_tool()
+
+    def data_with(self, names, order=None):
+        heading = {"id": "group", "ingame": "THE GROUP"}
+        if order is not None:
+            heading["order"] = order
+        entries = [{"name": n, "section": None, "headings": ["group"], "link": "", "what": "", "sources": ["#1"]}
+                   for n in names]
+        return {"schema": 1, "headings": [heading], "sections": [], "entries": entries, "notes": [], "closing": ""}
+
+    def test_a_fixed_order_is_shown_on_one_line_in_the_listed_order_not_alphabetically(self):
+        data = self.data_with(["Amy", "Mo", "Zed"], order=["Zed", "Amy", "Mo"])
+        self.assertEqual(self.tool.validate(data, ROOT), [])
+        self.assertEqual(self.tool.ingame_text(data), b"THE GROUP\n\nZed   Amy   Mo\n\n\n\n")
+
+    def test_a_fixed_order_naming_a_missing_entry_is_refused_and_names_the_heading(self):
+        data = self.data_with(["Amy", "Mo"], order=["Amy", "Mo", "Nobody"])
+        problems = self.tool.validate(data, ROOT)
+        self.assertTrue(any("'group'" in p and "Nobody" in p for p in problems), problems)
+
+    def test_a_fixed_order_naming_an_entry_listed_under_another_heading_is_refused(self):
+        data = self.data_with(["Amy", "Mo"], order=["Amy", "Mo", "Zed"])
+        data["headings"].append({"id": "other", "ingame": "OTHER"})
+        data["entries"].append({"name": "Zed", "section": None, "headings": ["other"], "link": "", "what": "", "sources": ["#1"]})
+        problems = self.tool.validate(data, ROOT)
+        self.assertTrue(any("'group'" in p and "Zed" in p for p in problems), problems)
+
+    def test_a_fixed_order_omitting_an_entry_under_the_heading_is_refused_and_names_the_heading(self):
+        data = self.data_with(["Amy", "Mo", "Zed"], order=["Zed", "Amy"])
+        problems = self.tool.validate(data, ROOT)
+        self.assertTrue(any("'group'" in p and "Mo" in p for p in problems), problems)
+
+    def test_a_fixed_order_naming_an_entry_twice_is_refused_and_names_the_heading(self):
+        data = self.data_with(["Amy", "Mo"], order=["Mo", "Amy", "Mo"])
+        problems = self.tool.validate(data, ROOT)
+        self.assertTrue(any("'group'" in p and "Mo" in p for p in problems), problems)
+
+    def test_a_heading_without_an_order_lists_its_names_in_file_order_four_across(self):
+        data = self.data_with(["Amy", "Bo", "Cy", "Mo", "Zed"])
+        self.assertEqual(self.tool.validate(data, ROOT), [])
+        self.assertEqual(self.tool.ingame_text(data), b"THE GROUP\n\nAmy   Bo   Cy   Mo\nZed\n\n\n\n")
+
+
+class SpecialThanks(unittest.TestCase):
+    """The SPECIAL THANKS group (named by the project owner, 11-12): the last group of the in-game page, three names
+    in the order its heading declares, and none of the three in the README."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tool = load_tool()
+        cls.data = json.loads(CREDITS.read_text(encoding="utf-8"))
+
+    def test_special_thanks_is_the_last_group_and_reads_teth_glow_spritz_in_that_order(self):
+        groups = self.tool.ingame_groups(self.data)
+        self.assertEqual(groups[-1], {"id": "special-thanks", "ingame": "SPECIAL THANKS", "names": ["Teth", "Glow", "Spritz"]})
+        self.assertTrue(self.tool.ingame_text(self.data).endswith(b"SPECIAL THANKS\n\nTeth   Glow   Spritz\n\n\n\n"))
+
+    def test_the_order_is_declared_on_the_heading_and_only_there(self):
+        declared = [h for h in self.data["headings"] if "order" in h]
+        self.assertEqual([h["id"] for h in declared], ["special-thanks"])
+        self.assertEqual(declared[0]["order"], ["Teth", "Glow", "Spritz"])
+
+    def test_the_three_entries_are_not_in_the_readme_and_say_the_owner_named_them(self):
+        for name in ("Teth", "Glow", "Spritz"):
+            found = [e for e in self.data["entries"] if e["name"] == name]
+            self.assertEqual(len(found), 1, f"{name} appears once in the file")
+            entry = found[0]
+            self.assertIsNone(entry["section"], name)
+            self.assertEqual(entry["headings"], ["special-thanks"], name)
+            self.assertEqual(entry["link"], "", name)
+            self.assertEqual(entry["sources"], ["named by the project owner, 11-12"], name)
+        readme = README.read_text(encoding="utf-8")
+        for name in ("Teth", "Glow", "Spritz"):
+            self.assertIsNone(re.search(r"^- \*\*\[?" + name + r"\b", readme, re.M), f"{name} is a README credit line")
 
 
 if __name__ == "__main__":

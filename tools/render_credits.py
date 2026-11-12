@@ -12,8 +12,10 @@ the in-game half (`ingame_groups`), so the two cannot drift.
     python3 tools/render_credits.py --ingame-text OUT.txt     the same bytes as a file, for tests and review
 
 File shape (schema 1; every key is required):
-  headings  ordered [{id, ingame}]       in-game group titles (the same character rule as a name); a heading
-                                         with no entry shows nowhere
+  headings  ordered [{id, ingame, order?}] in-game group titles (the same character rule as a name); a heading
+                                         with no entry shows nowhere. `order` (optional) is the list of names the
+                                         heading shows, in that display order, instead of file order; it names each
+                                         entry under the heading exactly once and no other (validate refuses the rest)
   sections  ordered [{id, title}]        README groups
   entries   ordered [{name, section, headings, link, what, sources}]
               name      the display name, spelled as the person or project writes it; each name once. It is
@@ -84,6 +86,20 @@ KEYS = {"schema", "headings", "sections", "entries", "notes", "closing"}
 ENTRY_KEYS = {"name", "section", "headings", "link", "what", "sources"}
 
 
+def order_problems(heading: dict, entries: list) -> list[str]:
+    """A heading's `order`: the names it shows, in display order. It names each entry listed under the heading
+    exactly once and no other, so the list cannot drop a name or show one under the wrong heading."""
+    hid = heading.get("id")
+    order = heading["order"]
+    if not isinstance(order, list) or not all(isinstance(n, str) and n for n in order):
+        return [f"heading {hid!r}: order must be a list of names"]
+    under = [e.get("name") for e in entries if isinstance(e.get("headings"), list) and hid in e["headings"]]
+    problems = [f"heading {hid!r}: order names {n!r}, which is not an entry under this heading" for n in order if n not in under]
+    problems += [f"heading {hid!r}: order omits {n!r}, which is listed under this heading" for n in under if n not in order]
+    problems += [f"heading {hid!r}: order names {n!r} more than once" for n in sorted({n for n in order if order.count(n) > 1})]
+    return problems
+
+
 def validate(data: dict, root: Path = ROOT) -> list[str]:
     problems: list[str] = []
     if not isinstance(data, dict) or set(data) != KEYS:
@@ -101,6 +117,8 @@ def validate(data: dict, root: Path = ROOT) -> list[str]:
     for heading in data["headings"]:
         if not heading.get("ingame"):
             problems.append(f"heading {heading.get('id')!r} has no in-game text")
+        if "order" in heading:
+            problems += order_problems(heading, data["entries"])
     for section in data["sections"]:
         if not section.get("title"):
             problems.append(f"section {section.get('id')!r} has no title")
@@ -163,11 +181,14 @@ def render_readme(data: dict) -> str:
 
 
 def ingame_groups(data: dict) -> list[dict]:
-    """The in-game page: one group per heading that has a name, in heading order, names in file order.
+    """The in-game page: one group per heading that has a name, in heading order, names in file order unless the
+    heading declares `order`, which is its display order (validate has checked it names the same entries).
     A heading with no name is left out, so an empty heading shows nowhere."""
     groups = []
     for heading in data["headings"]:
         names = [e["name"] for e in data["entries"] if heading["id"] in e["headings"]]
+        if "order" in heading:
+            names = list(heading["order"])
         if names:
             groups.append({"id": heading["id"], "ingame": heading["ingame"], "names": names})
     return groups
