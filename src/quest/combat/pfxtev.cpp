@@ -61,7 +61,7 @@ ModuleResult Install(bool configOn) noexcept {
                          {"replaced_by", "combat.pfxtev: false"},
                          {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
   }
-  return {configOn, configOn ? "installed" : "off_config"};
+  return {configOn, configOn ? "installed" : "off_config", !configOn};  // switched off by its key: counted apart (#2308)
 }
 
 bool AllowsIn(std::uint64_t id, bool inCombatMap) noexcept { return Decide(id, inCombatMap); }

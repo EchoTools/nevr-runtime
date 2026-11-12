@@ -80,7 +80,7 @@ void WithTheSwitchOnEveryEventIdIsAllowedAndEachDecisionIsOneLine() {
 void WithTheSwitchOffEveryEventIdIsRefusedAndTheNonEventPasses() {
   Fresh();
   const nevr_quest::combat::ModuleResult r = tev::Install(false);
-  QCHECK(!r.installed && std::string(r.status) == "off_config");
+  QCHECK(!r.installed && r.off && std::string(r.status) == "off_config");
   QCHECK(Count("combat_pfxtev_install", kInfo) == 1);  // a choice, not a failure
   for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(!tev::AllowsIn(tev::kIds[i], true));
   QCHECK(tev::AllowsIn(kNonEvent, true));

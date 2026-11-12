@@ -38,7 +38,7 @@ ModuleResult Install(bool configOn) noexcept {
                          {"replaced_by", "combat.pfx: false"},
                          {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
   }
-  return {decision.on, decision.on ? "installed" : "off_config"};
+  return {decision.on, decision.on ? "installed" : "off_config", !decision.on};  // switched off by its key: counted apart (#2308)
 }
 
 bool GateOn() noexcept { return g_on.load(std::memory_order_acquire); }
