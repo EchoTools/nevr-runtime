@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,7 +42,7 @@ class NamingInventoryTest(unittest.TestCase):
         out = self.inventory()
         self.assertIn("src/runtime/a.h:1  GameServer", out)
         self.assertIn("src/runtime/a.h:5  n" "EVR", out)  # spelled in two pieces: the sensor scans this file too
-        self.assertIn("src/runtime/b.cpp:1  Nevr::" "Lifecycle", out)  # two pieces: test_naming scans this file
+        self.assertIn("src/runtime/b.cpp:1  Nevr::" "Lifecycle", out)  # two pieces: this is Python text, and the lifecycle category reads code files only
         self.assertIn("src/runtime/b.cpp:3  [TELEMETRY.DIAG]", out)
         self.assertIn("src/runtime/CMakeLists.txt:1  platform_compat", out)
         self.assertIn("src/runtime/CMakeLists.txt:4  GIT_COMMIT_HASH", out)
@@ -102,6 +103,20 @@ class NamingInventoryTest(unittest.TestCase):
         summary = self.inventory("--summary")
         self.assertNotIn("src/runtime/a.h", summary)
         self.assertIn("pascal-namespaces", summary)
+
+
+class NamedPathsTest(unittest.TestCase):
+    # A path the inventory's text names (its docstring, SELF) must be a file of the tree, so a reference to a file that
+    # is not there fails here rather than in a reader's head.
+    PATH = re.compile(r"\b(?:docs|tools|src|sdk|installer)/[A-Za-z0-9_./-]+\.(?:md|py|json|h|cpp|txt|yaml|cmake)\b")
+
+    def test_every_path_the_inventory_names_is_in_the_tree(self):
+        tree = set(subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                                  check=True, capture_output=True, text=True).stdout.split("\0"))
+        named = sorted(set(self.PATH.findall(SCRIPT.read_text(encoding="utf-8"))))
+        self.assertTrue(named, "the check found no path in the inventory to read")
+        self.assertEqual([p for p in named if p not in tree], [],
+                         "tools/naming_inventory.py names a path that is not in the tree")
 
 
 if __name__ == "__main__":

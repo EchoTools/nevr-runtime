@@ -259,11 +259,14 @@ the alternatives.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-The review enforces these rules: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
-no non-canonical spelling of the project name in a file (or token) that does not already carry one
-(`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
-`nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the
-prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every namespace
-`nevr` or `nevr_<area>` (the exceptions above and the game's namespaces, listed in the test), and the old names of renamed
-namespaces (`tools/tests/renamed_namespaces/*.json`). `python3 tools/naming_inventory.py` lists what the tree
-still holds that breaks a rule, by category, with `file:line`. The other rules above are checked in review.
+KNOWN-WRONG #2392: no check enforces the rules in this paragraph. The test that did read the `Nvr` uses, the spelling
+lists (`LEGACY_SPELLINGS`, `BRAND_PROSE_SPELLINGS`), the lifecycle namespace, the `NEVR_` macros, the `nevr_` CMake
+targets, every namespace, the brand in prose, and the old names in `tools/tests/renamed_namespaces/*.json` is not in the
+tree, nothing else reads those JSON files, and the agent definitions under `.claude/agents` do not name these rules.
+Until #2392 is fixed these are the standard only: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
+no non-canonical spelling of the project name, one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand
+spelling `nEVR` in the prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every
+namespace `nevr` or `nevr_<area>` (the exceptions above and the game's namespaces), and no old name of a renamed namespace.
+`python3 tools/naming_inventory.py` lists the breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
+`pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`), with `file:line`; `--summary` gives the counts.
+It has no category for the rules above.

@@ -6,9 +6,10 @@
     python3 tools/naming_inventory.py --category lifecycle-namespaces
 
 It is the work list for the rename pass and the way to see what is left: a category that prints nothing is
-done. It reads tracked and untracked-but-not-ignored files, and skips what test_naming.py skips
-(extern, gen, docs/audits). The deprecated `Nvr*` aliases of the plugin/module ABI are not a finding (they are
-ALIAS_HEADERS and DEPRECATED_NVR_USES in tools/tests/test_naming.py). A name that is public (a config key, a log line, a DLL export,
+done. It reads tracked and untracked-but-not-ignored files, and skips the paths under extern/, gen/, docs/audits/ and
+build/, and the files in SELF (the naming standard and this script). It has no category for the deprecated `Nvr*`
+aliases of the plugin/module ABI, and no other check stops `Nvr` from being used beyond them (KNOWN-WRONG #2392).
+A name that is public (a config key, a log line, a DLL export,
 a file name users touch) is listed here too, tagged `public`: it is not renamed without a decision, and the
 rename PRs list each one as a deliberate exception.
 """
@@ -23,7 +24,7 @@ import sys
 
 REPO = pathlib.Path(os.environ.get("NEVR_NAMING_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/", "build/")
-SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py", "tools/naming_inventory.py"})
+SELF = frozenset({"docs/standards/naming.md", "tools/naming_inventory.py"})
 
 CODE_EXT = (".h", ".hpp", ".cpp", ".cc", ".inc")
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
