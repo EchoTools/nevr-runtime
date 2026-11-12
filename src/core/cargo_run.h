@@ -37,6 +37,10 @@ struct RunConfig {
   Policy policy;
   std::string source = "default";  // "default" or "config": whether the policy or the URL came from config (logged, never the values)
   ProgressFn progress;             // optional
+  // The first-run hold (docs/adr/0045 decision 11): the fetch stores every object of every served label through the first-run prefetch
+  // (core/cargo_prefetch.h), one after another, and ends at the first object that cannot be had, so a caller that waits for it knows the
+  // store is whole when RunResult::stopped is empty and `failed` is 0. Off: the background fetch, which counts a failed object and goes on.
+  bool first_run = false;
 };
 
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.

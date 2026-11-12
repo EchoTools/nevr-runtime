@@ -168,7 +168,7 @@ target_link_libraries(nevr_quest_invite_join PUBLIC nevr_quest_got_hook nlohmann
 # (tests/quest TestExportAllowlist). In an archive, --exclude-libs (above) keeps it out of the export set, the same as
 # nevr_quest_data_wiring and nevr_quest_invite_join. The sources stay in the -fno-exceptions list above (a directory-scoped
 # source property, so it applies here), and the flags match their siblings.
-add_library(nevr_quest_cargo STATIC ../../core/cargo_run.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp)
+add_library(nevr_quest_cargo STATIC ../../core/cargo_run.cpp ../../core/cargo_prefetch.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp)
 target_include_directories(nevr_quest_cargo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..

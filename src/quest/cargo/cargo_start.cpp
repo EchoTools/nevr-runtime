@@ -24,6 +24,12 @@ struct State {
 
 }  // namespace
 
+std::function<nevr_quest::data::AllAssetsResult(const std::string& root)> MakeProductionFirstRunWorker(const AssetsChoice& assets) {
+  static nevr_quest::data::CurlTransport* const transport = new nevr_quest::data::CurlTransport();  // never freed: the worker may be called at any time
+  return MakeFirstRunWorker(assets, kDefaultCacheDir, transport,
+                            [](const nevr_cargo::Mounted* set) { nevr_quest::resource_request::PublishCargo(set); });
+}
+
 bool Start(const AssetsChoice& assets) noexcept {
   if (g_started.exchange(true)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "cargo_start", {{"result", "refused"}, {"reason", "already_started"}});

@@ -1,5 +1,7 @@
 #include "core/cargo_run.h"
 
+#include "core/cargo_prefetch.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <map>
@@ -259,6 +261,54 @@ Downloaded Download(Env& env, const RunConfig& config, Store& store, const Entry
   return out;
 }
 
+// The cargo store as the first-run prefetch's store (cargo_prefetch.h). The store's writer wants the decompressed size at Commit, which
+// the prefetch's Open does not carry, so the adapter keeps each object's size from the plan it was built from.
+class PrefetchSink : public ObjectSink {
+ public:
+  PrefetchSink(std::unique_ptr<Store::Writer> writer, std::string sha256, std::uint64_t bytes)
+      : writer_(std::move(writer)), sha256_(std::move(sha256)), bytes_(bytes) {}
+  StoreStatus Write(const void* data, std::size_t length) override {
+    return writer_->Write(data, length) ? StoreStatus::kOk : StoreStatus::kIoError;
+  }
+  StoreStatus Commit() override {
+    committed_ = true;
+    return writer_->Commit(sha256_, bytes_) ? StoreStatus::kOk : StoreStatus::kIoError;
+  }
+  void Abort() override {
+    if (!committed_) writer_->Abort();
+  }
+
+ private:
+  std::unique_ptr<Store::Writer> writer_;
+  std::string sha256_;
+  std::uint64_t bytes_;
+  bool committed_ = false;
+};
+
+class StorePrefetch : public PrefetchStore {
+ public:
+  StorePrefetch(Store& store, const std::vector<Entry>& objects) : store_(store) {
+    for (const Entry& e : objects) bytes_[e.sha256] = e.bytes;
+  }
+  bool Has(const std::string& sha256) const override { return store_.Has(sha256); }
+  bool HoldsSized(const std::string& sha256, std::uint64_t size, std::uint64_t bytes) const override {
+    return store_.HoldsSized(sha256, size, bytes);
+  }
+  std::unique_ptr<ObjectSink> Open(const std::string& sha256, std::uint64_t size, StoreStatus* status) override {
+    const char* why = "";
+    std::unique_ptr<Store::Writer> writer = store_.Begin(size, &why);
+    if (!writer) {
+      *status = StoreStatus::kIoError;
+      return nullptr;
+    }
+    return std::unique_ptr<ObjectSink>(new PrefetchSink(std::move(writer), sha256, bytes_[sha256]));
+  }
+
+ private:
+  Store& store_;
+  std::map<std::string, std::uint64_t> bytes_;
+};
+
 bool ReadSavedManifest(Env& env, const std::string& dir, const Limits& limits, std::string* frame) {
   return env.ReadSmallFile(ManifestCopyPath(dir), frame, static_cast<std::size_t>(MaxManifestFrameBytes(limits.manifest_text_bytes)));
 }
@@ -464,12 +514,38 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     if (config.progress) config.progress(progress);
   };
   report();
+  if (config.first_run) {
+    // The first-run hold: every object of every served label, one after another, ending at the first one that cannot be had.
+    PrefetchConfig prefetch;
+    prefetch.base_url = config.base_url;
+    for (const PlanLabel& pl : plan.labels) {
+      if (pl.skipped != SkipReason::kNone) continue;
+      for (const PlanItem& item : pl.items) prefetch.objects.push_back(item.entry);
+    }
+    prefetch.keep_going = keep_going;
+    prefetch.progress = [&](std::uint64_t done, std::uint64_t) {
+      progress.done_bytes = done;
+      report();
+    };
+    StorePrefetch adapter(*store, prefetch.objects);
+    const PrefetchResult fetched = Prefetch(env, adapter, prefetch);
+    result.fetched = fetched.fetched;
+    result.cached = fetched.held;
+    result.bytes = fetched.bytes_fetched;
+    if (fetched.status != PrefetchStatus::kComplete) {
+      // What was stored stays and the next launch resumes from it; the manifest is not saved and nothing new is mounted.
+      result.failed = 1;
+      result.stopped = fetched.status == PrefetchStatus::kCancelled ? "cancelled" : PrefetchStatusName(fetched.status);
+      done(result.stopped);
+      return result;
+    }
+  }
   std::size_t lastDecile = 0;
   std::set<std::string> fetchedShas, failedShas;
   std::size_t failureLines = 0;
   bool stoppedRun = false;
   for (const PlanLabel& pl : plan.labels) {
-    if (pl.skipped != SkipReason::kNone || stoppedRun) continue;
+    if (pl.skipped != SkipReason::kNone || stoppedRun || config.first_run) continue;
     for (const PlanItem& item : pl.items) {
       if (item.cached) continue;
       const Entry& e = item.entry;
@@ -531,7 +607,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       if (item.cached) cachedShas.insert(item.entry.sha256);
     }
   }
-  result.cached = cachedShas.size();
+  if (!config.first_run) result.cached = cachedShas.size();
   if (stoppedRun) {
     // The store failed (a full disk, a file that would not open): what was stored stays, the manifest is not saved and nothing new is
     // mounted, so the next launch plans again from the same store.

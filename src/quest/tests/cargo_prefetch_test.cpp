@@ -27,6 +27,45 @@ using cargo_test::Sha256Of;
 constexpr const char* kBase = "https://cargo.echo.taxi/";
 constexpr const char* kDir = "/cache/cargo";
 
+// An object's path in the test store: the store is the fake filesystem under kDir, one file a name (the prefetch's seam is PrefetchStore, so
+// the layout is the test's own; the real store's is cargo_store.h's).
+std::string BlobPath(const std::string& dir, const std::string& sha256) { return dir + "/" + sha256; }
+
+// An object being written: bytes go to a temp file in the fake filesystem and are moved to their name at Commit. Every write and the
+// commit count as the env's mutating operations, so its stop switch (a killed process) fails them, as a real write would fail.
+class TestTemp {
+ public:
+  TestTemp(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) { env_->fs_->files[path_] = std::string(); }
+  ~TestTemp() {
+    if (!done_ && !env_->Dead()) env_->fs_->files.erase(path_);
+  }
+  bool Write(const void* data, std::size_t length) {
+    if (!env_->Tick()) return false;
+    env_->fs_->files[path_].append(static_cast<const char*>(data), length);
+    return true;
+  }
+  bool Commit(const std::string& final_path) {
+    if (!env_->Tick()) return false;
+    env_->fs_->files[final_path] = env_->fs_->files[path_];
+    env_->fs_->files.erase(path_);
+    done_ = true;
+    return true;
+  }
+  void Abort() {
+    if (!env_->Dead()) env_->fs_->files.erase(path_);
+    done_ = true;
+  }
+
+ private:
+  FakeEnv* env_;
+  std::string path_;
+  bool done_ = false;
+};
+
+std::unique_ptr<TestTemp> CreateTemp(FakeEnv* env, const std::string& dir) {
+  return std::unique_ptr<TestTemp>(new TestTemp(env, dir + "/.tmp" + std::to_string(env->fs_->next_temp++)));
+}
+
 std::string UrlOf(const std::string& sha) { return std::string(kBase) + "blobs/sha256/" + sha; }
 
 nc::Entry EntryOf(const std::string& label, std::uint64_t name, const std::string& bytes) {
@@ -56,11 +95,11 @@ class MemStore : public nc::PrefetchStore {
   int body_writes = 0;    // successful body writes, over every object
 
   bool Has(const std::string& sha256) const override {
-    return env_->fs_->files.count(nc::BlobPath(kDir, sha256)) != 0;
+    return env_->fs_->files.count(BlobPath(kDir, sha256)) != 0;
   }
   // The fake store keeps one size per object (the stored frame's), so the decompressed size is not checked here.
   bool HoldsSized(const std::string& sha256, std::uint64_t size, std::uint64_t) const override {
-    const auto it = env_->fs_->files.find(nc::BlobPath(kDir, sha256));
+    const auto it = env_->fs_->files.find(BlobPath(kDir, sha256));
     return it != env_->fs_->files.end() && it->second.size() == size;
   }
 
@@ -71,7 +110,7 @@ class MemStore : public nc::PrefetchStore {
 
 class MemSink : public nc::ObjectSink {
  public:
-  MemSink(std::unique_ptr<nc::TempFile> temp, std::string final_path, bool no_space, MemStore* owner)
+  MemSink(std::unique_ptr<TestTemp> temp, std::string final_path, bool no_space, MemStore* owner)
       : temp_(std::move(temp)), final_(std::move(final_path)), no_space_(no_space), owner_(owner) {}
   nc::StoreStatus Write(const void* data, std::size_t length) override {
     if (no_space_) return nc::StoreStatus::kNoSpace;
@@ -86,7 +125,7 @@ class MemSink : public nc::ObjectSink {
   void Abort() override { temp_->Abort(); }
 
  private:
-  std::unique_ptr<nc::TempFile> temp_;
+  std::unique_ptr<TestTemp> temp_;
   std::string final_;
   bool no_space_;
   MemStore* owner_;
@@ -100,7 +139,7 @@ std::unique_ptr<nc::ObjectSink> MemStore::Open(const std::string& sha256, std::u
     return nullptr;
   }
   return std::unique_ptr<nc::ObjectSink>(
-      new MemSink(env_->CreateTemp(kDir), nc::BlobPath(kDir, sha256), opened == fail_open, this));
+      new MemSink(CreateTemp(env_, kDir), BlobPath(kDir, sha256), opened == fail_open, this));
 }
 
 // A transport that never delivers a byte: it asks keep_going over and over, as a curl progress callback does, and gives up when told.
@@ -133,7 +172,7 @@ nc::PrefetchConfig ConfigOf(const std::vector<nc::Entry>& objects) {
   return c;
 }
 
-bool Held(const FakeEnv& env, const std::string& sha256) { return env.fs_->files.count(nc::BlobPath(kDir, sha256)) != 0; }
+bool Held(const FakeEnv& env, const std::string& sha256) { return env.fs_->files.count(BlobPath(kDir, sha256)) != 0; }
 
 int CountRequests(const FakeEnv& env, const std::string& sha256) {
   int n = 0;
@@ -167,8 +206,8 @@ void TestFull() {
   QCHECK(r.bytes_fetched == kA.size() + kB.size() + kC.size());
   QCHECK(env.requests.size() == 3);
   QCHECK(Held(env, a.sha256) && Held(env, b.sha256) && Held(env, c.sha256));
-  QCHECK(fs->files[nc::BlobPath(kDir, a.sha256)] == kA);
-  QCHECK(fs->files[nc::BlobPath(kDir, c.sha256)] == kC);
+  QCHECK(fs->files[BlobPath(kDir, a.sha256)] == kA);
+  QCHECK(fs->files[BlobPath(kDir, c.sha256)] == kC);
   // A test-store check, not an on-disk index: MemStore::Has reads the fake filesystem, so this shows only that the
   // lookup names every object of the set with its stored size, and does not name an absent one. The on-disk index is P3's.
   for (const nc::Entry* e : {&a, &b, &c}) {
@@ -220,7 +259,7 @@ void TestResumed() {
   QCHECK(CountRequests(second, b.sha256) == 1);
   QCHECK(CountRequests(second, c.sha256) == 1);
   QCHECK(Held(second, b.sha256) && Held(second, c.sha256));
-  QCHECK(fs->files[nc::BlobPath(kDir, b.sha256)] == kB);
+  QCHECK(fs->files[BlobPath(kDir, b.sha256)] == kB);
   std::printf("resumed: run1=%s fetched=%zu; run2=%s held=%zu fetched=%zu requests=%zu\n", nc::PrefetchStatusName(r1.status),
               r1.fetched, nc::PrefetchStatusName(r2.status), r2.held, r2.fetched, second.requests.size());
 }
@@ -426,13 +465,13 @@ void TestHeldSize() {
     FakeEnv env(fs);
     const nc::Entry a = EntryOf("lobby_posters", 1, kA);
     env.server[UrlOf(a.sha256)] = Response{200, kA, std::string::npos, std::string()};
-    fs->files[nc::BlobPath(kDir, a.sha256)] = std::string(7, 'z');  // held, but not the manifest's 300 bytes
+    fs->files[BlobPath(kDir, a.sha256)] = std::string(7, 'z');  // held, but not the manifest's 300 bytes
     MemStore store(&env);
     const nc::PrefetchResult r = nc::Prefetch(env, store, ConfigOf({a}));
     QCHECK(std::string(nc::PrefetchStatusName(r.status)) == "held_size_mismatch");
     QCHECK(r.failed_sha256 == a.sha256);
     QCHECK(CountRequests(env, a.sha256) == 0);
-    QCHECK(fs->files[nc::BlobPath(kDir, a.sha256)] == std::string(7, 'z'));
+    QCHECK(fs->files[BlobPath(kDir, a.sha256)] == std::string(7, 'z'));
     const std::string refused = FirstEvent(env, "cargo_prefetch_refused");
     QCHECK(FakeEnv::Value(refused, "reason") == "held_size_mismatch");
     QCHECK(FakeEnv::Value(refused, "name") == "0x1");
@@ -443,7 +482,7 @@ void TestHeldSize() {
     auto fs = std::make_shared<cargo_test::Fs>();
     FakeEnv env(fs);
     const nc::Entry a = EntryOf("lobby_posters", 1, kA);
-    fs->files[nc::BlobPath(kDir, a.sha256)] = kA;  // held at the manifest's size
+    fs->files[BlobPath(kDir, a.sha256)] = kA;  // held at the manifest's size
     MemStore store(&env);
     const nc::PrefetchResult r = nc::Prefetch(env, store, ConfigOf({a}));
     QCHECK(r.status == nc::PrefetchStatus::kComplete);

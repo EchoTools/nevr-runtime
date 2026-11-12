@@ -271,6 +271,7 @@ tools/tests/test_verify_symbols.py	ported by its unit of #2132
 tools/tests/test_verifying_a_release_doc.py	ported by its unit of #2132
 tools/tests/test_version_reconfigure.py	ported by its unit of #2132
 tools/tests/test_werror_live.py	ported by its unit of #2132
+tools/tests/test_whole_game_wiring.py	ported by its unit of #2132
 tools/tests/test_window_watch_wiring.py	ported by its unit of #2132
 tools/tests/test_winvm_checks.py	ported by its unit of #2132
 tools/tests/test_winvm_dispatch.py	ported by its unit of #2132
