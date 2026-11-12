@@ -1358,7 +1358,10 @@ test-quest-data-net: _vcpkg-quest-host
     root="{{ justfile_directory() }}"
     host="$root/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    rm -f -- build/quest-host-data-net/data-net/curl_transport_test build/quest-host-data-net/data-net/data_wiring_test
     (cd src/quest && cmake --preset quest-host-data-net && cmake --build --preset quest-host-data-net)
+    ninja -C build/quest-host-data-net -t targets all > build/quest-host-data-net/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-data-net --targets build/quest-host-data-net/test-programs-targets.txt data-net/curl_transport_test data-net/data_wiring_test
     bin="$root/build/quest-host-data-net/data-net"
     out="build/quest-host-data-net/run"
     rm -rf "$out"
@@ -1485,7 +1488,10 @@ test-quest-tls: _vcpkg-quest-host
     done
     pkg-config --exists libcurl || { echo "test-quest-tls: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
     root="{{ justfile_directory() }}"
+    rm -f -- build/quest-host-tls/tls/curl_ws_tls_test
     (cd src/quest && cmake --preset quest-host-tls && cmake --build --preset quest-host-tls)
+    ninja -C build/quest-host-tls -t targets all > build/quest-host-tls/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-tls --targets build/quest-host-tls/test-programs-targets.txt tls/curl_ws_tls_test
     bin="$root/build/quest-host-tls/tls"
     out="build/quest-host-tls/run"
     rm -rf "$out"
@@ -1610,7 +1616,10 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
     echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
     echo "d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8  $out/lib/lib/arm64-v8a/libpnsrad.so" | sha256sum -c -
+    rm -f -- build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test
     (cd src/quest && cmake --preset quest-host-hooks-pinned && cmake --build --preset quest-host-hooks-pinned)
+    ninja -C build/quest-host-hooks-pinned -t targets all > build/quest-host-hooks-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-hooks-pinned --targets build/quest-host-hooks-pinned/test-programs-targets.txt hooks-pinned/got_pinned_test
     build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" "$out/lib/lib/arm64-v8a/libpnsrad.so"
     # Each combat module's own pinned program (src/quest/combat/README.md rule 6) checks its targets header against the
@@ -1702,7 +1711,10 @@ test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host
     obb="{{ obb }}"
     [ -n "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB names no store OBB" >&2; exit 1; }
     [ -f "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB is not a file: $obb" >&2; exit 1; }
+    rm -f -- build/quest-host-obb-pinned/obb-pinned/obb_pinned_test
     (cd src/quest && cmake --preset quest-host-obb-pinned && cmake --build --preset quest-host-obb-pinned)
+    ninja -C build/quest-host-obb-pinned -t targets all > build/quest-host-obb-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-obb-pinned --targets build/quest-host-obb-pinned/test-programs-targets.txt obb-pinned/obb_pinned_test
     scratch="build/quest-host-obb-pinned/scratch"
     build/quest-host-obb-pinned/obb-pinned/obb_pinned_test "$obb" tools/quest_stock_data.pin "$scratch" | tee "build/quest-host-obb-pinned/run.log"
     rm -rf "$scratch"
@@ -1778,7 +1790,10 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr
     scratch="$out/pinned-scratch"
     rm -rf "$scratch"; mkdir -p "$scratch"
     trap 'rm -rf "$scratch"' EXIT
+    rm -f -- build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test
     (cd src/quest && cmake --preset quest-host-patcher-pinned && cmake --build --preset quest-host-patcher-pinned)
+    ninja -C build/quest-host-patcher-pinned -t targets all > build/quest-host-patcher-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-patcher-pinned --targets build/quest-host-patcher-pinned/test-programs-targets.txt patcher-pinned/libr15_patcher_pinned_test
     timeout 600 build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
@@ -1823,7 +1838,10 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
+    rm -f -- build/quest-host-social-pinned/social-pinned/social_pinned_test
     (cd src/quest && cmake --preset quest-host-social-pinned && cmake --build --preset quest-host-social-pinned)
+    ninja -C build/quest-host-social-pinned -t targets all > build/quest-host-social-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-social-pinned --targets build/quest-host-social-pinned/test-programs-targets.txt social-pinned/social_pinned_test
     social_pinned_test="build/quest-host-social-pinned/social-pinned/social_pinned_test"
     "$social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
@@ -1916,7 +1934,10 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
     unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
+    rm -f -- build/quest-host-integration-pinned/integration-pinned/integration_pinned_test
     (cd src/quest && cmake --preset quest-host-integration-pinned && cmake --build --preset quest-host-integration-pinned)
+    ninja -C build/quest-host-integration-pinned -t targets all > build/quest-host-integration-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-integration-pinned --targets build/quest-host-integration-pinned/test-programs-targets.txt integration-pinned/integration_pinned_test
     build/quest-host-integration-pinned/integration-pinned/integration_pinned_test "$lib/libr15.so"
 
 # --- Verify (closed-loop gate) ---
