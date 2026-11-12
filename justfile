@@ -512,10 +512,10 @@ package-dev store_apk=env("NEVR_STORE_APK"):
     out="build/package-dev/${commit:0:7}"
     # Windows DLL: its own build tree (build/mingw-dev).
     # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
+    # Configure through the `configure` recipe, which also runs generate-symcache, _proto-current and _build-inputs.
+    (unset VCPKG_ROOT; just preset=mingw-dev configure)
     (
         unset VCPKG_ROOT
-        just preset=mingw-dev _vcpkg-mingw
-        cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
     # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
