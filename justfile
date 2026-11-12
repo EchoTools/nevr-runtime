@@ -103,6 +103,10 @@ ccache-stats:
 build: configure
     @cmake --build --preset {{ preset }}
 
+# Build the reconstruction library (src/reconstruction), which the default build leaves out (#1974)
+build-reconstruction: configure
+    cmake --build --preset {{ preset }} --target nevr_r15_reconstruction
+
 # Build only the echovr_server.exe launcher
 launcher: configure
     cmake --build --preset {{ preset }} --target echovr_server
