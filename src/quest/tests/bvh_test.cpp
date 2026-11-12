@@ -1340,9 +1340,9 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 
 }  // namespace
 
-// Every combat_bvh_install line names the gate and touch switches the step was handed (#2382), on every path: the gate handed off and the touch hook
-// on, so a line that drops either, or names one for the other, shows.
-// All four pairs of gate and touch, on every path (#2382 review): a line that fixes either field at either value shows on the pairs that differ.
+// Every combat_bvh_install line names the gate and touch switches the step was handed (#2382), on every path: installed, already_ran, off and
+// refused. All four pairs of gate and touch run every path, so a line that drops either field, or fixes it at either value, shows on the pairs
+// that differ.
 void EveryInstallLineNamesTheSwitchesItWasHanded() {
   for (const bool gate : {false, true}) {
     for (const bool touch : {false, true}) {

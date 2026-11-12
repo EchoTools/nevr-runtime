@@ -80,7 +80,7 @@ runm dg_pin_refusal_stage1_fixed $D 's/^                         {"droneguard_st
 runm dg_refusal_stage1_fixed    $D 's/{"reason", token}, {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},/{"reason", token}, {"droneguard_stage1", 0},/'
 runm dg_off_stage1_fixed        $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 0},/'
 runm dg_installed_stage1_fixed  $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", 0},/'
-# the same fields fixed at the other value (off line on; installed line reads what ran, not what was handed) (#2382 review)
+# the same fields fixed at the other value (off line on; installed line reads what ran, not what was handed) (#2382)
 runm dg_off_stage1_on           $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 1},/'
 runm dg_installed_and_stage1    $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", installed \&\& stage1 ? 1 : 0},/'
 # the stats

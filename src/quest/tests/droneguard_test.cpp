@@ -809,11 +809,9 @@ void TheFinalStatsCountBothKindsOfSkip() {
 
 }  // namespace
 
-// Every combat_droneguard_install line names the stage-1 switch the step was handed (#2382), on every path, with stage 1 handed on (its default is
-// off, so a line that drops it shows): installed, refused for want of libr15, and refused for a pinned word that differs. The off line is the golden
-// line of TheSwitchOffInstallsNothingAndSaysSo.
-// Both values, on every path (#2382 review). The slot-refused line is the one whose installed flag is false while the switch was handed on, so a
-// line that reads "installed and stage 1" shows there; the off line is checked with the value handed off as well as on.
+// Every combat_droneguard_install line names the stage-1 switch the step was handed (#2382), with both values, on every path: installed, refused for
+// want of libr15, refused for a pinned word that differs, refused for a slot that holds something else, and off. A line that fixes the field at
+// either value shows on the paths that differ from it. The slot-refused line is the one whose installed flag is false while the switch was handed on.
 void EveryInstallLineNamesTheStageOneSwitchItWasHanded() {
   for (const bool s1 : {false, true}) {
     const std::string named = std::string("\"droneguard_stage1\":") + (s1 ? "1" : "0");

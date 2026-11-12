@@ -997,8 +997,8 @@ void TestInstall(const std::string& dir) {
   dc::ResetForTest();
 }
 
-// Every combat_decals_install line names the two flips the step was handed (#2382), on every path: u handed on and v off, so a line that drops one, or
-// names one for the other, shows.
+// Every combat_decals_install line names the two flips the step was handed (#2382), on every path: installed, a second install, off, and each
+// refusal. All four pairs of the flips run every path, so a line that drops one flip, or fixes one at either value, shows on the pairs that differ.
 static void TestEveryInstallLineNamesTheFlips(const std::string& dir) {
   const dc::Api api = MakeApi();
   std::vector<GroupIn> in(1);
@@ -1011,14 +1011,13 @@ static void TestEveryInstallLineNamesTheFlips(const std::string& dir) {
   CHECK(truncate(big.c_str(), static_cast<off_t>(dc::kMaxFileBytes) + 1) == 0, "a table one byte over the limit");
   dc::Api incomplete = api;
   incomplete.init = nullptr;
-  // All four pairs of the two flips, on every path: a line that fixes one flip at either value shows on the pairs that differ from it (#2382 review).
   for (const bool fu : {false, true}) {
     for (const bool fv : {false, true}) {
       const dc::Switches sw{true, fu, fv};
       const std::string want = std::string("\"decals_flip_u\":") + (fu ? "1" : "0") + ",\"decals_flip_v\":" + (fv ? "1" : "0");
       const auto named = [&want, fu, fv](const char* what, const combat::ModuleResult& r, const char* status) {
         CHECK(std::strcmp(r.status, status) == 0 && CountLines("\"event\":\"combat_decals_install\"") == 1 && CountLines(want.c_str()) == 1,
-              "%s (u=%d v=%d): the install line does not name the flips it was handed (%s)", what, (int)fu, (int)fv, r.status);
+              "%s (u=%d v=%d): the install line does not name the flips it was handed (%s)", what, static_cast<int>(fu), static_cast<int>(fv), r.status);
         g_lines.clear();
       };
       Fresh();
