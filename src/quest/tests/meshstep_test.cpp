@@ -175,7 +175,7 @@ std::uint8_t* Construct(std::uint64_t (&init)[3]) {
 
 // ---- the tests ------------------------------------------------------------------------------------------------------------------
 
-// Every table step is on when the file says nothing: upstream's shipped build turns the same change on (--resource-table-step-1).
+// Every table step is on when the file says nothing: the q15t plugin's Q15T_MESHSTEP is ON at v6.16.5 (src/quest/plugins/q15t/CMakeLists.txt:25 at that tag).
 void MeshstepIsOnByDefault() {
   const nevr_quest::CombatConfig defaults;
   QCHECK(defaults.meshstep.on && defaults.meshstep.source == nevr_quest::Source::kAbsent);
