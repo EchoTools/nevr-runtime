@@ -848,9 +848,15 @@ TEST_F(MapRunTest, NoFileIdDefersWithStampUnsupported) {
   EXPECT_EQ(env.OpenHandles(), 0u);
 }
 
-TEST_F(MapRunTest, AShutdownMidPieceLeavesTheTmpForTheNextGc) {
+std::size_t PieceCount(const Package& p) {
+  std::size_t n = 0;
+  for (const Member& m : p.members) n += m.pieces.size();
+  return n;
+}
+
+TEST_F(MapRunTest, AShutdownMidDownloadKeepsItsPiecesAndTheNextPassResumes) {
   config.subscribed = {"alpha"};
-  channel.Publish("alpha", "1.0.0", MakeSet(6, 'a'));
+  const std::size_t pieces = PieceCount(channel.Publish("alpha", "1.0.0", MakeSet(6, 'a')));
   channel.Sign(1);
   int gets = 0;
   env.allow_get = [&] {
@@ -865,9 +871,83 @@ TEST_F(MapRunTest, AShutdownMidPieceLeavesTheTmpForTheNextGc) {
   env.allow_get = [] { return true; };
   keep = true;
   const FetchReport resumed = Fetch();
-  EXPECT_NE(env.Find("map_gc", "reason", "unreferenced"), nullptr);
   EXPECT_EQ(resumed.maps_updated, 1u);
+  EXPECT_EQ(resumed.pieces_reused, 2u);
+  EXPECT_EQ(resumed.pieces_fetched, pieces - 2);
   EXPECT_FALSE(env.HasDir(tmp));
+  EXPECT_FALSE(env.HasDir(channel.VersionDir("alpha") + ".pieces"));
+  EXPECT_EQ(Boot().staged.at(0).version, "1.0.0");
+}
+
+TEST_F(MapRunTest, APieceLostInTransportKeepsTheOthersAndTheNextPassFetchesOnlyWhatIsMissing) {
+  config.subscribed = {"alpha"};
+  const Package& p = channel.Publish("alpha", "1.0.0", MakeSet(6, 'a'));
+  const std::size_t pieces = PieceCount(p);
+  ASSERT_GE(p.members[0].pieces.size(), 3u);
+  const std::string url = std::string(kBase) + "blobs/sha256/" + p.members[0].pieces[2].sha256;
+  channel.Sign(1);
+  env.server[url].status = 503;
+  EXPECT_EQ(Fetch().maps_updated, 0u);
+  EXPECT_NE(env.Find("map_piece", "reason", "http_503"), nullptr);
+  const std::string tmp = channel.VersionDir("alpha") + ".tmp";
+  EXPECT_TRUE(env.HasDir(tmp));
+
+  env.server[url].status = 200;
+  const FetchReport resumed = Fetch();
+  EXPECT_EQ(resumed.maps_updated, 1u);
+  EXPECT_EQ(resumed.pieces_reused, 2u);
+  EXPECT_EQ(resumed.pieces_fetched, pieces - 2);
+  EXPECT_FALSE(env.HasDir(tmp));
+}
+
+TEST_F(MapRunTest, AKeptPieceAlteredOnDiskIsFetchedAgain) {
+  config.subscribed = {"alpha"};
+  const Package& p = channel.Publish("alpha", "1.0.0", MakeSet(6, 'a'));
+  const std::size_t pieces = PieceCount(p);
+  const std::string first = p.members[0].pieces[0].sha256;
+  channel.Sign(1);
+  int gets = 0;
+  env.allow_get = [&] {
+    if (++gets > 4) keep = false;
+    return true;
+  };
+  EXPECT_EQ(Fetch().reason, "cancelled");
+  const std::string kept = channel.VersionDir("alpha") + ".tmp/pieces/" + first;
+  ASSERT_TRUE(env.Has(kept));
+  env.Put(kept, std::string(p.members[0].pieces[0].size, 'x'));
+
+  env.allow_get = [] { return true; };
+  keep = true;
+  const FetchReport resumed = Fetch();
+  EXPECT_EQ(resumed.maps_updated, 1u);
+  EXPECT_EQ(resumed.pieces_reused, 1u);
+  EXPECT_EQ(resumed.pieces_fetched, pieces - 1);
+}
+
+TEST_F(MapRunTest, AnUnfinishedDownloadOfASupersededVersionIsRemoved) {
+  config.subscribed = {"alpha"};
+  const std::string v1 = MakeSet(6, 'a');
+  channel.Publish("alpha", "1.0.0", v1);
+  channel.Sign(1);
+  int gets = 0;
+  env.allow_get = [&] {
+    if (++gets > 4) keep = false;
+    return true;
+  };
+  EXPECT_EQ(Fetch().reason, "cancelled");
+  const std::string old_tmp = channel.VersionDir("alpha") + ".tmp";
+  ASSERT_TRUE(env.HasDir(old_tmp));
+
+  std::string v2 = v1;
+  v2[FramesStart(6) + 3 * kFrameBytes + 20] ^= 1;
+  channel.Publish("alpha", "1.1.0", v2);
+  channel.Sign(2);
+  env.allow_get = [] { return true; };
+  keep = true;
+  EXPECT_EQ(Fetch().maps_updated, 1u);
+  EXPECT_FALSE(env.HasDir(old_tmp));
+  EXPECT_NE(env.Find("map_gc", "reason", "superseded"), nullptr);
+  EXPECT_EQ(Boot().staged.at(0).version, "1.1.0");
 }
 
 TEST_F(MapRunTest, APieceHashMismatchIsRetriedThreeTimesThenFailsTheMap) {

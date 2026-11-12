@@ -22,6 +22,8 @@ constexpr const char* kBlobPrefix = "blobs/sha256/";
 constexpr const char* kManifestUrlPath = "v1/maps/manifest.signed";
 constexpr const char* kPackageFile = "package.json";
 constexpr const char* kPiecesDir = "pieces";
+constexpr const char* kTmpSuffix = ".tmp";
+constexpr std::size_t kTmpSuffixLength = 4;
 constexpr std::size_t kStreamBytes = std::size_t{1} << 20;
 constexpr std::size_t kMaxSignedBytes = kMaxManifestBytes + kMaxMinisigBytes + 16;  // minisig, "--" line, body
 constexpr int kDownloadAttempts = 4;                                                // the first try and 3 retries
@@ -553,6 +555,7 @@ class FetchRun {
         {{"serial", parsed_.manifest.serial}, {"channel", parsed_.channel}, {"maps", parsed_.manifest.maps.size()}});
 
     PlanAndFetch();
+    if (keep_going_()) RemoveSupersededTmps();
 
     // The commit order: the manifest, then the floors it raises, then the index naming what is in place, last.
     std::string reason = keep_going_() ? std::string() : "cancelled";
@@ -612,6 +615,8 @@ class FetchRun {
           const std::string rel = id + "/" + platform + "/" + version;
           if (entry != index_.maps.end() && entry->second.dir == rel) {
             present.insert(entry->first);
+          } else if (IsTmpDir(version)) {
+            continue;  // an unfinished download: kept for its pieces until RemoveSupersededTmps
           } else {
             Remove(Join(platform_dir, version), rel, "unreferenced");
           }
@@ -626,6 +631,48 @@ class FetchRun {
       } else {
         ++it;
       }
+    }
+  }
+
+  static bool IsTmpDir(const std::string& name) {
+    return name.size() > kTmpSuffixLength && name.compare(name.size() - kTmpSuffixLength, kTmpSuffixLength, kTmpSuffix) == 0;
+  }
+
+  // After a pass that ran to its end: every .tmp still here is either the version the manifest pins, whose download
+  // failed in transport and resumes next pass, or one the manifest no longer pins, which goes.
+  void RemoveSupersededTmps() {
+    for (const std::string& id : subscribed_) {
+      const std::string platform_dir = Join(Join(config_.dir, id), config_.platform);
+      std::vector<std::string> names;
+      if (!fs_.ListDir(platform_dir, &names)) continue;
+      std::string pinned;
+      const auto map = parsed_.manifest.maps.find(id);
+      if (map != parsed_.manifest.maps.end()) {
+        const auto entry = map->second.platforms.find(config_.platform);
+        if (entry != map->second.platforms.end()) pinned = VersionDirName(entry->second.index.sha256) + kTmpSuffix;
+      }
+      for (const std::string& name : names) {
+        if (IsTmpDir(name) && name != pinned) {
+          Remove(Join(platform_dir, name), id + "/" + config_.platform + "/" + name, "superseded");
+        }
+      }
+    }
+  }
+
+  // The pieces an unfinished download of this package left in `pieces_dir`. Each was hashed before its commit and is
+  // hashed again by ReusePiece before a byte of it is used.
+  void CatalogKeptPieces(const std::string& pieces_dir, const Package& package) {
+    std::vector<std::string> names;
+    if (!fs_.ListDir(pieces_dir, &names)) return;
+    std::unordered_map<std::string, std::uint64_t> wanted;
+    for (const Member& m : package.members) {
+      for (const Pin& p : m.pieces) wanted.emplace(p.sha256, p.size);
+    }
+    for (const std::string& name : names) {
+      const auto piece = wanted.find(name);
+      if (piece == wanted.end() || catalog_.count(name)) continue;
+      catalog_files_.push_back(Join(pieces_dir, name));
+      catalog_[name] = PieceLocation{catalog_files_.size() - 1, 0, piece->second};
     }
   }
 
@@ -1106,12 +1153,24 @@ class FetchRun {
     const std::string rel = id + "/" + config_.platform + "/" + VersionDirName(entry.index.sha256);
     const std::string final_dir = Join(config_.dir, rel);
     const std::string tmp = final_dir + ".tmp";
+    const std::string pieces_dir = Join(tmp, kPiecesDir);
     auto abandon = [&](const char* event, const std::string& why) {
-      if (why != "cancelled") fs_.RemoveTree(tmp);
+      // A stop or a transport failure keeps the verified pieces for the next pass to resume from.
+      const bool resumable = why == "cancelled" || why == "transport" || why.rfind("http_", 0) == 0;
+      if (!resumable) fs_.RemoveTree(tmp);
       fail(event, why);
     };
-    if (!fs_.RemoveTree(tmp)) return fail("map_ready", "tmp_busy");
-    if (!env_.MakeDirs(Join(tmp, kPiecesDir))) return abandon("map_ready", "mkdir");
+    // The tmp is emptied around the pieces an unfinished download left in it; anything else in it is rebuilt.
+    const std::string kept = final_dir + ".pieces";
+    if (!fs_.RemoveTree(kept)) return fail("map_ready", "tmp_busy");
+    const bool resuming = fs_.RenameDir(pieces_dir, kept);
+    if (!fs_.RemoveTree(tmp) || !env_.MakeDirs(tmp)) {
+      fs_.RemoveTree(kept);
+      return fail("map_ready", "tmp_busy");
+    }
+    if (resuming && !fs_.RenameDir(kept, pieces_dir)) fs_.RemoveTree(kept);
+    if (!env_.MakeDirs(pieces_dir)) return abandon("map_ready", "mkdir");
+    if (resuming) CatalogKeptPieces(pieces_dir, package);
     for (const Member& m : package.members) {
       if (!env_.MakeDirs(ParentOf(Join(tmp, m.path)))) return abandon("map_ready", "mkdir");
     }
@@ -1151,7 +1210,7 @@ class FetchRun {
       reason = RunDerive(tmp, package, &cached.files, &cached.stock_stamps);
       if (!reason.empty()) return abandon("map_derive", reason);
     }
-    if (!fs_.RemoveTree(Join(tmp, kPiecesDir))) return abandon("map_ready", "tmp_busy");
+    if (!fs_.RemoveTree(pieces_dir)) return abandon("map_ready", "tmp_busy");
     if (!fs_.RemoveTree(final_dir)) return abandon("map_ready", "dir_busy");
     if (!fs_.RenameDir(tmp, final_dir)) return abandon("map_ready", "rename");
     for (CachedFile& f : cached.files) {
