@@ -23,7 +23,7 @@
  * `NRadEngine::CVR::ShutdownGraphics` (0x1a712b0, byte-checked reconstruction cvr_shutdown_graphics.cpp in the proven tree): `adrp x19, 0x37a3000`,
  * the LeaveVrMode call, then `str xzr, [x19, #0x3f0]`.
  *
- * Not established here: UpdateTracking and DoVRSubmission have no byte-checked reconstruction yet (both queued for one); what the comments above say
+ * Not established here: UpdateTracking and DoVRSubmission have no byte-checked reconstruction yet (not established: neither function is in the proven reconstruction tree); what the comments above say
  * they do beyond the pinned words is read from their disassembly, not from a whole reconstruction.
  *
  * Built with -fno-exceptions, like every combat translation unit.

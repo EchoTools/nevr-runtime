@@ -69,8 +69,8 @@ counter at +0x18 has no PC constant.
 - Whether the key `0x5b8cc538e22ad937` is used in the drone's graph as a sound system or as the physics system its name gives. The name is
   `ncaPhysics`; the role in the drone's graph is open.
 - What `CEnableComponentNode::Enter` (ELF 0x273b700, VA 0x283b700) does for a disable besides turning the resolved component off (vtable
-  +0x210, at once or through the game space's deferred queue when the owner's +0x368 is 0). That read is ReVault's; the proven
-  reconstruction does not hold the function, and its reconstruction is requested. The hold skips that whole Enter for one node (PC runs
+  +0x210, at once or through the game space's deferred queue when the owner's +0x368 is 0). That read is ReVault's; the function is not in the proven
+  reconstruction tree, so that is not established. The hold skips that whole Enter for one node (PC runs
   the real Enter and defers only the disable), so the hold is safe only if that disable is Enter's one effect. Until the reconstruction shows
   it, `combat.dronekill_hold` is off by default.
 - That the context the page holds at a drone's release (kept with its group) is still that drone's context when it explodes, with two drones

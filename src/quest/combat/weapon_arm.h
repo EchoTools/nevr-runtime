@@ -11,7 +11,7 @@
  * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile.
  *
  * Player state (ADR 0046 rule 4). The marker directory is the data directory (legacy_switch.h kDataSubdir), where players' markers already are; it is
- * state, not a switch, and renaming it would make every profile look unhandled. A marker already in a profile stops this module from touching that
+ * state, not a switch, and renaming it would make every profile look unhandled. A marker file (`t26arm.<id>`) already in the data directory for a profile stops this module from touching that
  * profile (weapon_arm_test). The marker file is the module's only write.
  *
  * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.

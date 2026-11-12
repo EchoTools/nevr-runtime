@@ -25,8 +25,9 @@
  * The bot gate. The combat bot (body 1) exists only in the full-size global_mp, which loads only where levelname's hook is on the game's
  * LoadLevelName slot (CR15Game's vtable word at +0x260, kPins.levelNameSlot: the stock function is `base + kPins.levelNameStock`, and a word that
  * is anything else, a hook, means levelname is on). The gate reads that word at each bot call (a data read with process_vm_readv, which never faults;
- * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). So it depends on no levelname switch, in
- * the levelname module or the runtime, and holds when levelname moves. Not the loaded level: the level table holds the name the game was asked for
+ * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). Its only input for this answer is the
+ * game's slot word, compared with the stock function at each call; it reads no levelname switch, neither the levelname module's nor a config
+ * key, so it answers right when levelname's hook changes. Not the loaded level: the level table holds the name the game was asked for
  * (`global_mp`) before LoadLevelName appends `_lowspec`, so the table cannot tell the two apart (CncaGameSpace::LoadLevel stores its argument at gs+0x58
  * and then calls the virtual).
  *

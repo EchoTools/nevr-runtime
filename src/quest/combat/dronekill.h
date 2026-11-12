@@ -24,8 +24,7 @@
  * The hold (`hold`, the key `combat.dronekill_hold`, default FALSE; it acts only with the explosion on). It skips the real Enter of the
  * first-system off and turns the same component off kFxSoundHoldMs after the explosion. That is safe only if CEnableComponentNode::Enter,
  * for a disable, has no effect but the component's disable (vtable +0x210, now or through its game space's deferred queue, owner +0x368).
- * That is NOT established: a ReVault read of Enter (ELF 0x273b700, VA 0x283b700) suggests it, the proven reconstruction does not hold
- * that function, and the function is not in the proven reconstruction tree, so that is not established. The hold stays off until a reconstruction of it
+ * That is NOT established: a ReVault read of Enter (ELF 0x273b700, VA 0x283b700) suggests it. The function is not in the proven reconstruction tree. The hold stays off until a reconstruction of it
  * shows the one effect; turning it on by default is one constant (quest_config.h `dronekillHold`). With it on, a hold is taken only when
  * exactly one drone group can still run its end (Enter has not looked its actor up yet; a shot-down drone counts until its own end has been
  * seen, however long that takes), that group is alive, its actor has the component, the system's DisableComponent is the read shape and its game
