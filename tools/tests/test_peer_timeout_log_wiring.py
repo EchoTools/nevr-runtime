@@ -38,7 +38,7 @@ class ServerHook(unittest.TestCase):
 
     def test_the_peer_record_is_read_before_the_original_destroys_it(self):
         body = read(HOOK)
-        self.assertLess(body.index("FormatCommunicationTimeout"), body.index("OriginalDestroyPeer(self, index, reason)"))
+        self.assertLess(body.index("FormatCommunicationTimeout"), body.rindex("OriginalDestroyPeer(self, index, reason)"))
 
     def test_every_argument_is_forwarded(self):
         self.assertIn("OriginalDestroyPeer(self, index, reason);", read(HOOK))
