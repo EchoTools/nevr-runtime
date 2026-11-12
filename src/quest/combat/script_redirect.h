@@ -1,5 +1,5 @@
 /* The combat area's script redirect (#2189, #1737, docs/adr/0046): the combat APK carries its own build of nine stock script libraries,
- * each named lib<hash>_q15t.so beside the untouched stock lib<hash>.so (script_redirect_list.h), and the game's loads of those nine names
+ * each named lib<hash>_nevr.so beside the untouched stock lib<hash>.so (script_redirect_list.h), and the game's loads of those nine names
  * open the combat builds. This module asks the host's registry for that redirect (quest/plugin/script_redirect.h, Register), with owner
  * `combat`. The registry registers all nine or none: each redirected file must be in the directory the sentinel was loaded from.
  *

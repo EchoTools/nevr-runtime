@@ -71,7 +71,7 @@ NevrScriptRedirectResult Refuse(NevrScriptRedirectResult result, const char* who
 
 bool RedirectName(std::uint64_t hash, char* out, std::size_t cap) noexcept {
   static constexpr char kHex[] = "0123456789abcdef";
-  static constexpr char kTail[] = "_q15t.so";  // with its NUL
+  static constexpr char kTail[] = "_nevr.so";  // with its NUL
   const std::size_t length = 3 + kHashDigits + sizeof kTail - 1;
   if (out == nullptr || cap < length + 1) return false;
   out[0] = 'l';

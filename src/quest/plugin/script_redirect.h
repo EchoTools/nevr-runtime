@@ -12,7 +12,7 @@
 //
 // Registry: one registration per process: the combat area's normal step (combat/script_redirect.h, owner `combat`), or a plugin's
 // init through NevrQuestHostApi::register_script_redirect. It
-// is all or nothing: each lib<hash16>_q15t.so must be a file in the directory the sentinel itself was loaded from (the APK's
+// is all or nothing: each lib<hash16>_nevr.so must be a file in the directory the sentinel itself was loaded from (the APK's
 // native library directory), or nothing is registered. A process with no registration (a plain APK) passes every name
 // through unchanged.
 //
@@ -28,10 +28,10 @@
 namespace nevr_quest::script_redirect {
 
 inline constexpr std::uint32_t kMaxEntries = 16;
-// lib<16 hex>_q15t.so is 27 bytes; the buffer the handler uses is this size.
+// lib<16 hex>_nevr.so is 27 bytes; the buffer the handler uses is this size.
 inline constexpr std::size_t kNameCapacity = 64;
 
-// The name the redirected library is built under: lib<hash16 lowercase hex>_q15t.so, into out[cap]. False when it does not
+// The name the redirected library is built under: lib<hash16 lowercase hex>_nevr.so, into out[cap]. False when it does not
 // fit.
 bool RedirectName(std::uint64_t hash, char* out, std::size_t cap) noexcept;
 

@@ -1,7 +1,7 @@
 // Host test for the combat area's script redirect (#2189, combat/script_redirect.h): the module asks the host registry once, with owner
 // `combat` and the nine hashes of script_redirect_list.h in their order, and writes one `combat_script_redirect_install` line with the
 // result, the count and the registry's answer. A registry that refuses leaves the module not installed, with the registry's answer as its
-// status; the shipped Install() reaches the real registry, which refuses here (no lib<hash>_q15t.so beside this program).
+// status; the shipped Install() reaches the real registry, which refuses here (no lib<hash>_nevr.so beside this program).
 //
 // Built and run by `just test-quest-combat`.
 

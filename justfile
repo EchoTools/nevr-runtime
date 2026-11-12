@@ -407,7 +407,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         [ -d "$extra_libs" ] || { echo "android-repack-apk: script library directory not found: $extra_libs" >&2; exit 1; }
         python3 -I tools/quest_repack_libs.py stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
         # The plain names, and the redirected names the stage gives the nine stock libraries a combat unit redirects (#1737).
-        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so "$work/stage/lib/arm64-v8a"/lib????????????????_q15t.so; do
+        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so "$work/stage/lib/arm64-v8a"/lib????????????????_nevr.so; do
             [ -f "$f" ] && combat_libs+=("lib/arm64-v8a/$(basename "$f")")
         done
     fi

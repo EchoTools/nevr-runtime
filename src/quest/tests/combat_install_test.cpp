@@ -545,7 +545,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     }
     QCHECK(Has(records.back().text, "\"module\":\"music\",\"outcome\":\"failed\",\"status\":\"module_not_loaded\""));
     QCHECK(Has(Lines("combat_install_module")[14].text, "\"module\":\"decals\",\"outcome\":\"off\",\"status\":\"no_table\""));
-    // the script redirect's own line (#2189): the host registry refuses here (no lib<hash>_q15t.so beside this program), an Error with the
+    // the script redirect's own line (#2189): the host registry refuses here (no lib<hash>_nevr.so beside this program), an Error with the
     // registry's answer and the nine hashes it was asked for
     const std::vector<Line> redirect = Lines("combat_script_redirect_install");
     QCHECK(redirect.size() == 1U);

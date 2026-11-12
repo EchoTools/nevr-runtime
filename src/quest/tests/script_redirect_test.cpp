@@ -117,7 +117,7 @@ void NameRules() {
   QCHECK(!sr::ParseScriptName("0123456789abcdefxyz", &h));             // the bare form's suffix too
   QCHECK(!sr::ParseScriptName("xyz0123456789abcdef.so", &h));          // the lib prefix is required with the long form
   QCHECK(!sr::ParseScriptName("lib0123456789abcde.so", &h));           // 15 digits
-  QCHECK(!sr::ParseScriptName("lib0123456789abcdef_q15t.so", &h));     // the redirected name is not a stock name
+  QCHECK(!sr::ParseScriptName("lib0123456789abcdef_nevr.so", &h));     // the redirected name is not a stock name
   QCHECK(!sr::ParseScriptName("/", &h));
   QCHECK(!sr::ParseScriptName("", &h));
   QCHECK(!sr::ParseScriptName(nullptr, &h));
@@ -125,7 +125,7 @@ void NameRules() {
 
   char buf[sr::kNameCapacity];
   QCHECK(sr::RedirectName(kA, buf, sizeof buf));
-  QCHECK(std::strcmp(buf, "lib37f88adb0d8066f7_q15t.so") == 0);
+  QCHECK(std::strcmp(buf, "lib37f88adb0d8066f7_nevr.so") == 0);
   QCHECK(!sr::RedirectName(kA, buf, 10));  // too small: the caller keeps the stock name
   QCHECK(!sr::RedirectName(kA, buf, 27));  // 27 characters and no room for the NUL: refused
   QCHECK(sr::RedirectName(kA, buf, 28));   // 27 characters and the NUL
@@ -215,7 +215,7 @@ void AllOrNothingRegistry() {
   g_lines.clear();
   sentinel::SetLogSink(&Capture);
 
-  const char* const all[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  const char* const all[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so"};
   const std::string dir = MakeDir(all, 2);
   QCHECK(!dir.empty());
   const std::uint64_t pair[] = {kA, kB};
@@ -224,14 +224,14 @@ void AllOrNothingRegistry() {
   QCHECK(sr::RegisterIn(dir.c_str(), "fixture", pair, 2) == NEVR_SCRIPT_REDIRECT_OK);
   QCHECK(sr::ArmedCount() == 2);
   char buf[sr::kNameCapacity];
-  QCHECK(std::strcmp(sr::RewriteLoadName(kNameA, buf, sizeof buf), "lib37f88adb0d8066f7_q15t.so") == 0);
+  QCHECK(std::strcmp(sr::RewriteLoadName(kNameA, buf, sizeof buf), "lib37f88adb0d8066f7_nevr.so") == 0);
   QCHECK(std::strcmp(sr::RewriteLoadName("/data/x/libac4cd8e0a786d5c5.so", buf, sizeof buf),
-                     "libac4cd8e0a786d5c5_q15t.so") == 0);
+                     "libac4cd8e0a786d5c5_nevr.so") == 0);
   QCHECK(sr::RewriteLoadName(kNameC, buf, sizeof buf) == kNameC);           // not registered: passes through
   char tiny[8];
   QCHECK(sr::RewriteLoadName(kNameA, tiny, sizeof tiny) == kNameA);         // registered, but no room: stock name kept
   QCHECK(std::strcmp(sr::RewriteLoadName("libpnsovr.so", buf, sizeof buf), "libpnsovr.so") == 0);
-  QCHECK(Has("\"event\":\"script_redirected\"") && Has("\"to\":\"lib37f88adb0d8066f7_q15t.so\""));
+  QCHECK(Has("\"event\":\"script_redirected\"") && Has("\"to\":\"lib37f88adb0d8066f7_nevr.so\""));
   QCHECK(LevelOf("script_redirected") == 'I');
   QCHECK(Has("\"from\":\"/data/x/libac4cd8e0a786d5c5.so\"") && Has("\"hash\":\"0xac4cd8e0a786d5c5\""));
   // A redirect is its own Info line; the per-load line is for loads that are not redirected, and is off here.
@@ -264,7 +264,7 @@ void AllOrNothingRegistry() {
   QCHECK(sr::ArmedCount() == 0);
   QCHECK(sr::RewriteLoadName(kNameA, buf, sizeof buf) == kNameA);
   QCHECK(Has("\"result\":\"missing_library\"") && Has("\"missing_count\":1"));
-  QCHECK(Has("\"missing\":\"lib0123456789abcdef_q15t.so\""));
+  QCHECK(Has("\"missing\":\"lib0123456789abcdef_nevr.so\""));
   QCHECK(LevelOf("script_redirect") == 'E');
   // A failed registration leaves the way open for a correct one.
   QCHECK(sr::RegisterIn(dir.c_str(), "fixture", pair, 2) == NEVR_SCRIPT_REDIRECT_OK);
@@ -307,7 +307,7 @@ void MissingNamesAreListed() {
   QCHECK(sr::RegisterIn(dir.c_str(), "fixture", pair, 2) == NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY);
   QCHECK(sr::ArmedCount() == 0);
   QCHECK(Has("\"missing_count\":2"));
-  QCHECK(Has("\"missing\":\"lib37f88adb0d8066f7_q15t.so,libac4cd8e0a786d5c5_q15t.so\""));
+  QCHECK(Has("\"missing\":\"lib37f88adb0d8066f7_nevr.so,libac4cd8e0a786d5c5_nevr.so\""));
   RemoveDir(dir, nullptr, 0);
   sentinel::SetLogSink(nullptr);
   sr::ResetForTest();
@@ -318,15 +318,15 @@ void DirectoryIsNotALibrary() {
   sr::ResetForTest();
   g_lines.clear();
   sentinel::SetLogSink(&Capture);
-  const char* const present[] = {"libac4cd8e0a786d5c5_q15t.so"};
+  const char* const present[] = {"libac4cd8e0a786d5c5_nevr.so"};
   const std::string dir = MakeDir(present, 1);
   QCHECK(!dir.empty());
-  const std::string asDirectory = dir + "/lib37f88adb0d8066f7_q15t.so";
+  const std::string asDirectory = dir + "/lib37f88adb0d8066f7_nevr.so";
   QCHECK(mkdir(asDirectory.c_str(), 0700) == 0);
   const std::uint64_t pair[] = {kA, kB};
   QCHECK(sr::RegisterIn(dir.c_str(), "fixture", pair, 2) == NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY);
   QCHECK(sr::ArmedCount() == 0);
-  QCHECK(Has("\"missing\":\"lib37f88adb0d8066f7_q15t.so\"") && Has("\"missing_count\":1"));
+  QCHECK(Has("\"missing\":\"lib37f88adb0d8066f7_nevr.so\"") && Has("\"missing_count\":1"));
   rmdir(asDirectory.c_str());
   RemoveDir(dir, present, 1);
   sentinel::SetLogSink(nullptr);
@@ -384,7 +384,7 @@ void OpenRedirectedPaths() {
   QCHECK(g_openCalls == 1 && g_openedName == kNameC);
   QCHECK(!Has("script_redirect_failed"));
 
-  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  const char* const both[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so"};
   const std::string dir = MakeDir(both, 2);
   QCHECK(!dir.empty());
   const std::uint64_t pair[] = {kA, kB};
@@ -394,8 +394,8 @@ void OpenRedirectedPaths() {
   g_lines.clear();
   g_openCalls = 0;
   QCHECK(sr::OpenRedirected(&RecordingOpen, kNameA, RTLD_NOW, buf, sizeof buf) == &g_openedName);
-  QCHECK(g_openCalls == 1 && g_openedName == "lib37f88adb0d8066f7_q15t.so");
-  QCHECK(LevelOf("script_redirected") == 'I' && Has("\"to\":\"lib37f88adb0d8066f7_q15t.so\""));
+  QCHECK(g_openCalls == 1 && g_openedName == "lib37f88adb0d8066f7_nevr.so");
+  QCHECK(LevelOf("script_redirected") == 'I' && Has("\"to\":\"lib37f88adb0d8066f7_nevr.so\""));
 
   // A registered name whose redirected open fails: null, a failure line naming both names and the loader's text, and
   // errno as the loader left it (the sink above clobbers errno when it logs).
@@ -405,14 +405,14 @@ void OpenRedirectedPaths() {
   (void)dlerror();  // nothing pending before the call
   QCHECK(sr::OpenRedirected(&FailingOpen, kNameA, RTLD_NOW, buf, sizeof buf) == nullptr);
   const int errnoAfter = errno;
-  QCHECK(g_openedName == "lib37f88adb0d8066f7_q15t.so");
+  QCHECK(g_openedName == "lib37f88adb0d8066f7_nevr.so");
   // The failure line read dlerror(), which clears it; the open is issued again so the game's own dlerror() still says why.
   QCHECK(g_openCalls == 2);
   const char* const gameSees = dlerror();
-  QCHECK(gameSees != nullptr && std::strstr(gameSees, "lib37f88adb0d8066f7_q15t.so") != nullptr);
+  QCHECK(gameSees != nullptr && std::strstr(gameSees, "lib37f88adb0d8066f7_nevr.so") != nullptr);
   const std::string failure = LineOf("script_redirect_failed");
   QCHECK(failure.find("\"from\":\"lib37f88adb0d8066f7.so\"") != std::string::npos);
-  QCHECK(failure.find("\"to\":\"lib37f88adb0d8066f7_q15t.so\"") != std::string::npos);
+  QCHECK(failure.find("\"to\":\"lib37f88adb0d8066f7_nevr.so\"") != std::string::npos);
   QCHECK(failure.find("cannot open shared object file") != std::string::npos);
   QCHECK(LevelOf("script_redirect_failed") == 'E');
   QCHECK(errnoAfter == EACCES);
@@ -443,7 +443,7 @@ void OpenRedirectedPaths() {
   g_lines.clear();
   g_openCalls = 0;
   QCHECK(sr::OpenRedirected(&OpensOnTheSecondTry, kNameA, RTLD_NOW, buf, sizeof buf) == &g_openedName);
-  QCHECK(g_openCalls == 2 && g_openedName == "lib37f88adb0d8066f7_q15t.so");
+  QCHECK(g_openCalls == 2 && g_openedName == "lib37f88adb0d8066f7_nevr.so");
   QCHECK(LevelOf("script_redirect_failed") == 'E' && LevelOf("script_redirect_recovered") == 'W');
 
   RemoveDir(dir, both, 2);
@@ -490,7 +490,7 @@ void RegisterFromOwnDirectory() {
   QCHECK(sr::ArmedCount() == 0);
 
   // A library on disk: its directory is the one checked, and both names are there, so the registration is armed.
-  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  const char* const both[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so"};
   const std::string dir = MakeDir(both, 2);
   QCHECK(!dir.empty());
   sr::ResetForTest();
@@ -536,7 +536,7 @@ void RegistrationClaimsBeforeItLooks() {
   sr::ResetForTest();
   g_lines.clear();
   sentinel::SetLogSink(&Capture);
-  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so", "lib0123456789abcdef_q15t.so"};
+  const char* const both[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so", "lib0123456789abcdef_nevr.so"};
   g_claimDir = MakeDir(both, 3);
   QCHECK(!g_claimDir.empty());
   const std::uint64_t three[] = {kA, kB, kC};
@@ -560,7 +560,7 @@ void HeldClaimRefuses() {
   sr::ResetForTest();
   g_lines.clear();
   sentinel::SetLogSink(&Capture);
-  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  const char* const both[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so"};
   g_claimDir = MakeDir(both, 2);
   QCHECK(!g_claimDir.empty());
   const std::uint64_t pair[] = {kA, kB};
@@ -584,7 +584,7 @@ void ResetClearsTheSeams() {
   sr::ResetForTest();
   g_lines.clear();
   sentinel::SetLogSink(&Capture);
-  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  const char* const both[] = {"lib37f88adb0d8066f7_nevr.so", "libac4cd8e0a786d5c5_nevr.so"};
   g_claimDir = MakeDir(both, 2);
   QCHECK(!g_claimDir.empty());
   const std::uint64_t pair[] = {kA, kB};

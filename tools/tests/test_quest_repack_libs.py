@@ -1325,7 +1325,7 @@ class StageLibsTest(unittest.TestCase):
 
 
 class StageRedirectedLibsTest(unittest.TestCase):
-    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_q15t.so name; its stock name never is.
+    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_nevr.so name; its stock name never is.
 
     The nine redirected libraries are all or nothing (the runtime registers all nine or none): a staged set holds all of
     them, or none of them.
@@ -1333,7 +1333,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
 
     HASH = "37f88adb0d8066f7"  # the first of the nine libs.COMBAT_REDIRECT_HASHES
     STOCK = f"lib{HASH}.so"
-    REDIRECTED = f"lib{HASH}_q15t.so"
+    REDIRECTED = f"lib{HASH}_nevr.so"
     NINE = [f"lib{h}.so" for h in libs.COMBAT_REDIRECT_HASHES]
 
     def setUp(self):
@@ -1372,7 +1372,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
             self.assertFalse((staged / name).exists(), name)
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
-        # The record the plugin-manifest check reads holds the names as staged, _q15t and all (#2092).
+        # The record the plugin-manifest check reads holds the names as staged, _nevr and all (#2092).
         self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(libs.staged_name(n) for n in self.NINE))
 
     def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
