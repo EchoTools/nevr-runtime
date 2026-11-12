@@ -9,8 +9,8 @@
  * This header holds the two ways a replacement reaches the game. CopyIntoGameHeap allocates through the same allocator,
  * slot +0x28 (FUN_1400cdee0(allocator, alignment, size), CElephantAllocator::vslot[5]; the game's own reader allocates
  * the buffer it reads through that slot, SetupReadBuffer 0x141524952), and copies the bytes in. The caller keeps its own
- * bytes and writes the block only when the copy exists in full. The reader's original buffer is then freed through the
- * same allocator (FreeReaderBuffer): the block no longer names it, and nothing else holds it. CopyIntoGameHeapFor is the same copy for a buffer the runtime
+ * bytes and writes the block only when the copy exists in full. The game's original buffer is left alone (the reader may
+ * own it), so one buffer per replaced load stays allocated. CopyIntoGameHeapFor is the same copy for a buffer the runtime
  * serves with no callback block (a plugin asset, plugin_assets.cpp): the release allocator alone decides.
  *
  * WriteInPlace (#1421) writes over the buffer the game's reader already allocated, when the bytes fit it: no allocation,
@@ -91,23 +91,6 @@ inline Copy AllocateCopy(void* release, uint64_t alignment, const void* bytes, u
     std::memcpy(copy, bytes, static_cast<size_t>(size));
     *out = copy;
     return Copy::Copied;
-}
-
-/// Frees `pointer`, the reader's buffer the block held before a copy replaced it, through the block's allocator at slot
-/// +0x38, the slot the release frees buffer 0 through. Only when the block's allocator is that one (CopyIntoGameHeap
-/// checks the same before it copies, so a copy that was made passed it). Returns false, and frees nothing, otherwise.
-using FreeFn = std::uint64_t (*)(void* allocator, void* pointer);
-inline bool FreeReaderBuffer(void* const* contextSlot, unsigned char* block, void* pointer) {
-    if (pointer == nullptr || contextSlot == nullptr || *contextSlot == nullptr) return false;
-    void* const release = ReleaseAllocator(contextSlot);
-    void* blockAllocator = nullptr;
-    std::memcpy(&blockAllocator, block + kBlockAllocator, sizeof(blockAllocator));
-    if (release == nullptr || blockAllocator != release) return false;
-    void* const* table = nullptr;
-    std::memcpy(&table, release, sizeof(table));
-    const FreeFn release_free = reinterpret_cast<FreeFn>(table[kFreeSlot / sizeof(void*)]);
-    release_free(release, pointer);
-    return true;
 }
 
 /// Allocates `size` bytes for the block `block` (at least kBlockAlignment + 8 bytes), through the allocator the game
