@@ -14,7 +14,7 @@
  *
  * Switches (docs/adr/0046 C2): `combat.bvh` (default true, as the reference build has it: afk_bvh.cpp "ON BY DEFAULT"; the answers are scoped to combat maps and the combat lobby),
  * `combat.bvh_gate` (true: only the three listed callers' casts use the tree) and `combat.bvh_touch` (true: touch rays are answered with a miss).
- * The imported combat plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the imported combat plugin's data directory is a Warning
+ * The imported combat plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the data directory is a Warning
  * (`combat_bvh_legacy_switch`) that names the key that replaces it.
  *
  * The tree table has 64 entries, each owned by the CBVHTree that built it and freed by that CBVHTree's Shutdown (docs/quest/combat/bvh.md "Table lifetime").
