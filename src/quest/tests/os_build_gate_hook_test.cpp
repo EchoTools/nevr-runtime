@@ -335,6 +335,10 @@ int GameOriginal(std::uint64_t* /*version*/) { return 0; }
 constexpr std::size_t kSlotImageBytes = 4 * 4096;
 constexpr std::uint64_t kSlotStrtab = 0x100, kSlotSymtab = 0x200, kSlotJmprel = 0x400, kSlotDynamic = 0x1800;
 constexpr std::uint64_t kSlotAt = 0x3008;  // a writable slot, not RELRO
+constexpr std::uint64_t kSlotNoteAt = 0x3800;  // the build note of a whole-library fixture, inside its one PT_LOAD
+constexpr std::size_t kNoteBytes = sizeof(Elf64_Nhdr) + 4 + 20;  // header, "GNU\0", a 20-byte build ID
+constexpr std::uint32_t kStockBodyWord = 0xd10283ffU;  // sub sp, sp, #0xa0: the stock body (os_build_gate_hook.cpp)
+constexpr std::size_t kPageBytes = 4096;
 
 // A libr15 look-alike with one writable PT_LOAD: the tables a JUMP_SLOT install reads (DT_STRTAB, DT_SYMTAB, DT_JMPREL,
 // DT_FLAGS BIND_NOW, a PT_DYNAMIC) and the slot for CSysInfo::OSBuildVersion, holding the game's function. Link-time
@@ -342,11 +346,17 @@ constexpr std::uint64_t kSlotAt = 0x3008;  // a writable slot, not RELRO
 // stays installed in it.
 struct SlotImage {
   unsigned char* mem = nullptr;
-  Elf64_Phdr phdr[2] = {};
+  Elf64_Phdr phdr[3] = {};
   sentinel::ElfImage image;
 
-  SlotImage() {
-    void* const region = mmap(nullptr, kSlotImageBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  // `whole`: also the pinned build's note, the stock first instruction word at the pinned OSBuildVersion address and the
+  // floor at the pinned floor address, as Install reads them. The mapping then reaches the floor's address (about 46 MB,
+  // reserved and never touched except those pages).
+  explicit SlotImage(bool whole = false) {
+    const std::size_t bytes =
+        whole ? static_cast<std::size_t>(sentinel::pinned::kMinOSBuildVersionVaddr) + kPageBytes : kSlotImageBytes;
+    void* const region =
+        mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     QCHECK(region != MAP_FAILED);
     mem = static_cast<unsigned char*>(region);
     const char* const name = sentinel::pinned::kOSBuildVersionSymbol;
@@ -390,6 +400,29 @@ struct SlotImage {
     image.base = reinterpret_cast<std::uintptr_t>(mem);
     image.phdr = phdr;
     image.phnum = 2;
+    if (whole) {
+      Elf64_Nhdr nhdr{};
+      nhdr.n_namesz = 4;
+      nhdr.n_descsz = 20;
+      nhdr.n_type = NT_GNU_BUILD_ID;
+      std::memcpy(mem + kSlotNoteAt, &nhdr, sizeof(nhdr));
+      std::memcpy(mem + kSlotNoteAt + sizeof(nhdr), "GNU", 4);
+      const char* const id = sentinel::pinned::LibR15PatchedBuildId();
+      for (int i = 0; i < 20; ++i) {
+        unsigned byte = 0;
+        std::sscanf(id + 2 * i, "%2x", &byte);
+        mem[kSlotNoteAt + sizeof(nhdr) + 4 + i] = static_cast<unsigned char>(byte);
+      }
+      phdr[2].p_type = PT_NOTE;
+      phdr[2].p_vaddr = kSlotNoteAt;
+      phdr[2].p_filesz = kNoteBytes;
+      phdr[2].p_memsz = kNoteBytes;
+      image.phnum = 3;
+      const std::uint32_t body = kStockBodyWord;
+      std::memcpy(mem + sentinel::pinned::kOSBuildVersionVaddr, &body, sizeof(body));
+      const std::uint64_t floor = kFloor;
+      std::memcpy(mem + sentinel::pinned::kMinOSBuildVersionVaddr, &floor, sizeof(floor));
+    }
   }
   void** Slot() const { return reinterpret_cast<void**>(mem + kSlotAt); }
 };
@@ -446,6 +479,48 @@ void TheGlueInstallsThroughTheHookAndRefusesWhatItCannotInstall() {
   }
 }
 
+// Install() end to end: the floor and the original body read from the library the lookup finds, then the install into it.
+SlotImage& WholeFixture() {
+  static SlotImage fixture(true);
+  return fixture;
+}
+bool g_wholeLoaded = true;
+bool WholeLookup(const char*, sentinel::ElfImage* out) {
+  if (!g_wholeLoaded) return false;
+  *out = WholeFixture().image;
+  return true;
+}
+
+void InstallReadsTheFloorAndTheBodyFromTheLoadedLibraryAndInstallsIntoIt() {
+  gate::ResetForTest();
+  g_lines.clear();
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  void* const original = reinterpret_cast<void*>(&GameOriginal);
+
+  // The library is not loaded: nothing is read, nothing is installed, and the line says why.
+  g_wholeLoaded = false;
+  QCHECK(!gate::Install(&WholeLookup));
+  g_wholeLoaded = true;
+  QCHECK(*WholeFixture().Slot() == original);
+
+  // The library is loaded: the floor and the stock body are read from it, and the slot holds the thunk's entry.
+  QCHECK(gate::Install(&WholeLookup));
+  QCHECK(*WholeFixture().Slot() == gate::Thunk::EntryAddress());
+
+  sentinel::SetLogSink(previous);
+  const std::vector<std::string> lines = LinesFor("os_build_gate_install");
+  QCHECK(lines.size() == 2);
+  if (lines.size() == 2) {
+    QCHECK(Field(lines[0], "result") == "refused" && Field(lines[0], "status") == "module_not_loaded");
+    QCHECK(Field(lines[0], "floor") == "0" && Field(lines[0], "floor_source") == "module_not_loaded");
+    QCHECK(Field(lines[0], "original_body") == "module_not_loaded");
+    QCHECK(Field(lines[1], "result") == "installed" && Field(lines[1], "status") == "ok");
+    QCHECK(Field(lines[1], "floor") == "6023800249000000" && Field(lines[1], "floor_source") == "pinned");
+    QCHECK(Field(lines[1], "original_body") == "queries_property");
+  }
+  gate::ResetForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -460,6 +535,7 @@ int main() {
   TheFloorIsReadOnlyFromAnImageWhoseBuildIdIsThePinnedOne();
   TheOriginalBodyIsClassified();
   TheGlueInstallsThroughTheHookAndRefusesWhatItCannotInstall();
+  InstallReadsTheFloorAndTheBodyFromTheLoadedLibraryAndInstallsIntoIt();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "os_build_gate_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
