@@ -26,12 +26,16 @@ constexpr double kLookEverySeconds = 0.25;
 constexpr std::uintptr_t kMarkAllowed = 1;
 
 // ---- state: plain atomics and PODs, no constructors ----
+// An entry belongs to one CBVHTree: `owner` is that object's address (0 = free). Writers (build, free) hold g_treeMutex; a query reads `owner` alone, with an
+// acquire load, so the hot path takes no lock. A freed entry keeps its bytes until it is built again, and the next entry built is the one after the last built
+// (g_cursor), so a freed entry is the last one to be handed out again.
 struct Entry {
+  std::uintptr_t owner;
   std::uint64_t data;  // the SBVHTreeData address this tree was built from
   Tree tree;
 };
 Entry g_trees[kMaxTrees];
-int g_treeCount = 0;
+int g_cursor = 0;  // where the next free-entry search starts (under g_treeMutex)
 pthread_mutex_t g_treeMutex = PTHREAD_MUTEX_INITIALIZER;  // a std::mutex would register a destructor at load time
 
 sentinel::GotHook g_hooks[6];
@@ -49,7 +53,7 @@ std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
 std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a test seam)
 
-std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
+std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_freed{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
 std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
 std::atomic<bool> g_firstHit{false}, g_firstBlock{false};
 // The tick's: game thread only.
@@ -136,6 +140,31 @@ void LogTree(sentinel::LogLevel level, const char* result, std::uint64_t data, c
 }
 
 // ---- Initialize / Shutdown ----
+// Frees the entry `self` (a CBVHTree's address) owns, if it owns one; `cause` is for the line. A CBVHTree that owns none (an arena level's, a refused one) frees nothing
+// and says nothing. The entry's bytes stay until it is built again.
+void ReleaseTree(const void* self, const char* cause) noexcept {
+  std::uint64_t data = 0;
+  int inUse = 0;
+  bool freed = false;
+  pthread_mutex_lock(&g_treeMutex);
+  for (int i = 0; i < kMaxTrees; ++i) {
+    if (!freed && g_trees[i].owner == reinterpret_cast<std::uintptr_t>(self)) {
+      data = g_trees[i].data;
+      __atomic_store_n(&g_trees[i].owner, std::uintptr_t{0}, __ATOMIC_RELEASE);
+      freed = true;
+    }
+    if (g_trees[i].owner != 0) ++inUse;
+  }
+  pthread_mutex_unlock(&g_treeMutex);
+  if (!freed) return;
+  g_freed.fetch_add(1, std::memory_order_relaxed);
+  char tr[19], dt[19];
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_tree_freed",
+                      {{"tree", sentinel::HexString(tr, reinterpret_cast<std::uintptr_t>(self))}, {"data", sentinel::HexString(dt, data)},
+                       {"cause", cause}, {"in_use", inUse},
+                       {"msg", "the CBVHTree's table entry is free for the next level's tree; a cast on this CBVHTree is the game's own from now on"}});
+}
+
 void BuildTree(void* self, const void* data, const LoadingLevel& loading) noexcept {
   const std::uint64_t d = reinterpret_cast<std::uintptr_t>(data);
   if (data == nullptr) {
@@ -166,13 +195,18 @@ void BuildTree(void* self, const void* data, const LoadingLevel& loading) noexce
   }
   int slot = -1;
   pthread_mutex_lock(&g_treeMutex);
-  for (int i = 0; i < g_treeCount; ++i) {
-    if (g_trees[i].data == d) slot = i;
+  for (int k = 0; k < kMaxTrees; ++k) {
+    const int i = (g_cursor + k) % kMaxTrees;
+    if (g_trees[i].owner == 0) {
+      slot = i;
+      break;
+    }
   }
-  if (slot < 0 && g_treeCount < kMaxTrees) slot = g_treeCount++;
   if (slot >= 0) {
     g_trees[slot].data = d;
     g_trees[slot].tree = t;
+    g_cursor = (slot + 1) % kMaxTrees;
+    __atomic_store_n(&g_trees[slot].owner, reinterpret_cast<std::uintptr_t>(self), __ATOMIC_RELEASE);  // last: a query that sees the owner sees the tree
   }
   pthread_mutex_unlock(&g_treeMutex);
   if (slot < 0) {
@@ -192,6 +226,7 @@ void OnInitialize(InitThunk::Fn original, void* self, const void* data) noexcept
   original(self, data);
   if (self == nullptr) return;
   *static_cast<const Tree**>(self) = nullptr;
+  ReleaseTree(self, "reinitialize");  // an Initialize on a CBVHTree that was never shut down replaces its tree: the old entry is not kept
   LoadingLevel loading;
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game != 0) {
@@ -206,18 +241,23 @@ void OnInitialize(InitThunk::Fn original, void* self, const void* data) noexcept
   BuildTree(self, data, loading);
 }
 
+// The game's Shutdown runs first (the game itself shuts the tree down before it unloads the resource the tree reads: CStaticRaycastCS::Shutdown calls CBVHTree::Shutdown,
+// then CResourceInstance::UnloadAndShutdown), then the word is cleared and the entry is freed.
 void OnShutdown(ShutThunk::Fn original, void* self) noexcept {
   original(self);
-  if (self != nullptr) *static_cast<const Tree**>(self) = nullptr;
+  if (self == nullptr) return;
+  *static_cast<const Tree**>(self) = nullptr;
+  ReleaseTree(self, "shutdown");
 }
 
-// The tree a CBVHTree points at: one of our table entries (a word that is not one is a doubt: the game's function answers). The CBVHTree is
-// the object the game's caller called a member of, so its first word is read with a plain load.
+// The tree a CBVHTree points at: one of our table entries that is in use (a word that is not one, or that names a freed entry, is a doubt: the game's function
+// answers). The CBVHTree is the object the game's caller called a member of, so its first word is read with a plain load.
 const Tree* TreeOf(const void* self) noexcept {
   const std::uintptr_t p = *static_cast<const std::uintptr_t*>(self);
   const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(&g_trees[0].tree);
   const std::uintptr_t off = p - lo;
   if (off >= sizeof(g_trees) || off % sizeof(Entry) != 0) return nullptr;  // (p below the table wraps `off` to a huge value)
+  if (__atomic_load_n(&g_trees[off / sizeof(Entry)].owner, __ATOMIC_ACQUIRE) == 0) return nullptr;  // freed
   return reinterpret_cast<const Tree*>(p);
 }
 
@@ -466,12 +506,13 @@ bool TreeInstalled() noexcept { return g_installed.load(std::memory_order_acquir
 
 Counters GetCounters() noexcept {
   return {g_built.load(),  g_refused.load(), g_skipped.load(), g_int.load(), g_intHit.load(), g_occ.load(),
-          g_occHit.load(), g_gated.load(),   g_touch.load(),   g_stock.load()};
+          g_occHit.load(), g_gated.load(),   g_touch.load(),   g_stock.load(), g_freed.load()};
 }
 
 int TreeCount() noexcept {
+  int n = 0;
   pthread_mutex_lock(&g_treeMutex);
-  const int n = g_treeCount;
+  for (const Entry& e : g_trees) n += e.owner != 0 ? 1 : 0;
   pthread_mutex_unlock(&g_treeMutex);
   return n;
 }
@@ -488,8 +529,9 @@ void LogSummary() noexcept {
   std::snprintf(max, sizeof(max), "%.1f", static_cast<double>(mx) / 1000.0);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_summary",
                       {{"window_s", 10}, {"intersect", ni}, {"intersect_hit", nih}, {"occluded", no}, {"occluded_blocked", noh},
-                       {"touch_miss", nt}, {"gated_off", ng}, {"stock", ns}, {"us_per_cast_avg", avg}, {"us_per_cast_max", max},
-                       {"msg", "casts answered from the level's static BVH in this window; stock counts calls the game's function answered"}});
+                       {"touch_miss", nt}, {"gated_off", ng}, {"stock", ns}, {"us_per_cast_avg", avg}, {"us_per_cast_max", max}, {"in_use", TreeCount()},
+                       {"msg", "casts answered from the level's static BVH in this window; stock counts calls the game's function answered; in_use is the tree "
+                               "table's entries held by live CBVHTrees (of 64)"}});
 }
 
 void LookAtLevels(std::uintptr_t game, double now) noexcept {
@@ -558,7 +600,7 @@ void ResetForTest() noexcept {
   GateThunk::Reset();
   pthread_mutex_lock(&g_treeMutex);
   std::memset(g_trees, 0, sizeof(g_trees));
-  g_treeCount = 0;
+  g_cursor = 0;
   pthread_mutex_unlock(&g_treeMutex);
   g_ran.store(false);
   g_installed.store(false);
@@ -570,7 +612,7 @@ void ResetForTest() noexcept {
   g_lookup.store(nullptr);
   g_pinsOverride.store(nullptr);
   g_clock.store(nullptr);
-  g_built = g_refused = g_int = g_intHit = g_occ = g_occHit = g_gated = g_touch = g_stock = 0;
+  g_built = g_freed = g_refused = g_int = g_intHit = g_occ = g_occHit = g_gated = g_touch = g_stock = 0;
   g_ns = g_maxNs = 0;
   g_firstHit = g_firstBlock = false;
   g_nextSummary = 0;

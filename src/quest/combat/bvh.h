@@ -4,7 +4,7 @@
  *
  * Six hooks (bvh_targets.h), each a CallbackThunk installed by the hook manager; no code page is written:
  *   Initialize  CBVHTree::Initialize(this, SBVHTreeData*)       the game's function runs, then the data is parsed and a Tree* kept in the 8-byte CBVHTree
- *   Shutdown    CBVHTree::Shutdown(this)                         the game's function runs, then the Tree* is cleared
+ *   Shutdown    CBVHTree::Shutdown(this)                         the game's function runs, then the Tree* is cleared and the CBVHTree's table entry is freed
  *   Intersect   CBVHTree::Intersect(this, CRay*, SBVHHit*)       nearest hit, for the casts the gate allows
  *   Occluded    CBVHTree::Occluded(this, C3Vector*, C3Vector*)   any hit on the segment
  *   Gate        CncaGameSpace::StaticRaycast(this, CRay*, SBVHHit*, CncaGameSpaceMT**)   the callers' gate: marks the thread while a cast the tree answers runs
@@ -16,6 +16,8 @@
  * `combat.bvh_gate` (true: only the three listed callers' casts use the tree) and `combat.bvh_touch` (true: touch rays are answered with a miss).
  * The plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the plugin's data directory is a Warning
  * (`combat_bvh_legacy_switch`) that names the key that replaces it.
+ *
+ * The tree table has 64 entries, each owned by the CBVHTree that built it and freed by that CBVHTree's Shutdown (docs/quest/combat/bvh.md "Table lifetime").
  *
  * Owner (ADR 0039). This file owns the six slots. The q15t plugin no longer installs any of them.
  *
@@ -54,9 +56,10 @@
  *             registration table by the configuration step (combat_install.h); the module writes none
  *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,"msg":".."}
  *             Info for installed and off (`reason` `off_config`), Error for a refusal (`reason` is the cause, `hook` the one that stopped it).
+ *   freed     {"event":"combat_bvh_tree_freed","tree":"0x..","data":"0x..","cause":"shutdown|reinitialize","in_use":<n>,"msg":".."}  Info: the CBVHTree's entry is free again
  *   tree      {"event":"combat_bvh_tree","result":"built|none|refused|skipped","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x..","level":"0x..","scope":"combat|arena|other|unknown"}
  *   hit       {"event":"combat_bvh_first_hit",...} and {"event":"combat_bvh_first_block",...}  once each: the first answered hit and blocked segment
- *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":".."}  every 10 s a counter moved
+ *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":"..","in_use":<n>}  every 10 s a counter moved (`in_use`: table entries held by live CBVHTrees, of 64)
  *   scope     {"event":"combat_bvh_scope","from":0|1,"to":0|1,"level":"0x.."}  Info, one per change of the answer
  *   stale     {"event":"combat_bvh_scope_stale","gap_s":"..","stale_after_s":"1.00","level":"0x.."}  Warning: the tick came back after more than
  *             kStaleAfterSeconds with the scope open, so the hooks answered with the game's functions for that gap
@@ -118,9 +121,10 @@ struct Counters {
   std::uint64_t gated;          // casts kept off the tree (the stock miss)
   std::uint64_t touch;          // touch rays answered with a miss
   std::uint64_t stock;          // calls that went to the game's function with a combat map or the combat lobby loaded (no tree for the object)
+  std::uint64_t treesFreed;     // table entries freed: a Shutdown (or a re-Initialize) of a CBVHTree that owned one
 };
 Counters GetCounters() noexcept;
-int TreeCount() noexcept;  // entries in use in the tree table (cap 64)
+int TreeCount() noexcept;  // entries in use in the tree table (cap 64 at once; an entry is freed when its CBVHTree is shut down)
 
 // The combat tick's callback (combat_tick.h): refreshes `InCombatOrLobby()` and writes the 10 s summary. One clock compare per frame otherwise.
 void Tick(std::uintptr_t game) noexcept;

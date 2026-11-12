@@ -4,7 +4,7 @@
 //
 // Moved from the q15t plugin's bvh_test: the assertions on the answers are the same (the nearest hit, the segment test, the hit's fields, the
 // refusals of Initialize and their lines, the 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install, the
-// touch answer). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
+// touch answer, and a Shutdown freeing its CBVHTree's table entry). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
 // plugin's kill files are `combat:` switches) and three deliberate behaviours: every answer is scoped to a combat map (the arena path calls the
 // game's function), the arguments of a cast are read with plain loads (the unreadable-argument assertions went with the system call), and a
 // thunk with no original answers a miss without calling the handler. New here: the scope, the switches, the legacy switch files.
@@ -847,7 +847,30 @@ void AnInitializeThatIsRefusedLeavesNoTreeAndSaysWhy() {
   End();
 }
 
-void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
+// A Shutdown frees the entry its CBVHTree owns: more than 64 trees can be built and shut down in one process, one at a time (#2307).
+void AShutDownTreeFreesItsEntry() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true, 8);
+  std::uint64_t cb = 0;
+  bool built = true, freed = true;
+  for (int i = 0; i < 200; ++i) {  // 200 level loads: three times the table
+    cb = 0;
+    InitSlot()(&cb, res.bytes.data());
+    built &= cb != 0 && bvh::TreeCount() == 1;
+    ShutSlot()(&cb);
+    freed &= cb == 0 && bvh::TreeCount() == 0;
+  }
+  QCHECK(built && freed);
+  QCHECK(Count("\"why\":\"tree table full\"") == 0);
+  QCHECK(Count("\"result\":\"built\"", kInfo) == 200);
+  End();
+}
+
+// The table is full only while 64 CBVHTrees hold an entry; a shut-down tree's entry is the next one built.
+void TheTableHolds64LiveTreesAndAShutdownMakesRoom() {
   Begin();
   Build();
   QCHECK(Installed(Gateless()));
@@ -861,10 +884,25 @@ void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
   for (int i = 0; i < 64; ++i) all &= cb[i] != 0;
   QCHECK(all);
   InitSlot()(&cb[64], res[64].bytes.data());
-  QCHECK(cb[64] == 0 && Count("\"why\":\"tree table full\"", kError) == 1);
+  QCHECK(cb[64] == 0 && Count("\"why\":\"tree table full\"", kError) == 1 && bvh::TreeCount() == 64);
   std::uint64_t again = 0;
-  InitSlot()(&again, res[3].bytes.data());  // the same data: the same entry, even with the table full
-  QCHECK(again == cb[3] && bvh::TreeCount() == 64);
+  InitSlot()(&again, res[3].bytes.data());  // the same data under a CBVHTree that is not cb[3]: no room, whatever the data
+  QCHECK(again == 0 && Count("\"why\":\"tree table full\"", kError) == 2);
+  // a CBVHTree initialized again without a Shutdown gives back its own entry first, so it is built even with the table full
+  InitSlot()(&cb[3], res[3].bytes.data());
+  QCHECK(cb[3] != 0 && bvh::TreeCount() == 64 && Count("\"cause\":\"reinitialize\"", kInfo) == 1);
+  // a Shutdown makes room for exactly one more
+  ShutSlot()(&cb[10]);
+  QCHECK(cb[10] == 0 && bvh::TreeCount() == 63);
+  InitSlot()(&cb[64], res[64].bytes.data());
+  QCHECK(cb[64] != 0 && bvh::TreeCount() == 64);
+  InitSlot()(&cb[65], res[65].bytes.data());
+  QCHECK(cb[65] == 0 && bvh::TreeCount() == 64 && Count("\"why\":\"tree table full\"", kError) == 3);
+  // every live tree still answers
+  std::uint8_t hit[0x44] = {};
+  bool answers = true;
+  for (int i : {0, 3, 9, 11, 63, 64}) answers &= CallInt(&cb[i], kDown, hit);
+  QCHECK(answers);
   // a CBVHTree word that is the right distance from the table but past its last entry is not a tree
   const std::uint64_t stride = cb[63] - cb[62];
   std::uint64_t past = cb[63] + stride;
@@ -875,6 +913,132 @@ void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
   QCHECK(!CallInt(&below, kDown, hitP) && g_stockInt == stockBefore + 2);
   std::uint64_t last = cb[63];
   QCHECK(CallInt(&last, kDown, hitP) && g_stockInt == stockBefore + 2);
+  End();
+}
+
+// The one free entry may be the last the search reaches: with the table full, shutting down the tree built last leaves its entry just behind the cursor.
+void TheLastEntryOfTheSearchIsUsed() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true, 8);
+  std::vector<std::uint64_t> cb(65, 0);
+  for (int i = 0; i < 64; ++i) InitSlot()(&cb[i], res.bytes.data());
+  QCHECK(bvh::TreeCount() == 64);
+  ShutSlot()(&cb[63]);
+  InitSlot()(&cb[64], res.bytes.data());
+  QCHECK(cb[64] != 0 && bvh::TreeCount() == 64 && Count("\"why\":\"tree table full\"") == 0);
+  End();
+}
+
+// Two CBVHTrees built from the same data own an entry each; a Shutdown frees its own and leaves the other answering.
+void ASharedResourceKeepsTheOtherTreesEntry() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t a = 0, b = 0;
+  InitSlot()(&a, res.bytes.data());
+  InitSlot()(&b, res.bytes.data());
+  QCHECK(a != 0 && b != 0 && a != b && bvh::TreeCount() == 2);
+  char named[160];  // the line names the CBVHTree (its address) and the data it was built from
+  std::snprintf(named, sizeof(named), "\"event\":\"combat_bvh_tree_freed\",\"tree\":\"0x%016llx\",\"data\":\"0x%016llx\"",
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&a)),
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(res.bytes.data())));
+  ShutSlot()(&a);
+  QCHECK(a == 0 && bvh::TreeCount() == 1);
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&b, kDown, hit));
+  QCHECK(Count(Event("combat_bvh_tree_freed"), kInfo) == 1 && Count("\"cause\":\"shutdown\",\"in_use\":1") == 1);
+  QCHECK(Count(named) == 1 && bvh::GetCounters().treesFreed == 1);
+  End();
+}
+
+// A Shutdown of a CBVHTree that owns no entry (an arena level's, a refused one, one never initialized) frees nothing and writes nothing.
+void AShutdownOfATreeWithoutAnEntryFreesNothing() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t live = 0;
+  InitSlot()(&live, res.bytes.data());
+  QCHECK(bvh::TreeCount() == 1);
+  std::uint64_t garbage = live;  // a word that names the live tree's entry, in an object that never built one
+  ShutSlot()(&garbage);
+  QCHECK(garbage == 0 && bvh::TreeCount() == 1);
+  std::uint64_t never = 0x1234567;
+  ShutSlot()(&never);
+  QCHECK(never == 0 && bvh::TreeCount() == 1 && g_stockShut == 2);
+  QCHECK(Count(Event("combat_bvh_tree_freed")) == 0 && bvh::GetCounters().treesFreed == 0);
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&live, kDown, hit));  // the live tree still answers
+  ShutSlot()(nullptr);                 // a null object: the game's function ran, nothing else
+  QCHECK(g_stockShut == 3 && bvh::TreeCount() == 1);
+  End();
+}
+
+// A cast on a CBVHTree after its Shutdown: the word is cleared, so the game's function answers; a copy of the old word names a freed entry, so it does too;
+// and the freed entry is the last one handed out again, so the copy does not name the next tree's entry either.
+void ACastOnAShutDownTreeIsTheGamesOwn() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t a = 0;
+  InitSlot()(&a, res.bytes.data());
+  std::uint64_t stale = a;  // a copy of the word, as a caller that cached it would hold
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&stale, kDown, hit) && g_stockInt == 0);
+  ShutSlot()(&a);
+  QCHECK(a == 0);
+  QCHECK(!CallInt(&a, kDown, hit) && g_stockInt == 1);          // the cleared word
+  QCHECK(!CallInt(&stale, kDown, hit) && g_stockInt == 2);      // the freed entry
+  QCHECK(!OccludedSlot()(&stale, kDown, kDown + 3) && g_stockOcc == 1);
+  QCHECK(bvh::GetCounters().intersect == 1 && bvh::GetCounters().stock == 3);
+  std::uint64_t b = 0;
+  InitSlot()(&b, res.bytes.data());  // the next tree takes the next entry, not the freed one
+  QCHECK(b != 0 && b != stale);
+  QCHECK(!CallInt(&stale, kDown, hit) && g_stockInt == 3);
+  QCHECK(CallInt(&b, kDown, hit));
+  End();
+}
+
+// Casts on a live tree go on while other trees are built and shut down, entries being reused around it (the table's reads take no lock).
+void ALiveTreeAnswersWhileOthersAreBuiltAndShutDown() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource live = RoomResource(true);
+  bt::Resource churn = RoomResource(true, 8);
+  std::uint64_t a = 0;
+  InitSlot()(&a, live.bytes.data());
+  std::atomic<bool> stop{false};
+  std::atomic<int> wrong{0}, casts{0};
+  std::thread reader([&] {
+    std::uint8_t h[0x44];
+    while (!stop.load()) {
+      std::memset(h, 0, sizeof(h));
+      std::int32_t id0 = -1;
+      const bool got = CallInt(&a, kDown, h);
+      std::memcpy(&id0, h, 4);
+      if (!got || id0 != 102) wrong.fetch_add(1);
+      casts.fetch_add(1);
+    }
+  });
+  for (int i = 0; i < 300; ++i) {
+    std::uint64_t b = 0;
+    InitSlot()(&b, churn.bytes.data());
+    ShutSlot()(&b);
+  }
+  stop.store(true);
+  reader.join();
+  QCHECK(wrong.load() == 0 && casts.load() > 0);
+  QCHECK(bvh::TreeCount() == 1 && Count("\"why\":\"tree table full\"") == 0);
   End();
 }
 
@@ -1085,6 +1249,7 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
   g_now = 112.0;
   bvh::Tick(GameAddress());
   QCHECK(Count(Event("combat_bvh_summary"), kInfo) == 1 && Count("\"intersect\":2,\"intersect_hit\":1") == 1);
+  QCHECK(Count("\"in_use\":1,") == 1);  // the one live tree holds one entry
   g_now = 125.0;
   bvh::Tick(GameAddress());
   QCHECK(Count(Event("combat_bvh_summary")) == 1);  // nothing moved: no line
@@ -1121,7 +1286,13 @@ int main() {
   AStalledTickFailsClosed();
   ALevelThatIsNotCombatGetsNoTree();
   AnInitializeThatIsRefusedLeavesNoTreeAndSaysWhy();
-  TheTableHolds64TreesAndTheSameDataReusesItsEntry();
+  AShutDownTreeFreesItsEntry();
+  TheTableHolds64LiveTreesAndAShutdownMakesRoom();
+  TheLastEntryOfTheSearchIsUsed();
+  ASharedResourceKeepsTheOtherTreesEntry();
+  AShutdownOfATreeWithoutAnEntryFreesNothing();
+  ACastOnAShutDownTreeIsTheGamesOwn();
+  ALiveTreeAnswersWhileOthersAreBuiltAndShutDown();
   TheCallersGateAnswersTheListedCastsOnly();
   ASlotThatDoesNotHoldItsPinnedFunctionRefusesAllOfIt();
   ARefusedStepTouchesNothingAndSaysWhy();
