@@ -17,7 +17,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -229,23 +228,16 @@ func (s *Set) Read(typ, name int64) ([]byte, bool, error) {
 	if int(r.Chunk) >= len(s.Manifest.Chunks) {
 		return nil, true, fmt.Errorf("resource %016x.%016x names chunk %d of %d", uint64(typ), uint64(name), r.Chunk, len(s.Manifest.Chunks))
 	}
-	c := s.Manifest.Chunks[r.Chunk]
-	f, err := os.Open(filepath.Join(s.data, "packages", fmt.Sprintf("%s_%d", s.ID, c.Package)))
+	chunks, err := NewChunks()
 	if err != nil {
 		return nil, true, err
 	}
-	defer f.Close()
-	packed := make([]byte, c.Compressed)
-	if _, err := f.ReadAt(packed, int64(c.Offset)); err != nil && err != io.EOF {
-		return nil, true, err
-	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(1<<31))
+	defer chunks.Close()
+	plain, err := chunks.Plain(s, int(r.Chunk))
 	if err != nil {
 		return nil, true, err
 	}
-	defer dec.Close()
-	plain, err := dec.DecodeAll(packed, nil)
-	if err != nil || uint32(len(plain)) != c.Decompressed || uint64(r.Offset)+uint64(r.Size) > uint64(len(plain)) {
+	if uint64(r.Offset)+uint64(r.Size) > uint64(len(plain)) {
 		return nil, true, fmt.Errorf("chunk %d of %s does not decompress to the resource it holds", r.Chunk, s.ID)
 	}
 	return plain[r.Offset : r.Offset+r.Size], true, nil
