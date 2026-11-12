@@ -27,6 +27,9 @@ runm bvh_refusal_switches_crossed src/quest/combat/bvh.cpp 's/{"bvh_touch", (han
 runm bvh_off_switches_crossed  src/quest/combat/bvh.cpp '/{{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},$/{n;s/{"bvh_touch", switches.touch ? 1 : 0},/{"bvh_touch", switches.gate ? 1 : 0},/}'
 runm bvh_already_switches_crossed src/quest/combat/bvh.cpp 's/{"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},/{"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.gate ? 1 : 0},/'
 runm bvh_installed_switches_crossed src/quest/combat/bvh.cpp '/{"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},$/{n;s/{"bvh_touch", switches.touch ? 1 : 0},/{"bvh_touch", switches.gate ? 1 : 0},/}'
+# each field fixed at one value on the installed line and on the off line (#2382 review): killed only by a pair whose handed value differs
+runm bvh_installed_gate_fixed  src/quest/combat/bvh.cpp '/{"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},$/{n;s/{"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},/{"bvh_gate", 0}, {"bvh_touch", switches.touch ? 1 : 0},/}'
+runm bvh_off_touch_fixed       src/quest/combat/bvh.cpp '/{{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},$/{n;s/{"bvh_touch", switches.touch ? 1 : 0},/{"bvh_touch", 1},/}'
 runm bvh_installed_early  src/quest/combat/bvh.cpp "s/^  g_installed.store(true, std::memory_order_release);\$/  g_installed.store(switches.gate, std::memory_order_release);/"
 runm bvh_touch_always     src/quest/combat/bvh.cpp "s/  if (switches.touch) {/  if (true) {/"
 runm bvh_touch_fatal      src/quest/combat/bvh.cpp "s/    touchOn = got == sentinel::GotStatus::kOk;/    touchOn = true;/"

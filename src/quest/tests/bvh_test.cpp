@@ -1342,31 +1342,39 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 
 // Every combat_bvh_install line names the gate and touch switches the step was handed (#2382), on every path: the gate handed off and the touch hook
 // on, so a line that drops either, or names one for the other, shows.
+// All four pairs of gate and touch, on every path (#2382 review): a line that fixes either field at either value shows on the pairs that differ.
 void EveryInstallLineNamesTheSwitchesItWasHanded() {
-  const std::string named = "\"bvh_gate\":0,\"bvh_touch\":1";
-  {  // installed, then a second step refused already_ran
-    Begin();
-    Build();
-    QCHECK(Installed(Gateless()));
-    QCHECK(Count(Event("combat_bvh_install") + ",\"result\":\"installed\"") == 1 && Count(named) == 1);
-    QCHECK(std::strcmp(bvh::Install(Gateless()).status, "already_ran") == 0);
-    QCHECK(Count("\"reason\":\"already_ran\"," + named) == 1);
-    End();
-  }
-  {  // off by combat.bvh: the two others it was handed are named too
-    Begin();
-    Build();
-    bvh::Switches off = Gateless();
-    off.bvh = false;
-    QCHECK(bvh::Install(off).off);
-    QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"") == 1 && Count(named) == 1);
-    End();
-  }
-  {  // refused: no libr15
-    Begin();
-    QCHECK(std::strcmp(bvh::Install(Gateless()).status, "module_not_loaded") == 0);
-    QCHECK(Count("\"reason\":\"module_not_loaded\"") == 1 && Count(named) == 1);
-    End();
+  for (const bool gate : {false, true}) {
+    for (const bool touch : {false, true}) {
+      const std::string named = std::string("\"bvh_gate\":") + (gate ? "1" : "0") + ",\"bvh_touch\":" + (touch ? "1" : "0");
+      bvh::Switches handed = Gateless();
+      handed.gate = gate;
+      handed.touch = touch;
+      {  // installed, then a second step refused already_ran
+        Begin();
+        Build();
+        QCHECK(Installed(handed));
+        QCHECK(Count(Event("combat_bvh_install") + ",\"result\":\"installed\"") == 1 && Count(named) == 1);
+        QCHECK(std::strcmp(bvh::Install(handed).status, "already_ran") == 0);
+        QCHECK(Count("\"reason\":\"already_ran\"," + named) == 1);
+        End();
+      }
+      {  // off by combat.bvh: the two others it was handed are named too
+        Begin();
+        Build();
+        bvh::Switches off = handed;
+        off.bvh = false;
+        QCHECK(bvh::Install(off).off);
+        QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"") == 1 && Count(named) == 1);
+        End();
+      }
+      {  // refused: no libr15
+        Begin();
+        QCHECK(std::strcmp(bvh::Install(handed).status, "module_not_loaded") == 0);
+        QCHECK(Count("\"reason\":\"module_not_loaded\"") == 1 && Count(named) == 1);
+        End();
+      }
+    }
   }
 }
 
