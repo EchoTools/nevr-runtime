@@ -80,7 +80,7 @@ type manifestDoc struct {
 	Schema        string              `json:"schema"`
 	SchemaVersion int                 `json:"schema_version"`
 	Labels        map[string]labelDoc `json:"labels"`
-	Sets          []string            `json:"sets"`
+	Sets          []setDoc            `json:"sets"`
 	Empty         []emptyDoc          `json:"empty"`
 }
 
@@ -114,7 +114,7 @@ type cargoRules struct {
 
 type summary struct {
 	Platform           string         `json:"platform"`
-	Sets               []string       `json:"sets"`
+	Sets               []setDoc       `json:"sets"`
 	RecordsByType      map[string]int `json:"records_by_type"`
 	Records            int            `json:"records"`
 	Entries            int            `json:"entries"`
@@ -182,13 +182,23 @@ func setIDs(data string, asked []string) ([]string, error) {
 	return ids, nil
 }
 
-func openSets(data string, ids []string, log *slog.Logger) ([]*radpack.Set, error) {
+// setDoc names a source manifest: its set id, the SHA-256 of the manifest file and the file's length in bytes.
+type setDoc struct {
+	ID     string `json:"id"`
+	Sha256 string `json:"sha256"`
+	Bytes  uint64 `json:"bytes"`
+}
+
+func openSets(data string, ids []string, log *slog.Logger) ([]*radpack.Set, []setDoc, error) {
 	var sets []*radpack.Set
+	var docs []setDoc
 	for _, id := range ids {
-		s, _, err := radpack.OpenSet(data, id)
+		s, raw, err := radpack.OpenSet(data, id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		h := sha256.Sum256(raw)
+		docs = append(docs, setDoc{ID: id, Sha256: hex.EncodeToString(h[:]), Bytes: uint64(len(raw))})
 		var chunkBytes uint64
 		for _, c := range s.Manifest.Chunks {
 			if c.Decompressed != 0 { // a package's end record states no size: its other words are not a frame's
@@ -199,7 +209,7 @@ func openSets(data string, ids []string, log *slog.Logger) ([]*radpack.Set, erro
 			"chunks", len(s.Manifest.Chunks), "chunk_bytes", chunkBytes)
 		sets = append(sets, s)
 	}
-	return sets, nil
+	return sets, docs, nil
 }
 
 // store is the object directory: <out>/blobs/sha256/<hex>. An object is claimed once per run by its hash; the claimer
@@ -325,7 +335,7 @@ func extract(ctx context.Context, o extractOptions, log *slog.Logger) (*summary,
 		return nil, err
 	}
 	log.Info("start", "platform", o.platform, "data", data, "sets", ids, "out", o.out, "level", o.level.String())
-	sets, err := openSets(data, ids, log)
+	sets, setDocs, err := openSets(data, ids, log)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +345,7 @@ func extract(ctx context.Context, o extractOptions, log *slog.Logger) (*summary,
 	}
 	defer chunks.Close()
 
-	sum := &summary{Platform: o.platform, Sets: ids, RecordsByType: map[string]int{}}
+	sum := &summary{Platform: o.platform, Sets: setDocs, RecordsByType: map[string]int{}}
 	sum.StockFrames, err = measureStock(chunks, sets)
 	if err != nil {
 		return nil, err
@@ -515,7 +525,7 @@ feed:
 	}
 
 	doc := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion, Labels: map[string]labelDoc{labelName: {Entries: entries}},
-		Sets: ids, Empty: empties}
+		Sets: setDocs, Empty: empties}
 	if doc.Empty == nil {
 		doc.Empty = []emptyDoc{}
 	}

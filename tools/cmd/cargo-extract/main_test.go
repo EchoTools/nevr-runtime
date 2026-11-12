@@ -424,7 +424,7 @@ func TestASetOptionTakesOnlyThatSet(t *testing.T) {
 	root := fixture(t, "win10")
 	out := filepath.Join(t.TempDir(), "out")
 	sum := mustExtract(t, root, out, "-set", setB)
-	if sum.Records != 2 || len(sum.Sets) != 1 || sum.Sets[0] != setB {
+	if sum.Records != 2 || len(sum.Sets) != 1 || sum.Sets[0].ID != setB {
 		t.Errorf("summary = %+v", sum)
 	}
 	if v := runTool(t, "verify", out, root); v.code != 0 {
@@ -821,5 +821,40 @@ func TestVerifyComparesTheDecompressedObjectWithTheStockBytes(t *testing.T) {
 	want := "record 0x0000000000000010:0x0000000000000002: the object " + name + " decompresses to 200 bytes that differ from the 200 bytes the stock package holds"
 	if r.code != 1 || !strings.Contains(r.stderr, want) {
 		t.Errorf("exit %d: %s", r.code, r.stderr)
+	}
+}
+
+// Each source manifest is named in the manifest and in the summary by its set id, the SHA-256 of the manifest file and its
+// length in bytes.
+func TestTheManifestAndTheSummaryNameEachSourceManifestByIdHashAndLength(t *testing.T) {
+	t.Parallel()
+	root := fixture(t, "win10")
+	out := filepath.Join(t.TempDir(), "out")
+	r := runTool(t, extractArgs(root, out)...)
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	want := []map[string]any{}
+	for _, id := range []string{setB, setA} { // the sets in id order
+		raw, err := os.ReadFile(filepath.Join(root, "rad15", "win10", "manifests", id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, map[string]any{"id": id, "sha256": sha(raw), "bytes": float64(len(raw))})
+	}
+	manifest, err := os.ReadFile(filepath.Join(out, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string][]byte{"manifest.json": manifest, "summary": []byte(r.stdout)} {
+		var doc struct {
+			Sets []map[string]any `json:"sets"`
+		}
+		if err := json.Unmarshal(text, &doc); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if fmt.Sprint(doc.Sets) != fmt.Sprint(want) {
+			t.Errorf("%s: sets = %v, want %v", name, doc.Sets, want)
+		}
 	}
 }

@@ -87,9 +87,13 @@ func verify(ctx context.Context, out, root string, log *slog.Logger) (*verifySum
 		return nil, fmt.Errorf("manifest.json: the platform %q is not one this tool knows", platform)
 	}
 	data := filepath.Join(root, "rad15", folder)
-	log.Info("start", "out", out, "data", data, "platform", platform, "sets", doc.Sets, "entries", len(label.Entries), "empty", len(doc.Empty))
+	ids := make([]string, len(doc.Sets))
+	for i, s := range doc.Sets {
+		ids[i] = s.ID
+	}
+	log.Info("start", "out", out, "data", data, "platform", platform, "sets", ids, "entries", len(label.Entries), "empty", len(doc.Empty))
 
-	sets, err := openSets(data, doc.Sets, log)
+	sets, _, err := openSets(data, ids, log)
 	if err != nil {
 		return nil, err
 	}
