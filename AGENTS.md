@@ -427,7 +427,7 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's when it was built at this commit)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's, whatever commit it was built at)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the keystore file `NEVR_QUEST_KEYSTORE` names (passphrase in `NEVR_QUEST_KEYSTORE_PASS`)
