@@ -951,7 +951,7 @@ void TheCostOnAnArenaPath() {
   const double modelHooked = best([&] { return hooked(Cs(0), h); });
   const double eventDirect = best([&] { return FakeEvent(nullptr, kTriggered, 1, 2, 0); });
   const double eventHooked = best([&] { return hookedEvent(nullptr, kTriggered, 1, 2, 0); });
-  // the per-frame callback in arena, with the clock fixed (the compare alone), with a real clock read added, and a look at the levels (the clock moved past kLookEveryMs)
+  // a frame in arena (the scope row's refresh, then the module's callback), with the clock fixed, with a real clock read added, and a frame whose refresh looks at the levels (the clock moved past kLookEveryMs)
   const double frame = best([&] {
     Frame();
     return std::uint64_t{1};
@@ -973,7 +973,7 @@ void TheCostOnAnArenaPath() {
     if (ns < look) look = ns;
   }
   std::printf("sensorwd_test: arena path, host: OnComponentEnabled direct %.1f ns, hooked %.1f ns (+%.1f ns); SendComponentEventGlobal direct %.1f ns, hooked %.1f ns (+%.1f ns); "
-              "the tick callback %.1f ns a frame between looks (a real clock read %.1f ns more), %.0f ns for a frame that looks at the levels (one gamespace, every %lld ms)\n",
+              "a frame (the scope's refresh, then the module's callback) %.1f ns between looks (a real clock read %.1f ns more), %.0f ns for a frame whose refresh looks at the levels (one gamespace, every %lld ms)\n",
               modelDirect, modelHooked, modelHooked - modelDirect, eventDirect, eventHooked, eventHooked - eventDirect, frame, clockRead, look,
               static_cast<long long>(scope::kLookEveryMs));
   g_record = true;

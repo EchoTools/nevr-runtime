@@ -50,10 +50,11 @@ would never act.
    the low-spec arena level, the tutorial, an arena lobby, the combat lobby, no level, a combat map beside an arena level): the game sees exactly its own 60 calls, every counter is zero, and no
    line is written. `AStaleOrMissingAnswerPassesEverythingThrough` shows no look and a look older than a second pass through, and `TheTickDoesNotBelieveAStaleAnswer` shows the tick does not either. `LeavingTheScopeEmptiesTheTable` shows the table emptied. The test drives the real combat level answer: each frame runs the scope row's refresh against the fake game before the module's callback, as the tick does. `OutsideACombatMapEveryHandlerIsAPassThrough` also counts what the three handlers ask: zero reads (`safe_read.h`'s `SetReadCounterForTest` counter) and zero `level::ScanCalls()` over the stream (the sphere check is five reads; `InACombatMapTheSphereCheckReads` shows a combat map does read, so zero is the scope's doing).
 2. Cost (ADR 0038), host microbenchmark, x86-64 -O2 (`sensorwd_test` built by hand at -O2; the combat group builds at -O0; best of 7; machine load ~15; NOT a Quest number): on an Echo Arena
-   level `OnComponentEnabled` through the thunk costs +3.1 ns over a direct call of 0.3 ns, `SendComponentEventGlobal` +3.4 ns; the tick callback is 3.7 ns a frame between looks, plus a
-   real `clock_gettime` of 23 ns, and a frame that looks at the levels (every 250 ms, one gamespace) is 3.3 us. These numbers were taken when the module made its own look; the handlers' arena
-   path is the same relaxed load and test now, on the scope word, and the look is the scope row's, made once for every reader (`sensorwd_test` prints the frame and look figures, which now
-   include the scope's refresh). The plugin paid up to five `process_vm_readv` reads on every model enable in every level.
+   level `OnComponentEnabled` through the thunk costs +3.1 ns over a direct call of 0.3 ns, `SendComponentEventGlobal` +3.4 ns (the handler's arena path is one relaxed load of the scope word
+   and a test). A real `clock_gettime` is 23 ns. The module's tick callback adds a clock read, the scope word's load and test and an exchange per frame; the look at the levels (every 250 ms,
+   about 3.3 us with one gamespace on the host) is the scope row's, made once for every reader. `sensorwd_test` `TheCostOnAnArenaPath` prints the thunk figures and a frame of the scope's
+   refresh and the module's callback together, between looks and with a look; the -O2 figures for the frame are not established. The plugin paid up to five `process_vm_readv` reads on every
+   model enable in every level.
    The calls per frame of the two model functions are NOT measured (no headset run), so ADR 0038's added time per frame is not established; at +3 ns the 10 us line is about 3,000 calls a frame.
    In a combat map the per-call work is the plugin's: up to five reads to ask whether the component is the sphere (not measured on a headset).
 
