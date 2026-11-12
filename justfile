@@ -2108,14 +2108,6 @@ verify:
         test-quest-combat \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
-    # A failing sensor is recorded, never taken as an exit (#1228): every sensor runs, each prints its own
-    # `verify: FAIL —` line through sensor_fail, and the recipe ends by naming all of them and exiting 1.
-    # A sensor body must not `exit`; the one exit is the summary at the end of this recipe.
-    verify_failed=()
-    sensor_fail() { # $1 the failure's first line, without the `verify: FAIL —` prefix
-        echo "verify: FAIL — $1" >&2
-        verify_failed+=("$1")
-    }
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
     # unreadable subject, bad pattern) hands stage 2 an empty stream, stage 2
@@ -2134,7 +2126,8 @@ verify:
     # tell rc 1 from rc 2. Left for a follow-up unit; do not add new ones.
     sensor_stage1() { # $1 sensor name, $2 subject, $3 stage-1 exit code
         if [ "$3" -ge 2 ]; then
-            sensor_fail "sensor '$1': stage-1 exited $3 (an error, not 'no match'). The sensor could not read its subject: $2"
+            echo "verify: FAIL — sensor '$1': stage-1 exited $3 (an error, not 'no match'). The sensor could not read its subject: $2" >&2
+            exit 1
         fi
     }
     # Same class, different shape: an awk body-extraction that finds nothing
@@ -2142,7 +2135,8 @@ verify:
     # downstream check of the empty body silently passes.
     sensor_nonempty() { # $1 sensor name, $2 what was being extracted, $3 captured text
         if [ -z "$3" ]; then
-            sensor_fail "sensor '$1': subject extraction produced nothing ($2 not found). The sensor is watching a range that no longer exists."
+            echo "verify: FAIL — sensor '$1': subject extraction produced nothing ($2 not found). The sensor is watching a range that no longer exists." >&2
+            exit 1
         fi
     }
     # SIGPIPE + pipefail = a FALSE FAIL (N101). `cmd | grep -q P` under
@@ -2173,8 +2167,9 @@ verify:
     # half-implemented for five weeks. CMake would hard-fail on a missing
     # directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        sensor_fail "src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/."
+        echo "verify: FAIL — src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/." >&2
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
+        exit 1
     fi
     # Quest remote transport (ADR 0003): TLS verification and routing are part of the source, not a setting.
     # This sensor is a tripwire for an edit that relaxes them, NOT the guarantee: test-quest-tls drives the
@@ -2188,7 +2183,7 @@ verify:
     QTLS_RC=0; QTLS_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/net/curl_ws_connector.cpp) || QTLS_RC=$?
     sensor_stage1 "Quest TLS verification" "src/quest/net/curl_ws_connector.cpp" "$QTLS_RC"
     sensor_nonempty "Quest TLS verification" "non-comment lines of src/quest/net/curl_ws_connector.cpp" "$QTLS_CODE"
-    qtls_fail() { sensor_fail "Quest TLS verification: $1 (ADR 0003: the remote WebSocket stays verified, wss-only, proxy-free and redirect-free)."; }
+    qtls_fail() { echo "verify: FAIL — Quest TLS verification: $1 (ADR 0003: the remote WebSocket stays verified, wss-only, proxy-free and redirect-free)." >&2; exit 1; }
     QTLS_CALLS=$(grep -ciE 'curl_easy_setopt' <<<"$QTLS_CODE" || true)
     QTLS_LITERAL=$(grep -ciE 'curl_easy_setopt\(curl,[[:space:]]*CURLOPT_[A-Z0-9_]+,' <<<"$QTLS_CODE" || true)
     [ "$QTLS_CALLS" = "$QTLS_LITERAL" ] || qtls_fail "$QTLS_CALLS curl_easy_setopt line(s) but only $QTLS_LITERAL name their option with a direct CURLOPT_ literal"
@@ -2226,31 +2221,38 @@ verify:
     # (the bug state) and pass when the fix is in place.
     # N59: PatchDscProvider call site in initialize.cpp
     if ! grep -q 'PatchDscProvider()' src/runtime/lifecycle/initialize.cpp; then
-        sensor_fail "N59 PatchDscProvider call site missing from initialize.cpp"
+        echo "verify: FAIL — N59 PatchDscProvider call site missing from initialize.cpp" >&2
+        exit 1
     fi
     # N68: TickPlugins/TickModules wired into per-frame hook
     if ! grep -q 'TickPlugins' <<<"$TICK_CODE"; then
-        sensor_fail "N68 TickPlugins call site missing from per-frame hook"
+        echo "verify: FAIL — N68 TickPlugins call site missing from per-frame hook" >&2
+        exit 1
     fi
     if ! grep -q 'TickModules' <<<"$TICK_CODE"; then
-        sensor_fail "N68 TickModules call site missing from per-frame hook"
+        echo "verify: FAIL — N68 TickModules call site missing from per-frame hook" >&2
+        exit 1
     fi
     if ! grep -q 'NotifyModulesStateChange' src/runtime/lifecycle/state_machine.cpp; then
-        sensor_fail "N68 NotifyModulesStateChange call site missing from state path"
+        echo "verify: FAIL — N68 NotifyModulesStateChange call site missing from state path" >&2
+        exit 1
     fi
     # N60: stop() must be called OUTSIDE g_pairsMutex lock (deadlock prevention)
     if ! grep -q 'remoteToStop->stop()' src/runtime/compat/ws_bridge.cpp; then
-        sensor_fail "N60 stop()-outside-lock pattern missing from ws_bridge"
+        echo "verify: FAIL — N60 stop()-outside-lock pattern missing from ws_bridge" >&2
+        exit 1
     fi
     # N61: matchmaker must register independent callback on shared remote
     if ! grep -q 'loginRemote->setOnMessageCallback' src/runtime/compat/ws_bridge.cpp; then
-        sensor_fail "N61 matchmaker callback registration missing from ws_bridge"
+        echo "verify: FAIL — N61 matchmaker callback registration missing from ws_bridge" >&2
+        exit 1
     fi
     # N63: re-entry gate must call ForceFatalExit, not return
     N63_RC=0; grep -q 'Sleep(100);\s*$' src/runtime/lifecycle/crash_recovery.cpp || N63_RC=$?
     sensor_stage1 "N63 re-entry gate" "src/runtime/lifecycle/crash_recovery.cpp" "$N63_RC"
     if [ "$N63_RC" -eq 0 ]; then
-        sensor_fail "N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit"
+        echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
+        exit 1
     fi
     # N106: the OAuth2 device-flow credential must remain REACHABLE on a server.
     # 571a41b stopped persisting the access token (refresh token only, on disk),
@@ -2263,26 +2265,30 @@ verify:
     sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp" "$N106_RC"
     sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp and gameserver_serverdb.cpp" "$N106_GS"
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
-        sensor_fail "N106 the gameserver no longer exchanges a refresh token for an"
+        echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
         echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
         echo "every registration silently degrades to password auth (N106)." >&2
+        exit 1
     fi
     if ! grep -q 'RefreshAuthToken(auth' <<<"$N106_GS"; then
-        sensor_fail "N106 HasValidRefreshToken() is checked but RefreshAuthToken is"
+        echo "verify: FAIL — N106 HasValidRefreshToken() is checked but RefreshAuthToken is" >&2
         echo "never called — the branch tests the credential and then discards it." >&2
+        exit 1
     fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
     # Assert the DIRECT call: a symbol the linker must resolve, not a name looked up at runtime.
     # (Matching the STRING 'WsBridge_Shutdown' would be satisfied on every run by a GetProcAddress
     # that returns null.)
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
-        sensor_fail "N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();"
+        echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
+        exit 1
     fi
     # The graceful console-control path must release it too, without a
     # runtime symbol lookup during shutdown (N62).
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/lifecycle/crash_recovery.cpp; then
-        sensor_fail "N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()."
+        echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
+        exit 1
     fi
     # Scoped to ResolveShutdownDependencies, NOT the whole file: crash_recovery.cpp
     # legitimately resolves the four kernel32 hooks (CreateProcessA/W, ExitProcess,
@@ -2294,8 +2300,9 @@ verify:
     sensor_stage1 "N105 shutdown resolver" "src/runtime/lifecycle/crash_recovery.cpp" "$N105_RC"
     sensor_nonempty "N105 shutdown resolver" "ResolveShutdownDependencies() body" "$N105_RSD"
     if grep -qE 'GetProcAddress|GetModuleHandleA' <<<"$N105_RSD"; then
-        sensor_fail "N62/N105 ResolveShutdownDependencies resolves a symbol at runtime again."
+        echo "verify: FAIL — N62/N105 ResolveShutdownDependencies resolves a symbol at runtime again." >&2
         echo "The ws bridge is compiled into this DLL; call StopWebSocketBridgeListener() directly." >&2
+        exit 1
     fi
     # N102: the two fail-fast sites N48 introduced must live in the copy that
     # SHIPS. 647cca7 wrote them into src/gameserver/ — a tree that stopped being
@@ -2307,15 +2314,17 @@ verify:
     sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp, gameserver_callbacks.cpp and gameserver_serverdb.cpp" "$N102_GS"
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
-            sensor_fail "N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver."
+            echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
             echo "Without it the server runs degraded for hours instead of exiting with a cause (N102)." >&2
+            exit 1
         fi
     done
     # Both sites shall use ServerFatal, not FatalError: ServerFatal is mode-gated
     # (Warning in client mode) and calls ForceFatalExit directly. The stranded
     # original used FatalError, which depends on a handler being installed first.
     if grep -qE 'FatalError\("(GameServer registration|Server authentication)' <<<"$N102_GS"; then
-        sensor_fail "N102 a gameserver fail-fast uses FatalError; use ServerFatal (mode-gated)."
+        echo "verify: FAIL — N102 a gameserver fail-fast uses FatalError; use ServerFatal (mode-gated)." >&2
+        exit 1
     fi
     # N72/N73: the broadcaster ingress guards live with the plugin in
     # the nevr-runtime-plugins repository (this repo is PUBLIC and the
@@ -2341,39 +2350,47 @@ verify:
     sensor_stage1 "N70 BreakpointVEH" "src/runtime/lifecycle/crash_recovery.cpp" "$N70_VEH_RC"
     sensor_nonempty "N70 BreakpointVEH" "BreakpointVEH() body in src/runtime/lifecycle/crash_recovery.cpp" "$N70_VEH_BODY"
     if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_VEH_BODY"; then
-        sensor_fail "N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)."
+        echo "verify: FAIL — N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         echo "Log() reaches std::lock_guard(g_file_mutex) — a crash during log emission would self-deadlock." >&2
+        exit 1
     fi
     N70_WCD_RC=0; N70_WCD_BODY=$(awk '/^static void WriteCrashDump/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N70_WCD_RC=$?
     sensor_stage1 "N70 WriteCrashDump" "src/runtime/lifecycle/crash_recovery.cpp" "$N70_WCD_RC"
     sensor_nonempty "N70 WriteCrashDump" "WriteCrashDump() body in src/runtime/lifecycle/crash_recovery.cpp" "$N70_WCD_BODY"
     if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_WCD_BODY"; then
-        sensor_fail "N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)."
+        echo "verify: FAIL — N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
+        exit 1
     fi
     # N70: the handler must never enumerate modules (loader lock). The snapshot is
     # taken at init by CacheModuleTable and read from the cache during a crash.
     if grep -q 'EnumProcessModules' <<<"$N70_WCD_BODY"; then
-        sensor_fail "N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead."
+        echo "verify: FAIL — N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead." >&2
+        exit 1
     fi
     if ! grep -q 'CacheModuleTable()' src/runtime/lifecycle/crash_recovery.cpp; then
-        sensor_fail "N70 CacheModuleTable() call site missing; handler would have no module snapshot."
+        echo "verify: FAIL — N70 CacheModuleTable() call site missing; handler would have no module snapshot." >&2
+        exit 1
     fi
     # N69: stack reserve must be claimed, or the overflow handler has no room to run.
     if ! grep -q 'SetThreadStackGuarantee' src/runtime/lifecycle/crash_recovery.cpp; then
-        sensor_fail "N69 SetThreadStackGuarantee missing; stack-overflow handler cannot run."
+        echo "verify: FAIL — N69 SetThreadStackGuarantee missing; stack-overflow handler cannot run." >&2
+        exit 1
     fi
     if ! grep -q 'EnsureStackReserve()' <<<"$TICK_CODE"; then
-        sensor_fail "N69 EnsureStackReserve() missing from per-frame hook; game threads uncovered."
+        echo "verify: FAIL — N69 EnsureStackReserve() missing from per-frame hook; game threads uncovered." >&2
+        exit 1
     fi
     # N67: the crash flags are written from any thread and read from the faulting
     # thread. VERIFIED-BY-TYPE only binds the artifact that ships — this grep asserts
     # the type is on THIS file, the one the linker consumes (an earlier fix landed
     # in a copy CMake did not build).
     if ! grep -q 'std::atomic<bool> g_crashReporterSuppressed' src/runtime/lifecycle/crash_recovery.cpp; then
-        sensor_fail "N67 g_crashReporterSuppressed is not std::atomic<bool> in the SHIPPING path."
+        echo "verify: FAIL — N67 g_crashReporterSuppressed is not std::atomic<bool> in the SHIPPING path." >&2
+        exit 1
     fi
     if ! grep -q 'std::atomic<bool> g_justSuppressedCrash' src/runtime/lifecycle/crash_recovery.cpp; then
-        sensor_fail "N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path."
+        echo "verify: FAIL — N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path." >&2
+        exit 1
     fi
     # N36: InitializeAfterGameImageGuard() runs from DllMain under the loader lock, where the game's CLog is
     # not usable. Log() reports through the boot tee while the tee's sink is set (nevr_boot_log_tee::Init() to
@@ -2387,8 +2404,9 @@ verify:
     N36_INIT_LINE=$(awk '/nevr_boot_log_tee::Init\(\);/ { print NR; exit }' <<<"$N36_CODE")
     N36_FP_LINE=$(awk '/EchoVR::InitializeFunctionPointers\(\);/ { print NR; exit }' <<<"$N36_CODE")
     if [ -z "$N36_INIT_LINE" ] || [ -z "$N36_FP_LINE" ] || [ "$N36_INIT_LINE" -ge "$N36_FP_LINE" ]; then
-        sensor_fail "N36 InitializeAfterGameImageGuard() in src/runtime/lifecycle/initialize.cpp does not call"
+        echo "verify: FAIL — N36 InitializeAfterGameImageGuard() in src/runtime/lifecycle/initialize.cpp does not call" >&2
         echo "nevr_boot_log_tee::Init() before EchoVR::InitializeFunctionPointers(): Log() would enter the game's CLog under the loader lock." >&2
+        exit 1
     fi
     # Plugin shutdown can join threads and release module references. DllMain
     # runs under the loader lock and must never enter plugin teardown; process
@@ -2397,7 +2415,8 @@ verify:
     sensor_stage1 "Plugin detach teardown boundary" "src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_RC"
     sensor_nonempty "Plugin detach teardown boundary" "DllMain() body in src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_BODY"
     if grep -Eq 'UnloadPlugins[[:space:]]*\(|Ne?vrPluginShutdown' <<<"$DLLMAIN_BODY"; then
-        sensor_fail "DllMain calls plugin shutdown/unload under the loader lock."
+        echo "verify: FAIL — DllMain calls plugin shutdown/unload under the loader lock." >&2
+        exit 1
     fi
     # --- Observability invariants (N77/N78/N79/N80/N81) ----------------------
     # N77: NEVR's own lines must be exempt from game-noise suppression patterns.
@@ -2405,35 +2424,42 @@ verify:
     # NEVR structured output — e.g. it would erase "Finished initializing engine"
     # (the witness cited in the N7/N8/N10 closes) and mask real ExitProcess reports.
     if ! grep -q 'if (IsNevrLine(message)) return false;' src/runtime/log/builtin_filter.cpp; then
-        sensor_fail "N77 NEVR-line exemption missing from ShouldSuppress; game-noise patterns can delete NEVR output."
+        echo "verify: FAIL — N77 NEVR-line exemption missing from ShouldSuppress; game-noise patterns can delete NEVR output." >&2
+        exit 1
     fi
     # N77: these two patterns must never return to the blanket suppress list.
     N77A_RC=0; grep -qF '"Finished initializing engine",' src/runtime/log/builtin_filter.cpp || N77A_RC=$?
     sensor_stage1 "N77 boot-witness suppression" "src/runtime/log/builtin_filter.cpp" "$N77A_RC"
     if [ "$N77A_RC" -eq 0 ]; then
-        sensor_fail "N77 'Finished initializing engine' is suppressed again; that string is the headless-boot witness (N7/N8/N10)."
+        echo "verify: FAIL — N77 'Finished initializing engine' is suppressed again; that string is the headless-boot witness (N7/N8/N10)." >&2
+        exit 1
     fi
     N77B_RC=0; grep -qF '"ExitProcess(",' src/runtime/log/builtin_filter.cpp || N77B_RC=$?
     sensor_stage1 "N77 ExitProcess suppression" "src/runtime/log/builtin_filter.cpp" "$N77B_RC"
     if [ "$N77B_RC" -eq 0 ]; then
-        sensor_fail "N77 'ExitProcess(' is suppressed again; it masks real process-exit reports. Use rate limiting (N78)."
+        echo "verify: FAIL — N77 'ExitProcess(' is suppressed again; it masks real process-exit reports. Use rate limiting (N78)." >&2
+        exit 1
     fi
     # N78: frequent lines are collapsed into a counted summary, never deleted.
     if ! grep -q 'RateVerdict::Collapse' src/runtime/log/builtin_filter.cpp; then
-        sensor_fail "N78 rate-limited summarisation missing; filter can only delete, not summarise (docs/standards/logging.md Rule 4)."
+        echo "verify: FAIL — N78 rate-limited summarisation missing; filter can only delete, not summarise (docs/standards/logging.md Rule 4)." >&2
+        exit 1
     fi
     # N79: filter health must be emitted while the process is alive. Shutdown() is
     # unreachable in production — every server exit is TerminateProcess, which runs
     # no DLL detach.
     if ! grep -q 'MaybeEmitHealth();' src/runtime/log/builtin_filter.cpp; then
-        sensor_fail "N79 periodic health emission missing; suppression ratio only reachable at a shutdown that never runs."
+        echo "verify: FAIL — N79 periodic health emission missing; suppression ratio only reachable at a shutdown that never runs." >&2
+        exit 1
     fi
     # N80: both log writers must stamp the shared run ID, or the two files cannot be joined.
     if ! grep -q 'GetRunId()' src/runtime/log/boot_log_tee.cpp; then
-        sensor_fail "N80 run ID missing from BootLogTee; boot log cannot be correlated or split by run."
+        echo "verify: FAIL — N80 run ID missing from BootLogTee; boot log cannot be correlated or split by run." >&2
+        exit 1
     fi
     if ! grep -q 'GetRunId()' src/runtime/log/builtin_filter.cpp; then
-        sensor_fail "N80 run ID missing from the runtime log writer."
+        echo "verify: FAIL — N80 run ID missing from the runtime log writer." >&2
+        exit 1
     fi
     # N81/N45: no bare [NEVR] tag on a LOG line — it names every component and so
     # discriminates none.
@@ -2456,7 +2482,8 @@ verify:
     sensor_stage1 "N115 login system_info measured" "src/runtime/compat/ws_bridge.cpp" "$N115_RC"
     sensor_nonempty "N115 login system_info measured" "non-comment lines of compat/ws_bridge.cpp" "$N115_WS"
     if ! grep -q 'nevr_system_info::Get()' <<<"$N115_WS"; then
-        sensor_fail "N115 the login payload no longer reads measured host facts (nevr_system_info::Get)."
+        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (nevr_system_info::Get)." >&2
+        exit 1
     fi
     # The JSON lives inside a C string literal, so every quote in the source is
     # backslash-escaped. Matching that through a justfile recipe means three
@@ -2466,8 +2493,9 @@ verify:
     N115_FLAT=$(tr -d '\\' <<<"$N115_WS")
     for _lit in '"num_physical_cores":4' '"num_logical_cores":8' '"memory_total":16384' '"memory_used":8192' '"cpu":"Wine"' '"video_card":"Wine D3D12"'; do
         if grep -qF "$_lit" <<<"$N115_FLAT"; then
-            sensor_fail "N115 a fabricated system_info literal is back in the login payload: $_lit"
+            echo "verify: FAIL — N115 a fabricated system_info literal is back in the login payload: $_lit" >&2
             echo "Invented telemetry is worse than none: it is indistinguishable from a real reading and gets acted on. Send the measured value, or send empty/0." >&2
+            exit 1
         fi
     done
 
@@ -2486,16 +2514,18 @@ verify:
     # call unconditional still satisfied both. Require the call inside the gate.
     N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
     if ! grep -qE 'if \( *!g_isServer *\) *\{ *nevr_asset_cdn::Initialize\(\)' <<<"$N131_FLAT"; then
-        sensor_fail "N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp."
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
         echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
+        exit 1
     fi
     # And it must NOT be called unconditionally from initialize.cpp (pre-CLI-parse).
     N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
     sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
     sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
     if grep -q 'nevr_asset_cdn::Initialize' <<<"$N131_INIT"; then
-        sensor_fail "N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set."
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
         echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
+        exit 1
     fi
 
     # --- N129: the DLL-load hooks must report per-hook failures ------------------
@@ -2508,11 +2538,13 @@ verify:
     sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
     sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
     if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
-        sensor_fail "N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook."
+        echo "verify: FAIL — N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
         echo "It would revert to a bare OK/PARTIAL that hides which LoadLibrary hook failed, so loads through it would skip the load filters, observers and callbacks unseen." >&2
+        exit 1
     fi
     if grep -qE 'bool ok = true;.*ok &=' <<<"$(tr '\n' ' ' <<<"$N129_DL")"; then
-        sensor_fail "N129 the accumulate-and-hide 'ok &=' aggregate is back in DllLoadHook."
+        echo "verify: FAIL — N129 the accumulate-and-hide 'ok &=' aggregate is back in DllLoadHook." >&2
+        exit 1
     fi
 
     # --- N43: the boot tee's records reach the main log through kernel32 only ----
@@ -2525,14 +2557,17 @@ verify:
     sensor_stage1 "N43 boot tee kernel32 only" "src/runtime/log/boot_log_tee.cpp and run_log_writer.h" "$N43_RC"
     sensor_nonempty "N43 boot tee kernel32 only" "non-comment lines of boot_log_tee.cpp and run_log_writer.h" "$N43_TEE"
     if grep -qE '\b(fopen|_wfopen|fopen_s|_wfopen_s|freopen|_fsopen|fprintf|fwrite|fputs|std::ofstream|std::fstream|std::ifstream)\b' <<<"$N43_TEE"; then
-        sensor_fail "N43 boot_log_tee.cpp or run_log_writer.h calls a CRT file function (fopen, fprintf, fwrite, an iostream file)."
+        echo "verify: FAIL — N43 boot_log_tee.cpp or run_log_writer.h calls a CRT file function (fopen, fprintf, fwrite, an iostream file)." >&2
         echo "The tee runs while the loader lock may be held; CRT file calls take CRT locks there. Open and write with CreateFileA and WriteFile." >&2
+        exit 1
     fi
     if ! grep -qF 'CreateFileA' <<<"$N43_TEE" || ! grep -qF 'WriteFile' <<<"$N43_TEE"; then
-        sensor_fail "N43 the boot tee's writer (run_log_writer.h) no longer opens and writes the main log through kernel32 (CreateFileA and WriteFile)."
+        echo "verify: FAIL — N43 the boot tee's writer (run_log_writer.h) no longer opens and writes the main log through kernel32 (CreateFileA and WriteFile)." >&2
+        exit 1
     fi
     if ! grep -qF 'nevr_run_log_writer::Append' src/runtime/log/boot_log_tee.cpp; then
-        sensor_fail "N43 boot_log_tee.cpp no longer appends through nevr_run_log_writer::Append: the boot records would need a file of their own."
+        echo "verify: FAIL — N43 boot_log_tee.cpp no longer appends through nevr_run_log_writer::Append: the boot records would need a file of their own." >&2
+        exit 1
     fi
 
     # --- N17: a component that installs several hooks reports each outcome -----
@@ -2544,15 +2579,17 @@ verify:
     sensor_stage1 "N17 platform_compat aggregate" "src/modules/platform-compat/src/platform_compat.cpp" "$N17_PC_RC"
     sensor_nonempty "N17 platform_compat aggregate" "non-comment lines of platform_compat.cpp" "$N17_PC"
     if ! grep -qF 'Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,' <<<"$N17_PC" || ! grep -qF 'platform_compat initialized: %d/3 hooks installed' <<<"$N17_PC" || ! grep -qF 'tls=%s createdir=%s msxml6=%s' <<<"$N17_PC"; then
-        sensor_fail "N17 platform_compat no longer reports its three hooks by name with an aggregate at Info."
+        echo "verify: FAIL — N17 platform_compat no longer reports its three hooks by name with an aggregate at Info." >&2
         echo "A success that logs nothing, or an aggregate that is not Info when all three took, makes a working hook look like a silent one." >&2
+        exit 1
     fi
     N17_PN_RC=0; N17_PN=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/pnsrad_enabler.cpp) || N17_PN_RC=$?
     sensor_stage1 "N17 pnsrad aggregate" "src/runtime/patch/pnsrad_enabler.cpp" "$N17_PN_RC"
     sensor_nonempty "N17 pnsrad aggregate" "non-comment lines of pnsrad_enabler.cpp" "$N17_PN"
     if ! grep -qF 'Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad init complete: %d/%d echovr.exe patches applied",' <<<"$N17_PN"; then
-        sensor_fail "N17 pnsrad_enabler no longer ends its install with the aggregate line at Info (pnsrad init complete)."
+        echo "verify: FAIL — N17 pnsrad_enabler no longer ends its install with the aggregate line at Info (pnsrad init complete)." >&2
         echo "Without it, a pnsrad install that patched nothing reads the same as one that patched every site." >&2
+        exit 1
     fi
 
     # --- N122, N124: a config or mode decision logs its outcome at Info ----------
@@ -2599,14 +2636,16 @@ verify:
     sensor_stage1 "N128 attach captures MH_STATUS" "src/core/hooking.h" "$N128_RC"
     sensor_nonempty "N128 attach captures MH_STATUS" "non-comment lines of hooking.h" "$N128_HK"
     if ! grep -q 'MH_StatusToString' <<<"$N128_HK"; then
-        sensor_fail "N128 Hooking::Attach no longer records the MH_STATUS reason."
+        echo "verify: FAIL — N128 Hooking::Attach no longer records the MH_STATUS reason." >&2
         echo "A failed hook would report 'reason=' empty again, and a double-hook collision would read as an unexplained failure." >&2
+        exit 1
     fi
     N128_RC2=0; N128_PD=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || N128_RC2=$?
     sensor_stage1 "N128 failure log surfaces reason" "src/runtime/hook/patching.h" "$N128_RC2"
     sensor_nonempty "N128 failure log surfaces reason" "non-comment lines of patching.h" "$N128_PD"
     if ! grep -q 'Hooking::LastAttachError()' <<<"$N128_PD"; then
-        sensor_fail "N128 PatchDetour's failure log no longer includes the attach reason."
+        echo "verify: FAIL — N128 PatchDetour's failure log no longer includes the attach reason." >&2
+        exit 1
     fi
 
     # --- N127: the Oculus-SDK block must report its real result ----------------
@@ -2618,17 +2657,20 @@ verify:
     sensor_stage1 "N127 oculus-block reports result" "src/runtime/patch/mode_patches.cpp" "$N127_RC"
     sensor_nonempty "N127 oculus-block reports result" "non-comment lines of mode_patches.cpp" "$N127_MP"
     if grep -q 'Installed Oculus Platform SDK blocking hooks' <<<"$N127_MP"; then
-        sensor_fail "N127 the unconditional 'Installed Oculus Platform SDK blocking hooks' claim is back."
+        echo "verify: FAIL — N127 the unconditional 'Installed Oculus Platform SDK blocking hooks' claim is back." >&2
         echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
+        exit 1
     fi
     # #361: the block is a DllLoadHook filter. A second detour on LoadLibraryW/ExW fails with
     # MH_ERROR_ALREADY_CREATED (DllLoadHook owns those targets), which is how N127 went unnoticed.
     if grep -qE 'PatchDetour\(&Original_LoadLibrary' <<<"$N127_MP"; then
-        sensor_fail "#361 PatchBlockOculusSDK installs its own LoadLibrary detour again."
+        echo "verify: FAIL — #361 PatchBlockOculusSDK installs its own LoadLibrary detour again." >&2
         echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
+        exit 1
     fi
     if ! grep -qE 'nevr_dll_load_hook::AddLoadFilter\(' <<<"$N127_MP"; then
-        sensor_fail "#361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook."
+        echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
+        exit 1
     fi
 
     # --- N126: a failed hook must not be silent --------------------------------
@@ -2641,8 +2683,9 @@ verify:
     sensor_stage1 "N126 failed hook is reported" "src/runtime/hook/patching.h" "$N126_RC"
     sensor_nonempty "N126 failed hook is reported" "non-comment lines of patching.h" "$N126_PD"
     if ! grep -qE 'else' <<<"$N126_PD" || ! grep -q 'hook FAILED name=' <<<"$N126_PD"; then
-        sensor_fail "N126 PatchDetour no longer logs on the failure path."
+        echo "verify: FAIL — N126 PatchDetour no longer logs on the failure path." >&2
         echo "A failed detour would return silently again, and the 'installed' line at the call site (unconditional at 9 of 10 sites) would be the only output — claiming success on failure." >&2
+        exit 1
     fi
 
     # --- N125: the game-loop setjmp and its longjmp live in the SAME file --------
@@ -2658,18 +2701,21 @@ verify:
     # correct tree — which it did on first write. Match only live code.
     N125_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/mode_patches.cpp)
     if grep -q 'g_gameLoopJmpBuf' <<<"$N125_MP"; then
-        sensor_fail "N125 mode_patches.cpp references g_gameLoopJmpBuf again."
+        echo "verify: FAIL — N125 mode_patches.cpp references g_gameLoopJmpBuf again." >&2
         echo "The setjmp and longjmp of the crash-recovery jump buffer must stay in one file (crash_recovery.cpp). A cross-file split is coupled only by an extern and is invisible to every test, because nothing exercises the recovery path." >&2
+        exit 1
     fi
     N125_RC=0; N125_CR=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/crash_recovery.cpp) || N125_RC=$?
     sensor_stage1 "N125 crash-recovery pair co-located" "src/runtime/lifecycle/crash_recovery.cpp" "$N125_RC"
     sensor_nonempty "N125 crash-recovery pair co-located" "non-comment lines of crash_recovery.cpp" "$N125_CR"
     if ! grep -q 'setjmp(g_gameLoopJmpBuf)' <<<"$N125_CR"; then
-        sensor_fail "N125 the setjmp on g_gameLoopJmpBuf is no longer in crash_recovery.cpp."
+        echo "verify: FAIL — N125 the setjmp on g_gameLoopJmpBuf is no longer in crash_recovery.cpp." >&2
         echo "Its longjmp lives here; separating the two is the coupling N125 removed." >&2
+        exit 1
     fi
     if ! grep -q 'longjmp(g_gameLoopJmpBuf' <<<"$N125_CR"; then
-        sensor_fail "N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp."
+        echo "verify: FAIL — N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp." >&2
+        exit 1
     fi
     # The recovery point must be REACHED, and no other sensor verifies it: the runtime's descriptor
     # must carry RuntimeGameMain as its game_main and its initialize must call ArmGameMain. A dropped
@@ -2679,8 +2725,9 @@ verify:
     sensor_stage1 "N125 runtime entry reaches the recovery point" "src/runtime/lifecycle/runtime_entry.cpp" "$N125_RE_RC"
     sensor_nonempty "N125 runtime entry reaches the recovery point" "non-comment lines of runtime_entry.cpp" "$N125_RE"
     if ! grep -qF 'api.game_main = &RuntimeGameMain;' <<<"$N125_RE" || ! grep -qF 'ArmGameMain(host);' <<<"$N125_RE"; then
-        sensor_fail "N125 runtime_entry.cpp no longer hands the host RuntimeGameMain and arms it (ArmGameMain)."
+        echo "verify: FAIL — N125 runtime_entry.cpp no longer hands the host RuntimeGameMain and arms it (ArmGameMain)." >&2
         echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
+        exit 1
     fi
 
     # --- #515: a server's time-step arguments are removed before the game parses them ----
@@ -2695,7 +2742,8 @@ verify:
     # Comment-stripped (N99/N111), reusing the N125 capture of crash_recovery.cpp.
     sensor_515_need() { # $1 capture, $2 fixed-string pattern, $3 why it matters
         if ! grep -qF -- "$2" <<<"$1"; then
-            sensor_fail "#515 sensor: '$2' is missing. $3"
+            echo "verify: FAIL — #515 sensor: '$2' is missing. $3" >&2
+            exit 1
         fi
     }
     # Trailing `// ...` comments are stripped too (a mutant `GameMain(arg1);  // not GameMain(gameArg);` must not
@@ -2718,22 +2766,26 @@ verify:
     S515_OPT=$(grep -nF 'report.options = handOff.optionsText;' <<<"$S515_CR" | cut -d: -f1)
     S515_ARG=$(grep -nF 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' <<<"$S515_CR" | cut -d: -f1)
     if [ -z "$S515_OPT" ] || [ -z "$S515_ARG" ] || [ "$S515_OPT" -ge "$S515_ARG" ]; then
-        sensor_fail "#515 sensor: gameArg is assigned before the report's options string is built (or one is missing)."
+        echo "verify: FAIL — #515 sensor: gameArg is assigned before the report's options string is built (or one is missing)." >&2
         echo "An allocation after gameArg throws leaves the game the stripped string while the log says the original." >&2
+        exit 1
     fi
     if [ "$(grep -cE '^[[:space:]]+gameArg = arg1;' <<<"$S515_CR")" -lt 2 ]; then
-        sensor_fail "#515 sensor: the exception handlers no longer put gameArg back to arg1."
+        echo "verify: FAIL — #515 sensor: the exception handlers no longer put gameArg back to arg1." >&2
+        exit 1
     fi
     if [ "$(grep -cF 'report = nevr_timestep_log::FailedReport();' <<<"$S515_CR")" -lt 2 ]; then
-        sensor_fail "#515 sensor: a handler no longer records the failure with FailedReport()."
+        echo "verify: FAIL — #515 sensor: a handler no longer records the failure with FailedReport()." >&2
         echo "boot.cpp would not know the removal threw and would log 'NOT removed' without hook_failed=true." >&2
+        exit 1
     fi
     # N2: the helper's std::string and report must be gone before GameMain, which the VEH longjmps out of.
     S515_REPORT_LINE=$(grep -nE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR" | cut -d: -f1 | sed -n 1p)
     S515_HOOK_LINE=$(grep -nF 'static INT64 GameMainWrapperHook(INT64 arg1) {' <<<"$S515_CR" | cut -d: -f1)
     if [ -z "$S515_REPORT_LINE" ] || [ -z "$S515_HOOK_LINE" ] || [ "$S515_REPORT_LINE" -ge "$S515_HOOK_LINE" ] || [ "$(grep -cE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR")" -ne 1 ]; then
-        sensor_fail "#515 sensor: a TimestepStripReport local is alive in GameMainWrapperHook (or the helper moved)."
+        echo "verify: FAIL — #515 sensor: a TimestepStripReport local is alive in GameMainWrapperHook (or the helper moved)." >&2
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
     fi
     # N2, any type: from the hook's first line through the GameMain(gameArg); line, the hook declares exactly the three trivial
     # locals below. Any other declaration (a report, a std:: or repo type, `auto`, in any form) could be alive
@@ -2743,9 +2795,10 @@ verify:
     S515_DECLS=$(grep -E '^[[:space:]]+(const[[:space:]]+)?[A-Za-z_][A-Za-z0-9_:<>,]*[[:space:]*&]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(=|;|\{|\(|\[)' <<<"$S515_PRE_GAMEMAIN" | grep -vE '^[[:space:]]+(return|else|case|goto|delete|throw)[[:space:]]' | sed -E 's/^[[:space:]]+//' || true)
     S515_ALLOWED=$'int crashCount = setjmp(g_gameLoopJmpBuf);\nconst INT64 gameArg = PrepareGameArgument(arg1);\nconst INT64 gameResult = GameMain(gameArg);'
     if [ "$S515_DECLS" != "$S515_ALLOWED" ]; then
-        sensor_fail "#515 sensor: GameMainWrapperHook's declarations through GameMain(gameArg); are not exactly the three trivial locals."
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's declarations through GameMain(gameArg); are not exactly the three trivial locals." >&2
         echo "Found: $S515_DECLS" >&2
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
     fi
     # The allowlist reads one-line declarations only (a type split over lines, or with spaces inside its template
     # arguments, would pass it), so the hook's whole text through the GameMain(gameArg); line is also pinned: any edit
@@ -2755,11 +2808,13 @@ verify:
     # GameMain call are crashCount, gameArg and the result, all trivial (#2245).
     S515_PRE_SHA=$(sha256sum <<<"$S515_PRE_GAMEMAIN" | cut -c1-64)
     if [ "$S515_PRE_SHA" != "ede647d23942ea5732dee07b06cbad51d279fb3e955e9fced639ae9b4b19b966" ]; then
-        sensor_fail "#515 sensor: GameMainWrapperHook's text through GameMain(gameArg); changed (sha256 $S515_PRE_SHA)."
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text through GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
         echo "Check that the edit leaves no local with a destructor alive across GameMain, then set the pin to that hash." >&2
+        exit 1
     fi
     if grep -qF 'catch (...)' <<<"$S515_CR"; then
-        sensor_fail "#515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)."
+        echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
+        exit 1
     fi
     S515_RC=0; S515_CFG=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
     sensor_stage1 "#515 server step call site" "src/runtime/lifecycle/config.cpp" "$S515_RC"
@@ -2771,8 +2826,9 @@ verify:
     sensor_stage1 "#515 read-back call site" "src/runtime/frame/tick.cpp" "$S515_RC"
     sensor_nonempty "#515 read-back call site" "non-comment lines of tick.cpp" "$S515_TICK"
     if ! grep -qE '^[[:space:]]*ApplyServerTimestep\(\);' <<<"$S515_CFG"; then
-        sensor_fail "#515 sensor: LoadLocalConfigHook no longer calls ApplyServerTimestep();"
+        echo "verify: FAIL — #515 sensor: LoadLocalConfigHook no longer calls ApplyServerTimestep();" >&2
         echo "The server would run on the game's own time step (#511); nothing else writes it." >&2
+        exit 1
     fi
     sensor_515_need "$S515_CFG" 'nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);' "ApplyServerTimestep must resolve the step field from the game's clock state."
     sensor_515_need "$S515_CFG" 'nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);' "ApplyServerTimestep must pass g_isServer and the configured rate to the step writer."
@@ -2810,30 +2866,34 @@ verify:
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
     if ! grep -qF 'profileInputs.display_name = displayName;' <<<"$N123_WS"; then
-        sensor_fail "N123 ws_bridge no longer forwards the resolved display name into the login profile."
+        echo "verify: FAIL — N123 ws_bridge no longer forwards the resolved display name into the login profile." >&2
         echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
+        exit 1
     fi
     N123_PROFILE_RC=0; N123_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N123_PROFILE_RC=$?
     sensor_stage1 "N123 login profile display name" "src/runtime/compat/login_profile.cpp" "$N123_PROFILE_RC"
     sensor_nonempty "N123 login profile display name" "non-comment lines of compat/login_profile.cpp" "$N123_PROFILE"
     if ! grep -qF 'profile["displayname"] = inputs.display_name.empty()' <<<"$N123_PROFILE" || \
        ! grep -qF 'std::to_string(inputs.account_id)' <<<"$N123_PROFILE"; then
-        sensor_fail "N123 login profile no longer serializes the resolved display name with the account-id fallback."
+        echo "verify: FAIL — N123 login profile no longer serializes the resolved display name with the account-id fallback." >&2
         echo "Every NEVR client could announce the same literal name if this fallback is replaced with a placeholder." >&2
+        exit 1
     fi
     # Anchored on the exact call form: a rename that APPENDS characters
     # (TokenAuth_GetUsernameX) still contains the bare symbol as a substring and
     # would satisfy a loose grep. Found while falsifying this very sensor.
     if ! grep -qF 'ResolveModuleProc("TokenAuth_GetUsername")' <<<"$N123_WS"; then
-        sensor_fail "N123 ws_bridge no longer resolves TokenAuth_GetUsername."
+        echo "verify: FAIL — N123 ws_bridge no longer resolves TokenAuth_GetUsername." >&2
         echo "The field would fall back to the account id on every login even when the real name is known and cached." >&2
+        exit 1
     fi
     N123_RC2=0; N123_TA=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/token-auth/src/token_auth.cpp) || N123_RC2=$?
     sensor_stage1 "N123 username export" "src/modules/token-auth/src/token_auth.cpp" "$N123_RC2"
     sensor_nonempty "N123 username export" "non-comment lines of token_auth.cpp" "$N123_TA"
     if ! grep -qF 'TokenAuth_GetUsername(void)' <<<"$N123_TA"; then
-        sensor_fail "N123 token_auth no longer exports TokenAuth_GetUsername."
+        echo "verify: FAIL — N123 token_auth no longer exports TokenAuth_GetUsername." >&2
         echo "ws_bridge resolves this optionally, so its absence is silent: logins would quietly revert to the account id." >&2
+        exit 1
     fi
 
     # --- N120: on a server, a degraded runtime must not keep running -------------
@@ -2851,12 +2911,14 @@ verify:
     # a bare statement is the pre-N120 bug: the collision was detected, logged at
     # ERROR, and the plugin loaded anyway — detection that changed nothing.
     if ! grep -qE '(int|auto) +[a-z_]+ *= *nevr_hook_guard::VerifyAll' <<<"$N120_LOADER"; then
-        sensor_fail "N120 nevr_hook_guard::VerifyAll's return is no longer captured."
+        echo "verify: FAIL — N120 nevr_hook_guard::VerifyAll's return is no longer captured." >&2
         echo "A discarded verdict means a plugin can re-hook an address this runtime owns, our patch silently stops applying, and the load continues as though nothing happened." >&2
+        exit 1
     fi
     if ! grep -q 'ServerFatal' <<<"$N120_LOADER"; then
-        sensor_fail "N120 plugin_loader no longer escalates to ServerFatal."
+        echo "verify: FAIL — N120 plugin_loader no longer escalates to ServerFatal." >&2
         echo "A plugin that failed init, or that stole one of our hooks, would again be tolerated on a dedicated server." >&2
+        exit 1
     fi
 
     # platform_compat returned 0 even when the TLS hook had failed. It must report failure so module_loader's
@@ -2865,12 +2927,14 @@ verify:
     sensor_stage1 "N120 platform_compat reports failure" "src/modules/platform-compat/src/platform_compat.cpp" "$N120_RC2"
     sensor_nonempty "N120 platform_compat reports failure" "non-comment lines of platform_compat.cpp" "$N120_PC"
     if ! grep -q 'NEVR_MODULE_HOST_IS_SERVER' <<<"$N120_PC"; then
-        sensor_fail "N120 platform_compat no longer distinguishes server from client."
+        echo "verify: FAIL — N120 platform_compat no longer distinguishes server from client." >&2
         echo "It must return failure ONLY on a server: module_loader treats a non-zero init as fatal in both modes, so an unconditional failure would hard-fail a client that should merely warn." >&2
+        exit 1
     fi
     if ! grep -qE 'if *\( *isServer *&& *!tlsOk *\)' <<<"$N120_PC"; then
-        sensor_fail "N120 platform_compat no longer fails a server run on a missing TLS hook."
+        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS hook." >&2
         echo "Without this it returns success with a degraded network stack, which is how a silently-failing TLS hook looked identical to a working one." >&2
+        exit 1
     fi
 
     # The XPID patch's outcome was unobservable: it runs before the log filter is
@@ -2882,22 +2946,25 @@ verify:
     sensor_stage1 "N120 xpid outcome observable" "src/runtime/patch/xpid_patch.cpp" "$N120_RC3"
     sensor_nonempty "N120 xpid outcome observable" "non-comment lines of patch/xpid_patch.cpp" "$N120_XPID"
     if [ "$(grep -c 'nevr_boot_log_tee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
-        sensor_fail "N120 the XPID patch no longer tees BOTH outcomes to the boot log."
+        echo "verify: FAIL — N120 the XPID patch no longer tees BOTH outcomes to the boot log." >&2
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
+        exit 1
     fi
     # ServerFatal is not callable here: the patch runs before the CLI is parsed, so g_isServer is
     # still false and ServerFatal would only warn. The failure goes through g_bootHookFailed, which
     # boot.cpp checks once the mode is known (src/runtime/tests/test_behavioral.cpp XpidPatchBoot).
     if ! grep -q 'g_bootHookFailed = true' <<<"$N120_XPID"; then
-        sensor_fail "N120 the XPID patch no longer escalates a validation failure."
+        echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
+        exit 1
     fi
     # The flag alone is satisfied by one `g_bootHookFailed = true`, so a ServerFatal() restored on the
     # validation path would pass the check above. It must stay out of this file altogether: it runs
     # before the CLI is parsed, where ServerFatal only warns and the boot would go on.
     if grep -q 'ServerFatal(' <<<"$N120_XPID"; then
-        sensor_fail "N120 xpid_patch.cpp calls ServerFatal()."
+        echo "verify: FAIL — N120 xpid_patch.cpp calls ServerFatal()." >&2
         echo "The patch runs before the CLI is parsed, so g_isServer is still false and ServerFatal only warns; report through g_bootHookFailed (boot.cpp refuses to start a server)." >&2
+        exit 1
     fi
 
     # --- N114: the plugin capability channel must stay WIRED ---------------------
@@ -2913,8 +2980,9 @@ verify:
     sensor_stage1 "N114 plugin capabilities wired" "src/runtime/ext/plugin_loader.cpp" "$N114_RC"
     sensor_nonempty "N114 plugin capabilities wired" "non-comment lines of ext/plugin_loader.cpp" "$N114_LOADER"
     if ! grep -q 'ResolvePluginExportAs<NevrPluginGetCapabilities_fn>(hPlugin, "PluginGetCapabilities"' <<<"$N114_LOADER"; then
-        sensor_fail "N114 the host no longer resolves NevrPluginGetCapabilities."
+        echo "verify: FAIL — N114 the host no longer resolves NevrPluginGetCapabilities." >&2
         echo "The ABI would still declare the export while every plugin read as UNDECLARED. A server cannot judge a session it cannot ask about." >&2
+        exit 1
     fi
     N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' sdk/include/nevr/plugin_interface.h) || N114_RC2=$?
     sensor_stage1 "N114 plugin capability ABI" "sdk/include/nevr/plugin_interface.h" "$N114_RC2"
@@ -2924,7 +2992,8 @@ verify:
     # query API (v5), the host log (v6, #598), the plugin assets (v7, #432), the current level (v8, #1094) and the resource sets (v9, #2161)
     # landed — a deliberate bump updates this line, exactly as this one did.
     if ! grep -q 'NEVR_PLUGIN_API_VERSION 9' <<<"$N114_ABI"; then
-        sensor_fail "N114 NEVR_PLUGIN_API_VERSION is not 9; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) + resource-set (v9) channels must not regress below v9."
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 9; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) + resource-set (v9) channels must not regress below v9." >&2
+        exit 1
     fi
     # N134 S7: the host must resolve NevrPluginInitEx — the v4 per-plugin-args init
     # export. This check is in the ABI header (typedef), the loader resolves the
@@ -2932,19 +3001,23 @@ verify:
     # loader's GetProcAddress references it. Falsified: comment out the typedef;
     # rename the loader's "PluginInitEx" suffix; revert API version to 3.
     if ! grep -q 'typedef.*NevrPluginInitEx_fn' <<<"$N114_ABI"; then
-        sensor_fail "N114 S7 NevrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it."
+        echo "verify: FAIL — N114 S7 NevrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
+        exit 1
     fi
     if ! grep -q 'ResolvePluginExportAs<NevrPluginInitEx_fn>(hPlugin, "PluginInitEx"' <<<"$N114_LOADER"; then
-        sensor_fail "N114 S7 the loader no longer resolves NevrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)."
+        echo "verify: FAIL — N114 S7 the loader no longer resolves NevrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
+        exit 1
     fi
     # N134 S8: ctx_size must be set at every NevrGameContext construction site.
     # The field is how a v5+ plugin discovers the query API at runtime.
     # Falsified: remove any ctx_size = sizeof(NevrGameContext) line.
     if ! grep -q 'ctx_size = sizeof(NevrGameContext)' <<<"$N114_LOADER"; then
-        sensor_fail "N134 S8 ctx_size not set in LoadPlugins; a v5 plugin cannot discover the query API."
+        echo "verify: FAIL — N134 S8 ctx_size not set in LoadPlugins; a v5 plugin cannot discover the query API." >&2
+        exit 1
     fi
     if ! grep -q 'get_plugin_count = GetLoadedPluginCount' <<<"$N114_LOADER"; then
-        sensor_fail "N134 S8 get_plugin_count function pointer not filled in LoadPlugins."
+        echo "verify: FAIL — N134 S8 get_plugin_count function pointer not filled in LoadPlugins." >&2
+        exit 1
     fi
 
     # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
@@ -2958,15 +3031,17 @@ verify:
     # ordering accident, not a design; this guard keeps it from existing.
     if grep -rn 'PatchServerFramePacing' src/runtime --include='*.cpp' --include='*.h' \
          | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
-        sensor_fail "N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save."
+        echo "verify: FAIL — N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save." >&2
         echo "patch/binary_bug_fixes.cpp is the canonical site and does both. A second writer defeats the N33 shutdown restore whenever it runs first." >&2
+        exit 1
     fi
     # The canonical site must still pair the save with the write.
     N113_RC=0; N113_BODY=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/binary_bug_fixes.cpp) || N113_RC=$?
     sensor_stage1 "N113 busywait save/restore" "src/runtime/patch/binary_bug_fixes.cpp" "$N113_RC"
     sensor_nonempty "N113 busywait save/restore" "non-comment lines of patch/binary_bug_fixes.cpp" "$N113_BODY"
     if ! grep -q 'memcpy(&s_busywait_original_byte' <<<"$N113_BODY"; then
-        sensor_fail "N113 the BusyWait RET patch no longer saves the original byte; the N33 shutdown restore has nothing to restore."
+        echo "verify: FAIL — N113 the BusyWait RET patch no longer saves the original byte; the N33 shutdown restore has nothing to restore." >&2
+        exit 1
     fi
 
     # --- N110: exactly ONE per-frame dispatcher ---------------------------------
@@ -2991,16 +3066,18 @@ verify:
     N110_PROD=$(grep -v '/tests/' <<<"$N110_TICKS" \
                 | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep -c . || true)
     if [ "$N110_PROD" -ne 2 ]; then
-        sensor_fail "N110 expected exactly 2 production Tick*(&) call sites (one TickPlugins, one TickModules, both inside DispatchPerFrameWork); found $N110_PROD."
+        echo "verify: FAIL — N110 expected exactly 2 production Tick*(&) call sites (one TickPlugins, one TickModules, both inside DispatchPerFrameWork); found $N110_PROD." >&2
         grep -v '/tests/' <<<"$N110_TICKS" >&2
         echo "A second dispatcher is how the client path came to report NEVR_HOST_IS_SERVER. Call DispatchPerFrameWork instead of inlining another copy." >&2
+        exit 1
     fi
     # ...and the surviving one must derive the host flag, never assert it.
     N110_BODY=$(awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp)
     sensor_nonempty "N110 dispatcher body" "DispatchPerFrameWork() body" "$N110_BODY"
     if ! grep -q 'gctx.flags = g_isServer ?' <<<"$N110_BODY"; then
-        sensor_fail "N110 DispatchPerFrameWork no longer derives the host flag from g_isServer."
+        echo "verify: FAIL — N110 DispatchPerFrameWork no longer derives the host flag from g_isServer." >&2
         echo "Hard-coding NEVR_HOST_IS_SERVER is the original defect: this dispatcher runs from a client-only hook too." >&2
+        exit 1
     fi
 
     # --- N109: src/runtime/ must not re-flatten its own namespace ---------------
@@ -3017,8 +3094,9 @@ verify:
     sensor_stage1 "N109 runtime include roots" "src/runtime/CMakeLists.txt" "$N109_RC"
     sensor_nonempty "N109 runtime include roots" "target_include_directories(nevr_runtime …) block" "$N109_INC"
     if grep -q 'CMAKE_CURRENT_SOURCE_DIR' <<<"$N109_INC"; then
-        sensor_fail "N109 src/runtime/CMakeLists.txt puts its own source dir on the include path."
+        echo "verify: FAIL — N109 src/runtime/CMakeLists.txt puts its own source dir on the include path." >&2
         echo "That re-enables bare-basename includes across all of src/runtime/, which is how 44 files ended up flat in one directory. Include path-qualified from src/ instead: \"runtime/hook/addresses.h\"." >&2
+        exit 1
     fi
 
     # --- N108: the shared layer's dependency direction --------------------------
@@ -3035,8 +3113,9 @@ verify:
     N108_RC=0; N108_HITS=$(grep -rn '#include "\(core\|extension\)/' src/abi) || N108_RC=$?
     sensor_stage1 "N108 abi->core direction" "src/abi" "$N108_RC"
     if [ "$N108_RC" -eq 0 ] && printf '%s\n' "$N108_HITS" | grep -v '#include "core/pch.h"' | grep .; then
-        sensor_fail "N108 src/abi/ includes src/core/. The dependency runs core -> abi, never the reverse."
+        echo "verify: FAIL — N108 src/abi/ includes src/core/. The dependency runs core -> abi, never the reverse." >&2
         echo "The ABI layer records what the binary told us; it must not depend on our own primitives. Move the shared piece INTO abi/, or stop using it there." >&2
+        exit 1
     fi
     # No "do these directories still exist" loop here on purpose: it would be
     # unfalsifiable, because emptying any of the three fails EARLIER than
@@ -3061,7 +3140,7 @@ verify:
     # BEGIN N151
     N151_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
     N151_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
-    n151_fail() { sensor_fail "N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)."; }
+    n151_fail() { echo "verify: FAIL — N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
     N151_RC=0; N151_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?
     sensor_stage1 "N151 protection calls" "src/quest" "$N151_RC"
     sensor_nonempty "N151 protection calls" "the protection calls of got_hook.cpp, libr15_attach.cpp and credits_text.cpp" "$N151_PROT"
@@ -3098,7 +3177,8 @@ verify:
     sensor_stage1 "N81 bare [NEVR] tag" "src/runtime src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
          | grep -v legacy | grep -v 'src/runtime/lifecycle/cli.cpp' | grep .; then
-        sensor_fail "N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table."
+        echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
+        exit 1
     fi
     # --- Tier-0 hook invariants (N83/N84) ------------------------------------
     # Static: no Wine, no game process, no execution. Catches the failure that
@@ -3110,42 +3190,44 @@ verify:
     # The suite's fixed environment (tools/run_tool_tests.py HERMETIC_SET and HERMETIC_UNSET; a test holds the two equal):
     # no user git configuration or signing key, a fixed identity, no display.
     # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
-    just go-tools || sensor_fail "just go-tools exited non-zero (its own output is above)."
-    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main uv run --no-project --with pyyaml python -m unittest discover -s tools/tests -p 'test_*.py' || sensor_fail "the tools test run (build/go-tools/test-go-tools: the Python half, the Go half or both) exited non-zero (its own output is above)."
-    python3 tools/verify_hook_invariants.py || sensor_fail "python3 tools/verify_hook_invariants.py exited non-zero (its own output is above)."
+    just go-tools
+    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main uv run --no-project --with pyyaml python -m unittest discover -s tools/tests -p 'test_*.py'
+    python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
-    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll" "build/{{ preset }}/bin/nevr-runtime.dll" || sensor_fail "python3 tools/verify_scenario_control_absent.py exited non-zero (its own output is above)."
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll" "build/{{ preset }}/bin/nevr-runtime.dll"
     # #575, #853: the game-facing PE surface of BugSplat64.dll (the host) is pinned: the exact 28-name export
     # set with its ordinals, DetoursExportPlaceholder at ordinal 1, no eager nevr-runtime.dll import, no runtime
     # code in it; nevr-runtime.dll exports the rendezvous entry and the module entry points and carries the
     # build-identity literal, and the two literals agree. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --game-exe echovr/bin/win10/echovr.exe || sensor_fail "python3 tools/verify_pe_contract.py exited non-zero (its own output is above)."
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --game-exe echovr/bin/win10/echovr.exe
     else
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" || sensor_fail "python3 tools/verify_pe_contract.py exited non-zero (its own output is above)."
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll"
     fi
     # #853 (ADR 0012 decision 4): the host shares no writable data symbol with the core or ABI library. Run on the
     # build's own UNSTRIPPED bin/BugSplat64.dll (dist strips a copy later; a stripped host has no symbols to read and
     # the tool then fails). The tool reads nm itself and fails closed: nm failing, an empty listing or a writable symbol
     # the host shares with libnevr_core.a or libnevr_abi.a all exit 1 (N93: no stage that can answer "no match" for
     # "could not look").
-    python3 tools/verify_host_no_core_state.py --host-dll "build/{{ preset }}/bin/BugSplat64.dll" --lib "build/{{ preset }}/src/core/libnevr_core.a" --lib "build/{{ preset }}/src/abi/libnevr_abi.a" || sensor_fail "python3 tools/verify_host_no_core_state.py exited non-zero (its own output is above)."
+    python3 tools/verify_host_no_core_state.py --host-dll "build/{{ preset }}/bin/BugSplat64.dll" --lib "build/{{ preset }}/src/core/libnevr_core.a" --lib "build/{{ preset }}/src/abi/libnevr_abi.a"
     # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
     # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
     # version that is not the build's exits 1.
-    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe" || sensor_fail "python3 tools/pe_version_info.py check exited non-zero (its own output is above)."
+    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
     # Both call sites are wiring, invisible to the GTest, so they get a sensor.
     if ! grep -q 'nevr_hook_guard::Record(target, name)' src/runtime/hook/patching.h; then
-        sensor_fail "N84 nevr_hook_guard::Record missing from PatchDetour; new detours would be unguarded."
+        echo "verify: FAIL — N84 nevr_hook_guard::Record missing from PatchDetour; new detours would be unguarded." >&2
+        exit 1
     fi
     if ! grep -qE 'nevr_hook_guard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
-        sensor_fail "N84 nevr_hook_guard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable."
+        echo "verify: FAIL — N84 nevr_hook_guard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
+        exit 1
     fi
     # N85: never hand ixwebsocket an empty std::function. It invokes
     # _onMessageCallback unconditionally, so nullptr throws std::bad_function_call,
@@ -3159,8 +3241,9 @@ verify:
     sensor_stage1 "N85 empty ws callback" "src/runtime src/modules src/abi src/core" "$N85_RC"
     if [ "$N85_RC" -eq 0 ] && printf '%s\n' "$N85_HITS" \
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
-        sensor_fail "N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda."
+        echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
+        exit 1
     fi
     # Issue #43: received ServerDB payloads reach the game through
     # CBroadcaster::ReceiveLocalEvent, which takes them as mutable. The receive
@@ -3172,8 +3255,9 @@ verify:
     sensor_stage1 "issue #43 const_cast on received payload" "src/runtime/server" "$I43_RC"
     if [ "$I43_RC" -eq 0 ] && printf '%s\n' "$I43_HITS" \
          | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
-        sensor_fail "issue #43 const_cast<VOID*> is back in src/runtime/server."
+        echo "verify: FAIL — issue #43 const_cast<VOID*> is back in src/runtime/server." >&2
         echo "Take the payload as VOID* from WebSocketClient::MessageCallback; it is writable by contract." >&2
+        exit 1
     fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
     # generic null-ptr branch, NOT by per-site hooks. The VEH must call the
@@ -3182,14 +3266,16 @@ verify:
     # (without it a fire reports a bare RVA and the class is unrecognisable).
     if ! grep -q 'if (nevr_veh_policy::ShouldRecoverNullPointerAv(' src/runtime/lifecycle/crash_recovery.cpp \
        || ! grep -q 'return isServer && target < 0x10000 && jumpBufferValid && gameLoopThreadId != 0 &&' src/runtime/lifecycle/veh_policy.h; then
-        sensor_fail "N71 generic null-ptr AV branch missing from BreakpointVEH; the whole"
+        echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
         echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
+        exit 1
     fi
     # Count ENTRIES, not lines — the table packs two per line.
     N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/runtime/lifecycle/crash_recovery_sites.h | wc -l)
     if [ "$N71_SITES" -lt 25 ]; then
-        sensor_fail "N71 known-site table has $N71_SITES entries (expected >= 25);"
+        echo "verify: FAIL — N71 known-site table has $N71_SITES entries (expected >= 25);" >&2
         echo "a crash at these RVAs would report a bare address with no class attribution." >&2
+        exit 1
     fi
     # N37: ixwebsocket never sets SO_REUSEADDR and exposes no socket-option hook,
     # so a zombie LISTEN socket can refuse a bind. That gap is UNFIXABLE from here
@@ -3198,11 +3284,13 @@ verify:
     # hardcoded-port failure returns with no way to fix it.
     for f in src/runtime/compat/ws_bridge.cpp; do
         if ! grep -q 'uniform_int_distribution<uint16_t> dist(49152, 65535)' "$f"; then
-            sensor_fail "N37/N39 random ephemeral-port selection missing from $f;"
+            echo "verify: FAIL — N37/N39 random ephemeral-port selection missing from $f;" >&2
             echo "a fixed port reintroduces the zombie-socket bind failure ixwebsocket cannot recover from." >&2
+            exit 1
         fi
         if ! grep -q 'kMaxBindAttempts' "$f"; then
-            sensor_fail "N37/N39 bind retry loop missing from $f."
+            echo "verify: FAIL — N37/N39 bind retry loop missing from $f." >&2
+            exit 1
         fi
     done
     # N62: graceful shutdown must not resolve symbols through the loader lock.
@@ -3214,12 +3302,14 @@ verify:
     sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/runtime/lifecycle/crash_recovery.cpp" "$N62_BODY"
     N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
     if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
-        sensor_fail "N62 PerformGracefulShutdown resolves symbols at shutdown time;"
+        echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
         echo "both take the loader lock and may deadlock shutdown." >&2
         echo "Call StopWebSocketBridgeListener() directly." >&2
+        exit 1
     fi
     if ! grep -q 'ResolveShutdownDependencies();' src/runtime/lifecycle/boot.cpp; then
-        sensor_fail "N62 ResolveShutdownDependencies() call site missing."
+        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing." >&2
+        exit 1
     fi
     # N86: the per-frame tick MUST be dispatched from a site that runs in server
     # mode on every frame. PrecisionSleep::Wait is not one (measured: 0 entries over a
@@ -3233,18 +3323,22 @@ verify:
     sensor_stage1 "N86 per-frame dispatch" "src/runtime/frame/tick.cpp" "$N86_RC"
     sensor_nonempty "N86 per-frame dispatch" "DispatchPerFrameWork() body in src/runtime/frame/tick.cpp" "$N86_BODY"
     if ! grep -q 'TickPlugins' <<<"$N86_BODY"; then
-        sensor_fail "N86 TickPlugins missing from DispatchPerFrameWork; the server-mode"
+        echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
         echo "per-frame tick is dead again (PrecisionSleep::Wait does not run on every server frame)." >&2
+        exit 1
     fi
     if ! grep -q 'TickModules' <<<"$N86_BODY"; then
-        sensor_fail "N86 TickModules missing from DispatchPerFrameWork."
+        echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
+        exit 1
     fi
     if ! grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;' <<<"$N86_BODY"; then
-        sensor_fail "N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin"
+        echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
+        exit 1
     fi
     if ! grep -q 'nevr_frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
-        sensor_fail "N86 DispatchPerFrameWork call site missing from the live tick hook."
+        echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
+        exit 1
     fi
     # N20: no platform identity may be compiled into the binary. The login
     # injection must take it from token-auth (JWT) or, in server mode, from
@@ -3253,8 +3347,9 @@ verify:
     sensor_stage1 "N20 identity literal" "src/runtime src/modules src/abi src/core" "$N20_RC"
     if [ "$N20_RC" -eq 0 ] && printf '%s\n' "$N20_HITS" \
          | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_' | grep .; then
-        sensor_fail "N20 an account/discord ID literal is compiled into source;"
+        echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
         echo "identity must come from the presented credential or config, never the binary." >&2
+        exit 1
     fi
     # #41: config credentials reach Nakama in a URL query from two places — the
     # ServerDB registration URI (server/gameserver.cpp) and the bridge's config/
@@ -3269,11 +3364,13 @@ verify:
     sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp server/gameserver_serverdb.cpp compat/ws_bridge.cpp" "$I41_RC"
     if [ "$I41_RC" -eq 0 ]; then
         printf '%s\n' "$I41_HITS" >&2
-        sensor_fail "#41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)."
+        echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
+        exit 1
     fi
     if ! grep -q 'nevr_serverdb_uri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
        || ! grep -q 'nevr_serverdb_uri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
-        sensor_fail "#41 a URL-credential site no longer calls the ServerDbUri encoder."
+        echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
+        exit 1
     fi
     # N20: the nevr_discord_id config fallback applies
     # in CLIENT mode too, not only server mode. Two assertions, because either one
@@ -3289,14 +3386,16 @@ verify:
     N20A_RC=0; grep -q 'Using nevr_discord_id from config' src/runtime/compat/ws_bridge.cpp || N20A_RC=$?
     sensor_stage1 "N20 discord-id config fallback" "src/runtime/compat/ws_bridge.cpp" "$N20A_RC"
     if [ "$N20A_RC" -ne 0 ]; then
-        sensor_fail "N20 nevr_discord_id config fallback missing from the shipping"
+        echo "verify: FAIL — N20 nevr_discord_id config fallback missing from the shipping" >&2
         echo "ws bridge (src/runtime/compat/ws_bridge.cpp)." >&2
+        exit 1
     fi
     N20B_RC=0; grep -n 'discordId == 0 &&.*g_isServer' src/runtime/compat/ws_bridge.cpp || N20B_RC=$?
     sensor_stage1 "N20 fallback not server-gated" "src/runtime/compat/ws_bridge.cpp" "$N20B_RC"
     if [ "$N20B_RC" -eq 0 ]; then
-        sensor_fail "N20 the config discord-id fallback is gated on g_isServer;"
+        echo "verify: FAIL — N20 the config discord-id fallback is gated on g_isServer;" >&2
         echo "the fallback applies in CLIENT mode too, not only on a server." >&2
+        exit 1
     fi
     # N86-class: HookLiveness reports "entered=NO" for a hook that never runs.
     # If an ID is DECLARED but never Mark()ed, it reports NO forever — which is
@@ -3314,26 +3413,29 @@ verify:
     DECLARED=$(printf '%s\n' "$HL_ENUM" \
                | grep -cE '^[[:space:]]+k[A-Za-z]+([[:space:]]*=[^,]*)?,' || true)
     if [ "$DECLARED" -lt 1 ]; then
-        sensor_fail "HookLiveness enum census matched zero enumerators; the enum's"
+        echo "verify: FAIL — HookLiveness enum census matched zero enumerators; the enum's" >&2
         echo "spelling no longer fits the pattern and the DECLARED/MARKED comparison below" >&2
         echo "would be vacuous." >&2
+        exit 1
     fi
     # MARKED needs no stage-1 capture: src/runtime is the repo itself, and a
     # zero count makes MARKED < DECLARED fail closed below (measured direction).
     MARKED=$(grep -rhoE 'nevr_hook_liveness::Mark\(nevr_hook_liveness::k[A-Za-z]+\)' src/runtime \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
-        sensor_fail "HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed."
+        echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
         echo "An unmarked id reports entered=NO forever, which is indistinguishable from dead" >&2
         echo "wiring (N86) — the tool would manufacture the false alarm it exists to prevent." >&2
+        exit 1
     fi
     # N89: log_filter.dll duplicates the built-in filter. Loading it installs a
     # SECOND MinHook on CLog::PrintfImpl from a different static MinHook copy,
     # which measurably killed the built-in filter's game-line capture (67 game
     # lines -> 0) and stopped max_line_length from applying.
     if ! grep -q 'kSupersededByBuiltin' src/runtime/ext/plugin_loader.cpp; then
-        sensor_fail "N89 superseded-plugin skip missing from plugin_loader; a stale"
+        echo "verify: FAIL — N89 superseded-plugin skip missing from plugin_loader; a stale" >&2
         echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
+        exit 1
     fi
     # N95: and we shall not PRODUCE the DLL the loader above refuses. Two
     # independent sensors, because either alone is satisfiable by the bug:
@@ -3348,25 +3450,29 @@ verify:
     sensor_stage1 "N95 log-filter build target" "tracked CMake files" "$N95_TGT_RC"
     sensor_nonempty "N95 log-filter build target" "non-comment lines of the tracked CMake files" "$N95_TGT"
     if grep -qE 'log[-_]filter' <<<"$N95_TGT"; then
-        sensor_fail "N95 log-filter is a build target again; plugin_loader.cpp refuses"
+        echo "verify: FAIL — N95 log-filter is a build target again; plugin_loader.cpp refuses" >&2
         echo "log_filter.dll by name, so building it produces a DLL our own loader rejects (N89)." >&2
+        exit 1
     fi
     N95_DIST_RC=0; N95_DIST=$(grep -vE '^\s*#' CMakeLists.txt) || N95_DIST_RC=$?
     sensor_stage1 "N95 log-filter packaging" "CMakeLists.txt" "$N95_DIST_RC"
     sensor_nonempty "N95 log-filter packaging" "non-comment lines of CMakeLists.txt" "$N95_DIST"
     if grep -q 'log_filter' <<<"$N95_DIST"; then
-        sensor_fail "N95 a dist rule packages the superseded log_filter.dll."
+        echo "verify: FAIL — N95 a dist rule packages the superseded log_filter.dll." >&2
+        exit 1
     fi
     # N90: pnsrad.dll links its OWN copy of CLog, so hooking echovr.exe's
     # CLog::PrintfImpl does not cover it. Without this second hook its output
     # bypasses the filter entirely — measured: 8191-byte profile dumps on console
     # while max_line_length was 500.
     if ! grep -q 'InstallPnsradHook' src/runtime/log/builtin_filter.cpp; then
-        sensor_fail "N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter."
+        echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
+        exit 1
     fi
     if ! grep -q 'nevr_builtin_log_filter::InstallPnsradHook();' <<<"$TICK_CODE"; then
-        sensor_fail "N90 InstallPnsradHook call site missing from the live tick; the hook"
+        echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
+        exit 1
     fi
     # N75: plugins must load with a restricted search path (modules are statically
     # linked and load no DLL). With
@@ -3375,8 +3481,9 @@ verify:
     # demonstrated the mechanism accidentally.
     for f in src/runtime/ext/plugin_loader.cpp; do
         if ! grep -q 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' "$f"; then
-            sensor_fail "N75 restricted search flags missing from $f;"
+            echo "verify: FAIL — N75 restricted search flags missing from $f;" >&2
             echo "dependencies would resolve from the application directory first." >&2
+            exit 1
         fi
     done
     # Doc paths: every src/, sdk/, extern/, docs/, tools/, tests/, cmake/ or gen/ path claimed
@@ -3384,11 +3491,11 @@ verify:
     # extern/nevr-proto, src/server, gamepatches/patches.cpp) survived for months
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
-    python3 tools/verify_doc_paths.py || sensor_fail "python3 tools/verify_doc_paths.py exited non-zero (its own output is above)."
+    python3 tools/verify_doc_paths.py
     # AGENTS.md imports the standards it makes part of its contract (#1277): an import
     # line that is lost, fenced or indented is no longer expanded; one moved below the
     # first section is no longer the first thing the contract says.
-    python3 tools/verify_agents_imports.py || sensor_fail "python3 tools/verify_agents_imports.py exited non-zero (its own output is above)."
+    python3 tools/verify_agents_imports.py
     # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
     # the one that does not run (N61's matchmaker fix did). The bridge is
     # in-process (StopWebSocketBridgeListener); this guard keeps a separate
@@ -3396,17 +3503,20 @@ verify:
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then
-        sensor_fail "N92 the ws-bridge MODULE is being built again. The bridge is"
+        echo "verify: FAIL — N92 the ws-bridge MODULE is being built again. The bridge is" >&2
         echo "compiled into gamepatches; two copies is the bug (fixes land in the dead one)." >&2
+        exit 1
     fi
     N92B_RC=0; grep -qE '(LoadModule|LoadLibrary[AW]?|RegisterStaticModule)\(\s*"ws_bridge' src/runtime/lifecycle/boot.cpp || N92B_RC=$?
     sensor_stage1 "N92 ws_bridge module load" "src/runtime/lifecycle/boot.cpp" "$N92B_RC"
     if [ "$N92B_RC" -eq 0 ]; then
-        sensor_fail "N92 boot.cpp still loads ws_bridge as a required module; with the"
+        echo "verify: FAIL — N92 boot.cpp still loads ws_bridge as a required module; with the" >&2
         echo "DLL gone the loader fail-fasts and the server never starts." >&2
+        exit 1
     fi
     if ! grep -q 'InstallWebSocketBridge();' src/runtime/lifecycle/boot.cpp; then
-        sensor_fail "N92 the in-process bridge is never started; no proxy, no login."
+        echo "verify: FAIL — N92 the in-process bridge is never started; no proxy, no login." >&2
+        exit 1
     fi
     # docs/standards/logging.md Rule 2: the login path SHALL log the full XPID at
     # Info. This rule existed in prose and went unenforced for months — N91 shipped
@@ -3417,12 +3527,14 @@ verify:
          src/runtime/compat/ws_bridge.cpp; then
         N91_CONTEXT=$(grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp || true)
         if ! grep -q 'LogLevel::Info' <<<"$N91_CONTEXT"; then
-            sensor_fail "logging.md Rule 2: the login-injection line is not at Info."
+            echo "verify: FAIL — logging.md Rule 2: the login-injection line is not at Info." >&2
             echo "Identity at login shall be visible in a production log (N91)." >&2
+            exit 1
         fi
     fi
     if ! grep -q 'xpid=%s' src/runtime/compat/ws_bridge.cpp; then
-        sensor_fail "logging.md Rule 2: login injection does not log the XPID."
+        echo "verify: FAIL — logging.md Rule 2: login injection does not log the XPID." >&2
+        exit 1
     fi
     # N91 / #520: a game socket's role comes from the request target it asked for, not from the
     # order it connected in. The Open handler takes its slot through AdmitGameSocket with the
@@ -3433,14 +3545,16 @@ verify:
     sensor_stage1 "#520 roles by request target" "src/runtime/compat/ws_bridge.cpp" "$I520_RC"
     sensor_nonempty "#520 roles by request target" "non-comment lines of compat/ws_bridge.cpp" "$I520_WS"
     if ! grep -qF 'AdmitGameSocket(&gameWs, msg->openInfo.uri, listener)' <<<"$I520_WS"; then
-        sensor_fail "#520 the Open handler no longer admits a game socket by its request target"
+        echo "verify: FAIL — #520 the Open handler no longer admits a game socket by its request target" >&2
         echo "(AdmitGameSocket(&gameWs, msg->openInfo.uri, listener)): the roles would follow the connect order again." >&2
+        exit 1
     fi
     if grep -qF 'g_connectionCount' <<<"$I520_WS"; then
-        sensor_fail "#520 ws_bridge.cpp counts connections again (g_connectionCount): a login socket that connects before config would be labelled config."
+        echo "verify: FAIL — #520 ws_bridge.cpp counts connections again (g_connectionCount): a login socket that connects before config would be labelled config." >&2
+        exit 1
     fi
     # logging.md: no INFO-level logging inside a per-frame hot path (~125Hz).
-    python3 tools/verify_log_rules.py || sensor_fail "python3 tools/verify_log_rules.py exited non-zero (its own output is above)."
+    python3 tools/verify_log_rules.py
     # D1/N78: exactly ONE strong definition of ::Log. A second definition (e.g. in
     # gameserver.cpp) would make which one every call in the DLL binds to link-order
     # dependent — and if the one without the WriteLog null-check won, the
@@ -3451,10 +3565,11 @@ verify:
                  --include='*.cpp' src/abi src/core src/runtime src/modules 2>/dev/null \
                | grep -v '/tests/' | wc -l)
     if [ "$LOG_DEFS" -ne 1 ]; then
-        sensor_fail "D1 found $LOG_DEFS definitions of ::Log (want exactly 1)."
+        echo "verify: FAIL — D1 found $LOG_DEFS definitions of ::Log (want exactly 1)." >&2
         grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' --include='*.cpp' \
              src/abi src/core src/runtime src/modules | grep -v '/tests/' >&2
         echo "Two strong definitions is an ODR violation; the winner is link-order dependent." >&2
+        exit 1
     fi
     # Nakama RPC responses are wrapped as {"payload":"<json>"} unless &unwrap is
     # passed. Commit 7a03d8b fixed this in the gamepatches copy on the same day
@@ -3463,8 +3578,9 @@ verify:
     for u in request poll; do
         if ! grep -q "device/auth/$u?http_key=\" + m_httpKey + \"&unwrap" \
              src/modules/token-auth/src/token_auth.cpp; then
-            sensor_fail "token-auth device/auth/$u endpoint is missing &unwrap;"
+            echo "verify: FAIL — token-auth device/auth/$u endpoint is missing &unwrap;" >&2
             echo "Nakama will wrap the response and the token parse will find nothing." >&2
+            exit 1
         fi
     done
     # Token expiry shall come from the JWT, not a hardcoded value (owner
@@ -3475,11 +3591,13 @@ verify:
          src/modules/token-auth/src/token_auth.cpp || TEXP_RC=$?
     sensor_stage1 "token-auth hardcoded expiry" "src/modules/token-auth/src/token_auth.cpp" "$TEXP_RC"
     if [ "$TEXP_RC" -eq 0 ]; then
-        sensor_fail "token-auth sets m_tokenExpiry from a hardcoded offset;"
+        echo "verify: FAIL — token-auth sets m_tokenExpiry from a hardcoded offset;" >&2
         echo "the JWT's own exp claim is the authority (GetJwtExpiry)." >&2
+        exit 1
     fi
     if ! grep -q 'GetJwtExpiry()' src/modules/token-auth/src/token_auth.cpp; then
-        sensor_fail "token-auth does not consult the JWT exp claim."
+        echo "verify: FAIL — token-auth does not consult the JWT exp claim." >&2
+        exit 1
     fi
     # N94: eight [NEVR.AUTH] per-step detail lines are pinned at Debug (N47
     # taxonomy, cfe96de). Merge 2f29312 reverted all nine to Info at once by
@@ -3500,7 +3618,8 @@ verify:
         sensor_stage1 "N94 auth log taxonomy" "$N94_FILE" "$N94_RC"
         sensor_nonempty "N94 auth log taxonomy" "message '$msg' in $N94_FILE" "$N94_CTX"
         if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
-            sensor_fail "N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — N94)."
+            echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — N94)." >&2
+            exit 1
         fi
     done
     # The poll-loop line lives in the platform-neutral device-code loop
@@ -3511,7 +3630,8 @@ verify:
     sensor_stage1 "N94 auth log taxonomy" "$N94_CORE_FILE" "$N94_RC"
     sensor_nonempty "N94 auth log taxonomy" "message 'Still waiting for authorization' in $N94_CORE_FILE" "$N94_CTX"
     if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
-        sensor_fail "N94 the '[NEVR.AUTH] Still waiting for authorization' line is at Info; the N47 taxonomy pins it at Debug."
+        echo "verify: FAIL — N94 the '[NEVR.AUTH] Still waiting for authorization' line is at Info; the N47 taxonomy pins it at Debug." >&2
+        exit 1
     fi
     # The core logs through its own level enum; the Windows side maps it to EchoVR::LogLevel
     # in ToEchoLogLevel. Without a pin on that mapping, a swapped case would move the N94
@@ -3528,7 +3648,7 @@ verify:
     # graph from the sentinel; if token auth, libcurl or OpenSSL is reachable it requires
     # -Wl,--exclude-libs,ALL on the sentinel and a live TestExportAllowlist. The built artifact's real
     # link line is checked by TestSentinelLinkLineGuard in `just test-android`.
-    python3 tools/verify_quest_sentinel_link.py || sensor_fail "python3 tools/verify_quest_sentinel_link.py exited non-zero (its own output is above)."
+    python3 tools/verify_quest_sentinel_link.py
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.
     # Match the DECLARATION, not prose. The first version of this check matched
@@ -3547,13 +3667,15 @@ verify:
     sensor_stage1 "N99 headless mask" "src/runtime/patch/mode_patches.cpp" "$N99_RC"
     sensor_nonempty "N99 headless mask" "non-comment lines of src/runtime/patch/mode_patches.cpp" "$N99_MP"
     if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK' <<<"$N99_MP"; then
-        sensor_fail "N99 PatchEnableHeadless no longer applies ENGINE_FLAGS_HEADLESS_MASK."
+        echo "verify: FAIL — N99 PatchEnableHeadless no longer applies ENGINE_FLAGS_HEADLESS_MASK." >&2
         echo "-server would leave bit 0 of pGame+0x1D4 SET and the game would open a window." >&2
+        exit 1
     fi
     # The mask constant shall keep the value measured in the shipped binary.
     if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK = 0xFFFEFEFEu' src/runtime/hook/addresses.h; then
-        sensor_fail "N99 ENGINE_FLAGS_HEADLESS_MASK is not 0xFFFEFEFE, the value"
+        echo "verify: FAIL — N99 ENGINE_FLAGS_HEADLESS_MASK is not 0xFFFEFEFE, the value" >&2
         echo "verified byte-for-byte at 0x140504566 in the shipped echovr.exe." >&2
+        exit 1
     fi
     # And boot.cpp shall not tell the operator to remove a flag that is native
     # to the game: acting on that message by removing -headless opens a
@@ -3562,8 +3684,9 @@ verify:
     sensor_stage1 "N99 boot flag advice" "src/runtime/lifecycle/boot.cpp" "$N99_BOOT_RC"
     sensor_nonempty "N99 boot flag advice" "non-comment lines of src/runtime/lifecycle/boot.cpp" "$N99_BOOT"
     if grep -qE 'is redundant|Remove this flag' <<<"$N99_BOOT"; then
-        sensor_fail "N99 boot.cpp tells the operator a flag is redundant / to remove it."
+        echo "verify: FAIL — N99 boot.cpp tells the operator a flag is redundant / to remove it." >&2
         echo "-headless and -noovr are NATIVE echovr.exe flags the game itself consumes." >&2
+        exit 1
     fi
     # N96: no symbol spelled plain `ResolveVA`. Two definitions of that name once
     # coexisted in BugSplat64.dll with IDENTICAL signatures and different
@@ -3579,9 +3702,10 @@ verify:
     sensor_stage1 "N96 bare ResolveVA" "src sdk" "$N96_RC"
     if [ "$N96_RC" -eq 0 ] && printf '%s\n' "$N96_HITS" \
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
-        sensor_fail "N96 a bare 'ResolveVA' spelling is back. Use"
+        echo "verify: FAIL — N96 a bare 'ResolveVA' spelling is back. Use" >&2
         echo "nevr::ResolveVA_Checked or nevr::ResolveVA_Unchecked — the name shall state" >&2
         echo "whether the address was validated (N96)." >&2
+        exit 1
     fi
     # N97: exactly ONE definition of ValidatePrologue. Two file-local copies
     # existed; pnsrad_enabler.cpp's was a bare memcmp, so a zero length returned
@@ -3594,17 +3718,19 @@ verify:
     sensor_stage1 "N97 ValidatePrologue definitions" "src sdk" "$N97_RC"
     N97_DEFS=$(printf '%s\n' "$N97_HITS" | grep -c 'ValidatePrologue' || true)
     if [ "$N97_RC" -ne 0 ] || [ "$N97_DEFS" -ne 1 ]; then
-        sensor_fail "N97 found $N97_DEFS definitions of ValidatePrologue (want exactly 1,"
+        echo "verify: FAIL — N97 found $N97_DEFS definitions of ValidatePrologue (want exactly 1," >&2
         echo "nevr::ValidatePrologue in sdk/include/nevr/pc/nevr_common.h). A second copy is how" >&2
         echo "a bare-memcmp version returned TRUE for a zero-length check (N97)." >&2
         printf '%s\n' "$N97_HITS" >&2
+        exit 1
     fi
     C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/runtime/hook/patching.h" "$C2_RC"
     if grep -qE 'PatchDetour\(.*const char\* name\s*=' <<<"$C2_CODE"; then
-        sensor_fail "C2 PatchDetour's name parameter has a default again."
+        echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
         echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
         echo "alarm printed name=(unnamed) for almost every address it guards." >&2
+        exit 1
     fi
     # N133 S7 — config cutover invariant sensors. The cutover (S0-S5) migrated
     # all 29 NEVR config keys off the game-JSON path onto config.yaml. These
@@ -3621,11 +3747,12 @@ verify:
         2>/dev/null | grep -v '/test_\|/legacy/' | grep '"nevr_') || N133_S7A_RC=$?
     sensor_stage1 "N133 S7a cutover" "src/runtime/ + src/modules/" "$N133_S7A_RC"
     if [ -n "$N133_S7A" ]; then
-        sensor_fail "N133 S7a: a nevr_* key is read from the game JSON:"
+        echo "verify: FAIL — N133 S7a: a nevr_* key is read from the game JSON:" >&2
         printf '%s\n' "$N133_S7A" >&2
         echo "The config cutover migrated ALL nevr_* keys to config.yaml via the" >&2
         echo "flat map in service_map.cpp. This key was added or reverted to the" >&2
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
+        exit 1
     fi
     # S7b — flat-map structural gate: exactly 36 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
@@ -3637,19 +3764,21 @@ verify:
     # nevr_max_team_size (#1422).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
     if [ "$N133_S7B" -ne 36 ]; then
-        sensor_fail "N133 S7b: flat map has $N133_S7B entries, expected 36."
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 36." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2
         echo "falls back to the game-JSON path (exactly what the cutover prevents)." >&2
+        exit 1
     fi
     # S7c — the module context config_get accessor (S5 deliverable) must remain
     # present in module_interface.h. Its removal would silently break token_auth's
     # config.yaml reads and revert modules to the game-JSON path.
     if ! grep -q 'config_get' src/extension/module_interface.h; then
-        sensor_fail "N133 S7c: NevrModuleContext.config_get removed from"
+        echo "verify: FAIL — N133 S7c: NevrModuleContext.config_get removed from" >&2
         echo "module_interface.h. This is the S5 deliverable that lets modules read" >&2
         echo "config.yaml. Without it token_auth reverts to game-JSON reads." >&2
+        exit 1
     fi
     # S7d — the tracked sample config must remain present and contain the minimum
     # keys a server needs to boot (auth, services, identity, version sections).
@@ -3661,9 +3790,10 @@ verify:
         docs/reference/example-config.yaml) || N133_S7D_RC=$?
     sensor_stage1 "N133 S7d sample config" "docs/reference/example-config.yaml" "$N133_S7D_RC"
     if [ "$N133_S7D" -lt 4 ]; then
-        sensor_fail "N133 S7d: sample config.yaml missing required sections"
+        echo "verify: FAIL — N133 S7d: sample config.yaml missing required sections" >&2
         echo "(found $N133_S7D of 4: auth, services, identity, version)." >&2
         echo "The tracked example is the source copied into a server's local config." >&2
+        exit 1
     fi
     # #573 — the Quest reads config.yaml through the PC's nevr_config, so the shared parser and its Quest wiring are
     # part of the source. The behaviour is proved by quest_config_test (test-quest-shared) and, on the device
@@ -3679,26 +3809,30 @@ verify:
     sensor_stage1 "#573 shared parser" "src/core/nevr_config.cpp" "$Q573A_RC"
     sensor_nonempty "#573 shared parser" "non-comment lines of src/core/nevr_config.cpp" "$Q573A_CODE"
     if grep -qE 'core/logging\.h|<windows\.h>|\bthread_local\b|\bLog\(|\bFatalError\(' <<<"$Q573A_CODE"; then
-        sensor_fail "#573: src/core/nevr_config.cpp includes the PC logger or windows.h, calls Log/FatalError, or declares a"
+        echo "verify: FAIL — #573: src/core/nevr_config.cpp includes the PC logger or windows.h, calls Log/FatalError, or declares a" >&2
         echo "thread_local. It is built into the Quest sentinel, which has none of them. Put PC-only behaviour in src/core/nevr_config_policy.cpp." >&2
+        exit 1
     fi
     Q573B_RC=0; Q573B_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/quest_config.cpp) || Q573B_RC=$?
     sensor_stage1 "#573 quest config" "src/quest/sentinel/quest_config.cpp" "$Q573B_RC"
     sensor_nonempty "#573 quest config" "non-comment lines of src/quest/sentinel/quest_config.cpp" "$Q573B_CODE"
     if ! grep -qF 'NevrConfig::LoadFromString' <<<"$Q573B_CODE" || grep -qE 'json::parse' <<<"$Q573B_CODE"; then
-        sensor_fail "#573: src/quest/sentinel/quest_config.cpp must parse config.yaml through nevr::NevrConfig::LoadFromString and hold no JSON parser."
+        echo "verify: FAIL — #573: src/quest/sentinel/quest_config.cpp must parse config.yaml through nevr::NevrConfig::LoadFromString and hold no JSON parser." >&2
+        exit 1
     fi
     Q573C_RC=0; Q573C_CODE=$(grep -vE '^[[:space:]]*#' src/quest/CMakeLists.txt) || Q573C_RC=$?
     sensor_stage1 "#573 quest cmake" "src/quest/CMakeLists.txt" "$Q573C_RC"
     sensor_nonempty "#573 quest cmake" "non-comment lines of src/quest/CMakeLists.txt" "$Q573C_CODE"
     if ! grep -qF '../core/nevr_config.cpp' <<<"$Q573C_CODE" || grep -qF 'nevr_config_policy' <<<"$Q573C_CODE"; then
-        sensor_fail "#573: nevr_quest_config must compile ../core/nevr_config.cpp and must not compile nevr_config_policy.cpp (src/quest/CMakeLists.txt)."
+        echo "verify: FAIL — #573: nevr_quest_config must compile ../core/nevr_config.cpp and must not compile nevr_config_policy.cpp (src/quest/CMakeLists.txt)." >&2
+        exit 1
     fi
     if ! grep -qF 'yaml-cpp-no-static-init.patch' src/quest/vcpkg-overlay-ports/yaml-cpp/portfile.cmake \
         || [ ! -s src/quest/vcpkg-overlay-ports/yaml-cpp/yaml-cpp-no-static-init.patch ] \
         || ! grep -qF 'vcpkg-overlay-ports' src/quest/vcpkg-configuration.json; then
-        sensor_fail "#573: the Quest build must take yaml-cpp from src/quest/vcpkg-overlay-ports (portfile lists yaml-cpp-no-static-init.patch,"
+        echo "verify: FAIL — #573: the Quest build must take yaml-cpp from src/quest/vcpkg-overlay-ports (portfile lists yaml-cpp-no-static-init.patch," >&2
         echo "the patch exists, src/quest/vcpkg-configuration.json names the overlay). Stock yaml-cpp adds six load-time initializers to the sentinel." >&2
+        exit 1
     fi
     # (e) the parser no longer logs the unset-variable warning, so the PC caller must (service_config.cpp's NevrCfg is
     #     impure and is not linked by a unit test; LogUnsetBareVars itself is tested in test_nevr_config).
@@ -3706,8 +3840,9 @@ verify:
     sensor_stage1 "#573 PC unset-variable warning" "src/runtime/lifecycle/service_config.cpp" "$Q573E_RC"
     sensor_nonempty "#573 PC unset-variable warning" "non-comment lines of src/runtime/lifecycle/service_config.cpp" "$Q573E_CODE"
     if ! grep -qE 'nevr::LogUnsetBareVars\(c\)' <<<"$Q573E_CODE"; then
-        sensor_fail "#573: NevrCfg() in src/runtime/lifecycle/service_config.cpp no longer calls nevr::LogUnsetBareVars(c) after the load;"
+        echo "verify: FAIL — #573: NevrCfg() in src/runtime/lifecycle/service_config.cpp no longer calls nevr::LogUnsetBareVars(c) after the load;" >&2
         echo "the parser does not log the unset-variable warning any more, so without that call the PC never says a \${VAR} was unset." >&2
+        exit 1
     fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
     # config.json outlived N133 (which moved every NEVR key to config.yaml) and
@@ -3720,15 +3855,17 @@ verify:
     sensor_stage1 "I21 config.json optional" "src/runtime/lifecycle/{boot,config}.cpp" "$I21_RC"
     sensor_nonempty "I21 config.json optional" "non-comment lines of boot.cpp + config.cpp" "$I21_CODE"
     if grep -qE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' <<<"$I21_CODE"; then
-        sensor_fail "issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:"
+        echo "verify: FAIL — issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:" >&2
         grep -nE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' \
             src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp >&2
         echo "config.json only carries keys the stock engine reads natively; NEVR's settings" >&2
         echo "are config.yaml. Its absence must not fatal a server or disable redirects." >&2
+        exit 1
     fi
     if ! grep -qE '^[[:space:]]*ArmServiceRedirects\(\);' <<<"$I21_CODE"; then
-        sensor_fail "issue #21: ArmServiceRedirects() is no longer called from the"
+        echo "verify: FAIL — issue #21: ArmServiceRedirects() is no longer called from the" >&2
         echo "bootstrap. Without it RedirectServiceUrl never fires (no login redirect)." >&2
+        exit 1
     fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
     # config.json outlived N133 (which moved every NEVR key to config.yaml) and
@@ -3741,15 +3878,17 @@ verify:
     sensor_stage1 "I21 config.json optional" "src/runtime/lifecycle/{boot,config}.cpp" "$I21_RC"
     sensor_nonempty "I21 config.json optional" "non-comment lines of boot.cpp + config.cpp" "$I21_CODE"
     if grep -qE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' <<<"$I21_CODE"; then
-        sensor_fail "issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:"
+        echo "verify: FAIL — issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:" >&2
         grep -nE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' \
             src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp >&2
         echo "config.json only carries keys the stock engine reads natively; NEVR's settings" >&2
         echo "are config.yaml. Its absence must not fatal a server or disable redirects." >&2
+        exit 1
     fi
     if ! grep -qE '^[[:space:]]*ArmServiceRedirects\(\);' <<<"$I21_CODE"; then
-        sensor_fail "issue #21: ArmServiceRedirects() is no longer called from the"
+        echo "verify: FAIL — issue #21: ArmServiceRedirects() is no longer called from the" >&2
         echo "bootstrap. Without it RedirectServiceUrl never fires (no login redirect)." >&2
+        exit 1
     fi
     # N112 — BuildIdentity: the client login and server registration now carry
     # NEVR build identity (version, commit, git describe, build type) and a
@@ -3759,41 +3898,48 @@ verify:
     #
     # N112a — BuildIdentity struct exists and is compiled.
     if [ ! -f src/core/build_identity.h ]; then
-        sensor_fail "N112a: src/core/build_identity.h is missing."
+        echo "verify: FAIL — N112a: src/core/build_identity.h is missing." >&2
         echo "The BuildIdentity struct carries compile-time version identity into" >&2
         echo "the login payload and server registration." >&2
+        exit 1
     fi
     if [ ! -f src/core/build_identity.cpp ]; then
-        sensor_fail "N112a: src/core/build_identity.cpp is missing."
+        echo "verify: FAIL — N112a: src/core/build_identity.cpp is missing." >&2
+        exit 1
     fi
     # N112b — the shared client login profile carries nevr_identity and nevr_plugins.
     N112_PROFILE_RC=0; N112_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N112_PROFILE_RC=$?
     sensor_stage1 "N112 client login identity and plugins" "src/runtime/compat/login_profile.cpp" "$N112_PROFILE_RC"
     sensor_nonempty "N112 client login identity and plugins" "non-comment lines of compat/login_profile.cpp" "$N112_PROFILE"
     if ! grep -qF 'profile["nevr_identity"]' <<<"$N112_PROFILE"; then
-        sensor_fail "N112b: shared login profile does not carry"
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_identity. The client login must send NEVR version info (N112)." >&2
+        exit 1
     fi
     if ! grep -qF 'profile["nevr_plugins"]' <<<"$N112_PROFILE"; then
-        sensor_fail "N112b: shared login profile does not carry"
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_plugins. The client login must send a plugin manifest (N112)." >&2
+        exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
     if ! grep -q 'nevr_build_identity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
-        sensor_fail "N112c: gameserver.cpp does not call nevr_build_identity::Get()."
+        echo "verify: FAIL — N112c: gameserver.cpp does not call nevr_build_identity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
+        exit 1
     fi
     # N112d — BuildPluginManifestJson exists.
     if ! grep -q 'BuildPluginManifestJson' src/runtime/ext/plugin_loader.cpp; then
-        sensor_fail "N112d: BuildPluginManifestJson() not found in"
+        echo "verify: FAIL — N112d: BuildPluginManifestJson() not found in" >&2
         echo "plugin_loader.cpp. The plugin manifest builder is required (N112)." >&2
+        exit 1
     fi
     # Static token_auth exports are registered by the host, not token_auth_Init.
     # Keep all three registrations pinned to boot so ws_bridge can resolve its ABI.
     for export in TokenAuth_GetToken TokenAuth_GetDiscordId TokenAuth_GetUsername; do
         if ! grep -q "RegisterModuleProc(\"$export\"" src/runtime/lifecycle/boot.cpp; then
-            sensor_fail "missing static token_auth export registration: $export"
+            echo "verify: FAIL — missing static token_auth export registration: $export" >&2
+            exit 1
         fi
     done
     # N112e — the hardcoded buildversion literal is still the game's 631547
@@ -3805,20 +3951,15 @@ verify:
     # The floor is the count at the base commit, read from git (#1343); a deliberate drop carries a
     # `GTest-Drop: <reason>` trailer.
     # #451: the self-check wiring goes through the tested gate functions (source check).
-    python3 tools/verify_self_check_wiring.py || sensor_fail "python3 tools/verify_self_check_wiring.py exited non-zero (its own output is above)."
-    python3 tools/verify_gtest_floor.py || sensor_fail "python3 tools/verify_gtest_floor.py exited non-zero (its own output is above)."
+    python3 tools/verify_self_check_wiring.py
+    python3 tools/verify_gtest_floor.py
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
-    python3 tools/verify_patch_source_inventory.py || sensor_fail "python3 tools/verify_patch_source_inventory.py exited non-zero (its own output is above)."
+    python3 tools/verify_patch_source_inventory.py
     # Wave 5/10: every concrete mode_patches.cpp byte rewrite must have a
     # PE-backed assertRVABytes row. Detours/import hooks are deliberately not
     # included: they are not ordinary prologue rewrites.
-    python3 tools/verify_mode_patch_ground_truth.py || sensor_fail "python3 tools/verify_mode_patch_ground_truth.py exited non-zero (its own output is above)."
-    if [ "${#verify_failed[@]}" -gt 0 ]; then
-        echo "verify: FAILED — ${#verify_failed[@]} sensor(s) failed:" >&2
-        printf 'verify:   %s\n' "${verify_failed[@]}" >&2
-        exit 1
-    fi
+    python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
 
 # Generate combat override files from echomod build output

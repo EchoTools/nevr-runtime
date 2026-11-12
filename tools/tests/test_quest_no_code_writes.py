@@ -74,13 +74,10 @@ def justfile_list(name: str) -> set:
 def sensor_script() -> str:
     """The `just verify` N151 block with the two plumbing helpers it calls, as a standalone bash script."""
     text = JUSTFILE.read_text()
-    recorder = text[text.index("    verify_failed=()") : text.index("    sensor_stage1() {")]
     helpers = text[text.index("    sensor_stage1() {") : text.index("    # Same class, different shape")]
     nonempty = text[text.index("    sensor_nonempty() {") : text.index("    # SIGPIPE + pipefail")]
     block = text[text.index("    # BEGIN N151") : text.index("    # END N151")]
-    # The recipe records a failure and goes on (#1228); a failed sensor ends this standalone script non-zero.
-    return ("set -euo pipefail\n" + recorder + helpers + nonempty + block
-            + '[ "${#verify_failed[@]}" -eq 0 ] || exit 1\n' + "echo N151-OK\n")
+    return "set -euo pipefail\n" + helpers + nonempty + block + "echo N151-OK\n"
 
 
 class NoQuestCodeWrites(unittest.TestCase):
