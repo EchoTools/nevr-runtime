@@ -17,9 +17,13 @@ runm ec_known_r         $R "s# || t == 'R'##"
 runm ec_known_g         $R "s# || t == 'G'##"
 runm ec_recv_flood      $R "s#kMaxConsumePerCall = 256;#kMaxConsumePerCall = 1000;#"
 runm ec_consume_cap     $R "s# || consumed >= kMaxConsumePerCall) return false;# || consumed < 0) return false;#"
-runm ec_recv_len        $R "s# || bufLen < sizeof(Packet)# || bufLen < 1#"
-runm ec_recv_peek       $R "s#if (peek || #if ((peek \&\& false) || #"
-runm ec_recv_fromlen    $R "s#if (peek || !haveFromLen || #if (peek || (!haveFromLen \&\& false) || #"
+# The receive precondition (ec_rules.h TakeOut, the first line of its test; Capped repeats it). Only TakeOut is mutated: RecvInScope reaches
+# Capped only after TakeOut refused with consumed >= kMaxConsumePerCall, and every earlier iteration of that loop passed the same peek, fromlen
+# and buffer tests (the flags, fromlen and len are the same in each iteration), so a change to Capped's copy of a test cannot change the
+# capped count there. The three Capped twins were run and survived for that reason (equivalent in the shipped path), and were removed.
+runm ec_recv_len        $R "/^inline bool TakeOut(/,/^}/s# || bufLen < sizeof(Packet)# || bufLen < 1#"
+runm ec_recv_peek       $R "/^inline bool TakeOut(/,/^}/s#if (peek || #if ((peek \&\& false) || #"
+runm ec_recv_fromlen    $R "/^inline bool TakeOut(/,/^}/s#if (peek || !haveFromLen || #if (peek || (!haveFromLen \&\& false) || #"
 runm ec_token_restart   $R "s#if (now100 >= __atomic_load_n(expiry, __ATOMIC_SEQ_CST)) __atomic_store_n(count, 0u, __ATOMIC_SEQ_CST);#;#"
 runm ec_a_counted       $R "s#            ++answers;#            ;#"
 runm ec_m_dedupe        $R "/if (p.type == 'M') {/,/++medi;/ s#if (!FirstTime(p.id)) return#if (false) return#"
@@ -120,7 +124,7 @@ runm ec_page_alias      $P "s#visibility(\"default\"), alias#visibility(\"hidden
 runm ec_page_publish    $P "s#RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL#RTLD_NOW | RTLD_NOLOAD#" quest-host-combat ec_page_test
 # arena pays nothing, by count (the send / receive handler reads game memory, or scans the levels, before the scope test)
 runm ec_arena_reads_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(buf), \&ok_); }\n  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#'
-runm ec_arena_scans_before_scope $E 's#^\#include "quest/combat/combat_scope.h"$#&\n\#include "quest/combat/combat_level.h"#; s#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
+runm ec_arena_scans_before_scope_multi $E 's#^\#include "quest/combat/combat_scope.h"$#&\n\#include "quest/combat/combat_level.h"#; s#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
 # off by its key is counted off on the phase line (combat_install_test)
 runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
 # the arena APK and a plain release run no normal step, so no #2187 module writes a line (combat_install_test, TheRealStepsConsultTheGate)
@@ -151,6 +155,6 @@ runm ec_leave_pick_best  $E "s#^        g_st.best = -1;#        (void)0;#"
 runm ec_leave_pick_line  $E "s#\"forgets the server (back in scope, the game's first send picks it)\"#\"\"#"
 # the leave resets the whole state where it clears the pick (#2390): the two clears become g_st = State(). The pick is the same either way, so only
 # the kept counters and the carried types (LeavePickTests, KeptCounters) tell the two apart
-runm ec_leave_keeps_counters $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        g_st = State();#; s#^        g_st.best = -1;#        (void)0;#"
+runm ec_leave_keeps_counters_multi $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        g_st = State();#; s#^        g_st.best = -1;#        (void)0;#"
 # the leave also clears the dropped count (#2390): one line after the pick's clear, so the uncarried-type count of LeavePickTests (KeptCounters) is checked
 runm ec_leave_keeps_dropped $E "s#^        g_st.best = -1;#        g_st.best = -1;\n        g_st.dropped = 0;#"
