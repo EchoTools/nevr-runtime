@@ -259,6 +259,14 @@ TEST(JoinHoldArm, AMismatchOnEitherSiteInstallsNothing) {
   EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1"}));  // both are checked and reported, none attached
 }
 
+TEST(JoinHoldArm, AMismatchOnTheFirstSiteStillChecksTheSecond) {
+  FakeHooker h;
+  h.matches[0] = false;
+  h.matches[1] = false;
+  EXPECT_EQ(ArmHooks(h), ArmOutcome::kPrologueMismatch);
+  EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1"}));  // site 1's mismatch is reported too
+}
+
 TEST(JoinHoldArm, TheFirstDetourFailingLeavesNothingToRetire) {
   FakeHooker h;
   h.attach[0] = false;
@@ -273,14 +281,18 @@ TEST(JoinHoldArm, TheSecondDetourFailingRemovesTheFirst) {
   EXPECT_EQ(h.calls, (std::vector<std::string>{"match0", "match1", "attach0", "attach1", "retire0"}));
 }
 
-// What ReleaseDue does with a due release: forwards it, or says it dropped it.
+// What ReleaseDue does with a due release: forwards it, or says it dropped it. `reasons` is the reason each call was
+// handed, so a Deliver that passes the wrong one is seen.
 struct FakeSink {
   std::vector<std::string> events;
-  void Forwarded(const Held& h, std::uint64_t waited, ReleaseReason) {
+  std::vector<ReleaseReason> reasons;
+  void Forwarded(const Held& h, std::uint64_t waited, ReleaseReason reason) {
     events.push_back("fwd" + std::to_string(h.entrants) + "@" + std::to_string(waited));
+    reasons.push_back(reason);
   }
-  void Dropped(const Held& h, std::uint64_t waited, ReleaseReason) {
+  void Dropped(const Held& h, std::uint64_t waited, ReleaseReason reason) {
     events.push_back("drop" + std::to_string(h.entrants) + "@" + std::to_string(waited));
+    reasons.push_back(reason);
   }
 };
 
@@ -302,6 +314,18 @@ TEST(JoinHoldDeliver, NothingForwardedIsReportedAsDroppedNeverAsReleased) {
   FakeSink sink;
   Deliver(TwoDue(), 400, false, sink);
   EXPECT_EQ(sink.events, (std::vector<std::string>{"drop2@300", "drop3@250"}));
+}
+
+TEST(JoinHoldDeliver, TheSinkIsHandedTheReasonOfTheRelease) {
+  FakeSink settled;
+  Deliver(TwoDue(), 400, true, settled);  // TwoDue is a settled release
+  EXPECT_EQ(settled.reasons, (std::vector<ReleaseReason>{ReleaseReason::kSettled, ReleaseReason::kSettled}));
+
+  FakeSink timedOut;
+  Release r = TwoDue();
+  r.reason = ReleaseReason::kTimeout;
+  Deliver(r, 400, false, timedOut);
+  EXPECT_EQ(timedOut.reasons, (std::vector<ReleaseReason>{ReleaseReason::kTimeout, ReleaseReason::kTimeout}));
 }
 
 }  // namespace
