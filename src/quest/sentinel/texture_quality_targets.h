@@ -11,7 +11,7 @@
  * What is established. Every word, symbol, PLT stub and JUMP_SLOT below is read from the store file and checked by the test. The
  * deferred-destroy body (0x1888a98), CEngine::Resize, CCanvasDisplay::Resize and CCanvas::BeforeResize are read whole from their
  * byte-checked reconstructions. The other functions named here (FlushGPU, CGDisplay::Resize, the reaper, the slot allocator, both
- * CGUploader::Upload and both End) have no reconstruction in this repository (tracked in #1737): what this comment says each of them
+ * CGUploader::Upload and both End) are not established: the function is not in the proven reconstruction tree. What this comment says each of them
  * does beyond its pinned words is INFERRED from those words, and the deadlock below is an inference until they are read whole.
  *
  * The two words. Both lie in .bss (.bss 0x3761180, size 0x713b8), so the file holds zero and the game writes them at run time.
@@ -34,10 +34,11 @@
  * thread) spins with the lock held, and that End waits for the lock: neither returns.
  * Each wait is skipped when its input is null: FlushGPU returns with no lock and no currframe store when gctx + 0xb50 is 0 (cbz at
  * 0x18e08e0), and the deferred-destroy body returns on a null handle before it reads currframe (cbz x1 at 0x1888aa8). So one
- * Resize can reach the upload lock up to nine times: FlushGPU's take, the body's immediate-path take in each of the four direct
- * calls of CGDisplay::Resize, and the same take in each of the four DeferredDestroy(SGImage&) calls below, which call the body with
- * kind 0xa on the last reference (0x1888c24..0x1888c34). Each take sits behind the body's own tests (a null handle returns first, and
- * the take is on the immediate path only), so nine is a bound, not a count.
+ * Resize reaches the upload lock at least nine times among the calls read: FlushGPU's take, the body's immediate-path take in each of
+ * the four direct calls of CGDisplay::Resize, and the same take in each of the four DeferredDestroy(SGImage&) calls below, which call
+ * the body with kind 0xa on the last reference (0x1888c24..0x1888c34). Each take sits behind the body's own tests (a null handle returns
+ * first, and the take is on the immediate path only), so each is a take that can occur, not a count. The calls after 0x18348f8 in
+ * CGDisplay::Resize are not read, so the total for one Resize is not bounded by this reading.
  *
  * The path from CEngine::Resize (each call is a bl; a call through the PLT names the stub, whose JUMP_SLOT names the callee):
  *   CEngine::Resize 0x2ac093c: bl at 0x2ac09c0 to stub 0xf3a4d0 (slot 0x36f4950) -> CCanvasDisplay::Resize 0x25edfb4
