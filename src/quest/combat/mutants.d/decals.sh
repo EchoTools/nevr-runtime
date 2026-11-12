@@ -92,6 +92,9 @@ runm dm_no_table_flips_crossed   $C '/{{"result", "off"}, {"status", "no_table"}
 runm dm_bad_table_flips_crossed  $C '/{"reason", reason}, {"bytes", len},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
 runm dm_no_export_flips_crossed  $C '/{{"result", "refused"}, {"status", "engine_export_missing"}, {"reason", "engine_export_missing"},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
 runm dm_installed_flips_crossed  $C '/{{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+# the same line with both flips fixed (u on, v off), and the off line with both fixed: each is killed only by a pair that differs from the fixed one (#2382 review)
+runm dm_installed_flips_fixed    $C '/{{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},$/{n;s/{"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},/{"decals_flip_u", 1}, {"decals_flip_v", 0},/}'
+runm dm_off_flips_fixed          $C '/{{"result", "off"}, {"status", "off_config"}, {"reason", "off_config"}, {"switch", "combat.decals"},$/{n;s/{"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},/{"decals_flip_u", 1}, {"decals_flip_v", 0},/}'
 # and each refusal that goes through Refused hands it the switches it was handed, not a default set
 runm dm_already_installed_flips_unset $C 's/return Refused(switches, "already_installed",/return Refused(Switches{}, "already_installed",/'
 runm dm_incomplete_engine_flips_unset $C 's/return Refused(switches, "engine_export_missing",/return Refused(Switches{}, "engine_export_missing",/'

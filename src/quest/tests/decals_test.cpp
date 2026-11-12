@@ -1011,24 +1011,29 @@ static void TestEveryInstallLineNamesTheFlips(const std::string& dir) {
   CHECK(truncate(big.c_str(), static_cast<off_t>(dc::kMaxFileBytes) + 1) == 0, "a table one byte over the limit");
   dc::Api incomplete = api;
   incomplete.init = nullptr;
-  const dc::Switches sw{true, true, false};
-  const auto named = [](const char* what, const combat::ModuleResult& r, const char* status) {
-    CHECK(std::strcmp(r.status, status) == 0 && CountLines("\"event\":\"combat_decals_install\"") == 1 &&
-              CountLines("\"decals_flip_u\":1,\"decals_flip_v\":0") == 1,
-          "%s: the install line does not name the flips it was handed (%s)", what, r.status);
-    g_lines.clear();
-  };
-  Fresh();
-  named("installed", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "installed");
-  named("a second install", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "already_installed");
-  Fresh();
-  named("off", dc::InstallAt(dc::Switches{false, true, false}, &Lookup, table.c_str(), &api), "off_config");
-  named("no table", dc::InstallAt(sw, &Lookup, (dir + "/flips-none.bin").c_str(), &api), "no_table");
-  named("a table too big to read", dc::InstallAt(sw, &Lookup, big.c_str(), &api), "table_unreadable");
-  named("a bad table", dc::InstallAt(sw, &Lookup, bad.c_str(), &api), "bad_table");
-  named("no engine export", dc::InstallAt(sw, &Lookup, table.c_str(), nullptr), "engine_export_missing");
-  named("an incomplete engine", dc::InstallAt(sw, &Lookup, table.c_str(), &incomplete), "engine_export_missing");
-  named("no libr15", dc::InstallAt(sw, nullptr, table.c_str(), &api), "module_not_loaded");
+  // All four pairs of the two flips, on every path: a line that fixes one flip at either value shows on the pairs that differ from it (#2382 review).
+  for (const bool fu : {false, true}) {
+    for (const bool fv : {false, true}) {
+      const dc::Switches sw{true, fu, fv};
+      const std::string want = std::string("\"decals_flip_u\":") + (fu ? "1" : "0") + ",\"decals_flip_v\":" + (fv ? "1" : "0");
+      const auto named = [&want, fu, fv](const char* what, const combat::ModuleResult& r, const char* status) {
+        CHECK(std::strcmp(r.status, status) == 0 && CountLines("\"event\":\"combat_decals_install\"") == 1 && CountLines(want.c_str()) == 1,
+              "%s (u=%d v=%d): the install line does not name the flips it was handed (%s)", what, (int)fu, (int)fv, r.status);
+        g_lines.clear();
+      };
+      Fresh();
+      named("installed", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "installed");
+      named("a second install", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "already_installed");
+      Fresh();
+      named("off", dc::InstallAt(dc::Switches{false, fu, fv}, &Lookup, table.c_str(), &api), "off_config");
+      named("no table", dc::InstallAt(sw, &Lookup, (dir + "/flips-none.bin").c_str(), &api), "no_table");
+      named("a table too big to read", dc::InstallAt(sw, &Lookup, big.c_str(), &api), "table_unreadable");
+      named("a bad table", dc::InstallAt(sw, &Lookup, bad.c_str(), &api), "bad_table");
+      named("no engine export", dc::InstallAt(sw, &Lookup, table.c_str(), nullptr), "engine_export_missing");
+      named("an incomplete engine", dc::InstallAt(sw, &Lookup, table.c_str(), &incomplete), "engine_export_missing");
+      named("no libr15", dc::InstallAt(sw, nullptr, table.c_str(), &api), "module_not_loaded");
+    }
+  }
   std::remove(table.c_str());
   std::remove(bad.c_str());
   std::remove(big.c_str());
