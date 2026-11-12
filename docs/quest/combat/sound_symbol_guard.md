@@ -62,8 +62,9 @@ The -1 path, which a returned -1 would enter, is read from the words 0x1706944 a
 reconstructed), so whether a returned -1 prints a line for every drop is not established. The bullet site ignores the answer. Every post that
 is not dropped reaches Play3DSound with the same four arguments (the whole x1 register included), and its answer is returned.
 Not pinned: the two .rodata strings (0x2c4e2dc, 0x2c4e307) are not read by the test; the `bl` words at 0x17069cc and 0x17069fc are pinned, but
-that the stub they reach is WriteLog is not (no stub's JUMP_SLOT symbol is checked); the words from 0x170694c to 0x170698c, which must leave
-x19 and x20 alone, are not pinned (read from the listing); and `bfi x8, x0, #32` (0x1706a14) is not pinned.
+that the stub they reach is WriteLog is not (no stub's JUMP_SLOT symbol is checked); the words from 0x170694c to 0x1706978, which must leave
+x19 and x20 alone, are not pinned (read from the listing); the words 0x170697c to 0x170698c are pinned (`kDropWords`,
+sound_symbol_guard_targets.h); and `bfi x8, x0, #32` (0x1706a14) is not pinned.
 
 ## Log lines (sentinel log)
 
