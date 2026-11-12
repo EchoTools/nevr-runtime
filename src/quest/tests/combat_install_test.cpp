@@ -379,7 +379,7 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
                     sendguard = at("sendguard"), pfx = at("pfx"), pfxtev = at("pfxtev"), sensorwd = at("sensorwd"), music = at("music");
   const std::size_t ec = at("ec"), ecfx = at("ecfx"), dronekill = at("dronekill"), dronemuzzle = at("dronemuzzle"), powerboost = at("powerboost");
   QCHECK(at("shaderstep") < ec && ec < ecfx && ecfx < dronekill && dronekill < dronemuzzle && dronemuzzle < powerboost && powerboost < gates);
-  // the bullet-velocity guard (#1737 row 031): immediately above dronemuzzle, whose assembly entry on FireBullet's slot must stay the newest hook
+  // the bullet-velocity guard (#1737): immediately above dronemuzzle, whose assembly entry on FireBullet's slot must stay the newest hook
   // there; a normal step with its switch and its end
   const std::size_t bvg = at("bullet_velocity_guard");
   QCHECK(dronekill < bvg && bvg + 2 == dronemuzzle);
@@ -1122,7 +1122,7 @@ void TheBotsRowTellsTheModuleWhetherThisIsADevelopmentBuild() {
   rmdir(dir);
 }
 
-// The bullet-velocity guard (#1737 row 031) switched off by its key is off, not failed, and its row reads the key the configuration step set.
+// The bullet-velocity guard (#1737) switched off by its key is off, not failed, and its row reads the key the configuration step set.
 // The texel-buffer guard's row reads its key (#1650): off by the file, it requests nothing (vk_ext_window has no request; the game's lookups are
 // the driver's) and the early phase counts it off; on, its two requests are registered.
 void TheTexelBufferGuardRowReadsItsKey() {

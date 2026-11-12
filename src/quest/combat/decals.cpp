@@ -200,7 +200,7 @@ bool ReadFile(const char* path, std::uint8_t** out, std::size_t* len, const char
   return true;
 }
 
-// The candidate paths, in order, for a run that is not a test: the plugin data directory, then the two places the content pack's layout
+// The candidate paths, in order, for a run that is not a test: the imported combat plugin data directory, then the two places the content pack's layout
 // puts an effects table. Each is `<root>/decals.bin`; returns the count.
 int CandidatePaths(char (*out)[400], int max) {
   int n = 0;

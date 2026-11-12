@@ -18,13 +18,13 @@
  * has CR15NetFollowPlayerCS components at all is not established; `combat_droneguard_stats` gives the call count on a headset.
  *
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switches are `combat.droneguard` (default
- * true) and `combat.droneguard_stage1` (default false; read only when the first is on) in config.yaml. The plugin had no switch file, and its build option
+ * true) and `combat.droneguard_stage1` (default false; read only when the first is on) in config.yaml. The imported combat plugin had no switch file, and its build option
  * for the second stage is gone.
  *
  * Install. The patched build ID, then the stage-0 code words (droneguard_targets.h), then the JUMP_SLOT, which must hold Follow itself (a word something
  * else already replaced is refused, not chained over). Stage 1 is tried after that: its own code words and the two engine functions (resolved by dlsym on
  * the loaded game library, each at exactly its pinned address) must all hold, else the null half stays alone and one Error `combat_droneguard_stage1`
- * line names why. It registers in combat::InstallNormal()'s table at the position the plugin installed it (after custctx, before peerclamp).
+ * line names why. It registers in combat::InstallNormal()'s table at the position the imported combat plugin installed it (after custctx, before peerclamp).
  *
  * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, four plain loads from the component (Follow loads [cs+0xc8] as its first data access, so the
  * game dereferences the same object on every call; a null component goes to the game's function) a compare of the state key and, for a call with a target, one relaxed load of the open-run count (0 unless a run is open: the run tables are scanned only while it is above 0, which is while a component is skipped and for at most kRunStaleSeconds after a run whose component died, because the scan releases stale slots); stage 1 adds a RefreshCache call, a

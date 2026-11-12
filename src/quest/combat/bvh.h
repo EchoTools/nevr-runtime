@@ -14,7 +14,7 @@
  *
  * Switches (docs/adr/0046 C2): `combat.bvh` (default true, as the reference build has it: afk_bvh.cpp "ON BY DEFAULT"; the answers are scoped to combat maps and the combat lobby),
  * `combat.bvh_gate` (true: only the three listed callers' casts use the tree) and `combat.bvh_touch` (true: touch rays are answered with a miss).
- * The plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the plugin's data directory is a Warning
+ * The imported combat plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the imported combat plugin's data directory is a Warning
  * (`combat_bvh_legacy_switch`) that names the key that replaces it.
  *
  * The tree table has 64 entries, each owned by the CBVHTree that built it and freed by that CBVHTree's Shutdown (docs/quest/combat/bvh.md "Table lifetime").
@@ -27,7 +27,7 @@
  * the game's own function while no combat map and no combat lobby is loaded, or while an Echo Arena level is (it wins): `InCombatOrLobby()` below is the
  * combat level answer (combat_scope.h `InCombatOrLobby`: a look at the loaded levels four times a second from the game-thread tick), and it fails
  * closed, a look older than 1 s is not believed, so a tick that stopped leaves every hook calling the game's function. The arena path of a query is one
- * relaxed load of the scope word, a test and a tail call. The combat lobby is in scope because the plugin answered there; a lobby arena players use is
+ * relaxed load of the scope word, a test and a tail call. The combat lobby is in scope because the imported combat plugin answered there; a lobby arena players use is
  * not. The module is a reader of the scope row: `combat.bvh` is in combat_install.cpp `ScopeNormal()`'s list, and the install refuses
  * (`scope_not_live`) when the answer cannot change.
  * Initialize builds a tree only for a combat map or the combat lobby, loaded or still loading (`Classify(game, true, ..., inFlight)`), or when the tick has

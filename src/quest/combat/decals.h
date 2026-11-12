@@ -13,7 +13,7 @@
  *
  * Owner (ADR 0039). This file owns UpdateMovement's GLOB_DAT word; the Shutdown word is shared with impactsnd (it installs first, in the table's
  * order). The kill file `decals.off` and the two flip files `decalflipu.on` and `decalflipv.on`
- * are no longer read: one found in the plugin's data directory is a Warning (`combat_decals_legacy_switch`) that names the key that replaces it.
+ * are no longer read: one found in the imported combat plugin's data directory is a Warning (`combat_decals_legacy_switch`) that names the key that replaces it.
  * `decals.bin` is a data file, not a switch, and is read where it was.
  *
  * The level, and why LevelGate is not used. The module acts on a game space only when that space's own level is a combat map (combat_level.h
@@ -96,7 +96,7 @@ struct Switches {
   bool flipV = false;
 };
 
-// Searched for decals.bin, in order: <the plugin's data dir>/decals.bin, /sdcard/Android/data/<pkg>/files/afk/decals.bin,
+// Searched for decals.bin, in order: <the imported combat plugin's data dir>/decals.bin, /sdcard/Android/data/<pkg>/files/afk/decals.bin,
 // /sdcard/Android/media/<pkg>/files/afk/decals.bin. No file: the module stays out with one Info line (reason "no_table").
 ModuleResult Install(const Switches& switches) noexcept;
 
