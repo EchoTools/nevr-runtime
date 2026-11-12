@@ -16,4 +16,8 @@ void InstallPnsradHook();
 /// takes the CLog target, the hook stops running — and a health check called only
 /// from inside it stops with it, exactly when its warning is needed (N89).
 void PollHealth();
+
+/// #1846: the GPU name and driver the runtime read (render_config's first line), for the GPU-hung notice (gpu_hung_notice.h),
+/// which names them when the game's own System Info lines come after its HUNG line. Safe from any thread.
+void NoteRuntimeAdapter(const char* gpu_name, const char* gpu_driver);
 }
