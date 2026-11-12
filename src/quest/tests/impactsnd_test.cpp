@@ -517,17 +517,21 @@ static void TestWriteSwitchOff() {
 // Every line that says what became of the install names the combat.impactsnd_write value the step was handed (#2382), on every path, with the switch
 // handed off (its default is on, so a line that drops it shows): installed, off, and refused for want of libr15. The no-key refusal is checked in
 // TestNoThreadKey, which runs before any install makes a key.
+// Each path runs with both values: a line that fixes the field at either one cannot tell them apart otherwise (#2382 review).
 static void TestEveryInstallLineNamesTheWriteSwitch() {
-  Fresh();
-  CHECK(Install(/*write=*/false).installed && CountLines("\"event\":\"combat_impactsnd_install\"") == 1 && HasLine("impactsnd_write=0"),
-        "installed: the install line does not name the write switch it was handed");
-  Fresh();
-  CHECK(impactsnd::InstallAt(false, /*write=*/false, &Lookup).off && HasLine("result=off") && HasLine("impactsnd_write=0"),
-        "off: the line does not name the write switch it was handed");
-  Fresh();
-  CHECK(std::strcmp(impactsnd::InstallAt(true, /*write=*/false, nullptr).status, "module_not_loaded") == 0 && HasLine("impactsnd OFF: nothing written") &&
-            HasLine("impactsnd_write=0"),
-        "no libr15: the refusal does not name the write switch it was handed");
+  for (const bool w : {false, true}) {
+    const char* const want = w ? "impactsnd_write=1" : "impactsnd_write=0";
+    Fresh();
+    CHECK(Install(w).installed && CountLines("\"event\":\"combat_impactsnd_install\"") == 1 && HasLine(want),
+          "installed (write=%d): the install line does not name the write switch it was handed", (int)w);
+    Fresh();
+    CHECK(impactsnd::InstallAt(false, w, &Lookup).off && HasLine("result=off") && HasLine(want),
+          "off (write=%d): the line does not name the write switch it was handed", (int)w);
+    Fresh();
+    CHECK(std::strcmp(impactsnd::InstallAt(true, w, nullptr).status, "module_not_loaded") == 0 && HasLine("impactsnd OFF: nothing written") &&
+              HasLine(want),
+          "no libr15 (write=%d): the refusal does not name the write switch it was handed", (int)w);
+  }
 }
 
 // No pthread key left for the Shutdown handler's per-thread depth: the install refuses before it hooks anything. Runs before any successful
@@ -547,10 +551,12 @@ static void TestNoThreadKey() {
   for (const auto& l : g_lines)
     CHECK(l.text.find("combat_impactsnd_refused") == std::string::npos || (l.text.find("\"vaddr\"") == std::string::npos && l.text.find("\"pinned\"") == std::string::npos),
           "no key: the line carries address fields that mean nothing here");
-  // the no-key refusal names the write switch the step was handed (#2382): handed off, its default being on
-  Fresh();
-  CHECK(std::strcmp(Install(/*write=*/false).status, "no_thread_key") == 0 && HasLine("reason=no_thread_key") && HasLine("impactsnd_write=0"),
-        "no key: the refusal does not name the write switch it was handed");
+  // the no-key refusal names the write switch the step was handed (#2382), with both values (the key hog stays in scope for both)
+  for (const bool w : {false, true}) {
+    Fresh();
+    CHECK(std::strcmp(Install(w).status, "no_thread_key") == 0 && HasLine("reason=no_thread_key") && HasLine(w ? "impactsnd_write=1" : "impactsnd_write=0"),
+          "no key (write=%d): the refusal does not name the write switch it was handed", (int)w);
+  }
   SetTable(All(), kStock, false);
   Publish();
   Polls(8);
@@ -629,6 +635,9 @@ static void TestShutdownSlotRefused() {
   CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "foreign Shutdown slot: %s", r.status);
   CHECK(R64(kShutSlotVa) == 0x4242420, "foreign slot word changed");
   CHECK(CountLines("impactsnd shutdown wrapper", 3) == 1 && HasLine("row_writes=disabled", 3), "no ERROR for the refused Shutdown hook");
+  // the refused install line names the switch it was handed (write on here), not the row writes the refused hook left off (#2382 review)
+  CHECK(HasLine("result=refused", 3) && HasLine("impactsnd_write=1", 3) && HasLine("row_writes=disabled", 3),
+        "the refused install line does not name the write switch it was handed (write on)");
   CHECK(!impactsnd::GetStats().writersOk && R64(kDefaultVa) == kDefaultSym, "writersOk / D");
   // the module reads and logs, never writes: through the load handler and through the tick
   impactsnd::SetScopedForTest(true);

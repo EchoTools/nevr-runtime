@@ -14,6 +14,13 @@ runm im_refused_write_fixed  $C '/{"pinned", sentinel::HexString(w, want)}, {"wr
 runm im_install_write_fixed  $C '/{"rebuild", rebuild ? "reconstructed" : "stock"}, {"switch", "combat.impactsnd"},$/{n;s/{"impactsnd_write", g_write ? 1 : 0},/{"impactsnd_write", 1},/}'
 runm im_off_write_fixed      $C '/{{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.impactsnd"},$/{n;s/{"impactsnd_write", write ? 1 : 0},/{"impactsnd_write", 1},/}'
 runm im_nokey_write_fixed    $C '/{{"reason", "no_thread_key"}, {"error", keyError}, {"written", 0},$/{n;s/{"impactsnd_write", write ? 1 : 0},/{"impactsnd_write", 1},/}'
+# the same field fixed at the other value (the default-on test hands false, so this one needs a line handed true; #2382 review)
+runm im_refused_write_zero   $C '/{"pinned", sentinel::HexString(w, want)}, {"written", 0},$/{n;s/{"impactsnd_write", g_write ? 1 : 0},/{"impactsnd_write", 0},/}'
+runm im_install_write_zero   $C '/{"rebuild", rebuild ? "reconstructed" : "stock"}, {"switch", "combat.impactsnd"},$/{n;s/{"impactsnd_write", g_write ? 1 : 0},/{"impactsnd_write", 0},/}'
+runm im_off_write_zero       $C '/{{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.impactsnd"},$/{n;s/{"impactsnd_write", write ? 1 : 0},/{"impactsnd_write", 0},/}'
+runm im_nokey_write_zero     $C '/{{"reason", "no_thread_key"}, {"error", keyError}, {"written", 0},$/{n;s/{"impactsnd_write", write ? 1 : 0},/{"impactsnd_write", 0},/}'
+# the installed line reads the row-writes member (writers ok) instead of the switch it was handed: differs only when the Shutdown hook is refused
+runm im_install_write_rowwrites $C '/{"rebuild", rebuild ? "reconstructed" : "stock"}, {"switch", "combat.impactsnd"},$/{n;s/{"impactsnd_write", g_write ? 1 : 0},/{"impactsnd_write", shutdownOk \&\& g_write ? 1 : 0},/}'
 # the pinned words
 runm im_guard_off            $C 's/if (!SafeRead(base + word.va, \&have, sizeof have) || have != word.want) return/if (false) return/'
 runm im_guard_unreadable_ok  $C 's/if (!SafeRead(base + word.va, \&have, sizeof have) || have != word.want) return/if (SafeRead(base + word.va, \&have, sizeof have) \&\& have != word.want) return/'
