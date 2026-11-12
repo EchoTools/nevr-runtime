@@ -52,6 +52,10 @@ bool SuppliedByTheSystem(const std::string& file);
 // the plugins directory after the check would be mapped in its place; the loader pins these (#768).
 bool SuppliedBySystem32Only(const std::string& file);
 
+// SuppliedBySystem32Only with the System32 directory given, without a trailing backslash. The public form
+// passes GetSystemDirectoryA's; a test passes a directory of its own to put a file where System32 would be.
+bool SuppliedBySystem32OnlyIn(const std::string& file, const std::string& systemDir);
+
 struct TreeVerdict {
   bool accepted = true;
   std::string file;  // when refused: the file that failed, a dependency's name or the plugin's own

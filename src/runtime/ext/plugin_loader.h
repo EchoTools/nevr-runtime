@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "nevr/plugin_interface.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginPhase
@@ -106,6 +107,11 @@ void TestHook_FailNamingTheHeldFile(bool fail);
 void TestHook_SetAfterDependenciesChecked(void (*hook)());
 // Makes every System32 pin of a plugin's dependencies fail with ERROR_ACCESS_DENIED (false restores it).
 void TestHook_FailPinning(bool fail);
+// Names the directory the pins load from in place of System32 (null or empty restores System32).
+void TestHook_SetPinDirectory(const char* directory);
+// Pins each name from the pin directory the way a plugin's System32 pins do, then frees them. False when one cannot be
+// loaded: `failed` names it, `error` is why.
+bool TestHook_PinSystemLibraries(const std::vector<std::string>& names, std::string* failed, DWORD* error);
 // Runs after a late load's check has passed and before the filter lets the load go on (#1177).
 void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked));
 #endif
