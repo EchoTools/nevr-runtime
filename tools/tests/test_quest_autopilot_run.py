@@ -420,8 +420,11 @@ class RunnerTest(unittest.TestCase):
 
     def test_an_interrupt_stops_the_game_and_gives_the_sensor_back(self):
         self.stream.write_text(LOADED + REGISTERED + START_LINE)
+        # A background job inherits SIGINT and SIGHUP ignored; reset both so the child can take the signal sent below.
         proc = subprocess.Popen(self.argv(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                env=self.env(None))
+                                env=self.env(None),
+                                preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL)
+                                                    for s in (signal.SIGINT, signal.SIGHUP)])
         for line in proc.stdout:
             if json.loads(line)["event"] == "route_start":
                 break

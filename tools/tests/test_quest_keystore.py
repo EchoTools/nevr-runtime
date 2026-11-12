@@ -358,15 +358,16 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertEqual(self.left_behind(), [])
 
     def assert_shredded_after_signal(self, sig, parent_ignores_sigint=False):
-        # A shell starts a background job with SIGINT ignored and the child inherits it, and a non-interactive bash
-        # cannot trap a signal that was ignored on entry. The script is started with the default disposition so the
-        # result does not depend on how the test run was started.
+        # A shell started as a background job (nohup, &) inherits SIGINT and SIGHUP ignored, and a non-interactive bash
+        # cannot trap a signal that was ignored on entry. The script is started with the default disposition for both,
+        # so the result does not depend on how the test run was started.
         if parent_ignores_sigint:
             previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
             self.addCleanup(signal.signal, signal.SIGINT, previous)
         proc = subprocess.Popen([str(SCRIPT), "with", "sleep", "30"], env=self.env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+                                preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL)
+                                                    for s in (signal.SIGINT, signal.SIGHUP)])
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         deadline = time.time() + 20
         while time.time() < deadline and not [p for p in self.run_dir.rglob("*") if p.is_file()]:
