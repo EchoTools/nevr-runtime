@@ -158,10 +158,10 @@ void Look(std::uintptr_t game, double now) noexcept {
     g_scopedOut.fetch_add(1, std::memory_order_relaxed);
     if (!g_scopedSaid) {
       g_scopedSaid = true;
-      const bool arena = look.fresh;  // fresh, so the refusal is an Echo Arena level the look saw
+      const bool sawFreshLook = look.fresh;  // fresh, so the refusal is an Echo Arena level the look saw
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_aibots_scoped_out",
-                          {{"bots", count}, {"reason", arena ? "echo_arena" : "no_fresh_look"},
-                           {"msg", arena ? "an Echo Arena level is loaded, so EnableScenario was not called; the game keeps its own bots"
+                          {{"bots", count}, {"reason", sawFreshLook ? "echo_arena" : "no_fresh_look"},
+                           {"msg", sawFreshLook ? "an Echo Arena level is loaded, so EnableScenario was not called; the game keeps its own bots"
                                          : "the combat level answer has no look younger than a second, so an Echo Arena level is not ruled out and "
                                            "EnableScenario was not called; the game keeps its own bots"}});
     }

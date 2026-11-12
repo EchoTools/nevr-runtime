@@ -56,7 +56,8 @@ libr15. `matchiscombat` is the game's own field: `Inspect<CBindingsOffsetOfInspe
 
 Offline Practice AI on a combat APK: `combat_aibots_install` with `result: installed`; on entering the match `combat_aibots_bots` with `bots` N; 3 s after the count settles one
 `combat_aibots_enable` with `scenario_name: randomattack`, `scenario_object: set`, `host: yes`, `combat_map: 1`; the bots move and fire instead of standing still. An arena match: no `enable` and no
-`combat_aibots_idle`, and in an arena match with bots (none expected) one `combat_aibots_scoped_out` with `reason: echo_arena`. An online combat match: no `enable`, and at most one
+`combat_aibots_idle`. One `combat_aibots_scoped_out` with `reason: echo_arena` appears only when the game's combat flag is set and an Echo Arena level is loaded
+(a transition from a combat map into an arena level, with bots on the field): an arena match has its combat flag at 0, so the look ends before that line. An online combat match: no `enable`, and at most one
 `combat_aibots_idle`. A `scoped_out` with `reason: no_fresh_look` in a combat match means the combat tick stopped (the scope's `combat_scope_stale` line follows when it is back).
 Falsifiers: bots stand still in a practice match with a `combat_aibots_idle` line (`scenarios_object` no means `net+0x2ab0`, `bots` 0 while bots are on the field means `scenarios+0x500`) or with none (the flag at `net+0x6341b`
 did not read set); an `enable` with `scenario_object: not_set` or `host: no`; `combat_map: 0` in a combat level; a crash at the call.

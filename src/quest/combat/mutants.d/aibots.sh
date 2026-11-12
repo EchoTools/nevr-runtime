@@ -50,9 +50,9 @@ runm ai_arena_said_every_look src/quest/combat/aibots.cpp 's/    if (!g_scopedSa
 runm ai_arena_unseen src/quest/combat/aibots.cpp 's/g_scopedOut.fetch_add(1, std::memory_order_relaxed);/;/'
 runm ai_arena_stale_believed src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if (look.fresh \&\& (look.bits \& scope::kBitEchoArena) != 0) {/'
 runm ai_arena_unchecked_view src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if ((look.bits \& scope::kBitEchoArena) != 0) {/'
-runm ai_scoped_reason_one src/quest/combat/aibots.cpp 's/{"reason", arena ? "echo_arena" : "no_fresh_look"}/{"reason", "echo_arena"}/'
-runm ai_scoped_msg_one src/quest/combat/aibots.cpp 's/{"msg", arena ? "an Echo Arena level is loaded/{"msg", true ? "an Echo Arena level is loaded/'
-runm ai_scoped_reason_inverted src/quest/combat/aibots.cpp 's/const bool arena = look.fresh;/const bool arena = !look.fresh;/'
+runm ai_scoped_reason_one src/quest/combat/aibots.cpp 's/{"reason", sawFreshLook ? "echo_arena" : "no_fresh_look"}/{"reason", "echo_arena"}/'
+runm ai_scoped_msg_one src/quest/combat/aibots.cpp 's/{"msg", sawFreshLook ? "an Echo Arena level is loaded/{"msg", true ? "an Echo Arena level is loaded/'
+runm ai_scoped_reason_inverted src/quest/combat/aibots.cpp 's/const bool sawFreshLook = look.fresh;/const bool sawFreshLook = !look.fresh;/'
 runm ai_scope_live_unchecked src/quest/combat/aibots.cpp 's/^  if (!scenarioOff \&\& !scope::Live()) return Refused/  if (false \&\& !scenarioOff \&\& !scope::Live()) return Refused/'
 runm ai_scope_live_token src/quest/combat/aibots.cpp 's/return Refused("scope_not_live", "");/return Refused("module_not_loaded", "");/'
 runm ai_scope_live_over_off src/quest/combat/aibots.cpp 's/if (!scenarioOff \&\& !scope::Live())/if ((scenarioOff || true) \&\& !scope::Live())/'
@@ -80,5 +80,9 @@ runm ai_arena_idle $A 's/  if (!ok || combat == 0) return;/  if (!ok) return;/'
 runm ai_pins_unchecked $A 's/const pinned::Pins lists\[\] = {at::kPins, netgame::kPins};/const pinned::Pins lists[] = {netgame::kPins};/'
 
 runm ai_no_pin_check src/quest/combat/aibots.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
+# One read of the combat level answer per call (test 18): a second LastLook for the refusal, or for the combat-map flag, gives the same answer here, so
+# only the read count (the seam) tells the mutant from the module.
+runm ai_one_look_decision src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if (scope::SeenEchoArena()) {/'
+runm ai_one_look_map src/quest/combat/aibots.cpp 's/(look.bits \& scope::kBitCombatMap) != 0 ? 1 : 0/(scope::LastLook().bits \& scope::kBitCombatMap) != 0 ? 1 : 0/'
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): aibots keeps the row on alone.
 runm airow_scope_reader src/quest/combat/combat_install.cpp 's/ || g_config.aibots.on || g_config.bvh.on;$/ || g_config.bvh.on;/' quest-host-combat combat_install_test

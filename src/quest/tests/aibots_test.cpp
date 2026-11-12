@@ -8,7 +8,7 @@
 // build only, so section 7 installs as one. New with the move: 12 the switch, 13 `combat.aibots_scenario`, 14 a release build reads no request file and
 // warns about one, 15 the Echo Arena scope, 16 the install on an image, 17 the host cost of a look. The scope is the real combat level answer (combat_scope.h,
 // #2382): each test frame runs its refresh against the fake game before the module's callback, as the tick does; a stale or absent look refuses the call;
-// a scope that cannot change refuses the install (`scope_not_live`).
+// a scope that cannot change refuses the install (`scope_not_live`). 18 one read of the combat level answer per call (the read seam counts them).
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/aibots.h"
@@ -115,6 +115,10 @@ void FEnable(void* scen, int state) {
   g_calls.push_back({scen, state, g_now});
   if (g_enableSets) Put<std::uintptr_t>(scen, 0x560, 0x1234);
 }
+
+// The combat level answer's read seam (combat_scope.h SetLookReadSeamForTest) fires once per LastLook: counting it counts the module's reads of the answer.
+std::atomic<std::uint64_t> g_lookReads{0};
+void CountLookRead() { g_lookReads.fetch_add(1, std::memory_order_relaxed); }
 
 void SetCount(std::uint32_t n) { Put<std::uint32_t>(g_scen, 0x500, n); }
 void SetState(std::int32_t s) { Put<std::int32_t>(g_net, 0, s); }
@@ -682,6 +686,57 @@ void AnArenaMatchIsFourReadsALookAndNoScan() {
         ai::CurrentStats().looks);
 }
 
+// 18: one read of the combat level answer per call that reaches it. The decision, the reason and the combat-map flag of a call all come from the one record
+// LastLook returns, so the module must not read the answer again (a second read could see a second look). Reads are counted by the seam: each call that
+// reaches the answer (refused or made) reads it exactly once, in four cases: an Echo Arena level, a combat map, a look a second old, and no look at all.
+void OneLookPerCall() {
+  const std::uint64_t arena = CSymbol64Hash("mpl_arena_a"), dyson = CSymbol64Hash("mpl_combat_dyson");
+  // an Echo Arena level: every call that reaches the answer is refused, from one read each
+  Reset();
+  SetLevels({arena});
+  scope::SetLookReadSeamForTest(&CountLookRead);
+  g_lookReads.store(0);
+  Run(10);
+  auto st = ai::CurrentStats();
+  CHECK(st.scopedOut > 0 && st.enables == 0 && g_lookReads.load() == st.scopedOut, "an Echo Arena level: %llu reads for %u refused calls",
+        static_cast<unsigned long long>(g_lookReads.load()), st.scopedOut);
+  // a combat map: the call made reads the answer once, and its combat_map field is that look's
+  Reset();
+  SetLevels({dyson});
+  scope::SetLookReadSeamForTest(&CountLookRead);
+  g_lookReads.store(0);
+  Run(4);
+  st = ai::CurrentStats();
+  CHECK(st.enables == 1 && g_lookReads.load() == st.enables + st.scopedOut && Count("combat_aibots_enable", "\"combat_map\":1") == 1,
+        "a combat map: %llu reads for %u calls and %u refused", static_cast<unsigned long long>(g_lookReads.load()), st.enables, st.scopedOut);
+  // a look a second old (one look, then the tick stops): every call is refused, from one read each
+  Reset();
+  SetLevels({dyson});
+  Tick();
+  scope::SetLookReadSeamForTest(&CountLookRead);
+  g_lookReads.store(0);
+  for (int i = 0; i < 160; ++i) {
+    ai::Tick(reinterpret_cast<std::uintptr_t>(g_game));
+    g_now += 0.0625;
+  }
+  st = ai::CurrentStats();
+  CHECK(st.scopedOut > 0 && st.enables == 0 && g_lookReads.load() == st.scopedOut && Count("combat_aibots_scoped_out", "\"reason\":\"no_fresh_look\"") == 1,
+        "a stale look: %llu reads for %u refused calls", static_cast<unsigned long long>(g_lookReads.load()), st.scopedOut);
+  // no look at all: the same, from one read each
+  Reset();
+  SetLevels({dyson});
+  scope::SetLookReadSeamForTest(&CountLookRead);
+  g_lookReads.store(0);
+  for (int i = 0; i < 160; ++i) {
+    ai::Tick(reinterpret_cast<std::uintptr_t>(g_game));
+    g_now += 0.0625;
+  }
+  st = ai::CurrentStats();
+  CHECK(st.scopedOut > 0 && st.enables == 0 && g_lookReads.load() == st.scopedOut && Count("combat_aibots_scoped_out", "\"reason\":\"no_fresh_look\"") == 1,
+        "no look: %llu reads for %u refused calls", static_cast<unsigned long long>(g_lookReads.load()), st.scopedOut);
+  scope::SetLookReadSeamForTest(nullptr);
+}
+
 void TheInstallOnAnImage() {  // 16
   combat_test::Image image;
   static combat_test::Image* sImage;
@@ -785,6 +840,7 @@ int main() {
   AReleaseBuildReadsNoRequestFile();
   AnEchoArenaLevelIsLeftAlone();
   AnArenaMatchIsFourReadsALookAndNoScan();
+  OneLookPerCall();
   TheInstallOnAnImage();
   TheCostOfALook();
   ClearDir();
