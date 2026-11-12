@@ -96,7 +96,10 @@ void RemoveIfUnusedLocked() {
     return;
   }
   Log(EchoVR::LogLevel::Info, "[NEVR.COMBAT] bullet spawn hook removed va=%p (no filter left on it)", g_target);
-  // The game's bytes are back: a call already past the filters reaches the game's own function, not a freed trampoline.
+  // The game's bytes are back, and a call that reads g_real after this store reaches the game's own function. A thread that
+  // already loaded g_real inside Hooked before PatchRetire freed the trampoline can still call the freed trampoline: that window
+  // is not closed here. It is not reachable in production today (no caller runs Uninstall, and DroneFix clears its filter only when
+  // its install fails at boot); a caller that clears filters while spawns run must disable the hook and never free it instead.
   g_real = reinterpret_cast<SpawnFn>(g_target);
   g_target = nullptr;
 }
