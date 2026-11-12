@@ -230,7 +230,7 @@ void AChangeIsOneInfoLineWithItsValueAndNoChangeIsNoLine() {
     std::snprintf(want, sizeof(want), "\"from\":0,\"to\":1,\"map\":1,\"level\":\"0x%016llx\",\"looks\":4",
                   static_cast<unsigned long long>(EchoVR::CSymbol64Hash("mpl_combat_dyson")));
     QCHECK(Has(change[0].text, want));
-    QCHECK(Has(change[0].text, "a combat level is loaded"));
+    QCHECK(Has(change[0].text, "\"msg\":\"a combat level is loaded: the combat modules that read the level answer act\""));
   }
   LookAt({"mpl_lobby_b_combat"});  // map -> lobby: InCombatOrLobby stays, InCombatMap goes: a change
   change = Lines("combat_scope_change");
@@ -246,7 +246,8 @@ void AChangeIsOneInfoLineWithItsValueAndNoChangeIsNoLine() {
   if (change.size() == 3U) {
     std::snprintf(want, sizeof(want), "\"from\":1,\"to\":0,\"map\":0,\"level\":\"0x%016llx\"",
                   static_cast<unsigned long long>(EchoVR::CSymbol64Hash("mpl_arena_a")));
-    QCHECK(Has(change[2].text, want) && Has(change[2].text, "pass every call through"));
+    QCHECK(Has(change[2].text, want) &&
+           Has(change[2].text, "\"msg\":\"no combat level is loaded: the combat modules that read the level answer pass every call through\""));
   }
   End();
 }
@@ -315,7 +316,8 @@ void AStaleGapIsOneWarningWhenTheTickIsBack() {
   if (stale.size() == 1U) {
     QCHECK(stale[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(stale[0].text, "\"gap_ms\":1001,\"stale_after_ms\":1000,") && Has(stale[0].text, idOf("mpl_combat_dyson")));
-    QCHECK(Has(stale[0].text, "passed every call through to the game in that gap"));
+    QCHECK(Has(stale[0].text, "\"msg\":\"the combat tick stopped for longer than the level answer is believed: every combat module that reads it "
+                              "passed every call through to the game in that gap\""));
   }
   Look();  // the next looks age from the one that said it: no second record
   Look();
@@ -414,7 +416,10 @@ void TheRowRegistersTheRefreshOnceAndSaysSo() {
   QCHECK(r.installed && tick::Count() == 1);  // asked again: the same registration
   const std::vector<Line> install = Lines("combat_scope_install");
   QCHECK(install.size() == 1U);
-  if (install.size() == 1U) QCHECK(install[0].level == sentinel::LogLevel::kInfo && Has(install[0].text, "\"result\":\"registered\",\"reason\":\"ok\""));
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kInfo && Has(install[0].text, "\"result\":\"registered\",\"reason\":\"ok\""));
+    QCHECK(Has(install[0].text, "\"msg\":\"the combat level answer is refreshed from the game-thread tick, four times a second, for every combat module that reads it\""));
+  }
   End();
 }
 
@@ -424,7 +429,10 @@ void ATickThatIsNotInstalledRegistersNothing() {
   QCHECK(!r.installed && std::strcmp(r.status, "tick_not_installed") == 0 && !scope::Live() && tick::Count() == 0);
   const std::vector<Line> install = Lines("combat_scope_install");
   QCHECK(install.size() == 1U);
-  if (install.size() == 1U) QCHECK(install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"tick_not_installed\""));
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"tick_not_installed\""));
+    QCHECK(Has(install[0].text, "\"msg\":\"the combat level answer cannot change, so the combat modules that read it are not installed and the game keeps its own behaviour\""));
+  }
   QCHECK(!scope::InCombatOrLobby());
   End();
 }
@@ -442,6 +450,94 @@ void AFullTickTableRefusesAndTheAnswerStaysFalse() {
   End();
 }
 
+std::uint64_t Id(const char* name) { return EchoVR::CSymbol64Hash(name); }
+
+// The last look as one record (LastLook): its classes, the level that decided it (the change line's), the count of looks and whether it is fresh; and the
+// arena question built on it (SeenEchoArena), which is true with no look, with a stale look and with an Echo Arena level, and false only for a fresh look
+// that saw none.
+void TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed() {
+  Begin();
+  scope::Look look = scope::LastLook();
+  QCHECK(look.bits == 0 && look.level == 0 && look.looks == 0 && !look.fresh);
+  QCHECK(scope::SeenEchoArena());  // no look yet: arena is not ruled out
+  LookAt({"mpl_combat_dyson"});
+  look = scope::LastLook();
+  QCHECK(look.bits == scope::kBitCombatMap && look.level == Id("mpl_combat_dyson") && look.looks == 1 && look.fresh);
+  QCHECK(!scope::SeenEchoArena());
+  LookAt({"mpl_combat_gauss", "mpl_arena_a"});  // a transition: arena wins, and the record names the arena level
+  look = scope::LastLook();
+  QCHECK(look.bits == (scope::kBitCombatMap | scope::kBitEchoArena) && look.level == Id("mpl_arena_a") && look.looks == 2 && look.fresh);
+  QCHECK(scope::SeenEchoArena());
+  for (const char* name : {"mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"}) {
+    LookAt({name});
+    QCHECK(scope::SeenEchoArena() && scope::LastLook().level == Id(name) && scope::LastLook().bits == scope::kBitEchoArena);
+  }
+  LookAt({"mpl_lobby_b_combat", "mpl_lobby_b"});
+  look = scope::LastLook();
+  QCHECK(look.bits == scope::kBitCombatLobby && look.level == Id("mpl_lobby_b_combat") && !scope::SeenEchoArena());
+  LookAt({"mpl_lobby_b_combat", "mpl_combat_fission"});
+  look = scope::LastLook();
+  QCHECK(look.bits == (scope::kBitCombatMap | scope::kBitCombatLobby) && look.level == Id("mpl_combat_fission"));
+  LookAt({"mpl_lobby_b"});  // a lobby arena players use: no class, no level, and not arena
+  look = scope::LastLook();
+  QCHECK(look.bits == 0 && look.level == 0 && look.looks == 8 && look.fresh && !scope::SeenEchoArena());
+  // staleness: believed at the limit, not a millisecond after; the record keeps its classes and level
+  const std::int64_t looked = g_nowMs;
+  g_nowMs = looked + scope::kStaleAfterMs;
+  QCHECK(scope::LastLook().fresh && !scope::SeenEchoArena());
+  g_nowMs = looked + scope::kStaleAfterMs + 1;
+  look = scope::LastLook();
+  QCHECK(!look.fresh && look.looks == 8 && look.bits == 0);
+  QCHECK(scope::SeenEchoArena());  // the tick stopped: arena is not ruled out
+  LookAt({"mpl_combat_dyson"});
+  QCHECK(scope::LastLook().fresh && !scope::SeenEchoArena());
+  // an unreadable game is no level, freshly looked
+  g_nowMs += scope::kLookEveryMs;
+  scope::Refresh(0);
+  look = scope::LastLook();
+  QCHECK(look.bits == 0 && look.level == 0 && look.fresh && !scope::SeenEchoArena());
+  End();
+}
+
+// A record read while a look is being written is not handed out (its fields could be of two looks): the read gives up after kLookReadTries and answers
+// "no look, not fresh", so SeenEchoArena is true. Once the write ends, the new look is read whole.
+scope::Look g_midWrite;
+bool g_midArena = false;
+int g_seamCalls = 0;
+void ReadMidWrite() {
+  ++g_seamCalls;
+  g_midWrite = scope::LastLook();
+  g_midArena = scope::SeenEchoArena();
+}
+int g_lookedDuringRead = 0;
+void LookOnceDuringARead() {
+  if (g_lookedDuringRead++ != 0) return;
+  Look();
+}
+void AHalfWrittenLookIsNeverHandedOut() {
+  Begin();
+  LookAt({"mpl_combat_dyson"});
+  scope::SetLookSeamForTest(&ReadMidWrite);
+  g_midWrite = scope::Look{};
+  g_midWrite.looks = 99;
+  LookAt({"mpl_arena_a"});
+  QCHECK(g_seamCalls == 1);
+  QCHECK(g_midWrite.looks == 0 && g_midWrite.bits == 0 && g_midWrite.level == 0 && !g_midWrite.fresh);
+  QCHECK(g_midArena);
+  scope::SetLookSeamForTest(nullptr);
+  scope::Look look = scope::LastLook();
+  QCHECK(look.bits == scope::kBitEchoArena && look.level == Id("mpl_arena_a") && look.looks == 2 && look.fresh);
+  // A look written while a read is under way (between its classes and its level): the read starts again and hands out the new look whole, never the
+  // old classes with the new level.
+  g_model.Only({"mpl_combat_gauss"});
+  scope::SetLookReadSeamForTest(&LookOnceDuringARead);
+  look = scope::LastLook();
+  scope::SetLookReadSeamForTest(nullptr);
+  QCHECK(g_lookedDuringRead == 2);  // the first read met the look, the second read found the record whole
+  QCHECK(look.bits == scope::kBitCombatMap && look.level == Id("mpl_combat_gauss") && look.looks == 3 && look.fresh);
+  End();
+}
+
 }  // namespace
 
 int main() {
@@ -449,6 +545,7 @@ int main() {
   // are false too (a word that started with a combat bit would be believed by them: the staleness test is made only on the combat path).
   QCHECK(!scope::InCombatOrLobby() && !scope::InCombatMap() && scope::Looks() == 0 && !scope::Live());
   QCHECK(!scope::SeenCombatOrLobby() && !scope::SeenCombatMap());
+  QCHECK(scope::SeenEchoArena() && scope::LastLook().looks == 0);  // and arena is not ruled out
   QCHECK(scope::kLookEveryMs == 250 && scope::kStaleAfterMs == 1000);  // four looks a second; a second without one is a stopped tick
   FailsClosedUntilTheFirstLook();
   TheTwoAnswersDifferExactlyAtTheCombatLobby();
@@ -465,6 +562,8 @@ int main() {
   LiveFollowsTheTickAndTheTickInstallIsHonest();
   ATickThatIsNotInstalledRegistersNothing();
   AFullTickTableRefusesAndTheAnswerStaysFalse();
+  TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed();
+  AHalfWrittenLookIsNeverHandedOut();
   if (quest_test::Failures() == 0) std::printf("combat_scope_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

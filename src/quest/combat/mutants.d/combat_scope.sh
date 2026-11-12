@@ -63,3 +63,26 @@ runm sc_row_off_is_failed       $I "s/return {false, \"off_config\", \\/\\*off=\
 runm sc_row_hudmeter_not_reader $I "s/const bool anyReader = g_config.hudmeter.on || /const bool anyReader = /" quest-host-combat combat_install_test
 runm sc_row_gamma_not_reader    $I "s/ || g_config.shieldgammaGamma.on || / || /" quest-host-combat combat_install_test
 runm sc_row_mirror_not_reader   $I "s/ || g_config.shieldgammaTubeMirror.on;/;/" quest-host-combat combat_install_test
+# the look record (LastLook): one look whole, under the sequence count, on any thread; and the arena question built on it (SeenEchoArena)
+runm lr_odd_ignored             $C "s/^    if ((begin \\& 1U) != 0) continue;  \\/\\/ a look is being written\$//"
+runm lr_end_unchecked           $C "s/^    if (g_seq.load(std::memory_order_relaxed) != begin) continue;.*\$//"
+runm lr_write_not_odd           $C "s/^  g_seq.store(seq + 1, std::memory_order_relaxed);\$//"
+runm lr_write_left_odd          $C "s/^  g_seq.store(seq + 2, std::memory_order_release);\$//"
+runm lr_no_tries                $H "s/kLookReadTries = 4;/kLookReadTries = 0;/"
+runm lr_gives_up_open           $C "s/^  return Look{};  \\/\\/ never whole.*\$/  Look open; open.fresh = true; return open;/"
+runm lr_fresh_without_look      $C "s/look.fresh = look.looks != 0 \\&\\& NowMs()/look.fresh = NowMs()/"
+runm lr_fresh_by_one            $C "s/look.fresh = look.looks != 0 \\&\\& NowMs() - at <= kStaleAfterMs;/look.fresh = look.looks != 0 \\&\\& NowMs() - at < kStaleAfterMs;/"
+runm lr_never_stale             $C "s/look.fresh = look.looks != 0 \\&\\& NowMs() - at <= kStaleAfterMs;/look.fresh = look.looks != 0 \\&\\& (NowMs() - at <= kStaleAfterMs || true);/"
+runm lr_bits_zero               $C "s/look.bits = detail::g_bits.load(std::memory_order_relaxed);/look.bits = 0;/"
+runm lr_level_zero              $C "s/look.level = g_lastLevel.load(std::memory_order_relaxed);/look.level = 0;/"
+runm lr_looks_zero              $C "s/look.looks = g_looks.load(std::memory_order_relaxed);/look.looks = 1;/"
+runm lr_seam_not_called         $C "s/^  if (seam != nullptr) seam();\$/  (void)seam;/"
+runm sea_ignores_stale          $C "s/return !look.fresh || (look.bits \\& kBitEchoArena) != 0;/return (look.bits \\& kBitEchoArena) != 0;/"
+runm sea_ignores_arena          $C "s/return !look.fresh || (look.bits \\& kBitEchoArena) != 0;/return !look.fresh;/"
+runm sea_inverted               $C "s/return !look.fresh || (look.bits \\& kBitEchoArena) != 0;/return look.fresh \\&\\& (look.bits \\& kBitEchoArena) == 0;/"
+# the texts of the three lines name every reader of the answer, not two of them
+runm sc_change_msg_old          $C "s/a combat level is loaded: the combat modules that read the level answer act/a combat level is loaded: the wrist HUD and shield colour modules act/"
+runm sc_change_out_msg_old      $C "s/no combat level is loaded: the combat modules that read the level answer pass every call through/no combat level is loaded: the wrist HUD and shield colour modules pass every call through/"
+runm sc_stale_msg_old           $C "s/every combat module that reads it passed every call /the wrist HUD and shield colour modules passed every call /"
+runm sc_install_msg_old         $C "s/, four times a second, for every combat module that reads it\"/, four times a second\"/"
+runm sc_refused_msg_old         $C "s/so the combat modules that read it are not installed/so the modules that read it are not installed/"
