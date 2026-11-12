@@ -85,6 +85,12 @@ class AssetCache : public ::testing::Test {
   std::wstring dir_;
 };
 
+// Two writes with one stem in one clock tick must not share a temp file: a shared name lets one write's CREATE_ALWAYS
+// truncate the other's bytes.
+TEST_F(AssetCache, TwoTempPathsForOneStemDiffer) {
+  EXPECT_NE(cache::TempPathForTest(dir_, L"index"), cache::TempPathForTest(dir_, L"index"));
+}
+
 TEST_F(AssetCache, Sha256MatchesTheKnownVector) {
   EXPECT_EQ(cache::Sha256Hex("abc", 3), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   EXPECT_EQ(cache::Sha256Hex("", 0), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");

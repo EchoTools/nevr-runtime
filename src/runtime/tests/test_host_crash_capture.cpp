@@ -192,9 +192,11 @@ TEST(HostCrashCapture, ANestedCaptureIsSuppressedAndRecorded) {
 // mutex that attach created: it creates none.
 TEST(HostCrashCapture, TheCaptureCreatesNoLogMutexWhenItIsTheFirstToWrite) {
   // A name of this test's own, so no other process in the wineserver can make it fail or pass.
+  static LONG counter = 0;
+  const LONG sequence = InterlockedIncrement(&counter);
   wchar_t name[128] = {};
-  swprintf(name, 128, L"Local\\nevr-test-log-capture-%lu-%llu", static_cast<unsigned long>(GetCurrentProcessId()),
-           static_cast<unsigned long long>(GetTickCount64()));
+  swprintf(name, 128, L"Local\\nevr-test-log-capture-%lu-%llu-%ld", static_cast<unsigned long>(GetCurrentProcessId()),
+           static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(sequence));
   const auto exists = [&name] {
     HANDLE found = OpenMutexW(SYNCHRONIZE, FALSE, name);
     if (found != nullptr) CloseHandle(found);

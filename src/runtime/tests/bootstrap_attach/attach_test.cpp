@@ -992,10 +992,12 @@ int RunSuite() {
   wchar_t temp_base[MAX_PATH] = {};
   const DWORD temp_len = GetTempPathW(MAX_PATH, temp_base);
   Require(temp_len != 0 && temp_len < MAX_PATH, "no temp directory available");
+  static LONG counter = 0;
+  const LONG sequence = InterlockedIncrement(&counter);
   const std::wstring base = std::wstring(temp_base, temp_len) + L"nevr-attach-" +
                             std::to_wstring(GetCurrentProcessId()) + L"-" +
-                            std::to_wstring(GetTickCount64());
-  CreateDirectoryW(base.c_str(), nullptr);
+                            std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(sequence);
+  Require(CreateDirectoryW(base.c_str(), nullptr) != FALSE, "could not create the scenario base directory");
   const auto use_scenario_directory = [&base](const std::wstring& name) {
     const std::wstring directory = base + L"\\" + name;
     CreateDirectoryW(directory.c_str(), nullptr);

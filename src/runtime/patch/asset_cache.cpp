@@ -115,13 +115,19 @@ bool ReadWholeFile(const std::wstring& path, std::uint64_t limit, std::vector<st
 }
 
 std::atomic<std::uint64_t> g_failWritesAfterBytes{UINT64_MAX};
+std::atomic<std::uint64_t> g_tempSequence{0};
+
+/// `<stem>.<pid>.<tick>.<sequence>.tmp` in `dir`: the sequence makes two writes in one clock tick differ.
+std::wstring TempPathFor(const std::wstring& dir, const std::wstring& tempStem) {
+  const std::uint64_t sequence = g_tempSequence.fetch_add(1, std::memory_order_relaxed);
+  return JoinPath(dir, tempStem + L"." + std::to_wstring(GetCurrentProcessId()) + L"." +
+                           std::to_wstring(GetTickCount64()) + L"." + std::to_wstring(sequence) + kTempSuffix);
+}
 
 /// temp file in `dir` -> flush -> rename over `finalPath`. *step names the failing step.
 bool WriteAtomically(const std::wstring& dir, const std::wstring& finalPath, const std::wstring& tempStem,
                      const void* data, std::size_t len, const char** step, DWORD* error) {
-  const std::wstring tempPath = JoinPath(
-      dir, tempStem + L"." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(GetTickCount64()) +
-               kTempSuffix);
+  const std::wstring tempPath = TempPathFor(dir, tempStem);
   *step = "create temp";
   HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
@@ -383,6 +389,8 @@ bool SetIndexEntry(const std::wstring& dir, const IndexEntry& entry, std::string
 }
 
 void SetWriteFailureAfterBytesForTest(std::uint64_t bytes) { g_failWritesAfterBytes.store(bytes, std::memory_order_relaxed); }
+
+std::wstring TempPathForTest(const std::wstring& dir, const std::wstring& tempStem) { return TempPathFor(dir, tempStem); }
 
 EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::set<std::string>& referenced) {
   EvictReport report;
