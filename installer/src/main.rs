@@ -239,6 +239,11 @@ fn main() -> ExitCode {
                 }
             }
             ("pc", "stage") => {
+                // The stage writes into `--root` (the nevr root), so it gets the same root rule as a PC install (#1383), before
+                // any manifest is fetched or any folder is made under the root.
+                if let Err(why) = sess.check_nevr_root(&root) {
+                    return Ok((sess.end("needs-user", &why.msg)?, None));
+                }
                 let cur = match args.val("--current-json") {
                     Some(t) => nevr_install::stage::Current::parse(&t)?,
                     None => nevr_install::stage::Current::default(),
