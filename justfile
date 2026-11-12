@@ -879,13 +879,16 @@ test-auth-unit:
     # A failing binary is recorded and the loop goes on, so one failure does not hide the binaries after it
     # (#1228); the summary after the last binary names every failure and exits non-zero.
     test_failures=()
+    # The verdict is GTest's own, not the exit code (#2152): each run writes its XML result beside the binary, and a
+    # run that exits 0 with no passing result (a stack overflow under Wine exited 0 with no summary line) is a failure.
     run_test() {
-        local rc=0
+        local rc=0 xml="$1.gtest.xml" verdict
+        rm -f "$xml"
         if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
-            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" || rc=$?
+            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" --gtest_output="xml:$xml" || rc=$?
         else
             echo "test-auth-unit: systemd-run unavailable or cannot start a user scope: running $1 with the time limit only (no memory cap)" >&2
-            timeout -k 10 900 wine "$1" || rc=$?
+            timeout -k 10 900 wine "$1" --gtest_output="xml:$xml" || rc=$?
         fi
         if [[ "$rc" -eq 124 ]]; then
             echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
@@ -896,6 +899,9 @@ test-auth-unit:
         elif [[ "$rc" -ne 0 ]]; then
             echo "test-auth-unit: FAIL — $1 exited $rc" >&2
             test_failures+=("$1 (exit $rc)")
+        elif ! verdict="$(python3 tools/gtest_verdict.py "$xml" 2>&1)"; then
+            echo "test-auth-unit: FAIL — $1 exited 0 but $verdict" >&2
+            test_failures+=("$1 (no GTest result, exit $rc)")
         fi
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
