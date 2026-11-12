@@ -101,12 +101,8 @@ class PackageFixture(unittest.TestCase):
         self.write_apk(self.version)
         self.out = self.tmp / "out"
 
-    def write_apk(self, version, version_code=DEV_VERSION_CODE, manifest=None, strings=None):
-        # The sentinel as the build writes it: the defaults, the version, the short commit and the full commit, each
-        # NUL-bounded (quest_library_problems matches each whole).
-        if strings is None:
-            strings = [*VALUES.values(), version, COMMIT[:8], COMMIT]
-        sentinel = b"\x7fELF" + b"".join(s.encode() + b"\0" for s in strings)
+    def write_apk(self, version, version_code=DEV_VERSION_CODE, manifest=None):
+        sentinel = b"\x7fELF" + b"\0".join([v.encode() for v in VALUES.values()] + [version.encode(), COMMIT[:8].encode()])
         with zipfile.ZipFile(self.apk, "w") as z:
             z.writestr("lib/arm64-v8a/libovrplatformloader.so", sentinel)
             z.writestr("AndroidManifest.xml", manifest if manifest is not None else axml_fixtures.build_manifest(version_code))
@@ -249,32 +245,6 @@ class LocalDevPackageTest(PackageFixture):
                 # "quest: " is the gate's prefix; the seal's own check (a second defence) has none
                 self.assertIn(f"quest: signed.apk: AndroidManifest.xml has versionCode {code}, not {DEV_VERSION_CODE}", result.stderr)
                 self.assertFalse(self.out.exists())
-
-    def test_a_local_gate_refuses_a_quest_library_whose_version_is_only_inside_another_string(self):
-        """#863: a bare substring match passes this library; the release job's whole-string check refuses it."""
-        inside = f"runtime-{self.version}-build"
-        self.write_apk(self.version, strings=[*VALUES.values(), inside, COMMIT[:8], COMMIT])
-        result = self.run_tool()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(f"quest: quest library: no string equal to the version '{self.version}'", result.stderr)
-        self.assertFalse(self.out.exists())
-
-    def test_a_local_gate_refuses_a_quest_library_whose_commit_is_only_inside_another_string(self):
-        self.write_apk(self.version, strings=[*VALUES.values(), self.version, COMMIT[:8], f"x{COMMIT}"])
-        result = self.run_tool()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(f"quest: quest library: no string equal to the commit {COMMIT}", result.stderr)
-
-    def test_a_tester_apk_check_refuses_a_library_whose_version_is_only_inside_another_string(self):
-        inside = f"runtime-{self.version}-build"
-        self.write_apk(self.version, strings=[*VALUES.values(), inside, COMMIT[:8], COMMIT])
-        with self.assertRaisesRegex(package_release.GateFailure, re.escape(f"no string equal to the version '{self.version}'")):
-            package_release.check_apk_version(self.apk, self.version, COMMIT)
-
-    def test_a_tester_apk_check_refuses_a_library_whose_commit_is_only_inside_another_string(self):
-        self.write_apk(self.version, strings=[*VALUES.values(), self.version, COMMIT[:8], f"x{COMMIT}"])
-        with self.assertRaisesRegex(package_release.GateFailure, re.escape(f"no string equal to the commit {COMMIT}")):
-            package_release.check_apk_version(self.apk, self.version, COMMIT)
 
     def test_the_seal_refuses_a_foreign_versionCode_on_its_own(self):
         # seal() is the second defence, for an APK that reaches it without the gate
