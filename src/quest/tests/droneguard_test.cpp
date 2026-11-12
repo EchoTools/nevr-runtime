@@ -812,24 +812,39 @@ void TheFinalStatsCountBothKindsOfSkip() {
 // Every combat_droneguard_install line names the stage-1 switch the step was handed (#2382), on every path, with stage 1 handed on (its default is
 // off, so a line that drops it shows): installed, refused for want of libr15, and refused for a pinned word that differs. The off line is the golden
 // line of TheSwitchOffInstallsNothingAndSaysSo.
+// Both values, on every path (#2382 review). The slot-refused line is the one whose installed flag is false while the switch was handed on, so a
+// line that reads "installed and stage 1" shows there; the off line is checked with the value handed off as well as on.
 void EveryInstallLineNamesTheStageOneSwitchItWasHanded() {
-  const std::string named = "\"droneguard_stage1\":1";
-  Installed(true);
-  std::vector<Line> install = Lines("combat_droneguard_install");
-  QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, named));
-  End();
-  Begin();
-  const dg::EngineFns f = Fns();
-  QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, true, &f).status, "module_not_loaded") == 0);
-  install = Lines("combat_droneguard_install");
-  QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") && Has(install[0].text, named));
-  End();
-  Begin();
-  g_image.Put<std::uint32_t>(dg::kWords[0].vaddr, dg::kWords[0].word ^ 0x00010000U);
-  QCHECK(std::strcmp(Install(true, true, &f).status, "pinned_word_mismatch") == 0);
-  install = Lines("combat_droneguard_install");
-  QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"pinned_word_mismatch\"") && Has(install[0].text, named));
-  End();
+  for (const bool s1 : {false, true}) {
+    const std::string named = std::string("\"droneguard_stage1\":") + (s1 ? "1" : "0");
+    Installed(s1);
+    std::vector<Line> install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    const dg::EngineFns f = Fns();
+    QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, s1, &f).status, "module_not_loaded") == 0);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    g_image.Put<std::uint32_t>(dg::kWords[0].vaddr, dg::kWords[0].word ^ 0x00010000U);
+    QCHECK(std::strcmp(Install(true, s1, &f).status, "pinned_word_mismatch") == 0);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"pinned_word_mismatch\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    Build(0x4242420);  // a slot that holds something other than Follow: the install is refused with its installed flag false
+    QCHECK(!Install(true, s1, nullptr).installed);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"slot_refused\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    QCHECK(Install(false, s1, &f).off);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"off\"") && Has(install[0].text, named));
+    End();
+  }
 }
 
 int main() {
