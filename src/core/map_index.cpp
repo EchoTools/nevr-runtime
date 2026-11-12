@@ -1,5 +1,6 @@
 #include "core/map_index.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <nlohmann/json.hpp>
 
@@ -163,13 +164,22 @@ bool MapFromJson(const json& value, CachedMap* out) {
   return true;
 }
 
+bool IsKeyIdText(const std::string& text) {
+  return text.size() == 16 &&
+         std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); });
+}
+
 json FloorsToJson(const FloorBook& book) {
   json channels = json::object();
-  for (const auto& [name, floors] : book.channels) {
-    json versions = json::object();
-    for (const auto& [key, version] : floors.version) versions[key] = version;
-    channels[name] =
-        json{{"serial", floors.serial}, {"serial_sha256", floors.serial_sha256}, {"version", std::move(versions)}};
+  for (const auto& [name, by_key] : book.channels) {
+    json keys = json::object();
+    for (const auto& [key_id, floors] : by_key) {
+      json versions = json::object();
+      for (const auto& [key, version] : floors.version) versions[key] = version;
+      keys[key_id] =
+          json{{"serial", floors.serial}, {"serial_sha256", floors.serial_sha256}, {"version", std::move(versions)}};
+    }
+    channels[name] = std::move(keys);
   }
   json bound = json::object();
   for (const auto& [url, channel] : book.bound) bound[url] = channel;
@@ -182,19 +192,27 @@ bool FloorsFromJson(const json& value, FloorBook* out) {
   const auto bound = value.find("bound");
   if (channels == value.end() || !channels->is_object() || bound == value.end() || !bound->is_object()) return false;
   for (auto it = channels->begin(); it != channels->end(); ++it) {
-    Floors floors;
-    const json& c = it.value();
-    if (!c.is_object() || !GetUnsigned(c, "serial", &floors.serial) ||
-        !GetString(c, "serial_sha256", &floors.serial_sha256)) {
-      return false;
+    if (!it.value().is_object()) return false;
+    auto& by_key = out->channels[it.key()];
+    for (auto k = it.value().begin(); k != it.value().end(); ++k) {
+      // An index written before floors were kept per key holds "serial", "serial_sha256" and "version" here. That floor
+      // is dropped: its key is unknown, and the next accepted manifest sets its own key's floor.
+      if (!IsKeyIdText(k.key())) continue;
+      Floors floors;
+      const json& c = k.value();
+      if (!c.is_object() || !GetUnsigned(c, "serial", &floors.serial) ||
+          !GetString(c, "serial_sha256", &floors.serial_sha256)) {
+        return false;
+      }
+      const auto versions = c.find("version");
+      if (versions == c.end() || !versions->is_object()) return false;
+      for (auto v = versions->begin(); v != versions->end(); ++v) {
+        if (!v.value().is_string()) return false;
+        floors.version[v.key()] = v.value().get<std::string>();
+      }
+      by_key[k.key()] = std::move(floors);
     }
-    const auto versions = c.find("version");
-    if (versions == c.end() || !versions->is_object()) return false;
-    for (auto v = versions->begin(); v != versions->end(); ++v) {
-      if (!v.value().is_string()) return false;
-      floors.version[v.key()] = v.value().get<std::string>();
-    }
-    out->channels[it.key()] = std::move(floors);
+    if (by_key.empty()) out->channels.erase(it.key());
   }
   for (auto it = bound->begin(); it != bound->end(); ++it) {
     if (!it.value().is_string()) return false;

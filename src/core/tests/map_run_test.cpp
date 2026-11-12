@@ -18,6 +18,8 @@ using namespace nevr_maps;
 using namespace nevr_maps_test;
 using json = nlohmann::json;
 
+constexpr const char* kKeyId = "A8A7A6A5A4A3A2A1";  // TestKey seed 1
+
 constexpr const char* kDir = "C:/nevr/cache/maps";
 constexpr const char* kBase = "https://maps.test/";
 constexpr const char* kNow = "2026-11-11T00:00:00Z";
@@ -671,8 +673,8 @@ TEST_F(MapRunTest, AChannelSwitchKeepsBothFloors) {
   config.channel = "echo-other";
   EXPECT_EQ(Fetch().reason, "");
   const CacheIndex index = Index();
-  EXPECT_EQ(index.floors.channels.at("echo-test").serial, 42u);
-  EXPECT_EQ(index.floors.channels.at("echo-other").serial, 7u);
+  EXPECT_EQ(index.floors.channels.at("echo-test").at(kKeyId).serial, 42u);
+  EXPECT_EQ(index.floors.channels.at("echo-other").at(kKeyId).serial, 7u);
 
   config.channel.clear();  // bound on first use: base_url now names echo-other, so echo-test's manifest is refused
   channel.name = "echo-test";
@@ -981,11 +983,42 @@ TEST_F(MapRunTest, AnUnsubscribedMapIsRemovedByGc) {
   EXPECT_TRUE(Index().maps.empty());
 }
 
+// The audit's scenario: testers trusted a test key on channel echo-test, then switch to the official key, whose manifest
+// carries the same channel name with a lower serial and a lower map version.
+TEST_F(MapRunTest, SwitchingToTheOfficialKeyStartsItsOwnFloorAndSaysSoOnce) {
+  config.subscribed = {"alpha"};
+  channel.Publish("alpha", "1.3.0", MakeSet(2, 'a'));
+  channel.Sign(40);
+  ASSERT_EQ(Fetch().reason, "");
+
+  TestKey official_key{2};
+  Channel official{env, official_key};
+  official.Publish("alpha", "1.0.0", MakeSet(2, 'b'));
+  official.Sign(1);
+  config.keys = {official_key.pin};
+  EXPECT_EQ(Fetch().reason, "");
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).version, "1.0.0");
+  const FakeEnv::Logged* changed = env.Find("map_trust_changed");
+  ASSERT_NE(changed, nullptr);
+  EXPECT_EQ(changed->Get("untrusted_keys"), kKeyId);
+  EXPECT_EQ(changed->Get("key_id"), "A9A8A7A6A5A4A3A2");
+  EXPECT_EQ(changed->Get("channel"), "echo-test");
+  EXPECT_TRUE(Boot().mounted == std::vector<std::string>{"alpha"});
+
+  official.Sign(2);
+  EXPECT_EQ(Fetch().reason, "");
+  official.Sign(1);
+  EXPECT_EQ(Fetch().reason, "serial_down");  // a rollback under the same key
+  EXPECT_EQ(std::count_if(env.events.begin(), env.events.end(),
+                          [](const FakeEnv::Logged& e) { return e.name == "map_trust_changed"; }),
+            1);
+}
+
 TEST_F(MapRunTest, TheCacheIndexRoundTrips) {
   CacheIndex index;
-  index.floors.channels["c"].serial = 3;
-  index.floors.channels["c"].serial_sha256 = std::string(64, 'a');
-  index.floors.channels["c"].version["m/windows-x86_64"] = "1.2.0";
+  index.floors.channels["c"][kKeyId].serial = 3;
+  index.floors.channels["c"][kKeyId].serial_sha256 = std::string(64, 'a');
+  index.floors.channels["c"][kKeyId].version["m/windows-x86_64"] = "1.2.0";
   index.floors.bound["https://x/"] = "c";
   CachedMap m;
   m.id = "m";
@@ -1011,9 +1044,16 @@ TEST_F(MapRunTest, TheCacheIndexRoundTrips) {
   CacheIndex back;
   ASSERT_TRUE(CacheIndexFromJson(CacheIndexToJson(index), &back));
   EXPECT_EQ(back.maps.at("m/windows-x86_64"), m);
-  EXPECT_EQ(back.floors.channels.at("c").version.at("m/windows-x86_64"), "1.2.0");
+  EXPECT_EQ(back.floors.channels.at("c").at(kKeyId).version.at("m/windows-x86_64"), "1.2.0");
   EXPECT_EQ(back.floors.bound.at("https://x/"), "c");
   EXPECT_FALSE(CacheIndexFromJson("{\"schema\":\"nevr-maps-index\",\"schema_version\":2}", &back));
+
+  // An index written before floors were kept per key: its floors are dropped, its maps are kept.
+  json legacy = json::parse(CacheIndexToJson(index));
+  legacy["floors"]["channels"]["c"] = legacy["floors"]["channels"]["c"][kKeyId];
+  ASSERT_TRUE(CacheIndexFromJson(legacy.dump(), &back));
+  EXPECT_EQ(back.floors.channels.count("c"), 0u);
+  EXPECT_EQ(back.maps.at("m/windows-x86_64"), m);
 }
 
 }  // namespace

@@ -32,6 +32,8 @@ using nevr_minisign::Verdict;
 
 constexpr const char* kNow = "2026-11-11T00:00:00Z";
 constexpr const char* kUrl = "https://maps.example/";
+constexpr const char* kAuthorId = "A8A7A6A5A4A3A2A1";    // TestKey seed 1
+constexpr const char* kOfficialId = "A9A8A7A6A5A4A3A2";  // TestKey seed 2
 
 std::string ReadVector(const std::string& name) {
   std::ifstream in(std::string(NEVR_MAP_VECTORS) + "/" + name, std::ios::binary);
@@ -306,8 +308,8 @@ TEST_F(MapManifest, SerialFloorRefusesRollbackAndReuseWhicheverKeySigned) {
   ParsedManifest p = Parse(a42, floors);
   ASSERT_EQ(p.reason, "");
   floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
-  EXPECT_EQ(floors.channels.at("echo-community").serial, 42u);
-  EXPECT_EQ(floors.channels.at("echo-community").serial_sha256, p.body_sha256);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kAuthorId).serial, 42u);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kAuthorId).serial_sha256, p.body_sha256);
 
   EXPECT_EQ(Parse(a42, floors).reason, "");  // the same bytes again: no change
 
@@ -321,7 +323,8 @@ TEST_F(MapManifest, SerialFloorRefusesRollbackAndReuseWhicheverKeySigned) {
   ASSERT_EQ(p.reason, "");
   floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
   EXPECT_EQ(Parse(a42, floors).reason, "serial_down");
-  EXPECT_EQ(floors.channels.at("echo-community").serial, 43u);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kOfficialId).serial, 43u);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kAuthorId).serial, 42u);
 }
 
 TEST_F(MapManifest, FloorsAreKeptPerSignedChannel) {
@@ -336,8 +339,8 @@ TEST_F(MapManifest, FloorsAreKeptPerSignedChannel) {
   p = Parse(author.SignedObject(BaseManifest("channel-y", 7).dump()), floors, "channel-y");
   ASSERT_EQ(p.reason, "");
   floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
-  EXPECT_EQ(floors.channels.at("channel-x").serial, 42u);
-  EXPECT_EQ(floors.channels.at("channel-y").serial, 7u);
+  EXPECT_EQ(floors.channels.at("channel-x").at(kAuthorId).serial, 42u);
+  EXPECT_EQ(floors.channels.at("channel-y").at(kAuthorId).serial, 7u);
   EXPECT_EQ(floors.bound.at(kUrl), "channel-y");
 
   // X's manifest replayed on Y's URL.
@@ -346,17 +349,62 @@ TEST_F(MapManifest, FloorsAreKeptPerSignedChannel) {
   EXPECT_EQ(Parse(author.SignedObject(BaseManifest("channel-x", 41).dump()), floors, "channel-x").reason, "serial_down");
 }
 
+// Test key to official key on one channel name: the official manifest is not held back by the test key's floors,
+// and a rollback under the official key itself is still refused.
+TEST_F(MapManifest, AKeyNoLongerTrustedHoldsNobodyBackButARollbackUnderTheSameKeyIsRefused) {
+  FloorBook floors;
+  json test_doc = BaseManifest("echo-community", 40);
+  test_doc["maps"]["arena"]["platforms"]["windows-x86_64"] = PlatformEntryJson("arena", "1.3.0", '1');
+  ParsedManifest p = Parse(author.SignedObject(test_doc.dump()), floors);
+  ASSERT_EQ(p.reason, "");
+  floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
+
+  const std::vector<PinnedKey> official_only{official.pin};
+  const auto as_official = [&](std::uint64_t serial, const char* arena_version) {
+    json doc = BaseManifest("echo-community", serial);
+    doc["maps"]["arena"]["platforms"]["windows-x86_64"] = PlatformEntryJson("arena", arena_version, '1');
+    return nevr_maps::ParseAndVerifyManifest(official.SignedObject(doc.dump()), official_only, floors, "echo-community",
+                                             kNow);
+  };
+  p = as_official(1, "1.0.0");
+  ASSERT_EQ(p.reason, "");
+  EXPECT_TRUE(p.dropped.empty());
+  EXPECT_EQ(p.untrusted_floor_keys, std::vector<std::string>{kAuthorId});
+  floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kOfficialId).serial, 1u);
+  EXPECT_EQ(floors.channels.at("echo-community").at(kAuthorId).serial, 40u);  // kept, in case the key is trusted again
+
+  p = as_official(2, "1.1.0");
+  ASSERT_EQ(p.reason, "");
+  floors = nevr_maps::AdvanceFloors(floors, kUrl, p);
+  EXPECT_EQ(as_official(1, "1.0.0").reason, "serial_down");
+  json reused = BaseManifest("echo-community", 2);
+  reused["revoked_ids"] = {"badmap"};
+  EXPECT_EQ(nevr_maps::ParseAndVerifyManifest(official.SignedObject(reused.dump()), official_only, floors,
+                                              "echo-community", kNow)
+                .reason,
+            "serial_reuse");
+  p = as_official(3, "1.0.5");
+  ASSERT_EQ(p.reason, "");
+  ASSERT_EQ(p.dropped.size(), 1u);
+  EXPECT_EQ(p.dropped[0], std::make_pair(std::string("arena/windows-x86_64"), std::string("version_down")));
+
+  // Both keys trusted again: the highest floor of the two applies.
+  EXPECT_EQ(Parse(official.SignedObject(BaseManifest("echo-community", 39).dump()), floors).reason, "serial_down");
+  EXPECT_TRUE(Parse(author.SignedObject(test_doc.dump()), floors).untrusted_floor_keys.empty());
+}
+
 TEST_F(MapManifest, VersionDownDropsOnlyThatEntryAndRevocationsStillApply) {
   FloorBook floors;
-  floors.channels["echo-community"].serial = 41;
-  floors.channels["echo-community"].serial_sha256 = Sha('0');
-  floors.channels["echo-community"].version["arena/windows-x86_64"] = "1.3.0";
-  floors.channels["echo-community"].version["arena/android-arm64"] = "1.1";
+  floors.channels["echo-community"][kAuthorId].serial = 41;
+  floors.channels["echo-community"][kAuthorId].serial_sha256 = Sha('0');
+  floors.channels["echo-community"][kAuthorId].version["arena/windows-x86_64"] = "1.3.0";
+  floors.channels["echo-community"][kAuthorId].version["arena/android-arm64"] = "1.1";
   json doc = BaseManifest();
   doc["revoked_ids"] = {"badmap"};
   doc["revoked_sha256"] = {Sha('7')};
   doc["maps"]["solo"]["platforms"]["windows-x86_64"] = PlatformEntryJson("solo", "0.9.0", '3');
-  floors.channels["echo-community"].version["solo/windows-x86_64"] = "1.0.0";
+  floors.channels["echo-community"][kAuthorId].version["solo/windows-x86_64"] = "1.0.0";
 
   const ParsedManifest p = ParseBody(doc, floors);
   ASSERT_EQ(p.reason, "");
@@ -371,22 +419,22 @@ TEST_F(MapManifest, VersionDownDropsOnlyThatEntryAndRevocationsStillApply) {
   EXPECT_EQ(p.manifest.revoked_sha256, std::vector<std::string>{Sha('7')});
 
   const FloorBook next = nevr_maps::AdvanceFloors(floors, kUrl, p);
-  EXPECT_EQ(next.channels.at("echo-community").version.at("arena/windows-x86_64"), "1.3.0");  // never lowered
-  EXPECT_EQ(next.channels.at("echo-community").serial, 42u);
+  EXPECT_EQ(next.channels.at("echo-community").at(kAuthorId).version.at("arena/windows-x86_64"), "1.3.0");  // never lowered
+  EXPECT_EQ(next.channels.at("echo-community").at(kAuthorId).serial, 42u);
 }
 
 TEST_F(MapManifest, AdvanceFloorsRaisesVersionsAndIgnoresARefusal) {
   FloorBook floors;
-  floors.channels["echo-community"].version["arena/windows-x86_64"] = "1.1.9";
+  floors.channels["echo-community"][kAuthorId].version["arena/windows-x86_64"] = "1.1.9";
   ParsedManifest p = ParseBody(BaseManifest(), floors);
   ASSERT_EQ(p.reason, "");
   const FloorBook next = nevr_maps::AdvanceFloors(floors, kUrl, p);
-  EXPECT_EQ(next.channels.at("echo-community").version.at("arena/windows-x86_64"), "1.2.0");
-  EXPECT_EQ(next.channels.at("echo-community").version.at("arena/android-arm64"), "1.1.0");
+  EXPECT_EQ(next.channels.at("echo-community").at(kAuthorId).version.at("arena/windows-x86_64"), "1.2.0");
+  EXPECT_EQ(next.channels.at("echo-community").at(kAuthorId).version.at("arena/android-arm64"), "1.1.0");
 
   p.reason = "serial_down";
   const FloorBook unchanged = nevr_maps::AdvanceFloors(floors, kUrl, p);
-  EXPECT_EQ(unchanged.channels.at("echo-community").version.at("arena/windows-x86_64"), "1.1.9");
+  EXPECT_EQ(unchanged.channels.at("echo-community").at(kAuthorId).version.at("arena/windows-x86_64"), "1.1.9");
   EXPECT_TRUE(unchanged.bound.empty());
 }
 

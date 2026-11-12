@@ -51,7 +51,8 @@ Every line is `[NEVR.MAPS] <event> key=value ...`, with a `reason=` or `refused=
 | --- | --- |
 | `map_start` | The channel starts, or does not (`not_configured`, `busy`). |
 | `map_manifest` | A manifest fetch and verify. |
-| `map_boot` | The stored manifest at boot. |
+| `map_boot` | The stored manifest at boot. After a key change, `reason=unknown_key` until the next fetch replaces it. |
+| `map_trust_changed` | Once, when a key first signs a channel that keys no longer trusted hold floors on (`untrusted_keys=`): the new key starts its own replay floor. |
 | `map_deferred` | A version whose stamp differs waits for a background re-hash. |
 | `map_mounted` | A map's set and scripts registered, or the reason they were refused. |
 | `map_skipped` | A map not mounted for a reason outside its own bytes (`local_map`). |
@@ -69,7 +70,7 @@ Every line is `[NEVR.MAPS] <event> key=value ...`, with a `reason=` or `refused=
 | `http_<status>`, `transport` | The fetch failed; the cache is untouched. |
 | `over_cap` | A download passed its cap, or a map would pass `maps.cap_mib`. |
 | `bad_signature`, `unknown_key`, `malformed` | The manifest does not verify; the stored one is kept. |
-| `serial_down`, `version_down` | A replay or a downgrade; refused. |
+| `serial_down`, `version_down` | A replay or a downgrade; refused. Floors are kept per channel and signing key; a manifest meets the highest floors of the keys trusted now, so switching from a test key to the official key never locks a player out. |
 | `expired` | Past `expires`: maps with scripts are not mounted. |
 | `unsupported_game`, `stock_mismatch` | The map was built for another game build or stock manifest; skipped. |
 | `revoked` | Revoked, or missing from the manifest; not mounted, then deleted by GC. |

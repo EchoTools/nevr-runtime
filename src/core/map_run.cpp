@@ -271,7 +271,13 @@ class BootRun {
     parsed_ = ParseAndVerifyManifest(signed_text, config_.keys, index_.floors, ExpectedChannel(config_, index_.floors),
                                      now_utc);
     if (!parsed_.reason.empty()) {
-      env_.Event(EventLevel::kWarn, "map_boot", {{"reason", parsed_.reason}});
+      if (parsed_.reason == "unknown_key") {
+        env_.Event(EventLevel::kWarn, "map_boot",
+                   {{"reason", parsed_.reason},
+                    {"consequence", "no key trusted now signed the stored manifest; the next fetch replaces it"}});
+      } else {
+        env_.Event(EventLevel::kWarn, "map_boot", {{"reason", parsed_.reason}});
+      }
       return parsed_.reason;
     }
     expired_ = IsExpired(parsed_.manifest.expires, now_utc);
@@ -553,6 +559,7 @@ class FetchRun {
     env_.Event(
         EventLevel::kInfo, "map_manifest",
         {{"serial", parsed_.manifest.serial}, {"channel", parsed_.channel}, {"maps", parsed_.manifest.maps.size()}});
+    LogTrustChange();
 
     PlanAndFetch();
     if (keep_going_()) RemoveSupersededTmps();
@@ -580,6 +587,20 @@ class FetchRun {
                 {"pieces_reused", report_.pieces_reused},
                 {"bytes_fetched", report_.bytes_fetched}});
     return report_;
+  }
+
+  // Once, when a key first signs a channel that keys no longer trusted have floors on (test key to official key).
+  void LogTrustChange() {
+    if (parsed_.untrusted_floor_keys.empty()) return;
+    const auto by_key = index_.floors.channels.find(parsed_.channel);
+    if (by_key != index_.floors.channels.end() && by_key->second.count(parsed_.key_id) != 0) return;
+    std::string untrusted;
+    for (const std::string& key_id : parsed_.untrusted_floor_keys) untrusted += (untrusted.empty() ? "" : ",") + key_id;
+    env_.Event(EventLevel::kWarn, "map_trust_changed",
+               {{"channel", parsed_.channel},
+                {"key_id", parsed_.key_id},
+                {"untrusted_keys", untrusted},
+                {"consequence", "this key starts its own replay floor; the untrusted keys' floors are ignored"}});
   }
 
   void Drop(const std::string& key) {

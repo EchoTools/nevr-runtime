@@ -217,8 +217,42 @@ std::string ReadRevoked(const json& doc, const char* key, bool ids, std::vector<
   return "";
 }
 
+// The floors a manifest meets, across the keys trusted now: the highest serial, with every body seen at it (one, unless
+// a key was swapped in between), and the highest version of each entry.
+struct TrustedFloor {
+  std::uint64_t serial = 0;
+  std::set<std::string> bodies;  // empty: no serial floor
+  std::map<std::string, std::string> version;
+};
+
+TrustedFloor FloorOfTrustedKeys(const FloorBook& floors, const std::string& channel,
+                                const std::set<std::string>& trusted_ids, std::vector<std::string>* untrusted) {
+  TrustedFloor out;
+  const auto by_key = floors.channels.find(channel);
+  if (by_key == floors.channels.end()) return out;
+  for (const auto& [key_id, floor] : by_key->second) {
+    if (trusted_ids.count(key_id) == 0) {
+      untrusted->push_back(key_id);
+      continue;
+    }
+    if (!floor.serial_sha256.empty()) {
+      if (out.bodies.empty() || floor.serial > out.serial) {
+        out.serial = floor.serial;
+        out.bodies.clear();
+      }
+      if (floor.serial == out.serial) out.bodies.insert(floor.serial_sha256);
+    }
+    for (const auto& [entry, version] : floor.version) {
+      std::string& have = out.version[entry];
+      if (have.empty() || CompareVersions(version, have) > 0) have = version;
+    }
+  }
+  return out;
+}
+
 // The body is already authenticated; this is the shape check and the floors.
-void ReadBody(std::string_view body, const FloorBook& floors, const std::string& expected_channel, ParsedManifest* out) {
+void ReadBody(std::string_view body, const FloorBook& floors, const std::set<std::string>& trusted_ids,
+              const std::string& expected_channel, ParsedManifest* out) {
   json doc;
   if (!ParseStrict(body, &doc)) {
     out->reason = "malformed";
@@ -253,14 +287,13 @@ void ReadBody(std::string_view body, const FloorBook& floors, const std::string&
   }
   manifest.expires = *expires;
 
-  const auto floor_it = floors.channels.find(*channel);
-  const Floors* floor = floor_it == floors.channels.end() ? nullptr : &floor_it->second;
-  if (floor != nullptr && !floor->serial_sha256.empty()) {
-    if (manifest.serial < floor->serial) {
+  const TrustedFloor floor = FloorOfTrustedKeys(floors, *channel, trusted_ids, &out->untrusted_floor_keys);
+  if (!floor.bodies.empty()) {
+    if (manifest.serial < floor.serial) {
       out->reason = "serial_down";
       return;
     }
-    if (manifest.serial == floor->serial && out->body_sha256 != floor->serial_sha256) {
+    if (manifest.serial == floor.serial && floor.bodies.count(out->body_sha256) == 0) {
       out->reason = "serial_reuse";
       return;
     }
@@ -289,18 +322,16 @@ void ReadBody(std::string_view body, const FloorBook& floors, const std::string&
   }
 
   // Per entry: a rollback of one map drops that entry and nothing else, so revocations in the same body still apply.
-  if (floor != nullptr) {
-    for (auto map = manifest.maps.begin(); map != manifest.maps.end(); ++map) {
-      auto& platforms = map->second.platforms;
-      for (auto p = platforms.begin(); p != platforms.end();) {
-        const std::string key = map->first + "/" + p->first;
-        const auto have = floor->version.find(key);
-        if (have != floor->version.end() && CompareVersions(p->second.version, have->second) < 0) {
-          out->dropped.emplace_back(key, "version_down");
-          p = platforms.erase(p);
-        } else {
-          ++p;
-        }
+  for (auto map = manifest.maps.begin(); map != manifest.maps.end(); ++map) {
+    auto& platforms = map->second.platforms;
+    for (auto p = platforms.begin(); p != platforms.end();) {
+      const std::string key = map->first + "/" + p->first;
+      const auto have = floor.version.find(key);
+      if (have != floor.version.end() && CompareVersions(p->second.version, have->second) < 0) {
+        out->dropped.emplace_back(key, "version_down");
+        p = platforms.erase(p);
+      } else {
+        ++p;
       }
     }
   }
@@ -688,10 +719,13 @@ ParsedManifest ParseAndVerifyManifest(std::string_view signed_object, const std:
   }
   out.key_id = KeyIdText(key_id);
   out.body_sha256 = nevr_quest::data::Sha256Hex(body.data(), body.size());
-  ReadBody(body, floors, expected_channel, &out);
+  std::set<std::string> trusted_ids;
+  for (const PinnedKey& k : keys) trusted_ids.insert(KeyIdText(k.key.key_id));
+  ReadBody(body, floors, trusted_ids, expected_channel, &out);
   if (!out.reason.empty()) {
     out.manifest = Manifest();
     out.dropped.clear();
+    out.untrusted_floor_keys.clear();
     out.channel.clear();
   }
   return out;
@@ -699,8 +733,8 @@ ParsedManifest ParseAndVerifyManifest(std::string_view signed_object, const std:
 
 FloorBook AdvanceFloors(const FloorBook& floors, const std::string& base_url, const ParsedManifest& parsed) {
   FloorBook next = floors;
-  if (!parsed.reason.empty() || parsed.channel.empty()) return next;
-  Floors& floor = next.channels[parsed.channel];
+  if (!parsed.reason.empty() || parsed.channel.empty() || parsed.key_id.empty()) return next;
+  Floors& floor = next.channels[parsed.channel][parsed.key_id];
   if (floor.serial_sha256.empty() || parsed.manifest.serial >= floor.serial) {
     floor.serial = parsed.manifest.serial;
     floor.serial_sha256 = parsed.body_sha256;

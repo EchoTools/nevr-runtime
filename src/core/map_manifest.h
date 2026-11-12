@@ -39,15 +39,17 @@ struct PinnedKey {
   bool official = false;
 };
 
-// One floor per SIGNED channel name, over every key it trusts. An empty serial_sha256 is "no floor"; serials start at 1.
+// The floors one signing key raised on one SIGNED channel name. An empty serial_sha256 is "no floor"; serials start at 1.
 struct Floors {
   std::uint64_t serial = 0;
   std::string serial_sha256;                    // sha256 of the manifest body at `serial`
   std::map<std::string, std::string> version;   // "<id>/<platform>" -> version
 };
 
+// A manifest meets the highest floors of the keys trusted NOW. A rollback under any trusted key is refused, and a key
+// that is no longer trusted (a test key, after the switch to the official key) holds nobody back.
 struct FloorBook {
-  std::map<std::string, Floors> channels;       // channel -> its floors
+  std::map<std::string, std::map<std::string, Floors>> channels;  // channel -> signing key id (KeyIdText) -> floors
   std::map<std::string, std::string> bound;     // base_url -> the channel it was bound to at its first verified fetch
 };
 
@@ -60,6 +62,7 @@ struct ParsedManifest {
   bool official = false;
   std::string reason;                        // "" when accepted
   std::vector<std::pair<std::string, std::string>> dropped;  // ("<id>/<platform>", "version_down"); absent from `manifest`
+  std::vector<std::string> untrusted_floor_keys;  // key ids with floors on this channel that the keys given do not trust
 };
 
 // `expected_channel`: maps.channel, else floors.bound[base_url], else "" (first use: any channel; the caller binds it).
@@ -67,7 +70,8 @@ ParsedManifest ParseAndVerifyManifest(std::string_view signed_object, const std:
                                       const FloorBook& floors, const std::string& expected_channel,
                                       const std::string& now_utc);
 
-// The floors after accepting `parsed`: serial and body sha set, versions raised and never lowered, bound[base_url] set.
+// The floors after accepting `parsed`, under the key that signed it: serial and body sha set, versions raised and never
+// lowered, bound[base_url] set.
 // A refused `parsed` (non-empty reason) leaves the floors as they were.
 FloorBook AdvanceFloors(const FloorBook& floors, const std::string& base_url, const ParsedManifest& parsed);
 
