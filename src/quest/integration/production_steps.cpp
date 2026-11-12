@@ -774,10 +774,18 @@ class ProductionSteps final : public Steps {
     // (an unverified libr15, a mismatched helper) stays pass-through; none of them fails social.
     // The lobby-full policy (#1001) needs the facade in place (three rows: join, failure, success).
     if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
-    // The UI texture top mip (#961): one row, and the helper it calls is checked against its pinned prologue.
-    nevr_quest::ui_texture_mips::InstallUiTextureMips();
-    // The button-press splash skip (#962): one row on the menu widget's update.
-    if (ok) nevr_quest::splash_skip::Install();
+    return ok;
+  }
+
+  // The UI texture top mip (#961) and the button-press splash skip (#962) read libr15 only, so they are their own step and run on
+  // every launch whatever the social facade says (#2096). Each logs its own outcome; neither's refusal fails the step.
+  bool InstallUiMipsAndSplash() override {
+    // One row: the helper it calls is checked against its pinned prologue.
+    const std::size_t mips = nevr_quest::ui_texture_mips::InstallUiTextureMips();
+    // One row on the menu widget's update.
+    const bool splash = nevr_quest::splash_skip::Install();
+    const bool ok = mips > 0 && splash;
+    detail_ = ok ? "ok" : "refused";
     return ok;
   }
 

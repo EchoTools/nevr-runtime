@@ -110,6 +110,9 @@
 //                                    arming; no counters. Initialize runs after the constructor, so the hooks are in place before the
 //                                    texture is uploaded. Refused (the step reports failure) unless Attach verified libr15;
 //                                    the game then uploads its own black texel.
+//      InstallUiMipsSplash           the UI top mip (#961) and the button-press splash skip (#962): one row each of the patched
+//                                    libr15 (ADR 0021), which read libr15 only, so on every launch whatever the social facade says;
+//                                    right after the irradiance default; no counters.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   Attach not verified     -> NOTHING is gated on it by the sequence: AttachLibR15 reports failure with the reason token
@@ -207,6 +210,7 @@ enum class StepId : std::uint8_t {
   kInstallWizardMetric,
   kArmClockLevels,
   kInstallIrradianceDefault,
+  kInstallUiMipsSplash,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -327,6 +331,8 @@ class Steps {
   // The grey default irradiance texture (#2091): the GOT hook on CGEngineResources::Initialize and the row of the patched libr15
   // that holds the upload helper, on every launch, no counters. True when both are live.
   virtual bool InstallIrradianceDefault() = 0;
+  // The UI top mip (#961) and the splash skip (#962): their rows of the patched libr15, on every launch, social or not (#2096).
+  virtual bool InstallUiMipsAndSplash() = 0;
   // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
   virtual bool WizardMetricWanted() = 0;
   virtual bool InstallWizardMetric() = 0;
