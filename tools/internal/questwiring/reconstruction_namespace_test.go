@@ -8,12 +8,10 @@ import (
 	"testing"
 )
 
-// #2189: the reconstruction sources written for the Quest gun and drone call surface carry no name of the deleted q15t plugin.
-// docs/standards/naming.md: a namespace the reconstruction wrote is `NRadEngine::nevr_reconstruction` (the game's prefix, then
-// `nevr_<area>`). Sixteen files under src/reconstruction/r15 opened `q15t::r15::reconstruction` instead (the plugin's name, a PC/Quest
-// word the namespace rule has no place for). They include each other through cnca_game.hpp, so a file left on the old namespace
-// would not see the shared types: the library would stop building, or it would build with the types declared twice.
-// This file is the Go port of tools/tests/test_reconstruction_namespace.py, with the same assertions.
+// #2189: every reconstruction source under src/reconstruction/r15 opens the one namespace NRadEngine::nevr_reconstruction, and
+// none names the retired q15t prefix. docs/standards/naming.md: a namespace the reconstruction writes is the game's prefix
+// followed by nevr_<area>. The sixteen files listed below include each other through cnca_game.hpp, so a file on any other
+// namespace would not see the shared types: the library would stop building, or it would declare them twice.
 
 const reconstructionNamespace = "NRadEngine::nevr_reconstruction"
 

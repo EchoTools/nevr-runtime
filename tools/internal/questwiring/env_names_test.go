@@ -12,13 +12,13 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
-// #2189: the Quest checks' environment variables and the frame sensor's probe symbols carry no name of the deleted q15t plugin.
-// docs/standards/naming.md: an environment variable is NEVR_<NAME>. Two variables were spelled Q15T_*: the switch that lets a combat
-// check skip its qemu run (src/quest/combat/check/*.sh) and the one that makes a host test dump its module's log records
-// (src/quest/tests/dronekill_test.cpp, dronemuzzle_test.cpp). The assembly probes of the frame sensor
-// (src/quest/tests/frames_asm_probe_real.cpp) carry symbols the sensor test names (tests/quest/frames_asm_probes_test.go); a symbol
-// renamed on one side only is an undefined symbol at link time, or a sensor that checks nothing.
-// This file is the Go port of tools/tests/test_quest_probe_env_names.py, with the same assertions.
+// #2189: no tracked source names the retired q15t prefix in the Quest checks' environment variables or in the frame sensor's
+// probe symbols. docs/standards/naming.md: an environment variable is NEVR_<NAME>, so the switch that lets a combat check skip
+// its qemu run is NEVR_SKIP_QEMU (src/quest/combat/check/*.sh), and the switch that makes a host test dump its module's log
+// records is NEVR_TEST_VERBOSE (src/quest/tests/dronekill_test.cpp, dronemuzzle_test.cpp). The assembly probes of the frame
+// sensor (src/quest/tests/frames_asm_probe_real.cpp) define the symbols the sensor test names
+// (tests/quest/frames_asm_probes_test.go): a symbol named on one side only is an undefined symbol at link time, or a sensor
+// that checks nothing.
 
 const envNamesSelf = "tools/internal/questwiring/env_names_test.go"
 
@@ -61,7 +61,7 @@ func TestNoSourceNamesAQ15TVariableOfTheTwoRenamed(t *testing.T) {
 		}
 		b, err := os.ReadFile(filepath.Join(root(t), p))
 		if os.IsNotExist(err) {
-			continue // tracked but not on disk: the Python check skipped what is not a file
+			continue // tracked but not on disk: there is no text to read
 		}
 		if err != nil {
 			t.Fatal(err)
