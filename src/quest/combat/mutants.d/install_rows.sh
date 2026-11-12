@@ -13,7 +13,6 @@
 # ffe_not_a_scope_reader).
 #
 # Not listed (no host test can tell them from the original: on the host the module refuses before it reads the switch, and its lines do not carry it):
-#   ir_fn_impactsnd_write_on/_off   ImpactsndNormal hands a fixed `write` (impactsnd refuses module_not_loaded; `write` is in no line)
 #   ir_fn_decals_flip_u_on/_off, ir_fn_decals_flip_v_on/_off   DecalsNormal hands fixed flips (the flips are logged only once a decals.bin loads)
 #   ir_fn_bvh_gate_off, ir_fn_bvh_touch_off   BvhNormal hands gate/touch false (logged only on an installed BVH; the host refuses scope_not_live)
 #   ir_fn_droneguard_stage1_on/_off   DroneguardNormal hands a fixed stage1 (logged only on an installed guard)
@@ -50,6 +49,8 @@ runm ir_fn_aibots_off src/quest/combat/combat_install.cpp 's#^  switches\.on = g
 runm ir_fn_weapon_arm_off src/quest/combat/combat_install.cpp 's#^ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config\.weaponArm\.on); }$#ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_impactsnd_on src/quest/combat/combat_install.cpp 's#^ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config\.impactsnd\.on, g_config\.impactsndWrite\.on); }$#ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(true, g_config.impactsndWrite.on); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_impactsnd_off src/quest/combat/combat_install.cpp 's#^ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config\.impactsnd\.on, g_config\.impactsndWrite\.on); }$#ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(false, g_config.impactsndWrite.on); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_impactsnd_write_on src/quest/combat/combat_install.cpp 's#^ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config\.impactsnd\.on, g_config\.impactsndWrite\.on); }$#ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, true); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_impactsnd_write_off src/quest/combat/combat_install.cpp 's#^ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config\.impactsnd\.on, g_config\.impactsndWrite\.on); }$#ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_decals_on src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.decals\.on;$#  switches.on = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_decals_off src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.decals\.on;$#  switches.on = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_ec_on src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.ec\.on;$#  switches.on = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key

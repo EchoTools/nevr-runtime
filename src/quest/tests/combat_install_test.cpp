@@ -1843,6 +1843,25 @@ void TheHeapsRowHandsTheModuleItsMemsysKey() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// impactsnd refuses on the host (no libr15) before it hooks anything, and its refusal names the combat.impactsnd_write value the row handed it
+// (#2382): on, then off, each set by the file.
+void TheImpactsndRowHandsTheModuleItsWriteKey() {
+  for (const bool write : {true, false}) {
+    nevr_quest::combat::impactsnd::ResetForTest();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.impactsndWrite = {write, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    const std::vector<Line> refused = Lines("combat_impactsnd_refused");
+    QCHECK(refused.size() == 1U && Has(refused[0].text, "\"reason\":\"module_not_loaded\"") &&
+           Has(refused[0].text, std::string("\"impactsnd_write\":") + (write ? "1" : "0")));
+    QCHECK(NoLineIsCut());
+    Done();
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1887,6 +1906,7 @@ int main() {
   TheHandWrittenConfigFieldsReadTheirOwnMembers();
   TheRowsHandTheirModulesTheKeysTheFileGave();
   TheHeapsRowHandsTheModuleItsMemsysKey();
+  TheImpactsndRowHandsTheModuleItsWriteKey();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

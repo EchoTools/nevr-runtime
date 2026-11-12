@@ -514,6 +514,22 @@ static void TestWriteSwitchOff() {
   CHECK(CountLines("mode=read_only_switch") == 1 && HasLine("when=load/unsorted"), "read-only handler: no read line");
 }
 
+// Every line that says what became of the install names the combat.impactsnd_write value the step was handed (#2382), on every path, with the switch
+// handed off (its default is on, so a line that drops it shows): installed, off, and refused for want of libr15. The no-key refusal is checked in
+// TestNoThreadKey, which runs before any install makes a key.
+static void TestEveryInstallLineNamesTheWriteSwitch() {
+  Fresh();
+  CHECK(Install(/*write=*/false).installed && CountLines("\"event\":\"combat_impactsnd_install\"") == 1 && HasLine("impactsnd_write=0"),
+        "installed: the install line does not name the write switch it was handed");
+  Fresh();
+  CHECK(impactsnd::InstallAt(false, /*write=*/false, &Lookup).off && HasLine("result=off") && HasLine("impactsnd_write=0"),
+        "off: the line does not name the write switch it was handed");
+  Fresh();
+  CHECK(std::strcmp(impactsnd::InstallAt(true, /*write=*/false, nullptr).status, "module_not_loaded") == 0 && HasLine("impactsnd OFF: nothing written") &&
+            HasLine("impactsnd_write=0"),
+        "no libr15: the refusal does not name the write switch it was handed");
+}
+
 // No pthread key left for the Shutdown handler's per-thread depth: the install refuses before it hooks anything. Runs before any successful
 // install, because a key made by one stays for the process.
 static void TestNoThreadKey() {
@@ -531,6 +547,10 @@ static void TestNoThreadKey() {
   for (const auto& l : g_lines)
     CHECK(l.text.find("combat_impactsnd_refused") == std::string::npos || (l.text.find("\"vaddr\"") == std::string::npos && l.text.find("\"pinned\"") == std::string::npos),
           "no key: the line carries address fields that mean nothing here");
+  // the no-key refusal names the write switch the step was handed (#2382): handed off, its default being on
+  Fresh();
+  CHECK(std::strcmp(Install(/*write=*/false).status, "no_thread_key") == 0 && HasLine("reason=no_thread_key") && HasLine("impactsnd_write=0"),
+        "no key: the refusal does not name the write switch it was handed");
   SetTable(All(), kStock, false);
   Publish();
   Polls(8);
@@ -1787,6 +1807,7 @@ int main() {
   TestInstall();
   TestOffByTheSwitch();
   TestWriteSwitchOff();
+  TestEveryInstallLineNamesTheWriteSwitch();
   TestRefusals();
   TestSlotRefused();
   TestShutdownSlotRefused();

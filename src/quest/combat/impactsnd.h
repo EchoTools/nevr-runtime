@@ -41,9 +41,10 @@
  *
  * Lines (sentinel log; every record's fields are typed, a value is never a free-text sentence):
  *   install   {"event":"combat_impactsnd_install","result":"installed|refused|off","status":"<token>","shutdown":"<GotStatus>","load":"<GotStatus>",
- *              "row_writes":"enabled|disabled","rebuild":"reconstructed|stock","msg":".."}  Info when installed, Error when refused
+ *              "row_writes":"enabled|disabled","rebuild":"reconstructed|stock","impactsnd_write":0|1,"msg":".."}  Info when installed, Error when refused;
+ *              `impactsnd_write` (here, on the off line and on every `refused` line) is the `combat.impactsnd_write` value the step was handed
  *   hook      {"event":"combat_impactsnd_hook","hook":"shutdown|load","status":"<GotStatus>"}    Info when ok, Error otherwise
- *   refused   {"event":"combat_impactsnd_refused","reason":"..","vaddr":"0x..","read":"0x..","pinned":"0x..","written":0}   Error
+ *   refused   {"event":"combat_impactsnd_refused","reason":"..","vaddr":"0x..","read":"0x..","pinned":"0x..","written":0,"impactsnd_write":0|1}   Error
  *   default   {"event":"combat_impactsnd_default_symbol","vaddr":"0x..","value":"0x..","matches":0|1}
  *   scope     {"event":"combat_impactsnd_scope","where":"load","scope":"combat|other_level|no_game","loader":"rebuilt|stock|game"}   per load (capped)
  *   load      {"event":"combat_impactsnd_load","table":"0x..","rows":<n>,"flags":"..","word_patch":"in_effect|absent|unexpected|no_verdict"}

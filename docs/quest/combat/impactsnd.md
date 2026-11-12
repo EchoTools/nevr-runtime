@@ -229,6 +229,8 @@ the tick's once-per-table unsorted pass does not repeat it; a pass the lock or t
   the LoadSoundSettings slot swapped. One line each: `combat_impactsnd_default_symbol` (D, whether it matches), `combat_impactsnd_hook` for `shutdown`
   (status, `row_writes`) and `load` (status, mode), `combat_impactsnd_rebuild` and one `combat_impactsnd_install`, or
   `combat_impactsnd_refused` (ERROR, with reason, vaddr, read, pinned). Any refusal before the wrapper: nothing is written and the tick does nothing.
+  The install line, the off line and every refused line carry `impactsnd_write`, the `combat.impactsnd_write` value the step was handed (0 or 1),
+  so a refusal still shows what the row handed over.
 - Each `LoadSoundSettings` return: `combat_impactsnd_load` (table, rows, flags, `word_patch`), then
   `combat_impactsnd_ids` when rows were rewritten (`when=load/unsorted`, rows, known, rewrote, right, left, `found_ids`).
 - Tick: `combat_impactsnd_table` once (rows, map set/null, after_s, default_symbol as read then, `word_patch`; WARNING for a count
