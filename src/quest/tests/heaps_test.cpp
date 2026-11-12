@@ -267,8 +267,8 @@ void TheSwitchesTurnTheModuleOrTheSystemHeapOff() {
 }
 
 // The memsys field of every install line is the value the step was handed, true and false alike, on the installed, off and refused paths.
-// InstallAt stores the switch before the off branch's line in the commit, and ResetForTest does not clear the switch: an off step that stored
-// nothing would log whatever the last step left, so the off call follows an installed step that left the other value.
+// InstallAt stores the switch before it branches, and ResetForTest does not clear the switch, so a path that stored nothing would log whatever
+// the last step left. Each path therefore follows a step that left the other value.
 void TheMemsysFieldIsTheValueTheStepWasHanded() {
   for (const bool sys : {false, true}) {
     const char* const want = sys ? "\"memsys\":1," : "\"memsys\":0,";
@@ -288,6 +288,11 @@ void TheMemsysFieldIsTheValueTheStepWasHanded() {
     QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, false, sys).status, "off") == 0);
     install = Lines("combat_heaps_install");
     QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"off\"") && Has(install[0].text, want));
+    End();
+    // The refused step follows an installed step that left !sys in the switch, so a refusal that stores nothing logs !sys and fails here.
+    Begin();
+    Build();
+    QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, !sys).installed);
     End();
     Begin();
     Build();

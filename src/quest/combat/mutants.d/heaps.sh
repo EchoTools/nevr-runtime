@@ -138,6 +138,8 @@ runm h_missing_mib         $F "s/{\"system_mib\", SystemBytesFor(headset_profile
 # the store of the switch only on a step that installs: the off line is written before it, so it reads the last step's value (the store
 # moved below the off branch, one line here: the off call stores nothing)
 runm h_off_store_skipped   $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (heapsOn) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
+# the refusal path: the switch is stored only when an image lookup is given, so a refused step (no lookup) keeps the value of the step before it
+runm h_refused_store_skipped $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (lookup != nullptr) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
 # the holder (quest/headset_active.h) and the identity step that fills it; each is killed by the test named after it
 runm h_holder_null_q2      src/quest/headset_active.h "s/  return profile != nullptr ? profile : \\&headset_profile::kGeneric;/  return profile != nullptr ? profile : \\&headset_profile::kQuest2;/"
 runm h_step_not_stored     src/quest/integration/headset_identity_step.cpp "s/^  headset_active::SetActive(match.profile);/  (void)match;/" quest-host-hooks headset_profile_test
