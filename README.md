@@ -40,10 +40,14 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **spike4887**: Tested nevr-runtime in #nevr-runtime-testing.
 - **TekEmperor**: Tested nevr-runtime in #nevr-runtime-testing.
 - **arii**: Tested nevr-runtime in #nevr-runtime-testing.
+- **Vibinator**: Reported players being split from the party in Echo Combat, and a spectator being disconnected.
+- **Grumpy**: Tested release signing on a clean Windows machine, which caught an antivirus false positive before release.
 - **[DC Coffey](https://www.dccoffey.com/work/echo-vr)**: Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.
 - **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
 - **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
+- **Coastermaster77**: Built a custom physics plugin on the nevr-runtime plugin template, and hosts community game servers.
 - **Furo**: Supporter of nevr-runtime.
+- **MyGuyChromium**: Tested pre-release nevr-runtime builds on a personal PC. Supporter of nevr-runtime.
 
 ### Thanks
 
