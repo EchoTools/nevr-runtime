@@ -83,6 +83,8 @@ runm dg_installed_stage1_fixed  $D 's/{"stage1", installed ? stageOne : "off"}, 
 # the same fields fixed at the other value (off line on; installed line reads what ran, not what was handed) (#2382)
 runm dg_off_stage1_on           $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 1},/'
 runm dg_installed_and_stage1    $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", installed \&\& stage1 ? 1 : 0},/'
+# the refusal path: the switch is stored only when an image lookup is given, so a step with no lookup (module_not_loaded) logs the value of the step before it
+runm dg_refused_store_lookup    $D 's/^  g_stage1Asked.store(stage1, std::memory_order_relaxed);$/  if (lookup != nullptr) g_stage1Asked.store(stage1, std::memory_order_relaxed);/'
 # the stats
 runm dg_stats_never       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  (void)calls;/"
 runm dg_stats_every       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  if (calls != ~0ULL) LogStats(false);/"

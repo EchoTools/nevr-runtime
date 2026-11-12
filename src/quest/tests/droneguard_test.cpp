@@ -819,6 +819,9 @@ void EveryInstallLineNamesTheStageOneSwitchItWasHanded() {
     std::vector<Line> install = Lines("combat_droneguard_install");
     QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, named));
     End();
+    // The refused step follows an installed step that left !s1 in the switch, so a refusal that stores nothing logs !s1 and fails here.
+    Installed(!s1);
+    End();
     Begin();
     const dg::EngineFns f = Fns();
     QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, s1, &f).status, "module_not_loaded") == 0);
