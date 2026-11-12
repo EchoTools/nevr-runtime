@@ -35,16 +35,16 @@ runm dk_local_none_chk src/quest/combat/dronekill.cpp "s/  if ((h \& 0xffff) == 
 runm dk_local_result src/quest/combat/dronekill.cpp "s/  return g_fns.local(np, h) != 0;/  return true;/" quest-host-combat dronekill_test
 runm dk_local_arg src/quest/combat/dronekill.cpp "s/  return g_fns.local(np, h) != 0;/  return g_fns.local(np, phys_h) != 0;/" quest-host-combat dronekill_test
 runm dk_local_sym src/quest/combat/dronekill.cpp "s/CallComponent(component, np, actor, kNetPhysics)/CallComponent(component, np, actor, kDroneActor)/" quest-host-combat dronekill_test
-runm dk_tick_inst src/quest/combat/dronekill.cpp "/^void Tick(std::uintptr_t game) noexcept {/,/^}/s/  if (!g_installed.load(std::memory_order_acquire)) return;/  (void)0;/" quest-host-combat dronekill_test
-runm dk_tick_first src/quest/combat/dronekill.cpp "/^void Tick(std::uintptr_t game) noexcept {/,/^}/s/  if (n == 0) {/  if (n == 1) {/" quest-host-combat dronekill_test
+runm dk_tick_inst src/quest/combat/dronekill.cpp "/^void Tick(std::uintptr_t \/\*game\*\/) noexcept {/,/^}/s/  if (!g_installed.load(std::memory_order_acquire)) return;/  (void)0;/" quest-host-combat dronekill_test
+runm dk_tick_first src/quest/combat/dronekill.cpp "/^void Tick(std::uintptr_t \/\*game\*\/) noexcept {/,/^}/s/  if (n == 0) {/  if (n == 1) {/" quest-host-combat dronekill_test
 runm dk_tick_any src/quest/combat/dronekill.cpp "s/  if (!g_any_due.load(std::memory_order_acquire) || g_t_in_tick.Get() != 0) return;/  if (g_t_in_tick.Get() != 0) return;/" quest-host-combat dronekill_test
 runm dk_tick_reent src/quest/combat/dronekill.cpp "s/  if (!g_any_due.load(std::memory_order_acquire) || g_t_in_tick.Get() != 0) return;/  if (!g_any_due.load(std::memory_order_acquire)) return;/" quest-host-combat dronekill_test
 runm dk_tick_reset src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void TickBody/,/^}/s/^  g_t_in_tick.Set(0);\$/  (void)0;/" quest-host-combat dronekill_test
 runm dk_tick_runs src/quest/combat/dronekill.cpp "s/  g_due_runs.fetch_add(1, std::memory_order_relaxed);/  g_due_runs.fetch_add(0, std::memory_order_relaxed);/" quest-host-combat dronekill_test
 runm dk_tick_done src/quest/combat/dronekill.cpp "s/    g_table.Done(due\[i\].number, due\[i\].idx);//" quest-host-combat dronekill_test
 runm dk_tick_wait src/quest/combat/dronekill.cpp "s/    if (r == 2) {\$/    if (false) {/" quest-host-combat dronekill_test
-runm dk_tick_clear_t src/quest/combat/dronekill.cpp "s/  if (!g_table.AnyDue() \&\& !g_touch.AnyDue() \&\& !g_chases.AnyDue())/  if (!g_table.AnyDue() \&\& !g_chases.AnyDue())/" quest-host-combat dronekill_test
-runm dk_tick_clear_g src/quest/combat/dronekill.cpp "s/  if (!g_table.AnyDue() \&\& !g_touch.AnyDue() \&\& !g_chases.AnyDue())/  if (!g_touch.AnyDue() \&\& !g_chases.AnyDue())/" quest-host-combat dronekill_test
+runm dk_tick_clear_t src/quest/combat/dronekill.cpp "s/  if (!g_table.AnyDue() \&\& !g_touch.AnyDue() \&\& !g_chases.AnyDue() \&\& /  if (!g_table.AnyDue() \&\& !g_chases.AnyDue() \&\& /" quest-host-combat dronekill_test
+runm dk_tick_clear_g src/quest/combat/dronekill.cpp "s/  if (!g_table.AnyDue() \&\& !g_touch.AnyDue() \&\& !g_chases.AnyDue() \&\& /  if (!g_touch.AnyDue() \&\& !g_chases.AnyDue() \&\& /" quest-host-combat dronekill_test
 runm dk_tick_chase_no src/quest/combat/dronekill.cpp "s/  if (g_chase) ChaseTick(now);//;$NOWARN" quest-host-combat dronekill_test
 runm dk_tick_warn src/quest/combat/dronekill.cpp "s/    sentinel::LogFields(LogLevel::kWarn, \"combat_dronekill_tick\",/    sentinel::LogFields(LogLevel::kInfo, \"combat_dronekill_tick\",/" quest-host-combat dronekill_test
 runm dk_tick_warn_cond src/quest/combat/dronekill.cpp "s/  if ((expired != 0 || (waiting != 0 \&\& off == 0 \&\& skipped == 0)) \&\& Allow/  if ((waiting != 0 \&\& off == 0 \&\& skipped == 0) \&\& Allow/" quest-host-combat dronekill_test
