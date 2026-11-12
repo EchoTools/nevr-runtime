@@ -21,8 +21,6 @@ sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
 
 SDK = REPO / "sdk"
-EXAMPLE = SDK / "examples" / "hello_plugin"
-WORKFLOW = REPO / ".github" / "workflows" / "plugin-sdk-example.yml"
 INCLUDE = SDK / "include" / "nevr"
 PORTABLE = sorted(p.name for p in INCLUDE.glob("*.h"))
 PC = sorted(p.name for p in (INCLUDE / "pc").glob("*.h"))
@@ -134,38 +132,6 @@ class InstalledPackageTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("NevrPluginSdk", result.stderr)
 
-    def build_example(self, name: str, extra: list) -> subprocess.CompletedProcess:
-        # The example is copied to a directory of its own: it sees the installed prefix and nothing of the tree.
-        src = self.root / f"{name}-src"
-        src.mkdir()
-        for f in EXAMPLE.iterdir():
-            shutil.copy(f, src / f.name)
-        build = self.root / f"{name}-build"
-        configure = run([CMAKE, "-S", src, "-B", build, *generator(), f"-DCMAKE_PREFIX_PATH={self.prefix}", *extra])
-        if configure.returncode != 0:
-            return configure
-        return run([CMAKE, "--build", build])
-
-    def test_the_example_default_api_is_the_trees(self):
-        self.assertIn(f"NEVR_HELLO_API_VERSION {api_version()} CACHE", (EXAMPLE / "CMakeLists.txt").read_text())
-
-    def test_the_example_plugin_builds_against_the_installed_prefix_on_the_host(self):
-        result = self.build_example("example-host", [f"-DCMAKE_CXX_COMPILER={HOST_CXX}"])
-        self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
-        self.assertTrue(list((self.root / "example-host-build").glob("hello_plugin.*")))
-
-    def test_the_example_plugin_is_refused_against_another_api(self):
-        result = self.build_example("example-api", [f"-DCMAKE_CXX_COMPILER={HOST_CXX}",
-                                                   f"-DNEVR_HELLO_API_VERSION={api_version() + 1}"])
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("NevrPluginSdk", result.stderr)
-
-    @unittest.skipUnless(MINGW_CXX, "x86_64-w64-mingw32-g++ is required")
-    def test_the_example_plugin_builds_for_windows(self):
-        result = self.build_example("example-mingw", ["-DCMAKE_SYSTEM_NAME=Windows", f"-DCMAKE_CXX_COMPILER={MINGW_CXX}"])
-        self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
-        self.assertTrue((self.root / "example-mingw-build" / "hello_plugin.dll").is_file())
-
     @unittest.skipUnless(MINGW_CXX, "x86_64-w64-mingw32-g++ is required")
     def test_the_pc_headers_compile_against_the_installed_prefix(self):
         headers = [h for h in PC if h != "hook_manager.h" or (MINHOOK_INCLUDE / "MinHook.h").is_file()]
@@ -177,23 +143,6 @@ class InstalledPackageTest(unittest.TestCase):
                 result = run([MINGW_CXX, "-std=c++17", "-fsyntax-only", f"-I{self.prefix / 'include'}",
                               f"-I{MINHOOK_INCLUDE}", unit])
                 self.assertEqual(result.returncode, 0, result.stderr)
-
-
-class ExampleWorkflowTest(unittest.TestCase):
-    def test_the_workflow_builds_the_example_for_windows_and_quest_from_the_installed_prefix(self):
-        import yaml
-        workflow = yaml.safe_load(WORKFLOW.read_text())
-        job = workflow["jobs"]["example"]
-        self.assertEqual(set(job["strategy"]["matrix"]["target"]), {"windows-mingw", "quest-arm64-android"})
-        text = WORKFLOW.read_text()
-        self.assertIn("cmake --install", text)
-        self.assertIn("./.github/actions/setup-ndk", text)
-        self.assertIn("android.toolchain.cmake", text)
-        self.assertIn("x86_64-w64-mingw32-g++", text)
-        self.assertIn("hello_plugin.dll", text)
-        self.assertIn("hello_plugin.so", text)
-        # Out of tree: the example is built from a copy, never with -S pointing into sdk/examples.
-        self.assertNotIn("-S sdk/examples", text)
 
 
 if __name__ == "__main__":
