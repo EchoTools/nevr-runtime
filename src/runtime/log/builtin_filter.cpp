@@ -28,6 +28,7 @@
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
 #include "runtime/log/rate_limiter.h"
+#include "runtime/log/log_retention.h"
 #include "core/globals.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/crash_recovery.h"
@@ -76,6 +77,10 @@ struct TruncateRule {
     int max_length = 0;
 };
 
+/* #1296: the logs folder's size cap in MiB (0 = no cap). A client keeps 1 GiB; a server keeps everything. */
+static constexpr int kDefaultClientLogCapMb = 1024;
+static constexpr int kDefaultServerLogCapMb = 0;
+
 struct LogFilterConfig {
     uint32_t    min_level = LOG_LEVEL_INFO;
     std::vector<std::string> suppress_channels;
@@ -95,7 +100,11 @@ struct LogFilterConfig {
     bool        rotate_enabled = false;
     int         rotate_max_size_mb = 50;
     int         rotate_interval_min = 0;
-    int         rotate_keep = 5;
+
+    /* #1296: the size cap on the logs folder, in MiB. The filter uses the client's cap in a client and the server's
+     * in a server (0 = no cap). Oldest run logs are deleted only past the cap, never the open one. */
+    int         client_log_cap_mb = kDefaultClientLogCapMb;
+    int         server_log_cap_mb = kDefaultServerLogCapMb;
 
     bool        valid = false;
 };
@@ -134,6 +143,7 @@ static std::mutex g_file_mutex;
 static std::string g_log_file_path;
 static uint64_t g_file_open_time = 0;
 static std::string g_log_dir;         /* the folder of g_log_file_path, for PruneOldLogs */
+static uint64_t g_log_cap_bytes = 0;  /* #1296: the folder's size cap for this process (0 = none), set in init */
 
 /* va_list must be a simple pointer on x64 for our int64_t* cast to work */
 static_assert(sizeof(va_list) == sizeof(void*),
@@ -204,7 +214,8 @@ static LogFilterConfig ParseJsonConfig(const std::string& json_str) {
         cfg.rotate_enabled = j.value("rotate_enabled", cfg.rotate_enabled);
         cfg.rotate_max_size_mb = j.value("rotate_max_size_mb", cfg.rotate_max_size_mb);
         cfg.rotate_interval_min = j.value("rotate_interval_min", cfg.rotate_interval_min);
-        cfg.rotate_keep = j.value("rotate_keep", cfg.rotate_keep);
+        cfg.client_log_cap_mb = j.value("client_log_cap_mb", cfg.client_log_cap_mb);
+        cfg.server_log_cap_mb = j.value("server_log_cap_mb", cfg.server_log_cap_mb);
 
         if (j.contains("suppress_channels")) {
             for (const auto& s : j["suppress_channels"])
@@ -252,7 +263,8 @@ static LogFilterConfig ParseYamlLogFilterConfig(const std::string& yaml_str) {
     if (y.count("rotate_enabled"))     cfg.rotate_enabled = y["rotate_enabled"].as_bool(false);
     if (y.count("rotate_max_size_mb")) cfg.rotate_max_size_mb = y["rotate_max_size_mb"].as_int(50);
     if (y.count("rotate_interval_min")) cfg.rotate_interval_min = y["rotate_interval_min"].as_int(0);
-    if (y.count("rotate_keep"))        cfg.rotate_keep = y["rotate_keep"].as_int(5);
+    if (y.count("client_log_cap_mb"))  cfg.client_log_cap_mb = y["client_log_cap_mb"].as_int(kDefaultClientLogCapMb);
+    if (y.count("server_log_cap_mb"))  cfg.server_log_cap_mb = y["server_log_cap_mb"].as_int(kDefaultServerLogCapMb);
 
     if (y.count("suppress_channels"))  cfg.suppress_channels = y["suppress_channels"].list;
     if (y.count("suppress_patterns"))  cfg.suppress_patterns = y["suppress_patterns"].list;
@@ -341,7 +353,8 @@ static LogFilterConfig MakeDefaultConfig() {
     cfg.rotate_enabled = true;
     cfg.rotate_max_size_mb = 50;
     cfg.rotate_interval_min = 0;
-    cfg.rotate_keep = 5;
+    cfg.client_log_cap_mb = kDefaultClientLogCapMb;
+    cfg.server_log_cap_mb = kDefaultServerLogCapMb;
 
     cfg.suppress_channels = {
         "[LOADING TIPS]",
@@ -512,27 +525,35 @@ static void CloseLogFile() {
     nevr_run_log_writer::Close();
 }
 
+/* #1296: delete the oldest run logs only while the folder is over its cap (journald's SystemMaxUse model). The
+ * selection is nevr_log_retention::SelectLogsToDelete; the open file is never deleted. Each deletion is logged. */
 static void PruneOldLogs() {
-    if (g_config.rotate_keep <= 0 || g_log_dir.empty()) return;
+    if (g_log_cap_bytes == 0 || g_log_dir.empty()) return;
 
-    std::vector<std::string> files;
+    std::vector<nevr_log_retention::RunLogFile> files;
     const std::string pattern = g_log_dir + "\\nevr-*.jsonl";
 
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
-            files.push_back(g_log_dir + "\\" + fd.cFileName);
+            nevr_log_retention::RunLogFile f;
+            f.path = g_log_dir + "\\" + fd.cFileName;
+            f.bytes = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+            files.push_back(f);
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
 
-    std::sort(files.begin(), files.end());
-
-    int to_delete = static_cast<int>(files.size()) - g_config.rotate_keep;
-    for (int i = 0; i < to_delete; i++) {
-        if (files[i] == g_log_file_path) continue;  /* never the file being written */
-        std::remove(files[i].c_str());
+    const std::vector<std::string> doomed =
+        nevr_log_retention::SelectLogsToDelete(files, g_log_cap_bytes, g_log_file_path);
+    for (const std::string& path : doomed) {
+        if (std::remove(path.c_str()) == 0) {
+            BlfLog("run log deleted over the size cap: %s (cap_mb=%llu)", path.c_str(),
+                   static_cast<unsigned long long>(g_log_cap_bytes / nevr_log_retention::kBytesPerMiB));
+        } else {
+            BlfLog("run log NOT deleted over the size cap: %s errno=%d", path.c_str(), errno);
+        }
     }
 }
 
@@ -579,6 +600,7 @@ static void InitFileLogging() {
         nevr_run_log_writer::SetDirectory(g_config.file_dir.c_str());
     }
     OpenLogFile();
+    PruneOldLogs();  /* #1296: a run that starts over the cap trims the folder before it writes */
 }
 
 static void ShutdownFileLogging() {
@@ -1079,6 +1101,13 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
                    cfg.console_color ? "on" : "off",
                    cfg.rotate_enabled ? "on" : "off");
         }
+    }
+
+    /* #1296: the logs folder's cap is the client's or the server's, by the mode this process runs in. */
+    {
+        const int cap_mb = is_server ? g_config.server_log_cap_mb : g_config.client_log_cap_mb;
+        g_log_cap_bytes = cap_mb > 0 ? static_cast<uint64_t>(cap_mb) * nevr_log_retention::kBytesPerMiB : 0;
+        BlfLog("run log folder cap_mb=%d (0 = no cap) server=%s", cap_mb, is_server ? "true" : "false");
     }
 
     /* Set up file logging */
