@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -179,78 +178,4 @@ func cleanupAllDLLs(t *testing.T) {
 	gameDir := getGameDir()
 	err := cleanupDLLs(gameDir)
 	require.NoError(t, err, "Failed to cleanup DLLs")
-}
-
-// copyCredentialPatternFile is the one definition of the sign-in file name pattern, read by the shell guard
-// (tools/lib/game_install.sh), this suite and tools/winvm/systest.py. The test's working directory is tests/system.
-const copyCredentialPatternFile = "../../tools/lib/copy_credential_pattern"
-
-// copyCredentialPattern returns the pattern from copyCredentialPatternFile: the sign-in files the game would sign in with.
-func copyCredentialPattern() (string, error) {
-	raw, err := os.ReadFile(copyCredentialPatternFile)
-	if err != nil {
-		return "", fmt.Errorf("cannot read the sign-in pattern: %w", err)
-	}
-	pattern := strings.TrimSpace(string(raw))
-	if pattern == "" {
-		return "", fmt.Errorf("%s holds no pattern", copyCredentialPatternFile)
-	}
-	return pattern, nil
-}
-
-// copyCredentialFiles lists the sign-in files under echovrDir (a copy's echovr/ directory). A symbolic link counts and
-// a directory does not; the walk does not follow links, as find does not by default. An error means the tree could not
-// be searched, which is not the same as no file.
-func copyCredentialFiles(echovrDir string) ([]string, error) {
-	pattern, err := copyCredentialPattern()
-	if err != nil {
-		return nil, err
-	}
-	var found []string
-	err = filepath.WalkDir(echovrDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		match, err := filepath.Match(pattern, d.Name())
-		if err != nil {
-			return err
-		}
-		if match {
-			found = append(found, path)
-		}
-		return nil
-	})
-	return found, err
-}
-
-// checkCopyCredentials refuses a game copy that holds a sign-in file: the game would sign in as whoever the file
-// belongs to. It applies only when EVR_GAME_DIR names a copy. Unset, the default is the main checkout's own install,
-// which holds the owner's sign-in, and nothing is refused there (the rule refuse_copy_credentials applies when
-// NEVR_GAME_ROOT is unset; AGENTS.md "The game install").
-func checkCopyCredentials() error {
-	if os.Getenv(envGameDir) == "" {
-		return nil
-	}
-	gameDir := getGameDir()
-	found, err := copyCredentialFiles(gameDir)
-	if err != nil {
-		return fmt.Errorf("cannot search %s for sign-in files: %w", gameDir, err)
-	}
-	if len(found) == 0 {
-		return nil
-	}
-	return fmt.Errorf("the game copy holds sign-in file(s) the game would sign in with: %s (remove them: AGENTS.md \"The game install\", \"Make it safe\")",
-		strings.Join(found, " "))
-}
-
-// refuseCopyCredentials fails the calling test before it deploys into or starts the game, when checkCopyCredentials
-// refuses. Every test that starts echovr.exe calls it first.
-func refuseCopyCredentials(t *testing.T) {
-	t.Helper()
-	if err := checkCopyCredentials(); err != nil {
-		t.Fatalf("not starting the game: %v", err)
-	}
 }

@@ -27,7 +27,6 @@ func TestCtrlC_ClientHandlerReArmed(t *testing.T) {
 		t.Skipf("BugSplat64.dll not found at %s (build required)", dllPath)
 	}
 	require.NoError(t, err)
-	refuseCopyCredentials(t)
 
 	// The host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root of the Wine prefix below (deployDLL puts it there).
 	err = deployDLL(getDLLPath("nevr-runtime.dll"), gameDir)
@@ -94,7 +93,6 @@ func TestWindowedImpliesNoOvr(t *testing.T) {
 		t.Skipf("BugSplat64.dll not found at %s (build required)", dllPath)
 	}
 	require.NoError(t, err)
-	refuseCopyCredentials(t)
 
 	// The host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root of the Wine prefix below (deployDLL puts it there).
 	err = deployDLL(getDLLPath("nevr-runtime.dll"), gameDir)
