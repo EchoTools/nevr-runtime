@@ -536,7 +536,11 @@ static int64_t g_scopeMs = 1000;
 // the record's freshness is judged on it); every later read in that tick sees the answer kStaleAfterMs + 1 older. So a live read of the answer, made after
 // the record, disagrees with it (TestTheRecordDecidesNotTheLiveRead). -1: not armed.
 static int g_armedReads = -1;
+// Every read of the scope's clock (LookIsFresh, LastLook, Refresh), so ExpectInert can show the arena path of the hooks reads none: the freshness test
+// is in the in-scope bodies, after the handlers' test of the cached scope (README rule 9).
+static int g_scopeClockReads = 0;
 static int64_t ScopeClock() noexcept {
+  ++g_scopeClockReads;
   if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + scope::kStaleAfterMs + 1;
   return g_scopeMs;
 }
@@ -2264,6 +2268,7 @@ static void ExpectInert(const char* where) {
   // what follows is the arena path: no read of game memory and no scan of the levels on any hook (the scope was refreshed before this), counted
   StartReadCount();
   StartScanCount();
+  g_scopeClockReads = 0;  // and no read of the scope's clock: the freshness test is in the in-scope bodies only
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
   ND touch = Drone(dk::kR14Touch, dk::kR14Touch, 0);
@@ -2281,6 +2286,7 @@ static void ExpectInert(const char* where) {
   CallAttack(g_cs, kAtHandle);
   CHECK(g_attacks.size() == 1, "%s: the game's AttackTarget was not called", where);
   OnKilled(0x11);
+  CHECK(g_scopeClockReads == 0, "%s: %d reads of the scope's clock on the arena path of the hooks", where, g_scopeClockReads);
   CHECK(ReadCount() == 0 && ScanCount() == 0,
         "%s: %llu reads and %llu scans on the arena path of the hooks", where,
         static_cast<unsigned long long>(ReadCount()),
@@ -2445,20 +2451,42 @@ static void TestAStaleAnswerIsNoCombatMap() {
   CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1), "a stale combat answer kept the scope");
 }
 
-// The held scope (dronekill.md, "Arena"): InCombatScope() reads the atomic the tick's last ask stored, and nothing re-judges it. While the game tick is
-// stopped nothing asks again, so the scope stays as it was however old the look is; a stale look is a no-combat-map answer only at an ask that runs.
-// Here the tick stops in a combat map: 60 s on the scope's clock with no tick leaves the scope's own look not fresh, the module still in scope, and
-// writes no change line.
-static void TestTheHeldScopeWhileTheTickIsStopped() {
+// A stopped tick (README rule 9, dronekill.md "Arena"): the tick stops in a combat map and the scope's clock moves on 60 s. Nothing asks again, so the
+// tick's copy (InCombatScope) still says combat; every in-scope body and OnKilled judge the answer at their call (scope::LookIsFresh), so each hook
+// calls the game's function as it was called and does nothing else: no look-up, no counter, no shot frame, no 'K' acted on, no line. The tick back:
+// the next frame looks again, and the drone's Enter is looked up.
+static void TestAStoppedTickPassesEveryCallThrough() {
   Result r = Reset(Words{});
   CHECK(r.ok, "install");
   Frame();  // a look and an ask: the combat map is the scope
   CHECK(InCombatScope(), "the combat map is not the scope");
-  const int scopeLines = CountLine("combat_dronekill_scope");
   g_scopeMs += 60000;  // the game tick is stopped: no Frame and no Tick, so nothing asks again
-  CHECK(!scope::LookIsFresh(), "held: the scope still believes its look 60 s on");
-  CHECK(InCombatScope(), "held: dronekill dropped its scope while the game tick was stopped");
-  CHECK(CountLine("combat_dronekill_scope") == scopeLines, "held: a scope change line was written with the game tick stopped");
+  CHECK(!scope::LookIsFresh(), "stopped: the scope still believes its look 60 s on");
+  CHECK(InCombatScope(), "stopped: the tick's copy changed with no tick");
+  g_lines.clear();
+  g_enters.clear();
+  g_fires.clear();
+  g_attacks.clear();
+  g_find_calls = g_comp_calls = 0;
+  const Stats before = CurrentStats();
+  ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&d);
+  CallFire(reinterpret_cast<void*>(0x6001), 1, DkC3{1, 2, 3}, 0);
+  CallAttack(g_cs, kAtHandle);
+  OnKilled(0x11);
+  CHECK(g_enters.size() == 1 && g_enters[0].data == &d && SameNd(g_enters[0].copy, d), "stopped: the game's Enter was not called as the caller called it");
+  CHECK(g_find_calls == 0 && g_comp_calls == 0, "stopped: a drone Enter was looked up (%d finds, %d components)", g_find_calls, g_comp_calls);
+  CHECK(g_fires.size() == 1 && !g_fires[0].acc_non_null, "stopped: a shot frame was made (dronemuzzle would act)");
+  CHECK(g_attacks.size() == 1, "stopped: the game's AttackTarget was not called");
+  const Stats after = CurrentStats();
+  CHECK(after.enter_drone == before.enter_drone && after.enter_other == before.enter_other && after.fires == before.fires &&
+            after.attacks == before.attacks,
+        "stopped: a hook counted work it did");
+  CHECK(g_lines.empty(), "stopped: %zu dronekill lines (the 'K' was acted on, or a drone was looked up)", g_lines.size());
+  Frame();  // the tick is back: a fresh look, and the copy still says combat
+  g_find_calls = 0;
+  CallEnter(&d);
+  CHECK(g_find_calls > 0 && HasLine("combat_dronekill_release"), "the tick back: the drone was not looked up");
 }
 
 // The scope's decision and its change line come from the one record the tick reads (LastLook): a live read of the answer made after the record is
@@ -3278,7 +3306,7 @@ int main() {
   TestArenaLevelsAreLeftAlone();
   TestScopeEndsAtTheLevelChange();
   TestAStaleAnswerIsNoCombatMap();
-  TestTheHeldScopeWhileTheTickIsStopped();
+  TestAStoppedTickPassesEveryCallThrough();
   TestTheRecordDecidesNotTheLiveRead();
   TestProductionStep();
   if (g_fail == 0) std::printf("dronekill_test: all checks passed\n");

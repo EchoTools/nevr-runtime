@@ -75,7 +75,8 @@ bool g_kill = false, g_lockon = false, g_gun = false, g_chase = false, g_shot = 
 bool g_hold = false;  // `combat.dronekill_hold` (and the explosion on): the first-system off is held back (dronekill.h "The hold")
 std::atomic<bool> g_shot_swapped{false};
 
-// The scope (dronekill.h, "Arena"): written by the tick only, read by every handler with one relaxed load.
+// The scope (dronekill.h, "Arena"): written by the tick only, read by every handler with one relaxed load. The copy is only as fresh as the tick's
+// last ask, so every in-scope body and OnKilled also check scope::LookIsFresh() (README rule 9): a combat answer older than kStaleAfterMs passes the call.
 std::atomic<bool> g_inScope{false};
 // Drone Enters in flight on any thread: the Actor handler reads its per-thread capture only while one is.
 std::atomic<int> g_capturing{0};
@@ -564,6 +565,7 @@ void RunExplosion(const FxCtx& f) noexcept {
 
 // CEnableComponentNode::Enter in a combat map (EnterHandler below is the hook).
 __attribute__((noinline)) void EnterInScope(EnterThunk::Fn real, void* node, const NodeData* data) noexcept {
+  if (!scope::LookIsFresh()) return real(node, data);  // the tick stopped: the answer is not believed (combat_scope.h)
   std::uint64_t actor = 0;
   if (data == nullptr || !SafeRead(reinterpret_cast<std::uintptr_t>(data), &actor, sizeof actor) || actor != kDroneActor) {
     g_enter_other.fetch_add(1, std::memory_order_relaxed);
@@ -837,6 +839,7 @@ void LockedOn(std::uint32_t at_handle) noexcept {
 // FireBulletLocal(cs, handle, C3Vector velocity by value, remote) (E4: AttackTarget remote 0, FireBulletNetwork remote 1). Outside a combat map:
 // the game's call, nothing else (no shot frame, so dronemuzzle passes too).
 __attribute__((noinline)) void FireInScope(FireThunk::Fn real, void* cs, std::uint32_t handle, DkC3 velocity, std::uint32_t remote) noexcept {
+  if (!scope::LookIsFresh()) return real(cs, handle, velocity, remote);  // the tick stopped: the answer is not believed (combat_scope.h)
   g_fires.fetch_add(1, std::memory_order_relaxed);
   if (g_lockon) LockedOn(handle);
   const std::uintptr_t outer = g_t_shot.Get();  // a shot inside a shot keeps the outer one's after it returns
@@ -943,6 +946,7 @@ void ChaseAfter(std::uintptr_t cs, std::uint32_t handle) noexcept {
 
 // AttackTarget's handler: the game's call first; outside a combat map nothing after it.
 __attribute__((noinline)) void AttackInScope(void* cs, std::uint32_t handle) noexcept {
+  if (!scope::LookIsFresh()) return;  // the tick stopped: the answer is not believed (combat_scope.h); the game's call is made
   g_attacks.fetch_add(1, std::memory_order_relaxed);
   if (g_chase) ChaseAfter(reinterpret_cast<std::uintptr_t>(cs), handle);
 }
@@ -1433,7 +1437,7 @@ bool InCombatScope() noexcept { return g_inScope.load(std::memory_order_relaxed)
 
 // The 'K' feed: the group is marked dead and due (kill) under g_mu, a table operation only. Out of scope it is dropped.
 void OnKilled(std::uint32_t index) noexcept {
-  if (!g_installed.load(std::memory_order_acquire) || !g_inScope.load(std::memory_order_relaxed)) return;
+  if (!g_installed.load(std::memory_order_acquire) || !g_inScope.load(std::memory_order_relaxed) || !scope::LookIsFresh()) return;
   const std::uint32_t tid = Tid();
   int group = 0, comps = 0, live_n = 0;
   std::uint32_t live[kGroups];

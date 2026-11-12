@@ -18,8 +18,9 @@
  * Arena (same APK). Every install happens on the combat APKs, which also play Echo Arena. The module acts only while a combat map
  * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
  * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, the answer
- * is "not combat"). The atomic is not judged again: while the tick is stopped the module keeps its last answer. A reader that checks
- * `LookIsFresh()` at call time refuses an answer older than a second (kStaleAfterMs); this module does not check it. Anywhere else every
+ * is "not combat"). Each wrapper tests that atomic; every in-scope body (and the cone's continuation) then starts with `scope::LookIsFresh()`
+ * (src/quest/combat/README.md rule 9), so while the tick is stopped a combat answer older than a second (kStaleAfterMs) passes every call on, though
+ * the atomic still says combat. Anywhere else every
  * wrapper only calls the game's function, the entry passes every call on, and nothing is logged, held, swallowed or sent. The module is a reader
  * of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
  * `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer cannot change.
@@ -27,7 +28,8 @@
  * Frequency (ADR 0038). ResolveBody has 771 callers and runs many times per frame: the entry's path for every call but the cone's is 10
  * instructions (bti, two adrp/add/ldar pairs, cmp, b.eq, br). Heal is called per damage-dealt message and per heal node; HealNode::Enter
  * per heal node a script runs; SetTargetInsideBubble once per bubble target per update of a heal bubble. Their thunks' arena path is the
- * thunk's counter, two acquire loads, one acquire load of the scope and the game's call.
+ * thunk's counter, two acquire loads, one acquire load of the scope and the game's call. In scope each call adds one clock read
+ * (`LookIsFresh`, CLOCK_MONOTONIC through the vDSO, no system call) before its work; docs/quest/combat/powerboost.md "Arena" gives the host cost.
  *
  * Owner (ADR 0039). This file owns the five words.
  *

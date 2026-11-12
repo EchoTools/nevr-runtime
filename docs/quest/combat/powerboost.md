@@ -82,11 +82,17 @@ cannot change. `combat_powerboost_scope` names the look's class as `kind` (`comb
 look, which can be up to `kLookEveryMs` old, so a change of the game reaches POWER BOOST's answer after up to 250 ms (the look) plus up to 32
 frames (the ask).
 
-The freshness test (`kStaleAfterMs`, 1 s) is made by a reader at call time: `scope::LookIsFresh()`, or `LastLook().fresh` on a record. POWER
-BOOST does not make it. Its wrappers read only the atomic that the last ask stored, and nothing re-judges that atomic. So while the game tick
-is stopped, POWER BOOST keeps its last answer for as long as the tick stays stopped. The "held answer" block of `powerboost_test.cpp` pins
-this: 60 s on the scope's clock with no tick leaves the scope's own look not fresh and POWER BOOST still in scope. POWER BOOST writes no line in
-that gap; the first look after the tick is back writes the scope's `combat_scope_stale` warning, when the held look was a combat class.
+The freshness test (`kStaleAfterMs`, 1 s) is made at call time (`src/quest/combat/README.md` rule 9). Each wrapper tests the atomic the last ask
+stored (one load: the arena path), and every in-scope body (`NodeAct`, `HealAct`, `QueuedHealAct`, `LinkAct`) and the cone's continuation then start
+with `scope::LookIsFresh()`. The atomic is not re-judged while the game tick is stopped, so it can still say combat; the bodies' test passes every
+call on once the look is older than a second. The "stopped tick" block of `powerboost_test.cpp` pins this: 60 s on the scope's clock with no tick
+leaves the atomic in scope, and a marker through each wrapper reaches the game's Heal, nothing is swallowed, held, sent, counted or logged, and the
+cone returns ResolveBody's own body; the next frame after the tick is back acts again. POWER BOOST writes no line in that gap; the first look after
+the tick is back writes the scope's `combat_scope_stale` warning, when the last look was a combat class. In scope that test costs each call one clock
+read (CLOCK_MONOTONIC through the vDSO, no system call: 31 to 38 ns on the x86 host, three runs of a scratch loop of 10,000,000 `LookIsFresh()`
+calls on a machine with builds running, not committed). Each wrapper runs per damage-dealt message, per heal node or per bubble target and update,
+so the added time per frame is that rate times about 38 ns: ADR 0038's 10 us a hook is reached only above about 260 calls a frame (not measured on a
+headset). The arena path reads no clock: the arena block counts the scope's clock reads and wants zero.
 
 ## Lines
 

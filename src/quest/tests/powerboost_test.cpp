@@ -199,7 +199,11 @@ std::int64_t g_scopeMs = 1000;
 // Armed (g_armedReads >= 0): the first clock read is the record's own (LastLook's staleness test), every later read sees the look older than
 // kStaleAfterMs. A decision made from a second read of the record, or from a live read, sees the answer stale (the block headed "the one look" in main()).
 int g_armedReads = -1;
+// Every read of the scope's clock (LookIsFresh, LastLook, Refresh), so the arena block can show its path reads none: the freshness test is in the
+// in-scope bodies, after the handlers' test of the cached answer (README rule 9).
+int g_scopeClockReads = 0;
 std::int64_t ScopeClock() noexcept {
+  ++g_scopeClockReads;
   if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + nevr_quest::combat::scope::kStaleAfterMs + 1;
   return g_scopeMs;
 }
@@ -1089,6 +1093,7 @@ int main() {
     const pb::Stats before = pb::CurrentStats();
     StartReadCount();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
     StartScanCount();
+    g_scopeClockReads = 0;  // and no clock read: the freshness test is in the in-scope bodies only
     g_node_heals = true;
     NodeData d = Data(1250030.0f, 5);
     NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
@@ -1103,6 +1108,7 @@ int main() {
     const PhTarget ta{{1, 0, 0}};
     const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
     pb::NetTick();
+    CHECK(g_scopeClockReads == 0, "arena (%s): %d reads of the scope's clock on the arena path", level != nullptr ? level : "no game", g_scopeClockReads);
     CHECK(ReadCount() == 0 && ScanCount() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
           level != nullptr ? level : "no game", static_cast<unsigned long long>(ReadCount()),
           static_cast<unsigned long long>(ScanCount()));
@@ -1145,17 +1151,49 @@ int main() {
     // the stale line names the class and the level the answer was held for (the record's level, not zero)
     CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"stale\"", LevelField("mpl_combat_dyson").c_str()}), "the stale line does not name the held level");
   }
-  // the held answer: the game tick is stopped (no Refresh and no GameTick) and the scope's clock moves on 60 s. The scope's own look is then not
-  // fresh, but POWER BOOST reads only the atomic its last ask stored, so it stays in scope and writes no line (powerboost.md, "Arena").
+  // a stopped tick (README rule 9, powerboost.md "Arena"): no Refresh and no GameTick, and the scope's clock moves on 60 s. Nothing asks again, so the
+  // tick's copy still says combat; every in-scope body judges the answer at its call (scope::LookIsFresh first), so each wrapper passes its call on
+  // unchanged: a marker reaches Heal, nothing is swallowed, held, sent, counted or logged, and the cone returns ResolveBody's own body. The tick back:
+  // the next frame looks again, and the module acts.
   {
     Fresh();
-    Inst(pb::kRead, &fns);
-    CHECK(pb::InScope(), "held: a combat map is not in scope");
-    const int scopeLines = Events("scope");
+    r = pb::InstallAt(&Lookup, g_pins, pb::kCone, &fns);
+    CHECK(r.installed, "stopped: stage 3 not installed: %s", r.status);
+    Frame();
+    CHECK(pb::InScope(), "stopped: a combat map is not in scope");
     g_scopeMs += 60000;
-    CHECK(!nevr_quest::combat::scope::LookIsFresh(), "held: the scope still believes its look 60 s on");
-    CHECK(pb::InScope(), "held: POWER BOOST dropped its answer while the game tick was stopped");
-    CHECK(Events("scope") == scopeLines, "held: a scope line was written with the game tick stopped");
+    CHECK(!nevr_quest::combat::scope::LookIsFresh(), "stopped: the scope still believes its look 60 s on");
+    CHECK(pb::InScope(), "stopped: the tick's copy changed with no tick");
+    g_lines.clear();
+    g_heals.clear();
+    g_sends.clear();
+    g_node_calls = g_link_calls = 0;
+    const pb::Stats before = pb::CurrentStats();
+    g_node_heals = true;
+    NodeData d = Data(1250030.0f, 5);
+    NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
+    g_node_heals = false;
+    HealSlot()(cs, 0x10001, 1250030.0f, 5);
+    QueuedSlot()(cs, 0x10003, 1250030.0f, 1);
+    alignas(16) uint8_t target[0x60] = {};
+    float pos[3] = {1, 2, 3};
+    LinkSlot()(cs, 0x50005, target, pos, 3);
+    SetPos(g_body_a, 110, 100, 100);  // g_frame holds the POWER BOOST bubble the cone tests built: in scope it would reject this target
+    const PhTarget ta{{1, 0, 0}};
+    const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
+    CHECK(g_heals.size() == 3 && g_heals[0].amount == 1250030.0f && g_heals[1].amount == 1250030.0f && g_heals[2].amount == 1250030.0f,
+          "stopped: a heal was swallowed or changed (%zu heals)", g_heals.size());
+    CHECK(g_node_calls == 1 && g_link_calls == 1 && body == g_body_a && g_sends.empty(), "stopped: a call was changed or something was sent");
+    const pb::Stats after = pb::CurrentStats();
+    CHECK(after.markers == before.markers && after.swallowed == before.swallowed && after.held == before.held && after.links == before.links &&
+              after.coneCalls == before.coneCalls && after.sent == before.sent,
+          "stopped: the module counted something");
+    CHECK(Events("marker") + Events("swallow") + Events("link") + Events("cone") + Events("use") == 0 && Events("scope") == 0,
+          "stopped: %zu lines logged", g_lines.size());
+    Frame();  // the tick is back: a fresh look, and the copy still says combat
+    g_heals.clear();
+    HealSlot()(cs, 0x10001, 1250030.0f, 5);
+    CHECK(g_heals.empty(), "the tick back: the relayed marker reached Heal");
   }
   // the scope's cadence, as literals: 64 frames of one game ask the level twice (the new game at the first frame, then the frame 32 later), so
   // the cadence is 32 frames. The literal, not kScopeEveryFrames, so a changed constant fails here.

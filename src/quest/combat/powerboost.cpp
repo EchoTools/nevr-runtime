@@ -61,7 +61,9 @@ std::atomic<int> g_stage{0};
 std::atomic<std::uintptr_t> g_game{0};
 // The scope: refreshed by the game tick, read by every wrapper. False until a tick saw a combat map or the combat lobby.
 std::atomic<bool> g_inScope{false};
-// The one place the module asks "is this combat?": the game tick's cached copy of the combat level answer (combat_scope.h).
+// The one place the module asks "is this combat?": the game tick's cached copy of the combat level answer (combat_scope.h), the handlers' test.
+// The copy is only as fresh as the tick's last ask and nothing re-judges it while the tick is stopped, so every in-scope body starts with
+// scope::LookIsFresh() (README rule 9): a combat answer older than kStaleAfterMs passes the call on.
 inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }
 std::atomic<std::uint32_t> g_frames{0};
 std::atomic<int> g_scopeKind{-1};
@@ -192,6 +194,7 @@ void Send(void* cs, std::uint64_t handle, float amount, const char* why) noexcep
 
 // R51, in scope. The data is copied before the game's call and never read after it.
 __attribute__((noinline)) void NodeAct(NodeThunk::Fn original, void* node, const std::uint8_t* data) noexcept {
+  if (!scope::LookIsFresh()) return original(node, data);  // the tick stopped: the answer is not believed (combat_scope.h)
   float amount = 0.0f;
   std::uint32_t user = 0;
   std::uint8_t raw[8];
@@ -209,6 +212,7 @@ __attribute__((noinline)) void NodeAct(NodeThunk::Fn original, void* node, const
 
 // R52, Heal's JUMP_SLOT, in scope: the node's direct heal and the server's relayed damage-dealt message.
 __attribute__((noinline)) void HealAct(HealThunk::Fn original, void* cs, std::uint64_t handle, float amount, std::uint64_t user) noexcept {
+  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);  // the tick stopped: the answer is not believed (combat_scope.h)
   if (g_swallow.load(std::memory_order_acquire) && amount >= kMarkerMin) {  // stage 2: a marker never reaches Heal; this path never sends
     const Marker m = Decode(amount);
     if (m.kind != kHeal) {
@@ -235,6 +239,7 @@ __attribute__((noinline)) void HealAct(HealThunk::Fn original, void* cs, std::ui
 // R52, Heal's GLOB_DAT word: the node's QUEUED heal (its SFunctor3 took the word, `ldr x8,[x8,#0xb80]` at 0x2320904), run by the deferred
 // queue's drain on the game thread. A marker is swallowed; kind 1 is sent here; a held one younger than kHoldMs too.
 __attribute__((noinline)) void QueuedHealAct(QueuedHealThunk::Fn original, void* cs, std::uint64_t handle, float amount, std::uint64_t user) noexcept {
+  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);  // the tick stopped: the answer is not believed (combat_scope.h)
   if (!g_swallow.load(std::memory_order_acquire)) {  // swallow is not (yet) on: the word only passes through
     original(cs, handle, amount, user);
     return;
@@ -273,6 +278,7 @@ __attribute__((noinline)) void QueuedHealAct(QueuedHealThunk::Fn original, void*
 
 // R53, in scope, after the game's call: one line per (bubble, target) change, or per second for the same pair.
 __attribute__((noinline)) void LinkAct(std::uint64_t bubble, const void* target, const void* pos, std::uint64_t arg) noexcept {
+  if (!scope::LookIsFresh()) return;  // the tick stopped: the answer is not believed (combat_scope.h); the game's call is made
   g_links.fetch_add(1, std::memory_order_relaxed);
   if (g_linkLines.load(std::memory_order_relaxed) > kLinkCap) return;  // one more call than the cap: it announces the cap
   std::uint32_t handle = 0xffffffffu;  // ffffffff = unreadable
@@ -368,7 +374,7 @@ const std::uint8_t* ConeAt(const PhTarget* target, const std::uint8_t* frame, st
   const ResolveFn resolve = Next();
   if (resolve == nullptr) return nullptr;  // cannot happen: the manager publishes the next word before the slot changes
   const std::uint8_t* body = resolve(target);
-  if (!Scoped() || !g_cone.load(std::memory_order_acquire)) return body;
+  if (!Scoped() || !g_cone.load(std::memory_order_acquire) || !scope::LookIsFresh()) return body;
   g_coneCalls.fetch_add(1, std::memory_order_relaxed);
   if (body == nullptr) return body;  // UpdateActiveHealBubble's own null path
   bool ok = true;

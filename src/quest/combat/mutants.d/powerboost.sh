@@ -47,7 +47,7 @@ runm pb_node_unscoped      $P '/^void NodeHandler/,/^}/ s/if (!Scoped()) return 
 runm pb_heal_unscoped      $P '/^void HealHandler/,/^}/ s/if (!Scoped()) return original/if (false) return original/'
 runm pb_queued_unscoped    $P '/^void QueuedHealHandler/,/^}/ s/if (!Scoped()) return original/if (false) return original/'
 runm pb_link_unscoped      $P 's/^  if (Scoped()) LinkAct(/  if (true) LinkAct(/'
-runm pb_cone_unscoped      $P 's/if (!Scoped() || !g_cone.load(std::memory_order_acquire)) return body;/if (!g_cone.load(std::memory_order_acquire)) return body;/'
+runm pb_cone_unscoped      $P 's/if (!Scoped() || !g_cone.load(std::memory_order_acquire) || !scope::LookIsFresh()) return body;/if (!g_cone.load(std::memory_order_acquire) || !scope::LookIsFresh()) return body;/'
 runm pb_scope_line_quiet   $P 's/"combat_powerboost_scope",/"combat_powerboost_scope_x",/'
 # stage 1: read-only, no per-call logging, capped lines
 runm pb_stage1_swallows    $P 's/if (g_swallow.load(std::memory_order_acquire) \&\& amount >= kMarkerMin) {/if (amount >= kMarkerMin) {/'
@@ -165,4 +165,10 @@ runm pb_level_zero_stale   $P 's/{"level", sentinel::HexString(lv, look.level)}/
 runm pb_cadence_16 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 16;/'
 runm pb_cadence_64 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 64;/'
 # the held answer (powerboost.md, "Arena"): the wrappers' scope test re-judges the atomic at call time, so a stopped tick drops the answer
-runm pb_scope_held_judged_at_call $P 's/^inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }$/inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire) \&\& scope::LookIsFresh(); }/'
+# README rule 9: each in-scope body judges the answer at its call (the stopped-tick block), and no handler reads the clock (the arena block counts)
+runm pb_node_stale_believed   $P '/^__attribute__((noinline)) void NodeAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(node, data);.*$//'
+runm pb_heal_stale_believed   $P '/^__attribute__((noinline)) void HealAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);.*$//'
+runm pb_queued_stale_believed $P '/^__attribute__((noinline)) void QueuedHealAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);.*$//'
+runm pb_link_stale_believed   $P '/^__attribute__((noinline)) void LinkAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return;.*$//'
+runm pb_cone_stale_believed   $P 's/ || !scope::LookIsFresh()) return body;/) return body;/'
+runm pb_heal_clock_in_handler $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);$/  if (!scope::LookIsFresh() || !Scoped()) return original(cs, handle, amount, user);/'

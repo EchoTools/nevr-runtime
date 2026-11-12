@@ -83,12 +83,18 @@ AttackTarget returns after its call; Actor returns after its call when no drone 
 'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-combat-map answers in a row, because a look cannot tell an unreadable game from one with no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
 combat map is acted on later.
 
-The scope is held, not re-judged. `InCombatScope()` reads the atomic that the tick's last ask stored, and only an ask writes it. While the game tick is
-stopped nothing asks again, so the scope stays as it was for as long as the tick stays stopped, however old the look is. A stale or missing look counts
-as no combat map only at an ask that runs (`scope::InCombatMap` on the record), and leaving takes `kLeaveAsks` such asks in a row. So when the tick runs
-again, a combat map that is still loaded keeps the scope, and a stale look has to be asked three times before the scope ends. `dronekill_test`
-(`TestTheHeldScopeWhileTheTickIsStopped`) pins the held case: 60 s on the scope's clock with no tick leaves `scope::LookIsFresh()` false, `InCombatScope()`
-true, and writes no change line. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
+The freshness test is made at call time (`src/quest/combat/README.md` rule 9). `InCombatScope()` reads the atomic that the tick's last ask stored, and
+only an ask writes it, so while the game tick is stopped it still says combat. Every in-scope body (`EnterInScope`, `FireInScope`, `AttackInScope`) and
+`OnKilled` therefore start with `scope::LookIsFresh()`: once the look is older than a second each hook calls the game's function as it was called and
+does nothing else, and a 'K' is dropped. The tick's own work needs no such test: it runs right after the scope's refresh in the same loop and stops with
+it. A stale or missing look counts as no combat map at an ask that runs (`scope::InCombatMap` on the record), and leaving takes `kLeaveAsks` such asks
+in a row; so when the tick runs again, a combat map that is still loaded keeps the tables, and a stale look has to be asked three times before the
+scope ends. `dronekill_test` (`TestAStoppedTickPassesEveryCallThrough`) pins the stopped case: 60 s on the scope's clock with no tick leaves
+`InCombatScope()` true, and an Enter, a shot, an attack and a 'K' each pass through with no look-up, counter, shot frame or line; the next frame after
+the tick is back acts again. In a combat map the test costs each hooked call one clock read (31 to 38 ns on the x86 host, the scratch loop
+`powerboost.md` "Arena" names); Enter runs once per enable/disable-component node, AttackTarget once per frame per targeting drone, so the added time
+per frame is that rate times about 38 ns, and ADR 0038's 10 us a hook is reached only above about 260 calls a frame (not measured on a headset). The arena path reads no clock: `ExpectInert` counts the scope's clock reads and
+wants zero. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
 measurement a headset run gives). `dronekill_test` (`TestArenaLevelsAreLeftAlone`, `TestScopeEndsAtTheLevelChange`) drives a drone's Enter,
 an Actor, a shot, an attack, a 'K' and 65 ticks on `mpl_arena_a`, `mpl_lobby_b2`, `mpl_lobby_b_combat` and no level, and checks that each hook
 called the game's function as it was called and nothing else happened: no look-up, no table entry, no disable, no velocity, no line.
