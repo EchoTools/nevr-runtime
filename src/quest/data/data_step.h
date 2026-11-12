@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "core/device_memory.h"
 #include "quest/data/fetch.h"
 #include "quest/data/package_pins.h"
 #include "quest/sentinel/data_root.h"
@@ -92,9 +93,12 @@ struct StepConfig {
   std::function<void(const Event&)> on_step_warn;
   // Read-only seams for the data version the step logs (`data_version`, `manifest_sha256`). Null: the real filesystem.
   // `list_dir` gives the names in a directory (none when it cannot be read); `read_file` fills `bytes` with a whole
-  // file of at most 16 MiB and says whether it could.
+  // file and says whether it could. The real read is bounded by ManifestReadLimit.
   std::function<std::vector<std::string>(const std::string& dir)> list_dir;
   std::function<bool(const std::string& path, std::string& bytes)> read_file;
+  // Test seam: the memory the device can still give (core/device_memory.h). Null: read from /proc/meminfo. A false return is a missing
+  // fact, and a manifest is then not read.
+  std::function<bool(std::uint64_t* bytes)> memory_available;
   // Seams for the package check (package_pins.h). Null: the real filesystem.
   // `file_size` gives the length of a regular file and says whether it is there. `hash_file` streams a file through
   // sha256 and gives the 64 lowercase hex characters; false when it cannot be read to its end (a test injects results
@@ -107,6 +111,20 @@ struct StepConfig {
   const PinnedDataSet* pinned_sets = nullptr;
   std::size_t pinned_set_count = 0;
 };
+
+// A manifest file the step reads whole may take at most 1/N of the memory the device can still give. N is the share the cargo manifest
+// takes (kMemoryShareForManifest in core/cargo_limits.h, 8): both read one manifest whole while the engine is not yet running. The game reads a manifest whole,
+// sized by the file, and is bounded only by its allocator (CSysCompression::DecompressAndReadFile, libr15 0x2b9e0a0); here the bound
+// is a share of the device's memory, through the one function every memory-based limit uses (core/device_memory.h).
+inline constexpr std::uint64_t kMemoryShareForLocalManifest = 8;
+
+// The most bytes of manifest file the step reads on a device with `memory_available` bytes free.
+std::uint64_t ManifestReadLimit(std::uint64_t memory_available) noexcept;
+
+// Reads a file the step needs whole (the game's manifest, the verified marker): through `config.read_file` when a test set it,
+// otherwise from disk, refusing a file over ManifestReadLimit(memory the device can give). False when it cannot be read, is over the
+// limit or the device gave no memory fact; `*why` then names which: "unreadable", "over_limit" or "no_memory_fact" (empty when it read).
+bool ReadBoundedFile(const StepConfig& config, const std::string& path, std::string& bytes, const char** why = nullptr);
 
 // The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy
 // root when the config may not read it.

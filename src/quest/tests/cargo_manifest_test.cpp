@@ -12,6 +12,7 @@
 
 #include "core/cargo_manifest.h"
 #include "core/cargo_plan.h"
+#include "core/resource_shadow.h"
 #include "quest/tests/cargo_fake_env.h"
 #include "quest/tests/cargo_zstd_support.h"
 #include "quest/tests/test_check.h"
@@ -203,8 +204,30 @@ void AnUnknownKeyIsCountedNeverNamed() {
   QCHECK(m.unknown_fields == 3);  // the entry's note, the label's state, the document's sets
 }
 
-void TheEntryMemoryCostIsWhatTheRunHolds() {
-  QCHECK(nc::ManifestEntryMemoryBytes() >= sizeof(nc::Entry));
+// Derived, not typed: the entry's own struct, the heap its SHA-256 text takes (the hex characters and the terminator), and the shadow's
+// record and chunk for it.
+void TheEntryMemoryCostIsDerivedFromWhatItEstimates() {
+  QCHECK(nc::kSha256DigestBytes == 32 && nc::kSha256HexChars == 2 * nc::kSha256DigestBytes);  // FIPS 180-4: 256 bits, two hex characters a byte
+  QCHECK(nc::ManifestEntryMemoryBytes() ==
+         sizeof(nc::Entry) + (nc::kSha256HexChars + 1) + nevr_shadow::kRecordBytes + nevr_shadow::kChunkBytes);
+}
+
+// A label or platform name has no length the format fixes (the game names resources by 64-bit symbols; a label is ours): its
+// characters are checked, its length is bounded by the manifest text limit, which comes from the device.
+void ANameIsCheckedByItsCharactersNotCappedByItsLength() {
+  const std::string longName(300, 'a');
+  json e = Entry(kArchiveType, "0x1", 'a');
+  e["platform"] = longName;
+  nc::Manifest m;
+  QCHECK(Parse(Doc(json::array({e}), json::array(), longName.c_str()), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.labels.size() == 1 && m.labels[0] == longName && m.entries.size() == 1 && m.entries[0].platform == longName);
+  QCHECK(Parse(Doc(json::array({Entry(kArchiveType, "0x1", 'a')}), json::array(), ""), &m).status == nc::ParseStatus::kBadField);  // empty
+  QCHECK(Parse(Doc(json::array({Entry(kArchiveType, "0x1", 'a')}), json::array(), "Bad-Label"), &m).status == nc::ParseStatus::kBadField);
+  json p = Entry(kArchiveType, "0x1", 'a');
+  p["platform"] = "Has Space";
+  QCHECK(Parse(Doc(json::array({p})), &m).status == nc::ParseStatus::kBadField);
+  p["platform"] = "";
+  QCHECK(Parse(Doc(json::array({p})), &m).status == nc::ParseStatus::kBadField);
 }
 
 // ── the manifest as published: one zstd frame ────────────────────────────────────────────────────────────────────────────
@@ -406,7 +429,8 @@ int main() {
   ADocumentWithNoEmptyListParses();
   AShapeThatIsNotTheSchemaIsRefusedWhole();
   AnUnknownKeyIsCountedNeverNamed();
-  TheEntryMemoryCostIsWhatTheRunHolds();
+  TheEntryMemoryCostIsDerivedFromWhatItEstimates();
+  ANameIsCheckedByItsCharactersNotCappedByItsLength();
   TheGameLabelIsRequiredByCodeAndAnUnlistedLabelIsOff();
   AWholeGameOfNonTexturesPlansWithoutAnyPairing();
   ATexturePayloadThatDiffersFromStockStillNeedsItsDescriptor();

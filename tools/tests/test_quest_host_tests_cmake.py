@@ -118,6 +118,7 @@ PROGRAMS = {
         "cargo_validate_test",
         "data_step_test",
         "data_test",
+        "device_memory_test",
         "fetch_test",
         "pack_test",
         "resource_shadow_test",

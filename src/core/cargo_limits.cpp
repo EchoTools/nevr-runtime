@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "core/device_memory.h"
+
 namespace nevr_cargo {
 
 namespace {
@@ -27,12 +29,12 @@ Limits ComputeLimits(const DeviceFacts& facts, std::uint64_t entry_bytes) {
   const std::uint64_t free_fds = facts.fd_soft_limit > facts.fds_open ? facts.fd_soft_limit - facts.fds_open : 0;
 
   Limits l;
-  l.manifest_text_bytes = facts.memory_available / (kMemoryShareForManifest * (2 + kJsonExpansion));
-  l.max_entries = facts.memory_available / kMemoryShareForEntries / entry_bytes;
-  l.max_object_bytes = std::min<std::uint64_t>(kFormatMaxObjectBytes, facts.memory_available / kMemoryShareForObject);
-  l.storage_budget = facts.free_bytes - facts.free_bytes / kStorageShareKept;
+  l.manifest_text_bytes = nevr_device::Share(facts.memory_available, kMemoryShareForManifest * (kManifestBufferCopies + kJsonExpansion));
+  l.max_entries = nevr_device::Share(nevr_device::Share(facts.memory_available, kMemoryShareForEntries), entry_bytes);
+  l.max_object_bytes = std::min<std::uint64_t>(kFormatMaxObjectBytes, nevr_device::Share(facts.memory_available, kMemoryShareForObject));
+  l.storage_budget = facts.free_bytes - nevr_device::Share(facts.free_bytes, kStorageShareKept);
   l.store_file_bytes = std::min<std::uint64_t>(kFormatMaxStoreBytes, facts.free_bytes);
-  l.max_store_files = free_fds / kDescriptorShareForStore;
+  l.max_store_files = nevr_device::Share(free_fds, kDescriptorShareForStore);
   l.index_bytes = kIndexBytesFor(l.max_entries);
   if (l.max_store_files == 0) return Refuse("no_descriptors");
   if (l.manifest_text_bytes == 0 || l.max_entries == 0 || l.max_object_bytes == 0 || l.storage_budget == 0) {

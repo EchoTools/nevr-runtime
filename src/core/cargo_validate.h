@@ -22,6 +22,7 @@
 #include <string>
 #include <tuple>
 
+#include "core/cargo_format.h"
 #include "core/cargo_limits.h"
 
 namespace nevr_cargo {
@@ -41,7 +42,7 @@ enum class Rule : std::uint8_t {
 const char* RuleName(Rule rule) noexcept;
 
 // The longest zstd frame header (RFC 8878 3.1.1.1): magic 4, descriptor 1, window 1, dictionary id 4, content size 8.
-inline constexpr std::size_t kMaxFrameHeaderBytes = 18;
+inline constexpr std::size_t kMaxFrameHeaderBytes = kZstdMaxFrameHeaderBytes;
 
 // How many leading bytes the header of the frame that starts with `bytes` (at least 5 of them) takes; 0 when the first five bytes
 // are not a frame start.

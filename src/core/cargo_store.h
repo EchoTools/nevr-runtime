@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "core/cargo_env.h"
+#include "core/cargo_format.h"
 #include "core/cargo_limits.h"
 #include "core/cargo_manifest.h"
 #include "core/cargo_plan.h"
@@ -43,8 +44,9 @@
 
 namespace nevr_cargo {
 
-// The index header is "NEVRCARG" | version u32 | record bytes u32 (kIndexHeaderBytes, kIndexRecordBytes: cargo_limits.h).
+// The index header is "NEVRCARG" | version u32 | record bytes u32 (kIndexHeaderBytes, kIndexRecordBytes: cargo_format.h).
 inline constexpr std::uint32_t kIndexVersion = 3;
+inline constexpr char kIndexMagic[kIndexMagicBytes + 1] = "NEVRCARG";  // the first eight bytes of blobs.idx
 
 std::string StoreFilePath(const std::string& dir, std::uint32_t file);
 std::string IndexPath(const std::string& dir);

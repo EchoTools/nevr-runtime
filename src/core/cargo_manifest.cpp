@@ -17,9 +17,11 @@ namespace {
 
 using json = nlohmann::ordered_json;  // document order matters: refusals are listed in it
 
-// A label is lowercase letters, digits and underscores, 1 to 48 of them: the name is logged, so it is checked before it is used.
+// A label is lowercase letters, digits and underscores, at least one: the name is logged, so its characters are checked before it is
+// used. No length is fixed by the format (the game names a resource by a 64-bit symbol, a label is ours); the length is bounded by the
+// manifest text limit, which comes from the device (cargo_limits.h).
 bool IsLabelName(const std::string& s) noexcept {
-  if (s.empty() || s.size() > 48) return false;
+  if (s.empty()) return false;
   for (const char c : s) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
     if (!ok) return false;
@@ -27,9 +29,9 @@ bool IsLabelName(const std::string& s) noexcept {
   return true;
 }
 
-// A platform name is lowercase letters, digits, '-' and '_', 1 to 32 of them.
+// A platform name is lowercase letters, digits, '-' and '_', at least one; bounded by the manifest text limit like a label.
 bool IsPlatformName(const std::string& s) noexcept {
-  if (s.empty() || s.size() > 32) return false;
+  if (s.empty()) return false;
   for (const char c : s) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
     if (!ok) return false;
@@ -140,8 +142,9 @@ ParseStatus ReadEmpty(const json& v, EmptyRecord* e, std::uint64_t* align, std::
 }  // namespace
 
 std::uint64_t ManifestEntryMemoryBytes() noexcept {
-  // The entry, its sha256 text (longer than a short string, so on the heap), its shadow record and its chunk.
-  return sizeof(Entry) + 64 + nevr_shadow::kRecordBytes + nevr_shadow::kChunkBytes;
+  // The entry, the heap its SHA-256 text takes (the hex characters and the terminator: longer than a short string, so out of line), and
+  // the shadow's record and chunk for it. The allocator's own overhead is not counted.
+  return sizeof(Entry) + (kSha256HexChars + 1) + nevr_shadow::kRecordBytes + nevr_shadow::kChunkBytes;
 }
 
 const char* ParseStatusName(ParseStatus status) noexcept {
@@ -165,28 +168,22 @@ const char* ParseStatusName(ParseStatus status) noexcept {
 }
 
 bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept {
-  if (text.size() < 3 || text.size() > 18 || text[0] != '0' || text[1] != 'x') return false;
+  if (text.size() <= kHexPrefixChars || text.size() > kHexPrefixChars + kSymbolHexDigits || text[0] != '0' || text[1] != 'x') return false;
   std::uint64_t v = 0;
-  for (std::size_t i = 2; i < text.size(); ++i) {
-    const char c = text[i];
+  for (std::size_t i = kHexPrefixChars; i < text.size(); ++i) {
     unsigned d = 0;
-    if (c >= '0' && c <= '9') {
-      d = static_cast<unsigned>(c - '0');
-    } else if (c >= 'a' && c <= 'f') {
-      d = static_cast<unsigned>(c - 'a') + 10;
-    } else {
-      return false;
-    }
-    v = (v << 4) | d;
+    if (!HexDigitValue(text[i], &d)) return false;
+    v = (v << kHexDigitBits) | d;
   }
   *out = v;
   return true;
 }
 
 bool IsSha256Hex(std::string_view text) noexcept {
-  if (text.size() != 64) return false;
+  if (text.size() != kSha256HexChars) return false;
   for (const char c : text) {
-    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    unsigned ignored = 0;
+    if (!HexDigitValue(c, &ignored)) return false;
   }
   return true;
 }

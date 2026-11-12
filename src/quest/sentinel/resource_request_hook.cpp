@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <pthread.h>
 
 #include "core/cargo_resolver.h"
 #include "cargo_read_keys.h"
@@ -117,9 +116,6 @@ std::uint64_t TouchCargo(std::uint64_t key) noexcept {
 }
 
 long long ThreadId() noexcept { return static_cast<long long>(::syscall(SYS_gettid)); }
-
-// A cheap per-thread key for the pins: the pthread handle, an integer type on glibc and bionic (no system call, no allocation).
-std::uint64_t PinKey() noexcept { return static_cast<std::uint64_t>(::pthread_self()); }  // an integer on glibc and on bionic
 
 std::int64_t ReadI64(const unsigned char* request, std::size_t at) noexcept {
   std::int64_t v = 0;
@@ -468,7 +464,7 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
                       unsigned char* request) noexcept {
   // Cargo first: a key the published shadow holds is filled by the game's own function from the shadow, and cargo replaces stock.
   // Select also pins the shadow of a texture's index 0 for its index 1, so it runs for every request.
-  const nevr_shadow::Shadow* const cargo = g_cargo.Select(PinKey(), name, index);
+  const nevr_shadow::Shadow* const cargo = g_cargo.Select(name, index);
   nevr_shadow::Found found;
   std::uint32_t user = 0;
   const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);

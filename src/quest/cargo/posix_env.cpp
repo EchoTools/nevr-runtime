@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/device_memory.h"
 #include "quest/auth/atomic_write.h"
 #include "quest/data/sha256.h"
 #include "quest/sentinel/hook_log.h"
@@ -20,6 +21,13 @@
 namespace nevr_quest::cargo {
 
 namespace {
+
+// Permission bits of what the store makes: its directory and its files are the app's own and nobody else's.
+constexpr mode_t kDirectoryMode = 0700;
+constexpr mode_t kFileMode = 0600;
+// Milliseconds and nanoseconds in a second, for the monotonic clock.
+constexpr std::uint64_t kMillisecondsPerSecond = 1000;
+constexpr std::uint64_t kNanosecondsPerMillisecond = 1000000;
 
 bool WriteAll(int fd, const void* data, std::size_t length) noexcept {
   const char* p = static_cast<const char*>(data);
@@ -77,24 +85,6 @@ bool CountOpenFds(std::uint64_t* out) noexcept {
   return true;
 }
 
-// MemAvailable of /proc/meminfo, in bytes.
-bool ReadMemAvailable(std::uint64_t* out) noexcept {
-  FILE* f = std::fopen("/proc/meminfo", "r");
-  if (f == nullptr) return false;
-  char line[256];
-  bool found = false;
-  while (std::fgets(line, sizeof(line), f) != nullptr) {
-    unsigned long long kb = 0;
-    if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
-      *out = static_cast<std::uint64_t>(kb) * 1024u;
-      found = true;
-      break;
-    }
-  }
-  std::fclose(f);
-  return found;
-}
-
 }  // namespace
 
 bool PosixEnv::ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) {
@@ -127,7 +117,7 @@ bool PosixEnv::MakeDirs(const std::string& dir) {
     const std::size_t slash = dir.find('/', at);
     const std::size_t end = slash == std::string::npos ? dir.size() : slash;
     prefix = dir.substr(0, end);
-    if (!prefix.empty() && ::mkdir(prefix.c_str(), 0700) != 0 && errno != EEXIST) return false;
+    if (!prefix.empty() && ::mkdir(prefix.c_str(), kDirectoryMode) != 0 && errno != EEXIST) return false;
     if (slash == std::string::npos) break;
     at = slash + 1;
   }
@@ -136,7 +126,7 @@ bool PosixEnv::MakeDirs(const std::string& dir) {
 }
 
 std::unique_ptr<nevr_cargo::AppendFile> PosixEnv::OpenAppend(const std::string& path) {
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, kFileMode);
   if (fd < 0) return nullptr;
   struct stat st;
   if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -161,7 +151,7 @@ bool PosixEnv::QueryDevice(const std::string& dir, nevr_cargo::DeviceFacts* out)
     out->fds_open = open;
   }
   std::uint64_t mem = 0;
-  if (ReadMemAvailable(&mem)) {
+  if (nevr_device::MemoryAvailable(&mem)) {
     out->have_memory = true;
     out->memory_available = mem;
   }
@@ -221,7 +211,7 @@ nevr_cargo::HttpResult PosixEnv::Get(const std::string& url, const nevr_cargo::H
 std::uint64_t PosixEnv::NowMs() {
   timespec ts{};
   ::clock_gettime(CLOCK_MONOTONIC, &ts);
-  return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
+  return static_cast<std::uint64_t>(ts.tv_sec) * kMillisecondsPerSecond + static_cast<std::uint64_t>(ts.tv_nsec) / kNanosecondsPerMillisecond;
 }
 
 void PosixEnv::Event(nevr_cargo::EventLevel level, const char* name, const std::vector<nevr_cargo::Field>& fields) {

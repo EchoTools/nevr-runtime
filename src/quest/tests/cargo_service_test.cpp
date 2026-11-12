@@ -24,6 +24,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/device_memory.h"
 #include "quest/cargo/cargo_service.h"
 #include "quest/cargo/posix_env.h"
 #include "quest/data/sha256.h"
@@ -154,6 +155,9 @@ void TheDeviceFactsAreTheMachinesOwnNumbers() {
   QCHECK(env.QueryDevice(scratch.Path(""), &f));
   QCHECK(f.have_free && f.free_bytes > 0);
   QCHECK(f.have_memory && f.memory_available > 0);
+  std::uint64_t direct = 0;  // the same source as every other memory-based limit (core/device_memory.h)
+  QCHECK(nevr_device::MemoryAvailable(&direct) && direct > 0);
+  QCHECK(f.memory_available < direct * 2 && direct < f.memory_available * 2);
   QCHECK(f.have_fds && f.fd_soft_limit > 0 && f.fds_open > 0 && f.fds_open < f.fd_soft_limit);
   // The descriptor limit is read from the process: lowered, it is what comes back, and the open count follows what the process holds.
   struct rlimit before;

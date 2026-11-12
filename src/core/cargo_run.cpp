@@ -13,15 +13,22 @@ namespace {
 constexpr const char* kBlobPrefix = "blobs/sha256/";
 // How many failures of one kind a run says one by one before it only counts them (a dead network must not write 36,000 lines).
 constexpr std::size_t kSingleLines = 16;
+// The event that says how far a fetch has come is written at each tenth of the bytes: ten lines a run, however many objects.
+constexpr std::uint64_t kProgressSteps = 10;
+constexpr char kSchemeSeparator[] = "://";
+constexpr std::size_t kSchemeSeparatorChars = sizeof(kSchemeSeparator) - 1;  // the "://" of a URL
+// "0x" and eight hex digits of a 32-bit chunk index, and the terminator.
+constexpr std::size_t kChunkBaseTextBytes = kHexPrefixChars + sizeof(std::uint32_t) * kHexCharsPerByte + 1;
+constexpr int kChunkBaseDigits = static_cast<int>(sizeof(std::uint32_t) * kHexCharsPerByte);
 
 // The transport asks every GET with `Range: bytes=0-` (quest/data/transport.h), which a CDN answers 206 with the whole object, and a
 // server that ignores a range answers 200. Both carry the object from its first byte.
-bool IsWholeBody(long status) noexcept { return status == 200 || status == 206; }
+bool IsWholeBody(long status) noexcept { return status == kHttpOk || status == kHttpPartialContent; }
 
 // The host part of a URL, for the log: never the path or a query.
 std::string HostOf(const std::string& url) {
-  const std::size_t scheme = url.find("://");
-  const std::size_t begin = scheme == std::string::npos ? 0 : scheme + 3;
+  const std::size_t scheme = url.find(kSchemeSeparator);
+  const std::size_t begin = scheme == std::string::npos ? 0 : scheme + kSchemeSeparatorChars;
   const std::size_t end = url.find_first_of("/?#", begin);
   return url.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
 }
@@ -44,8 +51,8 @@ std::string StatesText(const Policy& policy, const Manifest* manifest) {
 // The first chunk index of the mounted shadow, or "none" when nothing mounted (every shadow of the process owns a range of its own).
 std::string ChunkBaseText(const Mounted& m) {
   if (!m.shadow) return "none";
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "0x%08x", static_cast<unsigned>(m.shadow->chunk_base()));
+  char buf[kChunkBaseTextBytes];
+  std::snprintf(buf, sizeof(buf), "0x%0*x", kChunkBaseDigits, static_cast<unsigned>(m.shadow->chunk_base()));
   return buf;
 }
 
@@ -360,7 +367,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                                           early = "no_content_size";
                                           return false;
                                         default:  // not a frame start, or a header not all here yet
-                                          if (n >= 5 && FrameHeaderBytes(b, n) == 0) {
+                                          if (n >= kZstdProbeBytes && FrameHeaderBytes(b, n) == 0) {
                                             early = "not_zstd";
                                             return false;
                                           }
@@ -507,7 +514,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       }
       report();
       if (progress.total_bytes != 0) {
-        const std::size_t decile = static_cast<std::size_t>(progress.done_bytes * 10 / progress.total_bytes);
+        const std::size_t decile = static_cast<std::size_t>(progress.done_bytes * kProgressSteps / progress.total_bytes);
         if (decile > lastDecile) {
           lastDecile = decile;
           env.Event(EventLevel::kInfo, "cargo_progress",

@@ -4,9 +4,30 @@ namespace nevr_cargo {
 
 namespace {
 
-constexpr unsigned char kMagic[4] = {0x28, 0xB5, 0x2F, 0xFD};  // 0xFD2FB528, little endian (RFC 8878 3.1.1)
-
 bool IsPowerOfTwo(std::uint64_t v) noexcept { return v != 0 && (v & (v - 1)) == 0; }
+
+struct FrameDescriptor {
+  unsigned contentSizeFlag;
+  bool singleSegment;
+  unsigned dictionaryFlag;
+};
+
+FrameDescriptor Describe(unsigned char descriptor) noexcept {
+  return FrameDescriptor{static_cast<unsigned>(descriptor >> kZstdContentSizeFlagShift),
+                         ((descriptor >> kZstdSingleSegmentShift) & 1u) != 0,
+                         static_cast<unsigned>(descriptor & kZstdDictionaryFlagMask)};
+}
+
+// How many bytes the frame content size takes: its flag's width, and a single segment with flag 0 states one byte.
+std::size_t ContentSizeBytes(const FrameDescriptor& d) noexcept {
+  if (d.contentSizeFlag == kZstdContentSizeNone) return d.singleSegment ? kZstdSingleSegmentSizeBytes : 0;
+  return kZstdContentSizeBytes[d.contentSizeFlag];
+}
+
+// Where the content size starts: after the magic, the descriptor, the window descriptor (not in a single segment) and the dictionary id.
+std::size_t ContentSizeAt(const FrameDescriptor& d) noexcept {
+  return kZstdMagicBytes + kZstdDescriptorBytes + (d.singleSegment ? 0 : kZstdWindowDescriptorBytes) + kZstdDictionaryBytes[d.dictionaryFlag];
+}
 
 }  // namespace
 
@@ -26,40 +47,26 @@ const char* RuleName(Rule rule) noexcept {
 }
 
 std::size_t FrameHeaderBytes(const unsigned char* bytes, std::size_t length) noexcept {
-  if (length < 5) return 0;
-  for (std::size_t i = 0; i < 4; ++i) {
-    if (bytes[i] != kMagic[i]) return 0;
+  if (length < kZstdProbeBytes) return 0;
+  for (std::size_t i = 0; i < kZstdMagicBytes; ++i) {
+    if (bytes[i] != kZstdMagic[i]) return 0;
   }
-  const unsigned char descriptor = bytes[4];
-  if ((descriptor & 0x08) != 0) return 0;  // the reserved bit must be 0
-  const unsigned fcs = descriptor >> 6;
-  const bool single_segment = ((descriptor >> 5) & 1) != 0;
-  static constexpr std::size_t kDictionaryBytes[4] = {0, 1, 2, 4};
-  std::size_t size = 5;
-  if (!single_segment) size += 1;  // the window descriptor
-  size += kDictionaryBytes[descriptor & 3];
-  switch (fcs) {
-    case 0: size += single_segment ? 1 : 0; break;
-    case 1: size += 2; break;
-    case 2: size += 4; break;
-    default: size += 8; break;
-  }
-  return size;
+  const unsigned char descriptor = bytes[kZstdDescriptorAt];
+  if ((descriptor & kZstdReservedBit) != 0) return 0;
+  const FrameDescriptor d = Describe(descriptor);
+  return ContentSizeAt(d) + ContentSizeBytes(d);
 }
 
 Rule FrameContentSize(const unsigned char* head, std::size_t head_length, std::uint64_t* size) noexcept {
   const std::size_t header = FrameHeaderBytes(head, head_length);
   if (header == 0 || head_length < header) return Rule::kFrameMagic;
-  const unsigned char descriptor = head[4];
-  const unsigned fcs = descriptor >> 6;
-  const bool single_segment = ((descriptor >> 5) & 1) != 0;
-  if (fcs == 0 && !single_segment) return Rule::kContentSizeMissing;
-  static constexpr std::size_t kDictionaryBytes[4] = {0, 1, 2, 4};
-  const std::size_t at = 5 + (single_segment ? 0 : 1) + kDictionaryBytes[descriptor & 3];
-  const std::size_t width = fcs == 0 ? 1 : (fcs == 1 ? 2 : (fcs == 2 ? 4 : 8));
+  const FrameDescriptor d = Describe(head[kZstdDescriptorAt]);
+  const std::size_t width = ContentSizeBytes(d);
+  if (width == 0) return Rule::kContentSizeMissing;
+  const std::size_t at = ContentSizeAt(d);
   std::uint64_t content = 0;
-  for (std::size_t i = 0; i < width; ++i) content |= static_cast<std::uint64_t>(head[at + i]) << (8 * i);
-  if (fcs == 1) content += 256;  // the two-byte form counts from 256
+  for (std::size_t i = 0; i < width; ++i) content |= static_cast<std::uint64_t>(head[at + i]) << (kBitsPerByte * i);
+  if (d.contentSizeFlag == kZstdContentSizeTwoBytes) content += kZstdTwoByteContentSizeBase;
   *size = content;
   return Rule::kNone;
 }

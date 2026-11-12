@@ -66,7 +66,13 @@ process.
 8. **Limits come from the device and the manifest, never from a constant** (`src/core/cargo_limits.h`). The manifest text, the entry
    count, one object's size, the storage a plan may add and the store files held open are each a share of the device's free memory,
    free space and free descriptors, read when the run starts; a missing fact stops the run with its name. What remains constant is
-   what the engine's layout can express (a 4 GiB store file, 32-bit sizes, an alignment that is a power of two of at most 4096). A
+   what a format defines (`src/core/cargo_format.h`: SHA-256, hex, CRC-32, the zstd frame header, the blob index; and the engine's layout: a 4 GiB
+   store file, 32-bit sizes, an alignment that is a power of two of at most 4096). Every memory-based bound on every path, the cargo
+   limits and the first-run data step's manifest read, goes through one reader and one function (`src/core/device_memory.h`). A resolver
+   pin is thread-local, as the game keeps its own per-thread state (FillResourceFileRequest echovr.exe `0x140fa1fe0`: slot lookup `0x140fa2155`, `TlsGetValue` through `CPool::GetOrCreate` `0x140fa2171`, allocation `0x140fa218d`), so
+   no table size limits the threads that read resources. A manifest's decoded size is taken from its frame header, as the game takes a
+   manifest's decompressed length from its file header (libr15 `0x2b9dd10`); the game bounds a manifest only by its allocator
+   (`CSysCompression::DecompressAndReadFile` `0x2b9e0a0`), and here it is bounded by the share of the device's memory. A
    label is planned whole or skipped whole, with the reason named. A payload whose size differs from its stock buffer's still needs
    its descriptor (the per-binary pair table, `Platform::pairs`).
 9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;

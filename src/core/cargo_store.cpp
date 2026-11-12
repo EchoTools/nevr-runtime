@@ -10,66 +10,54 @@ namespace nevr_cargo {
 
 namespace {
 
-constexpr std::size_t kReadChunk = 64 * 1024;
-constexpr char kIndexMagic[8] = {'N', 'E', 'V', 'R', 'C', 'A', 'R', 'G'};
+constexpr std::size_t kReadChunk = 64 * 1024;  // Verify's read buffer: a size for the stack of one call, not a limit on any object
 
 void PutU32(unsigned char* at, std::uint32_t v) noexcept {
-  for (int i = 0; i < 4; ++i) at[i] = static_cast<unsigned char>((v >> (8 * i)) & 0xff);
+  for (std::size_t i = 0; i < kU32Bytes; ++i) at[i] = static_cast<unsigned char>((v >> (kBitsPerByte * i)) & kByteMask);
 }
 std::uint32_t GetU32(const unsigned char* at) noexcept {
-  return static_cast<std::uint32_t>(at[0]) | (static_cast<std::uint32_t>(at[1]) << 8) | (static_cast<std::uint32_t>(at[2]) << 16) |
-         (static_cast<std::uint32_t>(at[3]) << 24);
+  std::uint32_t v = 0;
+  for (std::size_t i = 0; i < kU32Bytes; ++i) v |= static_cast<std::uint32_t>(at[i]) << (kBitsPerByte * i);
+  return v;
 }
 
 std::string HexOfBytes(const unsigned char* bytes, std::size_t n) {
-  static const char digits[] = "0123456789abcdef";
-  std::string out(n * 2, '0');
+  std::string out(n * kHexCharsPerByte, '0');
   for (std::size_t i = 0; i < n; ++i) {
-    out[2 * i] = digits[bytes[i] >> 4];
-    out[2 * i + 1] = digits[bytes[i] & 15];
+    out[kHexCharsPerByte * i] = kHexDigits[bytes[i] >> kHexDigitBits];
+    out[kHexCharsPerByte * i + 1] = kHexDigits[bytes[i] & kHexDigitMask];
   }
   return out;
 }
 
 bool BytesOfHex(const std::string& hex, unsigned char* out) noexcept {
-  if (hex.size() != 64) return false;
-  for (std::size_t i = 0; i < 32; ++i) {
-    unsigned v = 0;
-    for (std::size_t j = 0; j < 2; ++j) {
-      const char c = hex[2 * i + j];
-      unsigned d = 0;
-      if (c >= '0' && c <= '9') {
-        d = static_cast<unsigned>(c - '0');
-      } else if (c >= 'a' && c <= 'f') {
-        d = static_cast<unsigned>(c - 'a') + 10;
-      } else {
-        return false;
-      }
-      v = (v << 4) | d;
-    }
-    out[i] = static_cast<unsigned char>(v);
+  if (hex.size() != kSha256HexChars) return false;
+  for (std::size_t i = 0; i < kSha256DigestBytes; ++i) {
+    unsigned high = 0, low = 0;
+    if (!HexDigitValue(hex[kHexCharsPerByte * i], &high) || !HexDigitValue(hex[kHexCharsPerByte * i + 1], &low)) return false;
+    out[i] = static_cast<unsigned char>((high << kHexDigitBits) | low);
   }
   return true;
 }
 
 void IndexHeader(unsigned char* out) noexcept {
-  std::memcpy(out, kIndexMagic, 8);
-  PutU32(out + 8, kIndexVersion);
-  PutU32(out + 12, static_cast<std::uint32_t>(kIndexRecordBytes));
+  std::memcpy(out, kIndexMagic, kIndexMagicBytes);
+  PutU32(out + kIndexVersionAt, kIndexVersion);
+  PutU32(out + kIndexRecordSizeAt, static_cast<std::uint32_t>(kIndexRecordBytes));
 }
 
 }  // namespace
 
 std::string FormatHex64(std::uint64_t v) {
-  static const char digits[] = "0123456789abcdef";
   std::string out = "0x";
   bool started = false;
-  for (int shift = 60; shift >= 0; shift -= 4) {
-    const unsigned d = static_cast<unsigned>((v >> shift) & 0xf);
+  for (unsigned shift = static_cast<unsigned>(kSymbolBits - kHexDigitBits);; shift -= kHexDigitBits) {
+    const unsigned d = static_cast<unsigned>((v >> shift) & kHexDigitMask);
     if (d != 0 || started || shift == 0) {
-      out.push_back(digits[d]);
+      out.push_back(kHexDigits[d]);
       started = true;
     }
+    if (shift == 0) break;
   }
   return out;
 }
@@ -80,19 +68,19 @@ std::string ManifestCopyPath(const std::string& dir) { return dir + "/manifest.j
 
 std::uint32_t Crc32(const void* data, std::size_t length) noexcept {
   static const struct Table {
-    std::uint32_t v[256];
+    std::uint32_t v[kCrc32TableEntries];
     Table() {
-      for (std::uint32_t i = 0; i < 256; ++i) {
+      for (std::uint32_t i = 0; i < kCrc32TableEntries; ++i) {
         std::uint32_t c = i;
-        for (int k = 0; k < 8; ++k) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        for (unsigned k = 0; k < kBitsPerByte; ++k) c = (c & 1) != 0 ? kCrc32Polynomial ^ (c >> 1) : c >> 1;
         v[i] = c;
       }
     }
   } table;
-  std::uint32_t crc = 0xFFFFFFFFu;
+  std::uint32_t crc = kCrc32Init;
   const unsigned char* p = static_cast<const unsigned char*>(data);
-  for (std::size_t i = 0; i < length; ++i) crc = table.v[(crc ^ p[i]) & 0xff] ^ (crc >> 8);
-  return crc ^ 0xFFFFFFFFu;
+  for (std::size_t i = 0; i < length; ++i) crc = table.v[(crc ^ p[i]) & kByteMask] ^ (crc >> kBitsPerByte);
+  return crc ^ kCrc32Init;
 }
 
 // ── the store ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -112,8 +100,8 @@ std::unique_ptr<Store> Store::Open(Env& env, const std::string& dir, const Limit
   bool cut = false;
   if (env.ReadSmallFile(IndexPath(dir), &bytes, static_cast<std::size_t>(limits.index_bytes))) {
     const unsigned char* b = reinterpret_cast<const unsigned char*>(bytes.data());
-    const bool headerOk = bytes.size() >= kIndexHeaderBytes && std::memcmp(b, kIndexMagic, 8) == 0 && GetU32(b + 8) == kIndexVersion &&
-                          GetU32(b + 12) == kIndexRecordBytes;
+    const bool headerOk = bytes.size() >= kIndexHeaderBytes && std::memcmp(b, kIndexMagic, kIndexMagicBytes) == 0 &&
+                          GetU32(b + kIndexVersionAt) == kIndexVersion && GetU32(b + kIndexRecordSizeAt) == kIndexRecordBytes;
     if (!headerOk) {
       info->index = "invalid";
       cut = true;
@@ -122,13 +110,13 @@ std::unique_ptr<Store> Store::Open(Env& env, const std::string& dir, const Limit
       std::size_t off = kIndexHeaderBytes;
       while (off + kIndexRecordBytes <= bytes.size()) {
         const unsigned char* r = b + off;
-        if (Crc32(r, kIndexRecordBytes - 4) != GetU32(r + kIndexRecordBytes - 4)) break;
+        if (Crc32(r, kIndexCrcAt) != GetU32(r + kIndexCrcAt)) break;
         Record rec;
-        rec.sha = HexOfBytes(r, 32);
-        rec.loc.file = GetU32(r + 32);
-        rec.loc.offset = GetU32(r + 36);
-        rec.loc.size = GetU32(r + 40);
-        rec.loc.bytes = GetU32(r + 44);
+        rec.sha = HexOfBytes(r + kIndexShaAt, kSha256DigestBytes);
+        rec.loc.file = GetU32(r + kIndexFileAt);
+        rec.loc.offset = GetU32(r + kIndexOffsetAt);
+        rec.loc.size = GetU32(r + kIndexSizeAt);
+        rec.loc.bytes = GetU32(r + kIndexBytesAt);
         records.push_back(std::move(rec));
         off += kIndexRecordBytes;
       }
@@ -205,11 +193,11 @@ class StoreWriter : public Store::Writer {
       Abort();
       return true;
     }
-    PutU32(record + 32, file_);
-    PutU32(record + 36, static_cast<std::uint32_t>(start_));
-    PutU32(record + 40, static_cast<std::uint32_t>(size_));
-    PutU32(record + 44, static_cast<std::uint32_t>(bytes));
-    PutU32(record + 48, Crc32(record, 48));
+    PutU32(record + kIndexFileAt, file_);
+    PutU32(record + kIndexOffsetAt, static_cast<std::uint32_t>(start_));
+    PutU32(record + kIndexSizeAt, static_cast<std::uint32_t>(size_));
+    PutU32(record + kIndexBytesAt, static_cast<std::uint32_t>(bytes));
+    PutU32(record + kIndexCrcAt, Crc32(record, kIndexCrcAt));
     // The object's bytes are durable before the record that names them is written.
     if (!store_->current_->Sync()) {
       Abort();

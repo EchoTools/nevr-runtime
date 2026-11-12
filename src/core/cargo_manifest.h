@@ -27,6 +27,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/cargo_format.h"
 #include "core/cargo_limits.h"
 #include "core/cargo_validate.h"
 

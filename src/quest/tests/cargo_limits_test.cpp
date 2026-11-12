@@ -38,7 +38,7 @@ constexpr std::uint64_t kEntry = 400;
 void EveryLimitIsTheDevicesNumberThroughItsShare() {
   const nc::Limits l = nc::ComputeLimits(Facts(3 * kGiB, 10 * kGiB, 1024, 64), kEntry);
   QCHECK(l.ok);
-  QCHECK(l.manifest_text_bytes == 3 * kGiB / (nc::kMemoryShareForManifest * (2 + nc::kJsonExpansion)));
+  QCHECK(l.manifest_text_bytes == 3 * kGiB / (nc::kMemoryShareForManifest * (nc::kManifestBufferCopies + nc::kJsonExpansion)));
   QCHECK(l.max_entries == 3 * kGiB / nc::kMemoryShareForEntries / kEntry);
   QCHECK(l.max_object_bytes == 3 * kGiB / nc::kMemoryShareForObject);
   QCHECK(l.storage_budget == 10 * kGiB - 10 * kGiB / nc::kStorageShareKept);

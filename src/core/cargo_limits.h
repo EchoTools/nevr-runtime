@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "core/cargo_env.h"
+#include "core/cargo_format.h"
 
 namespace nevr_cargo {
 
@@ -23,14 +24,13 @@ namespace nevr_cargo {
 inline constexpr std::uint64_t kFormatMaxStoreBytes = 0xFFFFFFFFull;   // a chunk's file offset is a u32 (resource_shadow.h Chunk)
 inline constexpr std::uint64_t kFormatMaxObjectBytes = 0xFFFFFFFFull;  // record size and chunk sizes are u32 words
 inline constexpr std::uint32_t kFormatMaxAlignment = 4096;
-// The blob index's layout (cargo_store.h): a header, then one fixed record per stored object.
-inline constexpr std::uint64_t kIndexHeaderBytes = 16;
-inline constexpr std::uint64_t kIndexRecordBytes = 52;
+// The blob index's layout is cargo_format.h's: a header, then one fixed record per stored object.
 constexpr std::uint64_t kIndexBytesFor(std::uint64_t objects) noexcept { return kIndexHeaderBytes + objects * kIndexRecordBytes; }
 
 // Shares. Each is "1 part in N" of the named device number.
 inline constexpr std::uint64_t kMemoryShareForManifest = 8;  // reading a manifest (its frame, its text and its parsed form) takes at most 1/N of free memory ...
-inline constexpr std::uint64_t kJsonExpansion = 6;           // ... the frame and the text are one copy each, and the parsed form is this many times the text: measured 3.85 on the 11.5 MB all-assets
+inline constexpr std::uint64_t kManifestBufferCopies = 2;   // reading a manifest holds its frame and its decoded text, one copy each ...
+inline constexpr std::uint64_t kJsonExpansion = 6;           // ... and the parsed form is this many times the text: measured 3.85 on the 11.5 MB all-assets
                                                               // manifest (nlohmann::ordered_json, mallinfo2, cargo_limits_test measures it again)
 inline constexpr std::uint64_t kMemoryShareForEntries = 4;    // the run's tables (entries, records, chunks) take at most 1/N of free memory
 inline constexpr std::uint64_t kMemoryShareForObject = 2;     // one object, decompressed by the engine, takes at most 1/N of free memory

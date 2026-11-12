@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
@@ -570,6 +571,27 @@ TEST(TheDataCheckNamesTheVersionFolderAndTheManifestHashOfTheDataItFound) {
   CHECK(Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
 }
 
+// A folder name is judged by its characters and by the file system's own bound (NAME_MAX), not by a number of ours: a long plain name is named.
+TEST(TheDataCheckNamesAPlainFolderOfAnyLengthTheFileSystemAllows) {
+  Rig rig;
+  const std::string longName(NAME_MAX, '7');
+  const std::string tooLong(NAME_MAX + 1, '7');
+  const std::string path = "_data/" + longName + "/rad15/android/manifests/48037dc70b0ecab2";
+  rig.present = {Media(), Media("_data"), Media(path)};
+  rig.config.list_dir = [&](const std::string& dir) {
+    return dir == Media("_data") ? std::vector<std::string>{tooLong, longName} : std::vector<std::string>{};
+  };
+  rig.config.read_file = [&](const std::string&, std::string& bytes) {
+    bytes = "m";
+    return true;
+  };
+  rig.config.allow_fetch = false;
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "data_version=" + longName + " "));
+  CHECK(!rig.events.empty() && !Contains(rig.events[0], tooLong));  // a name the file system cannot have is never logged
+}
+
 TEST(TheDataCheckNamesThePinnedFolderAndItsManifestHashWhenThatIsWhatIsThere) {
   Rig rig;
   rig.present = {Media(), Media("_data"), Media(kManifestRel)};
@@ -1041,6 +1063,100 @@ TEST(TheRealFileSeamsCheckSizesHashAndMarkerOnDisk) {
 
 TEST(TheMissingOutcomeHasAName) {
   CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kMissing)), std::string("missing"));
+}
+
+// The size of a manifest the step will read is a share of the device's memory (the game itself reads a manifest whole, sized by the
+// file, and is bounded by its allocator: CSysCompression::DecompressAndReadFile libr15 0x2b9e0a0), one function every memory-based
+// limit goes through (core/device_memory.h).
+TEST(TheManifestReadLimitIsAShareOfTheDevicesMemory) {
+  CHECK_EQ(ManifestReadLimit(8000000), nevr_device::Share(8000000, kMemoryShareForLocalManifest));
+  CHECK(ManifestReadLimit(1000000) < ManifestReadLimit(2000000));
+  CHECK(ManifestReadLimit(2000000) < ManifestReadLimit(4000000000ull));
+  CHECK_EQ(ManifestReadLimit(0), static_cast<std::uint64_t>(0));
+}
+
+TEST(AManifestFileIsReadUpToTheDevicesLimitAndRefusedPastIt) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  const std::string bytes(100000, 'm');
+  WriteFile(path, bytes);
+  StepConfig big;
+  big.memory_available = [](std::uint64_t* m) { *m = 100000 * kMemoryShareForLocalManifest; return true; };  // the limit is exactly the file
+  std::string got;
+  CHECK(ReadBoundedFile(big, path, got));
+  CHECK_EQ(got, bytes);
+  StepConfig small;
+  small.memory_available = [](std::uint64_t* m) { *m = 100000 * kMemoryShareForLocalManifest - kMemoryShareForLocalManifest; return true; };  // one byte short
+  CHECK(!ReadBoundedFile(small, path, got));
+  StepConfig larger;  // a device with more memory reads what a smaller one refused
+  larger.memory_available = [](std::uint64_t* m) { *m = 1000 * 1000 * 1000; return true; };
+  CHECK(ReadBoundedFile(larger, path, got));
+}
+
+// A refusal says why: the reason is what the step logs in the manifest's place.
+TEST(AFileThatIsNotReadSaysWhy) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  WriteFile(path, std::string(1000, 'm'));
+  std::string got;
+  const char* why = "";
+  StepConfig small;
+  small.memory_available = [](std::uint64_t* m) { *m = 100 * kMemoryShareForLocalManifest; return true; };
+  CHECK(!ReadBoundedFile(small, path, got, &why));
+  CHECK_EQ(std::string(why), std::string("over_limit"));
+  StepConfig none;
+  none.memory_available = [](std::uint64_t*) { return false; };
+  CHECK(!ReadBoundedFile(none, path, got, &why));
+  CHECK_EQ(std::string(why), std::string("no_memory_fact"));
+  StepConfig big;
+  big.memory_available = [](std::uint64_t* m) { *m = 1000 * 1000 * 1000; return true; };
+  CHECK(!ReadBoundedFile(big, scratch.Path("absent"), got, &why));
+  CHECK_EQ(std::string(why), std::string("unreadable"));
+  CHECK(ReadBoundedFile(big, path, got, &why));
+  CHECK_EQ(std::string(why), std::string(""));
+}
+
+// The step's own log line names the reason where the manifest's hash would be (real files, as the seams test above).
+TEST(TheStepLogsWhyAManifestWasNotReadInPlaceOfItsHash) {
+  Rig rig;
+  const std::string root = rig.scratch.Path("real");
+  ::mkdir(root.c_str(), 0755);
+  const std::string manifest_bytes = "a real manifest on disk";
+  const std::string manifest_sha = Sha256Hex(manifest_bytes.data(), manifest_bytes.size());
+  MakeTree(root, kManifestRel, manifest_bytes);
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_0", "abc");
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_1", "abc");
+  const char* const abc_sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  const PinnedPackage packages[2] = {{0, 3, abc_sha, false}, {1, 3, abc_sha, true}};
+  const PinnedDataSet set = {manifest_sha.c_str(), packages, 2};
+  rig.config.pinned_sets = &set;
+  rig.config.pinned_set_count = 1;
+  rig.config.engine_root = root;
+  rig.config.exists = &MappedExists;
+  rig.config.memory_available = [](std::uint64_t*) { return false; };  // the device gives no memory fact
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "manifest_sha256=unreadable:no_memory_fact"));
+  rig.events.clear();
+  rig.config.memory_available = [](std::uint64_t* m) { *m = 8 * kMemoryShareForLocalManifest; return true; };  // a limit of 8 bytes
+  OneShotTransport net2(rig.zip, true);
+  RunDataStep(rig.config, net2);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "manifest_sha256=unreadable:over_limit"));
+}
+
+TEST(AManifestIsNotReadWhenTheDeviceGivesNoMemoryFact) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  WriteFile(path, "tiny");
+  StepConfig none;
+  none.memory_available = [](std::uint64_t*) { return false; };
+  std::string got;
+  CHECK(!ReadBoundedFile(none, path, got));  // nothing is guessed in the number's place
+  StepConfig injected;
+  injected.read_file = [](const std::string&, std::string& bytes) { bytes = "from the seam"; return true; };
+  CHECK(ReadBoundedFile(injected, path, got) && got == "from the seam");  // the test seam still answers first
+  StepConfig real;  // the real memory fact of this machine reads a small file
+  CHECK(ReadBoundedFile(real, path, got) && got == "tiny");
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
