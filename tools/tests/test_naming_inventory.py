@@ -74,13 +74,15 @@ class NamingInventoryTest(unittest.TestCase):
             "namespace NRadEngine::" "NevrReconstruction {",                  # 14 finding: project spelling, not the game's
             "namespace " "nevr_reconstruction {",                             # 15 allowed: bare nevr_<area>
             "namespace " "nevr {",                                            # 16 allowed: bare nevr
+            "namespace NevrX::" "NRadGame {",                                 # 17 finding: project-spelled prefix, game spelling after it
+            "namespace NevrX::" "nevr_reconstruction {",                      # 18 finding: project-spelled prefix
         ]
         target = self.tmp / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         out = self.inventory("--category", "pascal-namespaces")
         found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
-        self.assertEqual(found, {6, 7, 8, 9, 10, 11, 12, 13, 14}, out)
+        self.assertEqual(found, {6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18}, out)
 
     def test_a_namespace_outside_the_reconstruction_keeps_the_general_rule(self):
         # The reconstruction's game spelling is not a licence anywhere else: a PascalCase namespace in the tree is a finding
