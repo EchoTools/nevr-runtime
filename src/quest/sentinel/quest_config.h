@@ -54,8 +54,8 @@
 // `combat.levelname` (#2181) is a boolean, true when absent, read the same way: `false` leaves the game's cut global level (combat/levelname.h) and, with it,
 // the booster pool's companion (combat/boosterpool.h).
 // `combat.meshstep`, `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false`
-// leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default, the defaults the q15t plugin's options carry at v6.16.5
-// (`src/quest/plugins/q15t/CMakeLists.txt` at that tag: Q15T_MESHSTEP:25, Q15T_SHADERSTEP, Q15T_TABLESTEP, Q15T_INSTMODEL).
+// leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default because the upstream build the
+// community combat port ships turns the same change on (`--resource-table-step-1`, in its wave-2 recipe).
 #pragma once
 
 #include <cstddef>
@@ -217,7 +217,7 @@ struct CombatConfig {
   CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
   CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
   CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)
-  // The three modules of #2185, each on unless the file says false (the q15t plugin's options for them are ON at v6.16.5: Q15T_GUNCONNECT:26, Q15T_AIBOTS:27, Q15T_T26:15): gun connect, practice AI bots and
+  // The three modules of #2185, each on unless the file says false (upstream's shipped build has all three on): gun connect, practice AI bots and
   // the gun hand default.
   CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)
   CombatSwitch aibots;        // `combat.aibots`: EnableScenario once the bots of a combat match are in game (combat/aibots.h)

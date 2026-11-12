@@ -83,7 +83,7 @@ ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.s
 ModuleResult LevelNameNormal() noexcept { return levelname::Install(g_config.levelname.on); }
 ModuleResult BoosterPoolNormal() noexcept { return boosterpool::Install(g_config.levelname.on, levelname::Installed()); }
 
-// The three modules of #2185. Each is on unless its key says false (the q15t plugin's options for them are ON at v6.16.5: Q15T_GUNCONNECT:26, Q15T_AIBOTS:27, Q15T_T26:15); aibots also takes its scenario text and whether this is a development build.
+// The three modules of #2185. Each is on unless its key says false (the reference build's shipped build has all three on); aibots also takes its scenario text and whether this is a development build.
 ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
 ModuleResult AibotsNormal() noexcept {
   aibots::Switches switches;

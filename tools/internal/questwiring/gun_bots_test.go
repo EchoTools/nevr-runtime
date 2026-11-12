@@ -64,7 +64,7 @@ func TestEachKeyIsReadKnownDocumentedAndDefaultsOn(t *testing.T) {
 			t.Errorf("the example config does not document %s", key)
 		}
 	}
-	// the three switches default on (the q15t options for them are ON at v6.16.5: Q15T_GUNCONNECT, Q15T_AIBOTS, Q15T_T26): no fallback argument other than the default, no `{false` initialiser
+	// the three switches default on (upstream's shipped build has all three on): no fallback argument other than the default, no `{false` initialiser
 	for _, call := range []string{"ReadCombatSwitch(cfg, kCombatGunconnectKey, r)", "ReadCombatSwitch(cfg, kCombatAibotsKey, r)", "ReadCombatSwitch(cfg, kCombatWeaponArmKey, r)"} {
 		if !strings.Contains(reader, call) {
 			t.Errorf("quest_config.cpp: %s is not read with the default fallback", call)
