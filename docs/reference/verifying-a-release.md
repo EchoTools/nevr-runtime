@@ -15,8 +15,8 @@ installer installs only what that file describes. Tracking issue for the manifes
 
 ## Status of this document
 
-- The manifest is specified by #898 and no live manifest is published. Until one is, run every step against the
-  fixtures. They hold the real v5.5.1 file list, hashes and sizes, signed with a **test key**, not with a release key.
+- The manifest is specified by #898. The installer fetches the live one from `DEFAULT_BASE`
+  (`installer/src/fetch.rs:9`). Until you check that one, run every step against the fixtures. They hold the real v5.5.1 file list, hashes and sizes, signed with a **test key**, not with a release key.
   A live manifest is signed by one of the pinned keys below, and the fixtures are not ("Fixtures and test key").
 - The snippets compile and run with `minisign` 0.12, `jq` 1.8, GNU coreutils (`dd`, `date`, `sha256sum`) with `bash` as
   `sh`, `curl`, Python 3.14, Rust 1.99 with the crates pinned in `Cargo.toml`, and .NET SDK 10 with the packages pinned
@@ -1432,8 +1432,9 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
   (`nevr_game_image_guard::IsSupportedGameModule`, called from `src/runtime/host/host_entry.cpp`) and validates the
   wrapper's prologue bytes before it writes the hook (`RuntimeRendezvous::Install` in
   `src/runtime/host/runtime_rendezvous.cpp`).
-- The host takes the runtime from its own directory (`ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp`:
-  `nevr-runtime.dll` beside `BugSplat64.dll`). `nevr_host::RuntimeLoader::Load` opens that file for reading with
+- The host takes the runtime from the nEVR root, not from its own directory (`ResolveRuntimePath` in
+  `src/runtime/host/runtime_load.cpp`, through `ResolveRuntimePathFrom`): `nevr-runtime.dll` in the root under
+  `%LOCALAPPDATA%`. Only a development build honours `NEVR_ROOT` to name another root; a release build ignores it. `nevr_host::RuntimeLoader::Load` opens that file for reading with
   `FILE_SHARE_READ` and holds the handle through the load and the runtime's `initialize`, so nothing can write the file
   between the check and the load. It checks the file with the verifier of ADR 0010
   (`nevr_plugin_signature::VerifyPluginFile`, with the pinned policy of `src/runtime/ext/plugin_pins.cpp`): an embedded
