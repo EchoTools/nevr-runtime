@@ -86,7 +86,7 @@ Inferred, from the analysis below; nothing here was observed on a headset.
   is not seen by either measure.
 - An `Upload` that is not part of a gamespace load: the init-fiber count does not see it. Which callers upload in a settled level (the
   `CGBuffer` initializers that upload initial data, through 0x182bdf0, created at run time, if any) and on which thread is not shown.
-- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock at least
+- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock up to
   nine times among the calls read (the calls after 0x18348f8 are not read, so its total is not bounded by this reading). Whether a new init fiber reaches an `Upload` inside that time is not shown.
 - An `Upload` taken after the count and lock read: the read narrows, it does not close (the section "What this means" below).
 - The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure. The menu's Resize (a change the player makes,
@@ -158,8 +158,7 @@ the PC control).
 
 - Measured: read in the store `libr15.so` (build id `b243509c08ce677aeb95fa348016949b3fc45230`): an instruction word, a symbol, a
   relocation, or a function read whole from its byte-checked reconstruction. The pinned test checks every word, symbol and slot.
-- Inferred: derived from measured facts; the step is named. Eight functions below are not in the proven reconstruction tree (not established: the function is not in the proven
-  reconstruction tree); what this page says they do beyond their pinned words is inferred from those words.
+- Inferred: derived from measured facts; the step is named. Eight functions below are not in the proven reconstruction tree; what this page says they do beyond their pinned words is inferred from those words.
 - Not shown: listed at the end.
 
 Addresses are ELF virtual addresses; ReVault (project echovr, binary libr15.so) shows each at ELF + 0x100000.
@@ -193,7 +192,7 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
-canvas needs a resize (its reconstruction). So one Resize reaches the upload lock at least nine times among the calls read: once in `FlushGPU`, once in each of the four direct
+canvas needs a resize (its reconstruction). So one Resize takes the upload lock up to nine times among the calls read: once in `FlushGPU`, once in each of the four direct
 body calls of `CGDisplay::Resize` (kind 0xe), and once in each of the four `DeferredDestroy(SGImage&)` calls, which reach the body
 (kind 0xa) only on the last reference. None of the eight runs when `CCanvas::BeforeResize` answers non-zero:
 `CCanvasDisplay::Resize` returns before `CGDisplay::Resize` (`src/reconstruction/r15/ccanvas_display_resize.cpp:79`). Each take sits
@@ -298,7 +297,7 @@ The game's own Resize (a display change) has the same exposure.
 - That no `Upload` runs in a settled level outside a gamespace load, and that the 10 s settle covers what a load leaves behind.
 - That the game resizes on its own at a level load (choice (a) above): when the pending word +0x13a50 is set is not read.
 - The eight unreconstructed functions read whole: `CGS::FlushGPU`, `CGDisplay::Resize`, the reaper 0x18ebb48, the allocator 0x18ebd38,
-  both `CGUploader::Upload` and both `End`. Each is not established: the function is not in the proven reconstruction tree, so their behaviour beyond the
+  both `CGUploader::Upload` and both `End`. Each is not in the proven reconstruction tree, so their behaviour beyond the
   pinned words is inferred.
 - When the init-fiber count (game + 0x1f08) returns to 0 against the end of a gamespace's uploads: `UpdateGameSpaceInit` (ELF 0x17ecc7c) has no
   reconstruction yet.
