@@ -135,6 +135,9 @@ runm h_missing_heaps_off   $F "s/  if (headset == nullptr \\&\\& heapsOn) {/  if
 runm h_missing_level       $F "s/sentinel::LogLevel::kWarn, \"combat_heaps_profile_missing\"/sentinel::LogLevel::kInfo, \"combat_heaps_profile_missing\"/"
 runm h_missing_profile     $F "s/{{\"profile\", headset_profile::kGeneric.name},/{{\"profile\", headset_profile::kQuest3.name},/"
 runm h_missing_mib         $F "s/{\"system_mib\", SystemBytesFor(headset_profile::kGeneric) \\/ kMiB},/{\"system_mib\", SystemBytesFor(headset_profile::kQuest2) \\/ kMiB},/"
+# the store of the switch only on a step that installs: the off line is written before it, so it reads the last step's value (the store
+# moved below the off branch, one line here: the off call stores nothing)
+runm h_off_store_skipped   $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (heapsOn) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
 # the holder (quest/headset_active.h) and the identity step that fills it; each is killed by the test named after it
 runm h_holder_null_q2      src/quest/headset_active.h "s/  return profile != nullptr ? profile : \\&headset_profile::kGeneric;/  return profile != nullptr ? profile : \\&headset_profile::kQuest2;/"
 runm h_step_not_stored     src/quest/integration/headset_identity_step.cpp "s/^  headset_active::SetActive(match.profile);/  (void)match;/" quest-host-hooks headset_profile_test
