@@ -235,9 +235,10 @@ nevr_ht_test(shieldgamma_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/gunconnect_test.cpp src/quest/combat/gunconnect.cpp src/quest/combat/gamespace.cpp ${_cscope_srcs})
 # Practice AI bots (#2185; moved from the q15t plugin's aibots): the plugin test's sections, then the switches and the scenario key, the request file in a
-# development build only, the Echo Arena scope, the install on an image and the host cost of a look.
+# development build only, the Echo Arena scope, the install on an image and the host cost of a look. The scope is the real combat level answer
+# (combat_scope.cpp, #2382): an Echo Arena level, no look or a stale look refuses the call (SeenEchoArena).
 nevr_ht_test(aibots_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp ${_cscope_srcs})
 # The gun hand default (#2185; moved from the q15t plugin's weapon_arm, T-26): the plugin test's sections, a marker the plugin wrote that stops the
 # module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image.
 nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}

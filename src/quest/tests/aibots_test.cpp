@@ -6,7 +6,9 @@
 // the request file, the agent warning, the host and combat-map fields, the pinned address and first word, a missing library). What changed is the
 // fixture (InstallResolved with the fake, the game now has levels) and the lines (`combat_aibots_*` records). The request file is read in a development
 // build only, so section 7 installs as one. New with the move: 12 the switch, 13 `combat.aibots_scenario`, 14 a release build reads no request file and
-// warns about one, 15 the Echo Arena scope, 16 the install on an image, 17 the host cost of a look.
+// warns about one, 15 the Echo Arena scope, 16 the install on an image, 17 the host cost of a look. The scope is the real combat level answer (combat_scope.h,
+// #2382): each test frame runs its refresh against the fake game before the module's callback, as the tick does; a stale or absent look refuses the call;
+// a scope that cannot change refuses the install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/aibots.h"
@@ -28,6 +30,7 @@
 #include "nevr/symbol_hash.h"
 #include "quest/combat/aibots_targets.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
@@ -35,6 +38,7 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_pins.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -44,6 +48,8 @@ std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxe
 
 namespace ai = nevr_quest::combat::aibots;
 namespace at = nevr_quest::combat::aibots::targets;
+namespace scope = nevr_quest::combat::scope;
+namespace world = combat_test::scope_world;
 using EchoVR::CSymbol64Hash;
 
 #define CHECK(cond, ...)                                                           \
@@ -102,6 +108,8 @@ struct EnableCall {
 std::vector<EnableCall> g_calls;
 double g_now = 100.0;
 double Clock() { return g_now; }
+// The combat level answer's clock (combat_scope.h) is the same fake clock, in ms.
+std::int64_t ScopeClock() noexcept { return static_cast<std::int64_t>(g_now * 1000.0); }
 bool g_enableSets = true;
 void FEnable(void* scen, int state) {
   g_calls.push_back({scen, state, g_now});
@@ -175,6 +183,8 @@ nevr_quest::combat::ModuleResult Reset(bool dev = false, const char* scenario = 
   g_enableSets = true;
   g_now = 100.0;
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
   ai::ResetForTest();
   ai::SetClockForTest(&Clock);
   ai::SetLegacyDirForTest(g_dir.c_str());
@@ -184,7 +194,9 @@ nevr_quest::combat::ModuleResult Reset(bool dev = false, const char* scenario = 
   sw.devBuild = dev;
   return ai::InstallResolved(kBase, Fns(), sw);
 }
+// One frame of the game-thread tick: the combat level answer's refresh (the scope row registers it before this module's callback), then the module's.
 void Tick() {
+  scope::Refresh(reinterpret_cast<std::uintptr_t>(g_game));
   ai::Tick(reinterpret_cast<std::uintptr_t>(g_game));
   g_now += 0.0625;
 }
@@ -400,9 +412,26 @@ void ThePinnedAddress() {  // 10
   CHECK(!ai::Resolve(kBase, nullptr, &g, &why) && std::strstr(why, "unreadable") != nullptr, "an unreadable address accepted");
 }
 
+// A libr15 image with the tick's slot row, on which the tick is installed and the scope row registers its refresh: the combat level answer can change,
+// as the shipped table leaves it before this module's row.
+combat_test::Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(world::StartScope(&TickImageLookup));
+}
+
 void NoLibrary() {  // 11
   g_lines.clear();
-  nevr_quest::combat::tick::ResetForTest();
+  StartTheScope();
   ai::ResetForTest();
   ai::SetClockForTest(&Clock);
   ai::Switches sw;
@@ -411,8 +440,63 @@ void NoLibrary() {  // 11
   BuildWorld();
   g_calls.clear();
   Run(5);
-  CHECK(!r.installed && g_calls.empty() && ai::Phase() == 2 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_aibots_install", "\"reason\":\"module_not_loaded\"", kError),
+  CHECK(!r.installed && g_calls.empty() && ai::Phase() == 2 && nevr_quest::combat::tick::Count() == 1 && HasLine("combat_aibots_install", "\"reason\":\"module_not_loaded\"", kError),
         "missing library not loud");
+  g_tickImage.Drop();
+}
+
+// The combat level answer cannot change (the tick is not installed, or the scope row did not register its refresh): every call would be refused, so the
+// module is not installed, says why at Error and registers nothing. Off by the key, or a scenario that is off in a release build, wins: off_config.
+void AScopeThatCannotChangeRefusesTheInstall() {
+  g_lines.clear();
+  nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  ai::ResetForTest();
+  ai::SetLegacyDirForTest(g_dir.c_str());
+  ai::Switches sw;
+  sw.on = true;
+  nevr_quest::combat::ModuleResult r = ai::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, sw);
+  CHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && ai::Phase() == 2 && nevr_quest::combat::tick::Count() == 0,
+        "a scope that cannot change: %s", r.status);
+  CHECK(Count("combat_aibots_install") == 1 && HasLine("combat_aibots_install", "\"reason\":\"scope_not_live\"", kError), "scope_not_live not loud");
+  // the tick is installed but no row registered the refresh
+  g_lines.clear();
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(nevr_quest::combat::tick::InstallAt(&TickImageLookup));
+  ai::ResetForTest();
+  r = ai::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, sw);
+  CHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !scope::Live(), "an unregistered refresh: %s", r.status);
+  // off by the key: off_config, whatever the scope
+  ai::ResetForTest();
+  sw.on = false;
+  r = ai::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, sw);
+  CHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0, "off with a dead scope: %s", r.status);
+  // a scenario that is off in a release build is the module off: it reaches InstallResolved (here on the image of the pinned build) and says off_config
+  combat_test::Image image;
+  static combat_test::Image* sImage;
+  sImage = &image;
+  auto lookup = [](const char* module, sentinel::ElfImage* out) {
+    if (!sImage->Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+    *out = sImage->Elf();
+    return true;
+  };
+  const nevr_quest::combat::pinned::Pins pins[] = {at::kPins, nevr_quest::combat::netgame::kPins};
+  image.Build({});
+  combat_test::PutPins(image, pins, 2);
+  ai::ResetForTest();
+  sw.on = true;
+  sw.scenario = "off";
+  r = ai::InstallAt(lookup, nullptr, sw);
+  CHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0, "scenario off with a dead scope: %s", r.status);
+  // in a development build the request file can still turn it on, so a dead scope refuses it
+  ai::ResetForTest();
+  sw.devBuild = true;
+  r = ai::InstallAt(lookup, nullptr, sw);
+  CHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0, "scenario off in a development build with a dead scope: %s", r.status);
+  image.Drop();
+  nevr_quest::combat::tick::ResetForTest();
+  g_tickImage.Drop();
 }
 
 void TheSwitch() {  // 12
@@ -524,28 +608,78 @@ void AnEchoArenaLevelIsLeftAlone() {  // 15
   SetLevels({CSymbol64Hash("mpl_lobby_b_combat")});
   Run(4);
   CHECK(g_calls.size() == 1, "the combat lobby stopped the call");
+  for (const char* name : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
+    Reset();
+    SetLevels({CSymbol64Hash(name)});
+    Run(4);
+    CHECK(g_calls.size() == 1 && Count("combat_aibots_scoped_out") == 0, "%s stopped the call", name);
+  }
+  // No look at all (the scope's refresh never ran): an Echo Arena level is not ruled out, so no call, and the line says why.
+  Reset();
+  SetLevels({CSymbol64Hash("mpl_combat_dyson")});
+  for (int i = 0; i < 160; ++i) {  // 10 s of the module's callback alone
+    ai::Tick(reinterpret_cast<std::uintptr_t>(g_game));
+    g_now += 0.0625;
+  }
+  CHECK(g_calls.empty() && ai::CurrentStats().scopedOut > 0 && Count("combat_aibots_scoped_out", "\"reason\":\"no_fresh_look\"", kInfo) == 1,
+        "no look: %zu calls, %u scoped out", g_calls.size(), ai::CurrentStats().scopedOut);
+  // The tick stops (nothing refreshes the answer): a combat map seen once is believed for a second, and the 3 s hold ends after it, so no call.
+  Reset();
+  SetLevels({CSymbol64Hash("mpl_combat_dyson")});
+  Tick();  // one look: a combat map, no arena level
+  for (int i = 0; i < 160; ++i) {
+    ai::Tick(reinterpret_cast<std::uintptr_t>(g_game));
+    g_now += 0.0625;
+  }
+  CHECK(g_calls.empty() &&
+        Count("combat_aibots_scoped_out", "\"msg\":\"the combat level answer has no look younger than a second, so an Echo Arena level is not ruled out and "
+                                             "EnableScenario was not called; the game keeps its own bots\"") == 1,
+        "a stale answer acted: %zu calls", g_calls.size());
+  // the tick comes back: the next look rules arena out and the call is made
+  Run(1);
+  CHECK(g_calls.size() == 1, "not called once the tick was back: %zu", g_calls.size());
+  // the echo_arena reason, with its own text
+  Reset();
+  SetLevels({CSymbol64Hash("mpl_arena_b")});
+  Run(4);
+  CHECK(Count("combat_aibots_scoped_out", "\"reason\":\"echo_arena\",\"msg\":\"an Echo Arena level is loaded, so EnableScenario was not called; the game keeps its own bots\"") == 1,
+        "the arena refusal's line");
 }
 
-// By count: an arena match (the game's own combat flag is 0, no bots) costs the look's four reads and nothing else: no level scan, no read of the scenarios.
+// By count: an arena match (the game's own combat flag is 0, no bots) costs the look's four reads and nothing else: no level scan of its own (the only scans are
+// the combat level answer's looks, shared by every reader), no read of the scenarios.
+// The reads one look of the combat level answer makes at the game as it is now (a scan of its tables).
+std::uint64_t ReadsPerScan() {
+  const std::uint64_t before = SafeReadCalls();
+  (void)nevr_quest::combat::level::Scan(reinterpret_cast<std::uintptr_t>(g_game));
+  return SafeReadCalls() - before;
+}
+
 void AnArenaMatchIsFourReadsALookAndNoScan() {
   for (const char* name : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"}) {
     Reset();
     SetLevels({CSymbol64Hash(name)});
     Put<std::uint8_t>(g_net, 0x6341b, 0);
     SetCount(0);
+    const std::uint64_t perScan = ReadsPerScan();
     const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
     Run(30);  // well past the 10 s the idle line waits for
     const std::uint32_t looks = ai::CurrentStats().looks;
+    const std::uint64_t scans = nevr_quest::combat::level::ScanCalls() - scans0;
     CHECK(looks >= 115 && g_calls.empty() && !HasLine("combat_aibots_idle"), "%s: %u looks, %zu calls, an idle line %d", name, looks, g_calls.size(), HasLine("combat_aibots_idle") ? 1 : 0);
-    CHECK(nevr_quest::combat::level::ScanCalls() == scans0, "%s: %llu level scans in an arena match", name, static_cast<unsigned long long>(nevr_quest::combat::level::ScanCalls() - scans0));
-    CHECK(SafeReadCalls() - reads0 == looks * 4, "%s: %llu reads for %u looks, wanted 4 each", name, static_cast<unsigned long long>(SafeReadCalls() - reads0), looks);
+    CHECK(scans == scope::Looks() && scans >= 100, "%s: %llu level scans for %u looks of the combat level answer", name, static_cast<unsigned long long>(scans), scope::Looks());
+    CHECK(SafeReadCalls() - reads0 == looks * 4 + scans * perScan, "%s: %llu reads for %u looks (4 each) and %llu scans (%llu each)", name,
+          static_cast<unsigned long long>(SafeReadCalls() - reads0), looks, static_cast<unsigned long long>(scans), static_cast<unsigned long long>(perScan));
   }
   // No net game at all (between matches): one read a look.
   Reset();
   g_game[0x8510 / 8] = 0;
-  const std::uint64_t reads1 = SafeReadCalls();
+  const std::uint64_t perScan = ReadsPerScan();
+  const std::uint64_t reads1 = SafeReadCalls(), scans1 = nevr_quest::combat::level::ScanCalls();
   Run(4);
-  CHECK(SafeReadCalls() - reads1 == ai::CurrentStats().looks, "no net game: %llu reads for %u looks", static_cast<unsigned long long>(SafeReadCalls() - reads1), ai::CurrentStats().looks);
+  const std::uint64_t scans = nevr_quest::combat::level::ScanCalls() - scans1;
+  CHECK(SafeReadCalls() - reads1 == ai::CurrentStats().looks + scans * perScan, "no net game: %llu reads for %u looks", static_cast<unsigned long long>(SafeReadCalls() - reads1),
+        ai::CurrentStats().looks);
 }
 
 void TheInstallOnAnImage() {  // 16
@@ -559,39 +693,46 @@ void TheInstallOnAnImage() {  // 16
   };
   const nevr_quest::combat::pinned::Pins pins[] = {at::kPins, nevr_quest::combat::netgame::kPins};
   auto put = [&] { combat_test::PutPins(image, pins, 2); };
+  // The tick is installed on this image and the scope row registered its refresh (one tick callback), as the shipped table leaves it.
   auto begin = [&] {
     g_lines.clear();
     nevr_quest::combat::tick::ResetForTest();
+    scope::ResetForTest();
     ai::ResetForTest();
     ai::SetLegacyDirForTest(g_dir.c_str());
+    world::PutTickSlot(image);
+    QCHECK(world::StartScope(lookup) && nevr_quest::combat::tick::Count() == 1);
   };
   ai::Switches sw;
   sw.on = true;
-  image.Build({});
+  image.Build({world::TickRow()});
   put();
   begin();
   nevr_quest::combat::ModuleResult r = ai::InstallAt(lookup, nullptr, sw);
-  CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && ai::Phase() == 1 && nevr_quest::combat::tick::Count() == 1, "install on the pinned image");
+  CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && ai::Phase() == 1 && nevr_quest::combat::tick::Count() == 2, "install on the pinned image");
   const std::size_t bent = combat_test::ForEachBentPin(image, pins, 2, [&](const char* what) {
     begin();
     r = ai::InstallAt(lookup, nullptr, sw);
-    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_aibots_pinned_word", what),
+    CHECK(!r.installed && !r.off && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 1 && HasLine("combat_aibots_pinned_word", what),
           "pin %s: %s", what, r.status);
   });
   CHECK(bent >= 15, "only %zu pins were bent", bent);
-  image.Build({}, "0123456789abcdef0123456789abcdef01234567");
+  // another build id (the scope was started on the pinned build; the tick keeps running when the image changes)
+  image.Build({world::TickRow()});
   put();
   begin();
+  image.Build({}, "0123456789abcdef0123456789abcdef01234567");
+  put();
   r = ai::InstallAt(lookup, nullptr, sw);
-  CHECK(!r.installed && std::strcmp(r.status, "build_id_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0, "another build id installed");
-  image.Build({});
+  CHECK(!r.installed && std::strcmp(r.status, "build_id_mismatch") == 0 && nevr_quest::combat::tick::Count() == 1, "another build id installed");
+  image.Build({world::TickRow()});
   put();
   begin();
   g_lookupRet = reinterpret_cast<void*>(image.Base() + 0x1000);
   r = ai::InstallAt(lookup, &Lookup, sw);
   CHECK(!r.installed && std::strcmp(r.status, "export_elsewhere") == 0, "a name elsewhere installed");
   begin();
-  for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) nevr_quest::combat::tick::Add([](std::uintptr_t) noexcept {});
+  for (std::size_t i = 1; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) nevr_quest::combat::tick::Add([](std::uintptr_t) noexcept {});
   r = ai::InstallAt(lookup, nullptr, sw);
   CHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0 && ai::Phase() == 2, "a full tick table installed");
   nevr_quest::combat::tick::ResetForTest();
@@ -638,6 +779,7 @@ int main() {
   TheEnableRecordContext();
   ThePinnedAddress();
   NoLibrary();
+  AScopeThatCannotChangeRefusesTheInstall();
   TheSwitch();
   TheScenarioKey();
   AReleaseBuildReadsNoRequestFile();

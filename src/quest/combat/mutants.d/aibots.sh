@@ -42,13 +42,22 @@ runm ai_idle_since_kept src/quest/combat/aibots.cpp 's/^    g_inSince = -1;$//'
 runm ai_host_bit1 src/quest/combat/aibots.cpp 's/(flags \& 2) != 0 ||/false ||/'
 runm ai_host_mask src/quest/combat/aibots.cpp 's/(flags \& 0x44) == 0x40/(flags \& 0x40) == 0x40/'
 runm ai_host_value src/quest/combat/aibots.cpp 's/(flags \& 0x44) == 0x40/(flags \& 0x44) == 0x44/'
-runm ai_map_unreported src/quest/combat/aibots.cpp 's/loaded.combatMap ? 1 : 0/0/'
+runm ai_map_unreported src/quest/combat/aibots.cpp 's/(look.bits \& scope::kBitCombatMap) != 0 ? 1 : 0/0/'
 runm ai_not_set_unreported src/quest/combat/aibots.cpp 's/{"scenario_object", has ? "set" : "not_set"}/{"scenario_object", (has || true) ? "set" : "not_set"}/'
 runm ai_had_unreported src/quest/combat/aibots.cpp 's/g_called ? "bot count changed" : had ? "replacing one already set" : "first call"/g_called ? "bot count changed" : (had \&\& false) ? "replacing one already set" : "first call"/'
-runm ai_arena_unscoped src/quest/combat/aibots.cpp 's/  if (loaded.echoArena) {/  if (false) {/'
+runm ai_arena_unscoped src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if (false) {/'
 runm ai_arena_said_every_look src/quest/combat/aibots.cpp 's/    if (!g_scopedSaid) {/    if (true) {/'
 runm ai_arena_unseen src/quest/combat/aibots.cpp 's/g_scopedOut.fetch_add(1, std::memory_order_relaxed);/;/'
-runm ai_scan_misses_arena src/quest/combat/aibots.cpp 's/if (loaded.echoArena) {/if (loaded.echoArena \&\& loaded.combatMap) {/'
+runm ai_arena_stale_believed src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if (look.fresh \&\& (look.bits \& scope::kBitEchoArena) != 0) {/'
+runm ai_arena_unchecked_view src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if ((look.bits \& scope::kBitEchoArena) != 0) {/'
+runm ai_scoped_reason_one src/quest/combat/aibots.cpp 's/{"reason", arena ? "echo_arena" : "no_fresh_look"}/{"reason", "echo_arena"}/'
+runm ai_scoped_msg_one src/quest/combat/aibots.cpp 's/{"msg", arena ? "an Echo Arena level is loaded/{"msg", true ? "an Echo Arena level is loaded/'
+runm ai_scoped_reason_inverted src/quest/combat/aibots.cpp 's/const bool arena = look.fresh;/const bool arena = !look.fresh;/'
+runm ai_scope_live_unchecked src/quest/combat/aibots.cpp 's/^  if (!scenarioOff \&\& !scope::Live()) return Refused/  if (false \&\& !scenarioOff \&\& !scope::Live()) return Refused/'
+runm ai_scope_live_token src/quest/combat/aibots.cpp 's/return Refused("scope_not_live", "");/return Refused("module_not_loaded", "");/'
+runm ai_scope_live_over_off src/quest/combat/aibots.cpp 's/if (!scenarioOff \&\& !scope::Live())/if ((scenarioOff || true) \&\& !scope::Live())/'
+runm ai_scope_off_in_dev src/quest/combat/aibots.cpp 's/const bool scenarioOff = !switches.devBuild \&\& /const bool scenarioOff = /'
+runm ai_scope_live_after_image src/quest/combat/aibots.cpp '/^  if (!scenarioOff \&\& !scope::Live()) return Refused/d; s/^  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");$/&\n  if (!scenarioOff \&\& !scope::Live()) return Refused("scope_not_live", "");/'
 runm ai_name_mismatch_ok src/quest/combat/aibots.cpp 's/if (p != nullptr \&\& reinterpret_cast<std::uintptr_t>(p) != want) {/if (false) {/'
 runm ai_no_word_check src/quest/combat/aibots.cpp 's/first != at::kEnableFirstWord/(first \& 0u) != 0/'
 runm ai_legacy_in_dev src/quest/combat/aibots.cpp 's/  if (devBuild || !legacy::Present("aibots.req")) return;/  if ((devBuild \&\& false) || !legacy::Present("aibots.req")) return;/'
@@ -62,12 +71,14 @@ runm ai_word src/quest/combat/aibots_targets.h 's/kEnableFirstWord = 0xd100c3ffU
 
 # Not listed: the offsets and the in-game state in aibots_targets.h and netgame_targets.h are tied to their pinned instruction words by static_assert, so a bent constant
 # does not compile (the compiler is the check; mutants.sh counts that as no kill). got_pinned_test checks the words against the store libr15.
-# By count (the arena test counts SafeRead calls and level scans): a scan on every look, and a read before the look's own.
+# By count (the arena test counts SafeRead calls and level scans against the combat level answer's own looks): a scan on every look, and a read before the look's own.
 A=src/quest/combat/aibots.cpp
-runm ai_scan_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  (void)level::Scan(game);/'
+runm ai_scan_every_look $A 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  (void)level::Scan(game);/'
 runm ai_extra_read_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  bool probe = true;\n  (void)SafeRead<std::uint8_t>(game, \&probe);/'
 # An arena match writes no idle line, however long it lasts.
 runm ai_arena_idle $A 's/  if (!ok || combat == 0) return;/  if (!ok) return;/'
 runm ai_pins_unchecked $A 's/const pinned::Pins lists\[\] = {at::kPins, netgame::kPins};/const pinned::Pins lists[] = {netgame::kPins};/'
 
 runm ai_no_pin_check src/quest/combat/aibots.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): aibots keeps the row on alone.
+runm airow_scope_reader src/quest/combat/combat_install.cpp 's/ || g_config.aibots.on;$/;/' quest-host-combat combat_install_test

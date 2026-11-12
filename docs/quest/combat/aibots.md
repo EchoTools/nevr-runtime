@@ -27,20 +27,24 @@ overrides both; a release build does not read it and warns when one is found.
 
 ## Arena
 
-Arena and combat run on the same APK. In an arena match the bot count is zero, so the 4 Hz look ends after four reads, and the call is refused while an Echo Arena level is loaded whatever the
-net game's flags say (`combat_level.h`, `Scan`), with one `combat_aibots_scoped_out` line per match. `aibots_test` shows the refusal for the four arena levels and for a transition holding an
-arena level beside a combat map, and the call going through in a combat map and in the combat lobby.
+Arena and combat run on the same APK. In an arena match the bot count is zero, so the 4 Hz look ends after four reads, and the call is refused whatever the net game's flags say while the combat
+level answer does not rule out an Echo Arena level (`combat_scope.h`, `SeenEchoArena`: its last look saw one, or there is no look younger than a second, so a stopped tick refuses too), with one
+`combat_aibots_scoped_out` line per match whose `reason` is `echo_arena` or `no_fresh_look`. The module is one of the scope row's readers (combat_install.cpp `ScopeNormal`) and refuses its install
+with `scope_not_live` when the answer cannot change; a scenario that is `off` in a release build is the module off and wins. `aibots_test` shows the refusal for the four arena levels, for a
+transition holding an arena level beside a combat map, with no look and with a look a second old, and the call going through in a combat map, in the combat lobby and in the lobbies arena players
+use (as before the move: those are not Echo Arena levels).
 
 ## Cost (ADR 0038)
 
 With the switch off nothing is registered. With it on, the tick callback runs once per rendered frame (one clock read and one compare, about 8 ns on the x86 host that built this change). The
-look is four process_vm_readv reads in an arena match (about 2 us, x86 host, 4 times a second) and six with bots in a combat match; the level scan runs only at the moment of a call.
+look is four process_vm_readv reads in an arena match (about 2 us, x86 host, 4 times a second) and six with bots in a combat match; the module reads no level itself: at the moment of a call it
+reads the combat level answer's last look (a sequence-count read and a clock read), whose 4 Hz look is the scope row's, shared by every reader.
 `aibots_test` prints the numbers. Not measured on a headset.
 
 ## Lines
 
 `combat_aibots_install` (installed, off by `combat.aibots` or by the scenario, or refused with its reason at Error), `_scenario` (Warning), `_req`, `_bots`, `_agents` (Warning), `_enable`,
-`_scoped_out`, `_rearmed`, `_idle`, `_pinned_word` (Warning), `_legacy_switch` (Warning). The switch is also one `combat_config_switch` record.
+`_scoped_out` (with its `reason`), `_rearmed`, `_idle`, `_pinned_word` (Warning), `_legacy_switch` (Warning). The switch is also one `combat_config_switch` record.
 
 ## Pins
 
@@ -52,7 +56,8 @@ libr15. `matchiscombat` is the game's own field: `Inspect<CBindingsOffsetOfInspe
 
 Offline Practice AI on a combat APK: `combat_aibots_install` with `result: installed`; on entering the match `combat_aibots_bots` with `bots` N; 3 s after the count settles one
 `combat_aibots_enable` with `scenario_name: randomattack`, `scenario_object: set`, `host: yes`, `combat_map: 1`; the bots move and fire instead of standing still. An arena match: no `enable` and no
-`combat_aibots_idle`. An online combat match: no `enable`, and at most one `combat_aibots_idle`.
+`combat_aibots_idle`, and in an arena match with bots (none expected) one `combat_aibots_scoped_out` with `reason: echo_arena`. An online combat match: no `enable`, and at most one
+`combat_aibots_idle`. A `scoped_out` with `reason: no_fresh_look` in a combat match means the combat tick stopped (the scope's `combat_scope_stale` line follows when it is back).
 Falsifiers: bots stand still in a practice match with a `combat_aibots_idle` line (`scenarios_object` no means `net+0x2ab0`, `bots` 0 while bots are on the field means `scenarios+0x500`) or with none (the flag at `net+0x6341b`
 did not read set); an `enable` with `scenario_object: not_set` or `host: no`; `combat_map: 0` in a combat level; a crash at the call.
 This row has not been run: the headset logs that held the plugin's copy show its start line and one `idle` line from an arena match (`matchiscombat` 0, `bots` 0), never an enable; that line is no longer written there.

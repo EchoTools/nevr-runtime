@@ -17,15 +17,17 @@
  * (`scenario=<0-6|name|off> delay=<seconds>`) is also polled at 1 Hz and overrides both; in a release build it is not read, and one found is a
  * Warning (`combat_aibots_legacy_switch`) naming the key.
  *
- * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle line, no scan); and the call itself is refused while an Echo Arena level is
- * loaded (combat_level.h `Scan`: `echoArena`), whatever the game's flags say, with one Info line per match (`combat_aibots_scoped_out`). The
- * combat-map flag the plugin logged beside the call (`combat_map`) is now `combat_level.h`'s detector, not a copy of its level list.
- * KNOWN-WRONG #2168: the scope asks `combat_level` directly, once per call; moving it to combat_scope.h is tracked in #2382.
+ * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle
+ * line, no read of the level); and the call itself is refused while the combat level answer does not rule out an Echo Arena level (combat_scope.h `SeenEchoArena`:
+ * its last look saw one, or there is no look younger than kStaleAfterMs, so a stopped tick refuses too), whatever the game's flags say, with one Info line per
+ * match (`combat_aibots_scoped_out`, `reason` echo_arena or no_fresh_look). The module is one of the scope row's readers and refuses its install with
+ * `scope_not_live` when the answer cannot change (a scenario that is off in a release build is the module off and wins). The combat-map flag the plugin logged
+ * beside the call (`combat_map`) is the combat-map bit of the same look record (fresh: a stale record refuses the call), not a copy of its level list.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
  * frame and does one clock read and one compare; the look runs at 4 Hz and is four process_vm_readv reads (the net game, its back pointer and
- * state, the matchiscombat byte) in an arena match, where it stops there; with bots in a combat match it is six. The level scan runs only at the
- * moment of a call. Not measured on a headset; aibots_test prints the host cost of a look.
+ * state, the matchiscombat byte) in an arena match, where it stops there; with bots in a combat match it is six. The module reads no level itself: at the
+ * moment of a call it reads the combat level answer (a sequence-count read and a clock read). Not measured on a headset; aibots_test prints the host cost of a look.
  *
  * Origin. The reference build's aibots in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_aibots.cpp:1-27,
  * the constants :52-62, the request protocol (ParseScenario :158, ReadRequest :167) and afk_aibots_tick :306-346. The q15t plugin reconstructed it
@@ -40,7 +42,7 @@
  *   agents    {"event":"combat_aibots_agents","bots":<n>,"msg":".."}   Warning: near the table size
  *   enable    {"event":"combat_aibots_enable","scenario_name":"..","scenario":<n>,"bots":<n>,"case":"first call|bot count changed|replacing one already set",
  *              "scenario_object":"set|not_set","host":"yes|no|unknown","combat_map":<0|1>,"delay_ms":<n>}
- *   scoped    {"event":"combat_aibots_scoped_out","bots":<n>,"msg":".."}   an Echo Arena level is loaded; EnableScenario was not called
+ *   scoped    {"event":"combat_aibots_scoped_out","bots":<n>,"reason":"echo_arena|no_fresh_look","msg":".."}   an Echo Arena level is not ruled out; EnableScenario was not called
  *   rearmed   {"event":"combat_aibots_rearmed","msg":".."}   left the match
  *   idle      {"event":"combat_aibots_idle","matchiscombat":<n>,"scenarios_object":"yes|no","scenario":<n>,"bots":<n>,"read_failed":<0|1>}   10 s in a combat match (the game's combat flag set), no call; never in an arena match
  *   legacy    {"event":"combat_aibots_legacy_switch","file":"aibots.req","replaced_by":"combat.aibots_scenario","msg":".."}   Warning
