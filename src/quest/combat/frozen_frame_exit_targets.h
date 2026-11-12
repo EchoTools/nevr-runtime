@@ -19,11 +19,11 @@
  * 0x36d0f78) returns a null window (`cbz x0` at 0x1a71c44, to the same place), the loop loads the word (`ldr x0, [x25, #0x3f0]`), and when it is non-zero
  * calls `vrapi_LeaveVrMode` (stub 0xedc2b0, JUMP_SLOT 0x36c5840) and stores zero (`str xzr, [x25, #0x3f0]`). So the word is zero whenever the headset's
  * session is not active or the game has no native window. Only game code on the main thread clears it: a pause that blocks that thread (inside
- * vrapi_SubmitFrame2 too) leaves it set (inferred: UpdateTracking is not in the proven reconstruction tree). In
+ * vrapi_SubmitFrame2 too) leaves it set (inferred; see the note on UpdateTracking and DoVRSubmission below). In
  * `NRadEngine::CVR::ShutdownGraphics` (0x1a712b0, byte-checked reconstruction cvr_shutdown_graphics.cpp in the proven tree): `adrp x19, 0x37a3000`,
  * the LeaveVrMode call, then `str xzr, [x19, #0x3f0]`.
  *
- * Not established here: UpdateTracking and DoVRSubmission have no byte-checked reconstruction yet (not established: neither function is in the proven reconstruction tree); what the comments above say
+ * Not established here: UpdateTracking and DoVRSubmission are not in the proven reconstruction tree, so what the comments above say
  * they do beyond the pinned words is read from their disassembly, not from a whole reconstruction.
  *
  * Built with -fno-exceptions, like every combat translation unit.
