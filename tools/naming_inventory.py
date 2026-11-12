@@ -28,6 +28,9 @@ SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py", "too
 CODE_EXT = (".h", ".hpp", ".cpp", ".cc", ".inc")
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
 CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+# docs/standards/naming.md: the brand spelling is allowed in the prose of documents; a Markdown file is a document.
+DOCUMENT_SUFFIX = (".md",)
+BRAND_SPELLING = "nEVR"
 PASCAL_NAMESPACE = re.compile(r"^\s*namespace\s+([A-Z][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
 LIFECYCLE_NAMESPACE = re.compile(r"\bnamespace\s+((?:[Nn]evr(?:_runtime)?)::[Ll]ifecycle(?:::\w+)*)")
 LOG_TAG = re.compile(r'"[^"\n]*\[([A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\]')
@@ -55,8 +58,11 @@ def lines_of(text):
 
 def noncanonical_spellings(files):
     for path, text in files:
+        prose = path.endswith(DOCUMENT_SUFFIX)
         for n, line in lines_of(text):
             for m in ANY_CASE.finditer(line):
+                if prose and m.group() == BRAND_SPELLING:
+                    continue
                 if not CANONICAL.match(m.group()):
                     yield path, n, m.group(), "a non-canonical spelling of the project name"
 
