@@ -96,6 +96,30 @@ class NamingInventoryTest(unittest.TestCase):
         self.assertIn("src/runtime/d.h:1  NRadEngine::nevr_reconstruction", out)
         self.assertIn("src/runtime/d.h:3  NRadEngine::CMemory", out)
 
+    def test_nrad_engine_outside_the_reconstruction_is_the_games_namespace(self):
+        # NRadEngine:: is the game's (naming.md, "Names in the tree that are not models"), and the exemption holds in the
+        # general rule too, not only in the reconstruction. The literal is split: this file is scanned too.
+        target = self.tmp / "src/runtime/e.h"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("namespace " "NRadEngine {\n}\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        self.assertNotIn("src/runtime/e.h:", out)
+
+    def test_a_multi_word_area_is_allowed_in_the_reconstruction(self):
+        # naming.md gives the form nevr_<area>; NEVR_COMPONENT takes `_` after the first letter of the area, so a
+        # multi-word area is allowed, and a pattern without that `_` reports both lines below.
+        path = "src/reconstruction/r15/b.cpp"
+        lines = [
+            "namespace NRadEngine::" "nevr_plugin_cfg {",                     # 1 allowed: a multi-word area
+            "namespace " "nevr_plugin_cfg {",                                 # 2 allowed: a bare multi-word area
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, set(), out)
+
     def test_a_category_can_be_selected_and_summarised(self):
         out = self.inventory("--category", "pascal-namespaces")
         self.assertIn("== pascal-namespaces (1)", out)
