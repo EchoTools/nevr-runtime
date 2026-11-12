@@ -9,6 +9,9 @@ nevr_ht_test(service_redirect_test GROUP shared TIMEOUT 120
 # The shared crash report (#1605): what it prints, what it writes and in what order, with the platform seams faked.
 nevr_ht_test(crash_report_test GROUP shared TIMEOUT 120
   SRC src/core/crash_report.cpp src/quest/tests/crash_report_test.cpp)
+# #2129: the report's summary names its final file after the rename (sentinel/crash_summary_rules.h). Header-only rule.
+nevr_ht_test(crash_summary_rules_test GROUP shared TIMEOUT 60
+  SRC src/quest/tests/crash_summary_rules_test.cpp)
 # The Quest side's address resolver (crash_report_quest.cpp, #1927): the test includes the file itself; the stub android/log.h is the
 # host's, and the sentinel log and build-id reader link for real.
 nevr_ht_test(crash_report_quest_test GROUP shared DL TIMEOUT 120 INCS src/quest/tests/stub
