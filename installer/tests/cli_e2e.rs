@@ -11,6 +11,8 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
 
+/// The binary's override of "is echovr.exe running" (`installer/src/main.rs`, `GAME_RUNNING_ENV`).
+const GAME_RUNNING_ENV: &str = "NEVR_INSTALL_GAME_RUNNING";
 const HOST: &[u8] = b"new host NEVR-BUILD 9.9.9";
 const RT: &[u8] = b"new runtime";
 const GAME: &[u8] = b"the game's BugSplat64.dll";
@@ -132,6 +134,9 @@ fn run_cmd(server: &World, dirs: &World, args: &[&str], base: &str, envs: &[(&st
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"));
     // The fixture's nevr root is a temporary folder, not the canonical one: a dev run says so (#1353).
     cmd.args(args).args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", base, "--pins", server.pins.to_str().unwrap(), "--now", NOW]);
+    // No echovr.exe the machine runs decides these runs: a live game on the machine must not fail them (#1231). A test that
+    // needs the game running sets the override itself, in `envs`.
+    cmd.env(GAME_RUNNING_ENV, "0");
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -187,6 +192,19 @@ fn pc_plan_changes_nothing() {
     assert!(!w.game.path().join("nevr-runtime.dll").exists());
     assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
     assert!(!w.root.path().join("state/install-record.json").exists());
+}
+
+#[test]
+fn a_running_game_refuses_the_pc_install_changes_nothing_and_the_override_is_on_record() {
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, out, _) = run_with(&w, &["pc", "install", "--dir", dir], &w.base, &[(GAME_RUNNING_ENV, "1".to_string())]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("echovr.exe is running; close the game first"), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
+    let start = records(&w).into_iter().find(|r| r["event"] == "run_start").expect("run_start is on record");
+    assert_eq!(start["game_running_override"], true, "{start}");
 }
 
 #[test]
@@ -367,6 +385,7 @@ fn run_with_log_cut_before(w: &World, target: &str, scenario: fn(&World)) -> (i3
         .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_install-nevr-runtime")])
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap()])
         .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", &w.base,"--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .env(GAME_RUNNING_ENV, "0")
         .output()
         .unwrap();
     reopen_game_folder(w);

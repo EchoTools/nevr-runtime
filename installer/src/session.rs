@@ -39,6 +39,9 @@ pub struct Config {
     pub canonical_nevr_root: Option<PathBuf>,
     /// A dev or test run (`--dev-nevr-root`): `nevr_root` may then be any absolute folder, and the record says so.
     pub dev_nevr_root: bool,
+    /// Overrides the answer to "is echovr.exe running" (`NEVR_INSTALL_GAME_RUNNING=0|1`, read by the binary): the tests set it
+    /// so a live game on the machine does not decide them. `None` asks the machine. Set, it is written to `run_start`.
+    pub game_running: Option<bool>,
 }
 
 impl Config {
@@ -59,6 +62,7 @@ impl Config {
             retry_delay_secs: 3,
             canonical_nevr_root: canonical_nevr_root(),
             dev_nevr_root: false,
+            game_running: None,
         }
     }
 }
@@ -133,7 +137,11 @@ impl Session {
     /// Opens the log (refusing the run when it cannot) and writes `run_start`.
     pub fn open(cfg: Config, mode: &str) -> Result<Session> {
         let log = Log::open(&cfg.log_path, &cfg.platform)?;
-        log.info("run_start", 0, json!({"channel": cfg.channel, "manifest_base": cfg.base, "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()}))?;
+        let mut start = json!({"channel": cfg.channel, "manifest_base": cfg.base, "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()});
+        if let Some(running) = cfg.game_running {
+            start["game_running_override"] = json!(running);
+        }
+        log.info("run_start", 0, start)?;
         Ok(Session { cfg, log })
     }
 
