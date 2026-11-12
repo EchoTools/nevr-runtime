@@ -16,9 +16,11 @@
  * recipe qa-1104-aj4-w2z22.json lists an empty powerboost.on, whose words are `swallow cone`, afk_powerboost.cpp:89). 0 installs nothing.
  *
  * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map
- * or the combat lobby is loaded (InScope(): the game tick asks combat_level once every kScopeEveryFrames frames and keeps the answer in an
- * atomic; with no tick seen yet the answer is "not combat"). Anywhere else every wrapper only calls the game's function, the entry passes
- * every call on, and nothing is logged, held, swallowed or sent. InScope() asks `combat_level` directly; moving it to `combat_scope.h` is tracked in #2382.
+ * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
+ * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, and with an
+ * answer older than a second, the answer is "not combat"). Anywhere else every wrapper only calls the game's function, the entry passes every call
+ * on, and nothing is logged, held, swallowed or sent. The module is a reader of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
+ * `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). ResolveBody has 771 callers and runs many times per frame: the entry's path for every call but the cone's is 10
  * instructions (bti, two adrp/add/ldar pairs, cmp, b.eq, br). Heal is called per damage-dealt message and per heal node; HealNode::Enter
@@ -76,7 +78,7 @@ inline constexpr std::uint32_t kScopeEveryFrames = 32;
 bool ResolveFns(std::uintptr_t base, const Pins& pins, Fns* out) noexcept;
 
 // The step on the loaded libr15 with `stage` (combat.powerboost_stage). Fixed status tokens: "installed", "partial", "refused", "off",
-// "already_ran", "module_not_loaded", "no_build_id", "build_id_mismatch", "no_thread_key", "tick_table_full", "hook_failed".
+// "already_ran", "scope_not_live", "module_not_loaded", "no_build_id", "build_id_mismatch", "no_thread_key", "tick_table_full", "hook_failed".
 ModuleResult Install(int stage) noexcept;
 // The same on the image `lookup` finds, with `pins`, and `fns` (null: ResolveFns).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, int stage, const Fns* fns) noexcept;

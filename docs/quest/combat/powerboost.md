@@ -72,10 +72,13 @@ game's own radius check, as it does a radius that is not finite.
 ## Arena
 
 The q15t and combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
-loaded: the game tick asks `combat_level::Classify` once every 32 frames (and when the CR15Game changes) and keeps the answer in an atomic;
-before a tick has seen a level the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
-continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. `combat_scope.h` is on main; moving
-`InScope()` to it is tracked in #2382.
+loaded and no Echo Arena level is: the game tick asks the combat level answer (`combat_scope.h`) once every 32 frames (and when the CR15Game
+changes), one `LastLook()` record judged by `InCombatOrLobby(look)`, and keeps the answer in an atomic; before a tick has seen a look, and when the
+answer is older than a second, the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
+continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. The module is one of the scope row's readers
+(`combat.powerboost_stage` 1 to 3 is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer
+cannot change. `combat_powerboost_scope` names the look's class as `kind` (`combat_scope.h` `LookClassName`: `combat_or_lobby`, `echo_arena`,
+`other`, `no_look`, `stale`) and its `level`.
 
 ## Lines
 

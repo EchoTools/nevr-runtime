@@ -27,10 +27,12 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/key_hog.h"
 #include "quest/tests/test_check.h"
 #include "runtime/patch/powerboost_rules.h"
@@ -192,6 +194,9 @@ extern "C" __attribute__((noinline)) PhTarget FakePrimary(const void* physics, u
 
 uint64_t g_now = 1000;
 uint64_t Clock() { return g_now; }
+// The combat level answer's own clock (combat_scope.h), in ms: each test frame moves it one look spacing, so each frame's refresh looks at the game.
+std::int64_t g_scopeMs = 1000;
+std::int64_t ScopeClock() noexcept { return g_scopeMs; }
 
 pb::Fns Fns() {
   pb::Fns f{};
@@ -270,8 +275,30 @@ void BuildWorld(bool with_dcs, const char* level = "mpl_combat_dyson") {
   g_dcs[0] = g_image.Base() + pb::kPins.damageableVptr;
   g_dcs[0x80 / 8] = gs;
 }
-// One game frame: a new game pointer always refreshes the scope; the same one does so once every kScopeEveryFrames frames.
-void Frame() { pb::GameTick(Game()); }
+// One game frame as the tick runs it: the combat level answer's refresh (the scope row registers it before this module's callback), then the module's
+// game tick, which asks the answer when the game pointer is new and once every kScopeEveryFrames frames of one game.
+void Frame() {
+  g_scopeMs += nevr_quest::combat::scope::kLookEveryMs;
+  nevr_quest::combat::scope::Refresh(Game());
+  pb::GameTick(Game());
+}
+// A libr15 image with the tick's slot row, on which the tick is installed and the scope row registers its refresh: the combat level answer can
+// change, as the shipped table leaves it before this module's row.
+Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  nevr_quest::combat::tick::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  nevr_quest::combat::scope::SetClockForTest(&ScopeClock);
+  g_scopeMs = 1000;
+  g_tickImage.Build({combat_test::scope_world::TickRow()});
+  combat_test::scope_world::PutTickSlot(g_tickImage);
+  QCHECK(combat_test::scope_world::StartScope(&TickImageLookup));
+}
 // Makes the module ask the level now (a frame with no game, then one with it).
 void Rescope() {
   pb::GameTick(0);
@@ -290,7 +317,7 @@ void Fresh(const char* level = "mpl_combat_dyson") {
   g_registrar_ok = true;
   g_registered = 0;
   pb::ResetForTest();
-  nevr_quest::combat::tick::ResetForTest();
+  StartTheScope();
   Build();
   pb::SetImageLookupForTest(&Lookup);
   pb::SetPinsForTest(&g_pins);
@@ -383,7 +410,25 @@ int main() {
     CHECK(!r.installed && std::strcmp(r.status, "off") == 0, "off status %s", r.status);
     CHECK(Untouched({g_pins.nodeSlot, g_pins.healSlot, g_pins.healGlobDat, g_pins.linkSlot, g_pins.resolveSlot}), "off changed a slot");
     CHECK(EventsWith("install", "\"result\":\"off\"", kInfo) == 1 && pb::CurrentStats().stage == 0, "off not logged");
-    CHECK(nevr_quest::combat::tick::Count() == 0, "off registered a tick");
+    CHECK(nevr_quest::combat::tick::Count() == 1, "off registered a tick (the one callback is the scope row's refresh)");
+  }
+
+  // ---- the combat level answer cannot change (the tick is not installed, so the scope row registered no refresh): refused before the image,
+  // nothing hooked or registered; off by its key wins
+  Fresh();
+  {
+    nevr_quest::combat::tick::ResetForTest();
+    nevr_quest::combat::scope::ResetForTest();
+    const auto r = pb::InstallAt(&Lookup, g_pins, pb::kCone, &fns);
+    CHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && nevr_quest::combat::tick::Count() == 0, "a scope that cannot change: %s", r.status);
+    CHECK(Untouched({g_pins.nodeSlot, g_pins.healSlot, g_pins.healGlobDat, g_pins.linkSlot, g_pins.resolveSlot}), "a scope that cannot change: a slot was hooked");
+    CHECK(EventsWith("install", "\"reason\":\"scope_not_live\"", kError) == 1, "scope_not_live is not an Error line");
+    pb::ResetForTest();
+    const auto off = pb::InstallAt(&Lookup, g_pins, 0, &fns);
+    CHECK(!off.installed && std::strcmp(off.status, "off") == 0, "off with a dead scope: %s", off.status);
+    pb::ResetForTest();
+    const auto noImage = pb::InstallAt([](const char*, sentinel::ElfImage*) { return false; }, g_pins, pb::kCone, &fns);
+    CHECK(std::strcmp(noImage.status, "scope_not_live") == 0, "a dead scope is asked after the image: %s", noImage.status);
   }
 
   // ---- a full tick table: refused, nothing hooked (the scope comes from the tick)
@@ -407,7 +452,7 @@ int main() {
   CHECK(Untouched({g_pins.healGlobDat, g_pins.resolveSlot, g_pins.sendSlot}), "stage 1 touched GLOB_DAT / ResolveBody / sender slot");
   CHECK(Events("hook", kInfo) == 3 && EventsWith("install", "\"result\":\"installed\"", kInfo) == 1 && pb::CurrentStats().stage == 1, "stage 1 lines: %d",
         Events("hook", kInfo));
-  CHECK(nevr_quest::combat::tick::Count() == 1 && g_registered == 0, "stage 1: the scope tick is registered, the net tick is not");
+  CHECK(nevr_quest::combat::tick::Count() == 2 && g_registered == 0, "stage 1: the game tick is registered beside the scope row's refresh, the net tick is not");
 
   // node: arguments and result pass through; a marker amount logs one line AFTER the real call, other amounts none
   {
@@ -1057,6 +1102,15 @@ int main() {
     BuildWorld(true, "mpl_arena_b");
     Rescope();
     CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"echo_arena\"") == 1, "an arena level did not take the scope away");
+  }
+  // the tick's refresh stops (the scope row's last look is older than 1 s): the module's next ask is not combat, and its line names the class `stale`
+  {
+    Fresh();
+    Inst(pb::kRead, &fns);
+    CHECK(pb::InScope(), "a combat map is not in scope");
+    g_scopeMs += nevr_quest::combat::scope::kStaleAfterMs + 1;
+    for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) pb::GameTick(Game());  // the module's game tick alone
+    CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"stale\"") == 1, "a stale combat answer kept the scope");
   }
   // the scope's cadence: the level is asked once every kScopeEveryFrames frames of one game, never per call
   {

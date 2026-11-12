@@ -29,7 +29,18 @@ runm pb_build_id_ignored   $P 's/if (std::strcmp(id, pinned::LibR15PatchedBuildI
 runm pb_no_tick            $P 's/if (!tick::Add(\&GameTick)) return Refused/if (false) return Refused/'
 # the arena scope
 runm pb_scope_always       $P 's/^inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }$/inline bool Scoped() noexcept { return true; }/'
-runm pb_scope_lobby_off    $P 's/level::Classify(game, \/\*lobby=\*\/true, \&levelId)/level::Classify(game, \/*lobby=*\/false, \&levelId)/'
+runm pb_scope_lobby_off    $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::InCombatMap(look);/'
+runm pb_scope_stale_believed $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::SeenCombatOrLobby();/'
+runm pb_scope_class_dropped $P 's/^  const scope::LookClass cls = scope::ClassOf(look);$/  const scope::LookClass cls = scope::LookClass::kOther;/'
+runm pb_scope_live_unchecked $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d'
+runm pb_scope_live_token   $P 's/return Refused("scope_not_live", stage,/return Refused("module_not_loaded", stage,/'
+runm pb_scope_live_after_image $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d; s/^  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", stage, kNothing);$/&\n  if (!scope::Live()) return Refused("scope_not_live", stage, kNothing);/'
+runm pb_scope_live_over_off $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d; s/^ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins\& pins, int stage, const Fns\* fns) noexcept {$/&\n  if (!scope::Live()) return Refused("scope_not_live", stage, kNothing);/'
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): POWER BOOST at stages 1 to 3 keeps the row
+# on alone; stage 0 and stage 4 do not (they install nothing).
+runm pbrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)(g_config\.powerboostStage\.value >= powerboost::kRead \&\& g_config\.powerboostStage\.value <= powerboost::kCone)/\1false/' quest-host-combat combat_install_test
+runm pbrow_stage_low    src/quest/combat/combat_install.cpp 's/(g_config\.powerboostStage\.value >= powerboost::kRead \&\& /(g_config.powerboostStage.value >= powerboost::kOff \&\& /' quest-host-combat combat_install_test
+runm pbrow_stage_high   src/quest/combat/combat_install.cpp 's/ \&\& g_config\.powerboostStage\.value <= powerboost::kCone)/ \&\& g_config.powerboostStage.value <= powerboost::kCone + 1)/' quest-host-combat combat_install_test
 runm pb_scope_per_frame    $P 's/if (was == game \&\& frame % kScopeEveryFrames != 0) return;/if (was == game \&\& frame % 1 != 0) return;/'
 runm pb_scope_never_again  $P 's/if (was == game \&\& frame % kScopeEveryFrames != 0) return;/if (was == game \&\& frame + 1 != 0) return;/'
 runm pb_node_unscoped      $P '/^void NodeHandler/,/^}/ s/if (!Scoped()) return original(node, data);/if (false) return original(node, data);/'
@@ -136,6 +147,6 @@ runm pb_cfg_range          $Q 's/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0
 runm pb_cfg_quiet          $Q 's/" rejected reason=out_of_range (default stays)");/" ok");/' quest-host-shared quest_config_test
 # arena pays nothing, by count (the arena path of the node handler reads game memory / the heal handlers scan the levels before the scope test)
 runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, data);/  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(data) + 0x20, \&ok_); }\n  if (!Scoped()) return original(node, data);/'
-runm pb_arena_scans_before_scope $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
+runm pb_arena_scans_before_scope $P 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
 # off by its key (stage 0) is counted off on the phase line (combat_install_test)
 runm pb_off_not_counted $P "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

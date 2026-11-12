@@ -74,7 +74,8 @@ ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
                          g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
                          g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on || g_config.weaponArm.on ||
-                         g_config.dronekill.on || g_config.ec.on;
+                         g_config.dronekill.on || g_config.ec.on ||
+                         (g_config.powerboostStage.value >= powerboost::kRead && g_config.powerboostStage.value <= powerboost::kCone);
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -233,7 +234,8 @@ constexpr std::array kModules{
     // and its switch is one of ScopeNormal()'s readers.
     Module{"sound_symbol_guard", nullptr, &SoundSymbolGuardNormal, "combat.sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, &sound_symbol_guard::NoteEnd},
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
-    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick. It reads the combat level answer (#2382), so it comes after the
+    // `scope` row, and its stage (1 to 3: installed) is one of ScopeNormal()'s readers.
     Module{"powerboost", nullptr, &PowerboostNormal},
     // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
     // callbacks, so they come after the tick's row; all three read the combat level answer (#2382), so they also come after the `scope` row, and their

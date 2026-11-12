@@ -13,7 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/powerboost_core.h"
@@ -61,7 +61,7 @@ std::atomic<int> g_stage{0};
 std::atomic<std::uintptr_t> g_game{0};
 // The scope: refreshed by the game tick, read by every wrapper. False until a tick saw a combat map or the combat lobby.
 std::atomic<bool> g_inScope{false};
-// The one place the module asks "is this combat?": the game tick's cached answer. combat_scope.h is on main; moving this to it is tracked in #2382.
+// The one place the module asks "is this combat?": the game tick's cached copy of the combat level answer (combat_scope.h).
 inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }
 std::atomic<std::uint32_t> g_frames{0};
 std::atomic<int> g_scopeKind{-1};
@@ -131,10 +131,6 @@ bool Take(std::atomic<int>& n, int cap, const char* what) noexcept {
                         {{"kind", what}, {"cap", cap}, {"msg", "this kind of powerboost line reached its cap; later ones are counted, not logged"}});
   }
   return false;
-}
-
-const char* KindName(level::Kind kind) noexcept {
-  return kind == level::Kind::kCombatOrLobby ? "combat_or_lobby" : kind == level::Kind::kEchoArena ? "echo_arena" : "none";
 }
 
 // where: "node" or "heal"; index: the heal's target index, -1 for the node
@@ -467,15 +463,16 @@ void GameTick(std::uintptr_t game) noexcept {
   const std::uint32_t frame = g_frames.fetch_add(1, std::memory_order_relaxed);
   if (was == game && frame % kScopeEveryFrames != 0) return;  // low cadence: once every kScopeEveryFrames frames, or a new game
   g_scopeChecks.fetch_add(1, std::memory_order_relaxed);
-  std::uint64_t levelId = 0;
-  const level::Kind kind = game != 0 ? level::Classify(game, /*lobby=*/true, &levelId) : level::Kind::kNone;
-  const bool in = kind == level::Kind::kCombatOrLobby;
+  // One record of the combat level answer (combat_scope.h LastLook) decides, classes and names the level, so the line describes the look that decided.
+  const scope::Look look = scope::LastLook();
+  const bool in = scope::InCombatOrLobby(look);
+  const scope::LookClass cls = scope::ClassOf(look);
   g_inScope.store(in, std::memory_order_release);
-  if (g_scopeKind.exchange(static_cast<int>(kind), std::memory_order_acq_rel) != static_cast<int>(kind) &&
+  if (g_scopeKind.exchange(static_cast<int>(cls), std::memory_order_acq_rel) != static_cast<int>(cls) &&
       Take(g_scopeLines, kScopeLineCap, "scope")) {
     char lv[19];
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_powerboost_scope",
-                        {{"in_combat", in ? 1 : 0}, {"kind", KindName(kind)}, {"level", sentinel::HexString(lv, levelId)},
+                        {{"in_combat", in ? 1 : 0}, {"kind", scope::LookClassName(cls)}, {"level", sentinel::HexString(lv, look.level)},
                          {"msg", in ? "a combat map or the combat lobby is loaded: POWER BOOST acts"
                                     : "no combat map or combat lobby is loaded: POWER BOOST only passes every call on"}});
   }
@@ -550,6 +547,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, int stage
                         {{"result", "refused"}, {"reason", "already_ran"}, {"consequence", "a second step installs nothing"}});
     return {false, "already_ran"};
   }
+  // The scope is the combat level answer (combat_scope.h): when it cannot change (the tick or the scope row's refresh is not installed) the module
+  // could never act, so nothing is hooked.
+  if (!scope::Live()) return Refused("scope_not_live", stage, "the combat level answer cannot change: nothing is installed");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded", stage, kNothing);
   char id[64] = {};

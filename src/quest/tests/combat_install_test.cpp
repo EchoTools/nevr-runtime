@@ -530,7 +530,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed texture_quest2_step_down=off meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
                "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=scope_not_live ecfx=needs_ec dronekill=scope_not_live "
-               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=scope_not_live weapon_arm=scope_not_live gates=module_not_loaded bvh=scope_not_live "
+               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=scope_not_live gunconnect=scope_not_live aibots=scope_not_live weapon_arm=scope_not_live gates=module_not_loaded bvh=scope_not_live "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=scope_not_live music=module_not_loaded\""));
     // one record per module with a step, early first: 3 early and 39 normal
@@ -873,6 +873,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.weaponArm = {false, nevr_quest::Source::kFile};        // the gun hand default reads the scope too (#2382)
   off.dronekill = {false, nevr_quest::Source::kFile};        // dronekill reads the scope too (#2382)
   off.ec = {false, nevr_quest::Source::kFile};               // the EC client reads the scope too (#2382)
+  off.powerboostStage = {0, nevr_quest::Source::kFile};      // POWER BOOST reads the scope too (#2382), at stages 1 to 3
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -886,7 +887,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
-  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (thirteen readers are on by default)
+  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (fourteen readers are on by default)
   gammaOnly.hudmeter = {false, nevr_quest::Source::kFile};  // the gamma alone is a reader
   gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
   gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
@@ -1562,6 +1563,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.weaponArm = {false, nevr_quest::Source::kFile};
     cfg.dronekill = {false, nevr_quest::Source::kFile};
     cfg.ec = {false, nevr_quest::Source::kFile};
+    cfg.powerboostStage = {0, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();
@@ -1571,6 +1573,22 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
       if (!c.reader) QCHECK(Has(ResultsOf(lines[0]), "scope=off_config"));
       if (c.reader) QCHECK(!Has(ResultsOf(lines[0]), "scope=off_config"));
     }
+    Done();
+  }
+  // POWER BOOST's switch is its stage (an integer, not a CombatSwitch): stages 1 to 3 install the module and keep the row on; 0 and 4 install nothing
+  for (const int stage : {0, 1, 3, 4}) {
+    Process(bv::Variant::kCombat);
+    nevr_quest::combat::powerboost::ResetForTest();
+    nevr_quest::CombatConfig cfg;
+    for (const Only& c : cases) cfg.*c.member = {false, nevr_quest::Source::kFile};
+    cfg.hudmeter = {false, nevr_quest::Source::kFile};
+    cfg.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
+    cfg.powerboostStage = {stage, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    const std::vector<Line> lines = Lines("combat_install");
+    QCHECK(lines.size() == 1U);
+    if (lines.size() == 1U) QCHECK(Has(ResultsOf(lines[0]), "scope=off_config") == (stage < 1 || stage > 3));
     Done();
   }
 }

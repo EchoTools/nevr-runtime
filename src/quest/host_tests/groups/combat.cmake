@@ -206,8 +206,7 @@ nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # scope: nothing acts while an Echo Arena level, an arena lobby or no level is loaded, and the level is asked once every 32 frames, never per call.
 # got_pinned_test resolves the five relocations, the two called functions and the cone's call word in the real libr15.
 nevr_ht_test(powerboost_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/powerboost_test.cpp src/quest/combat/powerboost.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/tests/ec_contract_stub.cpp)
+  SRC src/quest/tests/powerboost_test.cpp src/quest/combat/powerboost.cpp ${_cscope_srcs} src/quest/tests/ec_contract_stub.cpp)
 nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
   SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)
 # Whether a combat level is loaded, as a cache the hooks on shared slots read for free (#2186): the production refresh against a model of the
