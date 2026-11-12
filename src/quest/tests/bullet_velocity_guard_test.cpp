@@ -1,4 +1,4 @@
-// Host test of the bullet-velocity guard (src/quest/combat/bullet_velocity_guard.cpp, #1737 row 031, #1651): the rule
+// Host test of the bullet-velocity guard (src/quest/combat/bullet_velocity_guard.cpp, #1737, #1651): the rule
 // (runtime/combat/bullet_velocity_guard_rules.h), and the real handler through the real thunk, installed by the real GotHook into FireBullet's
 // JUMP_SLOT of a libr15 image built in memory, called through the slot the way FireBulletLocal calls it.
 //
@@ -246,7 +246,7 @@ void RefusesForeignOriginal() {
 }
 
 void RefusesChangedWord() {
-  // the install checks U2's three words, all of them (a shortened kWordPins is seen here)
+  // the install checks the three words of kWordPins, all of them (a shortened kWordPins is seen here)
   QCHECK(bvg::targets::kWordCount == 3 && bvg::targets::kWordPins.wordCount == 3 && bvg::targets::kWordPins.words == bvg::targets::kWords);
   QCHECK(bvg::targets::kWords[0].vaddr == 0x210ccac && bvg::targets::kWords[0].word == 0x1e2e1003);
   QCHECK(bvg::targets::kWords[1].vaddr == 0x210ccc0 && bvg::targets::kWords[1].word == 0x1e21c084);

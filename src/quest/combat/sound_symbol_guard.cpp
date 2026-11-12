@@ -94,7 +94,7 @@ std::uint64_t NowMs() noexcept {
   std::atomic<std::uint64_t>& counter = d == rules::Drop::kZero ? g_droppedZero : g_droppedUnregistered;
   const std::uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
   LogDrop(sym, d, site, n);
-  return 0;  // Play3DSound's own answer with audio disabled (0x134b488): PlaySound reads a start, the bullet site reads nothing
+  return 0;  // Play3DSound's own answer with audio disabled (0x134b488): PlaySound's -1 branch is not taken; the bullet site ignores it
 }
 
 std::int32_t Play3DHandler(Play3DThunk::Fn original, const void* caller, void* player, std::uint64_t symbol, std::uint32_t emitter,

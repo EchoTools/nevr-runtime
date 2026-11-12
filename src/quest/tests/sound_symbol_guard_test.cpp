@@ -164,13 +164,15 @@ void LearnTheSites() {
 // ---- the rule ------------------------------------------------------------------------------------------------------------------
 void TheRuleDropsZeroAndTheUnregisteredDefaultOnly() {
   QCHECK(rules::Drops(0) && rules::Classify(0) == rules::Drop::kZero);
-  // 0x1406b30a, the bullet site's default, is in no stock bank (U3a: tools/cmd/wwise-events over the two stock packages, 34 banks, 1295 events).
+  // 0x1406b30a, the bullet site's default, is in no stock bank (tools/cmd/wwise-events over the two stock packages: 34 banks, 1295 events;
+  // docs/quest/combat/sound_symbol_guard.md, What it hooks).
   QCHECK(rules::Drops(0x1406b30aU) && rules::Classify(0x1406b30aU) == rules::Drop::kUnregistered);
   QCHECK(rules::kUnregisteredCount == 1 && rules::kUnregistered[0] == 0x1406b30aU);
   for (std::size_t i = 0; i < rules::kUnregisteredCount; ++i) QCHECK(rules::Classify(rules::kUnregistered[i]) == rules::Drop::kUnregistered);
   // the list's entry is the .rodata word the default's writer copies (the targets' last kWords entry)
   QCHECK(ssg::targets::kWords[ssg::targets::kWordCount - 1].vaddr == 0x31c8330 && ssg::targets::kWords[ssg::targets::kWordCount - 1].word == rules::kUnregistered[0]);
-  // 1 and 0xc7b3d4fb are not events either, but neither is a symbol a site posts (U3a): not listed, so not dropped. Nor is any other value.
+  // 1 and 0xc7b3d4fb are not events either, but neither is a symbol a site posts (sound_symbol_guard.md, What it hooks): not listed, so not
+  // dropped. Nor is any other value.
   const std::uint32_t keep[] = {1U, 0xc7b3d4fbU, 0x1406b30bU, 0x1406b309U, 0xffffffffU, 0x5b8cc538U, 0x80000000U, 0x0000b30aU};
   for (std::uint32_t s : keep) QCHECK(!rules::Drops(s) && rules::Classify(s) == rules::Drop::kNone);
   QCHECK(std::strcmp(rules::DropName(rules::Drop::kZero), "zero") == 0 && std::strcmp(rules::DropName(rules::Drop::kUnregistered), "unregistered") == 0 &&

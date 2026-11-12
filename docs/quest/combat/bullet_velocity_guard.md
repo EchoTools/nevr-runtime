@@ -1,4 +1,4 @@
-# Module `bullet_velocity_guard` (#1737 row 031, #1651)
+# Module `bullet_velocity_guard` (#1737, #1651)
 
 Files: `src/quest/combat/bullet_velocity_guard.{h,cpp}`, `src/quest/combat/bullet_velocity_guard_targets.h` (the pins),
 `src/runtime/combat/bullet_velocity_guard_rules.h` (the rule, one definition for PC and Quest), `src/quest/tests/bullet_velocity_guard_test.cpp`,
@@ -32,9 +32,11 @@ non-finite one.
 
 The velocity is the fifth argument (x4, `const C3Vector&`). At FireBulletLocal's call (ELF 0x210c2a0, VA 0x220c2a0) x4 is the address of
 FireBulletLocal's own by-value velocity parameter (`C3Vector dir`, arriving in s0..s2 and spilled to its stack): `&dir`, with the bullet's handle
-in w1, its spawn record in x2, the record's transform in x3, two zero words in w5 and w6 and the float at its weapon record's +0x70 in s0
-(the libr15 reconstruction of `CR15NetAutoTargetCS::FireBulletLocal`, VA 0x220bff8). FireBulletLocal reads `dir` and never writes it between its
-entry and that call.
+in w1, the third argument in x2 (below), the transform in x3, two zero words in w5 and w6 and the damage float in s0 (below). The
+reconstruction is `CR15NetAutoTargetCS::FireBulletLocal`, VA 0x220bff8. FireBulletLocal reads `dir` and never writes it between its entry and
+that call. x2 is typed in the header as a `CComponentHandle<CR15NetGunCS>` by reference (`bullet_velocity_guard.h`), while the reconstruction
+passes a 0x50-byte spawn record built from the weapon record (`fire_bullet_local.cpp:275`); the two disagree, and the guard does not read x2.
+s0 is the damage float, which the reconstruction loads from the weapon record at +0x70 (`fire_bullet_local.cpp:280-281`).
 
 The guard and dronemuzzle see the same vector. dronemuzzle's continuation acts only on that one call (its entry compares the return address with
 FireBulletLocal's, ELF 0x210c2a4), and skips on dronekill's shot velocity, which dronekill copies from the same by-value parameter on entry to

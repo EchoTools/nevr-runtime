@@ -131,9 +131,9 @@ inline constexpr pinned::Word kWords[] = {
 inline constexpr std::size_t kWordCount = sizeof(kWords) / sizeof(kWords[0]);
 inline constexpr pinned::Pins kWordPins = {kWords, kWordCount, nullptr, 0};
 
-// What a dropped post leaves undone, and where the invalid-id text is made and written (the paragraphs "What a post dropped before Play3DSound leaves undone" and "Where the not-a-valid-wwise-identifier text is made" above): Play3DSound's
-// exits and its emitter-bit tests, the bit's writer, the emitters of PlaySound, the bullet site and TriggerSingle, and PlaySound's handling
-// of the result.
+// What a dropped post leaves undone, and where the invalid-id text is made and written (the paragraphs "What a post dropped before
+// Play3DSound leaves undone" and "Where the "not a valid wwise identifier" text is made" above): Play3DSound's exits and its emitter-bit
+// tests, the bit's writer, the emitters of PlaySound, the bullet site and TriggerSingle, and PlaySound's handling of the result.
 inline constexpr pinned::Word kDropWords[] = {
     {"Play3DSound audio-disabled early-out: mov w0, wzr", 0x134b488, 0x2a1f03e0},
     {"Play3DSound: bl PostSoundEvent@plt", 0x134b5e8, 0x97eed286},

@@ -3,7 +3,8 @@
  *
  * What the game does. CSoundPlayer::Play3DSound(this, CSoundSymbol w1, emitter id w2, volume s0) hands the 32-bit symbol to
  * CWwiseEngine::PostSoundEvent as the Wwise event id. For an id no loaded bank defines, PostEvent answers 0, PostSoundEvent records the "not a
- * valid wwise identifier" error and Play3DSound passes its status to OutputError (sound_symbol_guard_targets.h, U3a's second paragraph). Two
+ * valid wwise identifier" error and Play3DSound passes its status to OutputError (sound_symbol_guard_targets.h, the paragraph that opens
+ * "Where the "not a valid wwise identifier" text is made"). Two
  * classes of symbol take that path on every post: 0, Wwise's invalid id, and the bullet site's default 0x1406b30a, which no stock bank defines
  * (runtime/combat/sound_symbol_guard_rules.h, kUnregistered).
  *
@@ -12,8 +13,9 @@
  * slot's PLT stub, which leaves x30 alone (`br x17`), so the return address names the call site. In a combat map or the combat lobby, a post whose
  * symbol `nevr_combat::sound_symbol_guard::Drops` is dropped, returning 0 without calling Play3DSound, only when it returns to PlaySound (ELF
  * 0x170698c) or to the bullet site (0x21230d4):
- *   - 0 is Play3DSound's own answer when audio is disabled (`mov w0, wzr` at 0x134b488): PlaySound takes it as a start (`cmn w0, #1; b.ne`) and
- *     prints nothing; the bullet site ignores the result.
+ *   - 0 is Play3DSound's own answer when audio is disabled (`mov w0, wzr` at 0x134b488). PlaySound's `cmn w0, #1; b.ne` (0x1706990) takes
+ *     any answer but -1 past its -1 branch; what PlaySound prints for 0 is inferred (PlaySound is not reconstructed;
+ *     docs/quest/combat/sound_symbol_guard.md). The bullet site ignores the result.
  *   - Both sites post on an emitter created with CreateEmitter(name, 0, 0), so bit 0 of emitter+0xbc ("destroy the emitter when its sound does not
  *     start") is clear: a failed post there destroys nothing either, so a drop leaves nothing undone.
  *   - CRxMaterialFXCS::TriggerSingle posts on an emitter that carries the bit (CreateEmitter(name, 1, 0)): a drop there would skip the destroy the
@@ -21,8 +23,9 @@
  *     (counted `kept_other_caller`).
  * Every post that is not dropped reaches Play3DSound with the same four arguments, and its answer is returned.
  *
- * Arena (same APK). A performance guard, not a crash guard: U3a found a fault-capable path inside OutputError but not a fault on this path (both
- * open questions are rows of the port2 NEEDED list), so README rule 9's crash-only exception does not apply. The handler tests
+ * Arena (same APK). A performance guard, not a crash guard: the reading of OutputError in sound_symbol_guard_targets.h found a fault-capable
+ * path inside it but not a fault on this path (the two open questions are named in sound_symbol_guard.md, Switch and default), so README
+ * rule 9's crash-only exception does not apply. The handler tests
  * `scope::SeenCombatOrLobby()` first and, outside a combat level, tail-calls Play3DSound with the same arguments: no counter, no read, no line.
  * The combat body is `[[gnu::noinline]]` and starts with `scope::LookIsFresh()`. The switch is in `ScopeNormal()`'s reader list, and the install
  * refuses `scope_not_live` when the answer cannot change.
@@ -35,7 +38,7 @@
  *
  * Origin. The fxsndguard switch of kotorvr's echoquest-combat, runtime/native/afkxr/afk_fx.cpp (the sound guards; the lines are named in
  * sound_symbol_guard_targets.h), read as text and rebuilt on this tree's hook manager. The symbol list, the call-site gate and the drop value are
- * this tree's, from U3a's measurements.
+ * this tree's, from its own measurements (docs/quest/combat/sound_symbol_guard.md, What it hooks).
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_sound_symbol_guard_install","result":"installed|off|refused","reason":"ok|off_config|<token>","slot":"0x..","msg":".."}

@@ -1,4 +1,4 @@
-/* A CR15NetBulletCS::FireBullet call whose velocity FireBullet cannot normalise is not made (#1737 row 031, #1651;
+/* A CR15NetBulletCS::FireBullet call whose velocity FireBullet cannot normalise is not made (#1737, #1651;
  * docs/quest/combat/bullet_velocity_guard.md).
  *
  * What the game does. FireBullet normalises its velocity argument (x4, `const C3Vector&`) with no test: `fsqrt` at libr15 ELF 0x210ccc0 and
