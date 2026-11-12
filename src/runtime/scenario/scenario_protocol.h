@@ -16,7 +16,7 @@ namespace nevr_scenario_protocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
                 kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kInjectRecentlyMet, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
-                kFireAction, kInviteAnswers };
+                kFireAction, kInviteAnswers, kAbilityActivate };
 
 struct Command {
   Op op = Op::kState;
@@ -40,6 +40,7 @@ struct Command {
   std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
+  bool active = true;  // ability_activate: the use's active flag
   std::vector<nevr_social_roster::Entry> people;  // inject RecentlyMetListResponse
 };
 
@@ -223,6 +224,14 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     cmd.op = Op::kState;
   } else if (op == "invite_answers") {
     cmd.op = Op::kInviteAnswers;
+  } else if (op == "ability_activate") {
+    // #2365: the client sends one stock SR15NetAbilityActivate to the authority peer (runtime/scenario/ability_probe.h).
+    cmd.op = Op::kAbilityActivate;
+    if (j.contains("active") && !j["active"].is_boolean()) {
+      *error = "ability_activate takes an optional boolean \"active\" (default true)";
+      return false;
+    }
+    cmd.active = !j.contains("active") || j["active"].get<bool>();
   } else if (op == "inject") {
     const std::string msg = j.contains("msg") && j["msg"].is_string() ? j["msg"].get<std::string>() : "";
     if (msg == "PartyInviteNotify") {

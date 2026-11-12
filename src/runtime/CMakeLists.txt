@@ -147,6 +147,8 @@ set(PATCHES_SOURCES
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
     "compat/self_check.cpp"
+    # #2365: nEVR's control messages on the game's broadcaster (compat/peer_message_rules.h decides, compat/peer_message_targets.h pins).
+    "compat/peer_message.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/frame_stats.cpp"
@@ -506,7 +508,7 @@ nevr_build_identity_define(TARGET nevr_runtime READS VERSION COMMIT_FULL
 set_source_files_properties(${NEVR_HOST_UNITS} host/host_dllmain.cpp host/runtime_exports.cpp lifecycle/system_module_loader.cpp
                             PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/peer_message.cpp compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -563,9 +565,9 @@ set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plu
 # on; `just verify` checks the release DLL carries none of its strings.
 option(NEVR_SCENARIO_CONTROL "Compile the scenario-test control endpoint into nevr-runtime.dll (test builds only)" OFF)
 if(NEVR_SCENARIO_CONTROL)
-  target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp)
+  target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp scenario/ability_probe.cpp)
   target_compile_definitions(nevr_runtime PRIVATE NEVR_SCENARIO_CONTROL=1)
-  set_source_files_properties(scenario/scenario_control.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  set_source_files_properties(scenario/scenario_control.cpp scenario/ability_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
   message(STATUS "NEVR_SCENARIO_CONTROL=ON: nevr-runtime.dll carries the scenario control endpoint (test build)")
 endif()
 
@@ -1975,6 +1977,15 @@ if(BUILD_TESTING)
     target_include_directories(test_server_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_server_features PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_server_features DISCOVERY_MODE PRE_TEST)
+
+    # peer_message_rules_test.cpp (#2365, header-only compat/peer_message_rules.h): the codec of nEVR's control messages on
+    # the game's broadcaster and each rule that refuses one.
+    add_executable(test_peer_message_rules tests/peer_message_rules_test.cpp)
+    set_source_files_properties(tests/peer_message_rules_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_peer_message_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_peer_message_rules PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr_api
+      nevr::plugin_sdk)
+    gtest_discover_tests(test_peer_message_rules DISCOVERY_MODE PRE_TEST)
 
     # test_lobby_settings_hook.cpp (#2333): the LobbySettingsCB hook under MinHook against a fake game image.
     add_executable(test_lobby_settings_hook tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp

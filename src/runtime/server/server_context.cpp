@@ -306,6 +306,26 @@ uint64_t ServerContext::CountAcceptedEntrants() const {
   return accepted;
 }
 
+std::vector<uint64_t> ServerContext::AcceptedPeers() const {
+  std::shared_lock lock(m_stateMutex);
+
+  std::vector<uint64_t> peers;
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
+    return peers;
+  }
+  const auto& entrants = m_lobby->entrantData;
+  const auto* sessions = m_lobby->playerSessions;
+  if (!sessions || !entrants.items) {
+    return peers;
+  }
+  constexpr uint64_t kJoinStateAccepted = 4;
+  const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
+  for (uint64_t i = 0; i < limit; i++) {
+    if (sessions[i].joinState == kJoinStateAccepted) peers.push_back(sessions[i].peer);
+  }
+  return peers;
+}
+
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {
   std::unique_lock lock(m_stateMutex);
   m_serverDbPeer = peer;

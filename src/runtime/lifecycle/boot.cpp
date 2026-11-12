@@ -18,6 +18,7 @@
 #include "runtime/patch/mode_patches.h"
 #include "runtime/patch/peer_timeout_log.h"
 #ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/ability_probe.h"
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/patch/xpid_patch.h"
@@ -951,5 +952,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
 #ifdef NEVR_SCENARIO_CONTROL
   nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)
+  nevr_ability_probe::Install();   // #2365: test builds only; the server's read-only probe of the stock tac-mod use
 #endif
 }

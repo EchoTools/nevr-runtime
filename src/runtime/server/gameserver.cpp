@@ -15,6 +15,7 @@
 
 #include "core/auth_token.h"
 #include "core/auth_token_refresh.h"
+#include "runtime/compat/peer_message.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
@@ -240,6 +241,17 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   NotifyGameServerLibStarted();
   g_activeServerLib.store(this, std::memory_order_release);
   nevr_return_to_lobby::SetEntrantCounter(&AcceptedEntrantsNow);
+  // #2365: the match the server greets with its capabilities, and the peers it takes nEVR control messages from.
+  nevr_peer_message::SetMatchViewSource([this]() {
+    nevr_peer_message::MatchView view;
+    EchoVR::Lobby* lobby = GetContext().GetLobby();
+    view.valid = lobby != nullptr;
+    if (!view.valid) return view;
+    view.session = GetContext().GetSessionState().lobbySessionId;
+    view.peers = GetContext().AcceptedPeers();
+    view.lobbyBroadcaster = reinterpret_cast<std::uintptr_t>(lobby->broadcaster);
+    return view;
+  });
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);

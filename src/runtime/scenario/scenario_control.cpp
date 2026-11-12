@@ -28,6 +28,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/scenario/ability_probe.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
@@ -715,6 +716,23 @@ nlohmann::json Handle(const std::string& line) {
       return StateJson();
     case nevr_scenario_protocol::Op::kInviteAnswers:
       return InviteAnswersJson();
+    case nevr_scenario_protocol::Op::kAbilityActivate: {
+      // #2365: runs on the game thread (OnFrame), where the game's own send runs.
+      auto request = std::make_shared<FireRequest>();
+      const bool active = cmd.active;
+      request->job = [active] { return nevr_ability_probe::SendActivateForTest(active); };
+      std::future<std::string> done = request->result.get_future();
+      {
+        std::lock_guard<std::mutex> lock(g_fireMutex);
+        g_fireQueue.push_back(request);
+      }
+      if (done.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
+        return Fail("no game frame tick ran ability_activate within 120 s");
+      }
+      const std::string why = done.get();
+      if (!why.empty()) return Fail(why);
+      return {{"ok", true}, {"sent", true}};
+    }
     case nevr_scenario_protocol::Op::kInjectFriendStatus: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendStatusNotify id=%llu status=%u",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned>(cmd.status));

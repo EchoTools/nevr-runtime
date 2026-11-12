@@ -36,6 +36,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/compat/peer_message.h"  // Poll
 #include "runtime/compat/self_check.h"  // Flush
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
@@ -92,6 +93,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // #1200, ADR 0024 section 6: the swapped release is confirmed started once this dispatcher has run for 10 s. Here it is one atomic
     // compare; the confirmation itself runs on its own thread. Not new per-frame work of its own: no thread, dispatcher or Tick* site (N86).
     nevr_update::OnFrame(nowUs);
+    // #2365: nEVR's control messages on the game's broadcaster: the listener once the net game's broadcaster exists, and on
+    // a server the capabilities of each newly accepted peer (its match read every 250 ms). No dispatcher, thread or Tick* site (N86).
+    nevr_peer_message::Poll(nowUs);
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {

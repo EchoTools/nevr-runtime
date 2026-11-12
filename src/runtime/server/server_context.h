@@ -5,6 +5,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 #include "abi/echovr.h"
 #include "core/pch.h"
@@ -128,6 +129,9 @@ class ServerContext {
   // Number of player sessions whose join state is 4 (accepted): the players actually in the session.
   // GetEntrantCount() is the array capacity, not this. 0 when not initialized.
   uint64_t CountAcceptedEntrants() const;
+  // The broadcaster peer of each accepted entrant (join state 4), in slot order: the peers a nEVR control message may come
+  // from (#2365, compat/peer_message.h). Same bounds and state rule as CountAcceptedEntrants.
+  std::vector<uint64_t> AcceptedPeers() const;
 
   // ServerDB peer (exclusive lock for write)
   void SetServerDbPeer(const EchoVR::TcpPeer& peer);
