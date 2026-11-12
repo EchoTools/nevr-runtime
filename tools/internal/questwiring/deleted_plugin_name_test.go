@@ -191,3 +191,15 @@ func TestEveryAllowedNameIsStillThereAndHasAReason(t *testing.T) {
 		}
 	}
 }
+
+// The residue scan counts lines, so a recipe name added to a line that already carries the word passes it. The deleted
+// plugin's recipes are named here by their text, which the scan cannot see as a line of its own.
+func TestTheJustfileHasNoRecipeOfTheDeletedPlugin(t *testing.T) {
+	t.Parallel()
+	justfile := read(t, "justfile")
+	for _, recipe := range []string{"test-quest-" + deletedWord, "build-quest-" + deletedWord} {
+		if strings.Contains(justfile, recipe) {
+			t.Errorf("justfile names the recipe %s: the deleted plugin's recipes are gone", recipe)
+		}
+	}
+}
