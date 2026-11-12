@@ -2541,6 +2541,39 @@ verify:
         exit 1
     fi
 
+    # --- N122, N124: a config or mode decision logs its outcome at Info ----------
+    # A healthy-but-off server must say so at the default level. Three decision lines:
+    # the UPnP config key (config.cpp, every run), the mapping result (upnp.cpp), and
+    # the telemetry-disabled line on each of its two guards (gameserver_telemetry.cpp).
+    # Each call may break its line after the level, so the file is joined into one line
+    # before the match, and the level must be Info.
+    N122_CF_RC=0; N122_CF=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp) || N122_CF_RC=$?
+    sensor_stage1 "N122 UPnP config line" "src/runtime/lifecycle/config.cpp" "$N122_CF_RC"
+    sensor_nonempty "N122 UPnP config line" "non-comment lines of config.cpp" "$N122_CF"
+    N122_UP_RC=0; N122_UP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/upnp.cpp) || N122_UP_RC=$?
+    sensor_stage1 "N122 UPnP mapping line" "src/runtime/server/upnp.cpp" "$N122_UP_RC"
+    sensor_nonempty "N122 UPnP mapping line" "non-comment lines of upnp.cpp" "$N122_UP"
+    N124_TM_RC=0; N124_TM=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver_telemetry.cpp) || N124_TM_RC=$?
+    sensor_stage1 "N124 telemetry disabled lines" "src/runtime/server/gameserver_telemetry.cpp" "$N124_TM_RC"
+    sensor_nonempty "N124 telemetry disabled lines" "non-comment lines of gameserver_telemetry.cpp" "$N124_TM"
+    N122_CF_J=$(tr '\n' ' ' <<<"$N122_CF")
+    N122_UP_J=$(tr '\n' ' ' <<<"$N122_UP")
+    N124_TM_J=$(tr '\n' ' ' <<<"$N124_TM")
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.UPNP\] config key upnp=' <<<"$N122_CF_J"; then
+        echo "verify: FAIL — N122 config.cpp no longer logs the UPnP config key at Info (config key upnp=)." >&2
+        echo "Without it, a server with UPnP on and a server with UPnP off write the same run log." >&2
+        exit 1
+    fi
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.UPNP\] Port mapping added' <<<"$N122_UP_J"; then
+        echo "verify: FAIL — N122 upnp.cpp no longer logs the port mapping result at Info (Port mapping added)." >&2
+        exit 1
+    fi
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.GAMESERVER\] No telemetry_uri in config' <<<"$N124_TM_J" || ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.GAMESERVER\] telemetry disabled \(enabled=' <<<"$N124_TM_J"; then
+        echo "verify: FAIL — N124 gameserver_telemetry.cpp no longer logs both telemetry-disabled cases at Info." >&2
+        echo "A server running without telemetry must say so, or deliberate and broken read the same." >&2
+        exit 1
+    fi
+
     # --- N128: a failed hook must report WHICH MinHook error ---------------------
     # N126 made a failed detour visible; N128 made it DIAGNOSABLE. Hooking::Attach
     # captures MH_StatusToString on failure and PatchDetour surfaces it, so the log
