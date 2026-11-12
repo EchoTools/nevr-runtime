@@ -926,3 +926,76 @@ func TestTheSummaryCountsRecordsWithAnObjectAndTheUniqueObjects(t *testing.T) {
 		}
 	}
 }
+
+// manifest.json.zst is one zstd frame of the manifest's bytes, written with the objects' encoder settings: the zstd magic,
+// the content size in the header, a window within the stock chunks' largest.
+func TestTheManifestIsAlsoWrittenAsOneZstdFrameThatStatesItsSize(t *testing.T) {
+	t.Parallel()
+	small := fixture(t, "win10") // a manifest that fits the window: a single-segment frame
+	many := t.TempDir()          // a manifest larger than the window: a frame with a window descriptor
+	var recs []res
+	for i := 0; i < 2100; i++ {
+		recs = append(recs, res{0x10, int64(i + 1), fill(8, byte(i)), 16})
+	}
+	writeSet(t, many, "win10", setA, []chunkSpec{{0, recs}})
+	for name, root := range map[string]string{"a manifest within the window": small, "a manifest over the window": many} {
+		out := filepath.Join(t.TempDir(), "out")
+		sum := mustExtract(t, root, out)
+		plain, err := os.ReadFile(filepath.Join(out, "manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := os.ReadFile(filepath.Join(out, "manifest.json.zst"))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if binary.LittleEndian.Uint32(frame) != zstdMagic {
+			t.Errorf("%s: the frame does not start with the zstd magic", name)
+		}
+		var h zstd.Header
+		if err := h.Decode(frame); err != nil || !h.HasFCS || h.FrameContentSize != uint64(len(plain)) || h.HasCheckSum {
+			t.Errorf("%s: header %+v (%v) does not state %d bytes without a checksum", name, h, err, len(plain))
+		}
+		if w := frameWindow(&h); w > sum.StockFrames.MaxWindow {
+			t.Errorf("%s: the frame's window %d is over the stock %d", name, w, sum.StockFrames.MaxWindow)
+		}
+		dec, err := zstd.NewReader(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := dec.DecodeAll(frame, nil)
+		dec.Close()
+		if err != nil || !bytes.Equal(got, plain) {
+			t.Errorf("%s: the frame does not decompress to the manifest's bytes (%v)", name, err)
+		}
+		if (name == "a manifest within the window") != h.SingleSegment {
+			t.Errorf("%s: single-segment = %t", name, h.SingleSegment)
+		}
+	}
+}
+
+func TestTheManifestFrameMeetsTheFrameRuleToo(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	var recs []res
+	for i := 0; i < 5; i++ {
+		recs = append(recs, res{0x10, int64(i + 1), fill(100, byte('a'+i)), 16})
+	}
+	writeSet(t, root, "win10", setA, []chunkSpec{{0, recs}})
+	real := realEncode(t)
+	// The records are framed as usual; the manifest (over 500 bytes) comes back as a frame with a 1 GiB window.
+	out, err := refusedRun(t, root, func(b []byte) []byte {
+		if len(b) > 500 {
+			return bigWindowFrame(b)
+		}
+		return real(b)
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), "manifest.json.zst: the frame window is 1073741824 bytes") {
+		t.Errorf("got %v", err)
+	}
+	for _, name := range []string{"manifest.json", "manifest.json.zst"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err == nil {
+			t.Errorf("a refused manifest frame left %s", name)
+		}
+	}
+}

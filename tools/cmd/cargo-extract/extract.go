@@ -558,6 +558,15 @@ feed:
 		return nil, err
 	}
 	body = append(body, '\n')
+	// The manifest is also written as one zstd frame, by the encoder and under the rules the objects have: nothing uncompressed is
+	// published, so manifest.json.zst is the file to publish and manifest.json the plain copy it decompresses to.
+	manifestFrame := encode(body)
+	if err := checkFrame(manifestFrame, uint64(len(body)), sum.StockFrames.MaxWindow); err != nil {
+		return nil, fmt.Errorf("manifest.json.zst: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(o.out, "manifest.json.zst"), manifestFrame); err != nil {
+		return nil, err
+	}
 	if err := writeAtomic(filepath.Join(o.out, "manifest.json"), body); err != nil {
 		return nil, err
 	}
