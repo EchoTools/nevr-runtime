@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 #include "hook_log.h"
 
@@ -303,5 +304,162 @@ void ResetForTest() noexcept {
   g_logEveryLoad.store(false);
   g_beforeClaimHook.store(nullptr);
 }
+
+namespace map_scripts {
+
+namespace {
+
+enum State : std::uint8_t { kHeld = 1, kServed = 2, kPulling = 3, kWithdrawn = 4 };
+
+struct Slot {
+  std::uint64_t hash = 0;            // immutable once the slot is published
+  char owner[kOwnerCapacity] = {};   // immutable once the slot is published
+  std::atomic<std::uint8_t> state{0};
+  std::atomic<bool> logged{false};   // map_script_served written
+};
+
+Slot g_slots[kMaxMapScripts];
+std::atomic<std::uint32_t> g_used{0};  // slots [0, g_used) are published; release-stored after the slot is written
+std::mutex g_writers;                  // Admit, Withdraw and ResetForTest; the dlopen handler never takes it
+
+bool Live(std::uint8_t state) noexcept { return state == kHeld || state == kServed || state == kPulling; }
+
+bool RedirectHolds(std::uint64_t hash) noexcept {
+  const std::uint32_t count = g_count.load(std::memory_order_acquire);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (g_hashes[i] == hash) return true;
+  }
+  return false;
+}
+
+void LogRefusedWithdraw(const char* owner, const char* reason, std::uint64_t hash) noexcept {
+  char hex[19];
+  sentinel::LogFields(sentinel::LogLevel::kWarn, "map_script",
+                      {{"op", "withdraw"}, {"owner", owner}, {"refused", reason}, {"hash", sentinel::HexString(hex, hash)},
+                       {"consequence", "the game loaded this map script, so the map keeps it for the process"}});
+}
+
+}  // namespace
+
+const char* Admit(const char* owner, std::uint64_t hash) noexcept {
+  if (owner == nullptr || owner[0] == '\0' || std::strlen(owner) >= kOwnerCapacity) return "bad_owner";
+  if (hash == 0) return "bad_hash";
+  if (RedirectHolds(hash)) return "redirected";
+  const std::lock_guard<std::mutex> lock(g_writers);
+  const std::uint32_t used = g_used.load(std::memory_order_relaxed);
+  for (std::uint32_t i = 0; i < used; ++i) {
+    const Slot& slot = g_slots[i];
+    const std::uint8_t state = slot.state.load(std::memory_order_acquire);
+    if (state == kWithdrawn && std::strcmp(slot.owner, owner) == 0) return "withdrawn";
+    if (Live(state) && slot.hash == hash) return "duplicate";
+  }
+  if (used == kMaxMapScripts) return "table_full";
+  Slot& slot = g_slots[used];
+  slot.hash = hash;
+  std::memcpy(slot.owner, owner, std::strlen(owner) + 1);
+  slot.logged.store(false, std::memory_order_relaxed);
+  slot.state.store(kHeld, std::memory_order_relaxed);
+  g_used.store(used + 1, std::memory_order_release);
+  return nullptr;
+}
+
+std::size_t Withdraw(const char* owner) noexcept {
+  if (owner == nullptr) return 0;
+  const std::lock_guard<std::mutex> lock(g_writers);
+  const std::uint32_t used = g_used.load(std::memory_order_relaxed);
+  // Phase 1: every live entry of the owner goes Held -> Pulling. A loaded one refuses the whole withdraw.
+  for (std::uint32_t i = 0; i < used; ++i) {
+    Slot& slot = g_slots[i];
+    if (std::strcmp(slot.owner, owner) != 0) continue;
+    std::uint8_t expected = kHeld;
+    if (slot.state.compare_exchange_strong(expected, kPulling, std::memory_order_acq_rel) || expected != kServed) continue;
+    for (std::uint32_t j = 0; j < i; ++j) {
+      std::uint8_t pulling = kPulling;
+      if (std::strcmp(g_slots[j].owner, owner) == 0) {
+        g_slots[j].state.compare_exchange_strong(pulling, kHeld, std::memory_order_acq_rel);
+      }
+    }
+    LogRefusedWithdraw(owner, "withdraw_after_load", slot.hash);
+    return 0;
+  }
+  // Phase 2: Pulling -> Withdrawn. NoteLoad also takes Pulling to Served, so a load in between keeps its entry.
+  std::size_t dropped = 0;
+  bool any = false;
+  for (std::uint32_t i = 0; i < used; ++i) {
+    Slot& slot = g_slots[i];
+    if (std::strcmp(slot.owner, owner) != 0) continue;
+    std::uint8_t expected = kPulling;
+    if (slot.state.compare_exchange_strong(expected, kWithdrawn, std::memory_order_acq_rel)) {
+      ++dropped;
+      any = true;
+    } else if (expected == kServed) {
+      LogRefusedWithdraw(owner, "withdraw_raced_load", slot.hash);
+    } else if (expected == kWithdrawn) {
+      any = true;
+    }
+  }
+  if (!any) return 0;
+  if (dropped != 0) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "map_script",
+                        {{"op", "withdraw"}, {"owner", owner}, {"dropped", static_cast<long long>(dropped)}});
+  }
+  return dropped;
+}
+
+bool Holds(const char* owner, std::uint64_t hash) noexcept {
+  if (owner == nullptr) return false;
+  const std::uint32_t used = g_used.load(std::memory_order_acquire);
+  for (std::uint32_t i = 0; i < used; ++i) {
+    const Slot& slot = g_slots[i];
+    const std::uint8_t state = slot.state.load(std::memory_order_acquire);
+    if ((state == kHeld || state == kServed) && slot.hash == hash && std::strcmp(slot.owner, owner) == 0) return true;
+  }
+  return false;
+}
+
+std::uint32_t HeldCount() noexcept {
+  const std::uint32_t used = g_used.load(std::memory_order_acquire);
+  std::uint32_t live = 0;
+  for (std::uint32_t i = 0; i < used; ++i) {
+    if (Live(g_slots[i].state.load(std::memory_order_acquire))) ++live;
+  }
+  return live;
+}
+
+void NoteLoad(const char* name) noexcept {
+  const std::uint32_t used = g_used.load(std::memory_order_acquire);
+  if (used == 0) return;
+  std::uint64_t hash = 0;
+  if (!ParseScriptName(name, &hash) || RedirectHolds(hash)) return;
+  for (std::uint32_t i = 0; i < used; ++i) {
+    Slot& slot = g_slots[i];
+    if (slot.hash != hash) continue;
+    std::uint8_t state = slot.state.load(std::memory_order_acquire);
+    while ((state == kHeld || state == kPulling) &&
+           !slot.state.compare_exchange_weak(state, kServed, std::memory_order_acq_rel)) {
+    }
+    if (state != kHeld && state != kPulling && state != kServed) continue;  // withdrawn: the game's load passes as before
+    if (!slot.logged.exchange(true, std::memory_order_acq_rel)) {
+      char hex[19];
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "map_script_served",
+                          {{"name", name}, {"owner", slot.owner}, {"hash", sentinel::HexString(hex, hash)},
+                           {"route", "apk"}});
+    }
+    return;
+  }
+}
+
+void ResetForTest() noexcept {
+  const std::lock_guard<std::mutex> lock(g_writers);
+  for (Slot& slot : g_slots) {
+    slot.hash = 0;
+    slot.owner[0] = '\0';
+    slot.state.store(0, std::memory_order_relaxed);
+    slot.logged.store(false, std::memory_order_relaxed);
+  }
+  g_used.store(0, std::memory_order_release);
+}
+
+}  // namespace map_scripts
 
 }  // namespace nevr_quest::script_redirect
