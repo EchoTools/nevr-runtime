@@ -17,8 +17,6 @@ import (
 // (tests/quest/frames_asm_probes_test.go): a symbol named on one side only is an undefined symbol at link time, or a sensor
 // that checks nothing.
 
-const envNamesSelf = "tools/internal/questwiring/env_names_test.go"
-
 var (
 	combatChecks = []string{"dronemuzzle", "headset_gates", "powerboost"}
 	verboseTests = []string{"dronekill_test.cpp", "dronemuzzle_test.cpp"}

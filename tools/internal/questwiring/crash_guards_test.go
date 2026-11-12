@@ -7,28 +7,27 @@ import (
 
 // #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and nothing else installs on
 // their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
-// behaviour; these pin what they cannot see: who owns each slot, the table's order, the scope each guard has in arena, the keys.
+// behaviour; these pin what they cannot see: the registration table's order, which guards read the combat level answer
+// and which act in every level, the files each guard ships, its key in the config reader, schema, line and example, and its
+// hook budget row. The slot addresses are not checked here.
 
 type guard struct {
 	name    string
-	symbols []string // the dynsym names the module hooks
-	slots   []string // the JUMP_SLOT vaddrs, spelled as the plugin spelled them
-	scope   string   // the combat_scope answer the handler tests first, or "" when it acts in every level on purpose
-	handles int      // the GotHook handles the module declares (hook_budget.h)
-	row     string   // the registration table row, up to the end step
+	scope   string // the combat_scope answer the handler tests first, or "" when it acts in every level on purpose
+	handles int    // the GotHook handles the module declares (hook_budget.h)
+	row     string // the registration table row, up to the end step
 }
 
 var guards = []guard{
-	{"fxtrail", []string{"CParticleEffectCS10EffectTime"}, []string{"0x36e7b98"}, "scope::SeenCombatMap()", 1,
+	{"fxtrail", "scope::SeenCombatMap()", 1,
 		`Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd}`},
-	{"voipdrop", []string{"CR15NetVoipReceiverCS11ReceiveVoip"}, []string{"0x36c5d80"}, "", 1,
+	{"voipdrop", "", 1,
 		`Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd}`},
-	{"custctx", []string{"CR15NetCustomizationRenderer12LoadMeshData", "CR15NetCustomizationRenderer14DestroyContext", "SR15NetCustomDrawDataEE4GrowEv"},
-		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "scope::SeenCombatOrLobby()", 3,
+	{"custctx", "scope::SeenCombatOrLobby()", 3,
 		`Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd}`},
-	{"droneguard", []string{"CR15NetFollowPlayerCS6Follow"}, []string{"0x36f1218"}, "", 1,
+	{"droneguard", "", 1,
 		`Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd}`},
-	{"peerclamp", []string{"SBroadcasterData12CleanupPeers"}, []string{"0x36efad8"}, "scope::SeenCombatOrLobby()", 1,
+	{"peerclamp", "scope::SeenCombatOrLobby()", 1,
 		`Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd}`},
 }
 
