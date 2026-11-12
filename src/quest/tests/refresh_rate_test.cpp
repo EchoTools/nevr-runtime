@@ -243,7 +243,8 @@ void TheHeadsetIsTheIdentityStepsProfile() {
     Done();
   }
   // The rule off (witness) and no profile: still one Warning, but its consequence is the true one for that mode, which asks no level rate
-  // (the install line's `quest2` reads the generic profile's 0 and no tick is registered); it carries no `level_hz` either.
+  // (no tick is registered, so no switch line is written); the `quest2` field of the install line and of every request line, which the
+  // witness still writes, reads the generic profile's 0. The Warning carries no `level_hz` either.
   World(bv::Variant::kCombat, Keys(false, true, true));
   nevr_quest::headset_active::SetActive(nullptr);
   QCHECK(InstallRule().installed);
@@ -258,8 +259,12 @@ void TheHeadsetIsTheIdentityStepsProfile() {
            witnessMissing[0].text.substr(at) ==
                "\"event\":\"combat_refresh_rate_profile_missing\",\"profile\":\"generic\","
                "\"consequence\":\"the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level "
-               "rate and only the install line's quest2 field reads the generic profile's 0\"}");
+               "rate; the quest2 field of the install line and of each request line reads the generic profile's 0\"}");
   }
+  QCHECK(GameAsks(90.0f) == 90.0f);
+  const std::vector<Line> witnessRequest = Lines("combat_refresh_rate_request");
+  QCHECK(witnessRequest.size() == 1U && Has(witnessRequest[0].text, "\"mode\":\"witness\"") && Has(witnessRequest[0].text, "\"quest2\":0"));
+  QCHECK(Lines("combat_refresh_rate_switch").empty());
   Done();
   // In a release APK the rule does not run, so it reads no profile and says nothing about one.
   World(bv::Variant::kNone);

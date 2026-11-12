@@ -64,8 +64,9 @@ double Now() noexcept {
 
 // The headset is the identity step's profile (quest/headset_active.h, ADR 0031 decision 4): this file reads no system property. The step
 // runs in the sentinel's constructor, long before this normal step; with no profile set, the generic profile and one Warning whose
-// consequence is the one true in the mode the rule is in: on, it asks the generic profile's level rate; off (witness), it asks none and
-// only the install line's `quest2` field takes the generic profile's value.
+// consequence is the one true in the mode the rule is in: on, it asks the generic profile's level rate; off (witness), it asks none (no
+// tick, so no switch line) and the `quest2` field of the install line and of every request line, which the witness still writes, takes the
+// generic profile's value.
 const headset_profile::Profile& Headset(bool ruleOn) noexcept {
   if (headset_active::Active() == nullptr) {
     if (ruleOn) {
@@ -78,7 +79,7 @@ const headset_profile::Profile& Headset(bool ruleOn) noexcept {
     } else {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_profile_missing",
                           {{"profile", headset_profile::kGeneric.name},
-                           {"consequence", "the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level rate and only the install line's quest2 field reads the generic profile's 0"}});
+                           {"consequence", "the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level rate; the quest2 field of the install line and of each request line reads the generic profile's 0"}});
     }
   }
   return *headset_active::ActiveOrGeneric();
