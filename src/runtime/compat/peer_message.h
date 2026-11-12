@@ -8,7 +8,8 @@
 //     peer per session.
 //   - A client that takes `capabilities` from the authority peer pings it back; either side answers a `ping` with a
 //     `pong` to its sender.
-// Every line is `[NEVR.PEER]`: one Info line per message sent or taken, a Warning (bounded, counted) per refusal.
+// Every line is `[NEVR.PEER]`: one Info line per message sent or taken (at most 10 taken per peer per 10 s, the rest
+// dropped and counted), a Warning (bounded, counted) per refusal.
 #pragma once
 
 #include <cstdint>
@@ -29,8 +30,9 @@ struct MatchView {
 /// The server's source of its match. Set once by the game server; a client has none.
 void SetMatchViewSource(std::function<MatchView()> source);
 
-/// Called from the per-frame dispatcher (runtime/frame/tick.cpp) on the game thread. Cheap when there is nothing to do:
-/// two pointer reads, and the server's match read at most every 250 ms.
+/// Called from the per-frame dispatcher (runtime/frame/tick.cpp) on the game thread. It acts at most every 250 ms: then
+/// a few guarded reads (each a VirtualQuery), on a client one call of the game's GetAuthorityPeer, on the server one read
+/// of its match. The cost is not measured.
 void Poll(std::uint64_t nowUs);
 
 }  // namespace nevr_peer_message

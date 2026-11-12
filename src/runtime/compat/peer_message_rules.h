@@ -274,6 +274,104 @@ class RefusalLimiter {
   std::uint64_t pending_ = 0;
 };
 
+/// Messages a peer may have taken (logged at Info and, for a ping, answered) in a window, so a peer that sends as fast as
+/// its link allows sets neither the log's rate nor the reply rate (docs/standards/logging.md volume budget; Rule 16 is
+/// the precedent). Each peer has its own window; the messages past the bound are dropped and counted, and the next
+/// taken message of that peer carries the count. At most kMaxPeers peers are remembered; a new one replaces the one seen
+/// least recently.
+inline constexpr std::uint64_t kAcceptWindowMs = 10000;
+inline constexpr std::uint32_t kAcceptPerWindow = 10;
+
+class AcceptLimiter {
+ public:
+  static constexpr std::size_t kMaxPeers = 32;
+
+  /// True when this peer's message is taken now; `*dropped` is then the count of its messages dropped since its last
+  /// taken one.
+  bool Take(std::uint64_t peer, std::uint64_t nowMs, std::uint64_t* dropped) {
+    Entry* e = Find(peer, nowMs);
+    e->lastMs = nowMs;
+    if (nowMs - e->windowStartMs >= kAcceptWindowMs) {
+      e->windowStartMs = nowMs;
+      e->taken = 0;
+    }
+    if (e->taken >= kAcceptPerWindow) {
+      ++e->dropped;
+      return false;
+    }
+    ++e->taken;
+    *dropped = e->dropped;
+    e->dropped = 0;
+    return true;
+  }
+
+ private:
+  struct Entry {
+    std::uint64_t peer;
+    std::uint64_t windowStartMs;
+    std::uint64_t lastMs;
+    std::uint32_t taken;
+    std::uint64_t dropped;
+  };
+  Entry* Find(std::uint64_t peer, std::uint64_t nowMs) {
+    for (std::size_t i = 0; i < count_; ++i) {
+      if (entries_[i].peer == peer) return &entries_[i];
+    }
+    std::size_t slot = count_;
+    if (count_ < kMaxPeers) {
+      ++count_;
+    } else {
+      slot = 0;
+      for (std::size_t i = 1; i < count_; ++i) {
+        if (entries_[i].lastMs < entries_[slot].lastMs) slot = i;
+      }
+    }
+    entries_[slot] = {peer, nowMs, nowMs, 0, 0};
+    return &entries_[slot];
+  }
+  Entry entries_[kMaxPeers] = {};
+  std::size_t count_ = 0;
+};
+
+/// The server's greeting: each peer its match accepts gets `capabilities` (and a ping) once per session. A change of
+/// session forgets who was greeted; between sessions (an empty id) nobody is greeted.
+class GreetBook {
+ public:
+  struct Step {
+    bool sessionChanged = false;
+    std::size_t forgotten = 0;          // peers greeted in the session that ended
+    std::vector<std::uint64_t> greet;   // peers to greet now, in the order given
+  };
+
+  Step Update(const std::string& session, const std::vector<std::uint64_t>& acceptedPeers) {
+    Step step;
+    if (session != session_) {
+      step.sessionChanged = !session_.empty() || !greeted_.empty();
+      step.forgotten = greeted_.size();
+      session_ = session;
+      greeted_.clear();
+    }
+    if (session_.empty()) return step;
+    for (const std::uint64_t p : acceptedPeers) {
+      bool seen = false;
+      for (const std::uint64_t g : greeted_) seen = seen || g == p;
+      if (seen) continue;
+      greeted_.push_back(p);
+      step.greet.push_back(p);
+    }
+    return step;
+  }
+
+  const std::string& session() const { return session_; }
+
+ private:
+  std::string session_;
+  std::vector<std::uint64_t> greeted_;
+};
+
+/// Whether Envelope bytes may be sent: something, and no more than a receiver takes.
+inline bool Sendable(std::size_t size) { return size > 0 && size <= kMaxEnvelopeBytes; }
+
 /// The pings this side sent and not yet heard answered, for the round trip of each pong. Holds at most kMaxOutstanding:
 /// the oldest is forgotten first, so a peer that never answers costs a fixed amount of memory.
 class PingBook {

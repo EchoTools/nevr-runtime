@@ -204,6 +204,80 @@ TEST(PeerMessagePingBook, ForgetsTheOldestPastItsBound) {
   EXPECT_EQ(book.Answer(last, 20), std::optional<std::uint64_t>(10));
 }
 
+TEST(PeerMessageAccept, TenPerPeerPerWindowThenCounted) {
+  pm::AcceptLimiter limiter;
+  std::uint64_t dropped = 99;
+  for (int i = 0; i < 10; ++i) {
+    ASSERT_TRUE(limiter.Take(7, 1000 + i, &dropped)) << i;
+    EXPECT_EQ(dropped, 0u);
+  }
+  EXPECT_FALSE(limiter.Take(7, 1100, &dropped));
+  EXPECT_FALSE(limiter.Take(7, 1200, &dropped));
+  EXPECT_FALSE(limiter.Take(7, 1300, &dropped));
+  // Another peer has its own window.
+  ASSERT_TRUE(limiter.Take(8, 1300, &dropped));
+  EXPECT_EQ(dropped, 0u);
+  // Peer 7's next window takes again and carries the three it dropped.
+  ASSERT_TRUE(limiter.Take(7, 11000, &dropped));
+  EXPECT_EQ(dropped, 3u);
+  ASSERT_TRUE(limiter.Take(7, 11001, &dropped));
+  EXPECT_EQ(dropped, 0u);
+}
+
+TEST(PeerMessageAccept, RemembersABoundedNumberOfPeers) {
+  pm::AcceptLimiter limiter;
+  std::uint64_t dropped = 0;
+  for (int i = 0; i < 10; ++i) ASSERT_TRUE(limiter.Take(1, 0, &dropped));
+  ASSERT_FALSE(limiter.Take(1, 1, &dropped));  // peer 1 is at its bound
+  for (std::uint64_t p = 100; p < 100 + pm::AcceptLimiter::kMaxPeers; ++p) ASSERT_TRUE(limiter.Take(p, 2, &dropped));
+  // Peer 1 (seen least recently) was replaced, so it starts a fresh window and its old count is gone.
+  ASSERT_TRUE(limiter.Take(1, 3, &dropped));
+  EXPECT_EQ(dropped, 0u);
+}
+
+TEST(PeerMessageGreet, OncePerPeerPerSession) {
+  pm::GreetBook book;
+  pm::GreetBook::Step s = book.Update("a", {1, 2});
+  EXPECT_FALSE(s.sessionChanged);
+  EXPECT_EQ(s.greet, (std::vector<std::uint64_t>{1, 2}));
+  s = book.Update("a", {1, 2, 3});
+  EXPECT_EQ(s.greet, (std::vector<std::uint64_t>{3}));
+  s = book.Update("a", {2, 3});
+  EXPECT_TRUE(s.greet.empty());
+}
+
+TEST(PeerMessageGreet, ANewSessionGreetsAgain) {
+  pm::GreetBook book;
+  book.Update("a", {1, 2});
+  const pm::GreetBook::Step s = book.Update("b", {1});
+  EXPECT_TRUE(s.sessionChanged);
+  EXPECT_EQ(s.forgotten, 2u);
+  EXPECT_EQ(s.greet, (std::vector<std::uint64_t>{1}));
+  EXPECT_EQ(book.session(), "b");
+}
+
+TEST(PeerMessageGreet, NobodyBetweenSessions) {
+  pm::GreetBook book;
+  pm::GreetBook::Step s = book.Update("", {1});
+  EXPECT_FALSE(s.sessionChanged);
+  EXPECT_TRUE(s.greet.empty());
+  book.Update("a", {1});
+  s = book.Update("", {1});
+  EXPECT_TRUE(s.sessionChanged);
+  EXPECT_EQ(s.forgotten, 1u);
+  EXPECT_TRUE(s.greet.empty());
+  // The same peer in the next session is greeted again.
+  s = book.Update("b", {1});
+  EXPECT_EQ(s.greet, (std::vector<std::uint64_t>{1}));
+}
+
+TEST(PeerMessageSend, SizesASenderMaySend) {
+  EXPECT_FALSE(pm::Sendable(0));
+  EXPECT_TRUE(pm::Sendable(1));
+  EXPECT_TRUE(pm::Sendable(pm::kMaxEnvelopeBytes));
+  EXPECT_FALSE(pm::Sendable(pm::kMaxEnvelopeBytes + 1));
+}
+
 TEST(PeerMessageRefusal, NamesAreWords) {
   EXPECT_STREQ(pm::RefusalName(pm::Refusal::kOversize), "oversize");
   EXPECT_STREQ(pm::RefusalName(pm::Refusal::kWrongSender), "wrong_sender");

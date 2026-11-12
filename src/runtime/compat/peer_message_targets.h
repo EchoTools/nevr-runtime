@@ -55,10 +55,13 @@ struct Targets {
   std::size_t lobbyNsLobby;        // the CNSLobby inside CR15NetLobby: 0x18. Quest FACT (ctor 0x1344d58); PC INFERRED
                                    // (0x1401ab5c0 adds 0x18 before HostPeer's +0x138 read)
   std::size_t nsLobbyHostPeer;     // CNSLobby::HostPeer's field: 0x138 on both. PC FACT (0x140609a00), Quest FACT
-  std::size_t nsLobbySessions;     // the player-session slots: 0xc8 (array), count at +0x8. PC FACT (src/abi/echovr.h,
-                                   // CNSLobby::AcceptPlayersSuccessCBHost 0x140603e20); Quest FACT (EntrantPeer 0x1a2b4b4)
-  std::size_t sessionStride;       // 0x28 on both: PC FACT (echovr.h static_assert), Quest FACT (EntrantPeer madd #0x28)
-  std::size_t sessionJoinState;    // u64 at +0x18, 4 = accepted. PC FACT (echovr.h); Quest NOT ESTABLISHED
+  std::size_t nsLobbySessions;     // the player-session slots: 0xc8 (array), count at +0x8. PC INFERRED: the repo's layout
+                                   // (src/abi/echovr.h Lobby::playerSessions, used by ServerContext), not read in echovr.exe
+                                   // for this table; Quest FACT (CNSLobby::EntrantPeer 0x1a2b4b4)
+  std::size_t sessionStride;       // 0x28 on both: PC INFERRED (echovr.h static_assert, the repo's layout); Quest FACT
+                                   // (EntrantPeer madd #0x28)
+  std::size_t sessionJoinState;    // u64 at +0x18, 4 = accepted. PC INFERRED (echovr.h, the repo's layout); Quest NOT
+                                   // ESTABLISHED
   std::size_t msgPayload;          // SMsg+0x10 is the message struct, SMsg+0 the sender peer: FACT on both (ListenProxy
                                    // PC 0x14013cd50, Quest 0x13e55cc)
   std::size_t slotIndexTable;      // the handle's {u16 index, u16 generation} table: index at +0x138, generation at +0x13a,

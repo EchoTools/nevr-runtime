@@ -6,7 +6,6 @@
 #include <exception>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,12 +21,17 @@
 #include "runtime/lifecycle/cli.h"     // g_isServer
 #include "runtime/lifecycle/config.h"  // g_pGame
 #include "runtime/lifecycle/readable_memory.h"
+#include "runtime/hook/addresses.h"  // CONTEXT_NETGAME_OFFSET
 
 namespace nevr_peer_message {
 namespace {
 
 constexpr const Targets& kT = kPcTargets;
-constexpr std::uint64_t kServerPollUs = 250000;
+static_assert(kPcTargets.contextNetGame == nevr_patch_addresses::CONTEXT_NETGAME_OFFSET,
+              "the table's net game field is the one the runtime reads everywhere else (addresses.h)");
+constexpr std::uint64_t kPollUs = 250000;       // the server's match read and the client's authority check
+constexpr std::uint64_t kListenRetryUs = 5000000;  // a failed listener registration is tried again after this
+constexpr std::uint16_t kListenFailed = 0xFFFF;  // CBroadcaster::Listen's "no slot" (runtime/server/callback_unregistration.h)
 constexpr std::uint64_t kPeerSelf = 0xFFFFFFFFFFFFFFFCULL;
 constexpr std::uint64_t kPeerInvalid = 0xFFFFFFFFFFFFFFFFULL;
 
@@ -40,14 +44,16 @@ std::function<MatchView()> g_source;
 
 void* g_listenedBroadcaster = nullptr;
 std::uint16_t g_listenHandle = 0;
+std::uint64_t g_listenRetryAtUs = 0;
+std::uint32_t g_listenFailures = 0;
 bool g_authorityChecked = false;
 AuthorityPeerFn g_authorityPeer = nullptr;
-std::uint64_t g_lastServerPollUs = 0;
-std::string g_session;
-std::set<std::uint64_t> g_greeted;  // the server's peers sent capabilities this session
+std::uint64_t g_lastPollUs = 0;
+GreetBook g_greet;
 bool g_broadcasterCompared = false;
 std::uint64_t g_lastAuthority = kPeerInvalid;
 RefusalLimiter g_refusals;
+AcceptLimiter g_accepts;
 PingBook g_pings;
 
 const char* RoleName() { return g_isServer ? "server" : "client"; }
@@ -104,9 +110,14 @@ MatchView ReadMatch() {
 }
 
 bool Send(std::uintptr_t broadcaster, std::uint64_t peer, Kind kind, const std::string& bytes, const char* detail) {
-  if (bytes.empty() || bytes.size() > kMaxEnvelopeBytes || broadcaster == 0 || EchoVR::BroadcasterSend == nullptr) {
+  const char* why = bytes.empty() ? "encode_failed"
+                    : !Sendable(bytes.size()) ? "oversize"
+                    : broadcaster == 0 ? "no_broadcaster"
+                    : EchoVR::BroadcasterSend == nullptr ? "no_send_function"
+                    : nullptr;
+  if (why != nullptr) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PEER] %s not sent role=%s peer=%llu bytes=%zu reason=%s", KindName(kind), RoleName(),
-        static_cast<unsigned long long>(peer), bytes.size(), bytes.empty() ? "encode_failed" : broadcaster == 0 ? "no_broadcaster" : "oversize");
+        static_cast<unsigned long long>(peer), bytes.size(), why);
     return false;
   }
   // Reliable (`dest` ~0: the game's reliable queue, #2365), one item, no trailing buffer. Send reads the item only.
@@ -151,26 +162,30 @@ void Take(const void* payload, std::uint64_t size, std::uint64_t sender) {
     Refuse(sender, size, admit, d.message.kind);
     return;
   }
+  std::uint64_t dropped = 0;
+  if (!g_accepts.Take(sender, NowMs(), &dropped)) return;  // past this peer's bound: no line, no reply; counted below
+  const std::string droppedText = dropped ? " dropped_before=" + std::to_string(dropped) : std::string();
   const char* from = role == Role::kClient ? "authority" : "match_peer";
   switch (d.message.kind) {
     case Kind::kCapabilities:
-      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] capabilities received role=%s peer=%llu from=%s bytes=%llu gear=%s", RoleName(),
-          static_cast<unsigned long long>(sender), from, static_cast<unsigned long long>(size), GearText(d.message.gear).c_str());
+      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] capabilities received role=%s peer=%llu from=%s bytes=%llu gear=%s%s", RoleName(),
+          static_cast<unsigned long long>(sender), from, static_cast<unsigned long long>(size), GearText(d.message.gear).c_str(),
+          droppedText.c_str());
       SendPing(bc, sender);
       break;
     case Kind::kPing: {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] ping received role=%s peer=%llu from=%s bytes=%llu seq=%llu", RoleName(),
+      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] ping received role=%s peer=%llu from=%s bytes=%llu seq=%llu%s", RoleName(),
           static_cast<unsigned long long>(sender), from, static_cast<unsigned long long>(size),
-          static_cast<unsigned long long>(d.message.seq));
+          static_cast<unsigned long long>(d.message.seq), droppedText.c_str());
       const std::string detail = "seq=" + std::to_string(d.message.seq);
       Send(bc, sender, Kind::kPong, EncodePong(d.message.seq), detail.c_str());
       break;
     }
     case Kind::kPong: {
       const std::optional<std::uint64_t> rtt = g_pings.Answer(d.message.seq, NowMs());
-      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] pong received role=%s peer=%llu from=%s bytes=%llu seq=%llu rtt_ms=%lld%s",
+      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] pong received role=%s peer=%llu from=%s bytes=%llu seq=%llu rtt_ms=%lld%s%s",
           RoleName(), static_cast<unsigned long long>(sender), from, static_cast<unsigned long long>(size),
-          static_cast<unsigned long long>(d.message.seq), rtt ? static_cast<long long>(*rtt) : -1LL,
+          static_cast<unsigned long long>(d.message.seq), rtt ? static_cast<long long>(*rtt) : -1LL, droppedText.c_str(),
           rtt ? "" : " (no ping of this seq is outstanding)");
       break;
     }
@@ -191,47 +206,59 @@ void Listener(void*, void*, const void* payload, std::uint64_t size, std::uint64
   }
 }
 
-void EnsureListening(std::uintptr_t broadcaster) {
-  if (broadcaster == 0 || reinterpret_cast<void*>(broadcaster) == g_listenedBroadcaster || EchoVR::BroadcasterListen == nullptr) {
+void EnsureListening(std::uintptr_t broadcaster, std::uint64_t nowUs) {
+  if (broadcaster == 0 || reinterpret_cast<void*>(broadcaster) == g_listenedBroadcaster || EchoVR::BroadcasterListen == nullptr ||
+      nowUs < g_listenRetryAtUs) {
     return;
   }
   EchoVR::DelegateProxy proxy = {};
   proxy.method[0] = 0xFFFFFFFFFFFFFFFFULL;  // no member function: the proxy is called directly (server/constants.h DELEGATE_PROXY_INVALID_METHOD)
   proxy.instance = nullptr;
   proxy.proxyFunc = reinterpret_cast<void*>(&Listener);
-  g_listenHandle = EchoVR::BroadcasterListen(reinterpret_cast<EchoVR::Broadcaster*>(broadcaster),
-                                             static_cast<EchoVR::SymbolId>(kMessageSymbol), TRUE, &proxy, FALSE);
+  const std::uint16_t handle = EchoVR::BroadcasterListen(reinterpret_cast<EchoVR::Broadcaster*>(broadcaster),
+                                                         static_cast<EchoVR::SymbolId>(kMessageSymbol), TRUE, &proxy, FALSE);
+  if (handle == kListenFailed) {
+    // Not taken: nothing is listening, so tried again later; the line is written for the first failure and every 12th
+    // after it (one a minute), never per frame.
+    g_listenRetryAtUs = nowUs + kListenRetryUs;
+    if (g_listenFailures++ % 12 == 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PEER] listener not registered role=%s handle=%u failures=%u (no nEVR control message is taken until it is; "
+          "tried again every 5 s)",
+          RoleName(), static_cast<unsigned>(handle), g_listenFailures);
+    }
+    return;
+  }
+  g_listenHandle = handle;
   g_listenedBroadcaster = reinterpret_cast<void*>(broadcaster);
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.PEER] listener registered role=%s symbol=0x%016llx broadcaster=%p handle=%u (nEVR control messages are taken "
-      "on the game's broadcaster)",
-      RoleName(), static_cast<unsigned long long>(kMessageSymbol), g_listenedBroadcaster, g_listenHandle);
+      "[NEVR.PEER] listener registered role=%s message=NEVRProtobufMessageV1 handle=%u failures_before=%u (nEVR control "
+      "messages are taken on the game's broadcaster)",
+      RoleName(), static_cast<unsigned>(g_listenHandle), g_listenFailures);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PEER] listener detail symbol=0x%016llx broadcaster=%p",
+      static_cast<unsigned long long>(kMessageSymbol), g_listenedBroadcaster);
 }
 
-void PollServer(std::uintptr_t broadcaster, std::uint64_t nowUs) {
-  if (nowUs - g_lastServerPollUs < kServerPollUs) return;
-  g_lastServerPollUs = nowUs;
+void PollServer(std::uintptr_t broadcaster) {
   const MatchView view = ReadMatch();
   if (!view.valid) return;
   if (!g_broadcasterCompared && view.lobbyBroadcaster != 0) {
     g_broadcasterCompared = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.PEER] server broadcaster net_game=%p lobby=%p same=%s",
-        reinterpret_cast<void*>(broadcaster), reinterpret_cast<void*>(view.lobbyBroadcaster),
+    Log(EchoVR::LogLevel::Info, "[NEVR.PEER] server broadcaster same_as_lobby=%s (the net game's broadcaster is the one the lobby uses)",
         view.lobbyBroadcaster == broadcaster ? "yes" : "no");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PEER] server broadcaster detail net_game=%p lobby=%p", reinterpret_cast<void*>(broadcaster),
+        reinterpret_cast<void*>(view.lobbyBroadcaster));
   }
-  if (view.session != g_session) {
-    if (!g_greeted.empty() || !g_session.empty()) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PEER] session changed from=%s to=%s greeted_peers_forgotten=%zu",
-          g_session.empty() ? "none" : g_session.c_str(), view.session.empty() ? "none" : view.session.c_str(), g_greeted.size());
-    }
-    g_session = view.session;
-    g_greeted.clear();
+  const std::string previous = g_greet.session();
+  const GreetBook::Step step = g_greet.Update(view.session, view.peers);
+  if (step.sessionChanged) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PEER] session changed from=%s to=%s greeted_peers_forgotten=%zu",
+        previous.empty() ? "none" : previous.c_str(), view.session.empty() ? "none" : view.session.c_str(), step.forgotten);
   }
-  if (g_session.empty()) return;
+  if (step.greet.empty()) return;
   const std::vector<std::string> gear = GearFromFeatures(nevr_combat::ServerFeatures());
-  for (const std::uint64_t peer : view.peers) {
-    if (!g_greeted.insert(peer).second) continue;
-    const std::string detail = "gear=" + GearText(gear) + " session=" + g_session;
+  for (const std::uint64_t peer : step.greet) {
+    const std::string detail = "gear=" + GearText(gear) + " session=" + g_greet.session();
     Send(broadcaster, peer, Kind::kCapabilities, EncodeCapabilities(gear), detail.c_str());
     SendPing(broadcaster, peer);
   }
@@ -255,12 +282,21 @@ void SetMatchViewSource(std::function<MatchView()> source) {
 }
 
 void Poll(std::uint64_t nowUs) {
-  const std::uintptr_t netGame = NetGame();
-  const std::uintptr_t broadcaster = Broadcaster(netGame);
-  if (broadcaster == 0) return;
-  EnsureListening(broadcaster);
-  if (g_isServer) PollServer(broadcaster, nowUs);
-  else PollClient(netGame);
+  // At most every 250 ms: the reads below go through VirtualQuery, and nothing here needs a finer step.
+  if (nowUs - g_lastPollUs < kPollUs) return;
+  g_lastPollUs = nowUs;
+  try {
+    const std::uintptr_t netGame = NetGame();
+    const std::uintptr_t broadcaster = Broadcaster(netGame);
+    if (broadcaster == 0) return;
+    EnsureListening(broadcaster, nowUs);
+    if (g_isServer) PollServer(broadcaster);
+    else PollClient(netGame);
+  } catch (const std::exception& e) {
+    // Nothing may escape into the per-frame dispatcher (its re-entrancy gate is held while this runs).
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PEER] poll failed role=%s what_bytes=%zu (tried again on the next poll)", RoleName(),
+        std::strlen(e.what()));
+  }
 }
 
 }  // namespace nevr_peer_message
