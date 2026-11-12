@@ -107,9 +107,10 @@ unloaded game space cannot keep a matching owner word is not established):
   goes through `Revalidate`. It passes only when the system's owner word (read with `SafeRead`) still equals the recorded owner, the system is
   found again in that space, its `Component()` has the read shape and returns the recorded handle. Then `DisableComponent`'s (or
   `EnableComponent`'s) shape is checked, and an invoke-immediate word that is 0 makes the component wait.
-- a chase velocity (`ChaseTick`) goes through `ChaseStillOk`: the physics system's owner word equals the recorded one, and the handles are live.
-  Then the physics system's owner word must equal the recorded owner again, and that owner's invoke-immediate flag must be nonzero, before
-  `set_vel`. `Revalidate` is not called.
+- a chase velocity (`ChaseTick`) goes through `ChaseStillOk` first. That reads the attack-target system's owner word (the recorded
+  `atOwner`), the attack handle, the record's physics handle and the attack system's physics pointer, which must be the recorded
+  physics system, and then the physics handle. `ChaseTick` then reads the physics system's owner word once: it must equal the
+  recorded owner, and that owner's invoke-immediate flag must be nonzero, before `set_vel`. `Revalidate` is not called.
 - an explosion (`FxTick`, then `RunExplosion`) goes through `EntryOk` for both drone entries (each must be the expected entry of the drone
   library, by its module and offset) and a `SafeRead` of the context's state word. `Revalidate` is not called; the components it releases go off
   through `OffOne`, as above.
@@ -120,8 +121,11 @@ recorded components. That path is the arena's cost in this window; the out-of-sc
 scope is off. The window is counted from that answer, not from the map's end. The asks are 32 frames apart (`n % kScopeFrames`, `Tick`), and the
 first look that reads the map's end comes at most 250 ms after the end while the game tick runs (`kLookEveryMs`, the scope row's look). The
 first no-combat-map ask comes at most 31 frames after that look, and the scope ends 64 frames after that ask. So the due work's last frame is at
-most 94 frames after the first frame whose look reads the end. This assumes one `Tick` call per frame (`dronekill.h` describes the game's frame
-tick that way; the rate is not measured here).
+most 94 frames after the first frame whose look reads the end. The 31 holds because the scope row's refresh runs before dronekill's
+tick in the same frame: `combat_install.cpp` lists the `scope` module before the `dronekill` module, and `combat_tick.cpp` calls the
+tick callbacks in registration order, so a look on frame L is already stored when the ask on frame L reads it. With the refresh after
+the tick, the bound would be 95. The bound also assumes one `Tick` call per frame (`dronekill.h` describes the game's frame tick that
+way; the rate is not measured here).
 
 Lines in the window: one `combat_dronekill_scope_wait` (Debug) per no-combat-map answer that does not yet end the scope.
 
