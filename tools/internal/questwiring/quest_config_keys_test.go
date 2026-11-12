@@ -184,3 +184,30 @@ func TestTheExampleConfigSentenceListsExactlyTheKeysTheQuestReads(t *testing.T) 
 		t.Errorf("%s lists %d key(s) that %s does not read: %s", exampleConfigDoc, len(extra), questConfigSrc, strings.Join(extra, ", "))
 	}
 }
+
+// #2382: the PC's hand list of the keys the Quest reads (test_nevr_config.cpp, KnownPathsCoverEveryKeyTheQuestReads) must hold
+// every key quest_config.cpp reads. That list was missing network.invite_codes, so the two builds' key lists disagreed. Equality
+// is not required here: the C++ list may name a key the reader does not read (the schema check covers that side).
+func TestTheCppKnownPathsListHoldsEveryKeyTheQuestReads(t *testing.T) {
+	t.Parallel()
+	reader := readerKeys(t)
+	const cppTest = "src/runtime/tests/test_nevr_config.cpp"
+	const cppSig = "TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads)"
+	listed := map[string]bool{}
+	for _, m := range dottedKeyLiteral.FindAllStringSubmatch(body(t, stripComments(read(t, cppTest)), cppSig), -1) {
+		listed[m[1]] = true
+	}
+	if len(listed) < 50 {
+		t.Fatalf("%s: %s has %d key literals, want at least 50: the extraction has drifted from the test's spelling", cppTest, cppSig, len(listed))
+	}
+	var missing []string
+	for k := range reader {
+		if !listed[k] {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("%s: %s does not list %d key(s) that %s reads: %s", cppTest, cppSig, len(missing), questConfigSrc, strings.Join(missing, ", "))
+	}
+}
