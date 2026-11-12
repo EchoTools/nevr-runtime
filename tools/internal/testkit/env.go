@@ -97,14 +97,17 @@ var (
 )
 
 // goDefaults is what `goBin env GOCACHE GOMODCACHE` prints (it knows the defaults and the user's `go env -w`
-// settings), looked up once per go binary. Empty when goBin is "" or the command fails.
+// settings) under this process's environment, looked up once per go binary and environment: the defaults depend on HOME
+// and the XDG variables, so an answer given under one HOME is not the answer under another. Empty when goBin is "" or the
+// command fails.
 func goDefaults(goBin string) map[string]string {
 	if goBin == "" {
 		return nil
 	}
+	key := goBin + "\x00" + strings.Join(os.Environ(), "\x00")
 	goDefaultsMu.Lock()
 	defer goDefaultsMu.Unlock()
-	if got, ok := goDefaultsCache[goBin]; ok {
+	if got, ok := goDefaultsCache[key]; ok {
 		return got
 	}
 	got := map[string]string{}
@@ -115,7 +118,7 @@ func goDefaults(goBin string) map[string]string {
 			got[keys[i]] = lines[i]
 		}
 	}
-	goDefaultsCache[goBin] = got
+	goDefaultsCache[key] = got
 	return got
 }
 
