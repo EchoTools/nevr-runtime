@@ -16,7 +16,7 @@
 
 namespace {
 
-using nevr_invite_choices::Event;
+using nevr_menu_press::Press;
 using nevr_menu_press::Sender;
 
 constexpr uint64_t kNewCardOwner = 0xf67c7e3e9088c0feULL;
@@ -39,6 +39,10 @@ struct FakeGame {
     names[5] = kNewCardOwner;
   }
   static void Put(uint8_t* base, size_t at, uint64_t v) { std::memcpy(base + at, &v, sizeof(v)); }
+  void SetWords(uint64_t target, uint64_t value) {
+    Put(event, nevr_menu_press::kEventTargetOffset, target);
+    Put(event, nevr_menu_press::kEventValueOffset, value);
+  }
   void SetEvent(uint64_t symbol, uint64_t sender, uint64_t component) {
     Put(event, nevr_invite_choices::kEventSymbolOffset, symbol);
     Put(event, nevr_invite_choices::kEventSenderOffset, sender);
@@ -61,7 +65,7 @@ struct FakeGame {
       return true;
     };
   }
-  Sender Run(Event* out) const {
+  Sender Run(Press* out) const {
     return nevr_menu_press::ReadPress(Reader(), reinterpret_cast<uintptr_t>(space), reinterpret_cast<uintptr_t>(event),
                                       out);
   }
@@ -71,7 +75,7 @@ struct FakeGame {
 
 TEST(MenuPressRead, AnyEventSymbolIsReadWithItsOwnerAndComponent) {
   FakeGame game;
-  Event e;
+  Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.symbol, EchoVR::CSymbol64Hash("evt_something_else"));
   EXPECT_EQ(e.owner, kNewCardOwner);
@@ -81,7 +85,7 @@ TEST(MenuPressRead, AnyEventSymbolIsReadWithItsOwnerAndComponent) {
 TEST(MenuPressRead, TheWizardsOwnSymbolIsReadTheSameWay) {
   FakeGame game;
   game.SetEvent(nevr_invite_choices::kEvtCardClicked, 5, nevr_invite_choices::kCardLeft);
-  Event e;
+  Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.symbol, nevr_invite_choices::kEvtCardClicked);
   EXPECT_EQ(e.owner, kNewCardOwner);
@@ -90,7 +94,7 @@ TEST(MenuPressRead, TheWizardsOwnSymbolIsReadTheSameWay) {
 TEST(MenuPressRead, ASenderOfFFFFIsNoSenderButTheSymbolAndComponentAreKept) {
   FakeGame game;
   game.SetEvent(0xabcdULL, 0x1234ffffULL, 0x99);
-  Event e;
+  Press e;
   EXPECT_EQ(game.Run(&e), Sender::NoSender);
   EXPECT_EQ(e.symbol, 0xabcdULL);
   EXPECT_EQ(e.component, 0x99u);
@@ -100,14 +104,14 @@ TEST(MenuPressRead, ASenderOfFFFFIsNoSenderButTheSymbolAndComponentAreKept) {
 TEST(MenuPressRead, OnlyTheLow16BitsOfTheSenderIndexTheTable) {
   FakeGame game;
   game.SetEvent(0xabcdULL, 0xabcd0000ULL | 5, 0x99);
-  Event e;
+  Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.owner, kNewCardOwner);
 }
 
 TEST(MenuPressRead, AnIndexAtOrPastTheCapacityIsOutOfRange) {
   FakeGame game;
-  Event e;
+  Press e;
   game.SetEvent(0xabcdULL, 16, 0x99);
   EXPECT_EQ(game.Run(&e), Sender::OutOfRange);
   EXPECT_EQ(e.owner, 0u);
@@ -118,7 +122,7 @@ TEST(MenuPressRead, AnIndexAtOrPastTheCapacityIsOutOfRange) {
 }
 
 TEST(MenuPressRead, AMissingTableOrNamesArrayIsRefusedNotFollowed) {
-  Event e;
+  Press e;
   FakeGame game;
   FakeGame::Put(game.space, nevr_invite_choices::kSpaceActorTableOffset, 0);
   EXPECT_EQ(game.Run(&e), Sender::NoTable);
@@ -128,9 +132,10 @@ TEST(MenuPressRead, AMissingTableOrNamesArrayIsRefusedNotFollowed) {
 }
 
 TEST(MenuPressRead, MemoryThatCannotBeReadIsRefusedAtEveryStep) {
-  Event e;
+  Press e;
   const size_t offsets[] = {nevr_invite_choices::kEventSymbolOffset, nevr_invite_choices::kEventSenderOffset,
-                            nevr_invite_choices::kEventComponentOffset};
+                            nevr_invite_choices::kEventComponentOffset, nevr_menu_press::kEventTargetOffset,
+                            nevr_menu_press::kEventValueOffset};
   for (size_t offset : offsets) {
     FakeGame game;
     game.refuse = reinterpret_cast<uintptr_t>(game.event) + offset;
@@ -158,9 +163,36 @@ TEST(MenuPressRead, MemoryThatCannotBeReadIsRefusedAtEveryStep) {
   }
 }
 
+TEST(MenuPressRead, TheTargetAndTheValueWordsAreReadWithTheRest) {
+  FakeGame game;
+  game.SetEvent(0xabcdULL, 5, 0x99);
+  game.SetWords(0x1111, 0x2222);
+  Press e;
+  ASSERT_EQ(game.Run(&e), Sender::Resolved);
+  EXPECT_EQ(e.target, 0x1111u);
+  EXPECT_EQ(e.value, 0x2222u);
+  EXPECT_EQ(e.component, 0x99u);
+}
+
+TEST(MenuPressRead, TheTargetAndTheValueAreKeptWhenTheSenderDoesNotResolve) {
+  FakeGame game;
+  game.SetEvent(0xabcdULL, 0x1234ffffULL, 0x99);
+  game.SetWords(0x1111, 0x2222);
+  Press e;
+  EXPECT_EQ(game.Run(&e), Sender::NoSender);
+  EXPECT_EQ(e.target, 0x1111u);
+  EXPECT_EQ(e.value, 0x2222u);
+}
+
+TEST(MenuPressRead, TheWordOffsetsAreTheOnesTheGameReads) {
+  // SComponentEvent (echovr.exe 0x14050fb60): word 1 is the target space id, word 4 the value.
+  EXPECT_EQ(nevr_menu_press::kEventTargetOffset, 0x08u);
+  EXPECT_EQ(nevr_menu_press::kEventValueOffset, 0x20u);
+}
+
 TEST(MenuPressRead, ANullEventOrSpaceIsRefused) {
   FakeGame game;
-  Event e;
+  Press e;
   EXPECT_EQ(nevr_menu_press::ReadPress(game.Reader(), reinterpret_cast<uintptr_t>(game.space), 0, &e),
             Sender::Unreadable);
   EXPECT_EQ(nevr_menu_press::ReadPress(game.Reader(), 0, reinterpret_cast<uintptr_t>(game.event), &e),
@@ -170,21 +202,24 @@ TEST(MenuPressRead, ANullEventOrSpaceIsRefused) {
 // ---- the log line ----
 
 TEST(MenuPressLine, ACardPressIsOneTaggedLineWithTheSymbolOwnerAndComponent) {
-  Event e;
+  Press e;
   e.symbol = 0x1122334455667788ULL;
   e.owner = kNewCardOwner;
   e.component = 0x77;
+  e.target = 0x1234;
+  e.value = 0x5;
   EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::Resolved, 42),
             "[NEVR.PLUGINMGR] component event read=resolved event=0x1122334455667788 owner=0xf67c7e3e9088c0fe "
-            "component=0x77 seen=42");
+            "component=0x77 target=0x1234 value=0x5 seen=42");
 }
 
 TEST(MenuPressLine, AnUnresolvedSenderSaysWhyAndKeepsWhatWasRead) {
-  Event e;
+  Press e;
   e.symbol = 0xabcd;
   e.component = 0x99;
   EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::NoSender, 7),
-            "[NEVR.PLUGINMGR] component event read=no_sender event=0xabcd owner=0x0 component=0x99 seen=7");
+            "[NEVR.PLUGINMGR] component event read=no_sender event=0xabcd owner=0x0 component=0x99 target=0x0 value=0x0 "
+            "seen=7");
 }
 
 TEST(MenuPressLine, EverySenderOutcomeHasItsOwnName) {

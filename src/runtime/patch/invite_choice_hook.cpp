@@ -52,7 +52,7 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
   };
   // #1857: what every call carries (symbol, owner, component), so the plugin manager's press hook can filter on a press on
   // its own card. Debug: the calls are about one per click (#906 measured 18 in 112 s), and an operator does not need them.
-  nevr_invite_choices::Event press;
+  nevr_menu_press::Press press;
   const nevr_menu_press::Sender sender =
       nevr_menu_press::ReadPress(reader, static_cast<std::uintptr_t>(space), event, &press);
   Log(EchoVR::LogLevel::Debug, "%s", nevr_menu_press::PressLine(press, sender, seen).c_str());
