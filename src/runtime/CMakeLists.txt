@@ -1116,6 +1116,11 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
+    # #2110: the yield phase of CSpinWait::WaitForValue (patch/spin_wait_rules.h). Plain checks, no gtest.
+    add_executable(test_spin_wait_rules tests/test_spin_wait_rules.cpp)
+    target_include_directories(test_spin_wait_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME test_spin_wait_rules COMMAND test_spin_wait_rules)
+
     # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
