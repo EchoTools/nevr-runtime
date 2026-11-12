@@ -168,6 +168,12 @@ bool InstallPermissionWaitHook() noexcept {
     options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
+    // `assets.whole_game` (quest_config.h): the CDN holds every asset of the game, so the data step writes the stub manifests and
+    // fetches no data zip, in any build. The configuration is resolved before this step runs (ctor_sequence.cpp).
+    // KNOWN-WRONG #2398: `options.all_assets_ready`, the download and the mount that must finish before the step returns, is not set here: the first-run prefetch
+    // (the blocking fetch of every manifest object) is not in this tree, so a launch logs the Warning
+    // `data_all_assets_ready result=skipped reason=no_worker` and boots on the stubs with no asset source (docs/adr/0045 decision 11).
+    options.all_assets = sentinel::ActiveConfig().assets.wholeGame;
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);

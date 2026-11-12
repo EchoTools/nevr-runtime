@@ -79,6 +79,21 @@ process.
    any label not listed is off. Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
    manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
 10. **Client only.** A dedicated server fetches nothing.
+11. **Whole-game mode.** On Quest, `assets.whole_game: true` (needs `assets.manifest`) says the manifest holds every asset of the game, so
+    the first-run data step (`docs/adr/0011-quest-game-data-first-run.md`) does not fetch the data zip and never ends the process for
+    missing `_data`, in any build. The engine reads each boot package set's manifest file straight from disk, with no resolver hook in the
+    path, and stops at init when one is absent; a manifest with package count 0 is accepted. So the step writes the two zero-package
+    manifests (`src/quest/data/boot_stub.h`, sets `r14netclient` and `r14netclient_en_US`) where they are absent, keeps any manifest that is
+    there, and then calls the launch's setup (`data_wiring::Options::all_assets_ready`: the download and the mount of the shadow manifest,
+    which the first archive load needs) before the engine starts. The step runs that function when one is set and ends the launch with its
+    message when it answers not-ok (status `worker_refused`). KNOWN-WRONG #2398:
+    no production function is set in this tree. The sentinel (`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`) sets only the mode,
+    so a launch with the mode on logs the Warning `data_all_assets_ready result=skipped reason=no_worker` and nothing downloads or mounts: the
+    engine boots on the stubs and its first archive load finds no asset. Writing that function, from the first-run prefetch (not in this tree)
+    and an adapter over the cargo store (`src/core/cargo_store.*`), and setting it in
+    `entry.cpp` is the integration step (the APK package, P6). A stub that cannot be written ends the launch with a message, because the engine
+    could not start either. A manifest that is already there is kept and logged (Warning when it is not the stub or cannot be read); the step
+    does not check that the engine will accept it.
 
 ## Alternatives
 
