@@ -20,7 +20,7 @@
  * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle line, no scan); and the call itself is refused while an Echo Arena level is
  * loaded (combat_level.h `Scan`: `echoArena`), whatever the game's flags say, with one Info line per match (`combat_aibots_scoped_out`). The
  * combat-map flag the plugin logged beside the call (`combat_map`) is now `combat_level.h`'s detector, not a copy of its level list.
- * KNOWN-WRONG #2168: the scope asks `combat_level` directly, once per call; it moves to combat_scope (F19, #2246) when that lands.
+ * KNOWN-WRONG #2168: the scope asks `combat_level` directly, once per call; moving it to combat_scope.h is tracked in #2382.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
  * frame and does one clock read and one compare; the look runs at 4 Hz and is four process_vm_readv reads (the net game, its back pointer and

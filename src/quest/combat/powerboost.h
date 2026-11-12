@@ -18,7 +18,7 @@
  * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map
  * or the combat lobby is loaded (InScope(): the game tick asks combat_level once every kScopeEveryFrames frames and keeps the answer in an
  * atomic; with no tick seen yet the answer is "not combat"). Anywhere else every wrapper only calls the game's function, the entry passes
- * every call on, and nothing is logged, held, swallowed or sent. When the combat_scope answer (F19, #2246) lands, InScope() reads it instead.
+ * every call on, and nothing is logged, held, swallowed or sent. InScope() asks `combat_level` directly; moving it to `combat_scope.h` is tracked in #2382.
  *
  * Frequency (ADR 0038). ResolveBody has 771 callers and runs many times per frame: the entry's path for every call but the cone's is 10
  * instructions (bti, two adrp/add/ldar pairs, cmp, b.eq, br). Heal is called per damage-dealt message and per heal node; HealNode::Enter

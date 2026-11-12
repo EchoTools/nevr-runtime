@@ -29,7 +29,7 @@
  * sleeps 250 ms between looks and sends nothing. Two things act everywhere, on purpose: the WriteLogV handler stores a selected tac mod in
  * re33_ec_page (memory of ours that no arena code reads; a selection made in a menu must reach the combat lobby), and the gear gate takes its
  * mutex around ReloadEquipmentConfig / UnloadEquipmentConfig (an event, not a frame) so a rebuild that started before the scope changed is
- * never read half-built. `combat_scope` (F19, #2246) will replace the cache; `InCombatScope()` is the one place that changes.
+ * never read half-built. The cache is read from `combat_level`; moving it to `combat_scope.h` is tracked in #2382. `InCombatScope()` is the one place that changes.
  *
  * Config (`combat:` in config.yaml): `ec` (default true), `ec_words` (default `types=VPTO equip hide`): the words are `types=<letters of VPTO>`
  * (the packet types this client carries; no word, an empty list or another letter: 'T' only), `equip` / `noequip` (store the selection or

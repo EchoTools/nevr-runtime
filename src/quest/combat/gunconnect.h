@@ -14,7 +14,7 @@
  * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is (combat_level.h `Classify`);
  * in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds nothing to
  * do, calls nothing of the game's and writes no line. Online it does nothing in any level: the lobby-member event connects the guns first, so
- * (a) is false. KNOWN-WRONG #2168: the scope asks `combat_level` directly, once a pass; it moves to combat_scope (F19, #2246) when that lands.
+ * (a) is false. KNOWN-WRONG #2168: the scope asks `combat_level` directly, once a pass; moving it to combat_scope.h is tracked in #2382.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
  * frame and does one clock read and one compare; a pass runs at 1 Hz (4 Hz while a local gun is unconnected). A pass is the level scan (a few

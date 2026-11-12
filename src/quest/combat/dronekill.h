@@ -48,7 +48,7 @@
  * AttackTarget after its call, Actor after its call when no drone Enter is in flight; OnKilled drops the 'K'; the tick clears the tables when the
  * scope ends. An arena level writes only the one `combat_dronekill_scope` line per change of scope; the process writes the final
  * `combat_dronekill_stats` record at its end whenever the module is installed, with zero counts if no combat map was seen.
- * The scope moves to combat/combat_scope's InCombatMap (F19, PR #2246) once that file is on main; InCombatScope is the one place that changes.
+ * The scope asks `combat_level` directly; moving it to `combat/combat_scope.h`'s `InCombatMap` is tracked in #2382. `InCombatScope()` is the one place that changes.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
  *
