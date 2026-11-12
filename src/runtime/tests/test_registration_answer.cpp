@@ -278,3 +278,42 @@ TEST_F(RegistrationAnswerTest, TheEarlierReceiveObserverStillSeesEveryFrame) {
   EXPECT_EQ(seen, 3);
   EXPECT_EQ(lines.Count(), 1u);
 }
+
+// The answer-once exchange at the head of the legacy branch (registration_answer.h, OnFrame): a legacy failure writes a
+// line when it is the first answer on its connection, or when it completes a protobuf refusal held for it; after an
+// answer on the same connection it writes nothing. A second answer frame is a repeat, not a second refusal.
+TEST_F(RegistrationAnswerTest, ALegacyFailureAfterASuccessOnTheSameConnectionWritesNoLine) {
+  Open();
+  Frame(SuccessWrapper());
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(4))));
+  Close(1000);
+  EXPECT_EQ(log.Count(), 0u) << "the connection was answered by the success; a later failure on it owes no line: " << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, ASecondLegacyFailureOnTheSameConnectionWritesNoSecondLine) {
+  Open();
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(4))));
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(10))));
+  EXPECT_EQ(log.Count(), 1u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error, "legacy_code=4 ")) << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, ALegacyFailureAfterAnUnansweredProtobufWarningWritesItsOwnLine) {
+  Open();
+  Frame(ErrorWrapper(3));
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(10))));
+  ASSERT_EQ(log.Count(), 2u) << log.All();
+  EXPECT_TRUE(log.Has(EchoVR::LogLevel::Error,
+                      "registration refused by ServerDB protobuf_code=none protobuf_code_name=none message_bytes=none "
+                      "legacy_code=10 legacy_code_name=Failure legacy_payload_bytes=1 reconnect_count="))
+      << log.All();
+}
+
+TEST_F(RegistrationAnswerTest, AProtobufRefusalIsTheAnswerAndTheLegacyFramesAfterItAddNoLine) {
+  Open();
+  Frame(ErrorWrapper(4));
+  EXPECT_TRUE(tracker.Answered()) << "a CODE_REGISTRATION_FAILED is the registration's answer";
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(10))));
+  Frame(EvrMessage(nevr_registration_answer::kLegacyFailure, std::string(1, static_cast<char>(10))));
+  ASSERT_EQ(log.Count(), 1u) << log.All();
+}
