@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
@@ -67,10 +68,17 @@ def build_aarch64(out: pathlib.Path, source: str, *, build_id: str | None = None
     return out
 
 
+# A fixed entry time: writestr(name, ...) would stamp the clock's time, so two zips of the same entries
+# would differ across a 2-second boundary (#2309). The DOS epoch is the earliest time a zip can hold.
+FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+
+
 def make_zip(path: pathlib.Path, entries: dict[str, bytes]) -> pathlib.Path:
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+    with zipfile.ZipFile(path, "w") as z:
         for name, data in entries.items():
-            z.writestr(name, data)
+            info = zipfile.ZipInfo(name, date_time=FIXED_ZIP_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
     return path
 
 
@@ -1437,6 +1445,24 @@ class StageRedirectedLibsTest(unittest.TestCase):
 
 
 SHA = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+
+
+class MakeZipIsStableTest(unittest.TestCase):
+    """make_zip writes the same bytes for the same entries whatever the clock says (#2309)."""
+
+    # Fixed clock values, in seconds: two calls three seconds apart fall on different zip timestamps (2-second resolution).
+    FIRST_CALL_AT = 1_700_000_000.0
+    LATER_CALL_AT = FIRST_CALL_AT + 3.0
+
+    def test_the_same_entries_make_the_same_bytes_across_a_two_second_boundary(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="make-zip-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        clock = [self.FIRST_CALL_AT]
+        with mock.patch("time.time", side_effect=lambda: clock[0]):
+            first = make_zip(tmp / "first.zip", {"lib/arm64-v8a/libr15.so": b"x"}).read_bytes()
+            clock[0] = self.LATER_CALL_AT
+            second = make_zip(tmp / "second.zip", {"lib/arm64-v8a/libr15.so": b"x"}).read_bytes()
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":
