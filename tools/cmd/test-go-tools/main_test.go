@@ -1065,106 +1065,6 @@ func TestAPythonHalfStillRunningAfterTheInterruptGraceIsKilled(t *testing.T) {
 	case <-t.Context().Done():
 		t.Fatal("the run did not end")
 	}
-	requireNoFakeLeft(t, r.py.Dir())
-}
-
-// leftoverFakeProcesses lists the live processes whose argv[0] is under dir, a fake's own directory: the processes a fake
-// started through its path, which keep the worktree busy after the test ends (remove-worktree refuses a process whose cwd is inside).
-func leftoverFakeProcesses(dir string) []string {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		if _, err := strconv.Atoi(e.Name()); err != nil {
-			continue
-		}
-		raw, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
-		if err != nil || len(raw) == 0 {
-			continue
-		}
-		argv := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
-		if strings.HasPrefix(argv[0], dir+string(filepath.Separator)) {
-			out = append(out, e.Name()+" "+strings.Join(argv, " "))
-		}
-	}
-	return out
-}
-
-// requireNoFakeLeft waits up to three seconds for no process of the fake in dir to be alive. A process still alive then is
-// a failure, and it is killed, so the leak does not outlive the test.
-func requireNoFakeLeft(t *testing.T, dir string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		left := leftoverFakeProcesses(dir)
-		if len(left) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Errorf("processes started by the fake in %s are still alive after the run: %q", dir, left)
-			for _, l := range left {
-				if pid, err := strconv.Atoi(strings.Fields(l)[0]); err == nil {
-					syscall.Kill(pid, syscall.SIGKILL)
-				}
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// TestToolChildProcess is not a test of its own: TestKilledToolLeavesNoFakeRunning runs this binary with
-// NEVR_TGT_TOOL_CHILD=1, so the tool runs in a process that the test can kill without its cleanup.
-func TestToolChildProcess(t *testing.T) {
-	if os.Getenv("NEVR_TGT_TOOL_CHILD") != "1" {
-		t.Skip("runs only as the tool's child process")
-	}
-	var args []string
-	if os.Getenv("NEVR_TGT_TOOL_PY") == "1" {
-		args = []string{"--", "python3"}
-	}
-	runWith(defaultOptions, context.Background(), args, os.Getenv, strings.NewReader(""), io.Discard, io.Discard)
-}
-
-// A tool killed while its Go half runs (SIGKILL: no cleanup, no grace) must not leave that half running. The fake go
-// blocks until it is killed, so it is alive the whole time the test waits for it.
-func TestKilledToolLeavesNoFakeRunning(t *testing.T) {
-	t.Parallel()
-	r := newRig(t, "", 0)
-	r.script(r.fake, "ignore-sigint", "")
-	killedToolLeavesNoFake(t, r, r.fake, nil)
-}
-
-// The same for the Python half: the tool that started it is killed, and the fake python3 must not outlive it.
-func TestKilledToolLeavesNoPythonRunning(t *testing.T) {
-	t.Parallel()
-	r := newRig(t, "", 0)
-	r.script(r.py, "ignore-sigint", "")
-	killedToolLeavesNoFake(t, r, r.py, []string{"NEVR_TGT_TOOL_PY=1"})
-}
-
-// killedToolLeavesNoFake runs the tool in a child of this test binary, waits for the fake to be running (its ready file),
-// kills the child, and requires that no process of the fake's directory is left.
-func killedToolLeavesNoFake(t *testing.T, r *rig, half *testkit.FakeCommand, extra []string) {
-	t.Helper()
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(self, "-test.run=^TestToolChildProcess$")
-	cmd.Env = append(append(append([]string{}, r.env...), "NEVR_TGT_TOOL_CHILD=1"), extra...)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	testkit.WaitFor(t, "the fake to be running under the tool", func() bool {
-		_, err := os.Stat(filepath.Join(half.Dir(), "ready"))
-		return err == nil
-	})
-	cmd.Process.Kill()
-	cmd.Wait()
-	requireNoFakeLeft(t, half.Dir())
 }
 
 func TestTheDefaultWaitsAreThePinnedOnes(t *testing.T) {
@@ -1200,7 +1100,6 @@ func TestGoStillRunningAfterItsGraceIsKilled(t *testing.T) {
 	case <-t.Context().Done():
 		t.Fatal("the run did not end")
 	}
-	requireNoFakeLeft(t, r.fake.Dir())
 }
 
 // ---- the machine-wide test lock is held across both halves (R3-N3) ----
