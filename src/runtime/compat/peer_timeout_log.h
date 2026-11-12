@@ -26,9 +26,11 @@ namespace nevr_peer_timeout_log {
 inline constexpr std::uint64_t kNoSendWarnMicros = 5'000'000ULL;
 
 // How the log writes a removal: the reason's own level. A timeout is a Warning (the peer was silent past a limit); a
-// disconnect the peer asked for, or one the game acknowledged, is Info. An unknown reason is Info, with the text kept.
+// disconnect the peer or the game acknowledged is Info. An unknown reason is a Warning, and its line says it was
+// unrecognized (FormatPeerRemoved).
 enum class RemovalLevel { kWarning, kInfo };
 RemovalLevel LevelForRemovalReason(std::string_view reason);
+bool RecognizedRemovalReason(std::string_view reason);
 
 // One peer the game removed (CBroadcaster::DestroyPeer, the reason the caller passes).
 struct PeerRemoval {

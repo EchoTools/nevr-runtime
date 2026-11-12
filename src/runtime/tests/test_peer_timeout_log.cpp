@@ -23,6 +23,7 @@ namespace {
 using nevr_peer_timeout_log::PeerRemoval;
 using nevr_peer_timeout_log::FormatPeerRemoved;
 using nevr_peer_timeout_log::LevelForRemovalReason;
+using nevr_peer_timeout_log::RecognizedRemovalReason;
 using nevr_peer_timeout_log::RemovalLevel;
 using nevr_peer_timeout_log::FormatInGameSendState;
 using nevr_peer_timeout_log::FormatNoSendWarning;
@@ -64,11 +65,25 @@ TEST(PeerTimeoutRemoval, TimeoutsAreWarnings) {
     EXPECT_EQ(LevelForRemovalReason("no connect received"), RemovalLevel::kWarning);
 }
 
-TEST(PeerTimeoutRemoval, DisconnectsAndUnknownReasonsAreInfo) {
+TEST(PeerTimeoutRemoval, DisconnectsAreInfo) {
     EXPECT_EQ(LevelForRemovalReason("disconnect received"), RemovalLevel::kInfo);
     EXPECT_EQ(LevelForRemovalReason("disconnect acknowledged"), RemovalLevel::kInfo);
     EXPECT_EQ(LevelForRemovalReason("disconnected"), RemovalLevel::kInfo);
-    EXPECT_EQ(LevelForRemovalReason("something new"), RemovalLevel::kInfo);
+}
+
+TEST(PeerTimeoutRemoval, AnUnknownReasonIsAWarningAndSaysSo) {
+    EXPECT_EQ(LevelForRemovalReason("something new"), RemovalLevel::kWarning);
+    EXPECT_FALSE(RecognizedRemovalReason("something new"));
+    const PeerRemoval record{4, "something new", "10.0.0.4:4", kLateClock, kLateClock};
+    const std::string line = FormatPeerRemoved(record);
+    EXPECT_NE(line.find("reason=something new"), std::string::npos) << line;
+    EXPECT_NE(line.find("reason_recognized=no"), std::string::npos) << line;
+}
+
+TEST(PeerTimeoutRemoval, AKnownReasonIsNotSaidToBeUnrecognized) {
+    EXPECT_TRUE(RecognizedRemovalReason("communication timeout"));
+    const PeerRemoval record{5, "communication timeout", "10.0.0.5:5", kLateClock, kLateClock + kSecond};
+    EXPECT_EQ(FormatPeerRemoved(record).find("reason_recognized"), std::string::npos);
 }
 
 TEST(PeerTimeoutRemoval, TheReasonIsKeptInTheLine) {

@@ -29,19 +29,34 @@ std::string FormatLastSend(const SendTracker& tracker) {
 
 }  // namespace
 
+namespace {
+
+bool IsTimeoutReason(std::string_view reason) {
+    return reason == "communication timeout" || reason == "connect timeout" || reason == "disconnect timeout" ||
+           reason == "no connect received";
+}
+
+bool IsAcknowledgedReason(std::string_view reason) {
+    return reason == "disconnect received" || reason == "disconnect acknowledged" || reason == "disconnected";
+}
+
+}  // namespace
+
+bool RecognizedRemovalReason(std::string_view reason) { return IsTimeoutReason(reason) || IsAcknowledgedReason(reason); }
+
 RemovalLevel LevelForRemovalReason(std::string_view reason) {
-    if (reason == "communication timeout" || reason == "connect timeout" || reason == "disconnect timeout" ||
-        reason == "no connect received") {
-        return RemovalLevel::kWarning;
-    }
-    return RemovalLevel::kInfo;
+    // An unknown reason is a Warning: a reason this table has not named is one nobody has read yet.
+    if (IsAcknowledgedReason(reason)) return RemovalLevel::kInfo;
+    return RemovalLevel::kWarning;
 }
 
 std::string FormatPeerRemoved(const PeerRemoval& removal) {
     const std::uint64_t gap = removal.now_us > removal.last_receive_us ? removal.now_us - removal.last_receive_us : 0;
-    return "[NEVR.GAMESERVER] peer removed reason=" + removal.reason + " slot=" + std::to_string(removal.slot) +
-           " address=" + removal.address + " last_receive_us=" + std::to_string(removal.last_receive_us) +
-           " gap_s=" + FormatSeconds(gap);
+    std::string line = "[NEVR.GAMESERVER] peer removed reason=" + removal.reason + " slot=" + std::to_string(removal.slot) +
+                       " address=" + removal.address + " last_receive_us=" + std::to_string(removal.last_receive_us) +
+                       " gap_s=" + FormatSeconds(gap);
+    if (!RecognizedRemovalReason(removal.reason)) line += " reason_recognized=no (the reason is unrecognized)";
+    return line;
 }
 
 void SendTracker::EnterInGame(std::uint64_t now_us) {
