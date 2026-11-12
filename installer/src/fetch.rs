@@ -85,12 +85,6 @@ pub fn fetch_capped(url: &str, start: u64, max_total: u64, sink: &mut dyn Write)
 
 pub fn sha256_file(path: &std::path::Path) -> std::io::Result<(u64, String)> {
     let mut f = File::open(path)?;
-    sha256_reader(&mut f)
-}
-
-/// Byte count and sha256 of everything `f` reads from its current position to the end. The download hashes through
-/// its own locked handle (#1384): a lock taken by LockFileEx on Windows refuses reads through any other handle.
-pub fn sha256_reader(f: &mut impl Read) -> std::io::Result<(u64, String)> {
     let (mut h, mut n, mut buf) = (Sha256::new(), 0u64, vec![0u8; 65536]);
     loop {
         let k = f.read(&mut buf)?;
