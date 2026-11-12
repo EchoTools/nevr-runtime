@@ -1823,6 +1823,26 @@ void TheRowsHandTheirModulesTheKeysTheFileGave() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// heaps refuses on the host (no libr15) before it reaches the System row, and its install line names the combat.memsys value the row handed it
+// (#2382): on, then off, each set by the file.
+void TheHeapsRowHandsTheModuleItsMemsysKey() {
+  for (const bool memsys : {true, false}) {
+    nevr_quest::combat::heaps::ResetForTest();
+    nevr_quest::combat::memsys::ResetForTest();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.memsys = {memsys, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallEarly();
+    const std::vector<Line> install = Lines("combat_heaps_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") &&
+           Has(install[0].text, std::string("\"memsys\":") + (memsys ? "1" : "0")));
+    QCHECK(NoLineIsCut());
+    Done();
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1866,6 +1886,7 @@ int main() {
   EachSwitchRecordReadsItsOwnMember();
   TheHandWrittenConfigFieldsReadTheirOwnMembers();
   TheRowsHandTheirModulesTheKeysTheFileGave();
+  TheHeapsRowHandsTheModuleItsMemsysKey();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

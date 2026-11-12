@@ -10,7 +10,8 @@
 #   - `!ReadGame(slot) || !ReadGame(pointer)` to `&&` in ObservedMiB: a failed pointer read leaves 0 bytes, which is the answer for a failed read;
 #   - `/*write=*/false` to `true` in ReadGame: the test image is writable wherever it is readable;
 #   - `.Owned("combat_heaps")` in RowTarget: a name for the chain the manager shows on a refusal of a hook, which a data write never makes;
-#   - the test seams and ResetForTest.
+#   - the test seams and ResetForTest;
+#   - `g_systemOn{true}`'s first value: InstallAt stores the switch it was handed before any line reads it.
 F=src/quest/combat/heaps.cpp
 T=src/quest/combat/heaps_targets.h
 CI=src/quest/combat/combat_install.cpp
@@ -81,6 +82,8 @@ runm h_inst_game_space_row $F "s/ObservedMiB(base, 3)/ObservedMiB(base, 2)/"
 runm h_inst_swapped        $F "s/{\"swapped\", counts.swapped}/{\"swapped\", counts.refused}/"
 runm h_inst_refused        $F "s/{\"refused\", counts.refused}/{\"refused\", counts.swapped}/"
 runm h_inst_left           $F "s/{\"left\", counts.left}/{\"left\", counts.refused}/"
+runm h_inst_memsys_fixed   $F "s/{\"memsys\", g_systemOn.load(std::memory_order_relaxed) ? 1 : 0},/{\"memsys\", 1},/"
+runm h_inst_memsys_unset   $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);$//"
 runm h_inst_result_reason  $F "s/{{\"result\", result}, {\"reason\", reason}/{{\"result\", reason}, {\"reason\", result}/"
 runm h_inst_profile        $F "s/{\"profile\", profile}, {\"consequence\", consequence}});/{\"profile\", profile[0] ? \"\" : profile}, {\"consequence\", consequence}});/"
 runm h_inst_consequence    $F "s/{\"consequence\", consequence}});/{\"consequence\", consequence[0] ? \"\" : consequence}});/"

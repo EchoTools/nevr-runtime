@@ -23,6 +23,8 @@ sentinel::GotDataSlot g_slots[kRowCount];
 
 std::atomic<bool> g_ran{false};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
+// combat.memsys as the step was handed it (InstallAt's `systemOn`), for every combat_heaps_install line: InstallAt stores it before any line.
+std::atomic<bool> g_systemOn{true};
 
 // A read of the game's memory (mapping_perms.h): the range must lie in readable mappings of /proc/self/maps, then it is copied.
 template <typename T>
@@ -99,6 +101,7 @@ void LogInstall(const char* result, const char* reason, const Counts& counts, st
   const bool ok = counts.refused == 0 && std::strcmp(result, "refused") != 0;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_heaps_install",
                       {{"result", result}, {"reason", reason}, {"swapped", counts.swapped}, {"refused", counts.refused}, {"left", counts.left},
+                       {"memsys", g_systemOn.load(std::memory_order_relaxed) ? 1 : 0},
                        {"resource_mib", base != 0 ? ObservedMiB(base, 0) : 0}, {"system_mib", base != 0 ? ObservedMiB(base, kSystemRow) : 0},
                        {"gpu_mib", base != 0 ? ObservedMiB(base, 2) : 0}, {"game_space_mib", base != 0 ? ObservedMiB(base, 3) : 0},
                        {"profile", profile}, {"consequence", consequence}});
@@ -122,6 +125,7 @@ std::uint64_t SystemBytesFor(const headset_profile::Profile& profile) noexcept {
 }
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const headset_profile::Profile& headset, bool heapsOn, bool systemOn) noexcept {
+  g_systemOn.store(systemOn, std::memory_order_relaxed);
   const char* const profile = headset.name;
   if (!heapsOn) {
     const Counts none;

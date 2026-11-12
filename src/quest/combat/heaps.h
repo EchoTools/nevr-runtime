@@ -40,9 +40,10 @@
  *            a pinned word that differs (why `reader_word_not_stock` or `rodata_not_stock`) is a Warning with `have` (the word read, or
  *            "unreadable"), `want` and no `observed_mib`
  *   install  {"event":"combat_heaps_install","result":"installed|partial|refused|off","reason":"ok|row_refused|<status token>|combat.heaps","swapped":<n>,"refused":<n>,"left":<n>,
- *             "resource_mib":<n>,"system_mib":<n>,"gpu_mib":<n>,"game_space_mib":<n>,"profile":"..","consequence":".."}
- *            `*_mib` is the size the game reads through the slot after the step (0 when it could not be read). `profile` is the headset
- *            profile's name (quest2, quest3, generic).
+ *             "memsys":0|1,"resource_mib":<n>,"system_mib":<n>,"gpu_mib":<n>,"game_space_mib":<n>,"profile":"..","consequence":".."}
+ *            `memsys` is the `combat.memsys` value the step was handed, on every path (a refusal included, so the row's hand-off shows where no
+ *            row is written). `*_mib` is the size the game reads through the slot after the step (0 when it could not be read). `profile` is
+ *            the headset profile's name (quest2, quest3, generic).
  *   missing  {"event":"combat_heaps_profile_missing","profile":"generic","system_mib":640,"consequence":".."}   Warning, once, when
  *            combat.heaps is on and the identity step set no profile
  *

@@ -13,13 +13,13 @@
 # ffe_not_a_scope_reader).
 #
 # Not listed (no host test can tell them from the original: on the host the module refuses before it reads the switch, and its lines do not carry it):
-#   ir_fn_memsys_off           HeapsEarly hands heaps::Install `false` for memsys (heaps refuses module_not_loaded before the System row)
 #   ir_fn_impactsnd_write_on/_off   ImpactsndNormal hands a fixed `write` (impactsnd refuses module_not_loaded; `write` is in no line)
 #   ir_fn_decals_flip_u_on/_off, ir_fn_decals_flip_v_on/_off   DecalsNormal hands fixed flips (the flips are logged only once a decals.bin loads)
 #   ir_fn_bvh_gate_off, ir_fn_bvh_touch_off   BvhNormal hands gate/touch false (logged only on an installed BVH; the host refuses scope_not_live)
 #   ir_fn_droneguard_stage1_on/_off   DroneguardNormal hands a fixed stage1 (logged only on an installed guard)
 #   ir_fn_booster_needs_false  BoosterPoolNormal hands `false` for levelname::Installed() (levelname is never installed on the host)
 runm ir_fn_heaps_off src/quest/combat/combat_install.cpp 's#^ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config\.heaps\.on, g_config\.memsys\.on); }$#ModuleResult HeapsEarly() noexcept { return heaps::Install(false, g_config.memsys.on); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_memsys_off src/quest/combat/combat_install.cpp 's#^ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config\.heaps\.on, g_config\.memsys\.on); }$#ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_memsys_off_2 src/quest/combat/combat_install.cpp 's#^ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config\.memsys\.on); }$#ModuleResult MemsysEarly() noexcept { return memsys::Install(false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_texel_buffer_guard_on src/quest/combat/combat_install.cpp 's#^ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(g_config\.texelBufferGuard\.on); }$#ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(true); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_texel_buffer_guard_off src/quest/combat/combat_install.cpp 's#^ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(g_config\.texelBufferGuard\.on); }$#ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key

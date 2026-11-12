@@ -141,7 +141,7 @@ void AQuest3GetsAllFourSizes() {
   if (install.size() == 1U) {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":4,\"refused\":0,\"left\":0,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":4,\"refused\":0,\"left\":0,\"memsys\":1,"
            "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":512,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"the game's heaps are the raised sizes when android_main reads them\"}");
   }
@@ -330,7 +330,7 @@ void TheRowLinesCarryTheirFields() {
   if (install.size() == 1U) {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":3,\"refused\":0,\"left\":1,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":3,\"refused\":0,\"left\":1,\"memsys\":0,"
            "\"resource_mib\":320,\"system_mib\":400,\"gpu_mib\":512,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"the game's heaps are the raised sizes when android_main reads them\"}");
   }
@@ -356,7 +356,7 @@ void ARefusedRowIsNamedWithTheManagersStatusAndReadsZero() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"partial\",\"reason\":\"row_refused\",\"swapped\":3,\"refused\":1,\"left\":0,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"partial\",\"reason\":\"row_refused\",\"swapped\":3,\"refused\":1,\"left\":0,\"memsys\":1,"
            "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":0,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"a refused row keeps the game's stock size; the others are raised\"}");
   }
@@ -374,7 +374,7 @@ void WhenEveryRowIsRefusedTheResultIsRefused() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"row_refused\",\"swapped\":0,\"refused\":4,\"left\":0,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"row_refused\",\"swapped\":0,\"refused\":4,\"left\":0,\"memsys\":1,"
            "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }
@@ -389,7 +389,7 @@ void TheRefusalAndOffLinesSayWhatTheGameKeeps() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"module_not_loaded\",\"swapped\":0,\"refused\":0,\"left\":0,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"module_not_loaded\",\"swapped\":0,\"refused\":0,\"left\":0,\"memsys\":1,"
            "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }
@@ -401,7 +401,7 @@ void TheRefusalAndOffLinesSayWhatTheGameKeeps() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
-           "\"event\":\"combat_heaps_install\",\"result\":\"off\",\"reason\":\"combat.heaps\",\"swapped\":0,\"refused\":0,\"left\":0,"
+           "\"event\":\"combat_heaps_install\",\"result\":\"off\",\"reason\":\"combat.heaps\",\"swapped\":0,\"refused\":0,\"left\":0,\"memsys\":1,"
            "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"combat.heaps is false: the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }

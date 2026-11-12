@@ -111,7 +111,8 @@ Each function also has a stock sha256 in the source (`res_heap_patch.py:46-55`);
 ## 4. Logging (AGENTS.md)
 
 One aggregate line per run, `combat_heaps_install` (Info; Error when a row was refused), with `result` (`installed`, `partial`, `refused`, `off`),
-`reason`, the counts (`swapped`, `refused`, `left`), the size the game reads through each slot after the step (`resource_mib`, `system_mib`, `gpu_mib`,
+`reason`, the counts (`swapped`, `refused`, `left`), `memsys` (the `combat.memsys` value the step was handed, 0 or 1, on every path, a refusal
+included), the size the game reads through each slot after the step (`resource_mib`, `system_mib`, `gpu_mib`,
 `game_space_mib`: slot -> pointer -> u64, read back, not the intended value), the headset `profile` (`quest2`, `quest3`, `generic`) and the
 consequence. One Warning `combat_heaps_profile_missing` (`profile`, `system_mib`, `consequence`) when `combat.heaps` is on and the identity step
 set no profile. One `combat_heaps_row` line per row:
