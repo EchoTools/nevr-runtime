@@ -72,6 +72,7 @@ static int g_fail = 0;
 struct Line {
   uint32_t level;
   std::string text;
+  std::string raw;  // the JSON line as the sentinel wrote it: a field Render leaves out (`level`) is checked here
 };
 static std::vector<Line> g_lines;
 // A sentinel record as the plugin test's lines read: `<event> key=value ...` (string values unquoted), at the plugin's level numbers (1 Info,
@@ -115,7 +116,7 @@ static void Sink(sentinel::LogLevel level, const char* line) {
   // The combat level answer's records and the tick's (combat_scope_*, combat_tick_*) are those rows' own, checked by combat_scope_test and the
   // tick's tests; this test reads dronekill's.
   if (std::strstr(line, "\"event\":\"combat_scope_") != nullptr || std::strstr(line, "\"event\":\"combat_tick_") != nullptr) return;
-  g_lines.push_back({lv, Render(line)});
+  g_lines.push_back({lv, Render(line), std::string(line)});
 }
 static int CountLine(const char* needle, int level = -1) {
   int n = 0;
@@ -124,10 +125,25 @@ static int CountLine(const char* needle, int level = -1) {
   return n;
 }
 static bool HasLine(const char* needle, int level = -1) { return CountLine(needle, level) > 0; }
+// One raw line that holds every needle (a raw JSON fragment, e.g. "\"in_combat\":0"): the fields of one record, checked together.
+static bool HasRawLine(std::initializer_list<const char*> needles) {
+  for (const auto& l : g_lines) {
+    bool all = true;
+    for (const char* n : needles) all = all && l.raw.find(n) != std::string::npos;
+    if (all) return true;
+  }
+  return false;
+}
+// The raw JSON fragment of a level field: `"level":"0x%016llx"` for the level's symbol hash, as the scope's records write it (combat_scope.h).
+static std::string LevelField(const char* name) {
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "\"level\":\"0x%016llx\"", static_cast<unsigned long long>(EchoVR::CSymbol64Hash(name)));
+  return buf;
+}
 static void Dump(const char* title) {  // NEVR_TEST_VERBOSE=1: the module's own log records of that scenario
   if (std::getenv("NEVR_TEST_VERBOSE") == nullptr) return;
   std::printf("---- %s\n", title);
-  for (const auto& l : g_lines) std::printf("[%u] %s\n", l.level, l.text.c_str());
+  for (const auto& l : g_lines) std::printf("[%u] %s\n      raw: %s\n", l.level, l.text.c_str(), l.raw.c_str());
 }
 
 // ================================================================ the core (ported from the source's host test)
@@ -516,7 +532,14 @@ static uint64_t Clk() { return g_ms; }
 // The combat level answer's own clock (combat_scope.h), in ms. Each test frame moves it one look spacing, so each frame's refresh looks at the game as it
 // is then (on the headset the answer looks every 250 ms and this module asks every kScopeFrames frames, 267 ms or more: each ask reads a later look).
 static int64_t g_scopeMs = 1000;
-static int64_t ScopeClock() noexcept { return g_scopeMs; }
+// Armed for one tick (g_armedReads >= 0 counts the reads since the arming): the first read is the record's own (LastLook reads the clock once, and
+// the record's freshness is judged on it); every later read in that tick sees the answer kStaleAfterMs + 1 older. So a live read of the answer, made after
+// the record, disagrees with it (TestTheRecordDecidesNotTheLiveRead). -1: not armed.
+static int g_armedReads = -1;
+static int64_t ScopeClock() noexcept {
+  if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + scope::kStaleAfterMs + 1;
+  return g_scopeMs;
+}
 
 static uintptr_t g_base = 0;
 // The four slots in the image's writable segment (g_fire_slot moves below it, out of the image's writable part, to make an install fail), the
@@ -2311,9 +2334,11 @@ static void TestScopeEndsAtTheLevelChange() {
   CHECK(kLeaveAsks == 3, "the scope ends after %u no-level answers, want 3", kLeaveAsks);
   Result r = Reset(Words{});
   CHECK(r.ok, "install");
+  SetScopeForTest(false);  // out of scope before the first ask, so that ask is the entry (its change line is checked below)
   g_lines.clear();
-  Frame();  // the first tick: the combat map, the scope stays
+  Frame();  // the first tick: the combat map, the scope starts
   CHECK(InCombatScope(), "the combat map is not the scope");
+  CHECK(HasRawLine({"\"in_combat\":1", LevelField("mpl_combat_dyson").c_str()}), "the entry line does not carry the combat map's level of the look");
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
   OnKilled(0x11);
@@ -2333,6 +2358,8 @@ static void TestScopeEndsAtTheLevelChange() {
   g_lines.clear();
   TickAsks(1);  // the last answer
   CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1) && HasLine("enter_calls="), "the scope line on the way out");
+  CHECK(HasRawLine({"\"event\":\"combat_dronekill_scope\"", "\"in_combat\":0", LevelField("mpl_arena_a").c_str()}),
+        "the exit line does not carry the arena level of the look");
   CHECK(g_dis.size() == beforeLeave, "a component was turned off in the arena");
   g_dis.clear();
   ExpectInert("after the change");
@@ -2416,6 +2443,29 @@ static void TestAStaleAnswerIsNoCombatMap() {
     Tick(game);
   }
   CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1), "a stale combat answer kept the scope");
+}
+
+// The scope's decision and its change line come from the one record the tick reads (LastLook): a live read of the answer made after the record is
+// stale in this tick, so a decision that asked the answer again would stay out of the scope and write no change line. Out of scope on an arena level,
+// then a combat map loaded: the ask whose record says combat map starts the scope, its line names the map's level, and no live read decides it.
+static void TestTheRecordDecidesNotTheLiveRead() {
+  Result r = Reset(Words{});
+  CHECK(r.ok, "install");
+  SetScopeForTest(false);  // the harness's Reset starts the module in its scope (InstallDroneKill); this case starts out of it
+  LoadLevels({"mpl_arena_a"});
+  Frame();  // the first ask: an arena level, out of scope, no change line
+  CHECK(!InCombatScope() && !HasLine("combat_dronekill_scope in_combat=1"), "an arena level is the scope");
+  LoadLevels({"mpl_combat_fission"});
+  while (CurrentStats().ticks % kScopeFrames != 0) Frame();  // up to the frame of the next ask
+  g_lines.clear();
+  g_scopeMs += scope::kLookEveryMs;
+  scope::Refresh(GameAddress());  // this frame's look: the combat map, the record the ask reads
+  g_armedReads = 0;               // the ask's own read of the record is the first clock read; every later read is stale
+  Tick(GameAddress());
+  g_armedReads = -1;
+  CHECK(InCombatScope(), "the record says a combat map, but the scope did not start: a live read decided it");
+  CHECK(HasLine("combat_dronekill_scope in_combat=1", 1), "no change line for the record's combat map");
+  CHECK(HasRawLine({"\"in_combat\":1", LevelField("mpl_combat_fission").c_str()}), "the change line does not name the record's level");
 }
 
 // The production step: the switch, the tick, the kill feed, the refusals.
@@ -3212,6 +3262,7 @@ int main() {
   TestArenaLevelsAreLeftAlone();
   TestScopeEndsAtTheLevelChange();
   TestAStaleAnswerIsNoCombatMap();
+  TestTheRecordDecidesNotTheLiveRead();
   TestProductionStep();
   if (g_fail == 0) std::printf("dronekill_test: all checks passed\n");
   else std::printf("dronekill_test: %d failure(s)\n", g_fail);

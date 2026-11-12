@@ -76,6 +76,10 @@ runm dk_scope_every src/quest/combat/dronekill.cpp "s/  if (n % kScopeFrames == 
 runm dk_scope_frames src/quest/combat/dronekill.h "s/kScopeFrames = 32;/kScopeFrames = 33;/"
 runm dk_scope_lobby src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatOrLobby();/"
 runm dk_scope_stale_believed src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = (look.bits \& (scope::kBitCombatMap | scope::kBitEchoArena)) == scope::kBitCombatMap;/"
+# the scope decides from the one record the tick reads (LastLook), and the change line names that record's level (#2382 review, combat_scope.h Look)
+runm dk_scope_live_only src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap();/"
+runm dk_scope_one_look src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap(look) \&\& scope::InCombatMap();/"
+runm dk_scope_level src/quest/combat/dronekill.cpp "s/  const std::uint64_t level_id = look.level;/  const std::uint64_t level_id = 0;/"
 runm dk_scope_same src/quest/combat/dronekill.cpp "s/^  if (in == was) return;\$/  (void)0;/"
 runm dk_scope_clear src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void RefreshScope/,/^}/s/^    g_table = Table();\$/    (void)0;/"
 runm dk_scope_clear_due src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void RefreshScope/,/^}/s/^    g_any_due.store(false, std::memory_order_release);\$/    (void)0;/"
