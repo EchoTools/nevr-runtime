@@ -299,7 +299,7 @@ void TheSwitchAndASecondStepInstallNothing() {
     Begin1();
     Build();
     const nevr_quest::combat::ModuleResult r = ss::InstallAt(&Lookup, g_pins, false);
-    QCHECK(!r.installed && std::strcmp(r.status, "off") == 0 && !Hooked());
+    QCHECK(!r.installed && r.off && std::strcmp(r.status, "off") == 0 && !Hooked());
     const std::vector<Line> install = Lines("combat_shaderstep_install");
     QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
     if (install.size() == 1U) {
