@@ -71,14 +71,36 @@ def lifecycle_namespaces(files):
                 yield path, n, m.group(1), "one lifecycle namespace spelled three ways; canonical nevr::lifecycle"
 
 
+# docs/standards/naming.md ("Names in the tree that are not models"): the game's namespaces that src/reconstruction takes
+# from the binary keep the game's spelling, and a namespace the reconstruction wrote takes the rule on its last component,
+# after the game's prefix (NRadEngine::nevr_reconstruction, NRadEngine::NRadGame::nevr_reconstruction). Outside that
+# directory the general rule holds: a namespace is nevr or nevr_<area>, or EchoVR or NRadEngine.
+RECONSTRUCTION_PREFIX = "src/reconstruction/"
+ANY_NAMESPACE_OPEN = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
+NEVR_COMPONENT = re.compile(r"^nevr(?:_[a-z][a-z0-9_]*)?$")
+
+
+def reconstruction_namespace_is_allowed(name):
+    parts = name.split("::")
+    *prefix, last = parts
+    game_prefix = all(part[0].isupper() for part in prefix)
+    game_last = last[0].isupper()
+    return game_prefix and (game_last or bool(NEVR_COMPONENT.match(last)))
+
+
 def pascal_namespaces(files):
     for path, text in files:
         if not path.endswith(CODE_EXT) or path.startswith("plugins/"):
             continue
+        reconstruction = path.startswith(RECONSTRUCTION_PREFIX)
+        pattern = ANY_NAMESPACE_OPEN if reconstruction else PASCAL_NAMESPACE
         for n, line in lines_of(text):
-            m = PASCAL_NAMESPACE.match(line)
-            if m and not LIFECYCLE_NAMESPACE.search(line) and m.group(1) not in {"EchoVR", "NRadEngine"}:
-                yield path, n, m.group(1), "namespace is nevr or nevr_<area> (EchoVR:: and NRadEngine:: are the game's)"
+            m = pattern.match(line)
+            if not m or LIFECYCLE_NAMESPACE.search(line) or m.group(1) in {"EchoVR", "NRadEngine"}:
+                continue
+            if reconstruction and reconstruction_namespace_is_allowed(m.group(1)):
+                continue
+            yield path, n, m.group(1), "namespace is nevr or nevr_<area> (EchoVR:: and NRadEngine:: are the game's)"
 
 
 # Files that name the GAME's own log tags (to filter or match them), help text, and tests: not the project's tags.

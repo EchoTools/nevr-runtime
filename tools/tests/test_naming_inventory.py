@@ -52,6 +52,39 @@ class NamingInventoryTest(unittest.TestCase):
                      "NOMINMAX", "OldThing"):
             self.assertNotIn(fine + "  ", out, fine)
 
+    def test_a_reconstruction_namespace_is_a_finding_only_when_it_breaks_naming_md(self):
+        # docs/standards/naming.md: the game's namespaces in src/reconstruction keep the game's spelling, and a namespace
+        # the reconstruction wrote takes the rule on its last component, after the game's prefix. The literals are split:
+        # this file is scanned too, and a whole `namespace X {` line here would be a finding of the real tree.
+        path = "src/reconstruction/r15/a.cpp"
+        lines = [
+            "namespace NRadEngine::" "nevr_reconstruction {",                 # 1 allowed
+            "namespace NRadEngine::NRadGame::" "nevr_reconstruction {",       # 2 allowed
+            "namespace NRadEngine::" "NRadGame {",                            # 3 allowed: the game's spelling
+            "namespace NRadEngine::CMemory {",                                # 4 allowed: the game's spelling
+            "namespace NWriteLog {",                                          # 5 allowed: the game's spelling
+            "namespace NRadEngine::" "reconstruction {",                      # 6 finding: last component not nevr
+            "namespace xtool::r15::" "reconstruction {",                      # 7 finding: lower-case prefix
+            "namespace NRadEngine::" "nevr_reconstruction::" "extra {",       # 8 finding: nevr is not the last component
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, {6, 7, 8}, out)
+
+    def test_a_namespace_outside_the_reconstruction_keeps_the_general_rule(self):
+        # The reconstruction's game spelling is not a licence anywhere else: a PascalCase namespace in the tree is a finding
+        # unless it is EchoVR or NRadEngine, and the four non-models naming.md names stay findings (see the next test).
+        target = self.tmp / "src/runtime/d.h"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("namespace NRadEngine::" "nevr_reconstruction {\n}\nnamespace NRadEngine::CMemory {\n}\n",
+                          encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        self.assertIn("src/runtime/d.h:1  NRadEngine::nevr_reconstruction", out)
+        self.assertIn("src/runtime/d.h:3  NRadEngine::CMemory", out)
+
     def test_a_category_can_be_selected_and_summarised(self):
         out = self.inventory("--category", "pascal-namespaces")
         self.assertIn("== pascal-namespaces (1)", out)
