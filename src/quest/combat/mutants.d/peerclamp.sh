@@ -93,7 +93,7 @@ QC=src/quest/sentinel/quest_config.cpp
 runm pc_qc_default_off    $QC "s/  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);/  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r, false);/" quest-host-shared quest_config_test
 runm pc_qc_key_typo       $QC "s/kCombatPeerclampKey = \"combat.peerclamp\";/kCombatPeerclampKey = \"combat.peerclamps\";/" quest-host-shared quest_config_test
 runm pc_qc_not_assigned   $QC "s/  r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);/  (void)ReadCombatSwitch(cfg, kCombatPeerclampKey, r);/" quest-host-shared quest_config_test
-runm pc_nc_known_key      src/core/nevr_config.cpp "s/\"droneguard\", \"droneguard_stage1\", \"peerclamp\"}},/\"droneguard\", \"droneguard_stage1\"}},/" quest-host-shared quest_config_test
+runm pc_nc_known_key      src/core/nevr_config.cpp "s/\"droneguard_stage1\", \"peerclamp\", \"frozen_frame_exit\",/\"droneguard_stage1\", \"frozen_frame_exit\",/" quest-host-shared quest_config_test
 
 # arena pays nothing, by count (the test counts SafeRead calls and level scans on every arena level): a read or a scan before the scope test is killed
 runm pc_reads_before_scope $P "s/^  if (!scope::SeenCombatOrLobby()) {/  { bool okk = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(bd), \&okk); }  if (!scope::SeenCombatOrLobby()) {/"

@@ -386,6 +386,7 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
   // the drone explosion's switch (#1737): a switch-only row right after dronekill's, which DronekillNormal reads
   const std::size_t dkx = at("dronekill_explosion");
   QCHECK(dkx == dronekill + 1 && dkx < bvg);
+  QCHECK(dronekill < count && table[dronekill].end == &nevr_quest::combat::dronekill::NoteEnd);  // dronekill writes its counts at the end of the process
   if (dkx < count) {
     QCHECK(table[dkx].early == nullptr && table[dkx].normal == nullptr && table[dkx].end == nullptr && table[dkx].switchKey != nullptr &&
            std::strcmp(table[dkx].switchKey, "combat.dronekill_explosion") == 0 &&
@@ -974,6 +975,14 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   const std::vector<Line> policy = Lines("combat_gates_link_policy");
   QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"0e4384a5 1703a89b\"") && Has(policy[0].text, "\"source\":\"config\""));
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "gates=installed"));
+  {  // the defaults hand the module all three gates: the party slot carries perm, the headset slot bots and link
+    bool party = false, headset = false;
+    for (const Line& l : Lines("combat_gates_hook")) {
+      party = party || Has(l.text, "\"slot\":\"party\",\"gates\":\"perm\"");
+      headset = headset || Has(l.text, "\"slot\":\"headset\",\"gates\":\"bots,link\"");
+    }
+    QCHECK(party && headset);
+  }
   hg::ResetForTest();
 
   hg::ResetForTest();
@@ -1544,7 +1553,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"bvh", &nevr_quest::CombatConfig::bvh, true},                // the static BVH (#2382) reads the scope too
                         {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true},   // the gun hand default (#2382) reads the scope too
                         {"dronekill", &nevr_quest::CombatConfig::dronekill, true},    // dronekill (#2382) reads the scope too
-                        {"ec", &nevr_quest::CombatConfig::ec, true}};                 // the EC client (#2382) reads the scope too
+                        {"ec", &nevr_quest::CombatConfig::ec, true},                 // the EC client (#2382) reads the scope too
+                        {"texture_quest2_step_down", &nevr_quest::CombatConfig::textureQuest2StepDown, false}};  // the Quest 2 step-down (#1737) has a tick of its own and reads no scope
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1708,6 +1718,111 @@ void TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources() {
   Done();
 }
 
+// Each switch row's `combat_config_switch` record reads its own member: one key flipped at a time (the file's word), and only that row's record moves.
+void EachSwitchRecordReadsItsOwnMember() {
+  std::size_t count = 0;
+  const combat::Module* const table = combat::ShippedModules(&count);
+  const nevr_quest::CombatConfig defaults;
+  for (std::size_t i = 0; i < count; ++i) {
+    if (table[i].switchMember == nullptr) continue;
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    const bool flipped = !(cfg.*table[i].switchMember).on;
+    cfg.*table[i].switchMember = {flipped, nevr_quest::Source::kFile};
+    combat::LogConfig(cfg);
+    const std::vector<Line> lines = Lines("combat_config_switch");
+    for (std::size_t j = 0; j < count; ++j) {
+      if (table[j].switchMember == nullptr) continue;
+      const bool on = j == i ? flipped : (defaults.*table[j].switchMember).on;
+      const std::string want = std::string("\"event\":\"combat_config_switch\",\"module\":\"") + table[j].name + "\",\"key\":\"" + table[j].switchKey +
+                               "\",\"on\":" + (on ? "1" : "0") + ",\"source\":\"" + (j == i ? "config" : "default") + "\"}";
+      bool found = false;
+      for (const Line& l : lines) found = found || Has(l.text, want);
+      QCHECK(found);
+      if (!found) std::fprintf(stderr, "  flipped %s, missing %s\n", table[i].name, want.c_str());
+    }
+    Done();
+  }
+}
+
+// The fields LogConfig writes by hand (not from the table) each read their own member: every one set apart from its neighbours and its default.
+void TheHandWrittenConfigFieldsReadTheirOwnMembers() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.memsys = {false, nevr_quest::Source::kFile};
+  cfg.refreshRate = {false, nevr_quest::Source::kFile};
+  cfg.refreshRateQuest2At72 = {false, nevr_quest::Source::kFile};
+  cfg.pfx = {false, nevr_quest::Source::kFile};
+  cfg.pfxtev = {true, nevr_quest::Source::kFile};
+  cfg.gatePerm = {false, nevr_quest::Source::kFile};
+  cfg.gateLink = {false, nevr_quest::Source::kFile};
+  cfg.ec = {false, nevr_quest::Source::kFile};
+  cfg.ecWords.source = nevr_quest::Source::kFile;
+  cfg.powerboostStage = {1, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> main = Lines("combat_config");
+  QCHECK(main.size() == 1U);
+  if (main.size() == 1U) {
+    for (const char* want : {"\"memsys\":0,\"memsys_source\":\"config\"", "\"refresh_rate\":0,\"refresh_rate_source\":\"config\"",
+                             "\"refresh_rate_lobby\":0,\"refresh_rate_lobby_source\":\"default\"",
+                             "\"refresh_rate_quest2_72\":0,\"refresh_rate_quest2_72_source\":\"config\"", "\"pfx\":0,\"pfx_source\":\"config\"",
+                             "\"pfxtev\":1,\"pfxtev_source\":\"config\""}) {
+      QCHECK(Has(main[0].text, want));
+    }
+  }
+  const std::vector<Line> gates = Lines("combat_config_gates");
+  QCHECK(gates.size() == 1U);
+  if (gates.size() == 1U) {
+    for (const char* want : {"\"gate_perm\":0,\"gate_perm_source\":\"config\"", "\"gate_bots\":1,\"gate_bots_source\":\"default\"",
+                             "\"gate_link\":0,\"gate_link_source\":\"config\""}) {
+      QCHECK(Has(gates[0].text, want));
+    }
+  }
+  bool words = false, stage = false;
+  for (const Line& l : Lines("combat_config_switch")) {
+    words = words || Has(l.text, "\"module\":\"ec\",\"key\":\"combat.ec_words\",\"on\":0,\"source\":\"config\"");
+    stage = stage || Has(l.text, "\"module\":\"powerboost\",\"key\":\"combat.powerboost_stage\",\"stage\":1,\"on\":1,\"source\":\"config\"");
+  }
+  QCHECK(words && stage);
+  Done();
+}
+
+// The rows whose module's own install line or status shows the switch it was handed: the four table steps off, the Quest 2 step-down on and its
+// lobby switch off, the sound-symbol guard on, the refresh-rate rule's Quest 2 key at its default.
+void TheRowsHandTheirModulesTheKeysTheFileGave() {
+  for (const char* name : {"meshstep", "tablestep", "instmodel", "shaderstep"}) {
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member = std::strcmp(name, "meshstep") == 0    ? &nevr_quest::CombatConfig::meshstep
+                                                                : std::strcmp(name, "tablestep") == 0 ? &nevr_quest::CombatConfig::tablestep
+                                                                : std::strcmp(name, "instmodel") == 0 ? &nevr_quest::CombatConfig::instmodel
+                                                                                                       : &nevr_quest::CombatConfig::shaderstep;
+    cfg.*member = {false, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    QCHECK(Has(ResultsOf(Lines("combat_install")[0]), std::string(" ") + name + "=off"));
+    Done();
+  }
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_texture_quest2_install")[0].text, "\"lobby\":1"));
+  QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"refresh_rate_quest2_72\":1"));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.textureQuest2StepDown = {true, nevr_quest::Source::kFile};
+  cfg.textureQuest2Lobby = {false, nevr_quest::Source::kFile};
+  cfg.soundSymbolGuard = {true, nevr_quest::Source::kFile};
+  combat::SetConfig(cfg);
+  combat::InstallNormal();
+  QCHECK(!Has(ResultsOf(Lines("combat_install")[0]), "texture_quest2_step_down=off"));
+  QCHECK(!Has(ResultsOf(Lines("combat_install")[0]), "sound_symbol_guard=off"));
+  QCHECK(Has(Lines("combat_texture_quest2_install")[0].text, "\"lobby\":0"));
+  Done();
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1748,6 +1863,9 @@ int main() {
   TheFrozenFrameExitRowSitsAfterTheScopeAndHandsOverItsKeys();
   TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled();
   TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources();
+  EachSwitchRecordReadsItsOwnMember();
+  TheHandWrittenConfigFieldsReadTheirOwnMembers();
+  TheRowsHandTheirModulesTheKeysTheFileGave();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

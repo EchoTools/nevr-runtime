@@ -1531,6 +1531,10 @@ void CombatAibotsScenarioIsATextThatTheFileGivesWhole() {
 // file. A value that is not an integer, or one outside 0..3, keeps 3 with a Warning that names the key.
 void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
   const std::string key = "combat.powerboost_stage";
+  {  // no file at all: the default, 3, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(none.config.combat.powerboostStage.value == 3 && none.config.combat.powerboostStage.source != Source::kFile);
+  }
   for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
     const LoadResult r = Load(Full(), text);
     CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
@@ -1557,6 +1561,10 @@ void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
 // that is not an integer, or one outside 10..900, keeps 30 with a Warning that names the key.
 void CombatFrozenFrameExitSIsAnIntegerFromTenTo900() {
   const std::string key = "combat.frozen_frame_exit_s";
+  {  // no file at all: the default, 30, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(none.config.combat.frozenFrameExitS.value == 30 && none.config.combat.frozenFrameExitS.source != Source::kFile);
+  }
   for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  frozen_frame_exit: false\n"}) {
     const LoadResult r = Load(Full(), text);
     CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
