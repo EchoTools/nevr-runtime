@@ -16,6 +16,8 @@ namespace {
 using json = nlohmann::ordered_json;
 
 constexpr std::size_t kReadChunk = 64 * 1024;
+constexpr std::size_t kSha256HexLength = 64;
+const std::string kBlobSuffix = ".blob";
 
 }  // namespace
 
@@ -168,6 +170,45 @@ std::string HashFile(Env& env, const std::string& path) {
   const bool ok = HashHandle(env, handle, size, &hex);
   env.CloseBlob(handle);
   return ok ? hex : std::string();
+}
+
+EvictReport Evict(Env& env, const std::string& dir, std::uint64_t cap_bytes, const std::set<std::string>& referenced) {
+  EvictReport report;
+  std::vector<DirFile> files;
+  if (!env.ListFiles(dir, &files)) {
+    report.listed = false;
+    return report;
+  }
+  struct Blob {
+    std::string sha256;
+    std::uint64_t size;
+    std::uint64_t modified_ms;
+  };
+  std::vector<Blob> candidates;  // unreferenced blobs
+  for (const DirFile& f : files) {
+    const std::size_t suffix = kBlobSuffix.size();
+    if (f.name.size() != kSha256HexLength + suffix || f.name.compare(kSha256HexLength, suffix, kBlobSuffix) != 0) continue;
+    const std::string sha = f.name.substr(0, kSha256HexLength);
+    if (!IsSha256Hex(sha)) continue;
+    report.bytes_before += f.size;
+    ++report.blobs_before;
+    if (referenced.count(sha) == 0) candidates.push_back({sha, f.size, f.modified_ms});
+  }
+  report.bytes_after = report.bytes_before;
+  std::sort(candidates.begin(), candidates.end(), [](const Blob& a, const Blob& b) {
+    return std::tie(a.modified_ms, a.sha256) < std::tie(b.modified_ms, b.sha256);
+  });
+  for (const Blob& b : candidates) {
+    if (report.bytes_after <= cap_bytes) break;
+    if (env.RemoveFile(BlobPath(dir, b.sha256))) {
+      report.bytes_after -= b.size;
+      ++report.evicted;
+    } else {
+      ++report.failed;
+    }
+  }
+  report.over_cap_all_referenced = report.bytes_after > cap_bytes && report.failed == 0;
+  return report;
 }
 
 Mounted Mount(Env& env, const std::string& dir, const Index& index, const Policy& policy) {

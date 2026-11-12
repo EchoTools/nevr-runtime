@@ -32,6 +32,14 @@ class TempFile {
   virtual void Abort() = 0;
 };
 
+// One regular file of a directory, for the cache's size accounting and eviction. `modified_ms` is the file's last-write time, the
+// least-recently-used order of the cache (a blob is written once, so it is the time the blob was stored).
+struct DirFile {
+  std::string name;  // the file name alone, no directory
+  std::uint64_t size = 0;
+  std::uint64_t modified_ms = 0;
+};
+
 struct HttpResult {
   bool completed = false;  // a response was received and its body, if any, was delivered to the end
   long status = 0;         // the HTTP status; 0 when no response was received
@@ -64,6 +72,11 @@ class Env {
   virtual std::unique_ptr<TempFile> CreateTemp(const std::string& dir) = 0;
   // Writes `data` to `path` whole: a temp file in the same directory, flushed, renamed over `path`, the directory flushed.
   virtual bool WriteFileAtomically(const std::string& path, const std::string& data) = 0;
+
+  // The regular files directly in `dir` (no subdirectory, no link). False when the directory cannot be read.
+  virtual bool ListFiles(const std::string& dir, std::vector<DirFile>* out) = 0;
+  // Deletes one file. True when it is gone afterwards (an absent file counts). A blob held open keeps its bytes until closed.
+  virtual bool RemoveFile(const std::string& path) = 0;
 
   // Blobs. OpenBlob opens read-only and gives the handle the engine will be given for it (on the Quest the game's own file open),
   // and the file's size. A blob that is mounted stays open for the life of the process.

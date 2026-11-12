@@ -249,6 +249,57 @@ void TheStatusNamesAreDistinct() {
   QCHECK(nc::BlobPath("/d", std::string(64, 'a')) == "/d/" + std::string(64, 'a') + ".blob");
 }
 
+// Evict: the blobs of /cache, a: oldest, b, c newest, by write order; `named` is the set the index names.
+struct EvictRig {
+  FakeEnv env;
+  std::string a = Bytes(100, 'a'), b = Bytes(100, 'b'), c = Bytes(100, 'c');
+  EvictRig() {
+    for (const std::string* blob : {&a, &b, &c}) {
+      env.fs_->files[nc::BlobPath(kDir, Sha256Of(*blob))] = *blob;
+      env.fs_->modified[nc::BlobPath(kDir, Sha256Of(*blob))] = ++env.fs_->write_tick;
+    }
+  }
+  bool Has(const std::string& blob) const { return env.fs_->files.count(nc::BlobPath(kDir, Sha256Of(blob))) != 0; }
+};
+
+void EvictRemovesUnreferencedBlobsOldestFirstUntilTheyFit() {
+  EvictRig r;
+  const nc::EvictReport rep = nc::Evict(r.env, kDir, 200, {});
+  QCHECK(rep.bytes_before == 300 && rep.bytes_after == 200 && rep.evicted == 1 && rep.failed == 0 && !rep.over_cap_all_referenced);
+  QCHECK(!r.Has(r.a) && r.Has(r.b) && r.Has(r.c));  // the oldest went, and only as many as needed
+  const nc::EvictReport again = nc::Evict(r.env, kDir, 200, {});
+  QCHECK(again.evicted == 0 && again.bytes_after == 200);
+}
+
+void EvictNeverRemovesABlobTheIndexNames() {
+  EvictRig r;
+  const nc::EvictReport rep = nc::Evict(r.env, kDir, 100, {Sha256Of(r.a)});  // the oldest is the one in use
+  QCHECK(rep.evicted == 2 && r.Has(r.a) && !r.Has(r.b) && !r.Has(r.c));
+  QCHECK(rep.bytes_after == 100 && !rep.over_cap_all_referenced);
+  const nc::EvictReport all = nc::Evict(r.env, kDir, 10, {Sha256Of(r.a)});  // only the named one is left, and it is over the cap
+  QCHECK(all.evicted == 0 && r.Has(r.a) && all.over_cap_all_referenced);
+}
+
+void EvictUnderTheCapRemovesNothingAndTouchesOnlyBlobFiles() {
+  EvictRig r;
+  r.env.fs_->files["/cache/index.json"] = std::string(1000, 'x');
+  r.env.fs_->files["/cache/notablob.blob"] = std::string(1000, 'y');
+  r.env.fs_->files["/cache/" + std::string(64, 'A') + ".blob"] = std::string(1000, 'z');  // upper case is not a key
+  const nc::EvictReport rep = nc::Evict(r.env, kDir, 300, {});  // a, b, c are the only blobs counted: 300 bytes fit a 300 cap
+  QCHECK(rep.blobs_before == 3 && rep.bytes_before == 300 && rep.evicted == 0 && r.Has(r.a) && r.Has(r.b) && r.Has(r.c));
+  QCHECK(nc::Evict(r.env, kDir, 0, {}).evicted == 3);  // a cap of nothing takes every blob, and still only blobs
+  QCHECK(r.env.fs_->files.count("/cache/index.json") == 1 && r.env.fs_->files.count("/cache/notablob.blob") == 1);
+  QCHECK(r.env.fs_->files.count("/cache/" + std::string(64, 'A') + ".blob") == 1);
+}
+
+void EvictCountsAFailedRemovalAndDoesNotClaimTheCapIsMet() {
+  EvictRig r;
+  r.env.remove_fails_for_blobs = 1;  // the oldest blob cannot be removed
+  const nc::EvictReport rep = nc::Evict(r.env, kDir, 50, {});
+  QCHECK(rep.failed == 1 && rep.evicted == 2 && rep.bytes_after == 100 && r.Has(r.a));
+  QCHECK(!rep.over_cap_all_referenced);  // over the cap because a removal failed, not because the index names the rest
+}
+
 }  // namespace
 
 int main() {
@@ -265,6 +316,10 @@ int main() {
   TwoNamesThatShareABlobBothMount();
   TwoLabelsKeepTheirOwnTags();
   TheStatusNamesAreDistinct();
+  EvictRemovesUnreferencedBlobsOldestFirstUntilTheyFit();
+  EvictNeverRemovesABlobTheIndexNames();
+  EvictUnderTheCapRemovesNothingAndTouchesOnlyBlobFiles();
+  EvictCountsAFailedRemovalAndDoesNotClaimTheCapIsMet();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cargo_store_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

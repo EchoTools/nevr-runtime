@@ -27,6 +27,8 @@ struct Response {
 struct Fs {
   std::map<std::string, std::string> files;
   int next_temp = 0;
+  std::map<std::string, std::uint64_t> modified;  // last-write time by path; a file never written through the env reads as 0
+  std::uint64_t write_tick = 0;                   // each commit or atomic write stamps the next value, so the order is the write order
 };
 
 class FakeHasher : public nevr_cargo::Hasher {
@@ -48,6 +50,7 @@ class FakeEnv : public nevr_cargo::Env {
   std::vector<std::string> events;         // one JSON line each
   std::vector<std::string> event_levels;
   int mutating_ops = 0;                    // counts temp writes, commits and atomic writes
+  int remove_fails_for_blobs = 0;          // test switch: that many RemoveFile calls fail
   int stop_after = -1;                     // -1: never; otherwise the ops after this many fail
   std::uint64_t clock = 1000;
   std::size_t open_blobs() const { return open_.size(); }
@@ -77,6 +80,7 @@ class FakeEnv : public nevr_cargo::Env {
     bool Commit(const std::string& final_path) override {
       if (!env_->Tick()) return false;
       env_->fs_->files[final_path] = env_->fs_->files[path_];
+      env_->fs_->modified[final_path] = ++env_->fs_->write_tick;
       env_->fs_->files.erase(path_);
       done_ = true;
       return true;
@@ -98,6 +102,30 @@ class FakeEnv : public nevr_cargo::Env {
   bool WriteFileAtomically(const std::string& path, const std::string& data) override {
     if (!Tick()) return false;
     fs_->files[path] = data;
+    fs_->modified[path] = ++fs_->write_tick;
+    return true;
+  }
+  bool ListFiles(const std::string& dir, std::vector<nevr_cargo::DirFile>* out) override {
+    out->clear();
+    const std::string prefix = dir + "/";
+    for (const auto& kv : fs_->files) {
+      if (kv.first.compare(0, prefix.size(), prefix) != 0 || kv.first.find('/', prefix.size()) != std::string::npos) continue;
+      nevr_cargo::DirFile f;
+      f.name = kv.first.substr(prefix.size());
+      f.size = kv.second.size();
+      const auto m = fs_->modified.find(kv.first);
+      f.modified_ms = m == fs_->modified.end() ? 0 : m->second;
+      out->push_back(std::move(f));
+    }
+    return true;
+  }
+  bool RemoveFile(const std::string& path) override {
+    if (remove_fails_for_blobs > 0) {
+      --remove_fails_for_blobs;
+      return false;
+    }
+    fs_->files.erase(path);
+    fs_->modified.erase(path);
     return true;
   }
 

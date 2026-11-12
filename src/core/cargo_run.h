@@ -24,6 +24,7 @@ struct RunConfig {
   std::string manifest_path;  // relative to base_url, e.g. "v1/manifest.json"
   Platform platform = kAndroidArm64;
   Policy policy;
+  std::uint64_t cap_bytes = kDefaultCapBytes;  // the blobs the directory keeps; Evict removes unreferenced ones above it
   std::string source = "default";  // "default" or "config": whether the policy or the URL came from config (logged, never the values)
 };
 

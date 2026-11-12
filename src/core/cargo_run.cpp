@@ -376,6 +376,26 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
               {{"result", indexOk ? "written" : "failed"}, {"entries", next.entries.size()}});
   }
 
+  // Step 5b: the size cap. Only after the index is whole on disk, and never a blob the index names. A label that failed this run
+  // keeps its old entries in `next`, so the blobs those name stay too.
+  if (indexOk) {
+    std::set<std::string> referenced;
+    for (const IndexEntry& e : next.entries) referenced.insert(e.sha256);
+    const EvictReport ev = Evict(env, config.dir, config.cap_bytes, referenced);
+    if (!ev.listed) {
+      env.Event(EventLevel::kWarn, "cargo_evict", {{"result", "failed"}, {"reason", "list_failed"}, {"consequence", "the cache may stay over its cap until a later run"}});
+    } else if (ev.evicted != 0 || ev.failed != 0 || ev.over_cap_all_referenced) {
+      env.Event(ev.failed != 0 || ev.over_cap_all_referenced ? EventLevel::kWarn : EventLevel::kInfo, "cargo_evict",
+                {{"result", ev.failed != 0 ? "partial" : "ok"},
+                 {"evicted", ev.evicted},
+                 {"failed", ev.failed},
+                 {"bytes_before", ev.bytes_before},
+                 {"bytes_after", ev.bytes_after},
+                 {"cap", config.cap_bytes},
+                 {"over_cap_all_referenced", ev.over_cap_all_referenced ? "true" : "false"}});
+    }
+  }
+
   // Step 6: mount what the index names, when it changed or a blob was stored.
   if (indexOk && (!same || result.fetched != 0)) {
     const std::uint64_t mountStarted = env.NowMs();

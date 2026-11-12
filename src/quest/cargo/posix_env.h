@@ -23,6 +23,8 @@ class PosixEnv : public nevr_cargo::Env {
   bool MakeDirs(const std::string& dir) override;
   std::unique_ptr<nevr_cargo::TempFile> CreateTemp(const std::string& dir) override;
   bool WriteFileAtomically(const std::string& path, const std::string& data) override;
+  bool ListFiles(const std::string& dir, std::vector<nevr_cargo::DirFile>* out) override;
+  bool RemoveFile(const std::string& path) override;
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override;
   bool ReadBlob(std::int64_t handle, std::uint64_t offset, void* buffer, std::size_t length, std::size_t* got) override;
   void CloseBlob(std::int64_t handle) override;

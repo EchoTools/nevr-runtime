@@ -499,6 +499,40 @@ void AFlippedByteInAHeldBlobIsFetchedAgain() {
   QCHECK(IndexIsHonest(w.env));
 }
 
+// The size cap (#873): after the index is written a run removes unreferenced blobs, oldest first, and never one the index names.
+void AnOverCapCacheLosesItsUnreferencedBlobAndKeepsTheNamedOnes() {
+  World w;
+  const std::string stale = Bytes(500, 's');
+  const std::string staleKey = nc::BlobPath("/cache", Sha256Of(stale));
+  w.env.fs_->files[staleKey] = stale;  // modified time 0: older than anything this run writes
+  w.config.cap_bytes = w.desc.size() + w.pix.size() + 10;  // the two named blobs fit; with the stale one the cache does not
+  const nc::RunResult r = w.Run();
+  QCHECK(r.fetched == 2 && r.failed == 0);
+  QCHECK(w.env.fs_->files.count(staleKey) == 0 && w.HasBlob(w.desc) && w.HasBlob(w.pix));
+  const auto ev = w.env.EventsNamed("cargo_evict");
+  QCHECK(ev.size() == 1 && FakeEnv::Value(ev[0], "evicted") == "1" && FakeEnv::Value(ev[0], "result") == "ok");
+  QCHECK(Level(ev[0], "info") && IndexIsHonest(w.env));
+}
+
+void ACapBelowTheNamedBlobsStillKeepsThemAndSaysSo() {
+  World w;
+  w.config.cap_bytes = 10;
+  w.Run();
+  QCHECK(w.HasBlob(w.desc) && w.HasBlob(w.pix));  // the index names both: neither is evictable
+  const auto ev = w.env.EventsNamed("cargo_evict");
+  QCHECK(ev.size() == 1 && FakeEnv::Value(ev[0], "over_cap_all_referenced") == "true" && Level(ev[0], "warn"));
+  World second(w.env.fs_);
+  second.config.cap_bytes = 10;
+  second.Run();
+  QCHECK(second.BlobGets() == 0);  // nothing was removed, so nothing is fetched again
+}
+
+void AnUnderCapRunWritesNoEvictEvent() {
+  World w;
+  w.Run();
+  QCHECK(w.env.EventsNamed("cargo_evict").empty());
+}
+
 }  // namespace
 
 int main() {
@@ -520,6 +554,9 @@ int main() {
   AShutdownBetweenBlobsEndsTheRunWithoutAnIndex();
   AKillAfterAnyStepLeavesAnHonestCacheAndTheNextLaunchFinishes();
   AFlippedByteInAHeldBlobIsFetchedAgain();
+  AnOverCapCacheLosesItsUnreferencedBlobAndKeepsTheNamedOnes();
+  ACapBelowTheNamedBlobsStillKeepsThemAndSaysSo();
+  AnUnderCapRunWritesNoEvictEvent();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cargo_run_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
