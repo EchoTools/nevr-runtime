@@ -8,7 +8,8 @@
 // kRemoteTextCap bytes of it, inside double quotes, each byte that is not printable ASCII (below 0x20, 0x7f and
 // up) and each backslash and double quote written as \xNN. A peer's text therefore cannot end its own field,
 // start another (`reason=`, `endpoint_len=`) or start a second line, and spaces stay readable inside the quotes
-// (Rule 15 quotes a value the same way). The caller logs the full length beside it (`endpoint_len=<n>`,
+// Unlike Rule 15's plugin_log.h `Value`, this always quotes and writes a quote or backslash as \xNN, not \".
+// The caller logs the full length beside it (`endpoint_len=<n>`,
 // `port_len=<n>`), which also says when the cap cut it short.
 namespace nevr_remote_text {
 
