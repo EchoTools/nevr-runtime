@@ -110,6 +110,7 @@ PROGRAMS = {
     "data": (
         "cargo_limits_test",
         "cargo_manifest_test",
+        "cargo_prefetch_test",
         "cargo_resolver_test",
         "cargo_run_test",
         "cargo_scale_test",

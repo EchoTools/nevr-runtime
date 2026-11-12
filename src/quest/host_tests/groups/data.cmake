@@ -47,6 +47,10 @@ nevr_ht_test(cargo_run_test GROUP data HOST TIMEOUT 300
   SRC src/quest/tests/cargo_run_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
 nevr_ht_test(cargo_scale_test GROUP data HOST TIMEOUT 600
   SRC src/quest/tests/cargo_scale_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+# The first-run prefetch (docs/adr/0045-cdn-texture-delivery.md, the first-run hold): every object of a manifest, before the engine.
+nevr_ht_obj(o_cargo_cargo_prefetch GROUP data NOEXC HOST SRC src/core/cargo_prefetch.cpp)
+nevr_ht_test(cargo_prefetch_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_prefetch_test.cpp OBJS o_cargo_cargo_prefetch ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
 # The Quest side: the POSIX env on real files, the settings, and the worker end to end over a scripted transport. quest_config.h is read
 # for the settings struct only (nothing of quest_config.cpp is linked).
 nevr_ht_obj(o_cargo_posix_env GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/quest/cargo/posix_env.cpp)
