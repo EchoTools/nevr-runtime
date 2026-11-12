@@ -131,7 +131,8 @@ class TheScenarioEndpointReadsTheAppliersRecord(unittest.TestCase):
         others = {
             str(p.relative_to(ROOT)): strip_comments(p.read_text())
             for p in (ROOT / "src/runtime").rglob("*.cpp")
-            if "scenario/" not in p.as_posix() and "tests/" not in p.as_posix()
+            if "scenario/" not in p.relative_to(ROOT / "src/runtime").as_posix()
+            and "tests/" not in p.relative_to(ROOT / "src/runtime").as_posix()
         }
         self.assertGreater(len(others), 50)  # the scan found the tree
         self.assertEqual(scenario_problems(scenario, others), [])
