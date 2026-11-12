@@ -66,13 +66,21 @@ class NamingInventoryTest(unittest.TestCase):
             "namespace NRadEngine::" "reconstruction {",                      # 6 finding: last component not nevr
             "namespace xtool::r15::" "reconstruction {",                      # 7 finding: lower-case prefix
             "namespace NRadEngine::" "nevr_reconstruction::" "extra {",       # 8 finding: nevr is not the last component
+            "namespace xtool::" "NRadGame {",                                 # 9 finding: lower-case prefix, game spelling after it
+            "namespace xtool::" "nevr_reconstruction {",                      # 10 finding: lower-case prefix
+            "namespace NRadEngine::" "nevr_Reconstruction {",                 # 11 finding: nevr_<area> is lower-case
+            "namespace " "nevrfoo {",                                         # 12 finding: nevr needs an underscore for an area
+            "namespace NRadEngine::" "nevr_ {",                               # 13 finding: an empty area
+            "namespace NRadEngine::" "NevrReconstruction {",                  # 14 finding: project spelling, not the game's
+            "namespace " "nevr_reconstruction {",                             # 15 allowed: bare nevr_<area>
+            "namespace " "nevr {",                                            # 16 allowed: bare nevr
         ]
         target = self.tmp / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         out = self.inventory("--category", "pascal-namespaces")
         found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
-        self.assertEqual(found, {6, 7, 8}, out)
+        self.assertEqual(found, {6, 7, 8, 9, 10, 11, 12, 13, 14}, out)
 
     def test_a_namespace_outside_the_reconstruction_keeps_the_general_rule(self):
         # The reconstruction's game spelling is not a licence anywhere else: a PascalCase namespace in the tree is a finding

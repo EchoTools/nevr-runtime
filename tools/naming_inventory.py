@@ -78,13 +78,15 @@ def lifecycle_namespaces(files):
 RECONSTRUCTION_PREFIX = "src/reconstruction/"
 ANY_NAMESPACE_OPEN = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
 NEVR_COMPONENT = re.compile(r"^nevr(?:_[a-z][a-z0-9_]*)?$")
+# The project's spelling is not the game's: a component that starts with nevr in any case is a project name, not a game one.
+PROJECT_SPELLED = re.compile(r"^nevr", re.IGNORECASE)
 
 
 def reconstruction_namespace_is_allowed(name):
     parts = name.split("::")
     *prefix, last = parts
-    game_prefix = all(part[0].isupper() for part in prefix)
-    game_last = last[0].isupper()
+    game_prefix = all(part[0].isupper() and not PROJECT_SPELLED.match(part) for part in prefix)
+    game_last = last[0].isupper() and not PROJECT_SPELLED.match(last)
     return game_prefix and (game_last or bool(NEVR_COMPONENT.match(last)))
 
 

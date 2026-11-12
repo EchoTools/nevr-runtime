@@ -354,9 +354,11 @@ func TestEnvSetsGOFLAGSSoGoTestNeverServesACachedResult(t *testing.T) {
 	}
 }
 
-// Not parallel: it sets HOME and GOPATH of the test process, which t.Setenv forbids with t.Parallel. The answer `go env`
-// gives for the caches depends on those variables, so the kit must ask again when they change: a test that
-// changed HOME (TestEnvDropsTheCallersEnvironmentAndKeepsOnlyPATH) must not leave its answer for the tests after it.
+// Not parallel: it sets GOENV and GOPATH once, and HOME once per iteration, in the test process, which t.Setenv forbids
+// with t.Parallel. Only HOME differs between the two iterations: GOENV=off and an empty GOPATH hold the rest of go env's
+// answer still, and with an empty GOPATH GOMODCACHE is $HOME/go/pkg/mod, so the second call must ask go again rather
+// than reuse the first answer. (TestEnvDropsTheCallersEnvironmentAndKeepsOnlyPATH also changes HOME, in its own process
+// state, and this test does not depend on it.)
 func TestEnvAsksGoAgainWhenTheCallersEnvironmentChanges(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
