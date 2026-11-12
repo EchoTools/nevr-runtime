@@ -124,36 +124,37 @@ The dynamic-level loader at 0x1404FD650 logs "[LEVELLOAD] Loading dynamic level"
 
 ## Live-run row
 
-One dedicated-server run, 2026-11-11, from the commit `da584317c960efd9ca3a9cb41c6cd0163b2c31d8`. Its server log (quoted below as "server log, line N", with the timestamps of that date, UTC) is the row; the client that joined wrote its own log ("client log, line N").
+One dedicated-server run of a build without the join hold, so its order is the game's own. The server log is not kept in the tree; the lines below are quoted as the run wrote them, in order.
 
-**Build.** A scratch clone of that commit with a local tag `v6.17.0` and the forced release environment (`GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v6.17.0`), preset `mingw-plugin-dev`. The runtime carries `NEVR-BUILD 6.17.0 da584317c960efd9ca3a9cb41c6cd0163b2c31d8` and the host `NEVR-HOST-BUILD dev`. That commit has no join hold (`src/runtime/server/join_hold.cpp` does not exist in it), so the run shows the game's own order.
+**Build.** A clone of the commit with a local tag `v6.17.0` and the forced release environment (`GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v6.17.0`), preset `mingw-plugin-dev`. The runtime's build literal carries the forced version `6.17.0`; the host carries `NEVR-HOST-BUILD dev`. The build has no `src/runtime/server/join_hold.cpp`.
 
-**Route.** The server ran from a throwaway game copy against the production game service, headless (`DISPLAY` and `WAYLAND_DISPLAY` unset), with the stored server sign-in. Its `config.yaml` set `network.regions` to a dev region (not `default`, so public matchmaking never offered it) and put the `novalidation` tag in the query of `services.serverdb_uri`, which the token route keeps (`Connecting to ServerDB at <socket host>/nevr?tags=novalidation&regions=<dev region>`, server log, line 502); the tag makes the service skip its reachability probe. `registration successful` (server log, line 510) followed. A session came from the service's allocate RPC (`echo_arena_private`, level `mpl_arena_a`, the dev region), and it started only when a client joined it: a second game copy ran `echovr.exe -windowed -mp -lobbyid <lobby id>` on a headless display. Allocation at 20:45:56 started nothing; the client's join at 20:47:58 did. The pattern is in AGENTS.md ("System test for runtime and auth changes").
+**Route.** The server ran from a game copy, not from the install, headless (`DISPLAY` and `WAYLAND_DISPLAY` unset), with the stored server sign-in. Its `config.yaml` set `network.regions` to a dev region (not `default`, so public matchmaking never offers it) and put the `novalidation` tag in the query of `services.serverdb_uri`. The token route keeps that query and appends `regions=`, so the server logged `Connecting to ServerDB at <socket host>/nevr?tags=novalidation&regions=<dev region>`; the tag makes the service skip its reachability probe. `registration successful` followed. A session came from the service's allocate RPC (`echo_arena_private`, level `mpl_arena_a`, the dev region), and it started only when a client joined it: a second game copy ran `echovr.exe -windowed -mp -lobbyid <lobby id>` on a headless display. The allocation alone started nothing; the client's join started the session. The pattern is in AGENTS.md ("System test for runtime and auth changes").
 
 **The server log, in order.**
 
-| Line | Text |
+| Text | Note |
 | --- | --- |
-| 491 | `[LEVELLOAD] Finished loading level 'r14_glb_global_mp' in 2155 ms` (boot, 20:45:47) |
-| 543 | `[NEVR.GAMESERVER] session starting session_id=6db17c30-59af-48a7-af57-2bf8ba2e41fb` |
-| 548-550 | `[NETGAME] Session Started`, `[NETGAME] Loading map 'mpl_arena_a'`, `[NETGAME] NetGame switching state (from lobby, to loading level)` |
-| 552 | `[LEVELLOAD] Loading level 'mnu_master_mp_ingame'` |
-| 554 | `[LEVELLOAD] Finished loading level 'mnu_master_mp_ingame' in 57 ms` (line 1) |
-| 555 | `[LEVELLOAD] Loading level 'mpl_arena_a'` |
-| 558, 563 | `[NSLOBBY] pending connection from [10.0.8.50:6794]` (the client), `[NETGAME] Entrant DMO-1525633280207098008 added to slot 0` |
-| 577 | `[LEVELLOAD] Finished loading level 'mpl_arena_a' in 710 ms` (line 1) |
-| 578 | `[NETGAME] NetGame switching state (from loading level, to in game)` (line 2) |
-| 580 | `[LEVELLOAD] Disabling level 'mnu_master'` |
-| 581, 582 | `[LEVELLOAD] Enabling level 'mpl_arena_a'`, `[LEVELLOAD] Enabling level 'r14_glb_global_mp'` (line 3) |
+| `[LEVELLOAD] Finished loading level 'r14_glb_global_mp' in 2155 ms` | at boot |
+| `[NEVR.GAMESERVER] session starting session_id=<id>` | |
+| `[NETGAME] Session Started`, `[NETGAME] Loading map 'mpl_arena_a'`, `[NETGAME] NetGame switching state (from lobby, to loading level)` | |
+| `[LEVELLOAD] Loading level 'mnu_master_mp_ingame'` | |
+| `[LEVELLOAD] Finished loading level 'mnu_master_mp_ingame' in 57 ms` | line 1 |
+| `[LEVELLOAD] Loading level 'mpl_arena_a'` | |
+| `[NSLOBBY] pending connection from <client address>`, `[NETGAME] Entrant <xpid> added to slot 0` | |
+| `[LEVELLOAD] Finished loading level 'mpl_arena_a' in 710 ms` | line 1 |
+| `[NETGAME] NetGame switching state (from loading level, to in game)` | line 2 |
+| `[LEVELLOAD] Disabling level 'mnu_master'` | |
+| `[LEVELLOAD] Enabling level 'mpl_arena_a'`, `[LEVELLOAD] Enabling level 'r14_glb_global_mp'` | line 3 |
 
-The session ended at 20:49:26 with `Destroy Peer 0 [10.0.8.50:6794] (communication timeout)` (server log, line 618): the client took 67759 ms to load `mpl_arena_a` under Wine (client log, line 691) and the server dropped it for the communication timeout 15 s after it reached in game.
+The session ended with `Destroy Peer 0 <client address> (communication timeout)`. The client took 67759 ms to load `mpl_arena_a` under Wine, and the server dropped it for the communication timeout 15 s after it reached in game.
 
-**Prediction.** The first bullet applied: line 2 (server log, line 578) follows the last line 1 (line 577) and comes before line 3 (lines 581 and 582). No Finished line follows line 2 and no Enabling line precedes it. The run is consistent with the Game+0x1F10 inference and the queue ordering for this session. It says nothing about a session whose levels are already loaded.
+**Prediction.** The first prediction holds for this run: line 2 follows the last line 1 and comes before line 3. No Finished line follows line 2, and no Enabling line precedes it. This is consistent with the Game+0x1F10 inference and the queue ordering for a session that loads its levels. It says nothing about a session whose levels are already loaded.
 
-**What the run corrected.**
+**Observed, and not established.**
 
-- The lines the first draft expected before the row, `[NETGAME] LobbyJoinAcceptedCB` and a switch to loading level from it, are in the client's log: `LobbyJoinAcceptedCB` (client log, line 589), `NetGame switching state (from lobby, to server loading)` (line 591), `Loading map 'mpl_arena_a'` (line 602), `NetGame switching state (from server loading, to loading level)` (line 603). The server's log holds no `LobbyJoinAcceptedCB` line (0 matches). The server reaches loading level from `Session Started` (server log, lines 548 to 550). Step 3 of the chain is therefore the client's path; the server's route to `LoadMap` from a session start is not read [N]. The client's own sequence, `Finished` (client log, lines 607 and 691), `(from loading level, to ready for game)` (line 693), `(from ready for game, to in game)` (line 696), `Enabling` (lines 700 and 701), has the row's line 2 text only on the server: its state before in game is `ready for game`, not `loading level`.
-- The two `Finished` lines and the two `Enabling` lines name different levels. `mnu_master_mp_ingame` finished (line 554) and was not enabled in this session; `r14_glb_global_mp` was enabled (line 582) after finishing at boot (line 491). Equal counts did not mean each finished level was enabled. Which `Enable` call took each level, and why `mnu_master_mp_ingame` was not enabled (the key lookup, bit 7, or `Disabling level 'mnu_master'` at line 580), is not established [I].
+- `LobbyJoinAcceptedCB` and the switch to loading level from it are in the client's log, not the server's. The client logged `[NETGAME] LobbyJoinAcceptedCB`, `NetGame switching state (from lobby, to server loading)`, `Loading map 'mpl_arena_a'` and `NetGame switching state (from server loading, to loading level)`. The server's log has no `LobbyJoinAcceptedCB` line, and it reaches loading level from `Session Started`. So step 3 of the chain is the client's path; the server's route to `LoadMap` from a session start is not read [N].
+- The client's own sequence is `Finished`, then `(from loading level, to ready for game)`, `(from ready for game, to in game)`, then `Enabling`. Its state before in game is `ready for game`, not `loading level`.
+- The two `Finished` lines and the two `Enabling` lines name different levels. `mnu_master_mp_ingame` finished and was not enabled in this session; `r14_glb_global_mp` was enabled after it finished at boot. Equal counts did not mean each finished level was enabled. Which `Enable` call took each level, and why `mnu_master_mp_ingame` was not enabled (the key lookup, bit 7, or `Disabling level 'mnu_master'`), is not established [I].
 
 ## Verification
 
