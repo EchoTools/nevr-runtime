@@ -8,14 +8,18 @@
 //
 //	NEVR_CARGO_PREFIX=v1/allassets/2026-11-12/ cargo-publish -dir <extract>/quest -dry-run
 //
-// The set is <dir>/blobs/sha256/<64 hex> (each file's bytes must hash to its name) and <dir>/manifest.json. Every key is
-// <prefix>blobs/sha256/<hex> or <prefix>manifest.json. Per object: a HEAD on the public domain (200 skips the object), a
-// PUT with If-None-Match: * (the bucket refuses to overwrite), then a GET on the public domain whose SHA-256 must match.
-// Nothing is deleted, nothing outside the prefix is written, and no secret is logged. Dry run hashes the set and prints
-// the counts and bytes it would send, without the network and without any credential.
+// The set is <dir>/blobs/sha256/<64 hex>: each file must start with the zstd frame magic and hash to its name. The
+// manifest goes up only as the zstd frame <dir>/manifest.json.zst, never as plain JSON, at two keys: <prefix>manifest.json.zst
+// and v1/manifests/<sha256 of the frame>.json.zst. A plain manifest.json in the set is not read.
 //
-// Records are JSON on standard error (Debug per object, Info for the summary, Error for each failure); the run summary
-// is one JSON line on standard output. Exit 1 names each failure.
+// Blobs are written at <prefix>blobs/sha256/<hex>. Per object: a HEAD on the public domain (200 skips the object, 404
+// puts it, any other status is an error), a PUT with If-None-Match: * (the bucket refuses to overwrite), then a GET on the
+// public domain whose SHA-256 must match. Nothing is deleted, nothing outside the prefix or the manifests directory is
+// written, and no secret is logged. Dry run checks and hashes the set and prints the counts and bytes it would send,
+// without the network and without any credential.
+//
+// Records are JSON on standard error (Info per uploaded object and for the summary, Debug per skipped object, Error for
+// each failure); the run summary is one JSON line on standard output. Exit 1 names each failure.
 package main
 
 import (
@@ -40,6 +44,29 @@ import (
 	"sync"
 	"time"
 )
+
+const (
+	defaultWorkers    = 8
+	defaultRegion     = "auto"
+	requestTimeout    = 5 * time.Minute
+	maxErrorBodyBytes = 4096
+	sha256HexLen      = 2 * sha256.Size // 64 hex characters
+	amzDateLayout     = "20060102T150405Z"
+	amzDateStampLen   = 8 // the YYYYMMDD prefix of amzDateLayout
+	unsignedPayload   = "UNSIGNED-PAYLOAD"
+	blobsDir          = "blobs/sha256/"
+	plainManifestName = "manifest.json"
+	manifestFrameName = "manifest.json.zst"
+	manifestsKeyDir   = "v1/manifests/"
+	manifestFrameExt  = ".json.zst"
+	liveManifestKey   = "v1/manifest.json" // never written by this tool
+	logLevelDefault   = slog.LevelInfo
+)
+
+// zstdMagic is the first four bytes of every zstd frame (RFC 8878 section 3.1.1).
+var zstdMagic = [4]byte{0x28, 0xb5, 0x2f, 0xfd}
+
+var hexName = regexp.MustCompile(fmt.Sprintf("^[0-9a-f]{%d}$", sha256HexLen))
 
 type config struct {
 	Endpoint    string
@@ -76,13 +103,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	c.Region = strings.TrimSpace(getenv("NEVR_CARGO_S3_REGION"))
 	if c.Region == "" {
-		c.Region = "auto"
+		c.Region = defaultRegion
 	}
 	if err := checkPrefix(c.Prefix); err != nil {
 		return config{}, err
 	}
-	c.Workers = 8
-	c.HTTP = &http.Client{Timeout: 5 * time.Minute}
+	c.Workers = defaultWorkers
+	c.HTTP = &http.Client{Timeout: requestTimeout}
 	return c, nil
 }
 
@@ -107,10 +134,25 @@ type plan struct {
 	Bytes   int64
 }
 
-var hexName = regexp.MustCompile(`^[0-9a-f]{64}$`)
+// checkZstd refuses a file whose first four bytes are not the zstd frame magic.
+func checkZstd(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var head [len(zstdMagic)]byte
+	if _, err := io.ReadFull(f, head[:]); err != nil {
+		return fmt.Errorf("shorter than the four-byte zstd magic: %w", err)
+	}
+	if !bytes.Equal(head[:], zstdMagic[:]) {
+		return fmt.Errorf("first four bytes are %x, not the zstd frame magic 28b52ffd", head[:])
+	}
+	return nil
+}
 
-// buildPlan lists and hashes the set. A blob whose bytes do not hash to its name, or a name that is not 64 lowercase hex,
-// is refused before anything is sent.
+// buildPlan checks and hashes the set. A blob that is not a zstd frame, whose bytes do not hash to its name, or whose
+// name is not 64 lowercase hex is refused before anything is sent. The manifest is the zstd frame only.
 func buildPlan(dir, prefix string) (plan, error) {
 	if err := checkPrefix(prefix); err != nil {
 		return plan{}, err
@@ -127,9 +169,12 @@ func buildPlan(dir, prefix string) (plan, error) {
 			return plan{}, fmt.Errorf("blob entry %s is not a regular file", name)
 		}
 		if !hexName.MatchString(name) {
-			return plan{}, fmt.Errorf("blob name %q is not 64 lowercase hex characters", name)
+			return plan{}, fmt.Errorf("blob name %q is not %d lowercase hex characters", name, sha256HexLen)
 		}
 		local := filepath.Join(bdir, name)
+		if err := checkZstd(local); err != nil {
+			return plan{}, fmt.Errorf("blob %s refused, not a zstd frame: %w", name, err)
+		}
 		sum, size, err := hashFile(local)
 		if err != nil {
 			return plan{}, fmt.Errorf("hash %s: %w", name, err)
@@ -137,17 +182,33 @@ func buildPlan(dir, prefix string) (plan, error) {
 		if sum != name {
 			return plan{}, fmt.Errorf("blob %s holds bytes that hash to %s", name, sum)
 		}
-		p.Objects = append(p.Objects, object{Key: prefix + "blobs/sha256/" + name, Local: local, SHA: sum, Size: size})
+		p.Objects = append(p.Objects, object{Key: prefix + blobsDir + name, Local: local, SHA: sum, Size: size})
 		p.Blobs++
 		p.Bytes += size
 	}
-	mpath := filepath.Join(dir, "manifest.json")
-	sum, size, err := hashFile(mpath)
-	if err != nil {
-		return plan{}, fmt.Errorf("manifest: %w", err)
+	frame := filepath.Join(dir, manifestFrameName)
+	if _, err := os.Stat(frame); err != nil {
+		if os.IsNotExist(err) {
+			return plan{}, fmt.Errorf("no %s in %s: a plain %s is never uploaded, the manifest goes up only as the zstd frame",
+				manifestFrameName, dir, plainManifestName)
+		}
+		return plan{}, fmt.Errorf("manifest frame: %w", err)
 	}
-	p.Objects = append(p.Objects, object{Key: prefix + "manifest.json", Local: mpath, SHA: sum, Size: size})
-	p.Bytes += size
+	if err := checkZstd(frame); err != nil {
+		return plan{}, fmt.Errorf("manifest frame refused, not a zstd frame: %w", err)
+	}
+	sum, size, err := hashFile(frame)
+	if err != nil {
+		return plan{}, fmt.Errorf("hash manifest frame: %w", err)
+	}
+	keys := []string{prefix + manifestFrameName, manifestsKeyDir + sum + manifestFrameExt}
+	for _, k := range keys {
+		if k == liveManifestKey {
+			return plan{}, fmt.Errorf("manifest key %s is the live manifest; refused", k)
+		}
+		p.Objects = append(p.Objects, object{Key: k, Local: frame, SHA: sum, Size: size})
+		p.Bytes += size
+	}
 	sort.Slice(p.Objects, func(i, j int) bool { return p.Objects[i].Key < p.Objects[j].Key })
 	return p, nil
 }
@@ -257,7 +318,7 @@ func publishOne(ctx context.Context, cfg config, o object, log *slog.Logger) (st
 		log.Error("readback mismatch", "key", o.Key, "want_sha256", o.SHA, "got_sha256", got, "want_bytes", o.Size, "got_bytes", n)
 		return "", fmt.Errorf("%s: readback mismatch: want sha256 %s and %d bytes, got %s and %d bytes", o.Key, o.SHA, o.Size, got, n)
 	}
-	log.Debug("object uploaded and read back", "key", o.Key, "bytes", o.Size, "sha256", o.SHA)
+	log.Info("object uploaded", "key", o.Key, "bytes", o.Size, "sha256", o.SHA)
 	return "uploaded", nil
 }
 
@@ -282,7 +343,7 @@ func publicStatus(ctx context.Context, cfg config, key string) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	default:
-		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return false, fmt.Errorf("HEAD answered HTTP %d, not 200 or 404", resp.StatusCode)
 	}
 }
 
@@ -333,7 +394,7 @@ func putObject(ctx context.Context, cfg config, o object) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
 		return nil
@@ -344,46 +405,66 @@ func putObject(ctx context.Context, cfg config, o object) error {
 	}
 }
 
-// signV4 signs a request with AWS Signature Version 4 for S3, with an unsigned payload.
-func signV4(req *http.Request, cfg config, now time.Time) {
-	now = now.UTC()
-	amzDate := now.Format("20060102T150405Z")
-	dateStamp := amzDate[:8]
-	req.Header.Set("X-Amz-Date", amzDate)
-	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+// sigInput is one request to sign with AWS Signature Version 4.
+type sigInput struct {
+	Method      string
+	URI         string            // the escaped path, no query
+	Headers     map[string]string // lower-case name -> value; must include "host"
+	PayloadHash string
+	AmzDate     string // amzDateLayout
+	Region      string
+	KeyID       string
+	Secret      string
+}
 
-	host := req.URL.Host
-	headers := map[string]string{"host": host}
-	for _, name := range []string{"If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
-		headers[strings.ToLower(name)] = req.Header.Get(name)
-	}
-	names := make([]string, 0, len(headers))
-	for n := range headers {
+// sigV4Authorization returns the Authorization header value (AWS Signature Version 4, service s3).
+func sigV4Authorization(in sigInput) string {
+	names := make([]string, 0, len(in.Headers))
+	for n := range in.Headers {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	var canonHeaders strings.Builder
 	for _, n := range names {
-		canonHeaders.WriteString(n + ":" + strings.TrimSpace(headers[n]) + "\n")
+		canonHeaders.WriteString(n + ":" + strings.TrimSpace(in.Headers[n]) + "\n")
 	}
 	signedHeaders := strings.Join(names, ";")
-
-	canonURI := req.URL.EscapedPath()
 	canonical := strings.Join([]string{
-		req.Method, canonURI, "", canonHeaders.String(), signedHeaders, "UNSIGNED-PAYLOAD",
+		in.Method, in.URI, "", canonHeaders.String(), signedHeaders, in.PayloadHash,
 	}, "\n")
-
-	scope := dateStamp + "/" + cfg.Region + "/s3/aws4_request"
-	sts := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + hexSHA256([]byte(canonical))
-
-	kDate := hmacSHA256([]byte("AWS4"+cfg.SecretKey), dateStamp)
-	kRegion := hmacSHA256(kDate, cfg.Region)
+	dateStamp := in.AmzDate[:amzDateStampLen]
+	scope := dateStamp + "/" + in.Region + "/s3/aws4_request"
+	sts := "AWS4-HMAC-SHA256\n" + in.AmzDate + "\n" + scope + "\n" + hexSHA256([]byte(canonical))
+	kDate := hmacSHA256([]byte("AWS4"+in.Secret), dateStamp)
+	kRegion := hmacSHA256(kDate, in.Region)
 	kService := hmacSHA256(kRegion, "s3")
 	kSigning := hmacSHA256(kService, "aws4_request")
 	sig := hex.EncodeToString(hmacSHA256(kSigning, sts))
+	return "AWS4-HMAC-SHA256 Credential=" + in.KeyID + "/" + scope +
+		", SignedHeaders=" + signedHeaders + ", Signature=" + sig
+}
 
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+cfg.AccessKeyID+"/"+scope+
-		", SignedHeaders="+signedHeaders+", Signature="+sig)
+// signV4 signs a request for S3 with an unsigned payload.
+func signV4(req *http.Request, cfg config, now time.Time) {
+	amzDate := now.UTC().Format(amzDateLayout)
+	req.Header.Set("X-Amz-Date", amzDate)
+	req.Header.Set("X-Amz-Content-Sha256", unsignedPayload)
+	headers := map[string]string{"host": req.URL.Host}
+	for _, name := range []string{"If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
+		if v := req.Header.Get(name); v != "" {
+			headers[strings.ToLower(name)] = v
+		}
+	}
+	req.Header.Set("Authorization", sigV4Authorization(sigInput{
+		Method:      req.Method,
+		URI:         req.URL.EscapedPath(),
+		Headers:     headers,
+		PayloadHash: unsignedPayload,
+		AmzDate:     amzDate,
+		Region:      cfg.Region,
+		KeyID:       cfg.AccessKeyID,
+		Secret:      cfg.SecretKey,
+	}))
 }
 
 func hexSHA256(b []byte) string {
@@ -398,11 +479,11 @@ func hmacSHA256(key []byte, msg string) []byte {
 }
 
 func main() {
-	dir := flag.String("dir", "", "extracted set: blobs/sha256/* and manifest.json")
+	dir := flag.String("dir", "", "extracted set: blobs/sha256/* and manifest.json.zst")
 	dry := flag.Bool("dry-run", false, "count the objects and bytes that would be sent; no network, no credential")
-	workers := flag.Int("workers", 8, "parallel objects")
+	workers := flag.Int("workers", defaultWorkers, "parallel objects")
 	flag.Parse()
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelDefault}))
 	fail := func(err error) {
 		logger.Error("cargo-publish refused", "error", err.Error())
 		fmt.Fprintln(os.Stderr, "cargo-publish:", err)
