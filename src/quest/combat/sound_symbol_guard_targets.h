@@ -57,7 +57,7 @@
  * So 0x0f986c58c7b3d4fb is the error record's type key, not a sound symbol: no CSoundSymbol of that value (or of its low word
  * 0xc7b3d4fb) is posted on this path. The text says only that PostEvent returned 0, for any symbol whose bank is not loaded or that no
  * bank defines. Play3DSound passes the status to OutputError(status, 8) (`bl` 0xf4e4c0 at 0x134b5f0); OutputError returns 0 at once for
- * status 0 or -1 (`add w8, w0, #1` / `cmp w8, #2` / `b.hs` 0x11d1b54-0x11d1b60, which is CreateAndAddError's answer with no error db), else
+ * status 0 or -1 (`add w8, w0, #1` / `cmp w8, #2` / `b.hs` 0x11d1b54-0x11d1b60; -1 is CreateAndAddError's answer with no error db, and with one it answers CErrorDb::AddError's status unchanged, per its reconstruction), else
  * logs the callstack, constructs the CConsoleStream at 0x11d1ca8 (the return 0x11d1cac is upstream's crash frame) and serializes the
  * record at env+0x40008+(status-1)*0x18. When that record is incomplete it takes a null record (`mov x20, xzr` 0x11d1d5c) and still calls
  * through it (`ldr x8, [x20]` at 0x11d1ddc on the JSON path and 0x11d1ee4 on the text path): a null dereference inside OutputError. So

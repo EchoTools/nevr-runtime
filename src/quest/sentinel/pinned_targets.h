@@ -1238,7 +1238,7 @@ inline GotTarget LibR15VkAllocate() {
 inline constexpr PinnedFunction kVkAllocate = {
     "_ZN10NRadEngine16CGRawInterfaceVK8AllocateE20VkMemoryRequirementsjjjjRNS_15SGAllocatedBaseE", 0x188813c,
     {0xd10383ff, 0xa9086ffc, 0xa90967fa, 0xa90a5ff8}, 4};
-// NRadEngine::CErrMsg::CreateAndAddError(const char* file, unsigned line, CSymbol64 code, CSymbol64 message, ...), exported at
+// NRadEngine::CErrMsg::CreateAndAddError(const char* file, unsigned line, CSymbol64 code, const char* format, ...), exported at
 // 0x11ce4dc: the error a failed Allocate returns (0x18884a8: x0 the source file, w1 the line, x2 the 64-bit word at 0x2b2f1f0,
 // x3 the message text, then `bl` to its PLT stub). Called at its link address plus the image base, never written.
 inline constexpr PinnedFunction kErrMsgCreateAndAddError = {"_ZN10NRadEngine7CErrMsg17CreateAndAddErrorEPKcjNS_9CSymbol64ES2_z",

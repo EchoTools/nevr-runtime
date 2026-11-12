@@ -21,7 +21,7 @@ names the key.
 
 Why off. The guard's default was to follow whether a dropped post's alternative can fault. It can in the code: OutputError, which Play3DSound
 calls with PostSoundEvent's status, has a path that calls through a null record when the record at that status is incomplete. But it is not shown
-to be reached on this path: whether CErrorDb::AddError ever answers a status whose record is incomplete, and whether the CConsoleStream
+to be reached on this path: whether CErrorDb::AddError (whose status CreateAndAddError returns unchanged, its reconstruction) ever answers a status whose record is incomplete, and whether the CConsoleStream
 constructor (upstream's crash frame, return 0x11d1cac) can fault, are open (neither function is reconstructed yet). With no fault shown the guard
 is a performance guard: it saves a failed post, its error record and OutputError's callstack and console write, which upstream measured at about
 4 ms a print and 230 posts a second for symbol 0. Upstream ships it off too (`fxsndguard.on` is not among the recipe's switch files). A player

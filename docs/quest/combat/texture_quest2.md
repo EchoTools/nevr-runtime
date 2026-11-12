@@ -192,7 +192,7 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
 canvas needs a resize (its reconstruction). So one Resize reaches the upload lock up to five times: once in `FlushGPU`, then once in each
-of the four deferred destroys. Each can be skipped: `FlushGPU` returns with no lock and no `currframe` store when gctx + 0xb50 is 0
+of the four deferred destroys (none of the four when `CCanvas::BeforeResize` answers non-zero: `CCanvasDisplay::Resize` returns before `CGDisplay::Resize`, its reconstruction). Each can be skipped: `FlushGPU` returns with no lock and no `currframe` store when gctx + 0xb50 is 0
 (`ldr x8,[x19,#0xb50]` at 0x18e08dc, `cbz x8` at 0x18e08e0 to the epilogue at 0x18e098c), and the destroy body returns on a null handle before it
 reads `currframe` (`cbz x1` at 0x1888aa8 to the epilogue at 0x1888be4). The test pins both branches and their targets.
 
