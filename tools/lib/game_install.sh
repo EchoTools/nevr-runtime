@@ -47,6 +47,9 @@ resolve_game_root() {
   printf '%s\n' "$root"
 }
 
+# The sign-in file name pattern, defined once in tools/lib/copy_credential_pattern (the Go and Python system tests read it too).
+COPY_CREDENTIAL_PATTERN=$(<"$(dirname "${BASH_SOURCE[0]}")/copy_credential_pattern")
+
 # refuse_copy_credentials <game root>: a throwaway copy of the install carries no sign-in. When NEVR_GAME_ROOT names the
 # root (a copy; unset is the main checkout's own install, which holds the owner's sign-in), any `.credentials.json*`
 # file under <game root>/echovr, in `_local` or in the nevr root of the Wine prefix, makes the run sign in as whoever
@@ -56,8 +59,8 @@ resolve_game_root() {
 refuse_copy_credentials() {
   local root=$1 listing
   [[ -n "${NEVR_GAME_ROOT:-}" ]] || return 0
-  listing=$(find "$root/echovr" -name '.credentials.json*' ! -type d -print) \
-    || { echo "ERROR: cannot search $root/echovr for sign-in files (.credentials.json*); not starting the game" >&2; exit 2; }
+  listing=$(find "$root/echovr" -name "$COPY_CREDENTIAL_PATTERN" ! -type d -print) \
+    || { echo "ERROR: cannot search $root/echovr for sign-in files ($COPY_CREDENTIAL_PATTERN); not starting the game" >&2; exit 2; }
   [[ -z "$listing" ]] && return 0
   echo "ABORT: the game copy holds sign-in file(s) the game would sign in with: ${listing//$'\n'/ } (remove them: AGENTS.md \"The game install\", \"Make it safe\")" >&2
   exit 3

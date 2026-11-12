@@ -27,6 +27,7 @@ func requireLiveClient(t *testing.T) string {
 	if testing.Short() || os.Getenv(envLiveTests) != "1" {
 		t.Skip("set NEVR_LIVE_TESTS=1 to run the local Echo VR login smoke test")
 	}
+	refuseCopyCredentials(t)
 
 	liveLoginRun.once.Do(func() {
 		gameDir := getGameDir()

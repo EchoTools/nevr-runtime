@@ -367,6 +367,7 @@ func timingStartAndMeasure(t *testing.T) {
 	if _, err := os.Stat(exe); err != nil {
 		t.Fatalf("EVR_GAME_DIR has no bin/win10/echovr.exe: %v", err)
 	}
+	refuseCopyCredentials(t)
 	root := nevrRootDir(gameDir)
 	configPath := filepath.Join(root, "config.yaml")
 	if _, err := os.Stat(configPath); err == nil {
