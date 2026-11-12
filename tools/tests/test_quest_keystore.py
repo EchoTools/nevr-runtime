@@ -179,7 +179,7 @@ class QuestKeystoreTest(unittest.TestCase):
         proc.communicate(timeout=20)
         self.assertEqual(self.left_behind(), [])
 
-    def passphrase_holders(self, script=SCRIPT, stop_bound_s=20):
+    def passphrase_holders(self, script=SCRIPT, stop_bound_s=20, after_look=None):
         """Lines `<pid> <ppid> <command line>` of the processes that carry the passphrase and belong to the tool under
         test: the tool itself, everything it starts while the wrapped command runs, and every `keytool` call it makes
         (the fake `keytool` records those, because they are over before the wrapped command starts). A failure
@@ -208,6 +208,10 @@ class QuestKeystoreTest(unittest.TestCase):
             table = process_table()
             found += [f"{pid} {table[pid][0] if pid in table else '?'} {' '.join(argv)}"
                       for pid, argv in tree if PASSPHRASE in " ".join(argv)]
+            # The look is over: a process the caller starts from here is one the look did not see, and the stop below must still
+            # reach it. The caller signals that point with after_look, not with a sleep.
+            if after_look is not None:
+                after_look()
         finally:
             self.tool_pid = proc.pid
             stop_tool(proc, tool_log, stop_bound_s)
@@ -261,19 +265,24 @@ class QuestKeystoreTest(unittest.TestCase):
     def test_a_process_the_tool_starts_after_the_check_looked_is_stopped_before_the_check_returns(self):
         ready = self.tmp / "late-ready"
         pidfile = self.tmp / "late-child.pid"
-        # The holder waits for the tool's key (the flag), then starts a child a second later that holds the tool's
-        # output. The check has taken its look by then, and the tool sleeps 3 s in its cleanup, so the child starts
-        # before the check stops the tool. A stop that signals only what the look saw, or a wait on the output, waits
-        # out the child's 30 s.
-        holder = (f"    bash -c 'until [ -e {ready} ]; do sleep 0.05; done; sleep 1; sleep 30 & echo $! > {pidfile}; "
+        # Event order, not time order. The check's look sets the flag (after_look) once it has taken its look. The holder
+        # waits for that flag and only then starts a child that holds the tool's output and writes its pid. The tool's
+        # cleanup waits for that pid file (bounded at 10 s) before it exits, so the child exists before the check's stop
+        # signals the group. A stop that signals only what the look saw, or a check that reads the child before it has
+        # died, fails here.
+        holder = (f"    bash -c 'until [ -e {ready} ]; do sleep 0.05; done; sleep 30 & echo $! > {pidfile}; "
                   "wait' \"$NEVR_QUEST_KEYSTORE_PASS\" &\n"
-                  f"    : > {ready}\n"
                   '    log "keystore ready alias=$ALIAS"')
-        leaky = self.leaking_copy('    log "keystore ready alias=$ALIAS"', holder,
-                                  "    local rc=$?", "    local rc=$?\n    sleep 3")
-        self.passphrase_holders(leaky)
+        cleanup_wait = (f"    local rc=$?\n    for _ in $(seq 200); do [ -e {pidfile} ] && break; sleep 0.05; done")
+        leaky = self.leaking_copy('    log "keystore ready alias=$ALIAS"', holder, "    local rc=$?", cleanup_wait)
+        self.passphrase_holders(leaky, after_look=lambda: ready.touch())
         self.assertTrue(pidfile.exists(), "the holder never started its child")
         late = int(pidfile.read_text())
+        # SIGKILL is delivered asynchronously: the child may still be dying when the group signal returns. The check
+        # waits for it to be gone, with a deadline, before it judges.
+        deadline = time.time() + 10
+        while alive(late) and time.time() < deadline:
+            time.sleep(0.05)
         self.assertFalse(alive(late), f"the child started after the check looked (pid {late}) outlived the check")
         self.assertFalse(pathlib.Path(f"/proc/{self.tool_pid}").exists(),
                          f"the tool (pid {self.tool_pid}) was not reaped before the check returned")
