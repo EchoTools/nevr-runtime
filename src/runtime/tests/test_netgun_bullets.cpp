@@ -349,4 +349,16 @@ TEST(NetgunBulletDecide, TheNamesALogLineCarriesAreStable) {
   for (const auto& s : statuses) EXPECT_STREQ(nevr_netgun_bullets::StatusName(s.first), s.second);
 }
 
+// #1479: Install returns how many of its ten registrations the seam took, so the caller's summary counts what took.
+int g_fakeRegisterCalls = 0;
+bool FakeRegisterEveryThird(uint64_t, uint64_t, ResourceTransformFn, void*, const char*) {
+  return (++g_fakeRegisterCalls % 3) != 0;  // calls 3, 6 and 9 are refused
+}
+
+TEST(NetgunBulletRegistration, InstallReturnsTheRegistrationsThatTook) {
+  g_fakeRegisterCalls = 0;
+  EXPECT_EQ(nevr_netgun_bullets::Install(&FakeRegisterEveryThird), 7u);
+  EXPECT_EQ(g_fakeRegisterCalls, 10);
+}
+
 }  // namespace

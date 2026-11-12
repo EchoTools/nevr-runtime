@@ -109,20 +109,23 @@ bool TransformBullets(const void* original, uint64_t size, const void** out, uin
 
 }  // namespace
 
-void Install(RegisterFn reg) {
+std::size_t Install(RegisterFn reg) {
+  std::size_t took = 0;
   for (const Level& level : kLevels) {
     const std::string particles = std::string("netgun bullet effects ") + level.name + " CParticleEffectCR";
     const std::string bullets = std::string("netgun bullet effects ") + level.name + " CR15NetBulletCR";
-    reg(kParticleType, level.hash, &TransformParticles, const_cast<Level*>(&level), particles.c_str());
-    reg(kBulletType, level.hash, &TransformBullets, const_cast<Level*>(&level), bullets.c_str());
+    if (reg(kParticleType, level.hash, &TransformParticles, const_cast<Level*>(&level), particles.c_str())) ++took;
+    if (reg(kBulletType, level.hash, &TransformBullets, const_cast<Level*>(&level), bullets.c_str())) ++took;
   }
-  // The seam logs each transform it takes ("Registered transform: ..."); this line says what was asked of it.
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] netgun bullet effects requested levels=%zu transforms=%zu pins=%s,%s,%s (once a combat level "
-      "loads, the magnum, smg, Chain and rifle bullets get particle effects if its resources are these stock files; "
+  // The seam logs each transform it takes at Debug ("Registered transform: ..."); this line says what was asked of it
+  // and how many of those asks took (#1479). A refused registration is a Warning.
+  const std::size_t requested = 2 * std::size(kLevels);
+  Log(took == requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.RESOURCE] netgun bullet effects requested levels=%zu transforms=%zu registered=%zu pins=%s,%s,%s (once a combat "
+      "level loads, the magnum, smg, Chain and rifle bullets get particle effects if its resources are these stock files; "
       "any other bytes are served unchanged)",
-      std::size(kLevels), 2 * std::size(kLevels), kParticleStockSha256, kParticleStockGaussSha256,
-      kBulletStockSha256);
+      std::size(kLevels), requested, took, kParticleStockSha256, kParticleStockGaussSha256, kBulletStockSha256);
+  return took;
 }
 
 #ifdef NEVR_TEST_HOOKS
