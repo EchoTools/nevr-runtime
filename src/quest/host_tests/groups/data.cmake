@@ -61,3 +61,16 @@ nevr_ht_test(data_wiring_test GROUP data-net HOST CURL PTHREAD NOEXC DL NO_TEST 
       src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp
       src/quest/data/data_step.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
   LIBS ${NEVR_ZLIB_LIB} ssl crypto)
+
+# CDN_DESIGN Q1: a map's set over a held POSIX descriptor (quest/sentinel/map_sets.cpp) and the shared registry with the Android
+# types (core/resource_set_registry.cpp, moved from src/runtime/patch). cargo_hook_test and cargo_run_test are unchanged.
+nevr_ht_obj(o_maps_registry GROUP data NOEXC HOST INCS sdk/include SRC src/core/resource_set_registry.cpp)
+nevr_ht_obj(o_maps_map_sets GROUP data NOEXC HOST INCS src/quest/sentinel sdk/include SRC src/quest/sentinel/map_sets.cpp)
+nevr_ht_test(map_sets_test GROUP data HOST NOEXC INCS src/quest/sentinel sdk/include TIMEOUT 120 ENV ${_data_env}
+  SRC src/quest/tests/map_sets_test.cpp
+  OBJS o_maps_registry o_maps_map_sets o_cargo_resource_shadow o_cargo_hook_log o_data_sha256 LIBS ${NEVR_ZSTD_LIB})
+# CDN_DESIGN Q2b: the `_lowspec` level vectors, the session pin check on the Quest, and the POSIX stock source over a written tree.
+nevr_ht_test(map_quest_test GROUP data HOST NOEXC INCS src/quest/sentinel sdk/include TIMEOUT 120 ENV ${_data_env}
+  SRC src/quest/tests/map_quest_test.cpp src/quest/cargo/map_pin.cpp src/quest/cargo/stock_source_posix.cpp
+      src/quest/cargo/posix_map_fs.cpp
+  OBJS o_data_zip LIBS ${NEVR_ZSTD_LIB} ${NEVR_ZLIB_LIB})

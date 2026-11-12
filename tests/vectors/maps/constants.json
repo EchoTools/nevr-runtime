@@ -1,0 +1,14 @@
+{
+  "schema": "nevr-maps-constants",
+  "schema_version": 1,
+  "kStockBytesMinSize": 64,
+  "kStockBlockSize": 4096,
+  "kRecipeOpsMax": 65536,
+  "kRecipeInsertMax": 4194304,
+  "kRecipeMapInsertMax": 67108864,
+  "kRecipeResultMax": 134217728,
+  "kRecipeInsertDivisor": 4,
+  "kRecipeFormatVersion": 2,
+  "kStockFingerprintPrime": "0x100000001b3",
+  "kAliasRecordType": "0x607d858c90268f9a"
+}

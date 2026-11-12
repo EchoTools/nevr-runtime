@@ -61,3 +61,6 @@ set_source_files_properties(mic_owner_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEAD
 if(MSVC)
   target_compile_options(nevr_core PRIVATE /wd4251)
 endif()
+
+# The custom-map channel (docs/adr/0047): each map packet's build lines live in its own fragment under maps/.
+include(${CMAKE_CURRENT_LIST_DIR}/maps/maps.cmake OPTIONAL)

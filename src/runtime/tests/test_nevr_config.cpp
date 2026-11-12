@@ -472,6 +472,17 @@ TEST(NevrConfig, AcceptsGraphicsSection) {
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
 }
 
+// `maps` is the custom-map channel's section (ADR 0047): a config.yaml that configures the channel loads, and every
+// key the PC reads from it is known.
+TEST(NevrConfig, AcceptsMapsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "maps:\n  base_url: \"https://maps.example.org/\"\n  subscribed: [arena1]\n  trusted_keys: []\n"
+      "  server_allow: [arena1]\n  channel: echo\n  boot_budget_ms: 2000\n  cap_mib: 512\n");
+  ASSERT_TRUE(cfg.GetString("maps.base_url").has_value());
+  EXPECT_EQ(*cfg.GetString("maps.base_url"), "https://maps.example.org/");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+}
+
 // Kind tells "set to something that is not a value" from "not set": the typed getters give nullopt for both.
 TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
   using nevr::NodeKind;

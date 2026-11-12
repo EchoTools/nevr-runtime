@@ -211,6 +211,9 @@ std::map<std::string, std::string> Tree(const std::wstring& dir) {
 }
 
 void RemoveTree(const std::wstring& dir) {
+  // Only a full path below a drive root: an empty one turns L"\\*" into the current drive's root, which is
+  // how a failed SetUp wiped D:\b on 2026-11-12.
+  if (dir.size() < 4 || dir[1] != L':' || dir[2] != L'\\') return;
   WIN32_FIND_DATAW data;
   const HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &data);
   if (find != INVALID_HANDLE_VALUE) {

@@ -312,6 +312,34 @@ void TestComposeFailsClosed() {
 // The composed fields are the PCVR builder's output for the same inputs, the plugin report included (written as
 // indexed members `nevr_plugins[i]|key`), and with no password value: the server reads the
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
+std::vector<nevr_quest_login::MapLoginEntry> OneMap() {
+  nevr_quest_login::MapLoginEntry m;
+  m.level = 0xd09afd15b1c75c04ULL;
+  m.id = "arena2";
+  m.version = "1.0";
+  m.platform = "android-arm64";
+  m.mounted = true;
+  return {m};
+}
+
+void TestMapsAreIndexedMembersAndAbsentWithoutMaps() {
+  nevr_quest_login::BuildInfo build = MakeBuild();
+  const nevr_quest_login::Composition plain = nevr_quest_login::Compose(MakeIdentity(), {}, build);
+  QCHECK(plain.map_fields.empty());
+  build.map_report = [] { return std::vector<nevr_quest_login::MapLoginEntry>{}; };
+  QCHECK(nevr_quest_login::Compose(MakeIdentity(), {}, build).map_fields.empty());
+  build.map_report = &OneMap;
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(MakeIdentity(), {}, build);
+  QCHECK(c.fields.size() == plain.fields.size());  // the maps never reach the identity fields
+  bool id = false, level = false, mounted = false;
+  for (const nevr_quest_login::Field& f : c.map_fields) {
+    id = id || (f.path == "nevr_maps[0]|id" && f.text == "arena2");
+    level = level || (f.path == "nevr_maps[0]|level" && f.text == "0xd09afd15b1c75c04");
+    mounted = mounted || (f.path == "nevr_maps[0]|mounted" && f.number == 1);
+  }
+  QCHECK(id && level && mounted);
+}
+
 void TestComposedProfileMatchesPcvrBuilder() {
   nevr_quest_login::Identity id = MakeIdentity();
   id.social_level = nevr_social_party::kSocialLevel;  // a source with the social facade installed
@@ -1582,6 +1610,7 @@ int main() {
   TestEndToEndFlow();
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
+  TestMapsAreIndexedMembersAndAbsentWithoutMaps();
   TestSerialRelay();
   TestSocialLevelFollowsTheIdentitySource();
   TestRewriteCarriesNevrIdentityToTheWire();

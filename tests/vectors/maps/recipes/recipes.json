@@ -1,0 +1,88 @@
+{
+  "schema": "nevr-maps-recipes",
+  "schema_version": 2,
+  "about": "Synthetic stock bytes only, never game files (CDN_DESIGN §5.4, PC10). Shared with EchoConstruct E1: each side applies `recipe` to `stock_hex` (insert ops index `inserts_hex`) and must produce `result_hex`, or refuse with `reason`. A field `to` is a little-endian value written as a hex string; a field carries no `from`, since it would be stock bytes. Each side computes sha256 itself.",
+  "vectors": [
+    {
+      "name": "fields_three_widths",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "",
+      "recipe": {
+        "kind": "fields", "stock_size": 64, "result_size": 64,
+        "fields": [
+          {"at": 8, "width": 4, "to": "0xdeadbeef"},
+          {"at": 32, "width": 8, "to": "0x1122334455667788"},
+          {"at": 63, "width": 1, "to": "0x00"}
+        ]
+      },
+      "result_hex": "0001020304050607efbeadde0c0d0e0f101112131415161718191a1b1c1d1e1f887766554433221128292a2b2c2d2e2f303132333435363738393a3b3c3d3e00"
+    },
+    {
+      "name": "fields_zero_ops",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "",
+      "recipe": {"kind": "fields", "stock_size": 64, "result_size": 64, "fields": []},
+      "result_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "diff_insert_between_copies",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "recipe": {
+        "kind": "diff", "stock_size": 64, "result_size": 80,
+        "diff": [
+          {"op": "copy", "offset": 0, "size": 32},
+          {"op": "insert", "offset": 0, "size": 16},
+          {"op": "copy", "offset": 32, "size": 32}
+        ]
+      },
+      "result_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "diff_reordered_copies",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "recipe": {
+        "kind": "diff", "stock_size": 64, "result_size": 72,
+        "diff": [
+          {"op": "copy", "offset": 48, "size": 16},
+          {"op": "insert", "offset": 4, "size": 8},
+          {"op": "copy", "offset": 0, "size": 48}
+        ]
+      },
+      "result_hex": "303132333435363738393a3b3c3d3e3fa4a5a6a7a8a9aaab000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+    },
+    {
+      "name": "refuse_field_bytes_over_cap",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "",
+      "recipe": {"kind": "fields", "stock_size": 64, "result_size": 64,
+                 "fields": [{"at": 0, "width": 8, "to": "0x0"},
+                            {"at": 8, "width": 8, "to": "0x0"},
+                            {"at": 16, "width": 1, "to": "0x0"}]},
+      "reason": "recipe_cap"
+    },
+    {
+      "name": "refuse_insert_over_cap",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3",
+      "recipe": {"kind": "diff", "stock_size": 64, "result_size": 64,
+                 "diff": [{"op": "copy", "offset": 0, "size": 44}, {"op": "insert", "offset": 0, "size": 20}]},
+      "reason": "recipe_cap"
+    },
+    {
+      "name": "refuse_sizes_do_not_sum",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "",
+      "recipe": {"kind": "diff", "stock_size": 64, "result_size": 80, "diff": [{"op": "copy", "offset": 0, "size": 64}]},
+      "reason": "recipe_bounds"
+    },
+    {
+      "name": "refuse_tiny_result",
+      "stock_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "inserts_hex": "",
+      "recipe": {"kind": "diff", "stock_size": 64, "result_size": 63, "diff": [{"op": "copy", "offset": 0, "size": 63}]},
+      "reason": "recipe_tiny"
+    }
+  ]
+}
