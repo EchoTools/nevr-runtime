@@ -99,6 +99,7 @@ from collections.abc import Callable
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import FETCH_TIMEOUT_SECONDS, Failure, Log, NoRedirect, public_base, sha256_file  # noqa: E402 - the sibling tool's log, failure, fetch and hash
 from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
+from signer_runs import RUN_LIST_ARGS, SIGNER_SLUG, WORKFLOW, unfinished_runs  # noqa: E402 - the signer-run rule the rollback tool shares (#1978)
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
 # NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-apk`, #1994).
@@ -125,7 +126,8 @@ MANIFEST_PATH = "nevr-runtime/manifest.json"
 USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 to the default agent
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
 RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
-SIGNER_SLUG = "thesprockee/release-signer"
+SIGNER_WAITS = 60  # checks of the signer's run list before a dispatch; SIGNER_WAIT_SECONDS apart, an hour in all (#1978)
+SIGNER_WAIT_SECONDS = 60
 PUBLISHING_JOBS = ("Commit the manifest record", "Publish to R2", "A run that published nothing is red")
 MAX_FAILURES = 3
 GAME_DATA_PLATFORM = "android-arm64"  # the Quest half of a release carries the game-data entry of this platform only
@@ -417,6 +419,25 @@ class Timer:
             self.sleep(SLOT_WAIT_SECONDS)
         raise StepFailure("build_slot", f"two or more ninja processes ran for {SLOT_WAITS * SLOT_WAIT_SECONDS} seconds")
 
+    def wait_for_signer_runs(self) -> None:
+        """Dispatch only when no signer run is queued or running (#1978, the rollback tool's rule in tools/signer_runs.py). An active
+        run is waited for, SIGNER_WAITS checks SIGNER_WAIT_SECONDS apart; a run still active after the last check stops the release
+        with the run ids, and nothing is dispatched."""
+        active: list[str] = []
+        for attempt in range(SIGNER_WAITS):
+            listing = self.cmd("signer_runs", [self.gh, *RUN_LIST_ARGS]).stdout
+            try:
+                active = unfinished_runs(listing)
+            except (ValueError, KeyError, TypeError) as error:
+                raise StepFailure("signer_runs", f"the signer's run list is unreadable: {error}") from error
+            if not active:
+                self.ok("signer_runs")
+                return
+            if attempt + 1 < SIGNER_WAITS:
+                self.sleep(SIGNER_WAIT_SECONDS)
+        raise StepFailure("signer_runs", f"{WORKFLOW} runs on {SIGNER_SLUG} are still queued or running after "
+                                         f"{SIGNER_WAITS * SIGNER_WAIT_SECONDS} seconds: {', '.join(active)}")
+
     def check_jobs(self, run_id: str) -> None:
         out = self.cmd("check_jobs", [self.gh, "run", "view", run_id, "-R", SIGNER_SLUG, "--json", "jobs"]).stdout
         try:
@@ -489,6 +510,7 @@ class Timer:
         arena_claims = self.arena_steps(tag, worktree, build_env, binary, signer_dir, publish_env, arena_file)
         claim = json.dumps([*claims, *arena_claims], separators=(",", ":"))
 
+        self.wait_for_signer_runs()
         dispatched = self.cmd("dispatch", [self.gh, "workflow", "run", "sign-manifest.yml", "-R", SIGNER_SLUG, "--ref",
                                            "main", "-f", "action=publish", "-f", f"tag={tag}", "-f", "channel=beta",
                                            "-f", f"extra_artifacts={claim}", "-f", "dry_run=false"],

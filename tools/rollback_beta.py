@@ -59,6 +59,7 @@ from collections.abc import Callable
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import quest_release_timer  # noqa: E402 - where the timer's work folder (and its lock) is found
 from publish_quest_apk import Failure, Log, fetch, public_base  # noqa: E402 - the sibling tool's log, failure and fetch
+from signer_runs import SIGNER_SLUG, WORKFLOW, unfinished_runs  # noqa: E402 - the signer-run rule both tools share (#1978)
 
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # used with fullmatch: `$` would pass a trailing newline
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -66,8 +67,6 @@ RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MANIFEST_PATH = "nevr-runtime/manifest.json"  # as in quest_release_timer.py
 MANIFEST_LIMIT = 16 << 20
-SIGNER_SLUG = "thesprockee/release-signer"
-WORKFLOW = "sign-manifest.yml"
 SIGNER_BINARY = "release-signer"
 DEFAULT_GH = "gh"  # as in quest_release_timer.py
 # The jobs of .github/workflows/sign-manifest.yml in the release-signer repository. A live run records and uploads; a dry run
@@ -353,7 +352,7 @@ class Rollback:
         out = self.gh_cmd(step, ["run", "list", "--workflow", WORKFLOW, "-R", SIGNER_SLUG, "--json", "status,databaseId",
                                  "--limit", "30"]).stdout
         try:
-            return [f"{run['databaseId']} ({run['status']})" for run in json.loads(out) if run["status"] != "completed"]
+            return unfinished_runs(out)
         except (ValueError, KeyError, TypeError) as error:
             raise StepFailure(step, f"the run list is unreadable: {error}") from error
 

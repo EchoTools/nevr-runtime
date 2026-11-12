@@ -44,7 +44,7 @@ SECRETS = {
 }
 TOKEN = "sentinel-gh-token"
 STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
-         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "variant_configure", "variant_build", "variant_publish",
+         "publish_apk", "signer_runs", "dispatch", "watch", "check_jobs", "verify_live", "variant_configure", "variant_build", "variant_publish",
          "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
@@ -103,7 +103,7 @@ class Fake:
             ("release-quest-apk", "build_apk"),
             ("release-quest-variant-apk", "variant_build"), (" --variant ", "variant_publish"),
             ("publish_quest_apk.py", "publish_apk"),
-            ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
+            ("run list", "signer_runs"), ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
             ("remove-worktree", "cleanup.worktree"),
         ]
         for needle, step in table:
@@ -168,6 +168,8 @@ class Fake:
         if step == "publish_apk":
             pathlib.Path(argv[argv.index("--extra-out") + 1]).write_text(
                 json.dumps([{"name": f"nevr-runtime-{TAG}-quest.apk", "sha256": "ab" * 32, "size": 7}]))
+        if step == "signer_runs":
+            return completed(argv, 0, "[]\n")  # no signer run queued or running
         if step == "dispatch":
             return completed(argv, 0, "https://github.com/thesprockee/release-signer/actions/runs/40746571311\n")
         if step == "check_jobs":
@@ -342,7 +344,7 @@ class ArenaApk(TimerCase):
         self.assertEqual(self.run_timer(fake), 0)
         steps = [e["step"] for e in self.events() if e["event"] == "step_ok"]
         self.assertEqual(steps[steps.index("publish_apk"):steps.index("dispatch") + 1],
-                         ["publish_apk", "arena_gate", "arena_build", "arena_publish", "dispatch"])
+                         ["publish_apk", "arena_gate", "arena_build", "arena_publish", "signer_runs", "dispatch"])
         self.assertEqual(fake.steps().count("dispatch"), 1)
         extra = next(a for a in next(c["argv"] for c in fake.calls if c["step"] == "dispatch") if a.startswith("extra_artifacts="))
         self.assertEqual([c["name"] for c in json.loads(extra.split("=", 1)[1])],
@@ -477,7 +479,7 @@ class TheLogIsNotMasked(TimerCase):
 class FailsLoud(TimerCase):
     def test_each_failing_step_exits_1_names_itself_and_stops_the_rest(self) -> None:
         later = {step: [s for s in STEPS[STEPS.index(step) + 1:] if s != "cleanup"]
-                 for step in ("build_signer", "worktree", "build_slot", "configure", "build_apk", "publish_apk", "dispatch",
+                 for step in ("build_signer", "worktree", "build_slot", "configure", "build_apk", "publish_apk", "signer_runs", "dispatch",
                               "watch")}
         for step, after in later.items():
             with self.subTest(step=step):
@@ -1395,7 +1397,7 @@ class RealProcess(TimerCase):
 VARIANT = "q15t"
 VARIANT_APK = f"nevr-runtime-{TAG}-{VARIANT}-quest.apk"
 MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure",
-              "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
+              "build_apk", "publish_apk", "signer_runs", "dispatch", "watch", "check_jobs", "verify_live"]
 
 
 HOST_APK = b"apk bytes the host serves"
@@ -1636,7 +1638,7 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertEqual(self.run_timer(fake), 0)
         self.assertEqual(self.names()[-1], "done")
         self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")])
-        for never in ("build_apk", "publish_apk", "dispatch", "watch", "check_jobs"):
+        for never in ("build_apk", "publish_apk", "signer_runs", "dispatch", "watch", "check_jobs"):
             self.assertNotIn(never, fake.steps())
         self.assertEqual(fake.steps().count("variant_build"), 1)
         self.assertEqual(fake.steps().count("variant_publish"), 1)
@@ -2225,6 +2227,37 @@ class VariantOnlyAfterTheMainRelease(VariantCase):
         self.assertEqual(self.run_timer(fake), 0)
         for once in ("build_apk", "publish_apk", "dispatch"):
             self.assertEqual(fake.steps().count(once), 1, once)
+
+
+class SignerRunsFirst(TimerCase):
+    """A dispatch waits for signer runs that are queued or running (the rollback tool's rule), and stops with their ids when
+    they outlast the wait."""
+
+    @staticmethod
+    def listing(*batches: list[dict]) -> Callable:
+        queue = list(batches)
+
+        def answer(argv: list[str]) -> subprocess.CompletedProcess:
+            return completed(argv, 0, json.dumps(queue.pop(0) if len(queue) > 1 else queue[0]))
+        return answer
+
+    def test_a_queued_signer_run_is_waited_for_before_the_dispatch(self) -> None:
+        fake = Fake(self.root, overrides={"signer_runs": self.listing(
+            [{"databaseId": 99, "status": "queued"}], [{"databaseId": 99, "status": "in_progress"}], [])})
+        self.assertEqual(self.run_timer(fake), 0)
+        steps = fake.steps()
+        self.assertEqual(steps.count("signer_runs"), 3)
+        self.assertLess(steps.index("signer_runs"), steps.index("dispatch"))
+        self.assertEqual(self.sleeps.count(timer.SIGNER_WAIT_SECONDS), 2)
+
+    def test_a_signer_run_still_active_at_the_deadline_stops_the_dispatch(self) -> None:
+        fake = Fake(self.root, overrides={"signer_runs": self.listing([{"databaseId": 4242, "status": "queued"}])})
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertNotIn("dispatch", fake.steps())
+        self.assertEqual(len(self.sleeps), timer.SIGNER_WAITS - 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "signer_runs")
+        self.assertIn("4242", failed["error"])
 
 
 class RunLock(TimerCase):
