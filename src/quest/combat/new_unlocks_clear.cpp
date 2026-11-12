@@ -69,7 +69,7 @@ void ClearHandler(typename pinned::LibR15NewUnlocksClearThunk<Word>::Fn original
   std::uint64_t before = 0;
   std::uint64_t user = 0;
   const bool readable = ReadU64(game + rules::kNewUnlocksCountOffset, &before) && ReadU64(game + rules::kNetGameUserOffset, &user) && user != 0 &&
-                        sentinel::MappingsAllow(static_cast<std::uintptr_t>(user), rules::kUserFlagsOffset + sizeof(std::uint32_t), /*write=*/false);
+                        sentinel::MappingsAllow(static_cast<std::uintptr_t>(user), rules::kUserFlagsOffset + sizeof(std::uint32_t), /*write=*/true);
   original(netGame);
   if (!readable) return;  // the game's clear ran as it always did; there is nothing the rule can read
   bool held = false;
@@ -166,11 +166,19 @@ void PollNow() noexcept {
   const std::uint64_t heldCount = g_hold.HeldCount();
   // The user the clear was held for must still be the net game's user: after a log-out the pointer can be freed or reused, and the dirty bit of
   // another object is never touched.
+  // No mapping scan here: the pages were checked once, when the clear was held, and what ends a hold is seen from the frame hook's own live
+  // net game. A different net game than the one the clear was made on is a session that ended; a different user pointer in the same net game is a
+  // logout. Either drops the hold before anything is read through the old user.
+  const std::uintptr_t liveGame = reinterpret_cast<std::uintptr_t>(invite::frame::NetGame());
   std::uint64_t current = 0;
   std::uint64_t countNow = 0;
-  if (!ReadU64(g_heldNetGame + rules::kNetGameUserOffset, &current) || current != held ||
-      !sentinel::MappingsAllow(held, rules::kUserFlagsOffset + sizeof(std::uint32_t), /*write=*/true) ||
-      !ReadU64(g_heldNetGame + rules::kNewUnlocksCountOffset, &countNow)) {
+  if (liveGame != g_heldNetGame) {
+    current = 0;
+  } else {
+    std::memcpy(&current, reinterpret_cast<const void*>(liveGame + rules::kNetGameUserOffset), sizeof(current));
+    std::memcpy(&countNow, reinterpret_cast<const void*>(liveGame + rules::kNewUnlocksCountOffset), sizeof(countNow));
+  }
+  if (current != held) {  // 0 when the net game is another one
     g_hold.Drop();
     g_heldNetGame = 0;
     pthread_mutex_unlock(&g_lock);

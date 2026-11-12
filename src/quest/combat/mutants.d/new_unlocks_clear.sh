@@ -14,7 +14,10 @@ runm nuc_inflight_offset    $F "s/fn(reinterpret_cast<void\*>(user + rules::kUse
 runm nuc_rearm_not_written  $F "s/    __atomic_fetch_or(reinterpret_cast<std::uint32_t\*>(held + rules::kUserFlagsOffset), rules::kUserDirtyBit, __ATOMIC_SEQ_CST);/    (void)held;/"
 runm nuc_rearm_wrong_bit    $F "s/rules::kUserDirtyBit, __ATOMIC_SEQ_CST/0x2U, __ATOMIC_SEQ_CST/"
 runm nuc_user_not_rechecked $F "s/current != held/current == 0/"
-runm nuc_write_not_checked  $F "s/MappingsAllow(held, rules::kUserFlagsOffset + sizeof(std::uint32_t), \/\*write=\*\/true)/MappingsAllow(held, rules::kUserFlagsOffset + sizeof(std::uint32_t), \/*write=*\/false)/"
+runm nuc_write_not_checked  $F "s/rules::kUserFlagsOffset + sizeof(std::uint32_t), \/\*write=\*\/true);/rules::kUserFlagsOffset + sizeof(std::uint32_t), \/*write=*\/false);/"
+# what ends a hold without a scan: the frame hook's net game (session end) and the user pointer in it (logout)
+runm nuc_session_end_unseen_read $F "s/  if (liveGame != g_heldNetGame) {/  if (false) {/"
+runm nuc_scan_per_frame     $F "s/  const std::uintptr_t liveGame = reinterpret_cast<std::uintptr_t>(invite::frame::NetGame());/  const std::uintptr_t liveGame = g_heldNetGame;/"
 # the lines
 runm nuc_held_count_lost    $F "s/LogEnd(\"combat_new_unlocks_clear_held\", rules::kMsgHeld, before)/LogEnd(\"combat_new_unlocks_clear_held\", rules::kMsgHeld, 0)/"
 runm nuc_dropped_renamed    $F "s/LogEnd(\"combat_new_unlocks_clear_dropped\", rules::kMsgDropped, heldCount)/LogEnd(\"combat_new_unlocks_clear_drop\", rules::kMsgDropped, heldCount)/"

@@ -14,6 +14,7 @@
 // Built and run by `just test-quest-combat`.
 
 #include <sys/mman.h>
+#include <time.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -82,7 +83,7 @@ int g_clearCalls[2];
 const void* g_clearArg[2];
 
 // RemoveAllNewlyUnlockedItems: returns at once on an empty list, else the count to 0 and the user's dirty bit. One model per word, so each word's
-// own stored original can be told apart.
+bool g_modelSetsDirty = true;  // false: the model leaves the user's flag word alone (a test whose user page is read-only)
 template <int Word>
 void ModelClear(void* game) {
   ++g_clearCalls[Word];
@@ -91,7 +92,7 @@ void ModelClear(void* game) {
   if (Get<std::uint64_t>(g, kOffCount) == 0) return;
   Put<std::uint64_t>(g, kOffCount, 0);
   const auto user = Get<std::uintptr_t>(g, kOffUser);
-  if (user != 0) Put<std::uint32_t>(reinterpret_cast<unsigned char*>(user), kOffFlags, Get<std::uint32_t>(reinterpret_cast<unsigned char*>(user), kOffFlags) | kDirty);
+  if (user != 0 && g_modelSetsDirty) Put<std::uint32_t>(reinterpret_cast<unsigned char*>(user), kOffFlags, Get<std::uint32_t>(reinterpret_cast<unsigned char*>(user), kOffFlags) | kDirty);
 }
 
 // CJson::Empty: nonzero when the json has nothing in it. The module asks it about user + 0x28.
@@ -181,6 +182,7 @@ void Begin(const ImageOptions& opt = {}) {
   nuc::SetGameFunctionsForTest(&fns);
   sentinel::SetLogSink(&Capture);
   BuildGame();
+  frame::SetNetGame(g_game);  // the net game the frame hook passes each tick
   BuildImage(opt);
 }
 void End() {
@@ -341,28 +343,84 @@ void AGoneUserDropsTheHoldAndNothingIsWritten() {
   }
 }
 
-// The user's page is read-only when the poll runs (the object was unmapped or remapped since the clear): the module must not write through it. The
-// clear is dropped, the word is left as it is and nothing faults; a write through the page would end the test with a signal.
-void AUserWhosePageCannotBeWrittenIsDropped() {
+// The user's page cannot be written when the clear is made (the object was unmapped or remapped): the module must not hold it and must not write through it.
+// The game's clear runs, nothing is held, no line is written and nothing faults; a write through the page would end the test with a signal.
+void AUserWhosePageCannotBeWrittenIsNotHeld() {
   Begin();
   QCHECK(InstallWithModels());
-  void* const page = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void* const page = mmap(nullptr, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   QCHECK(page != MAP_FAILED);
   auto* user = static_cast<unsigned char*>(page);
   Put<std::uintptr_t>(g_game, kOffUser, reinterpret_cast<std::uintptr_t>(user));
   g_inFlight = true;
   SetCount(2);
-  CallWord(0);                                  // held: the page is readable and writable now
+  g_modelSetsDirty = false;
+  CallWord(0);
+  g_modelSetsDirty = true;
+  QCHECK(g_clearCalls[0] == 1);  // the game's clear ran
+  g_inFlight = false;
+  frame::Tick();
+  QCHECK(Lines("combat_new_unlocks_clear_held").empty() && Lines("combat_new_unlocks_clear_dropped").empty() &&
+         Lines("combat_new_unlocks_clear_rearmed").empty());
+  End();
+  QCHECK(munmap(page, 4096) == 0);
+}
+
+// The session ends while a clear is held: the frame hook's net game is no longer the one the clear was made on. The hold is dropped without reading
+// the old net game or its user, and nothing is written.
+void ASessionEndDropsTheHold() {
+  Begin();
+  QCHECK(InstallWithModels());
+  g_inFlight = true;
+  SetCount(2);
+  CallWord(0);
+  GameMergesAndClearsTheBit();
   QCHECK(Lines("combat_new_unlocks_clear_held").size() == 1U);
-  Put<std::uint32_t>(user, kOffFlags, 0);       // the game merged the change and cleared the bit
-  QCHECK(mprotect(page, 4096, PROT_READ) == 0);  // the page can no longer be written
+  frame::SetNetGame(nullptr);
+  const int emptyBefore = g_emptyCalls;
   g_inFlight = false;
   frame::Tick();
   QCHECK(Lines("combat_new_unlocks_clear_dropped").size() == 1U && Lines("combat_new_unlocks_clear_rearmed").empty());
-  QCHECK(Flags(user) == 0);
-  QCHECK(mprotect(page, 4096, PROT_READ | PROT_WRITE) == 0);
+  QCHECK(g_emptyCalls == emptyBefore && Flags() == 0);
+  frame::Tick();
+  QCHECK(Lines("combat_new_unlocks_clear_dropped").size() == 1U);  // one line, and the hold is over
   End();
-  QCHECK(munmap(page, 4096) == 0);
+}
+
+// The per-frame cost of the frame work, measured: while a clear is held and the update is still unacknowledged (the hold stays), and with nothing held.
+// The hold's per-frame work must stay near zero because it runs on the game thread once per CR15NetGame::Update. The numbers are printed (the README's
+// "prints its cost") and bounded loosely, so a return to a /proc/self/maps scan per frame fails here.
+std::uint64_t NowNs() {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<std::uint64_t>(ts.tv_nsec);
+}
+
+void ThePerFrameCostWhileAHoldIsActive() {
+  constexpr int kFrames = 20000;
+  constexpr std::uint64_t kBoundNs = 2000;  // a per-frame scan of the mappings costs tens of microseconds (28 us measured): far above this
+  Begin();
+  QCHECK(InstallWithModels());
+  frame::SetNetGame(g_game);
+  nuc::PollNow();
+  const std::uint64_t idle0 = NowNs();
+  for (int i = 0; i < kFrames; ++i) nuc::PollNow();
+  const std::uint64_t idleNs = (NowNs() - idle0) / kFrames;
+  g_inFlight = true;
+  SetCount(5);
+  CallWord(0);
+  QCHECK(Lines("combat_new_unlocks_clear_held").size() == 1U);
+  for (int i = 0; i < 100; ++i) nuc::PollNow();
+  const int emptyBefore = g_emptyCalls;
+  const std::uint64_t held0 = NowNs();
+  for (int i = 0; i < kFrames; ++i) nuc::PollNow();
+  const std::uint64_t heldNs = (NowNs() - held0) / kFrames;
+  QCHECK(g_emptyCalls - emptyBefore == kFrames);  // one call of the game's emptiness test per frame
+  QCHECK(Lines("combat_new_unlocks_clear_held").size() == 1U && Lines("combat_new_unlocks_clear_dropped").empty());  // still held, no line per frame
+  std::printf("new_unlocks_clear_test: per-frame cost: %llu ns with nothing held, %llu ns while a clear is held and unacknowledged (%d frames each)\n",
+              static_cast<unsigned long long>(idleNs), static_cast<unsigned long long>(heldNs), kFrames);
+  QCHECK(heldNs < kBoundNs);
+  End();
 }
 
 // The refusals: a pin that differs refuses the module before any word is touched; so do a missing library and another build; a word that does not hold
@@ -420,7 +478,9 @@ int main() {
   AHeldClearIsRearmedOnceAfterTheAcknowledgement();
   AnAddAfterTheClearSupersedesIt();
   AGoneUserDropsTheHoldAndNothingIsWritten();
-  AUserWhosePageCannotBeWrittenIsDropped();
+  AUserWhosePageCannotBeWrittenIsNotHeld();
+  ASessionEndDropsTheHold();
+  ThePerFrameCostWhileAHoldIsActive();
   TheRefusalsSayWhy();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "new_unlocks_clear_test: %d check(s) failed\n", quest_test::Failures());

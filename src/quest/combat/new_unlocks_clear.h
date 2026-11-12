@@ -38,10 +38,12 @@
  * Which APKs (docs/adr/0046 rule 5). This ships to every APK, the release APK and the variants alike, and is not gated by combat::Active()
  * (combat_active.h): it installs on every launch (entry.cpp, InstallPermissionWaitHook).
  *
- * Frequency (ADR 0038). The clear runs once per click. The frame work costs one lock and one pointer test per frame while nothing is held. While a clear is held
- * it also makes two /proc/self/maps checks, two reads and one call of the game's CJson::Empty per frame; a hold ends at the acknowledgement, when an add
- * follows, when the user is gone, or when the next clear replaces it, so a clear whose acknowledgement never comes costs that every frame until one of those.
- * The cost of a read was not measured on a headset.
+ * Frequency (ADR 0038). The clear runs once per click. The frame work costs one lock and one pointer test per frame while nothing is held. While a clear is
+ * held it compares the frame hook's net game and the net game's user pointer with the held ones, reads the count and calls the game's CJson::Empty once, with
+ * no mapping scan (the pages were checked once, when the hold began): measured on the host, 10 ns per frame with nothing held and a few tens of ns
+ * held (the first version scanned /proc/self/maps twice per frame, 28 us). A hold ends at the acknowledgement, when an add follows, at session end (the
+ * frame hook's net game is no longer the one the clear was made on), at logout (the net game's user pointer changed), or when the next clear replaces it.
+ * The cost was not measured on a headset.
  *
  * Owner (ADR 0039). This file owns sending a clear made while an update is unacknowledged. The argument and the effect of the game's clear are not changed.
  *
