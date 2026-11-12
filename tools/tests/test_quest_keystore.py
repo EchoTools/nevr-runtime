@@ -79,6 +79,27 @@ def alive(pid: int) -> bool:
     return stat[stat.rindex(")") + 2] not in "ZX"
 
 
+# Field 22 of /proc/<pid>/stat is the process's start time. The fields after the command name begin at field 3, so the
+# start time is at index 22 - 3 of the list that splits them.
+STARTTIME_INDEX = 22 - 3
+
+
+def child_start_ticks(pid: int) -> int | None:
+    """The kernel start time of `pid` in clock ticks since boot, or None when it is gone."""
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    return int(stat[stat.rindex(")") + 2:].split()[STARTTIME_INDEX])
+
+
+def late_child_report(pid: int, load1: float, start_ticks: int | None, look_s: float, stop_s: float) -> str:
+    """The failure text for a late child that outlived the check: the load average at the start of the check, the
+    child's start time, the look and the stop of the tool (monotonic seconds)."""
+    return (f"the child started after the check looked (pid {pid}) outlived the check: load1={load1:.2f} "
+            f"child_start_ticks={start_ticks} look_monotonic={look_s:.3f} stop_monotonic={stop_s:.3f}")
+
+
 def fingerprint(keystore: pathlib.Path) -> str:
     out = subprocess.run(
         ["keytool", "-list", "-keystore", str(keystore), "-alias", ALIAS, "-storepass", PASSPHRASE],
@@ -202,6 +223,7 @@ class QuestKeystoreTest(unittest.TestCase):
             while time.time() < deadline and not any(argv[:1] == ["sleep"] for _, argv in tree):
                 time.sleep(0.05)
                 tree = process_tree(proc.pid)
+            self.look_s = time.monotonic()  # the look: the tree that holds the wrapped command is taken now
             self.assertTrue(any(argv[:1] == ["sleep"] for _, argv in tree),
                             f"the wrapped command never started; tree {tree}")
             self.assertGreaterEqual(len(tree), 2, f"the scan saw {tree}")
@@ -211,6 +233,7 @@ class QuestKeystoreTest(unittest.TestCase):
         finally:
             self.tool_pid = proc.pid
             stop_tool(proc, tool_log, stop_bound_s)
+            self.stop_s = time.monotonic()  # the stop: the tool's group has been signalled and waited for
         calls = self.keytool_log.read_text().splitlines() if self.keytool_log.exists() else []
         self.assertTrue(calls, "the tool never called keytool, so there was nothing to check")
         found += [line for line in calls if PASSPHRASE in line]
@@ -271,12 +294,35 @@ class QuestKeystoreTest(unittest.TestCase):
                   '    log "keystore ready alias=$ALIAS"')
         leaky = self.leaking_copy('    log "keystore ready alias=$ALIAS"', holder,
                                   "    local rc=$?", "    local rc=$?\n    sleep 3")
+        load1 = os.getloadavg()[0]
         self.passphrase_holders(leaky)
         self.assertTrue(pidfile.exists(), "the holder never started its child")
         late = int(pidfile.read_text())
-        self.assertFalse(alive(late), f"the child started after the check looked (pid {late}) outlived the check")
+        self.assert_late_child_gone(late, load1, self.look_s, self.stop_s)
         self.assertFalse(pathlib.Path(f"/proc/{self.tool_pid}").exists(),
                          f"the tool (pid {self.tool_pid}) was not reaped before the check returned")
+
+    def assert_late_child_gone(self, late, load1, look_s, stop_s):
+        """Fails when the child the holder started after the check's look is still alive after the tool stopped. The
+        message names the 1-minute load average at the start of the check, the child's kernel start time, the look and
+        the stop (both on the monotonic clock), so a failure on a busy host says what the timing was."""
+        if alive(late):
+            self.fail(late_child_report(late, load1, child_start_ticks(late), look_s, stop_s))
+
+    def test_a_late_child_still_alive_fails_with_its_start_load_and_times(self):
+        runner = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (runner.kill(), runner.wait()))
+        look_s = time.monotonic()  # the child started before the look: its start time is in the past
+        expected_start = child_start_ticks(runner.pid)
+        with self.assertRaises(AssertionError) as caught:
+            self.assert_late_child_gone(runner.pid, 1.5, look_s, time.monotonic())
+        message = str(caught.exception)
+        self.assertIn("outlived the check", message)
+        self.assertIn(f"(pid {runner.pid})", message)
+        self.assertIn("load1=1.50", message)
+        self.assertIn(f"child_start_ticks={expected_start}", message)
+        self.assertIn(f"look_monotonic={look_s:.3f}", message)
+        self.assertIn("stop_monotonic=", message)
 
     def test_alive_is_false_for_a_zombie_and_true_for_a_running_process(self):
         zombie = subprocess.Popen(["true"])
