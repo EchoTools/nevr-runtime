@@ -135,7 +135,14 @@ func TestAibotsReadsOneLookOfTheScopeScansNoLevelAndRefusesWhenTheScopeCannotCha
 	if !strings.Contains(install, `Refused("scope_not_live"`) {
 		t.Error(`aibots.cpp's install does not refuse with "scope_not_live"`)
 	}
-	if strings.Contains(code, "scope::Enroll") {
-		t.Error("aibots.cpp registers the refresh itself; the scope row does")
+	// The refresh is registered once, by the scope row: combat_install.cpp's ScopeNormal returns scope::InstallNormal(), which adds scope::Refresh
+	// to the tick. The module names neither, and the row's call is where this test expects it, so a rename cannot leave the check reading nothing.
+	for _, reg := range []string{"scope::Refresh", "scope::InstallNormal("} {
+		if strings.Contains(code, reg) {
+			t.Errorf("aibots.cpp names %s: it registers the refresh itself; the scope row does", reg)
+		}
+	}
+	if !strings.Contains(stripComments(read(t, "src/quest/combat/combat_install.cpp")), "return scope::InstallNormal();") {
+		t.Error("combat_install.cpp's scope row does not call scope::InstallNormal(): the registration this test keeps out of aibots.cpp is not where it expects it")
 	}
 }

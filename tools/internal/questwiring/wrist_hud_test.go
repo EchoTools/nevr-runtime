@@ -53,9 +53,16 @@ func TestEachModuleAsksTheScopeIsLiveBeforeItHooksAnything(t *testing.T) {
 			t.Errorf("%s: an off module does not say off_config", m.file)
 		}
 		before(t, b, "off_config", "scope::Live()") // a module that is off asks nothing of the scope
-		if strings.Contains(code, "scope::Enroll") {
-			t.Errorf("%s: a module registers the refresh itself; the scope row does", m.file)
+		for _, reg := range []string{"scope::Refresh", "scope::InstallNormal("} {
+			if strings.Contains(code, reg) {
+				t.Errorf("%s names %s: a module registers the refresh itself; the scope row does", m.file, reg)
+			}
 		}
+	}
+	// the one registration: the scope row's step returns scope::InstallNormal() (combat_install.cpp ScopeNormal), so a rename cannot leave the check above
+	// reading nothing
+	if !strings.Contains(stripComments(read(t, "src/quest/combat/combat_install.cpp")), "return scope::InstallNormal();") {
+		t.Error("combat_install.cpp's scope row does not call scope::InstallNormal(): the registration the modules must not make is not where this test expects it")
 	}
 }
 
