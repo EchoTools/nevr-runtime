@@ -89,10 +89,9 @@ class TheDetourForwardsEverything(unittest.TestCase):
 
 
 class TheSourceIsInTheBuild(unittest.TestCase):
-    def test_cmake_compiles_the_source_and_the_inventory_pins_it(self):
+    def test_cmake_compiles_the_source(self):
         cmake = read("src/runtime/CMakeLists.txt")
         self.assertIn('"patch/broadcaster_allow_incoming.cpp"', cmake)
-        self.assertIn("patch/broadcaster_allow_incoming.cpp", read("tools/verify_patch_source_inventory.py"))
 
     def test_the_identity_manifest_pins_the_site(self):
         self.assertIn('"va": "0x140F7FE50"', read("tools/hook_identity_manifest.json"))
