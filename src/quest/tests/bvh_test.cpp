@@ -70,6 +70,9 @@ constexpr int kInfo = static_cast<int>(sentinel::LogLevel::kInfo);
 constexpr int kWarn = static_cast<int>(sentinel::LogLevel::kWarn);
 constexpr int kError = static_cast<int>(sentinel::LogLevel::kError);
 std::string Event(const char* name) { return std::string("\"event\":\"") + name + "\""; }
+// The msg of the combat_bvh_scope edge line, whole, as bvh.cpp NoteScopeEdge writes it for each direction.
+const char* const kScopeInMsg = "a combat map or the combat lobby is loaded: casts are answered from its static BVH";
+const char* const kScopeOutMsg = "no combat map or combat lobby is loaded (or the combat level answer is stale): the game's own answers stand";
 
 // ---- fake stock functions (what the pinned build's stubs do) ----
 int g_stockInit, g_stockShut, g_stockInt, g_stockOcc, g_stockTouch, g_stockGate;
@@ -508,6 +511,7 @@ void ACombatMapGetsTheTreesAnswers() {
   EnterCombat();
   QCHECK(bvh::InCombatOrLobby());
   QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 1 && Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1") == 1);
+  QCHECK(Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1,\"msg\":\"" + kScopeInMsg + "\"") == 1);  // the 0->1 line carries the combat text, whole
   Look();  // the same answer again: no second line
   QCHECK(Count(Event("combat_bvh_scope")) == 1);
 
@@ -689,6 +693,9 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
   EnterArena();
   QCHECK(Count(Event("combat_bvh_scope")) == 2 && Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1") == 1 &&
          Count(Event("combat_bvh_scope") + ",\"from\":1,\"to\":0") == 1);
+  // each direction's line carries its own msg, whole: a swapped or blanked text fails here
+  QCHECK(Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1,\"msg\":\"" + kScopeInMsg + "\"") == 1 &&
+         Count(Event("combat_bvh_scope") + ",\"from\":1,\"to\":0,\"msg\":\"" + kScopeOutMsg + "\"") == 1);
   End();
 }
 
