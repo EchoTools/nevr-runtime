@@ -512,9 +512,14 @@ class RealRepoGuardTest(unittest.TestCase):
     def test_the_state_it_watches_names_the_submodule_config_and_the_worktree_paths_not_their_heads(self):
         state = real_repo_guard.real_repo_state().decode()
         config, _, worktrees = state.partition("\0")
-        self.assertRegex(worktrees, r"(?m)^worktree /")
         self.assertNotIn("HEAD ", worktrees)
         self.assertTrue(config == "" or config.startswith("submodule."), config[:60])
+        # Only the worktrees under the temporary directory the tests make theirs are named (#2155).
+        own = str(real_repo_guard._own_root())
+        for line in worktrees.splitlines():
+            self.assertTrue(line.startswith(("worktree ", "locked")), line)
+            if line.startswith("worktree "):
+                self.assertTrue(line[len("worktree "):].startswith(own), line)
 
 
 if __name__ == "__main__":
