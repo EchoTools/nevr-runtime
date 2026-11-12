@@ -185,7 +185,7 @@ the name and has to make sense as one.
 
 ### What checks it
 
-The review checks (no automated check reads these):
+The review checks (no automated check reads these). KNOWN-WRONG #2393: no file in the tree defines the lists these rules name (`KNOWN_COLLISIONS`, `KNOWN_ROLE_BREAKS`, `COMBAT_NAMES`, `KNOWN_COMBAT_BREAKS`, `RULES_HOME_SHARED_HOOK`, `KNOWN_DIRECTORY_BREAKS`), so each rule that names one is unchecked until its list exists:
 
 - **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
   removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
