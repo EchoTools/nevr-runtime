@@ -338,12 +338,26 @@ fn reopen_game_folder(w: &World) {
     std::fs::set_permissions(w.game.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+// The installer folder refuses the record file, so the record write fails after the host was replaced. The aside folder is
+// made first: the run makes it at its start, and it stays writable inside the read-only folder.
+fn setup_failing_record_write(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(w.nevr.path().join("installer/aside")).unwrap();
+    std::fs::set_permissions(w.nevr.path().join("installer"), std::fs::Permissions::from_mode(0o555)).unwrap();
+}
+
+fn reopen_installer_folder(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(w.nevr.path().join("installer"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// Bytes of log written before the first record named `target` in a healthy run of the scenario.
 fn log_bytes_before(target: &str, scenario: fn(&World)) -> usize {
     let probe = world(false);
     scenario(&probe);
     let _ = run(&probe, &["pc", "install", "--dir", probe.game.path().to_str().unwrap()]);
     reopen_game_folder(&probe);
+    reopen_installer_folder(&probe);
     let text = std::fs::read_to_string(probe.root.path().join("logs/nevr-install.jsonl")).unwrap();
     let mut before = 0;
     for line in text.lines() {
@@ -385,6 +399,17 @@ fn a_log_that_fails_while_the_rollback_is_due_does_not_stop_the_rollback() {
     let reason = out["reason"].as_str().unwrap();
     // The record of the failure and the record of the one file put back were both lost.
     assert!(reason.contains("; 2 log record(s) could not be written during the rollback: FAIL step 0: cannot write the log"), "the lost records are said: {reason}");
+}
+
+#[test]
+fn a_log_that_fails_after_a_host_replace_still_puts_the_host_back() {
+    // The host is replaced, then the record write fails; the log cannot take `install_failed`, and the host must still be the
+    // game's own bytes after the rollback. The runtime is not asserted here: the host bytes are the point of this case.
+    let w = world(false);
+    let (code, out, _) = run_with_log_cut_before(&w, "install_failed", setup_failing_record_write);
+    reopen_installer_folder(&w);
+    assert_eq!((code, out["state"].as_str()), (3, Some("restored")), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
 }
 
 #[test]
