@@ -142,8 +142,16 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
             static_cast<unsigned long long>(size), nevr_game_buffer::CopyName(result));
         return false;
     }
+    /* #2345: the block no longer names the reader's buffer, so the release's own allocator frees it here. */
+    void* const reader = *reinterpret_cast<void**>(cbd + 0x18);
     *reinterpret_cast<void**>(cbd + 0x18) = copy;
     *reinterpret_cast<uint64_t*>(cbd + 0x20) = size;
+    const bool freed = nevr_game_buffer::FreeReaderBuffer(g_memory_context_slot.load(std::memory_order_acquire),
+                                                          reinterpret_cast<unsigned char*>(cbd), reader);
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.RESOURCE] reader buffer freed label=%s type=0x%016llx name=0x%016llx bytes=%llu orig_freed=%s",
+        label, static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+        static_cast<unsigned long long>(size), freed && reader != nullptr ? "yes" : "no");
     return true;
 }
 
@@ -268,13 +276,9 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                  * A fixed replacement outranks every transform of the same key whatever the registration order (#1479),
                  * so transforms are offered only when none matches. Every match is recorded, so a shutdown can tell an
                  * entry passed over from one never requested.
-                 * KNOWN-WRONG #2345: the cost of every load. A buffer-0 replacement points the block at a copy in
-                 * the game's heap and leaves the reader's own buffer alone (game_buffer.h: the reader may own it), so
-                 * one buffer of orig_bytes stays allocated for each load served, a level loaded N times leaving N of
-                 * them per overridden buffer-0 resource. Serving one load per entry would cap that at one per entry,
-                 * and the override would not survive a reload; transforms (OfferTransforms) already pay it on every
-                 * load. A buffer-1 payload is written in place and leaves none. Test:
-                 * EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone. */
+                 * A buffer-0 replacement frees the reader's own buffer through the block's allocator once the copy is
+                 * written (GiveGameACopy), and a buffer-1 payload is written in place, so no load leaves one allocated.
+                 * Test: EachBufferZeroLoadServedFreesTheReadersOwnBufferAndBufferOneLeavesNone. */
                 std::shared_ptr<ResourceOverride> fixedHit;
                 for (auto& ovr : *g_overrides) {
                     if (ovr->name_hash != name_hash) continue;
