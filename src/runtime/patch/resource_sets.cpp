@@ -29,6 +29,7 @@
 
 #include <winsock2.h>
 #include <windows.h>
+#include <wincrypt.h>
 
 #include <nlohmann/json.hpp>
 
@@ -63,12 +64,18 @@ struct Published {
 constexpr std::uint64_t kLateMs = 60000;
 // A label: what a plugin calls its set, written into log lines and the login's JSON.
 constexpr std::size_t kMaxLabel = 64;
+// A map's label is "map:<id>@<version>" (CDN_DESIGN F3), and an id alone may be 55 bytes.
+constexpr std::size_t kMaxMapLabel = 128;
 
 std::mutex g_mutex;  // the registry, the init state and the mount
 // A set's check of the plugin assets and its Add; a plugin asset's check of the sets and its Register (LockKeyClaims).
 // Taken before g_mutex and before the asset registry's own lock, never after either.
 std::mutex g_keyMutex;
 Registry g_registry;
+// The mapped views of the map sets the registry holds, by their file's handle; unmapped when the handle is closed.
+// Taken after g_mutex, never before it.
+std::mutex g_viewMutex;
+std::vector<std::pair<std::int64_t, const void*>> g_fileViews;
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
 bool g_deferSaid = false;
@@ -86,6 +93,8 @@ std::atomic<std::uint64_t> g_lastSummaryMs{0};
 std::atomic<bool> g_stockWinSaid{false};
 std::atomic<bool> g_mountFailedSaid{false};
 std::atomic<bool> g_summaryFailedSaid{false};
+std::atomic<void (*)(const MountReport&)> g_mountObserver{nullptr};
+std::atomic<bool> g_mountObserved{false};
 
 struct InitState {
   std::string id;
@@ -140,9 +149,24 @@ std::uint64_t StockRecordsNow() {
   return nevr::assets::StockRecordCount();
 }
 
+void UnmapFileView(std::int64_t handle) {
+  const void* view = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_viewMutex);
+    const auto it = std::find_if(g_fileViews.begin(), g_fileViews.end(),
+                                 [handle](const std::pair<std::int64_t, const void*>& v) { return v.first == handle; });
+    if (it == g_fileViews.end()) return;
+    view = it->second;
+    g_fileViews.erase(it);
+  }
+  UnmapViewOfFile(view);
+}
+
 void CloseHandles(const std::vector<std::int64_t>& handles) {
   for (std::int64_t h : handles) {
-    if (h != -1 && h != 0) CloseHandle(reinterpret_cast<HANDLE>(static_cast<intptr_t>(h)));
+    if (h == -1 || h == 0) continue;
+    UnmapFileView(h);
+    CloseHandle(reinterpret_cast<HANDLE>(static_cast<intptr_t>(h)));
   }
 }
 
@@ -168,10 +192,10 @@ class FileHandle {
 
 // A label is 1 to kMaxLabel bytes of printable ASCII, with no double quote or backslash: it is written into log lines
 // (quoted) and into the login's JSON, so it can neither start a line nor break either.
-bool LabelOk(const char* label) {
+bool LabelOk(const char* label, std::size_t maxLength = kMaxLabel) {
   if (label == nullptr) return false;
   const std::size_t n = std::strlen(label);
-  if (n == 0 || n > kMaxLabel) return false;
+  if (n == 0 || n > maxLength) return false;
   for (std::size_t i = 0; i < n; ++i) {
     const unsigned char c = static_cast<unsigned char>(label[i]);
     if (c < 0x20 || c > 0x7e || c == '"' || c == '\\') return false;
@@ -250,6 +274,20 @@ FileCheck FileHoldsMappedBytes(HANDLE file, std::uint64_t fileOffset, const unsi
   if (!ReadFileAt(file, fileOffset + tail, span, &read, error)) return FileCheck::kReadFailed;
   if (std::memcmp(read.data(), mapped + tail, span) != 0) return FileCheck::kDiffers;
   return FileCheck::kSame;
+}
+
+// The first record of `view` whose key a plugin asset holds, as kCollides names it; empty when none. Under g_keyMutex.
+std::string AssetClaimOn(const nevr_resource_set::View& view) {
+  const std::vector<nevr::assets::AssetManifestKey> assetKeys = nevr::assets::AssetManifestKeys();
+  for (std::uint32_t i = 0; i < view.record_count() && !assetKeys.empty(); ++i) {
+    const nevr_resource_set::Record r = view.RecordAt(i);
+    for (const nevr::assets::AssetManifestKey& key : assetKeys) {
+      if (key.type == r.type && key.name == r.name) {
+        return KeyText(r.type, r.name) + " owner=asset:" + Printable(key.label.c_str());
+      }
+    }
+  }
+  return {};
 }
 
 int32_t Refused(const char* pluginId, const std::string& label, int32_t status, const char* reason,
@@ -359,15 +397,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
     // check of the sets and its Register: a set and an asset never both take one resource (the asset hook would serve
     // one and the resolver the other).
     const std::lock_guard<std::mutex> claim(g_keyMutex);
-    const std::vector<nevr::assets::AssetManifestKey> assetKeys = nevr::assets::AssetManifestKeys();
-    for (std::uint32_t i = 0; i < view.record_count() && !assetKeys.empty(); ++i) {
-      const nevr_resource_set::Record r = view.RecordAt(i);
-      for (const nevr::assets::AssetManifestKey& key : assetKeys) {
-        if (key.type == r.type && key.name == r.name) {
-          return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
-                         KeyText(r.type, r.name) + " owner=asset:" + Printable(key.label.c_str()));
-        }
-      }
+    const std::string claimed = AssetClaimOn(view);
+    if (!claimed.empty()) {
+      return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides), claimed);
     }
 #ifdef NEVR_TEST_HOOKS
     if (g_testBeforeAdd != nullptr) g_testBeforeAdd();
@@ -393,19 +425,132 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
   return NEVR_RESOURCES_OK;
 }
 
-// The mount itself, under g_mutex, once TryMount found the manifest ready. Fills `report`, `mounted` and
-// `abandoned` for the lines written after the lock is released.
+bool IsSha256Hex(const std::string& text) {
+  return text.size() == 64 &&
+         std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
+// The SHA-256 of the first `size` bytes of `file`, read through it 1 MiB at a time, as 64 lowercase hex. Empty when a
+// read or the hash fails; `error` is then the failing call's GetLastError (ERROR_HANDLE_EOF: the file ended first).
+std::string FileSha256(HANDLE file, std::uint64_t size, DWORD* error) {
+  HCRYPTPROV provider = 0;
+  if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
+    *error = GetLastError();
+    return {};
+  }
+  HCRYPTHASH hash = 0;
+  std::string hex;
+  if (!CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash)) {
+    *error = GetLastError();
+  } else {
+    std::vector<unsigned char> buffer(std::size_t{1} << 20);
+    bool ok = true;
+    for (std::uint64_t done = 0; ok && done < size;) {
+      OVERLAPPED at = {};
+      at.Offset = static_cast<DWORD>(done & 0xFFFFFFFFu);
+      at.OffsetHigh = static_cast<DWORD>(done >> 32);
+      const DWORD want = static_cast<DWORD>(std::min<std::uint64_t>(size - done, buffer.size()));
+      DWORD got = 0;
+      if (!ReadFile(file, buffer.data(), want, &got, &at)) {
+        *error = GetLastError();
+        ok = false;
+      } else if (got == 0) {
+        *error = ERROR_HANDLE_EOF;
+        ok = false;
+      } else if (!CryptHashData(hash, buffer.data(), got, 0)) {
+        *error = GetLastError();
+        ok = false;
+      } else {
+        done += got;
+      }
+    }
+    BYTE digest[32] = {};
+    DWORD length = sizeof(digest);
+    if (ok && CryptGetHashParam(hash, HP_HASHVAL, digest, &length, 0) && length == sizeof(digest)) {
+      constexpr char kDigits[] = "0123456789abcdef";
+      for (const BYTE b : digest) {
+        hex.push_back(kDigits[b >> 4]);
+        hex.push_back(kDigits[b & 0x0f]);
+      }
+    } else if (ok) {
+      *error = GetLastError();
+    }
+    CryptDestroyHash(hash);
+  }
+  CryptReleaseContext(provider, 0);
+  return hex;
+}
+
+// A read-only view of a whole file; unmapped unless released to the registry.
+class FileView {
+ public:
+  FileView() = default;
+  FileView(const FileView&) = delete;
+  FileView& operator=(const FileView&) = delete;
+  ~FileView() {
+    if (data_ != nullptr) UnmapViewOfFile(data_);
+  }
+  // False with `error` set when the file cannot be mapped.
+  bool Map(HANDLE file, DWORD* error) {
+    const HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (mapping == nullptr) {
+      *error = GetLastError();
+      return false;
+    }
+    data_ = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (data_ == nullptr) *error = GetLastError();
+    CloseHandle(mapping);  // the view keeps the section alive
+    return data_ != nullptr;
+  }
+  const void* get() const { return data_; }
+  void release() { data_ = nullptr; }
+
+ private:
+  void* data_ = nullptr;
+};
+
+Outcome MapRefused(const std::string& owner, const std::string& label, Refusal refusal, std::string detail) {
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.MAPS] map resource set refused owner=%s label=\"%s\" reason=%s detail=\"%s\" (nothing was registered, "
+      "so none of the map's levels or resources is served; the caller keeps the file)",
+      Printable(owner.c_str()).c_str(), Printable(label.c_str()).c_str(), RefusalName(refusal), detail.c_str());
+  return Outcome{refusal, std::move(detail)};
+}
+
+bool MountedNow() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_registry.mounted();
+}
+
+// The mount observer, once a run, with no lock held.
+void NotifyMountObserver(const MountReport& report) {
+  const auto observer = g_mountObserver.load();
+  if (observer == nullptr || g_mountObserved.exchange(true)) return;
+  try {
+    observer(report);
+  } catch (...) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map mount observer threw (the mount goes on: every set it mounted is served)");
+  }
+}
+
+// The mount itself, under g_mutex, once TryMount found the manifest ready. Fills `report` and `mounted` for the lines
+// written after the lock is released.
 void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<const Set*>* mounted) {
 #ifdef NEVR_TEST_HOOKS
   if (g_testMountThrow == MountThrowAt::kBeforeMount) throw std::bad_alloc();
 #endif
   *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
   *mounted = g_registry.MountedSets();
+}
+
+// After MountLocked, under g_mutex: the shadow goes out to the resolver hook.
+void PublishLocked(const std::vector<const Set*>& mounted) {
   if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
     // The first read window starts here, before the publish: a read the resolver serves on another thread between
     // the publish and this frame's summary is then counted in a window that has a start.
     g_lastSummaryMs.store(NowMs());
-    g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
+    g_published.store(new Published(shadow, mounted.size()), std::memory_order_release);
 #ifdef NEVR_TEST_HOOKS
     if (g_testAfterPublish != nullptr) g_testAfterPublish();
 #endif
@@ -483,6 +628,7 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
 // throw left the scope that held it).
 void MountFailed(const char* reason) {
   g_mountDeferred.store(false);
+  NotifyMountObserver(MountReport{});
   if (g_mountFailedSaid.exchange(true)) return;
   const bool served = g_published.load(std::memory_order_acquire) != nullptr;
   Log(EchoVR::LogLevel::Error,
@@ -503,6 +649,7 @@ void TryMount(bool onLoopThread) {
   if (!ready && (g_lateSaid.load(std::memory_order_relaxed) || now - armed < kLateMs)) return;
   MountReport report;
   std::vector<const Set*> mounted;
+  bool observed = false;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_mountDeferred.load() || g_registry.mounted()) return;
@@ -519,6 +666,13 @@ void TryMount(bool onLoopThread) {
     }
     if (!ready || count == 0) return;
     MountLocked(count, &report, &mounted);
+    observed = g_mountObserver.load() != nullptr;
+    if (!observed) PublishLocked(mounted);
+  }
+  if (observed) {
+    NotifyMountObserver(report);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    PublishLocked(mounted);
   }
   WriteMountLines(now, report, mounted, {}, {}, now - armed);
 }
@@ -572,16 +726,117 @@ int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* des
   return NEVR_RESOURCES_BAD_FORMAT;
 }
 
+Outcome RegisterFileResourceSet(const std::string& owner, std::int64_t held_handle, const std::string& label,
+                                const std::string& sha256, bool rehash) {
+  if (!IsMapOwner(owner) || !LabelOk(owner.c_str(), kMaxMapLabel)) {
+    return MapRefused(owner, label, Refusal::kFormat,
+                      "bad_owner: \"map:<id>\", at most 128 bytes of printable ASCII with no double quote or "
+                      "backslash");
+  }
+  if (!LabelOk(label.c_str(), kMaxMapLabel)) {
+    return MapRefused(owner, label, Refusal::kFormat,
+                      "bad_label: 1 to 128 bytes of printable ASCII with no double quote or backslash");
+  }
+  if (rehash && !IsSha256Hex(sha256)) {
+    return MapRefused(owner, label, Refusal::kFormat, "bad_pin: the pinned sha256 is not 64 lowercase hex digits");
+  }
+  const HANDLE file = reinterpret_cast<HANDLE>(static_cast<intptr_t>(held_handle));
+  if (held_handle == 0 || file == INVALID_HANDLE_VALUE) {
+    return MapRefused(owner, label, Refusal::kFormat, "bad_handle: no file handle");
+  }
+  // Before the read and the map, which are wasted once the sets are mounted; Add checks again under the lock.
+  if (MountedNow()) return MapRefused(owner, label, Refusal::kTooLate, "the run's resource sets are already mounted");
+
+  LARGE_INTEGER fileSize = {};
+  if (!GetFileSizeEx(file, &fileSize)) {
+    return MapRefused(owner, label, Refusal::kFormat, "GetFileSizeEx error " + std::to_string(GetLastError()));
+  }
+  const auto size = static_cast<std::uint64_t>(fileSize.QuadPart);
+  if (size == 0) return MapRefused(owner, label, Refusal::kFormat, "the file is empty");
+  if (rehash) {
+    DWORD error = 0;
+    const std::string actual = FileSha256(file, size, &error);
+    if (actual.empty()) {
+      return MapRefused(owner, label, Refusal::kFormat,
+                        error == ERROR_HANDLE_EOF ? std::string("the file ended before its size while it was hashed")
+                                                  : "hash read error " + std::to_string(error));
+    }
+    if (actual != sha256) return MapRefused(owner, label, Refusal::kHash, "sha256 " + actual + ", pinned " + sha256);
+  }
+  FileView view;
+  DWORD mapError = 0;
+  if (!view.Map(file, &mapError)) {
+    return MapRefused(owner, label, Refusal::kFormat, "the file maps with error " + std::to_string(mapError));
+  }
+  nevr_resource_set::View parsed;
+  const nevr_resource_set::Result format = nevr_resource_set::Parse(view.get(), size, &parsed);
+  if (!format.ok()) {
+    return MapRefused(owner, label, Refusal::kFormat,
+                      std::string(nevr_resource_set::ProblemName(format.problem)) + " at index " +
+                          std::to_string(format.index));
+  }
+  std::size_t levels = 0;
+  for (std::uint32_t i = 0; i < parsed.record_count(); ++i) {
+    if (parsed.RecordAt(i).type == kLevelRootType) ++levels;
+  }
+
+  Outcome outcome;
+  {
+    // The same claim as a plugin's set: a set and a plugin asset never both take one resource.
+    const std::lock_guard<std::mutex> claim(g_keyMutex);
+    const std::string claimed = AssetClaimOn(parsed);
+    if (!claimed.empty()) return MapRefused(owner, label, Refusal::kCollides, claimed);
+    const std::lock_guard<std::mutex> lock(g_mutex);
+    {
+      // Listed before the Add, whose success must leave nothing that can throw: the registry owns the handle then.
+      const std::lock_guard<std::mutex> views(g_viewMutex);
+      g_fileViews.emplace_back(held_handle, view.get());
+    }
+    outcome = g_registry.AddMapFile(owner, label, view.get(), size, held_handle);
+    if (outcome.ok()) {
+      view.release();
+    } else {
+      const std::lock_guard<std::mutex> views(g_viewMutex);
+      g_fileViews.pop_back();
+    }
+  }
+  if (!outcome.ok()) return MapRefused(owner, label, outcome.refusal, outcome.detail);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.MAPS] map resource set registered owner=%s label=\"%s\" records=%u chunks=%u levels=%zu overrides=%u "
+      "bytes=%llu rehashed=%d (mapped from the file, held for the mount)",
+      owner.c_str(), label.c_str(), parsed.record_count(), parsed.chunk_count(), levels, parsed.override_count(),
+      static_cast<unsigned long long>(size), rehash ? 1 : 0);
+  return outcome;
+}
+
+void WithdrawFileResourceSet(const std::string& owner) {
+  std::vector<std::int64_t> dropped;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    dropped = g_registry.DropMap(owner);
+  }
+  if (dropped.empty()) return;
+  CloseHandles(dropped);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.RESOURCE] resource set withdrawn owner=%s count=%zu (the map did not mount whole, so its set is not "
+      "served)",
+      Printable(owner.c_str()).c_str(), dropped.size());
+}
+
+void SetMountObserver(void (*observer)(const MountReport& report)) { g_mountObserver.store(observer); }
+
 namespace {
 void MountWhenReadyUnguarded() {
   std::vector<std::int64_t> abandoned;
   std::vector<std::string> abandonedPlugins;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::unique_lock<std::mutex> lock(g_mutex);
     if (g_registry.mounted()) return;
     if (g_registry.held() == 0) {
       // Nothing to mount: close registration for the run without a line (no plugin carries resources).
-      g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
+      const MountReport none = g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
+      lock.unlock();
+      NotifyMountObserver(none);
       return;
     }
     // The resolver hook goes in now, so it sees the game's first request (which the mount waits for).
@@ -610,7 +865,10 @@ void MountWhenReadyUnguarded() {
       g_mountDeferred.store(true);
     }
   }
-  if (!abandoned.empty()) WriteMountLines(NowMs(), MountReport{}, {}, abandoned, abandonedPlugins, 0);
+  if (!abandoned.empty()) {
+    NotifyMountObserver(MountReport{});
+    WriteMountLines(NowMs(), MountReport{}, {}, abandoned, abandonedPlugins, 0);
+  }
 }
 }  // namespace
 
@@ -764,6 +1022,8 @@ void ResetForTest() {
   g_stockWinSaid.store(false);
   g_mountFailedSaid.store(false);
   g_summaryFailedSaid.store(false);
+  g_mountObserver.store(nullptr);
+  g_mountObserved.store(false);
   g_init = InitState{};
   g_testStockHas = nullptr;
   g_testStockRecords = 0;

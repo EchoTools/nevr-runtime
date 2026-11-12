@@ -10,8 +10,32 @@
 #include <vector>
 
 #include "nevr/plugin_interface.h"
+#include "runtime/patch/resource_set_registry.h"
 
 namespace nevr_resource_sets {
+
+// A downloaded map's set (CDN_PC PC3): the whole file the caller holds open as `held_handle` (a HANDLE, GENERIC_READ,
+// shared for reading only, so the file cannot change while the game reads it). With `rehash` the file is first read
+// through the handle and its SHA-256 compared with `sha256` (64 lowercase hex): kHash when they differ. The file is then
+// mapped read-only, never copied, checked as a plugin's set is (Registry::AddMapFile; one with an override is kOverride)
+// and held committed for the mount. Call it before MountWhenReady: with no plugin set held, that mounts at once. On ok()
+// the registry owns the handle and the view for the process: the game's reader reads the file through it. On a refusal
+// the caller keeps the handle. After the mount: kTooLate. `owner` is "map:<id>", `label` "map:<id>@<version>", each
+// at most 128 bytes of printable ASCII with no double quote or backslash. Run it off the game's thread: a rehash reads
+// the whole file, with no lock held.
+Outcome RegisterFileResourceSet(const std::string& owner, std::int64_t held_handle, const std::string& label,
+                                const std::string& sha256, bool rehash);
+
+// Undoes RegisterFileResourceSet for `owner` before the mount (a map withdrawn whole, CDN_DESIGN §13 D8): its set is
+// dropped, committed or not, and its file's view and handle are closed. Nothing after the mount, or for a plugin owner.
+void WithdrawFileResourceSet(const std::string& owner);
+
+// Called once a run, on the thread that ran the mount, right after Registry::Mount returned and before the first
+// request is answered from the shadow (CDN_PC PC3 d1). No lock of this file is held, so it may call MountedLevelNames
+// and ReportJson. The owners are the report's refusals and MountedLevelNames' sets; a registration that ends without a
+// mount (the resolver hook missing, a mount that failed) calls it with an empty report. Default none: the plugin-only
+// path is unchanged. A throw from it is logged and the mount goes on.
+void SetMountObserver(void (*observer)(const MountReport& report));
 
 // The plugin loader brackets each plugin's init with these, so register_resources knows whose init is running, on
 // which thread, and from which image. EndPluginInit keeps the plugin's sets for the mount when its init succeeded and
