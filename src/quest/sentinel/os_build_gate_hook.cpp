@@ -165,9 +165,9 @@ const char* ReadOriginalBodyFrom(const sentinel::ElfImage& image, const char** k
 namespace {
 
 // The floor from the loaded libr15. `*source` names the outcome.
-std::uint64_t ReadPinnedFloor(const char** source) noexcept {
+std::uint64_t ReadPinnedFloor(const char** source, sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (!lookup(sentinel::pinned::kLibR15, &image)) {
     *source = "module_not_loaded";
     return 0;
   }
@@ -175,9 +175,9 @@ std::uint64_t ReadPinnedFloor(const char** source) noexcept {
 }
 
 // The original's classification from the loaded libr15. `*kind` names the outcome.
-const char* ReadOriginalBody(const char** kind) noexcept {
+const char* ReadOriginalBody(const char** kind, sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (!lookup(sentinel::pinned::kLibR15, &image)) {
     *kind = "module_not_loaded";
     return *kind;
   }
@@ -218,17 +218,18 @@ bool InstallAt(const sentinel::GotTarget& target, std::uint64_t floor, const cha
   return ok;
 }
 
-bool Install() noexcept {
+bool Install(sentinel::ImageLookup lookup) noexcept {
   const char* source = "unknown";
-  const std::uint64_t floor = ReadPinnedFloor(&source);
+  const std::uint64_t floor = ReadPinnedFloor(&source, lookup);
   const char* kind = "unknown";
-  const char* originalBody = ReadOriginalBody(&kind);
-  return InstallAt(sentinel::pinned::LibR15OSBuildVersion(), floor, source, originalBody);
+  const char* originalBody = ReadOriginalBody(&kind, lookup);
+  return InstallAt(sentinel::pinned::LibR15OSBuildVersion(), floor, source, originalBody, lookup);
 }
 
 void ArmForTest(std::uint64_t floor) noexcept { Arm(floor); }
 
 void ResetForTest() noexcept {
+  g_hook.Forget();  // a test installs more than once, each into its own fixture library
   g_floor.store(0, std::memory_order_relaxed);
   g_calls.store(0, std::memory_order_relaxed);
   g_read.store(false, std::memory_order_relaxed);
