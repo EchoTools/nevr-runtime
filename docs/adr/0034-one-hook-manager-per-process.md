@@ -34,10 +34,10 @@ implements every write, under one lock, against one registry"), through `NevrQue
 input filter and the script redirect, not a general hook, and it refuses chaining: "Refused in v1: a second claim on a
 slot is a refusal ... Chaining is a later ADR." Section 9 refuses a plugin's claim on a slot the sentinel registered.
 
-So the q15t plugin carries a second mechanism, with its own page-protection calls and stores
+So the q15t plugin carries a second mechanism (KNOWN-WRONG #2389: the plugin is not in the tree), with its own page-protection calls and stores
 (src/quest/plugins/q15t/src/got_swap.cpp) and its own install helpers (`InstallImportHook`, `InstallChainedImportHook` in
 src/quest/plugins/q15t/src/import_hook.h). Most of its modules install through those helpers, outside the sentinel's
-registry. N151 names got_swap.cpp as an allowed page-protection site.
+registry. N151 names got_swap.cpp as an allowed page-protection site. KNOWN-WRONG #2389: src/quest/plugins/q15t/ and got_swap.cpp are not in the tree, and the N151 allowlist (`N151_PROT_OK` in `justfile`) lists no got_swap.cpp.
 ADR 0046 (`docs/adr/0046-combat-is-part-of-the-quest-runtime.md`) decides to end this: the plugin's modules move into the runtime, one
 unit at a time, and install through the manager.
 
