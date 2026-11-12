@@ -76,7 +76,7 @@ runm dk_scope_every src/quest/combat/dronekill.cpp "s/  if (n % kScopeFrames == 
 runm dk_scope_frames src/quest/combat/dronekill.h "s/kScopeFrames = 32;/kScopeFrames = 33;/"
 runm dk_scope_lobby src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatOrLobby();/"
 runm dk_scope_stale_believed src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = (look.bits \& (scope::kBitCombatMap | scope::kBitEchoArena)) == scope::kBitCombatMap;/"
-# the scope decides from the one record the tick reads (LastLook), and the change line names that record's level (#2382 review, combat_scope.h Look)
+# the scope decides from the one record the tick reads (LastLook), and the change line names that record's level (combat_scope.h, Look)
 runm dk_scope_live_only src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap();/"
 runm dk_scope_one_look src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap(look) \&\& scope::InCombatMap();/"
 # README rule 9: each in-scope body and OnKilled judge the answer at the call (TestAStoppedTickPassesEveryCallThrough); no handler reads the clock (ExpectInert)

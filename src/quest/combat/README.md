@@ -57,6 +57,10 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    A module that keeps its own copy of the answer, asked from its tick (`powerboost`, `dronekill`), tests that copy in the handler in place of
    `SeenCombatOrLobby()` / `SeenCombatMap()`, and every body it hands a combat call to still starts with `scope::LookIsFresh()`: the copy is only as
    fresh as the tick's last ask, and nothing re-judges it while the tick is stopped.
+   The EC client (`ec.cpp`) keeps its own copy too and is exempt from the call-time test: its scope thread judges the copy every `kScopeEveryMs`
+   (250 ms), in scope or out, from one record of the answer (`scope::LastLook()`, then `scope::InCombatOrLobby(look)`), and a look older than
+   `kStaleAfterMs` takes the client out of scope on that judgement. The thread does this whether or not the tick runs, so a stale answer leaves the
+   client at most 250 ms after it went stale, plus one pass of the thread's loop; its handlers test only the copy (`InCombatScope()`) in between.
    The refresh is registered by the `scope` row of the install table, after the `tick` row, and only while a reader is on (`ScopeNormal()` in `combat_install.cpp` lists the readers' switches: a module that reads the scope adds its switch there); a module does not register it, it asks `scope::Live()` from its
    install function, before it hooks anything, and refuses (`scope_not_live`) when the answer cannot change. The module's host test pins the arena path with data
    pointers nobody could read and by count (`SetReadCounterForTest`, `level::ScanCalls()`: zero reads and zero scans), and prints its cost. Arena and combat run on the same APK, so `combat::Active()` does not do this.

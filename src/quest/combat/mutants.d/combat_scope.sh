@@ -88,7 +88,7 @@ runm sc_stale_msg_no_ec         $C "s/went stale, and the frozen-frame watch, wh
 runm sc_install_msg_old         $C "s/, four times a second, for every combat module that reads it\"/, four times a second\"/"
 runm sc_refused_msg_old         $C "s/so the combat modules that read it are not installed/so the modules that read it are not installed/"
 # every field of a look is written inside its sequence count (a field stored after the close is a torn read on another thread: the closed-count seam,
-# which CloseLook calls right after the close, sees it; each mutant moves one store to after the CloseLook call, the review's H2 for the level)
+# which CloseLook calls right after the close, sees it; each mutant moves one store (the level, the bits or the stamp) to after the CloseLook call)
 runm lr_level_after_close       $C "/^  g_lastLevel.store(levelId, std::memory_order_relaxed);\$/d; s/^  CloseLook(seq);\$/&\n  g_lastLevel.store(levelId, std::memory_order_relaxed);/"
 runm lr_bits_after_close        $C "/^  detail::g_bits.store(bits, std::memory_order_release);\$/d; s/^  CloseLook(seq);\$/&\n  detail::g_bits.store(bits, std::memory_order_release);/"
 runm lr_stamp_after_close       $C "/^  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);\$/d; s/^  CloseLook(seq);\$/&\n  detail::g_lookedAtMs.store(now, std::memory_order_relaxed);/"
