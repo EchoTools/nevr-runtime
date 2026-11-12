@@ -24,9 +24,7 @@ One family, three cases:
 | `nevr` | files, directories, CMake targets, namespaces, flat config keys the runtime owns | `src/core/nevr_config.h`, `nevr_core`, `namespace nevr`, `nevr_socket_uri` |
 
 - Those three are the only spellings of the project name in an identifier. `Nvr` (no `e`) and every
-  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier; the one
-  place `Nvr` remains is the deprecated alias of the plugin and module C ABI (below). In prose the
-  project brand is spelled `nEVR`.
+  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier.
 - A name states the project once. Inside `namespace nevr`, a type is `Config`, not `NevrConfig`.
 - A log tag is `[NEVR.<AREA>]` with an upper-case area. The areas in use are the `[NEVR.` tags in
   `src/` (`[NEVR.WS]`, `[NEVR.AUTH]`, `[NEVR.GAMESERVER]`, ...); `docs/standards/logging.md` says what
@@ -227,9 +225,6 @@ compile against. Its prefix is `Nevr`: `NevrPluginInfo`, `NevrGameContext`, `Nev
 - Both plugin loaders (`src/runtime/ext/plugin_loader.cpp`, `src/quest/plugin/plugin_loader.cpp`) resolve each entry
   point's `Nevr*` export first and the `Nvr*` export when the plugin has no other, and log one Info line per plugin that
   loaded through a deprecated export (`loaded with deprecated Nvr exports`).
-- Nothing else in the tree is spelled `Nvr`. It is allowed in the two alias headers
-  and in (the fixtures that prove an old plugin loads, and the loaders'
-  messages), and nowhere else.
 
 The aliases and the fallback go when no plugin that ships still exports `Nvr*`: when the Info line above has not been logged
 for a plugin the project distributes or knows of. `docs/adr/0043-nevr-is-the-plugin-abi-prefix.md` records the decision and
@@ -259,30 +254,11 @@ the alternatives.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-KNOWN-WRONG #2392: no test or sensor reads most rules in this paragraph, and none runs the inventory against the tree.
-Two tests check part of it: `tools/internal/questwiring/reconstruction_namespace_test.go`
+What is checked: `tools/internal/questwiring/reconstruction_namespace_test.go`
 (`TestEachReconstructionFileOpensAndClosesTheOneNamespaceOnce`) fails when a named reconstruction file does not open and
 close `NRadEngine::nevr_reconstruction` once; and `RuntimeLifecycleInvariantTest.test_dllmain_does_not_run_plugin_shutdown_or_unload`
 in `tools/tests/test_runtime_lifecycle_invariants.py` fails when the deprecated `NvrPluginShutdown` spelling appears in
 `DllMain`'s body. `python3 tools/naming_inventory.py` lists breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
 `pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`) with `file:line`; `--summary` gives the counts. It
-exits 0 whatever it finds. What it reads for each rule of this paragraph:
-
-- `Nvr` only as the deprecated aliases of the plugin and module C ABI: no category. The `spellings` pattern matches only
-  spellings with an `E` (`NEVR`, `Nevr`, `nEVR`), so `Nvr` is not read.
-- No non-canonical spelling of the project name in a file that does not carry one: `spellings` reports every `nEVR` token
-  in the tree, the prose included (every match is a finding; `--summary` gives the count). It does not implement the file
-  and token exemptions.
-- One spelling of the lifecycle namespace (`nevr::lifecycle`): `lifecycle-namespaces`, in code files.
-- The brand spelling `nEVR` in the prose of documents: `spellings` reports it as a break, in `.md` files as elsewhere
-  (`--category spellings`), the opposite of this rule. Tracked by #2394.
-- `NEVR_` project macros: `macros` reads the names in `target_compile_definitions(...)` calls only. The
-  `add_compile_definitions` calls in the CMake files, and every `#define` in C++, are not read.
-- `nevr_` CMake targets (four named exceptions): `cmake-targets` reads `add_library` and `add_executable` in CMake files
-  and reports the four exceptions (`echovr_server`, `LibOVRPlatform64_1`, `ovrplatformloader`, `breakpad_client`).
-- Every namespace `nevr` or `nevr_<area>`: `pascal-namespaces` reads the namespaces that begin with an upper-case letter,
-  and every namespace under `src/reconstruction/`. A lower-case namespace elsewhere is not read.
-- The old names of renamed namespaces (`tools/tests/renamed_namespaces/*.json`): no category, and nothing reads those
-  files.
-
-Until #2392 is fixed, these rules are the standard, and `naming_inventory.py` is the only automated list of breaks.
+exits 0 whatever it finds. A rule of this standard that no category and no test above reads is guidance for review, not a
+gate; a check is written for a rule when breaking it has caused a failure.

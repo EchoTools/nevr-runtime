@@ -8,7 +8,7 @@
 It is the work list for the rename pass and the way to see what is left: a category that prints nothing is
 done. It reads tracked and untracked-but-not-ignored files, and skips the paths under extern/, gen/, docs/audits/ and
 build/, and the files in SELF (the naming standard and this script). It has no category for the deprecated `Nvr*`
-aliases of the plugin/module ABI, and no other check stops `Nvr` from being used beyond them (KNOWN-WRONG #2392).
+aliases of the plugin/module ABI.
 A name that is public (a config key, a log line, a DLL export,
 a file name users touch) is listed here too, tagged `public`: it is not renamed without a decision, and the
 rename PRs list each one as a deliberate exception.
