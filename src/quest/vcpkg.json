@@ -1,6 +1,7 @@
 {
   "name": "nevr-quest",
   "version-string": "0.1.0",
+  "builtin-baseline": "40c89449f0ccce12d21f8a906639f6c2c649b9e7",
   "dependencies": [
     "nlohmann-json",
     {
