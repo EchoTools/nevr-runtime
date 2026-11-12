@@ -353,3 +353,27 @@ func TestEnvSetsGOFLAGSSoGoTestNeverServesACachedResult(t *testing.T) {
 		t.Errorf("GOFLAGS = %q, want -count=1", got)
 	}
 }
+
+// Not parallel: it sets HOME and GOPATH of the test process, which t.Setenv forbids with t.Parallel. The answer `go env`
+// gives for the caches depends on those variables, so the kit must ask again when they change: a test that
+// changed HOME (TestEnvDropsTheCallersEnvironmentAndKeepsOnlyPATH) must not leave its answer for the tests after it.
+func TestEnvAsksGoAgainWhenTheCallersEnvironmentChanges(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOENV", "off")
+	t.Setenv("GOPATH", "")
+	noCaches := func(string) string { return "" }
+	for _, home := range []string{t.TempDir(), t.TempDir()} {
+		t.Setenv("HOME", home)
+		env, err := EnvAt(t.TempDir(), noCaches, goBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := goEnv(t, "GOMODCACHE")
+		if got, _ := lookup(env, "GOMODCACHE"); got != want {
+			t.Errorf("with HOME=%q: GOMODCACHE = %q, want go env's %q for that HOME", home, got, want)
+		}
+	}
+}

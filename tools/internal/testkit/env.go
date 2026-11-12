@@ -97,14 +97,17 @@ var (
 )
 
 // goDefaults is what `goBin env GOCACHE GOMODCACHE` prints (it knows the defaults and the user's `go env -w`
-// settings), looked up once per go binary. Empty when goBin is "" or the command fails.
+// settings). The command inherits this process's environment, and the answer depends on it (HOME and GOPATH decide
+// the module cache), so the answer is kept per go binary AND per environment: a test that changes HOME for itself
+// must not leave its answer for the tests that run after it. Empty when goBin is "" or the command fails.
 func goDefaults(goBin string) map[string]string {
 	if goBin == "" {
 		return nil
 	}
+	key := goBin + "\x00" + strings.Join(os.Environ(), "\x00")
 	goDefaultsMu.Lock()
 	defer goDefaultsMu.Unlock()
-	if got, ok := goDefaultsCache[goBin]; ok {
+	if got, ok := goDefaultsCache[key]; ok {
 		return got
 	}
 	got := map[string]string{}
@@ -115,7 +118,7 @@ func goDefaults(goBin string) map[string]string {
 			got[keys[i]] = lines[i]
 		}
 	}
-	goDefaultsCache[goBin] = got
+	goDefaultsCache[key] = got
 	return got
 }
 
