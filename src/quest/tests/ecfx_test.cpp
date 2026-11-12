@@ -42,6 +42,22 @@ struct Line {
   std::string text;
 };
 static std::vector<Line> g_lines;
+// #1930: dladdr as ecfx's Named check asks it (combat/ecfx.cpp). g_dladdrMode 0 is libc's answer. 1 names the entry as libc does and
+// returns 0, a failure that still names it. 2 names the entry's file and no symbol, and returns 1. This definition takes the place of
+// libc's for the calls this executable makes, as crash_report_quest_test.cpp's does.
+static int g_dladdrMode = 0;
+extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
+  using RealDladdr = int (*)(const void*, Dl_info*);
+  static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
+  if (g_dladdrMode == 0) return real(address, info);
+  real(address, info);
+  if (g_dladdrMode == 2) {
+    info->dli_sname = nullptr;
+    return 1;
+  }
+  return 0;
+}
+
 static void Capture(LogLevel level, const char* line) { g_lines.push_back({level, line}); }
 // level -1: any, 1 Info, 2 Warning, 3 Error (the plugin test's numbers)
 static bool HasLine(const char* needle, int level = -1) {
@@ -455,6 +471,18 @@ static void FullTests(const char* path) {
   Tick();
   CHECK(calls[0] == 3 && Q()[0] == 0 && HasLine("no longer the wall library's", 2), "an address inside the entry was called: %d", calls[0]);
   SetEntryForTest(kCharge, e0);
+  // #1930: dladdr fails for the entry the wall library holds. Mode 1 returns 0 and still names it, mode 2 names the file and no symbol
+  // and returns 1: the Named check refuses both, so the entry is not run and its queue slot is freed, with a WARNING each time.
+  const int refusedBefore = CountLines("no longer the wall library's");
+  g_dladdrMode = 1;
+  QPut(0, ctx0, e0 | kCharge);
+  Tick();
+  g_dladdrMode = 2;
+  QPut(0, ctx0, e0 | kCharge);
+  Tick();
+  g_dladdrMode = 0;
+  CHECK(calls[0] == 3 && Q()[0] == 0 && CountLines("no longer the wall library's") == refusedBefore + 2,
+        "an entry dladdr could not name was called: %d", calls[0]);
   // re-entry from inside an entry returns at once
   g_reenter = 1;
   QPut(0, ctx0, e0 | kCharge);
