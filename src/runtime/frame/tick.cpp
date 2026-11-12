@@ -51,6 +51,7 @@
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
+#include "runtime/content/map_channel.h"
 #include "runtime/patch/resource_sets.h"
 #include "runtime/patch/ui_text_writer.h"
 
@@ -91,6 +92,7 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // #1200, ADR 0024 section 6: the swapped release is confirmed started once this dispatcher has run for 10 s. Here it is one atomic
     // compare; the confirmation itself runs on its own thread. Not new per-frame work of its own: no thread, dispatcher or Tick* site (N86).
     nevr_update::OnFrame(nowUs);
+    nevr_map_channel::Tick();  // ADR 0047: the map config alias reconcile and the session pin; a no-op with no maps config
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {

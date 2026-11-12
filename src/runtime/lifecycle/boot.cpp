@@ -5,6 +5,7 @@
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/content/map_channel.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/game_data_notice.h"
@@ -18,6 +19,9 @@
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
+#endif
+#ifdef NEVR_MAPS_PROBES
+#include "runtime/maps/probe/probe_game.h"
 #endif
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
@@ -441,6 +445,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // which a module inherits by calling through this pointer.
     moduleCtx.config_get = &NevrCfgGetFlat;
     SetModuleContext(&moduleCtx);
+#ifdef NEVR_MAPS_PROBES
+    nevr_maps_probe::Register();  // probe builds only (src/runtime/maps/probes.cmake)
+#endif
 
     // Platform compat — Schannel TLS hooks, CreateDirectory fixes, MSXML6 pass-through hook.
     // Must load before any network-using code. Statically linked (2026-08-02).
@@ -920,9 +927,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
+  // ADR 0047: the custom-map channel registers its cached maps' sets before the mount. One map_start line and nothing
+  // else when no maps config is present.
+  nevr_map_channel::Boot(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
   // #2161: the resource sets the plugins registered are mounted once the game's manifest exists (now, or from the
   // per-frame tick when it is not built yet).
   nevr_resource_sets::MountWhenReady();
+  nevr_map_channel::StartFetch();  // the background fetch; what it stores mounts at the next launch
 
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();

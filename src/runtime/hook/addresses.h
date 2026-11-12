@@ -847,4 +847,49 @@ constexpr uintptr_t CGAMELEVELRESOURCE_ENABLE = 0x4ED4B0;
 /// the gamespace's value at +0x58.
 constexpr uintptr_t CR15NETGAME_ENABLE_GAME_SPACES = 0x161940;
 
+// ============================================================================
+// ConfigAlias (CDN_DESIGN §5.3, runtime/content/config_alias_hook.cpp)
+// ============================================================================
+
+/// Address: the balance-config lookup (0x140D0B170, 0x63 bytes; no symbol). `void* (u64 key)`: unless the dword at
+/// 0x1420D3A70 is set, it binary-searches the container 0x1420D3A68 points to (sorted 24-byte {key, value} entries at
+/// +0, count at +0x30, keys compared signed) and returns &value; otherwise, or on a miss, it tail-jumps to the
+/// JsonConfig registry lookup 0x1404B4340 with the same key. Read from echovr.exe 34.4.631547. 23 callers;
+/// mp_arena_rules is read through it.
+constexpr uintptr_t CONFIG_BALANCE_LOOKUP = 0xD0B170;
+
+/// Offsets within the game object (the net game's +NETGAME_GAME_OFFSET: CR15NetGame::EnableGameSpaces 0x140161940
+/// passes `[netgame+8]` to EnableGameSpace 0x1404EF130) of its two sorted level tables. Each is a pointer to 16-byte
+/// {level symbol, level resource} entries with the count 0x30 further on, the key being the resource's +0x58.
+/// - GAME_SPACE_TABLE (+0x1F90): the loaded levels that are not enabled. EnableGameSpace finds the level there, calls
+///   Enable on its resource, erases the entry (0x14011F5F0, erase at index) and inserts it into the enabled table
+///   (0x1404FA170).
+/// - GAME_ENABLED_SPACE_TABLE (+0x1F50): the enabled levels. DisableGameSpace (0x1404ED260) moves an entry back.
+/// So a level that is loaded at all is in exactly one of the two. Read from echovr.exe 34.4.631547.
+constexpr uintptr_t GAME_SPACE_TABLE_OFFSET = 0x1F90;
+constexpr uintptr_t GAME_SPACE_TABLE_COUNT_OFFSET = 0x1FC0;
+constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_OFFSET = 0x1F50;
+constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_COUNT_OFFSET = 0x1F80;
+
+/// Address: NRadEngine::CGameLevelResource::Disable (0x1404EC900, 1069 bytes; no symbol). `int32 (resource*)`, 0 on
+/// success. Logs "[LEVELLOAD] Disabling level '%s'". Returns 0 at once when the resource already reads disabled;
+/// otherwise sets the disabled bit, then tears the level's entities down. Called by DisableGameSpace (0x1404ED260)
+/// and by the level unload 0x140515E40 (which EchoMapLoader detours; nevr hooks Disable, not the unload).
+/// Enable (CGAMELEVELRESOURCE_ENABLE) has the same shape: 0 at once when the resource already reads enabled; it clears
+/// the disabled bit before its work; a non-zero return is an error code.
+constexpr uintptr_t CGAMELEVELRESOURCE_DISABLE = 0x4EC900;
+
+/// Offsets within a level resource: its level symbol (Enable logs the name of +0x58; both tables key on it) and its
+/// state flags, whose bit 0x80 reads "disabled" (Disable sets it first, Enable clears it first).
+constexpr uintptr_t LEVEL_RESOURCE_LEVEL_OFFSET = 0x58;
+constexpr uintptr_t LEVEL_RESOURCE_FLAGS_OFFSET = 0xC40;
+constexpr uint32_t LEVEL_RESOURCE_DISABLED_FLAG = 0x80;
+
+/// Address: CR15NetGame's balance-settings update (0x1401B2A90, 0x38A bytes; no symbol; the Quest
+/// CR15NetGame::SettingsUpdateCB). `int64 (CR15NetGame*)`: re-reads mp_frisbee_settings, mp_fullscreen_settings and
+/// mp_arena_rules through the balance lookup and copies zone_0/1/2_point_value into 0x142023CE8/CF0/CF8. Its callers
+/// pass the net game: SetGameState 0x1401B8650, the lobby member change 0x14018C720 and the event thunk 0x14013D5F0
+/// (`mov rcx,[rcx]; jmp`). A second argument register is passed but never read.
+constexpr uintptr_t NETGAME_BALANCE_SETTINGS_UPDATE = 0x1B2A90;
+
 }  // namespace nevr_patch_addresses
