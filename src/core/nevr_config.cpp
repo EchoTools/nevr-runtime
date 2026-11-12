@@ -222,7 +222,7 @@ const std::set<std::string>& AllowedTopLevelKeys() {
   static const std::set<std::string> kKeys = {
       "version", "identity", "auth",    "services", "network", "assets",
       "arena",   "guilds",   "telemetry", "plugins", "profiles", "social",
-      "diagnostics", "graphics", "combat"};
+      "diagnostics", "graphics", "combat", "maps"};
   return kKeys;
 }
 
@@ -233,7 +233,7 @@ void ValidateTopLevel(const YAML::Node& root) {
       throw NevrConfigError(
           "config: unknown top-level key '" + key +
           "' (allowed: version, identity, auth, services, network, assets, arena, "
-          "guilds, telemetry, plugins, profiles, social, diagnostics, graphics; use x-* for extensions)",
+          "guilds, telemetry, plugins, profiles, social, diagnostics, graphics, combat, maps; use x-* for extensions)",
           NevrConfigErrorKind::kUnknownTopLevelKey, SourceLine(kv.first.Mark()), SourceColumn(kv.first.Mark()));
     }
   }
@@ -267,6 +267,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"social", {"facade", "send_presence_to_meta"}},
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
+      {"maps", {"base_url", "subscribed", "trusted_keys", "server_allow", "channel", "boot_budget_ms", "cap_mib"}},
       {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "levelname", "meshstep", "instmodel", "shaderstep",
                   "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "impactsnd", "impactsnd_write", "decals",
                   "decals_flip_u", "decals_flip_v", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard", "music", "sensorwd", "ec", "ec_words",

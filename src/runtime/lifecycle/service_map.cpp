@@ -88,6 +88,14 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       {"nevr_guilds", "guilds"},
       // assets
       {"asset_cdn_url", "assets.cdn_url"},
+      // custom maps (ADR 0047): list-shaped ones are read CSV, like guilds
+      {"maps_subscribed", "maps.subscribed"},
+      {"maps_base_url", "maps.base_url"},
+      {"maps_trusted_keys", "maps.trusted_keys"},
+      {"maps_server_allow", "maps.server_allow"},
+      {"maps_channel", "maps.channel"},
+      {"maps_boot_budget_ms", "maps.boot_budget_ms"},
+      {"maps_cap_mib", "maps.cap_mib"},
       // arena rule overrides (floats)
       {"arena_round_time", "arena.round_time"},
       {"arena_celebration_time", "arena.celebration_time"},

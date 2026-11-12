@@ -59,6 +59,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -165,6 +166,21 @@ struct AssetsChoice {
   Source source = Source::kAbsent;                         // kFile: the file gave at least one accepted assets key
 };
 
+// The custom-map channel's settings (CDN_DESIGN Q2; the PC's maps_* keys): the channel starts only when base_url and subscribed are
+// both given, so with no `maps:` keys nothing of it runs (quest/cargo/map_service.h).
+//   maps.base_url      the channel's base (https only)       maps.subscribed    the map ids, a list or one comma-separated string
+//   maps.trusted_keys  minisign public key lines, a list     maps.channel       the channel name (optional)
+//   maps.cap_mib       the cache cap in MiB (optional)
+// A key that is wrong is one Warning that names the key and never the value, and the key stays unset.
+struct MapsConfig {
+  std::string baseUrl;
+  std::string channel;
+  std::vector<std::string> subscribed;
+  std::vector<std::string> trustedKeys;
+  std::uint64_t capMib = 0;  // 0: the core's default
+  Source source = Source::kAbsent;  // kFile: the file gave at least one accepted maps key
+};
+
 // The combat.force request (#2170, docs/adr/0046 rule 5), after the file and the default have spoken: the file asks for the folded
 // combat modules to run whatever the APK's variant. Whether it is honoured is combat::Decide's rule (combat/combat_active.h).
 struct CombatForceChoice {
@@ -265,6 +281,7 @@ struct ResolvedConfig {
   TextureChoice textureQuality;
   HandFlipChoice handFlip;
   AssetsChoice assets;
+  MapsConfig maps;
   CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).

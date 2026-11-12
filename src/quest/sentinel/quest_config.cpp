@@ -4,6 +4,7 @@
 #include "runtime/lifecycle/service_redirect.h"
 #include "runtime/patch/invite_config.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <exception>
@@ -49,6 +50,12 @@ constexpr const char* kAssetsManifestKey = "assets.manifest";
 constexpr const char* kAssetsRequiredOnlyKey = "assets.required_only";
 constexpr const char* kAssetsLabelsPath = "assets.labels";
 constexpr std::size_t kMaxAssetLabels = 32;
+constexpr const char* kMapsBaseUrlKey = "maps.base_url";
+constexpr const char* kMapsSubscribedKey = "maps.subscribed";
+constexpr const char* kMapsTrustedKeysKey = "maps.trusted_keys";
+constexpr const char* kMapsChannelKey = "maps.channel";
+constexpr const char* kMapsCapMibKey = "maps.cap_mib";
+constexpr std::size_t kMaxMapIds = 64;
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
 constexpr const char* kCombatHeapsKey = "combat.heaps";           // Quest only (default true, #2175)
 constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only (default true, #2175)
@@ -427,6 +434,91 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.assets = std::move(a);
 }
 
+// The ids of maps.subscribed, from a list or one comma-separated string: [a-z][a-z0-9_]{0,54} each (CDN_DESIGN §4.3).
+bool ReadMapIds(const nevr::NevrConfig& cfg, std::vector<std::string>* out) {
+  std::vector<std::string> ids;
+  for (const std::string& item : cfg.GetStringList(kMapsSubscribedKey)) {
+    std::size_t from = 0;
+    while (from <= item.size()) {
+      const std::size_t comma = std::min(item.find(',', from), item.size());
+      std::string id = item.substr(from, comma - from);
+      id.erase(0, id.find_first_not_of(" \t"));
+      id.erase(id.find_last_not_of(" \t") + 1);
+      from = comma + 1;
+      if (id.empty()) continue;
+      const bool ok = id.size() <= 55 && id[0] >= 'a' && id[0] <= 'z' &&
+                      std::all_of(id.begin(), id.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
+      if (!ok || ids.size() >= kMaxMapIds) return false;
+      ids.push_back(std::move(id));
+    }
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  *out = std::move(ids);
+  return true;
+}
+
+// maps.* (CDN_DESIGN Q2). Every key is optional; a wrong one is a Warning naming the key, and that key stays unset. Nothing is
+// logged when no maps key is present, so a file without them gives the same lines as before.
+void ReadMaps(const nevr::NevrConfig& cfg, LoadResult& r) {
+  MapsConfig m;
+  bool given = false;
+  const auto reject = [&r](const char* key, const char* reason) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=" + reason + " (the key stays unset)");
+  };
+  if (cfg.Kind(kMapsBaseUrlKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::string> value = cfg.GetString(kMapsBaseUrlKey);
+    std::string base;
+    if (value && NormalizeCdnBase(*value, &base)) {
+      m.baseUrl = base.back() == '/' ? base : base + "/";
+      given = true;
+    } else {
+      reject(kMapsBaseUrlKey, "not_an_https_address");
+    }
+  }
+  if (cfg.Kind(kMapsSubscribedKey) != nevr::NodeKind::kAbsent) {
+    if (ReadMapIds(cfg, &m.subscribed)) {
+      given = true;
+    } else {
+      reject(kMapsSubscribedKey, "not_map_ids");
+    }
+  }
+  if (cfg.Kind(kMapsTrustedKeysKey) != nevr::NodeKind::kAbsent) {
+    m.trustedKeys = cfg.GetStringList(kMapsTrustedKeysKey);
+    if (m.trustedKeys.empty() || m.trustedKeys.size() > 8) {
+      m.trustedKeys.clear();
+      reject(kMapsTrustedKeysKey, "not_a_key_list");
+    } else {
+      given = true;
+    }
+  }
+  if (cfg.Kind(kMapsChannelKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::string> value = cfg.GetString(kMapsChannelKey);
+    if (value && !value->empty() && value->size() <= 64) {
+      m.channel = *value;
+      given = true;
+    } else {
+      reject(kMapsChannelKey, "not_a_name");
+    }
+  }
+  if (cfg.Kind(kMapsCapMibKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::int64_t> value = cfg.GetInt(kMapsCapMibKey);
+    if (value && *value > 0 && *value < (std::int64_t{1} << 40)) {
+      m.capMib = static_cast<std::uint64_t>(*value);
+      given = true;
+    } else {
+      reject(kMapsCapMibKey, "not_a_positive_integer");
+    }
+  }
+  if (!given) return;
+  m.source = Source::kFile;
+  Add(r, LogLevel::kInfo,
+      std::string("config key=maps subscribed=") + std::to_string(m.subscribed.size()) +
+          " keys=" + std::to_string(m.trustedKeys.size()) + " base_url=" + (m.baseUrl.empty() ? "unset" : "config") +
+          " channel=" + (m.channel.empty() ? "default" : "config"));
+  r.config.maps = std::move(m);
+}
+
 // combat.force (#2170). Absent: not asked, from the default. A boolean: that value, from the file (false is the file's word too, so the
 // log line says `config`). Anything else: not asked, from the default, and ReadBool's one Warning that names the key.
 void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
@@ -535,6 +627,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
   ReadAssets(cfg, r);
+  ReadMaps(cfg, r);
   ReadCombatForce(cfg, r);
   r.config.combat.heaps = ReadCombatSwitch(cfg, kCombatHeapsKey, r);
   r.config.combat.memsys = ReadCombatSwitch(cfg, kCombatMemsysKey, r);
