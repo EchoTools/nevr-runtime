@@ -197,7 +197,7 @@ uint64_t Clock() { return g_now; }
 // The combat level answer's own clock (combat_scope.h), in ms: each test frame moves it one look spacing, so each frame's refresh looks at the game.
 std::int64_t g_scopeMs = 1000;
 // Armed (g_armedReads >= 0): the first clock read is the record's own (LastLook's staleness test), every later read sees the look older than
-// kStaleAfterMs. A decision made from a second read of the record, or from a live read, sees the answer stale (TestOneLook).
+// kStaleAfterMs. A decision made from a second read of the record, or from a live read, sees the answer stale (the block headed "the one look" in main()).
 int g_armedReads = -1;
 std::int64_t ScopeClock() noexcept {
   if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + nevr_quest::combat::scope::kStaleAfterMs + 1;
@@ -311,7 +311,7 @@ void Rescope() {
   Frame();
 }
 
-// The look seam (combat_scope.h SetLookReadSeamForTest), set only inside TestOneLook: the second LastLook of the armed tick runs it between
+// The look seam (combat_scope.h SetLookReadSeamForTest), set only inside the block headed "the one look" in main(): the second LastLook of the armed tick runs it between
 // the record's classes and its level, and it writes the arena level's look there, so a caller that reads the record a second time sees another look.
 int g_lookReads = 0;
 void SecondLookWritesArena() {
@@ -1133,7 +1133,8 @@ int main() {
     Rescope();
     CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"echo_arena\"") == 1, "an arena level did not take the scope away");
   }
-  // the tick's refresh stops (the scope row's last look is older than 1 s): the module's next ask is not combat, and its line names the class `stale`
+  // the module's ask reads a look older than kStaleAfterMs (the game tick still runs; the stopped-tick case is the held block below): the answer
+  // is not combat, and its line names the class `stale`
   {
     Fresh();
     Inst(pb::kRead, &fns);
@@ -1144,20 +1145,33 @@ int main() {
     // the stale line names the class and the level the answer was held for (the record's level, not zero)
     CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"stale\"", LevelField("mpl_combat_dyson").c_str()}), "the stale line does not name the held level");
   }
-  // the scope's cadence: the level is asked once every kScopeEveryFrames frames of one game, never per call
+  // the held answer: the game tick is stopped (no Refresh and no GameTick) and the scope's clock moves on 60 s. The scope's own look is then not
+  // fresh, but POWER BOOST reads only the atomic its last ask stored, so it stays in scope and writes no line (powerboost.md, "Arena").
+  {
+    Fresh();
+    Inst(pb::kRead, &fns);
+    CHECK(pb::InScope(), "held: a combat map is not in scope");
+    const int scopeLines = Events("scope");
+    g_scopeMs += 60000;
+    CHECK(!nevr_quest::combat::scope::LookIsFresh(), "held: the scope still believes its look 60 s on");
+    CHECK(pb::InScope(), "held: POWER BOOST dropped its answer while the game tick was stopped");
+    CHECK(Events("scope") == scopeLines, "held: a scope line was written with the game tick stopped");
+  }
+  // the scope's cadence, as literals: 64 frames of one game ask the level twice (the new game at the first frame, then the frame 32 later), so
+  // the cadence is 32 frames. The literal, not kScopeEveryFrames, so a changed constant fails here.
   {
     Fresh();
     Inst(pb::kRead, &fns);
     const uint32_t first = pb::CurrentStats().scopeChecks;
-    for (uint32_t i = 0; i < 2 * pb::kScopeEveryFrames; ++i) Frame();
+    for (uint32_t i = 0; i < 64; ++i) Frame();
     const uint32_t checks = pb::CurrentStats().scopeChecks - first;
-    CHECK(checks == 2, "%u level reads in %u frames, want 2", checks, 2 * pb::kScopeEveryFrames);
+    CHECK(checks == 2, "%u level reads in 64 frames, want 2 (one every 32 frames of one game)", checks);
     BuildWorld(true, "mpl_arena_a");  // the level changes under the same game: seen within kScopeEveryFrames frames
     for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) Frame();
     CHECK(!pb::InScope(), "an arena level was not seen within %u frames", pb::kScopeEveryFrames);
   }
 
-  // ---- the one look (TestTheRecordDecidesNotTheLiveRead, dronekill's case): the decision, the logged class and the logged level come from the one
+  // ---- the one look (the case dronekill_test.cpp's TestTheRecordDecidesNotTheLiveRead states): the decision, the logged class and the logged level come from the one
   // record the tick reads. The clock is armed, so the record's own read is fresh and every later read sees it older than kStaleAfterMs; the second
   // read of the record writes the arena level's look, so a second read names another look. The one record must decide all three.
   {

@@ -17,8 +17,9 @@
  *
  * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map
  * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
- * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, and with an
- * answer older than a second, the answer is "not combat"). Anywhere else every wrapper only calls the game's function, the entry passes every call
+ * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, the answer
+ * is "not combat"). The atomic is not judged again: while the tick is stopped the module keeps its last answer. A reader that checks
+ * `LookIsFresh()` at call time refuses an answer older than a second (kStaleAfterMs); this module does not check it. Anywhere else every wrapper only calls the game's function, the entry passes every call
  * on, and nothing is logged, held, swallowed or sent. The module is a reader of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
  * `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer cannot change.
  *
@@ -70,7 +71,7 @@ struct Fns {
 
 enum Stage : int { kOff = 0, kRead = 1, kSwallow = 2, kCone = 3 };
 inline constexpr int kDefaultStage = kCone;
-// The scope is asked again once every this many game frames (about 2.5 times a second at 72 Hz).
+// The scope is asked again once every this many game frames (about 2.25 times a second at 72 Hz: 32 frames is about 444 ms).
 inline constexpr std::uint32_t kScopeEveryFrames = 32;
 
 // The three engine functions by exported name (dlsym on the loaded libr15.so), each required to be at base + its pin. False when one is

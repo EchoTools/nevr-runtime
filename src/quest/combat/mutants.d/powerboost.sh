@@ -1,7 +1,7 @@
 # powerboost: each rule of src/quest/combat/powerboost.cpp, src/runtime/patch/powerboost_rules.h and powerboost_core.h removed or bent once;
 # src/quest/tests/powerboost_test.cpp must
 # fail on every one. Sourced by ../mutants.sh, which defines `runm <name> <file> <sed>`. The entry's text (powerboost_thunk.inc) is judged by
-# check/powerboost.sh, not by the host test: its mutants are listed at the end of docs/quest/combat/powerboost.md.
+# check/powerboost.sh, not by the host test; this list does not cover it.
 P=src/quest/combat/powerboost.cpp
 C=src/quest/combat/powerboost_core.h
 # the shared rules (#2339), also killed by the PC GTest, runtime/tests/test_powerboost_rules.cpp
@@ -150,7 +150,7 @@ runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, d
 runm pb_arena_scans_before_scope $P 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
 # off by its key (stage 0) is counted off on the phase line (combat_install_test)
 runm pb_off_not_counted $P "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
-# the one look and the scope line's fields (0cdaf99db review, F1/F2): the decision, the logged class and the logged level come from the one record
+# the one look and the scope line's fields: the decision, the logged class and the logged level come from one record (combat_scope.h LastLook)
 runm pb_one_look_in        $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::InCombatOrLobby(scope::LastLook());/'
 runm pb_one_look_kind      $P 's/^  const scope::LookClass cls = scope::ClassOf(look);$/  const scope::LookClass cls = scope::ClassOf(scope::LastLook());/'
 runm pb_one_look_level     $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, scope::LastLook().level)}/'
@@ -161,3 +161,8 @@ runm pb_level_zero         $P 's/{"level", sentinel::HexString(lv, look.level)}/
 runm pb_msg_swapped        $P 's/{"msg", in ? "a combat map/{"msg", !in ? "a combat map/'
 runm pb_kind_gate_in_only  $P 's/if (g_scopeKind.exchange(static_cast<int>(cls), std::memory_order_acq_rel) != static_cast<int>(cls) \&\&/if (g_scopeKind.exchange(in ? 1 : 0, std::memory_order_acq_rel) != (in ? 1 : 0) \&\&/'
 runm pb_level_zero_stale   $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, cls == scope::LookClass::kStale ? 0 : look.level)}/'
+# the scope's cadence (powerboost.md, "Arena"): the constant is changed in the header; the test pins the cadence as a literal (64 frames, 2 asks)
+runm pb_cadence_16 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 16;/'
+runm pb_cadence_64 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 64;/'
+# the held answer (powerboost.md, "Arena"): the wrappers' scope test re-judges the atomic at call time, so a stopped tick drops the answer
+runm pb_scope_held_judged_at_call $P 's/^inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }$/inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire) \&\& scope::LookIsFresh(); }/'

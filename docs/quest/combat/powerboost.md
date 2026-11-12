@@ -73,15 +73,20 @@ game's own radius check, as it does a radius that is not finite.
 
 The q15t and combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
 loaded and no Echo Arena level is: the game tick asks the combat level answer (`combat_scope.h`) once every 32 frames (and when the CR15Game
-changes), one `LastLook()` record judged by `InCombatOrLobby(look)`, and keeps the answer in an atomic; before a tick has seen a look, and when the
-answer is older than a second, the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
+changes), one `LastLook()` record judged by `InCombatOrLobby(look)`, and keeps the answer in an atomic. Before a tick has seen a look the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
 continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. The module is one of the scope row's readers
 (`combat.powerboost_stage` 1 to 3 is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer
 cannot change. `combat_powerboost_scope` names the look's class as `kind` (`combat_scope.h` `LookClassName`: `combat_or_lobby`, `echo_arena`,
-`other`, `no_look`, `stale`) and its `level`. The look is made by the scope's `Refresh`, at most once every `kLookEveryMs` (250 ms), so the ask a
-game change triggers (it does not wait for the 32-frame cadence) reads the last look, which can still be the previous game's until the next look:
-the previous game's answer can be held for up to about 250 ms; if the tick has stopped, a look is believed for `kStaleAfterMs` (1 s), so the
-answer can be held for about 1 s after the tick's last look. Every reader of the scope has this window, not only POWER BOOST.
+`other`, `no_look`, `stale`) and its `level`. The scope's `Refresh` makes a look at most once every `kLookEveryMs` (250 ms). POWER BOOST asks the look once every
+`kScopeEveryFrames` (32) frames of one game (about 444 ms at 72 Hz), and at once when the game pointer is new. Each ask reads the scope's last
+look, which can be up to `kLookEveryMs` old, so a change of the game reaches POWER BOOST's answer after up to 250 ms (the look) plus up to 32
+frames (the ask).
+
+The freshness test (`kStaleAfterMs`, 1 s) is made by a reader at call time: `scope::LookIsFresh()`, or `LastLook().fresh` on a record. POWER
+BOOST does not make it. Its wrappers read only the atomic that the last ask stored, and nothing re-judges that atomic. So while the game tick
+is stopped, POWER BOOST keeps its last answer for as long as the tick stays stopped. The "held answer" block of `powerboost_test.cpp` pins
+this: 60 s on the scope's clock with no tick leaves the scope's own look not fresh and POWER BOOST still in scope. POWER BOOST writes no line in
+that gap; the first look after the tick is back writes the scope's `combat_scope_stale` warning, when the held look was a combat class.
 
 ## Lines
 
