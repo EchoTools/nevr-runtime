@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # POWER BOOST's arm64 checks (docs/adr/0046 rule 2; src/quest/combat/powerboost.h). Run by `just test-quest-combat powerboost` after the host
-# tests. Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and Q15T_SKIP_QEMU=1 skips the
+# tests. Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and NEVR_SKIP_QEMU=1 skips the
 # run (and says so).
 #   1. the entry (src/quest/combat/powerboost_thunk.inc) compiled for arm64 is exactly the instructions and relocations in powerboost_thunk.want;
 #   2. every word the entry reads reaches the register it compares or branches through by ldar or ldapr (#2216: a plain ldr fails), and the
@@ -77,9 +77,9 @@ program="$scratch/pb_thunk_qemu"
   -o "$program" "$root/src/quest/tests/pb_thunk_qemu.cpp"
 if command -v qemu-aarch64 >/dev/null 2>&1; then
   qemu-aarch64 "$program" || { echo "FAIL: pb_thunk_qemu"; exit 1; }
-elif [ "${Q15T_SKIP_QEMU:-0}" = 1 ]; then
-  echo "SKIPPED (Q15T_SKIP_QEMU=1): qemu-aarch64 not found, the entry was not run"
+elif [ "${NEVR_SKIP_QEMU:-0}" = 1 ]; then
+  echo "SKIPPED (NEVR_SKIP_QEMU=1): qemu-aarch64 not found, the entry was not run"
 else
-  echo "FAIL: qemu-aarch64 not found (Q15T_SKIP_QEMU=1 to skip explicitly)"
+  echo "FAIL: qemu-aarch64 not found (NEVR_SKIP_QEMU=1 to skip explicitly)"
   exit 1
 fi

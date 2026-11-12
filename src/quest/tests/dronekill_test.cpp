@@ -117,8 +117,8 @@ static int CountLine(const char* needle, int level = -1) {
   return n;
 }
 static bool HasLine(const char* needle, int level = -1) { return CountLine(needle, level) > 0; }
-static void Dump(const char* title) {  // Q15T_TEST_VERBOSE=1: the module's own log records of that scenario
-  if (std::getenv("Q15T_TEST_VERBOSE") == nullptr) return;
+static void Dump(const char* title) {  // NEVR_TEST_VERBOSE=1: the module's own log records of that scenario
+  if (std::getenv("NEVR_TEST_VERBOSE") == nullptr) return;
   std::printf("---- %s\n", title);
   for (const auto& l : g_lines) std::printf("[%u] %s\n", l.level, l.text.c_str());
 }
