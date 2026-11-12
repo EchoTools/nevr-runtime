@@ -151,6 +151,10 @@ void Boot(std::uintptr_t game_base, bool is_server) {
   ch->deriver = std::make_unique<nevr_maps::ChannelDeriver>(*ch->env, *ch->fs, *ch->stock);
   ch->cdn = settings.reason.empty();
   if (ch->cdn) {
+    for (const nevr_maps::PinnedKey& key : settings.configured_official_keys) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map_official_key key_id=%s (from maps.official_keys, for %s)",
+          nevr_maps::KeyIdText(key.key.key_id).c_str(), settings.config.base_url.c_str());
+    }
     for (const nevr_maps::PinnedKey& key : settings.author_keys) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.MAPS] map_trusted_key key_id=%s (an author key from maps.trusted_keys: maps it signs at %s are trusted)",

@@ -64,7 +64,8 @@ bool Start(nevr_cargo::Env* env, const MapsChoice& choice, nevr_maps::Deriver* d
 // The pins of the staged maps whose sets `report` did not refuse (owners `map:<id>`).
 std::vector<pin::Pin> MountedPins(const std::vector<pin::Pin>& staged, const nevr_resource_sets::MountReport& report);
 
-// The choice from the config's maps keys. False, with the config key at fault in *bad_key, when a trusted key does not parse.
+// The choice from the config's maps keys. False, with the config key at fault in *bad_key, when a key does not parse or
+// maps.trusted_keys is given beside maps.official_keys (mixed_keys, as on the PC).
 bool ChoiceFromConfig(const MapsConfig& config, MapsChoice* out, std::string* bad_key);
 
 // Production (map_start.cpp; production_steps.cpp calls it beside the cargo start): nothing at all when the config gives no

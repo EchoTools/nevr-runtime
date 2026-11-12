@@ -760,11 +760,13 @@ arena:
 # maps — custom maps from a CDN channel (docs/adr/0047, docs/reference/maps-channel.md). OPTIONAL: with no
 # maps.subscribed the channel is off and the run is unchanged (one "map_start reason=not_configured" line).
 # Maps fetched in the background mount at the next launch. The editor's LOCAL test maps need no config here:
-# they are the signed <id>.pc.nevrmap files in <nevr root>\maps\local, trusted only through its dev_key.pub.
+# they are the signed <id>.windows-x86_64.nevrmap files in <nevr root>\maps\local, trusted only through its dev_key.pub.
 # maps:
 #   subscribed: [my_arena]                     # map ids to fetch and mount
 #   base_url: "https://maps.example.org/"       # the bucket
-#   trusted_keys: ["RWQ...base64 minisign public key..."]  # author keys, each logged at Warning
+#   official_keys: ["RWQ...base64 minisign public key..."] # the official content key (no rebuild needed)
+#   trusted_keys: ["RWQ...base64 minisign public key..."]  # author or test keys, each logged at Warning;
+#                                                          # never together with official_keys (mixed_keys)
 #   server_allow: [my_arena]                   # servers: maps whose scripts are served ("<id>" or "<id>@<index sha256>")
 #   channel: ""                                # empty: the channel the base_url names at its first fetch
 #   boot_budget_ms: 0                          # 0: no limit on the boot mount

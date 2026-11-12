@@ -59,10 +59,13 @@ struct Settings {
   std::string reason;  // "" = the CDN channel runs; not_configured, bad_key, mixed_keys
   std::string detail;
   nevr_maps::ChannelConfig config;  // dir and local_maps are the caller's
-  std::vector<nevr_maps::PinnedKey> author_keys;
+  std::vector<nevr_maps::PinnedKey> author_keys;               // maps.trusted_keys
+  std::vector<nevr_maps::PinnedKey> configured_official_keys;  // maps.official_keys
 };
-// value: a scalar maps_* key; csv: a list-shaped one as "a,b". `official` is the compiled-in key list.
-Settings ReadSettings(const Lookup& value, const Lookup& csv, const std::vector<nevr_maps::PinnedKey>& official);
+// value: a scalar maps_* key; csv: a list-shaped one as "a,b". The official keys are `compiled_official` plus
+// maps.official_keys, so the official key can be added on a PC without a new build.
+Settings ReadSettings(const Lookup& value, const Lookup& csv,
+                      const std::vector<nevr_maps::PinnedKey>& compiled_official);
 
 std::vector<std::string> SplitCsv(const std::string& text);
 // A minisign public key file (an "untrusted comment:" line, then the base64 key) or a bare base64 line.

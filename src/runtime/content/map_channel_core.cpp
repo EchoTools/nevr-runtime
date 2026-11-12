@@ -87,18 +87,32 @@ bool ParseKeyText(const std::string& text, PinnedKey* out) {
   return false;
 }
 
-Settings ReadSettings(const Lookup& value, const Lookup& csv, const std::vector<PinnedKey>& official) {
-  Settings s;
-  const std::vector<std::string> trusted = SplitCsv(csv("maps_trusted_keys"));
-  for (std::size_t i = 0; i < trusted.size(); ++i) {
+namespace {
+
+bool ReadKeyList(const std::string& csv_text, const char* config_key, std::vector<PinnedKey>* keys, Settings* s) {
+  const std::vector<std::string> lines = SplitCsv(csv_text);
+  for (std::size_t i = 0; i < lines.size(); ++i) {
     PinnedKey key;
-    if (!ParseKeyText(trusted[i], &key)) {
-      s.reason = "bad_key";
-      s.detail = "maps.trusted_keys[" + std::to_string(i) + "]";
-      return s;
+    if (!ParseKeyText(lines[i], &key)) {
+      s->reason = "bad_key";
+      s->detail = std::string(config_key) + "[" + std::to_string(i) + "]";
+      return false;
     }
-    s.author_keys.push_back(key);
+    keys->push_back(key);
   }
+  return true;
+}
+
+}  // namespace
+
+Settings ReadSettings(const Lookup& value, const Lookup& csv, const std::vector<PinnedKey>& compiled_official) {
+  Settings s;
+  if (!ReadKeyList(csv("maps_official_keys"), "maps.official_keys", &s.configured_official_keys, &s) ||
+      !ReadKeyList(csv("maps_trusted_keys"), "maps.trusted_keys", &s.author_keys, &s)) {
+    return s;
+  }
+  std::vector<PinnedKey> official = compiled_official;
+  official.insert(official.end(), s.configured_official_keys.begin(), s.configured_official_keys.end());
   if (!official.empty() && !s.author_keys.empty()) {
     s.reason = "mixed_keys";
     s.detail = "official and author keys are never trusted for one base_url";

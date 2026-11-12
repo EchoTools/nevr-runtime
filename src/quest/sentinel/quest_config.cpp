@@ -53,6 +53,7 @@ constexpr std::size_t kMaxAssetLabels = 32;
 constexpr const char* kMapsBaseUrlKey = "maps.base_url";
 constexpr const char* kMapsSubscribedKey = "maps.subscribed";
 constexpr const char* kMapsTrustedKeysKey = "maps.trusted_keys";
+constexpr const char* kMapsOfficialKeysKey = "maps.official_keys";
 constexpr const char* kMapsChannelKey = "maps.channel";
 constexpr const char* kMapsCapMibKey = "maps.cap_mib";
 constexpr std::size_t kMaxMapIds = 64;
@@ -488,6 +489,15 @@ void ReadMaps(const nevr::NevrConfig& cfg, LoadResult& r) {
     if (m.trustedKeys.empty() || m.trustedKeys.size() > 8) {
       m.trustedKeys.clear();
       reject(kMapsTrustedKeysKey, "not_a_key_list");
+    } else {
+      given = true;
+    }
+  }
+  if (cfg.Kind(kMapsOfficialKeysKey) != nevr::NodeKind::kAbsent) {
+    m.officialKeys = cfg.GetStringList(kMapsOfficialKeysKey);
+    if (m.officialKeys.empty() || m.officialKeys.size() > 8) {
+      m.officialKeys.clear();
+      reject(kMapsOfficialKeysKey, "not_a_key_list");
     } else {
       given = true;
     }

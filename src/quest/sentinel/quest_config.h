@@ -170,6 +170,7 @@ struct AssetsChoice {
 // both given, so with no `maps:` keys nothing of it runs (quest/cargo/map_service.h).
 //   maps.base_url      the channel's base (https only)       maps.subscribed    the map ids, a list or one comma-separated string
 //   maps.trusted_keys  minisign public key lines, a list     maps.channel       the channel name (optional)
+//   maps.official_keys the official key lines, a list (never with trusted_keys)
 //   maps.cap_mib       the cache cap in MiB (optional)
 // A key that is wrong is one Warning that names the key and never the value, and the key stays unset.
 struct MapsConfig {
@@ -177,6 +178,7 @@ struct MapsConfig {
   std::string channel;
   std::vector<std::string> subscribed;
   std::vector<std::string> trustedKeys;
+  std::vector<std::string> officialKeys;
   std::uint64_t capMib = 0;  // 0: the core's default
   Source source = Source::kAbsent;  // kFile: the file gave at least one accepted maps key
 };

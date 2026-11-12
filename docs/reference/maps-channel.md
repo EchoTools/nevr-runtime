@@ -9,8 +9,11 @@ How nevr fetches, verifies and mounts subscribed custom maps (`docs/adr/0047-cus
 | --- | --- |
 | `maps.base_url` | The channel's bucket URL. Required: there is no compiled default host. |
 | `maps.subscribed` | The map ids to fetch and mount. Absent or empty: the channel is off. |
-| `maps.trusted_keys` | Minisign public keys (author or dev) trusted for this `base_url`; each is logged at Warning. Never mixed with the official keys on one `base_url`. |
+| `maps.official_keys` | Minisign public keys of the official channel, added to the compiled-in list (empty today). The bare base64 line or the whole `.pub` file. This is how the official key reaches players without a new build. |
+| `maps.trusted_keys` | Minisign public keys (author, dev or test) trusted for this `base_url`; each is logged at Warning. Never mixed with the official keys on one `base_url`. |
 | `maps.cap_mib` | The cache cap; a map that would pass it is skipped. |
+| `maps.channel` | The channel name the manifest must carry. Empty: the name the `base_url` gave at its first fetch. |
+| `maps.boot_budget_ms` | The boot mount's time budget; later ids are skipped past it. 0: no limit. |
 | `maps.server_allow` | Map ids (optionally `id@index_sha256`) whose scripts a server may run. A server mounts a map only if every script is allowed. |
 
 ## Bucket
@@ -20,6 +23,8 @@ How nevr fetches, verifies and mounts subscribed custom maps (`docs/adr/0047-cus
 <base_url>/v1/maps/manifest.signed   the current channel manifest: the minisig, a "--" line, then the body
 <base_url>/v1/maps/manifests/<serial>.signed
 ```
+
+Any static HTTPS host serves it: a Cloudflare R2 bucket's public URL or its custom domain works as `maps.base_url`.
 
 Member paths are exact: `set/<platform>.nevrres`, then `scripts/<hash16>.dll` (PC) or `scripts/lib<hash16>.so` (Quest). Map ids
 match `[a-z][a-z0-9_]{0,54}`; `level_name` is `<id>` on PC and `<id>_lowspec` on Quest.
@@ -33,7 +38,9 @@ match `[a-z][a-z0-9_]{0,54}`; `level_name` is `<id>` on PC and `<id>_lowspec` on
   <id>\<platform>\<index sha12>\package.json
   <id>\<platform>\<index sha12>\set\windows-x86_64.nevrres
   <id>\<platform>\<index sha12>\scripts\<hash16>.dll
-  <id>\<platform>\<index sha12>.tmp\              assembly in progress; removed by GC
+  <id>\<platform>\<index sha12>.tmp\              assembly in progress; its verified pieces/ survive a stop or a
+                                                  transport failure and the next pass resumes from them; removed
+                                                  once the manifest pins another version
 ```
 
 ## Events
@@ -57,7 +64,8 @@ Every line is `[NEVR.MAPS] <event> key=value ...`, with a `reason=` or `refused=
 | --- | --- |
 | `not_configured` | No `maps.subscribed`: nothing runs. |
 | `busy` | Another process on the same root is fetching; no fetch this run. |
-| `mixed_keys` | Official and author keys configured for one `base_url`; refused. |
+| `mixed_keys` | Official keys (compiled in or `maps.official_keys`) and `maps.trusted_keys` configured together; refused. |
+| `bad_key` | A `maps.official_keys` or `maps.trusted_keys` entry is not a minisign public key; the detail names it. |
 | `http_<status>`, `transport` | The fetch failed; the cache is untouched. |
 | `over_cap` | A download passed its cap, or a map would pass `maps.cap_mib`. |
 | `bad_signature`, `unknown_key`, `malformed` | The manifest does not verify; the stored one is kept. |

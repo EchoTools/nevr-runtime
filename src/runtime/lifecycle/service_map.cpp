@@ -91,6 +91,7 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       // custom maps (ADR 0047): list-shaped ones are read CSV, like guilds
       {"maps_subscribed", "maps.subscribed"},
       {"maps_base_url", "maps.base_url"},
+      {"maps_official_keys", "maps.official_keys"},
       {"maps_trusted_keys", "maps.trusted_keys"},
       {"maps_server_allow", "maps.server_allow"},
       {"maps_channel", "maps.channel"},

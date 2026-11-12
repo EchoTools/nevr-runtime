@@ -22,7 +22,7 @@ behaves exactly as before), maps only add resources (R2), and no game bytes trav
    the frame's sha256 starts below 64, or before 8 MiB. The client only concatenates pieces in order, so the rule can change
    without a client release. The client never unzips; the `.nevrmap` is an upload container only.
 3. **Freshness.** One serial floor per channel (`base_url`), compared strictly; an equal serial must carry equal body bytes. A
-   per-`(id, platform)` version floor. Official and author keys are never trusted for the same `base_url` (`mixed_keys`). Past
+   per-`(id, platform)` version floor. Official keys are compiled in or set in `maps.official_keys`; official and author keys are never trusted for the same `base_url` (`mixed_keys`). Past
    `expires`, a map with scripts does not mount; a script-free map still does. The stored manifest is re-verified at every boot,
    before anything mounts.
 4. **Integrity at rest.** Hashing happens once, at fetch. At boot each file is opened share-read and held for the process, and

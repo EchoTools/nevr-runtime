@@ -83,13 +83,25 @@ bool ChoiceFromConfig(const MapsConfig& config, MapsChoice* out, std::string* ba
   choice.channel = config.channel;
   choice.subscribed = config.subscribed;
   choice.cap_bytes = config.capMib << 20;
-  for (std::size_t i = 0; i < config.trustedKeys.size(); ++i) {
-    nevr_maps::PinnedKey key;
-    if (!nevr_minisign::ParsePublicKey(config.trustedKeys[i], &key.key)) {
-      *bad_key = "maps.trusted_keys[" + std::to_string(i) + "]";
-      return false;
+  const auto add_keys = [&](const std::vector<std::string>& lines, const char* name, bool official) {
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+      nevr_maps::PinnedKey key;
+      key.official = official;
+      if (!nevr_minisign::ParsePublicKey(lines[i], &key.key)) {
+        *bad_key = std::string(name) + "[" + std::to_string(i) + "]";
+        return false;
+      }
+      choice.keys.push_back(key);
     }
-    choice.keys.push_back(key);
+    return true;
+  };
+  if (!add_keys(config.officialKeys, "maps.official_keys", true) ||
+      !add_keys(config.trustedKeys, "maps.trusted_keys", false)) {
+    return false;
+  }
+  if (!config.officialKeys.empty() && !config.trustedKeys.empty()) {
+    *bad_key = "maps.trusted_keys (mixed_keys: never trusted beside maps.official_keys)";
+    return false;
   }
   *out = std::move(choice);
   return true;

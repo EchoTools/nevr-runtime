@@ -638,6 +638,53 @@ TEST(MapChannelSettings, NoSubscriptionIsNotConfiguredAndKeysAreChecked) {
   EXPECT_EQ(ReadSettings(none, bad, {}).reason, "bad_key");
 }
 
+TEST(MapChannelSettings, TheOfficialKeyCanComeFromTheConfigAndIsNeverMixedWithAuthorKeys) {
+  const TestKey official(4), author(5);
+  const auto bare = [](const TestKey& k) {
+    const std::string file = k.PublicKeyFile("k");
+    return file.substr(file.find('\n') + 1);
+  };
+  std::string official_keys, trusted_keys;
+  const Lookup csv = [&](const char* k) {
+    if (std::strcmp(k, "maps_subscribed") == 0) return std::string("a");
+    if (std::strcmp(k, "maps_official_keys") == 0) return official_keys;
+    if (std::strcmp(k, "maps_trusted_keys") == 0) return trusted_keys;
+    return std::string();
+  };
+  const Lookup value = [](const char* k) {
+    return std::string(std::strcmp(k, "maps_base_url") == 0 ? "https://maps.example/" : "");
+  };
+
+  official_keys = bare(official);
+  Settings s = ReadSettings(value, csv, {});
+  EXPECT_EQ(s.reason, "");
+  ASSERT_EQ(s.config.keys.size(), 1u);
+  EXPECT_TRUE(s.config.keys[0].official);
+  EXPECT_EQ(s.config.keys[0].key.key_id, official.pin.key.key_id);
+  EXPECT_EQ(s.configured_official_keys.size(), 1u);
+  EXPECT_TRUE(s.author_keys.empty());
+
+  official_keys = official.PublicKeyFile("minisign public key");
+  s = ReadSettings(value, csv, {});
+  ASSERT_EQ(s.config.keys.size(), 1u) << "the whole .pub file, its comment line included, is accepted";
+  EXPECT_EQ(s.config.keys[0].key.key_id, official.pin.key.key_id);
+
+  trusted_keys = bare(author);
+  EXPECT_EQ(ReadSettings(value, csv, {}).reason, "mixed_keys");
+  official_keys.clear();
+  EXPECT_EQ(ReadSettings(value, csv, {official.pin}).reason, "mixed_keys") << "a compiled-in key mixes the same way";
+  s = ReadSettings(value, csv, {});
+  EXPECT_EQ(s.reason, "") << "a test channel: only its test key, in maps.trusted_keys";
+  ASSERT_EQ(s.config.keys.size(), 1u);
+  EXPECT_FALSE(s.config.keys[0].official);
+
+  official_keys = "nope";
+  trusted_keys.clear();
+  s = ReadSettings(value, csv, {});
+  EXPECT_EQ(s.reason, "bad_key");
+  EXPECT_EQ(s.detail, "maps.official_keys[0]");
+}
+
 TEST(MapChannelLock, ASecondHolderOfOneRootIsBusy) {
   std::unique_ptr<nevr_cargo::Env> env = nevr_cargo::MakeWinEnv("");
   const std::string root = "D:/nevr-map-channel-lock-test-" + std::to_string(GetCurrentProcessId());
