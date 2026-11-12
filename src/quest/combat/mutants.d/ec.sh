@@ -149,3 +149,6 @@ runm ec_leave_ans       $E "s#^      g_loop.pageAns = false;#      (void)0;#"
 runm ec_leave_pick_dests $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        (void)0;#"
 runm ec_leave_pick_best  $E "s#^        g_st.best = -1;#        (void)0;#"
 runm ec_leave_pick_line  $E "s#\"forgets the server (back in scope, the game's first send picks it)\"#\"\"#"
+# the leave resets the whole state where it clears the pick (#2390): the two clears become g_st = State(). The pick is the same either way, so only
+# the kept counters and the carried types (LeavePickTests, KeptCounters) tell the two apart
+runm ec_leave_keeps_counters $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        g_st = State();#; s#^        g_st.best = -1;#        (void)0;#"
