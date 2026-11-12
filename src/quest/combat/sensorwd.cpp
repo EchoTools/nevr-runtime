@@ -259,7 +259,7 @@ void ReportEvent(const Seen& seen, std::uint64_t a, std::uint64_t b) noexcept {
   }
 }
 
-// ---- the three handlers: the scope first, then the plugin's work ----------------------------------------------------------------------
+// ---- the three handlers: the scope first, then the module's work ----------------------------------------------------------------------
 
 std::uint64_t OnEnabled(tgt::EnabledThunk::Fn original, void* component, std::uint64_t handle) noexcept {
   if (!InScope()) return original(component, handle);

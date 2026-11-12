@@ -17,9 +17,8 @@
  * Arena (same APK). Arena and combat run on the same APK, so the rule is scoped by the loaded level, not by the APK: in an Echo Arena match the
  * game's own rate stands, and a player who leaves combat for arena gets the session rate back at the tick's next look. The other lobbies are
  * neither: the lobby levels arena players use (`mpl_lobby_b`, `_b2`, ...) keep the game's rate always, and only the combat lobby can ask for the
- * level rate, and only with `refresh_rate_lobby` on. Where this departs from the combat plugin imported in #1591 (and docs/quest/combat/adr/0002): that plugin took
- * every lobby level and turned it on by default; the game holds 118-120 Hz in the lobby (ADR 0001), so arena's lobby is left alone.
- * The kill files `hzlevel.off`, `hzlobby90.off` and `hz72q2.off` of the plugin are no longer read: one found in the plugin's data directory is a
+ * level rate, and only with `refresh_rate_lobby` on. The module takes the combat lobby only, not every lobby level: the game holds 118-120 Hz in the lobby (ADR 0001), so arena's lobby is left alone (the default is recorded in docs/quest/combat/adr/0002-level-refresh-rate-default.md).
+ * The kill files `hzlevel.off`, `hzlobby90.off` and `hz72q2.off` are no longer read: one found in the data directory is a
  * Warning (`combat_refresh_rate_legacy_switch`) naming the key that replaces it.
  *
  * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false `Choose` answers the game's own rate,

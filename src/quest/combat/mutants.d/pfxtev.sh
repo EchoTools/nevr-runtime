@@ -59,7 +59,7 @@ runm tev_line_reason_map    $F "s/{\"reason\", !switchOn ? \"switch\" : (inComba
 runm tev_line_reason_first  $F "s/{\"reason\", !switchOn ? \"switch\" : (inCombatMap ? \"switch\" : \"level\")},/{\"reason\", switchOn ? \"switch\" : (inCombatMap ? \"switch\" : \"level\")},/"
 runm tev_line_reason_level  $F "s/{\"reason\", !switchOn ? \"switch\" : (inCombatMap ? \"switch\" : \"level\")},/{\"reason\", !switchOn ? \"switch\" : \"switch\"},/"
 runm tev_line_msg_allowed   $F "s/{\"msg\", allowed ? \"the renderer may create this event effect\"/{\"msg\", !allowed ? \"the renderer may create this event effect\"/"
-# the install: the stored switch, the line, the plugin's kill file, the result
+# the install: the stored switch, the line, the kill file, the result
 runm tev_install_stores_on  $F "s/  g_on.store(configOn, std::memory_order_relaxed);/  g_on.store(true, std::memory_order_relaxed);/"
 runm tev_install_stores_off $F "s/  g_on.store(configOn, std::memory_order_relaxed);/  g_on.store(false, std::memory_order_relaxed);/"
 runm tev_install_no_store   $F "s/  g_on.store(configOn, std::memory_order_relaxed);/  (void)configOn;/"

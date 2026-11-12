@@ -34,7 +34,7 @@
  *
  * Frequency (ADR 0038). Update runs once per update of a material-property node, every update while its duration runs; its rate per frame is NOT
  * measured (no headset run). The handler's cost on a call that is not a combat level's is the thunk plus the instructions above. In combat each call adds
- * one process_vm_readv of 0x58 bytes, as the plugin's did in every level.
+ * one process_vm_readv of 0x58 bytes.
  *
  * Origin. The combat plugin's `shieldgamma.cpp`, our implementation of the reference build's `runtime/native/afkxr/afk_shieldgamma.cpp` (see
  * shieldgamma_targets.h for the lines). Imported in #1591 from kotorvr's echoquest-combat work.

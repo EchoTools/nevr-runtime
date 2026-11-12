@@ -19,8 +19,8 @@
  *
  * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's constructor.
  *
- * Switch. `combat.instmodel` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `instmodel.off` is not read; one found in the
- * plugin's data directory is a Warning naming the key.
+ * Switch. `combat.instmodel` (default true) in config.yaml (docs/adr/0046 rule 4). The `instmodel.off` file is not read; one found in the
+ * data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the constructor's first word and the step constant (instmodel_targets.h) are read and compared; a
  * difference refuses the module with nothing hooked.

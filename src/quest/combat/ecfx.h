@@ -5,7 +5,7 @@
  * and one drain has run. No hook of its own: it rides ec's recvfrom handler, so it runs on a combat map or the combat lobby only (ec.h,
  * "Arena"); in any other level no net tick runs and the gate is never opened by a drain there.
  *
- * Config: `combat.ecfx` (default true). The plugin's `neutronfx.on` file is no longer read: one found is a Warning
+ * Config: `combat.ecfx` (default true). The `neutronfx.on` file is no longer read: one found is a Warning
  * (`combat_ecfx_legacy_switch`). Needs ec: with ec not installed the step refuses (`needs_ec`).
  *
  * The thread. Until the wall library is loaded (it loads with the first EC level), a thread looks for it once a second with

@@ -26,7 +26,7 @@ runm pfx_reason_on_token     $F "s/GateReason::kConfigOff ? \"off_config\" : \"d
 runm pfx_switch_key          $F "s/{\"switch\", \"combat.pfx\"}/{\"switch\", \"combat.pf\"}/"
 runm pfx_scope_token         $F "s/{\"scope\", \"combat_map\"}/{\"scope\", \"combat\"}/"
 runm pfx_msg_swapped         $F "s/{\"msg\", decision.on ? \"the particle-renderer gate is on/{\"msg\", !decision.on ? \"the particle-renderer gate is on/"
-# the plugin's kill file: never read, one Warning when found
+# the kill file: never read, one Warning when found
 runm pfx_legacy_file         $F "s/legacy::Present(\"pfx.off\")/legacy::Present(\"pfx.on\")/"
 runm pfx_legacy_always       $F "s/  if (legacy::Present(\"pfx.off\")) {/  if (true) {/"
 runm pfx_legacy_never        $F "s/  if (legacy::Present(\"pfx.off\")) {/  if (false) {/"

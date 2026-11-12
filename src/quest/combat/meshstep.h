@@ -22,8 +22,8 @@
  *
  * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's constructor.
  *
- * Switch. `combat.meshstep` (default true, as upstream's shipped build turns `--resource-table-step-1` on; this replacement of the constructor has not run on a headset, the plugin's copy having always refused) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
- * plugin's data directory is a Warning naming the key.
+ * Switch. `combat.meshstep` (default true, as upstream's shipped build turns `--resource-table-step-1` on; this replacement of the constructor has not run on a headset) in config.yaml (docs/adr/0046 rule 4). The `meshstep.off` file is not read; one found in the
+ * data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the 33 code words of meshstep_targets.h are read and compared; a difference refuses the module with
  * nothing hooked.

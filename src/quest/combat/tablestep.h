@@ -21,8 +21,8 @@
  *
  * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's function.
  *
- * Switch. `combat.tablestep` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `tablestep.off` is not read; one found in the
- * plugin's data directory is a Warning naming the key.
+ * Switch. `combat.tablestep` (default true) in config.yaml (docs/adr/0046 rule 4). The `tablestep.off` file is not read; one found in the
+ * data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the step constant (tablestep_targets.h) is read and compared; a difference refuses the module with
  * nothing hooked.

@@ -12,8 +12,8 @@
  * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs.
  *
  * Switch. `combat.music` in config.yaml, true unless the file says false (kotorvr's build has it on by default, `afk_music.cpp:1`, with `music.off` as its off
- * switch, `afk_music.cpp:31`; the combat plugin imported in #1591 built it on). No headset session of ours has yet shown it acting (the sessions that loaded that plugin reach no combat map), so its headset row requires
- * `combat_music_first` and `combat_music_play` (docs/quest/combat/music.md). The plugin's kill file `music.off` is no longer read: one found in the plugin's data
+ * switch, `afk_music.cpp:31`; the default is on too). No headset session of ours has yet shown it acting, so its headset row requires
+ * `combat_music_first` and `combat_music_play` (docs/quest/combat/music.md). The kill file `music.off` is no longer read: one found in the data
  * directory is a Warning (`combat_music_legacy_switch`).
  *
  * Arena (same APK). Arena has its own music (`mp_arena_music`), which must stay as stock. PostSoundEvent is the game's one post for every sound

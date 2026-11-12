@@ -10,8 +10,7 @@
  * and writes through the answer without testing it; the table's free head is stored at `str w9,[x19,#0x50]` (0x23165a8). DestroyContext frees through
  * the same vtable at +0x38 (`ldr x8,[x8,#0x38]`, 0x124943c).
  *
- * The four engine functions the probe calls are libr15 exports found with dlsym (voipdrop.h); their addresses are not pinned here (the plugin did
- * not pin them either).
+ * The four engine functions the probe calls are libr15 exports found with dlsym (voipdrop.h); their addresses are not pinned here.
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */

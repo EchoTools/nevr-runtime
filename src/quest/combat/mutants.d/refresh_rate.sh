@@ -78,7 +78,7 @@ runm rr_install_msg_off        $F "s/: !decided.on ? \"refresh_rate is off/: dec
 runm rr_install_full_returns   $F "s/  if (full) return {false, \"tick_table_full\"};//"
 runm rr_install_status         $F "s/  return {true, decided.on ? \"installed\" : \"witness\"};/  return {true, decided.on ? \"witness\" : \"installed\"};/"
 runm rr_install_no_legacy      $F "s/^  WarnLegacyKillFiles();/  if (false) WarnLegacyKillFiles();/"
-# the plugin's kill files: only a Warning, naming the key that replaces each
+# the kill files: only a Warning, naming the key that replaces each
 runm rr_legacy_not_looked      $F "s/    if (!legacy::Present(entry.file)) continue;/    (void)entry;/"
 runm rr_legacy_file_level      $F "s/{\"hzlevel.off\", /{\"hzlevel.of\", /"
 runm rr_legacy_file_lobby      $F "s/{\"hzlobby90.off\", /{\"hzlobby90.of\", /"

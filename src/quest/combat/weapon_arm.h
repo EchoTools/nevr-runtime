@@ -11,14 +11,13 @@
  * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile.
  *
  * Player state (ADR 0046 rule 4). The marker directory is the data directory (legacy_switch.h kDataSubdir), where players' markers already are; it is
- * state, not a switch, and renaming it would make every profile look unhandled. A marker the plugin wrote stops this module from touching that
+ * state, not a switch, and renaming it would make every profile look unhandled. A marker already in a profile stops this module from touching that
  * profile (weapon_arm_test). The marker file is the module's only write.
  *
  * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.weapon_arm` in config.yaml, on unless the file says false (the reference build's T-26 is on in its shipped build,
- * afk_gunconnect.cpp:58-64,587; the combat plugin imported in #1591 had it on). The headset runs that loaded the plugin's copy wrote the marker for a profile already on the
- * right hand and found the marker on later runs, and never a `set`, so its headset row requires `combat_weapon_arm_set`. The plugin's kill file
+ * afk_gunconnect.cpp:58-64,587; the default is on too). No headset run has yet logged a `set`, so its headset row requires `combat_weapon_arm_set`. The kill file
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
  * Arena (same APK). The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h

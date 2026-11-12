@@ -5,7 +5,7 @@
  * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs and the gate reads off.
  *
  * Switch. `combat.pfx` in config.yaml, true unless the file says false (the working build has the renderer on; the reference build keeps it
- * off unless its own switch file says otherwise). The plugin's kill file `pfx.off` is no longer read: one found in the plugin's data
+ * off unless its own switch file says otherwise). The kill file `pfx.off` is no longer read: one found in the data
  * directory is a Warning (`combat_pfx_legacy_switch`) that names the key replacing it.
  *
  * Arena (same APK). Arena and combat run on the same APK, so the APK does not say which one a player is in; the loaded level does. The gate
@@ -17,7 +17,7 @@
  * process_vm_readv reads, meant for a level change. No caller exists in the tree (the renderer is #1631), so today the gate adds nothing to any
  * frame, in arena or in combat; pfx_test measures the cost of both calls so the first caller starts from a number.
  *
- * Origin. The plugin's `pfx.cpp` (#1682), whose gate reconstructs the renderer switch of kotorvr's echoquest-combat repository (commit
+ * Origin. The gate reconstructs the renderer switch of kotorvr's echoquest-combat repository (commit
  * c5a67e8): `On()` at native/afkxr/afk_pfx.cpp:6958, and the level gate at runtime/native/afkxr/afk_pfx.cpp:1943-1955 (docs/quest/combat/pfx.md).
  * Nothing is copied.
  *
@@ -50,7 +50,7 @@ struct GateDecision {
 // The decision from the one fact, the `combat.pfx` key (pure).
 GateDecision Decide(bool configOn) noexcept;
 
-// The module's normal step: stores the decision for GateOn(), writes the install line and warns for the plugin's kill file. Installs
+// The module's normal step: stores the decision for GateOn(), writes the install line and warns for the kill file. Installs
 // (`installed` true) when the gate is on; off by the key is `off_config`.
 ModuleResult Install(bool configOn) noexcept;
 

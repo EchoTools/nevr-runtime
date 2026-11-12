@@ -12,15 +12,14 @@
  *
  * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs.
  *
- * Switch. `combat.sensorwd` in config.yaml, true unless the file says false: the combat plugin's sensorwd option was on by default in v6.16.5
- * (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50, default ON). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
+ * Switch. `combat.sensorwd` in config.yaml, true unless the file says false. Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
  * and gated to combat maps (`afk_fx.cpp:127-137`). No headset session of ours has yet shown it acting (the reference build's
  * combat match counts no sphere enable, no TriggeredPing and no watchdog action), so its headset row requires `combat_sensorwd_first`
- * (docs/quest/combat/sensorwd.md). The plugin's kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).
+ * (docs/quest/combat/sensorwd.md). The kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).
  *
  * Arena (same APK). The watchdog CAN act in arena: the three words are generic (every model component's enable and disable, and the game's one
  * event post), and the combat ability scripts are named for combat but are not level-specific, so the sphere can exist on an arena player's actor; kotorvr's
- * echoquest-combat found the plugin's sphere hooks live in every level, Echo Arena included, and gated them to combat maps (afk_fx.cpp:127-137, "ARENA-ISO1
+ * echoquest-combat found the sphere hooks live in every level, Echo Arena included, and gated them to combat maps (afk_fx.cpp:127-137, "ARENA-ISO1
  * T-143"). Here the hooks are installed on the same words, and each handler's first statement asks the scope: a combat map is loaded and no Echo Arena level
  * is, as the combat level answer last saw it (combat_scope.h `InCombatMap`: a look four times a second from the game-thread tick, not believed once it is
  * older than 1 s). In any other state the handler calls the game's function with the same arguments and does nothing else: no read of game memory, no lock,
@@ -30,7 +29,7 @@
  *
  * Frequency (ADR 0038). OnComponentEnabled and OnComponentDisabled run for every model component enable and disable of every level (not measured on a headset);
  * SendComponentEventGlobal runs for every component event of every level. The added work on those paths in arena is the thunk's counter and loads plus one
- * relaxed load of the scope word and a test. In a combat map the plugin's cost stays: a model enable or disable reads up to five words of game memory
+ * relaxed load of the scope word and a test. In a combat map the cost stays: a model enable or disable reads up to five words of game memory
  * (process_vm_readv) to ask whether the component is the sphere; the event path is two compares; the scope's freshness adds a clock read. The tick callback
  * runs once per rendered frame: a clock read, the scope word's load and test, and an exchange; the look at the loaded levels is the scope row's, made once
  * for every reader.
@@ -40,7 +39,7 @@
  * Origin. kotorvr's echoquest-combat fxsensor / sensorwd: runtime/native/afkxr/afk_fx.cpp (commit c5a67e8): the constants at :6115-6121, the sphere test at
  * :6141-6152, the enable and disable hooks at :6162-6201, the tick at :6204-6243, the event hook from :6244, and the combat-map gate: the policy at :127-137
  * (`kIsoSns`, :136) and `SnsOpen` at :6137-6140, which applies it to the sensor hooks. The ring of 8 waiting pings, the sweep and the
- * log budgets are the plugin's.
+ * log budgets are this module's.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_sensorwd_install","state":"on|off|refused","reason":"default|off_config|scope_not_live|<refusal>","switch":"combat.sensorwd","scope":"combat_map",

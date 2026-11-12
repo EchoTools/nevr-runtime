@@ -20,8 +20,8 @@
  *
  * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's function.
  *
- * Switch. `combat.shaderstep` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `shaderstep.off` is not read; one found in
- * the plugin's data directory is a Warning naming the key.
+ * Switch. `combat.shaderstep` (default true) in config.yaml (docs/adr/0046 rule 4). The `shaderstep.off` file is not read; one found in
+ * the data directory is a Warning naming the key.
  *
  * Frequency (ADR 0038). Once per shader set the game constructs through this slot; not on a per-frame path. The log is written after the work:
  * one line for the first object set, and a Warning for each of the first five objects whose step was not the game's 0x20.

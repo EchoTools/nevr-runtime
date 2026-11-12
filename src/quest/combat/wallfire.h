@@ -8,7 +8,7 @@
  * CBVHTree::Occluded through CncaGame's virtual +0x278, which is bvh's Occluded hook. A segment that is blocked makes QueryCollision answer 1, and
  * FireGunLocal returns without firing. Every other caller of QueryCollision gets the game's answer.
  *
- * Switch (docs/adr/0046 C2): `combat.wallfire` (default true, as the reference build has it; it needs `combat.bvh` and installs nothing without it). The plugin's kill file `wallfire.off` is no longer read: one found is a Warning (`combat_wallfire_legacy_switch`) that names the key.
+ * Switch (docs/adr/0046 C2): `combat.wallfire` (default true, as the reference build has it; it needs `combat.bvh` and installs nothing without it). The kill file `wallfire.off` is no longer read: one found is a Warning (`combat_wallfire_legacy_switch`) that names the key.
  *
  * Owner (ADR 0039). This file owns the QueryCollision slot.
  *

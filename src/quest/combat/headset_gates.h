@@ -15,7 +15,7 @@
  * thunk's return address, not the game's. HeadsetType's one entry serves both gates on its slot; a gate that is off has an empty range.
  *
  * Owner (ADR 0039). This file owns both slots. The kill files `gate_perm.off`, `gate_bots.off` and
- * the data file `gate_libs.txt` are no longer read: one found in the plugin's data directory is a Warning (`combat_gates_legacy_switch`) that
+ * the data file `gate_libs.txt` are no longer read: one found in the data directory is a Warning (`combat_gates_legacy_switch`) that
  * names the key that replaces it.
  *
  * Another handler on a slot. A gate acts on the game's own call site, so its entry stays the newest hook on its slot: the manager refuses a hook
@@ -26,14 +26,14 @@
  * LoadLevelName slot (CR15Game's vtable word at +0x260, kPins.levelNameSlot: the stock function is `base + kPins.levelNameStock`, and a word that
  * is anything else, a hook, means levelname is on). The gate reads that word at each bot call (a data read with process_vm_readv, which never faults;
  * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). So it depends on no levelname switch, in
- * the plugin or the runtime, and holds when levelname moves. Not the loaded level: the level table holds the name the game was asked for
+ * the levelname module or the runtime, and holds when levelname moves. Not the loaded level: the level table holds the name the game was asked for
  * (`global_mp`) before LoadLevelName appends `_lowspec`, so the table cannot tell the two apart (CncaGameSpace::LoadLevel stores its argument at gs+0x58
  * and then calls the virtual).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in:
  *   - gate_bots acts only while a combat map or the combat lobby is loaded (combat_level.h); in an Echo Arena level, and in every other level, it
  *     answers the real value, because BotActorId chooses a bot body at random for a symbol it does not list, and body 1 does not exist in an arena
- *     level. This is where the plugin differed: it answered "not a Quest" to every BotActorId call. The game's frame tick supplies the CR15Game
+ *     level. The game's frame tick supplies the CR15Game
  *     (`Tick`); with no game seen yet the gate answers the real value.
  *   - gate_perm acts wherever the permissions expression runs: the flag it affects is the combat permission of a party member who bought combat.
  *   - gate_link acts for the script libraries of the policy, in the menus and the lobby script wherever they run. The lobby script is shared by

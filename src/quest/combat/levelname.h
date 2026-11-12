@@ -20,8 +20,8 @@
  *
  * Which APKs. The combat variants (`combat::Active()`); every other APK keeps the game's own level name.
  *
- * Switch (ADR 0046 rule 4): `combat.levelname` in config.yaml, default true. The plugin's kill file `levelname.off` is no longer read: one found in
- * the plugin's data directory is a Warning (`combat_levelname_legacy_switch`) naming the key.
+ * Switch (ADR 0046 rule 4): `combat.levelname` in config.yaml, default true. The kill file `levelname.off` is no longer read: one found in
+ * the data directory is a Warning (`combat_levelname_legacy_switch`) naming the key.
  *
  * Frequency (ADR 0038). The function runs once per level the game loads: the handler compares the level to one constant and reads the flags word
  * only for global_mp. Not measured on a headset.
@@ -57,8 +57,8 @@ namespace nevr_quest::combat::levelname {
 // "installed", "refused", "off", "already_ran", "module_not_loaded". A refused step leaves nothing installed and may be tried again.
 ModuleResult Install(bool on) noexcept;
 
-// The same on the image `lookup` finds. The plugin's old kill file is looked for through legacy::Present (legacy_switch.h), in the directory that
-// the test seam (legacy::SetDirectoryForTest) names, or the plugin's own data directory.
+// The same on the image `lookup` finds. The kill file is looked for through legacy::Present (legacy_switch.h), in the directory that
+// the test seam (legacy::SetDirectoryForTest) names, or the data directory.
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept;
 
 // True once Install put all four thunks in and until ResetForTest: the companion (boosterpool.h) installs only then.

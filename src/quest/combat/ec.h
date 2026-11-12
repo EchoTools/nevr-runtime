@@ -40,8 +40,7 @@
  *
  * Config (`combat:` in config.yaml): `ec` (default true), `ec_words` (default `types=VPTO equip hide`): the words are `types=<letters of VPTO>`
  * (the packet types this client carries; no word, an empty list or another letter: 'T' only), `equip` / `noequip` (store the selection or
- * only log it), `hide` (cut the list on a server without EC), `loctoken=<s>` (TEST: one LOC token every s seconds, 1..600). The plugin's
- * switch files `ec.on`, `ec.off` and `ec_preset1.on` .. `ec_preset3.on` are no longer read: one found is a Warning
+ * only log it), `hide` (cut the list on a server without EC), `loctoken=<s>` (TEST: one LOC token every s seconds, 1..600). The switch files `ec.on`, `ec.off` and `ec_preset1.on` .. `ec_preset3.on` are no longer read: one found is a Warning
  * (`combat_ec_legacy_switch`) naming the key.
  *
  * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-209). The combat plugin's

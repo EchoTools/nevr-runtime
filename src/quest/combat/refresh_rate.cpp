@@ -90,7 +90,7 @@ static_assert(kQuest2LevelHz == headset_profile::kQuest2.levelHz, "the Quest 2 l
 static_assert(kLevelHz == headset_profile::kQuest3.levelHz && kLevelHz == headset_profile::kGeneric.levelHz,
               "every other profile's level rate is the match rate");
 
-// The plugin's kill files are not read: a file there turns nothing off (docs/adr/0046 C2). One found is a Warning that names the `combat:` key
+// The kill files are not read: a file there turns nothing off (docs/adr/0046 C2). One found is a Warning that names the `combat:` key
 // that replaces it, so an operator who relied on it learns why the rule is running.
 void WarnLegacyKillFiles() noexcept {
   struct Legacy {

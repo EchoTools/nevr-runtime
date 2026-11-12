@@ -32,7 +32,7 @@
  * swapped as a second "slot", is an unwind record inside `.eh_frame` and no pointer (sendguard_targets.h); nothing here installs on it.
  *
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true (combat_active.h): the combat variants. Its switch
- * is `combat.sendguard` in config.yaml (default true). The plugin's `sendguard.off` file is no longer read; one found in the data
+ * is `combat.sendguard` in config.yaml (default true). The `sendguard.off` file is no longer read; one found in the data
  * directory (legacy_switch.h) is a Warning that names the key.
  *
  * Install. The build ID, then the code pins (sendguard_targets.h), then the JUMP_SLOT, checked against base + Enter's address (a word
@@ -64,7 +64,7 @@
  *            (final 1, written by NoteEnd when the wrapper is installed), and Debug every kStatsEvery passes and every kStatsDropEvery drops
  *            (final 0), so a process that is killed still leaves the rate and the drops after the eighth leave a trace.
  *   legacy   {"event":"combat_sendguard_legacy_switch","key":"combat.sendguard","file":"sendguard.off","consequence":".."}, Warning,
- *            when the plugin's switch file is found; the file changes nothing.
+ *            when the switch file is found; the file changes nothing.
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */

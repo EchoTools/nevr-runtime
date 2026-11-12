@@ -48,7 +48,7 @@ runm ec_hide_newlist    $R "s#    if (entries != st.entries) {  // a new list#  
 runm ec_types_empty     $C "s#return m ? m : step1;#return m;#"
 runm ec_equip_word      $C "s#return !WholeWord(words, \"noequip\");#return !WholeWord(words, \"noequip\") || true;#"
 runm ec_gate_gen        $C "s#gen.fetch_add(1, std::memory_order_relaxed);##"
-# the handlers (ec.cpp): the scope first, then the plugin's rules
+# the handlers (ec.cpp): the scope first, then the module's rules
 runm ec_recv_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  if (false) return real(fd, buf, len, flags, from, fromlen);#"
 runm ec_send_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  if (false) return real(fd, buf, len, flags, to, tolen);#"
 runm ec_send_v4         $E "s# \&\& to->sa_family == AF_INET##"

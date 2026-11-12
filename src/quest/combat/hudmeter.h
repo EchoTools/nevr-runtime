@@ -29,8 +29,7 @@
  *
  * Frequency (ADR 0038). Enter runs once per script update of a canvas-attribute node: its rate per frame is NOT measured (no headset run; the
  * reference build's lobby log says the weapon_meter writes are a few per second while the HUD fills, and no count of the other nodes). The handler's
- * cost on a call that is not a combat level's is the thunk plus the instructions above. In combat it adds one process_vm_readv of 0x40 bytes per call,
- * which is the cost the plugin had in every level.
+ * cost on a call that is not a combat level's is the thunk plus the instructions above. In combat it adds one process_vm_readv of 0x40 bytes per call.
  *
  * Origin. The combat plugin's `hudmeter.cpp`, which is our implementation of the reference build's `runtime/native/afkxr/afk_hudmeter.cpp` (see
  * hudmeter_targets.h for the lines); the rev 4 "old bar" part of the reference build is not built. Imported in #1591 from kotorvr's

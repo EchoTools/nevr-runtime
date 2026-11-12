@@ -27,7 +27,7 @@
  * Install. The patched build ID, then the code words (peerclamp_targets.h), then the GOT word that holds &SAddress::kInvalid (read once; unreadable or
  * null refuses, `invalid_unreadable`), then the JUMP_SLOT, which must hold CleanupPeers itself. The scope must be live first (`scope::Live()`: the `scope` row
  * of the install table registered the refresh and the tick is installed; else `scope_not_live` and nothing is hooked). A refused install leaves the
- * game's calls as they are. It registers in combat::InstallNormal()'s table at the position the plugin installed it (last of the guards).
+ * game's calls as they are. It registers in combat::InstallNormal()'s table last of the crash and timing guards.
  *
  * Frequency (ADR 0038). CleanupPeers runs once per CBroadcaster::Receive (the rate per frame is not known: `combat_peerclamp_stats` counts it). Every call
  * pays the thunk's counter and one relaxed atomic load of the scope word. In scope a call also reads the clock (`LookIsFresh`), pays 2 + (one per peer)

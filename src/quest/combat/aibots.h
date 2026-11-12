@@ -10,10 +10,9 @@
  * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switches. `combat.aibots` in config.yaml, on unless the file says false (the reference build's aibots is on in its shipped build, afk_aibots.cpp:19,145;
- * the combat plugin imported in #1591 had it on). No headset log shows the module calling EnableScenario yet (the headset runs that loaded the plugin's copy hold its start
- * line and one `idle` line, never an enable), so its headset row requires `combat_aibots_enable`. `combat.aibots_scenario` is the scenario it enables: a number 0-6 or one of patrol, randomattack (the default), weaponattack,
+ * the default is on too). No headset log shows the module calling EnableScenario yet, so its headset row requires `combat_aibots_enable`. `combat.aibots_scenario` is the scenario it enables: a number 0-6 or one of patrol, randomattack (the default), weaponattack,
  * spike, aithrowtest, aionevone, aibdebugarena; `off` is the module off. It is read once, at install. A word that is none of these keeps the default
- * with a Warning (`combat_aibots_scenario`) that does not name the word. In a development build the plugin's request file `<data dir>/aibots.req`
+ * with a Warning (`combat_aibots_scenario`) that does not name the word. In a development build the request file `<data dir>/aibots.req`
  * (`scenario=<0-6|name|off> delay=<seconds>`) is also polled at 1 Hz and overrides both; in a release build it is not read, and one found is a
  * Warning (`combat_aibots_legacy_switch`) naming the key.
  *
@@ -22,7 +21,7 @@
  * its last look saw one, or the record is not fresh: it fails closed; the module's tick runs in the same loop right after the scope row's refresh, so its
  * record is at most 250 ms old, and a stopped tick runs neither), whatever the game's flags say, with one Info line per
  * match (`combat_aibots_scoped_out`, `reason` echo_arena or no_fresh_look). The module is one of the scope row's readers and refuses its install with
- * `scope_not_live` when the answer cannot change (a scenario that is off in a release build is the module off and wins). The combat-map flag the plugin logged
+ * `scope_not_live` when the answer cannot change (a scenario that is off in a release build is the module off and wins). The combat-map flag logged
  * beside the call (`combat_map`) is the combat-map bit of the same look record (fresh: a stale record refuses the call), not a copy of its level list.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered

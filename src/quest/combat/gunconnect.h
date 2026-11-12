@@ -7,9 +7,8 @@
  * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.gunconnect` in config.yaml, on unless the file says false (UPSTREAM-DEFAULTS: the reference build's `gunconnect` is on in its shipped
- * build, afk_gunconnect.cpp:9,747; the combat plugin imported in #1591 had it on). No headset log shows the module acting yet (the headset runs that loaded the plugin's
- * copy hold its start line and never a Connect), so its headset row requires `combat_gunconnect_connect`.
- * The plugin's kill file `gunconnect.off` is no longer read; one found in the plugin's data directory is a Warning (`combat_gunconnect_legacy_switch`).
+ * build, afk_gunconnect.cpp:9,747; the default is on too). No headset log shows the module acting yet, so its headset row requires `combat_gunconnect_connect`.
+ * The kill file `gunconnect.off` is no longer read; one found in the data directory is a Warning (`combat_gunconnect_legacy_switch`).
  *
  * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is, as the combat level answer
  * last saw it (combat_scope.h `InCombatOrLobby`, a look four times a second from the game-thread tick; the pass runs in the same tick loop, right
