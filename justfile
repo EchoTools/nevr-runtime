@@ -500,13 +500,13 @@ release-check:
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev store_apk=env("NEVR_STORE_APK"):
+package-dev reference_apk=env("NEVR_QUEST_REFERENCE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
     tools/release_preflight.py
     tools/quest_keystore.sh check
-    [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    [ -f "{{ reference_apk }}" ] || { echo "package-dev: reference APK not found: {{ reference_apk }} (set NEVR_QUEST_REFERENCE_APK to the reference build, #1994)" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
     echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
     out="build/package-dev/${commit:0:7}"
@@ -525,7 +525,7 @@ package-dev store_apk=env("NEVR_STORE_APK"):
     x86_64-w64-mingw32-strip "$installer"
     # The same file under the name programs outside this repository still call (#1492): one build, one copy.
     cp "$installer" "$(dirname "$installer")/nevr-install.exe"
-    just _quest-apk "{{ store_apk }}"
+    just _quest-apk "{{ reference_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
@@ -537,9 +537,11 @@ package-dev store_apk=env("NEVR_STORE_APK"):
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
         --quest-build-info build/android-dev/generated/nevr_build_info.h
 
-# The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
-# APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk: _build-guard _require-ndk
+# The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the reference
+# build's base (tools/quest_release_base.py prepare), then checked against that base (check-release), as the release APK is (#1995,
+# #1994). The store APK has none of the reference build's combat entries. Private: package-dev only (a release packages CI's loader,
+# release-quest-apk).
+_quest-apk reference_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
@@ -547,7 +549,12 @@ _quest-apk store_apk: _build-guard _require-ndk
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
+    base=build/android-dev/base/reference-r15.apk
+    rm -f "$base"
+    mkdir -p build/android-dev/base
+    python3 -I tools/quest_release_base.py prepare --apk "{{ reference_apk }}" --out "$base" >&2
+    just android-repack-apk "$base" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
+    python3 -I tools/quest_release_base.py check-release --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk --base "$base" >&2
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
 # android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
