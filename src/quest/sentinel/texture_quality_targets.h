@@ -11,8 +11,8 @@
  * What is established. Every word, symbol, PLT stub and JUMP_SLOT below is read from the store file and checked by the test. The
  * deferred-destroy body (0x1888a98), CEngine::Resize, CCanvasDisplay::Resize and CCanvas::BeforeResize are read whole from their
  * byte-checked reconstructions. The other functions named here (FlushGPU, CGDisplay::Resize, the reaper, the slot allocator, both
- * CGUploader::Upload and both End) have no reconstruction yet and are queued for one: what this comment says each of them does
- * beyond its pinned words is INFERRED from those words, and the deadlock below is an inference until they are read whole.
+ * CGUploader::Upload and both End) have no reconstruction in this repository (tracked in #1737): what this comment says each of them
+ * does beyond its pinned words is INFERRED from those words, and the deadlock below is an inference until they are read whole.
  *
  * The two words. Both lie in .bss (.bss 0x3761180, size 0x713b8), so the file holds zero and the game writes them at run time.
  *   0x379b780  the upload lock: a 32-bit spin lock (ldar spin, then ldaxr/stlxr 0 -> 1; released by stlr wzr).
@@ -34,25 +34,30 @@
  * thread) spins with the lock held, and that End waits for the lock: neither returns.
  * Each wait is skipped when its input is null: FlushGPU returns with no lock and no currframe store when gctx + 0xb50 is 0 (cbz at
  * 0x18e08e0), and the deferred-destroy body returns on a null handle before it reads currframe (cbz x1 at 0x1888aa8). So one
- * Resize reaches the upload lock up to five times, not always five.
+ * Resize can reach the upload lock up to nine times: FlushGPU's take, the body's immediate-path take in each of the four direct
+ * calls of CGDisplay::Resize, and the same take in each of the four DeferredDestroy(SGImage&) calls below, which call the body with
+ * kind 0xa on the last reference (0x1888c24..0x1888c34). Each take sits behind the body's own tests (a null handle returns first, and
+ * the take is on the immediate path only), so nine is a bound, not a count.
  *
  * The path from CEngine::Resize (each call is a bl; a call through the PLT names the stub, whose JUMP_SLOT names the callee):
  *   CEngine::Resize 0x2ac093c: bl at 0x2ac09c0 to stub 0xf3a4d0 (slot 0x36f4950) -> CCanvasDisplay::Resize 0x25edfb4
  *   CCanvasDisplay::Resize: bl at 0x25edfd0 to stub 0xf394b0 (slot 0x36f4140) -> CCanvas::BeforeResize 0x25edc0c
  *     CCanvas::BeforeResize: bl at 0x25edc14 to stub 0xef36c0 (slot 0x36d1248) -> CGS::FlushGPU 0x18e08cc   (first wait)
  *   CCanvasDisplay::Resize: bl at 0x25edff0 to stub 0xf402a0 (slot 0x36f7838) -> CGDisplay::Resize 0x1834748
- *     CGDisplay::Resize: four direct bl to 0x1888a98 at 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8, each after `mov w0,#0xe` (the
- *     kind, at 0x1834880, 0x18348ac, 0x18348d0, 0x18348f4)   (up to four more waits; FlushGPU has just made currframe equal the
- *     GPU frame, so each takes the immediate path)
+ *     CGDisplay::Resize: four bl to stub 0xf3c3a0 (slot 0x36f58b8, DeferredDestroy(SGImage&) at 0x1888c04) at 0x1834878, 0x18348a4,
+ *     0x18348c8, 0x18348ec; then four direct bl to 0x1888a98 at 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8, each after `mov w0,#0xe`
+ *     (the kind, at 0x1834880, 0x18348ac, 0x18348d0, 0x18348f4). FlushGPU has just made currframe equal the GPU frame, so each
+ *     direct call takes the immediate path.
  *
  * What stays open after a pre-Resize check of the count and the lock. FlushGPU gives the lock back at 0x18e093c and the five calls
- * that follow hold none; each of the four destroys takes the lock again (the body's ldaxr at 0x1888ae8) and gives it back at
- * 0x1888b50, with CGDisplay::Resize's own code between them. An Upload that takes a slot between any two of those takes (count
- * becomes 1, its submitted word 0) makes the next take spin on a count the reaper cannot lower until that End runs, and the End
- * needs the lock the spinner holds: the deadlock again. The window therefore runs from the read of the two words to the fourth
- * destroy's lock take, which is most of the Resize; the time from the read to FlushGPU's first take is only the start of it. A
- * check before the Resize narrows the exposure and does not close it; a guard has to be designed around the whole Resize, not a
- * gap before the lock. (Inferred: the reaper, the allocator, Upload, End and CGDisplay::Resize between the takes are not read whole.)
+ * that follow hold none; each destroy takes the lock again (the body's ldaxr at 0x1888ae8) and gives it back at 0x1888b50, with
+ * CGDisplay::Resize's own code between them. An Upload that takes a slot between any two of those takes (count becomes 1, its
+ * submitted word 0) makes the next take spin on a count the reaper cannot lower until that End runs, and the End needs the lock the
+ * spinner holds: the deadlock again. The window therefore runs from the read of the two words to at least the fourth direct
+ * destroy's lock take (0x1834884..0x18348f8), which is most of the Resize; the time from the read to FlushGPU's first take is only the
+ * start of it. What CGDisplay::Resize runs after 0x18348f8 is not read, so the window may be longer. A check before the Resize
+ * narrows the exposure and does not close it; a guard has to be designed around the whole Resize, not a gap before the lock.
+ * (Inferred: the reaper, the allocator, Upload, End and CGDisplay::Resize between the takes are not read whole.)
  *
  * The second lock path. The deferred-destroy body's other branch (0x1888b04, currframe not the GPU frame) takes a different lock,
  * the one the pointer word 0x379b478 (.bss) names, for a constant-time append to the deferred queue (a CMemBlock resize when it is

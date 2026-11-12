@@ -40,7 +40,7 @@ from `src/quest/combat/texture_quest2.cpp`: a combat-tick callback, every 500 ms
 tables, an Echo Arena level winning) and CncaGame's init-fiber count (game + 0x1f08, `combat_level_targets.h` `kFiberCount`). Inferred: the
 count is of the gamespaces still loading (the table of in-flight init fibers it indexes is read by `combat_level`, and `meshstep.md` reads the
 fiber's insertion into the loaded tables). `UpdateGameSpaceInit` (ELF 0x17ecc7c, the function that inserts the gamespace at 0x17ed480) has no
-reconstruction in the r15 set (queued in NEEDED.tsv), so when the count returns to 0 is not shown: that it is 0 only after the last
+reconstruction in the r15 set (not established: the function is not in the proven reconstruction tree; tracked in #1737), so when the count returns to 0 is not shown: that it is 0 only after the last
 gamespace's resources are built, and not earlier, is not established. A count that is not 0, or that cannot be read, is a load. The tick
 also keeps the time it last saw a load (`Look::lastLoadMs`). The combat input registers itself with the owner through
 `src/quest/sentinel/texture_quality_input.h`; texture_quality includes no combat module header (`texture_menu_hook.cpp` includes the utility
@@ -86,8 +86,8 @@ Inferred, from the analysis below; nothing here was observed on a headset.
   is not seen by either measure.
 - An `Upload` that is not part of a gamespace load: the init-fiber count does not see it. Which callers upload in a settled level (the
   `CGBuffer` initializers that upload initial data, through 0x182bdf0, created at run time, if any) and on which thread is not shown.
-- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize takes the upload lock up to
-  five times over its whole length. Whether a new init fiber reaches an `Upload` inside that time is not shown.
+- A load that begins after the look and before the Resize ends: the look can be up to 1.5 s old, and the Resize can take the upload lock up to
+  nine times over its whole length. Whether a new init fiber reaches an `Upload` inside that time is not shown.
 - An `Upload` taken after the count and lock read: the read narrows, it does not close (the section "What this means" below).
 - The menu's own live apply and the game's own Resize are unchanged and keep the whole exposure. The menu's Resize (a change the player makes,
   `ApplyPending` with no look behind it) is made with no hold: no load window, no upload word is read.
@@ -158,8 +158,8 @@ the PC control).
 
 - Measured: read in the store `libr15.so` (build id `b243509c08ce677aeb95fa348016949b3fc45230`): an instruction word, a symbol, a
   relocation, or a function read whole from its byte-checked reconstruction. The pinned test checks every word, symbol and slot.
-- Inferred: derived from measured facts; the step is named. Eight functions below have no reconstruction yet (each is queued for
-  one); what this page says they do beyond their pinned words is inferred from those words.
+- Inferred: derived from measured facts; the step is named. Eight functions below are not in the proven reconstruction tree (tracked in
+  #1737); what this page says they do beyond their pinned words is inferred from those words.
 - Not shown: listed at the end.
 
 Addresses are ELF virtual addresses; ReVault (project echovr, binary libr15.so) shows each at ELF + 0x100000.
@@ -184,6 +184,8 @@ Measured. Each step is a `bl`; a call through the PLT names the stub, and the st
 | `CCanvas::BeforeResize` | 0x25edc14 | stub 0xef36c0, slot 0x36d1248 | `CGS::FlushGPU` 0x18e08cc |
 | `CCanvasDisplay::Resize` | 0x25edff0 | stub 0xf402a0, slot 0x36f7838 | `CGDisplay::Resize` 0x1834748 |
 | `CGDisplay::Resize` | 0x1834884, 0x18348b0, 0x18348d4, 0x18348f8 | direct, each after `mov w0,#0xe` (0x1834880, 0x18348ac, 0x18348d0, 0x18348f4) | deferred-destroy body 0x1888a98 (kind 0xe) |
+| `CGDisplay::Resize` | 0x1834878, 0x18348a4, 0x18348c8, 0x18348ec | stub 0xf3c3a0, slot 0x36f58b8 | `CGRawInterfaceVK::DeferredDestroy(SGImage&)` 0x1888c04 (`src/reconstruction/r15/cg_raw_interface_vk_deferred_destroy.cpp`) |
+| `DeferredDestroy(SGImage&)` | 0x1888c34, after `mov w0,#0xa` (0x1888c30), on the last reference when the allocation's first word is not 0 | direct | deferred-destroy body 0x1888a98 (kind 0xa) |
 
 `CEngine::Resize` is the function the live apply's engine resize slot must hold (`pinned::kEngineResize`, the same address; the test
 checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawInterfaceVK::DeferredDestroy(VkBuffer_T*)` (0x1888a8c,
@@ -191,8 +193,12 @@ checks it). The deferred-destroy body has no `.dynsym` name: it follows `CGRawIn
 
 `CCanvas::BeforeResize` calls `CGS::FlushGPU` first, before any other step (its byte-checked reconstruction). The game's own resize
 also comes this way: `CEngine::CheckForResize` (0x2ac0f9c) calls the engine's vtable slot at +0x30, `CEngine::Resize`, when the
-canvas needs a resize (its reconstruction). So one Resize reaches the upload lock up to five times: once in `FlushGPU`, then once in each
-of the four deferred destroys (none of the four when `CCanvas::BeforeResize` answers non-zero: `CCanvasDisplay::Resize` returns before `CGDisplay::Resize`, its reconstruction). Each can be skipped: `FlushGPU` returns with no lock and no `currframe` store when gctx + 0xb50 is 0
+canvas needs a resize (its reconstruction). So one Resize can reach the upload lock up to nine times: once in `FlushGPU`, once in each of the four direct
+body calls of `CGDisplay::Resize` (kind 0xe), and once in each of the four `DeferredDestroy(SGImage&)` calls, which reach the body
+(kind 0xa) only on the last reference. None of the eight runs when `CCanvas::BeforeResize` answers non-zero:
+`CCanvasDisplay::Resize` returns before `CGDisplay::Resize` (`src/reconstruction/r15/ccanvas_display_resize.cpp:79`). Each take sits
+behind the body's own tests (a null handle returns first; the take is on the immediate path only), so nine is a bound, not a count.
+Each can be skipped: `FlushGPU` returns with no lock and no `currframe` store when gctx + 0xb50 is 0
 (`ldr x8,[x19,#0xb50]` at 0x18e08dc, `cbz x8` at 0x18e08e0 to the epilogue at 0x18e098c), and the destroy body returns on a null handle before it
 reads `currframe` (`cbz x1` at 0x1888aa8 to the epilogue at 0x1888be4). The test pins both branches and their targets.
 
@@ -213,7 +219,7 @@ The lock is held for the whole wait.
 
 ### The wait in FlushGPU (0x18e08cc)
 
-Inferred from its pinned words (no reconstruction yet; queued in NEEDED.tsv). 0x18e08d4/0x18e08d8 load the gctx from the same pointer
+Inferred from its pinned words (not established: the function is not in the proven reconstruction tree; tracked in #1737). 0x18e08d4/0x18e08d8 load the gctx from the same pointer
 word 0x370f360 the body reads, and 0x18e08e0 returns with no lock when gctx + 0xb50 is 0. 0x18e08f4/0x18e08f8 form the upload lock's
 address and 0x18e0910 takes it; 0x18e0920/0x18e0924 read the count, and the loop to 0x18e0938 calls the reaper with 32 until it is 0;
 0x18e093c gives the lock back (`stlr wzr,[x20]`, pinned). Five calls follow with no lock held: four `bl` to the PLT stub 0xf2b750
@@ -273,9 +279,11 @@ lock (0 at 0x379b780) for the whole Resize, and reading the two words first cann
 0x18e093c and makes five calls with none held, and the deferred-destroy body takes it again in each of the four destroys (0x1888ae8)
 and gives it back (0x1888b50). An `Upload` that takes a slot between any two takes leaves a slot with its submitted word 0, so the
 next take spins on a count the reaper cannot lower until that `End` runs, and the `End` needs the lock the spinner holds. The window
-therefore runs from the read to the fourth destroy's lock take: most of the Resize, not the short time to `FlushGPU`'s first take.
-The check narrows the exposure and does not close it. A guard has to be designed around the whole Resize (what can run an `Upload`
-while it runs), not around a gap before the lock. Not read: `CGDisplay::Resize` between the destroys, and the five calls above.
+therefore runs from the read to at least the fourth direct destroy's lock take (0x1834884..0x18348f8): most of the Resize, not the
+short time to `FlushGPU`'s first take. What `CGDisplay::Resize` runs after 0x18348f8 is not read (the function is not in the proven
+reconstruction tree), so the window may be longer. The check narrows the exposure and does not close it. A guard has to be designed
+around the whole Resize (what can run an `Upload` while it runs), not around a gap before the lock. Not read: `CGDisplay::Resize`
+between the destroys, and the five calls above.
 The game's own Resize (a display change) has the same exposure.
 
 ## Not shown
@@ -286,7 +294,7 @@ The game's own Resize (a display change) has the same exposure.
 - That no `Upload` runs in a settled level outside a gamespace load, and that the 10 s settle covers what a load leaves behind.
 - That the game resizes on its own at a level load (choice (a) above): when the pending word +0x13a50 is set is not read.
 - The eight unreconstructed functions read whole: `CGS::FlushGPU`, `CGDisplay::Resize`, the reaper 0x18ebb48, the allocator 0x18ebd38,
-  both `CGUploader::Upload` and both `End`. Each is queued for a byte-checked reconstruction; until then their behaviour beyond the
+  both `CGUploader::Upload` and both `End`. Each is tracked in #1737 for a byte-checked reconstruction; until then their behaviour beyond the
   pinned words is inferred.
 - When the init-fiber count (game + 0x1f08) returns to 0 against the end of a gamespace's uploads: `UpdateGameSpaceInit` (ELF 0x17ecc7c) has no
   reconstruction yet.
