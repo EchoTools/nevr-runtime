@@ -86,7 +86,7 @@ The name in row 3 rests on structure, not on a PC symbol. The offsets (NetGame+0
 
 - **[I] Game+0x1F10 counts the in-flight load fibers, and reaches zero only after the last Finished loading level line.** The basis is the gate in `CR15NetGame::Update` (step 4) and the insert at step 6. The code that removes fibers from the array is [N]. `addresses.h` (`GAME_DEFER_COUNT_OFFSET`) says the entries' identity is not established; step 6 reads them as init fibers. This inference governs where the Finished lines fall.
 - **[I] The state-9 switch line comes after the last Finished line, and the Enabling lines come after the switch.** The Enabling lines come from `Enable`, which `EnableGameSpace` calls from `EnableGameSpaces` in the queue after the switch (steps 9 to 11).
-- **[I] The key lookup and bit 7.** Only an entry whose key matches the gamespace's value at +0x58, and whose object has bit 7 set at +0xC40, is enabled. The live run below may test this; the other causes are listed under Prediction.
+- **[I] The key lookup and bit 7.** Only an entry whose key matches the gamespace's value at +0x58, and whose object has bit 7 set at +0xC40, is enabled. The live run below does not test this: it checks the order of the server's log lines (see Prediction), not which `Enable` call took each level.
 - **[I] The names.** Row 3's name is the Quest symbol carried over by the structural match. Row 2's name is a reconstruction at confidence M. Row 1's name is ReVault's imported record, which the engine notes in `docs/engine/asset-system.md` also use.
 
 ## Not read
@@ -126,11 +126,11 @@ The dynamic-level loader at 0x1404FD650 logs "[LEVELLOAD] Loading dynamic level"
 
 One dedicated-server run of a build without the join hold, so its order is the game's own. The server log is not kept in the tree; the lines below are quoted as the run wrote them, in order.
 
-**Build.** A clone of the commit with a local tag `v6.17.0` and the forced release environment (`GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v6.17.0`), preset `mingw-plugin-dev`. The runtime's build literal carries the forced version `6.17.0`; the host carries `NEVR-HOST-BUILD dev`. The build has no `src/runtime/server/join_hold.cpp`.
+**Build.** A clone of a commit with no `src/runtime/server/join_hold.cpp`, with a local tag `v6.17.0` and the forced release environment (`GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v6.17.0`), preset `mingw-plugin-dev`. The runtime's build literal carries the forced version `6.17.0`; the host carries `NEVR-HOST-BUILD dev`.
 
 **Route.** The server ran from a game copy, not from the install, headless (`DISPLAY` and `WAYLAND_DISPLAY` unset), with the stored server sign-in. Its `config.yaml` set `network.regions` to a dev region (not `default`, so public matchmaking never offers it) and put the `novalidation` tag in the query of `services.serverdb_uri`. The token route keeps that query and appends `regions=`, so the server logged `Connecting to ServerDB at <socket host>/nevr?tags=novalidation&regions=<dev region>`; the tag makes the service skip its reachability probe. `registration successful` followed. A session came from the service's allocate RPC (`echo_arena_private`, level `mpl_arena_a`, the dev region), and it started only when a client joined it: a second game copy ran `echovr.exe -windowed -mp -lobbyid <lobby id>` on a headless display. The allocation alone started nothing; the client's join started the session. The pattern is in AGENTS.md ("System test for runtime and auth changes").
 
-**The server log, in order.**
+**The server log, in order.** The lines marked 1, 2 and 3 are the three the prediction below is about: line 1 is a `[LEVELLOAD] Finished loading level` line, line 2 the `NetGame switching state (from loading level, to in game)` line, and line 3 a `[LEVELLOAD] Enabling level` line.
 
 | Text | Note |
 | --- | --- |
@@ -146,9 +146,9 @@ One dedicated-server run of a build without the join hold, so its order is the g
 | `[LEVELLOAD] Disabling level 'mnu_master'` | |
 | `[LEVELLOAD] Enabling level 'mpl_arena_a'`, `[LEVELLOAD] Enabling level 'r14_glb_global_mp'` | line 3 |
 
-The session ended with `Destroy Peer 0 <client address> (communication timeout)`. The client took 67759 ms to load `mpl_arena_a` under Wine, and the server dropped it for the communication timeout 15 s after it reached in game.
+The session ended with `Destroy Peer 0 <client address> (communication timeout)`. The client took 67759 ms to load `mpl_arena_a` under Wine, and the server dropped it for the communication timeout 15 s after the client reached in game (the client's `NetGame switching state (from ready for game, to in game)` line).
 
-**Prediction.** The first prediction holds for this run: line 2 follows the last line 1 and comes before line 3. No Finished line follows line 2, and no Enabling line precedes it. This is consistent with the Game+0x1F10 inference and the queue ordering for a session that loads its levels. It says nothing about a session whose levels are already loaded.
+**Prediction.** For a session that loads its levels, every line 1 comes before line 2, and line 2 comes before every line 3. A Finished line after line 2, or an Enabling line before it, contradicts it. This is consistent with the Game+0x1F10 inference and the queue ordering. It says nothing about a session whose levels are already loaded. The run above holds it: line 2 follows the last line 1 and comes before line 3, no Finished line follows line 2, and no Enabling line precedes it.
 
 **Observed, and not established.**
 
