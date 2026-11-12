@@ -161,9 +161,10 @@ lock, and the failure is journalled as a `log_mutex` attach step. Each wait is b
 the mutex is recursive for its owner. A wait that times out or fails marks the lock unreliable and
 every later append in the process writes without waiting, so a holder that never releases costs a
 crash one 500 ms wait. A wait that ends with the lock acquired is not capped per process: with a
-holder that releases inside every wait, every destination an append opens waits once (at most
-500 ms), and a record whose write fails after its wait falls back to the next of up to three
-destinations and waits again, so a crash of up to four records can wait more than four times. No per-process budget exists on purpose: it would stop serializing appends
+holder that releases inside every wait, every append waits once (at most 500 ms). The main log is the
+one destination: a record whose write fails after its wait goes to standard error, and no other
+place is tried, so one record waits at most once and a crash of up to four records waits at most four
+times. No per-process budget exists on purpose: it would stop serializing appends
 after waits that succeeded, which is the ordinary contended case (a client and a local server
 sharing a prefix). In every case the record is not blocked: it is written, without the lock when
 the wait did not end owned. The append that marks the lock
