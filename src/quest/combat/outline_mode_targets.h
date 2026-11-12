@@ -32,7 +32,9 @@
  *   prim of k  = u32[[d+0xa8] + (u32[record+0x34] + k)*0x70 + 0x40]   (0x18c51c0, 0x18c51d0, 0x18c516c, 0x18c51e4, 0x18c51e8)
  *   draw set k = [mesh+0x8] + k*0x778                    (0x18c51ec, 0x18c5204), for k below the count
  * and it calls CGDrawDataSet::SetOutlineMode(draw set k, mode, format, prim of k) through the PLT stub at ELF 0xf189b0 (the `bl` at
- * 0x18c51fc), whose `adrp`/`ldr` read the JUMP_SLOT 0x36e3bc0. The same format is passed for every draw set of every mesh.
+ * 0x18c51fc), whose `adrp`/`ldr` read the JUMP_SLOT 0x36e3bc0. Within one mesh the same format is passed for every draw set; the
+ * format is looked up again for each mesh (`madd x21,x11,x12,x10` at 0x18c51d8 sits in the per-mesh block, after the `cbnz x29` at
+ * 0x18c5184, and is the only write to x21 before the return).
  * The 0x150 stride is the stride of the array at d+0xe0; that the CGVertexFormat sits at offset 0 of each 0x150-byte entry is what the
  * walk passes (the entry's address), not a size of CGVertexFormat.
  * The mesh is a CGMesh. CGMesh::SetOutlineMode (the reconstruction above) walks the same two fields (count [this+0x38], sets [this+0x8],
@@ -177,6 +179,8 @@ inline constexpr pinned::Word kSceneFormatArg{"mov x2,x21 (arg 3: the format)", 
 inline constexpr pinned::Word kSceneDrawSetArg{"add x0,x8,x24 (arg 1: draw set k)", 0x18c51f8ULL, 0x8b180100U};
 inline constexpr pinned::Word kSceneDrawSetCountDown{"subs x29,x29,#0x1 (draw sets left in the mesh)", 0x18c5200ULL, 0xf10007bdU};
 inline constexpr pinned::Word kSceneDrawSetLoop{"b.ne (back to the draw-set call while draw sets are left)", 0x18c5208ULL, 0x54ffff01U};
+inline constexpr pinned::Word kSceneSkipEmptyBranch{"cbz x29 (a mesh whose draw-set count is 0: to the next mesh)", 0x18c51a4ULL, 0xb4ffff3dU};
+inline constexpr pinned::Word kSceneDrawSetLoopExit{"b (the draw-set loop is done: to the next mesh)", 0x18c520cULL, 0x17ffffdfU};
 
 inline constexpr std::uintptr_t kSceneMeshCountOffset = pinned::LdrXOffset(kSceneMeshCount.word);
 inline constexpr std::uintptr_t kSceneMeshesOffset = pinned::LdrXOffset(kSceneMeshes.word);
@@ -435,7 +439,7 @@ inline constexpr pinned::Word kWords[] = {
     kSceneFirstPrim, kSceneFormatMadd, kScenePrimField, kScenePrimRead, kSceneDrawSets, kSceneDrawSetCall, kSceneDrawSetStride,
     kSceneSceneReg, kSceneModeReg, kSceneMeshIndexZero, kSceneMeshAddr, kSceneMeshNext, kSceneMeshCompare, kSceneMeshLoopEnd,
     kSceneDrawSetIndexZero, kScenePrimIndexScale, kScenePrimIndexAdd, kSceneModeArg, kSceneFormatArg, kSceneDrawSetArg,
-    kSceneDrawSetCountDown, kSceneDrawSetLoop,
+    kSceneDrawSetCountDown, kSceneDrawSetLoop, kSceneSkipEmptyBranch, kSceneDrawSetLoopExit,
     kMeshSkinnedRead, kMeshSkinnedTest, kMeshComputeFormatArg, kMeshCountUsedCall, kMeshCountUsedTest, kMeshComputeVbArg,
     kMeshBindCall, kMeshDrawSetsArg, kMeshStoreAt260, kMeshInitDrawSetStride, kMeshDrawSetInitCall, kMeshThisMove, kMeshThisSave,
     kMeshThisReload, kMeshBindResultArg, kMeshDrawSetInitBufArg,
