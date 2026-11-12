@@ -224,7 +224,8 @@ add_subdirectory(src/nevr_api)
 add_subdirectory(src/runtime)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
-add_subdirectory(src/reconstruction)
+# Outside ALL: nothing links nevr_r15_reconstruction yet, so the default build skips its 316 units (`just build-reconstruction`, #1974).
+add_subdirectory(src/reconstruction EXCLUDE_FROM_ALL)
 # There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
 # pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
 # and those layouts are documented there. The pure-RE copy of pnsrad lives in
