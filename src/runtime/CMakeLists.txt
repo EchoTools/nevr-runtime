@@ -1117,6 +1117,11 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
+    # #2099: the per-player stats read at the game writer's offsets (telemetry_snapshot.h). Plain checks, no gtest.
+    add_executable(test_telemetry_stats tests/test_telemetry_stats.cpp)
+    target_include_directories(test_telemetry_stats PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME test_telemetry_stats COMMAND test_telemetry_stats)
+
     # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
