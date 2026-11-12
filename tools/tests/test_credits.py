@@ -203,6 +203,13 @@ class SharedFile(unittest.TestCase):
             self.assertIn("thanks", entry["headings"], name)
             self.assertNotIn("code-contributions", entry["headings"], name)
 
+    def test_marshmallow_mia_is_credited_for_the_six_prs_she_wrote_here_in_the_entry_and_its_sources(self):
+        # #2137: #1442, #1450, #1453, #1480, #1491 and #1495 are her merged PRs (2026-10-29 and 2026-10-30) and the entry names none.
+        mia = self.entry("marshmallow-mia")
+        for number in (1442, 1450, 1453, 1480, 1491, 1495):
+            self.assertIn(f"#{number}", mia["what"], f"#{number} is named in what")
+            self.assertIn(f"https://github.com/EchoTools/nevr-runtime/pull/{number}", mia["sources"])
+
     def test_elominator_is_its_own_string_and_marshmallow_mia_keeps_her_code_entry(self):
         self.assertEqual(self.entry("Elominator")["headings"], ["thanks"])
         mia = self.entry("marshmallow-mia")
