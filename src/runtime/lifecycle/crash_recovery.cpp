@@ -1505,7 +1505,8 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   nevr_dll_load_hook::FlushPendingLines();
 
   // 2c. Stop the custom-map fetch worker before the exit kills it (a no-op without maps config). It joins for up to
-  //     2 s; a pass it cuts short leaves only a .part file, never a cache blob, since each blob is renamed into place.
+  //     2 s; a pass it cuts short keeps its verified pieces in <ver>.tmp\pieces\ for the next pass to resume from,
+  //     and never leaves a partial version in the cache, since each version directory is renamed into place.
   nevr_map_channel::StopFetch();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
