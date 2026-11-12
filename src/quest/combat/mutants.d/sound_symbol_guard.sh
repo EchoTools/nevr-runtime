@@ -51,7 +51,7 @@ runm ssg_total_never      $F "s/  if (!g_hook.installed()) return;/  return;/"
 CI=src/quest/combat/combat_install.cpp
 runm ssg_row_ignores_switch $CI "s/sound_symbol_guard::Install(g_config.soundSymbolGuard.on)/sound_symbol_guard::Install(true)/" quest-host-combat combat_install_test
 runm ssg_row_end_null       $CI "s/soundSymbolGuard, \&sound_symbol_guard::NoteEnd}/soundSymbolGuard, nullptr}/" quest-host-combat combat_install_test
-runm ssg_scope_reader_gone  $CI "s/ || g_config.soundSymbolGuard.on;/;/" quest-host-combat combat_install_test
+runm ssg_scope_reader_gone  $CI 's/\(|| \|^ *\)g_config\.soundSymbolGuard\.on/\1false/' quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm ssg_qc_default_on      $QC "s/  r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);/  r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r);/" quest-host-shared quest_config_test
 runm ssg_qc_not_assigned    $QC "s/  r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);/  (void)ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);/" quest-host-shared quest_config_test

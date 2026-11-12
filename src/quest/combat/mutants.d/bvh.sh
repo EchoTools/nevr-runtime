@@ -197,4 +197,4 @@ runm bvh_game_unstored    src/quest/combat/bvh.cpp "s/^  g_game.store(game, std:
 # -- the arena path reads no clock (bvh_test counts the reads of both clocks); the staleness bound and the stall line are combat_scope's
 runm bvh_scope_swap src/quest/combat/combat_scope.h "s/{ return SeenCombatOrLobby() \&\& LookIsFresh(); }/{ return LookIsFresh() \&\& SeenCombatOrLobby(); }/"
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): the static BVH keeps the row on alone.
-runm bvhrow_scope_reader src/quest/combat/combat_install.cpp "s/ || g_config.aibots.on || g_config.bvh.on;\$/ || g_config.aibots.on;/" quest-host-combat combat_install_test
+runm bvhrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.bvh\.on/\1false/' quest-host-combat combat_install_test

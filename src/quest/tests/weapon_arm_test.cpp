@@ -8,7 +8,9 @@
 // logged by its last four characters only). New with the move: 14 a marker the plugin wrote stops the module, whatever else is true, and the module writes
 // the marker under the same name in the same directory (player state, ADR 0046 rule 4), 15 the switch, 16 the kill file is not read and warns, 17 the
 // scope (an arena match, a lobby arena players use and a transition holding an arena level set nothing and write no marker; a profile with a marker never
-// scans the levels), 18 the install on an image, 19 the host cost of the arena pass.
+// scans the levels), 18 the install on an image, 19 the host cost of the arena pass. The scope is the real combat level answer (combat_scope.h, #2382):
+// each test pass runs its refresh against the fake game before the module's callback, as the tick does, a look older than 1 s is not believed, and a
+// scope that cannot change refuses the install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/weapon_arm.h"
@@ -28,6 +30,7 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/gamespace_targets.h"
@@ -37,6 +40,7 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_pins.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -45,6 +49,8 @@ std::atomic<std::uint64_t> g_safeReads{0};
 std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxed); }
 
 namespace wa = nevr_quest::combat::weapon_arm;
+namespace scope = nevr_quest::combat::scope;
+namespace world = combat_test::scope_world;
 using EchoVR::CSymbol64Hash;
 
 #define CHECK(cond, ...)                                                           \
@@ -127,6 +133,8 @@ void* FQueue(void* queueObject, void (*)(void*, char*)) {
 
 double g_now = 100.0;
 double Clock() { return g_now; }
+// The combat level answer's clock (combat_scope.h) is the same fake clock, in ms.
+std::int64_t ScopeClock() noexcept { return static_cast<std::int64_t>(g_now * 1000.0); }
 
 // The game's levels: `level` in the first gamespace (the equipment system's), and optionally `second` in another.
 void BuildWorld(int direct, const char* level = "mpl_combat_dyson", const char* second = nullptr) {
@@ -205,15 +213,23 @@ void Reset(int direct, std::uint32_t arm, long long profArm, const char* level =
   g_setCalls = g_queueCalls = g_profileCalls = 0;
   g_now = 100.0;
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
   wa::ResetForTest();
   wa::SetClockForTest(&Clock);
   wa::SetLegacyDirForTest(g_dir.c_str());
   QCHECK(wa::InstallResolved(kBase, Fns()).installed);
 }
-// one pass per second of fake time
-void Pass() {
+// The module's callback alone, then one second of fake time: what the module itself reads, with nothing refreshing the combat level answer.
+void ModulePass() {
   wa::Tick(reinterpret_cast<std::uintptr_t>(g_game));
   g_now += 1.0;
+}
+// One pass per second of fake time, as the game-thread tick runs it: the combat level answer's refresh (the scope row registers it before this module's
+// callback), then the module's.
+void Pass() {
+  scope::Refresh(reinterpret_cast<std::uintptr_t>(g_game));
+  ModulePass();
 }
 
 void TheGunOnTheLeft() {  // 1. a profile with no weaponarm key and the gun on the left, direct call: held for 3 passes, set once, marker once the arm reads 1
@@ -389,18 +405,66 @@ void NoNetGame() {  // 9
   CHECK(g_setCalls == 0 && HasLine("combat_weapon_arm_waiting", "\"why\":\"no netgame\""), "netgame absent not reported");
 }
 
-void NoLibrary() {  // 11. no game library loaded on the host: one ERROR, nothing runs
+// A libr15 image with the tick's slot row, on which the tick is installed and the scope row registers its refresh: the combat level answer can
+// change, as the shipped table leaves it before this module's row.
+combat_test::Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(world::StartScope(&TickImageLookup));
+}
+
+void NoLibrary() {  // 11. no game library loaded on the host: one ERROR, nothing runs (the scope's refresh is the one tick callback)
   g_lines.clear();
   ClearDir();
-  nevr_quest::combat::tick::ResetForTest();
+  StartTheScope();
   wa::ResetForTest();
   wa::SetClockForTest(&Clock);
   const nevr_quest::combat::ModuleResult r = wa::InstallAt([](const char*, sentinel::ElfImage*) { return false; }, nullptr, true);
   BuildWorld(1);
   g_setCalls = 0;
   for (int i = 0; i < 3; ++i) Pass();
-  CHECK(!r.installed && HasLine("combat_weapon_arm_install", "\"reason\":\"module_not_loaded\"", kError) && g_setCalls == 0 && nevr_quest::combat::tick::Count() == 0,
+  CHECK(!r.installed && HasLine("combat_weapon_arm_install", "\"reason\":\"module_not_loaded\"", kError) && g_setCalls == 0 && nevr_quest::combat::tick::Count() == 1,
         "missing library not loud");
+  g_tickImage.Drop();
+}
+
+// The combat level answer cannot change (the tick is not installed, or the scope row did not register its refresh): the pass would never act, so the
+// module is not installed, says why at Error and registers nothing. Off by the key wins: nothing is asked of the scope.
+void AScopeThatCannotChangeRefusesTheInstall() {
+  g_lines.clear();
+  nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  wa::ResetForTest();
+  wa::SetLegacyDirForTest(g_dir.c_str());
+  nevr_quest::combat::ModuleResult r = wa::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, true);
+  CHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && wa::Phase() == 2 && nevr_quest::combat::tick::Count() == 0,
+        "a scope that cannot change: %s", r.status);
+  CHECK(Lines("combat_weapon_arm_install").size() == 1 && Lines("combat_weapon_arm_install")[0].level == sentinel::LogLevel::kError &&
+            HasLine("combat_weapon_arm_install", "\"reason\":\"scope_not_live\""),
+        "scope_not_live not loud");
+  // the tick is installed but no row registered the refresh
+  g_lines.clear();
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(nevr_quest::combat::tick::InstallAt(&TickImageLookup));
+  wa::ResetForTest();
+  r = wa::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, true);
+  CHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !scope::Live(), "an unregistered refresh: %s", r.status);
+  // off by the key: off_config, whatever the scope
+  wa::ResetForTest();
+  r = wa::InstallAt([](const char*, sentinel::ElfImage*) { return true; }, nullptr, false);
+  CHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0, "off with a dead scope: %s", r.status);
+  nevr_quest::combat::tick::ResetForTest();
+  g_tickImage.Drop();
 }
 
 void AnUnwritableDirectory() {  // 12. waits and reports, sets nothing (no marker could be kept)
@@ -431,7 +495,7 @@ void AMarkerThePluginWroteStopsTheModule() {  // 14
     std::FILE* m = std::fopen((g_dir + "/t26arm.OVR-ORG-1234567890").c_str(), "w");
     std::fputs(text, m);
     std::fclose(m);
-    for (int i = 0; i < 8; ++i) Pass();
+    for (int i = 0; i < 8; ++i) ModulePass();  // the module's callback alone: the combat level answer's own looks are counted in 17
     CHECK(g_setCalls == 0 && g_queueCalls == 0 && wa::Phase() == 2, "a plugin marker (%zu bytes) did not stop the module", std::strlen(text));
     CHECK(ReadFile("t26arm.OVR-ORG-1234567890") == text, "the module rewrote a plugin marker");
     CHECK(wa::CurrentStats().scopedOut == 0, "a profile with a marker scanned the levels");
@@ -506,9 +570,10 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
     const std::uint64_t reads0 = SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
     for (int i = 0; i < 12; ++i) Pass();
     CHECK(g_setCalls == 0 && g_queueCalls == 0 && wa::Phase() == 0, "%s: set %d queued %d phase %d", name, g_setCalls, g_queueCalls, wa::Phase());
-    // By count: each pass makes one scan and nothing else reads (no equipment search, no component read).
+    // By count: the only scans are the combat level answer's own looks (combat_scope.h), and nothing else reads: a pass reads no level, no equipment
+    // system and no component.
     const std::uint64_t scans = nevr_quest::combat::level::ScanCalls() - scans0, reads = SafeReadCalls() - reads0;
-    CHECK(scans == wa::CurrentStats().passes && scans >= 11, "%s: %llu scans for %u passes", name, static_cast<unsigned long long>(scans), wa::CurrentStats().passes);
+    CHECK(scans == scope::Looks() && scans >= 11, "%s: %llu scans for %u looks", name, static_cast<unsigned long long>(scans), scope::Looks());
     CHECK(reads == scans * perScan, "%s: %llu reads for %llu scans of %u reads each", name, static_cast<unsigned long long>(reads), static_cast<unsigned long long>(scans), perScan);
     CHECK(!FileExists("t26arm.OVR-ORG-1234567890"), "%s: a marker was written", name);
     CHECK(Lines("combat_weapon_arm_waiting").empty() && Lines("combat_weapon_arm_set").empty() && Count("combat_weapon_arm_install") == 1, "%s: the module wrote a line", name);
@@ -531,6 +596,14 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
     for (int i = 0; i < 4; ++i) Pass();
     CHECK(g_setCalls == 1, "%s: %d sets", name, g_setCalls);
   }
+  // The tick stops (nothing refreshes the answer): a combat map seen a second ago is no longer believed, so nothing is set however long the module's own
+  // callback keeps running (combat_scope.h, kStaleAfterMs).
+  Reset(1, 0, -1, "mpl_combat_dyson");
+  Pass();                                      // one look: a combat map; the hold starts
+  for (int i = 0; i < 10; ++i) ModulePass();  // 10 s of the module's callback alone
+  // The look is believed for one second (two passes of the 3-pass hold); after it every pass is scoped out, so the hold never ends in a set.
+  CHECK(g_setCalls == 0 && g_queueCalls == 0 && wa::CurrentStats().scopedOut >= 8, "a stale answer acted: %d sets, %d queued, %u scoped out", g_setCalls,
+        g_queueCalls, wa::CurrentStats().scopedOut);
 }
 
 void TheInstallOnAnImage() {  // 18
@@ -545,11 +618,15 @@ void TheInstallOnAnImage() {  // 18
   const nevr_quest::combat::pinned::Pins pins[] = {nevr_quest::combat::weapon_arm::targets::kPins, nevr_quest::combat::netgame::kPins,
                                                    nevr_quest::combat::gamespace::targets::kPins};
   auto put = [&] { combat_test::PutPins(image, pins, 3); };
+  // The tick is installed on this image and the scope row registered its refresh (one tick callback), as the shipped table leaves it.
   auto begin = [&] {
     g_lines.clear();
     nevr_quest::combat::tick::ResetForTest();
+    scope::ResetForTest();
     wa::ResetForTest();
     wa::SetLegacyDirForTest(g_dir.c_str());
+    world::PutTickSlot(image);
+    QCHECK(world::StartScope(lookup) && nevr_quest::combat::tick::Count() == 1);
   };
   static std::uintptr_t sBase;
   static const char* sWrong;
@@ -562,13 +639,13 @@ void TheInstallOnAnImage() {  // 18
     }
     return nullptr;
   };
-  image.Build({});
+  image.Build({world::TickRow()});
   put();
   sBase = image.Base();
   sWrong = nullptr;
   begin();
   nevr_quest::combat::ModuleResult r = wa::InstallAt(lookup, symbols, true);
-  CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && wa::Phase() == 0 && nevr_quest::combat::tick::Count() == 1, "install on the pinned image");
+  CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && wa::Phase() == 0 && nevr_quest::combat::tick::Count() == 2, "install on the pinned image");
   CHECK(HasLine("combat_weapon_arm_install", "\"named\":9"), "named count not logged");
   begin();
   r = wa::InstallAt(lookup, nullptr, true);
@@ -580,13 +657,13 @@ void TheInstallOnAnImage() {  // 18
     sWrong = sym;
     begin();
     r = wa::InstallAt(lookup, symbols, true);
-    CHECK(!r.installed && std::strcmp(r.status, "export_elsewhere") == 0 && nevr_quest::combat::tick::Count() == 0, "a name elsewhere installed: %s", sym);
+    CHECK(!r.installed && std::strcmp(r.status, "export_elsewhere") == 0 && nevr_quest::combat::tick::Count() == 1, "a name elsewhere installed: %s", sym);
   }
   sWrong = nullptr;
   const std::size_t bent = combat_test::ForEachBentPin(image, pins, 3, [&](const char* what) {
     begin();
     r = wa::InstallAt(lookup, symbols, true);
-    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 0 && HasLine("combat_weapon_arm_pinned_word", what), "pin %s: %s",
+    CHECK(!r.installed && std::strcmp(r.status, "pinned_word_mismatch") == 0 && nevr_quest::combat::tick::Count() == 1 && HasLine("combat_weapon_arm_pinned_word", what), "pin %s: %s",
           what, r.status);
   });
   CHECK(bent >= 15, "only %zu pins were bent", bent);
@@ -594,11 +671,14 @@ void TheInstallOnAnImage() {  // 18
   for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) nevr_quest::combat::tick::Add([](std::uintptr_t) noexcept {});
   r = wa::InstallAt(lookup, symbols, true);
   CHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0 && wa::Phase() == 2, "a full tick table installed");
-  image.Build({}, "0123456789abcdef0123456789abcdef01234567");
+  // another build id (the scope was started on the pinned build; the tick keeps running when the image changes)
+  image.Build({world::TickRow()});
   put();
   begin();
+  image.Build({}, "0123456789abcdef0123456789abcdef01234567");
+  put();
   r = wa::InstallAt(lookup, symbols, true);
-  CHECK(!r.installed && std::strcmp(r.status, "build_id_mismatch") == 0, "another build id installed");
+  CHECK(!r.installed && std::strcmp(r.status, "build_id_mismatch") == 0 && nevr_quest::combat::tick::Count() == 1, "another build id installed");
   nevr_quest::combat::tick::ResetForTest();
   image.Drop();
 }
@@ -617,7 +697,7 @@ void TheCostInArena() {  // 19: printed (a host number; the module's header says
   const int frames = 2000000;
   for (int i = 0; i < frames; ++i) wa::Tick(reinterpret_cast<std::uintptr_t>(g_game));
   const auto t2 = std::chrono::steady_clock::now();
-  std::printf("weapon_arm_test: arena pass (profile, level scan) %.2f us at 1 Hz, frame with no pass due %.1f ns (x86 host)\n", Seconds(t0, t1) / passes * 1e6,
+  std::printf("weapon_arm_test: arena pass (profile, the scope word's load and test) %.2f us at 1 Hz, frame with no pass due %.1f ns (x86 host)\n", Seconds(t0, t1) / passes * 1e6,
               Seconds(t1, t2) / frames * 1e9);
   CHECK(wa::CurrentStats().scopedOut >= static_cast<std::uint32_t>(passes) - 1, "the passes were not scoped out");
   // done: a frame is one load
@@ -649,6 +729,7 @@ int main() {
   NotFound();
   NoNetGame();
   NoLibrary();
+  AScopeThatCannotChangeRefusesTheInstall();
   AnUnwritableDirectory();
   ASecondLogin();
   AMarkerThePluginWroteStopsTheModule();

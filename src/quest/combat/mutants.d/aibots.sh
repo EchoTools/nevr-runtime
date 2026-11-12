@@ -85,4 +85,4 @@ runm ai_no_pin_check src/quest/combat/aibots.cpp 's/  if (pinned::FirstFailure(i
 runm ai_one_look_decision src/quest/combat/aibots.cpp 's/  if (scope::SeenEchoArena(look)) {/  if (scope::SeenEchoArena()) {/'
 runm ai_one_look_map src/quest/combat/aibots.cpp 's/(look.bits \& scope::kBitCombatMap) != 0 ? 1 : 0/(scope::LastLook().bits \& scope::kBitCombatMap) != 0 ? 1 : 0/'
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): aibots keeps the row on alone.
-runm airow_scope_reader src/quest/combat/combat_install.cpp 's/ || g_config.aibots.on || g_config.bvh.on;$/ || g_config.bvh.on;/' quest-host-combat combat_install_test
+runm airow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.aibots\.on/\1false/' quest-host-combat combat_install_test

@@ -88,4 +88,4 @@ runm gc_ring_u32 $G 's/c.ring = SafeRead<std::uint64_t>(cs + gt::kConnectRing, \
 
 runm gc_no_pin_check src/quest/combat/gunconnect.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): gun connect keeps the row on alone.
-runm gcrow_scope_reader src/quest/combat/combat_install.cpp 's/g_config.soundSymbolGuard.on ||$/g_config.soundSymbolGuard.on || false ||/; s/^                         g_config.gunconnect.on;$/                         false;/' quest-host-combat combat_install_test
+runm gcrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.gunconnect\.on/\1false/' quest-host-combat combat_install_test

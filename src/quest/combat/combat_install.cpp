@@ -73,7 +73,7 @@ ModuleResult RefreshRateNormal() noexcept {
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
                          g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
-                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on;
+                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on || g_config.weaponArm.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -233,8 +233,8 @@ constexpr std::array kModules{
     // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},
     // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
-    // callbacks, so they come after the tick's row; gunconnect and aibots read the combat level answer (#2382), so they also come after the `scope` row,
-    // and their switches are two of ScopeNormal()'s readers; before the gates, which the plugin installed after all its modules.
+    // callbacks, so they come after the tick's row; all three read the combat level answer (#2382), so they also come after the `scope` row, and their
+    // switches are three of ScopeNormal()'s readers; before the gates, which the plugin installed after all its modules.
     Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
     Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
     Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},

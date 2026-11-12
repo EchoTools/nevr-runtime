@@ -97,4 +97,4 @@ runm sd_read_before_scope_enabled $S "/^std::uint64_t OnEnabled/{n;s/^/  (void)I
 runm sd_read_before_scope_disabled $S "/^std::uint64_t OnDisabled/{n;s/^/  (void)IsSphere(reinterpret_cast<std::uintptr_t>(component), handle);\n/}"
 runm sd_scan_in_event_handler $S "s/^#include \"quest\/combat\/combat_scope.h\"\$/&\n#include \"quest\/combat\/combat_level.h\"/; /^std::uint64_t OnEvent/{n;s/^/  (void)level::Classify(0, false, nullptr);\n/}"
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): the watchdog keeps the row on alone.
-runm sdrow_scope_reader $CI "s/^                         g_config.gunconnect.on || g_config.sensorwd.on;\$/                         g_config.gunconnect.on;/" quest-host-combat combat_install_test
+runm sdrow_scope_reader $CI 's/\(|| \|^ *\)g_config\.sensorwd\.on/\1false/' quest-host-combat combat_install_test

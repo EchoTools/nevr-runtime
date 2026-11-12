@@ -104,7 +104,7 @@ runm dg_stage1_row_step    $CI "s/Module{\"droneguard_stage1\", nullptr, nullptr
 runm dg_row_member         $CI "s/\"combat.droneguard\", \&nevr_quest::CombatConfig::droneguard,/\"combat.droneguard\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
 runm dg_row_key            $CI "s/\"combat.droneguard\", \&nevr_quest/\"combat.droneguards\", \&nevr_quest/" quest-host-combat combat_install_test
 # droneguard asks nothing of the scope: it is not a reader of the scope row
-runm dg_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.droneguard.on;/" quest-host-combat combat_install_test
+runm dg_reader_listed      $CI "s/ || g_config.custctx.on/ || g_config.custctx.on || g_config.droneguard.on/" quest-host-combat combat_install_test
 # (kOffTarget and kOffHandleIdx are tied to the pinned words by static_assert in droneguard_targets.h: a changed one fails the build)
 # the run of skips belongs to the component, and each kind of run line has a cap that says so (review F1)
 runm dg_run_shared          $D "s/  Began Begin(std::uintptr_t c) noexcept {/  Began Begin(std::uintptr_t c) noexcept {\n    if (c != 0) return Began::kNew;/"

@@ -240,10 +240,10 @@ nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_c
 nevr_ht_test(aibots_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp ${_cscope_srcs})
 # The gun hand default (#2185; moved from the q15t plugin's weapon_arm, T-26): the plugin test's sections, a marker the plugin wrote that stops the
-# module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image.
+# module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image. The
+# scope is the real combat level answer (combat_scope.cpp, #2382): a stale look sets nothing, and a scope that cannot change refuses the install.
 nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/weapon_arm_test.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp src/quest/combat/combat_level.cpp
-      src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/weapon_arm_test.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp ${_cscope_srcs})
 # The EC client (#2187, docs/quest/combat/ec.md): the pure rules, the list hide, the real thunks installed by the real GotHook into the five slots of
 # a libr15 image built in memory and the WriteLogV slots of two platform-library images, called through the slots against a fake libc, the game's
 # WriteLog (a va_list through the WriteLogV slot) and a fake clock; the net tick, the step, the hide, the selection, the observer install, the

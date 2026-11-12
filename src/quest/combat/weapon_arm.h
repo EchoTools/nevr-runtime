@@ -21,17 +21,19 @@
  * right hand and found the marker on later runs, and never a `set`, so its headset row requires `combat_weapon_arm_set`. The plugin's kill file
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
- * Arena (same APK). The module reads the loaded levels and goes on only while a combat map is loaded and no Echo Arena level is (combat_level.h `Classify`,
- * without the lobby): in an arena match, in every lobby (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an
- * arena player never has mpl_lobby_b_combat loaded) and in a transition that still holds an arena level it neither looks for the equipment system nor sets the
- * hand nor writes the marker, and writes no line. A profile that has a marker never scans the levels: the marker check comes first and ends the module. A
- * profile with no marker that only ever plays arena is looked at once a second and never touched. KNOWN-WRONG #2168: the scope asks `combat_level` directly; it
- * moves to combat_scope (F19, #2246) when that lands.
+ * Arena (same APK). The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h
+ * `InCombatMap`, a look four times a second from the game-thread tick, not believed once the tick has stopped for a second): in an arena match, in every lobby
+ * (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an arena player never has mpl_lobby_b_combat loaded)
+ * and in a transition that still holds an arena level it neither looks for the equipment system nor sets the hand nor writes the marker, and writes no line. A
+ * profile that has a marker never asks: the marker check comes first and ends the module. A profile with no marker that only ever plays arena is looked at
+ * once a second and never touched. The module is a reader of the scope row: `combat.weapon_arm` is in combat_install.cpp `ScopeNormal()`'s list, and the
+ * install refuses (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per frame:
  * once the module is done, one atomic load and a branch; before that, one clock read and one compare, and a pass at 1 Hz (the netgame, the profile
- * id, the marker check and, for a profile with no marker, the level scan; in a combat level also the equipment search and three engine calls).
- * Not measured on a headset; weapon_arm_test prints the host cost of the arena pass.
+ * id, the marker check and, for a profile with no marker, one relaxed load of the scope word and a test; in a combat level also a clock read (the
+ * answer's freshness), the equipment search and three engine calls). The level scan is the scope row's, made once for every reader. Not measured on a
+ * headset; weapon_arm_test prints the host cost of the arena pass.
  *
  * Origin. The reference build's T-26 in kotorvr's echoquest-combat repository (commit c5a67e8): runtime/native/afkxr/afk_gunconnect.cpp:58-64 (the
  * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the q15t plugin reconstructed (`weapon_arm.cpp`); this file moves that reconstruction into the runtime.
@@ -76,8 +78,8 @@ using SymbolLookup = void* (*)(const char* symbol);
 // name that does not resolve is accepted at the pinned address.
 bool Resolve(std::uintptr_t base, SymbolLookup lookup, Fns* out, const char** why) noexcept;
 
-// The module's normal step. Off: one Info line, nothing registered. On: finds the loaded libr15, checks its build id, resolves the nine functions and
-// registers the tick callback.
+// The module's normal step. Off: one Info line, nothing registered. On: refuses (`scope_not_live`) when the combat level answer cannot change
+// (combat_scope.h `Live`), else finds the loaded libr15, checks its build id, resolves the nine functions and registers the tick callback.
 ModuleResult Install(bool on) noexcept;
 ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool on) noexcept;
 // The part after the resolution (a test calls it with fake functions).
