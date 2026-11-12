@@ -1648,6 +1648,20 @@ void ALoadSeenByTheTickBetweenTwoPollerSamplesStillBlocksForTenSeconds() {
   QCHECK(g_resizeCalls == 1 && tq::LatchedLevel() == tq::Level::kVeryLow);
 }
 
+// The held line's quiet_ms is the shorter of the poller's quiet stretch and the time since the tick's last load. Here the tick saw a
+// load at this instant and the poller's stretch is about 10 s, so the hold read 0 ms; the line must say 0, not the poller's stretch.
+void AHeldLineReportsTheShorterQuietStretch() {
+  ResetStepDown();
+  Capture log;
+  SettleInCombat();
+  g_look.lastLoadMs = g_nowMs;
+  Frame();
+  tm::PollOnceForTest();
+  const std::string held = LineWith("\"event\":\"texture_quality_level_held\"");
+  QCHECK(!held.empty());
+  QCHECK(held.find("\"quiet_ms\":0,") != std::string::npos);
+}
+
 // 40 changes of the level sent (combat, arena, combat, ...), each after a settle: the 32 lines, the cap notice, then a count line at most once a
 // minute while the count grows.
 void TheCapOnRuleLinesIsFollowedByACountThatKeepsComing() {
@@ -1770,6 +1784,7 @@ int main() {
   ALookDrivenResizeWaitsForTheUploadCountAndLock();
   ALookDrivenResizeWaitsWhileALevelLoads();
   ALoadSeenByTheTickBetweenTwoPollerSamplesStillBlocksForTenSeconds();
+  AHeldLineReportsTheShorterQuietStretch();
   TheCapOnRuleLinesIsFollowedByACountThatKeepsComing();
   APlayerChoiceStandsInCombat();
   AStepDownMadeStandsAsideForAMenuChoiceAtOnce();

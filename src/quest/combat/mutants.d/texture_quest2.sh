@@ -38,6 +38,7 @@ runm tq2_prop_choice     $M "s/        tq::NotePlayerChose();  \/\/ a level set 
 runm tq2_hold_skipped    $M "s/  if (lookDriven) {\$/  if (false) {/" $MT
 runm tq2_way_back_free   $M "s/(g_lookApplied.load(std::memory_order_acquire) \&\& effective.reason != rules::RuleReason::kPlayerChoice)/false/" $MT
 runm tq2_fail_keeps_look $M "s/  if (lookDriven) LookOff(\"resize_failed\");/  (void)0;/" $MT
+runm tq2_held_quiet_shorter $M "s/    if (in.look.lastLoadMs != 0 \&\& in.nowMs - in.look.lastLoadMs < quiet) quiet = in.nowMs - in.look.lastLoadMs;//" $MT
 runm tq2_words_ignored   $M "s/    LookOff(\"upload_words_unavailable\");/    (void)0;/" $MT
 # Not a mutant: LookHold's 1U for a null upload word is a null guard only. Unpinned words turn the look off at the poller's first pass
 # (tq2_words_ignored), before the gate can turn on, so no look-driven change reaches LookHold with a null word.
