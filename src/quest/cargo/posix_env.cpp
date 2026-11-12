@@ -1,13 +1,17 @@
 #include "quest/cargo/posix_env.h"
 
+#include <dirent.h>
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #include "quest/auth/atomic_write.h"
 #include "quest/data/sha256.h"
@@ -16,8 +20,6 @@
 namespace nevr_quest::cargo {
 
 namespace {
-
-std::atomic<unsigned> g_tempCounter{0};
 
 bool WriteAll(int fd, const void* data, std::size_t length) noexcept {
   const char* p = static_cast<const char*>(data);
@@ -33,13 +35,6 @@ bool WriteAll(int fd, const void* data, std::size_t length) noexcept {
   return true;
 }
 
-void SyncDirectory(const std::string& dir) noexcept {
-  const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) return;
-  ::fsync(fd);
-  ::close(fd);
-}
-
 class Sha256Hasher : public nevr_cargo::Hasher {
  public:
   void Update(const void* data, std::size_t length) override { sha_.Update(data, length); }
@@ -49,41 +44,56 @@ class Sha256Hasher : public nevr_cargo::Hasher {
   nevr_quest::data::Sha256 sha_;
 };
 
-// A file written beside its final name: created exclusively and not through a link, flushed and renamed in one step.
-class PosixTemp : public nevr_cargo::TempFile {
+// A file that only grows: opened for appending (created when absent) and not through a link. Size is read from the file each time, so
+// it is what a second process or a kill left, not what this object thinks.
+class PosixAppend : public nevr_cargo::AppendFile {
  public:
-  PosixTemp(int fd, std::string path, std::string dir) : fd_(fd), path_(std::move(path)), dir_(std::move(dir)) {}
-  ~PosixTemp() override { Abort(); }
-
-  bool Write(const void* data, std::size_t length) override { return fd_ >= 0 && WriteAll(fd_, data, length); }
-
-  bool Commit(const std::string& final_path) override {
-    if (fd_ < 0) return false;
-    const bool synced = ::fsync(fd_) == 0;
-    ::close(fd_);
-    fd_ = -1;
-    if (!synced || ::rename(path_.c_str(), final_path.c_str()) != 0) {
-      ::unlink(path_.c_str());
-      path_.clear();
-      return false;
-    }
-    SyncDirectory(dir_);
-    path_.clear();
-    return true;
-  }
-
-  void Abort() override {
+  explicit PosixAppend(int fd) : fd_(fd) {}
+  ~PosixAppend() override {
     if (fd_ >= 0) ::close(fd_);
-    fd_ = -1;
-    if (!path_.empty()) ::unlink(path_.c_str());
-    path_.clear();
   }
+  std::uint64_t Size() const override {
+    struct stat st;
+    return ::fstat(fd_, &st) == 0 ? static_cast<std::uint64_t>(st.st_size) : 0;
+  }
+  bool Append(const void* data, std::size_t length) override { return WriteAll(fd_, data, length); }
+  bool Truncate(std::uint64_t size) override { return size <= Size() && ::ftruncate(fd_, static_cast<off_t>(size)) == 0; }
+  bool Sync() override { return ::fsync(fd_) == 0; }
 
  private:
   int fd_;
-  std::string path_;
-  std::string dir_;
 };
+
+// The files the process holds open now: the entries of /proc/self/fd, less the directory handle that reads it.
+bool CountOpenFds(std::uint64_t* out) noexcept {
+  DIR* d = ::opendir("/proc/self/fd");
+  if (d == nullptr) return false;
+  std::uint64_t n = 0;
+  while (const dirent* e = ::readdir(d)) {
+    if (e->d_name[0] != '.') ++n;
+  }
+  ::closedir(d);
+  *out = n > 0 ? n - 1 : 0;
+  return true;
+}
+
+// MemAvailable of /proc/meminfo, in bytes.
+bool ReadMemAvailable(std::uint64_t* out) noexcept {
+  FILE* f = std::fopen("/proc/meminfo", "r");
+  if (f == nullptr) return false;
+  char line[256];
+  bool found = false;
+  while (std::fgets(line, sizeof(line), f) != nullptr) {
+    unsigned long long kb = 0;
+    if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+      *out = static_cast<std::uint64_t>(kb) * 1024u;
+      found = true;
+      break;
+    }
+  }
+  std::fclose(f);
+  return found;
+}
 
 }  // namespace
 
@@ -125,11 +135,37 @@ bool PosixEnv::MakeDirs(const std::string& dir) {
   return ::stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-std::unique_ptr<nevr_cargo::TempFile> PosixEnv::CreateTemp(const std::string& dir) {
-  const std::string path = dir + "/.tmp-" + std::to_string(::getpid()) + "-" + std::to_string(g_tempCounter.fetch_add(1));
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+std::unique_ptr<nevr_cargo::AppendFile> PosixEnv::OpenAppend(const std::string& path) {
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0) return nullptr;
-  return std::unique_ptr<nevr_cargo::TempFile>(new PosixTemp(fd, path, dir));
+  struct stat st;
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    ::close(fd);
+    return nullptr;
+  }
+  return std::unique_ptr<nevr_cargo::AppendFile>(new PosixAppend(fd));
+}
+
+bool PosixEnv::QueryDevice(const std::string& dir, nevr_cargo::DeviceFacts* out) {
+  *out = nevr_cargo::DeviceFacts();
+  struct statvfs vfs;
+  if (::statvfs(dir.c_str(), &vfs) == 0) {
+    out->have_free = true;
+    out->free_bytes = static_cast<std::uint64_t>(vfs.f_bavail) * static_cast<std::uint64_t>(vfs.f_frsize);
+  }
+  struct rlimit lim;
+  std::uint64_t open = 0;
+  if (::getrlimit(RLIMIT_NOFILE, &lim) == 0 && CountOpenFds(&open)) {
+    out->have_fds = true;
+    out->fd_soft_limit = lim.rlim_cur == RLIM_INFINITY ? ~std::uint64_t{0} : static_cast<std::uint64_t>(lim.rlim_cur);
+    out->fds_open = open;
+  }
+  std::uint64_t mem = 0;
+  if (ReadMemAvailable(&mem)) {
+    out->have_memory = true;
+    out->memory_available = mem;
+  }
+  return out->have_free || out->have_fds || out->have_memory;
 }
 
 bool PosixEnv::WriteFileAtomically(const std::string& path, const std::string& data) {
@@ -198,7 +234,8 @@ void PosixEnv::Event(nevr_cargo::EventLevel level, const char* name, const std::
       list.emplace_back(f.key.c_str(), f.text.c_str());
     }
   }
-  const sentinel::LogLevel mapped = level == nevr_cargo::EventLevel::kInfo   ? sentinel::LogLevel::kInfo
+  const sentinel::LogLevel mapped = level == nevr_cargo::EventLevel::kDebug  ? sentinel::LogLevel::kDebug
+                                    : level == nevr_cargo::EventLevel::kInfo ? sentinel::LogLevel::kInfo
                                     : level == nevr_cargo::EventLevel::kWarn ? sentinel::LogLevel::kWarn
                                                                              : sentinel::LogLevel::kError;
   sentinel::LogFieldList(mapped, name, list.data(), list.size());

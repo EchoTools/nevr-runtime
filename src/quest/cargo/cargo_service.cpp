@@ -23,6 +23,7 @@ nevr_cargo::RunResult RunOnce(nevr_cargo::Env& env, const nevr_cargo::RunConfig&
                               const std::function<bool()>& keep_going) {
   // The publisher keeps the set for the life of the process: the engine may be filling a request from its shadow.
   const nevr_cargo::Publish give = [publish](std::unique_ptr<nevr_cargo::Mounted> set) { publish(set.release()); };
+  env.MakeDirs(config.dir);  // as Start does: the device's free space is asked of a directory that exists
   nevr_cargo::MountFromCache(env, config, give);
   return nevr_cargo::FetchAndMount(env, config, give, keep_going);
 }

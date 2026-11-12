@@ -20,7 +20,7 @@ namespace nevr_quest::cargo {
 
 inline constexpr const char* kDefaultCacheDir = "/data/data/com.readyatdawn.r15/files/nevr/cache";
 inline constexpr const char* kDefaultBaseUrl = "https://cargo.echo.taxi/";
-inline constexpr const char* kDefaultManifestPath = "v1/manifest.json";
+inline constexpr const char* kDefaultManifestPath = "v1/manifest.json.zst";  // one zstd frame: nothing uncompressed is published
 
 // The run's settings: the code's defaults, changed by what the config file gave.
 nevr_cargo::RunConfig MakeRunConfig(const AssetsChoice& assets, const std::string& cache_dir = kDefaultCacheDir);

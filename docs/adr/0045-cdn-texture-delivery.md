@@ -43,27 +43,35 @@ process.
    another's. So every shadow in the process (cargo, plugin packages, a cargo republish) takes its indices from one counter that
    never gives a value out twice, and a build that finds fewer than it needs below `0x08000000` takes none and fails. Below that
    limit `index * 0x10` stays under 2^31, so the game's index multiply lands on the same entry in 32 or 64 bits, signed or unsigned.
-4. **The manifest supersedes ADR 0005's.** One JSON document keyed `(platform, on-disk type, name)` (`src/core/cargo_manifest.h`),
-   a blob being one stock-format chunk: one zstd frame whose decompressed bytes are the buffer. The runtime never decompresses; the
-   SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in this decision (see Not claimed).
+4. **The manifest supersedes ADR 0005's.** One JSON document keyed `(platform, on-disk type, name)` (`src/core/cargo_manifest.h`), for
+   any on-disk type, published as one zstd frame (`manifest.json.zst`) whose header states the content size. The client decodes it with
+   the libzstd the runtime already links (not the game's `CSysCompression`, which needs the engine's allocator and function table
+   before the engine runs) and holds the declared size to the device's memory before it decodes anything. A record of 0 bytes is
+   listed in the manifest's `empty` list. A blob is one stock-format chunk: one zstd frame whose decompressed bytes are the buffer.
+   The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
+   this decision (see Not claimed).
 5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json` (kept by
    hash), `v1/manifest.json` (the current copy, short cache). A test device names `v1/test/manifest.json` through `assets.cdn_url`;
    `v1/manifest.json` holds no label in this decision. The manifest-publish token is held by the project owner's delegate;
    whether an R2 token can be limited to a key prefix is open and not needed here.
-6. **The cache is verified, atomic and re-hashed on mount.** A blob is streamed to a temp file while hashing, compared by size and
-   SHA-256, flushed and renamed to `<sha256>.blob`. The index (`{"version":2,"entries":[...]}`) is written whole, by temp and rename,
-   after every blob it names. At mount each blob is opened read-only, held for the life of the process, and hashed again through the
-   handle held, so the bytes the engine reads are the bytes hashed. A label's entries for one name mount together or not at all. The
-   index is runtime-only. On Quest the cache is `<internalDataPath>/nevr/cache/`.
+6. **Objects are appended to a few store files and hashed once.** A blob is streamed into `store-<n>.pack` (at most 4 GiB: the engine's
+   chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cargo_validate.h`); when size, header
+   and SHA-256 match, its bytes are synced and then one fixed record (SHA-256, file, offset, sizes, crc) is appended to `blobs.idx`
+   and synced. A failure or a kill gives the bytes back at the next open. The manifest is saved as it was published. At boot the
+   store reads the index and measures its files; nothing is read or hashed. At mount each store file is opened once, read-only,
+   held for the life of the process, and serves every object in it. On Quest the directory is `<internalDataPath>/nevr/cache/`.
 7. **Never block the boot.** The runtime mounts what the cache holds at boot with no network, fetches in the background on a
    client only, and mounts what arrives. A first launch may show the stock texture; a second launch shows the CDN texture from its
    first load with no request. Every request of a cargo key reads the cargo file; there is no served-once latch.
-8. **Size rules, decided before any request.** `size` and `bytes` are at most 128 MiB. A buffer-1 entry whose `bytes` differs from its
-   `stock_size` needs a buffer-0 entry for the same name in the same label, else the whole name is refused. The referenced blobs
-   fit 512 MiB, else the label is skipped whole. The runtime holds no bytes in memory.
-9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on; any label not listed is off. Config
-   (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the manifest never does. `required` never blocks
-   a level load or a match, and a server cannot require labels of a client.
+8. **Limits come from the device and the manifest, never from a constant** (`src/core/cargo_limits.h`). The manifest text, the entry
+   count, one object's size, the storage a plan may add and the store files held open are each a share of the device's free memory,
+   free space and free descriptors, read when the run starts; a missing fact stops the run with its name. What remains constant is
+   what the engine's layout can express (a 4 GiB store file, 32-bit sizes, an alignment that is a power of two of at most 4096). A
+   label is planned whole or skipped whole, with the reason named. A payload whose size differs from its stock buffer's still needs
+   its descriptor (the per-binary pair table, `Platform::pairs`).
+9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;
+   any label not listed is off. Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
+   manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
 10. **Client only.** A dedicated server fetches nothing.
 
 ## Alternatives
@@ -88,5 +96,5 @@ process.
   security work with its own order.
 - **That the engine builds a texture whose buffer 1 differs in size from stock.** The first test keeps buffer 1 at the stock size.
 - **Raw disassembly of the Quest chunk-index arithmetic.** The shadow's base keeps both multiplies equal; the headset run decides.
-- **A cap on mounted handles on Quest.** Nothing is resident, but each blob holds a file descriptor.
+- **The headset descriptor limit.** A mount holds one descriptor per store file, and the budget is read from the device (Decision 8); the value on a headset is not recorded here.
 - **Tint packages.** The v1 tint path writes nothing; removing it is a later change.

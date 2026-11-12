@@ -1,6 +1,13 @@
 #include "quest/data/sha256.h"
 
+#include <atomic>
 #include <cstring>
+
+#if defined(__aarch64__) && (defined(__linux__) || defined(__ANDROID__))
+#include <arm_neon.h>
+#include <sys/auxv.h>
+#define NEVR_SHA256_ARM64 1
+#endif
 
 namespace nevr_quest::data {
 
@@ -18,17 +25,8 @@ constexpr std::uint32_t kRound[64] = {
 
 inline std::uint32_t Rotr(std::uint32_t x, unsigned n) noexcept { return (x >> n) | (x << (32 - n)); }
 
-}  // namespace
-
-void Sha256::Reset() noexcept {
-  static constexpr std::uint32_t kInit[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-  std::memcpy(state_, kInit, sizeof(state_));
-  total_bytes_ = 0;
-  buffered_ = 0;
-}
-
-void Sha256::Block(const unsigned char* block) noexcept {
+// The portable compression function: one 64-byte block into the eight state words.
+void ScalarBlock(std::uint32_t* state, const unsigned char* block) noexcept {
   std::uint32_t w[64];
   for (int i = 0; i < 16; ++i) {
     w[i] = (static_cast<std::uint32_t>(block[4 * i]) << 24) | (static_cast<std::uint32_t>(block[4 * i + 1]) << 16) |
@@ -39,8 +37,8 @@ void Sha256::Block(const unsigned char* block) noexcept {
     const std::uint32_t s1 = Rotr(w[i - 2], 17) ^ Rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
     w[i] = w[i - 16] + s0 + w[i - 7] + s1;
   }
-  std::uint32_t a = state_[0], b = state_[1], c = state_[2], d = state_[3];
-  std::uint32_t e = state_[4], f = state_[5], g = state_[6], h = state_[7];
+  std::uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+  std::uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
   for (int i = 0; i < 64; ++i) {
     const std::uint32_t big1 = Rotr(e, 6) ^ Rotr(e, 11) ^ Rotr(e, 25);
     const std::uint32_t ch = (e & f) ^ (~e & g);
@@ -57,15 +55,125 @@ void Sha256::Block(const unsigned char* block) noexcept {
     b = a;
     a = t1 + t2;
   }
-  state_[0] += a;
-  state_[1] += b;
-  state_[2] += c;
-  state_[3] += d;
-  state_[4] += e;
-  state_[5] += f;
-  state_[6] += g;
-  state_[7] += h;
+  state[0] += a;
+  state[1] += b;
+  state[2] += c;
+  state[3] += d;
+  state[4] += e;
+  state[5] += f;
+  state[6] += g;
+  state[7] += h;
 }
+
+void ScalarBlocks(std::uint32_t* state, const unsigned char* p, std::size_t count) noexcept {
+  for (; count != 0; --count, p += 64) ScalarBlock(state, p);
+}
+
+#if defined(NEVR_SHA256_ARM64)
+#ifndef HWCAP_SHA2
+#define HWCAP_SHA2 (1 << 6)
+#endif
+// The target attribute turns the instructions on for this function alone, so the rest of the library still runs on any aarch64 CPU.
+#if defined(__clang__)
+#define NEVR_SHA2_TARGET __attribute__((target("sha2")))
+#else
+#define NEVR_SHA2_TARGET __attribute__((target("+sha2")))
+#endif
+
+// The compression function on the SHA-2 instructions (ARMv8 Cryptography Extensions): the message schedule is SHA256SU0 and SHA256SU1
+// four words at a time, and each SHA256H / SHA256H2 pair is four rounds. The state is held as ABCD and EFGH.
+NEVR_SHA2_TARGET void Arm64Blocks(std::uint32_t* state, const unsigned char* data, std::size_t count) noexcept {
+  uint32x4_t abcd = vld1q_u32(&state[0]);
+  uint32x4_t efgh = vld1q_u32(&state[4]);
+  for (; count != 0; --count, data += 64) {
+    const uint32x4_t abcdSave = abcd, efghSave = efgh;
+    uint32x4_t w[16];
+    for (int i = 0; i < 4; ++i) w[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data + 16 * i)));  // the block's big-endian words
+    for (int i = 4; i < 16; ++i) w[i] = vsha256su1q_u32(vsha256su0q_u32(w[i - 4], w[i - 3]), w[i - 2], w[i - 1]);
+    for (int i = 0; i < 16; ++i) {
+      const uint32x4_t wk = vaddq_u32(w[i], vld1q_u32(&kRound[4 * i]));
+      const uint32x4_t before = abcd;
+      abcd = vsha256hq_u32(abcd, efgh, wk);
+      efgh = vsha256h2q_u32(efgh, before, wk);
+    }
+    abcd = vaddq_u32(abcd, abcdSave);
+    efgh = vaddq_u32(efgh, efghSave);
+  }
+  vst1q_u32(&state[0], abcd);
+  vst1q_u32(&state[4], efgh);
+}
+
+bool CpuHasSha2() noexcept {
+  static const bool has = (getauxval(AT_HWCAP) & HWCAP_SHA2) != 0;
+  return has;
+}
+#endif
+
+using BlocksFn = void (*)(std::uint32_t*, const unsigned char*, std::size_t) noexcept;
+std::atomic<BlocksFn> g_blocks{nullptr};  // null until the first use or selection
+
+BlocksFn AutoBackend() noexcept {
+#if defined(NEVR_SHA256_ARM64)
+  if (CpuHasSha2()) return &Arm64Blocks;
+#endif
+  return &ScalarBlocks;
+}
+
+BlocksFn CurrentBackend() noexcept {
+  BlocksFn f = g_blocks.load(std::memory_order_relaxed);
+  if (f == nullptr) {
+    f = AutoBackend();
+    g_blocks.store(f, std::memory_order_relaxed);
+  }
+  return f;
+}
+
+}  // namespace
+
+bool Sha256HardwareAvailable() noexcept {
+#if defined(NEVR_SHA256_ARM64)
+  return CpuHasSha2();
+#else
+  return false;
+#endif
+}
+
+const char* Sha256BackendName() noexcept {
+#if defined(NEVR_SHA256_ARM64)
+  if (CurrentBackend() == &Arm64Blocks) return "arm64-sha2";
+#endif
+  return "scalar";
+}
+
+bool Sha256SelectBackend(Sha256Backend backend) noexcept {
+  switch (backend) {
+    case Sha256Backend::kAuto:
+      g_blocks.store(AutoBackend(), std::memory_order_relaxed);
+      return true;
+    case Sha256Backend::kScalar:
+      g_blocks.store(&ScalarBlocks, std::memory_order_relaxed);
+      return true;
+    case Sha256Backend::kArm64Sha2:
+#if defined(NEVR_SHA256_ARM64)
+      if (CpuHasSha2()) {
+        g_blocks.store(&Arm64Blocks, std::memory_order_relaxed);
+        return true;
+      }
+#endif
+      return false;
+  }
+  return false;
+}
+
+void Sha256::Reset() noexcept {
+  static constexpr std::uint32_t kInit[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+  std::memcpy(state_, kInit, sizeof(state_));
+  total_bytes_ = 0;
+  buffered_ = 0;
+}
+
+void Sha256::Blocks(const unsigned char* blocks, std::size_t count) noexcept { CurrentBackend()(state_, blocks, count); }
 
 void Sha256::Update(const void* bytes, std::size_t length) noexcept {
   const unsigned char* p = static_cast<const unsigned char*>(bytes);
@@ -77,13 +185,14 @@ void Sha256::Update(const void* bytes, std::size_t length) noexcept {
     p += take;
     length -= take;
     if (buffered_ < 64) return;
-    Block(buffer_);
+    Blocks(buffer_, 1);
     buffered_ = 0;
   }
-  while (length >= 64) {
-    Block(p);
-    p += 64;
-    length -= 64;
+  if (length >= 64) {
+    const std::size_t whole = length / 64;
+    Blocks(p, whole);
+    p += whole * 64;
+    length -= whole * 64;
   }
   if (length != 0) {
     std::memcpy(buffer_, p, length);
