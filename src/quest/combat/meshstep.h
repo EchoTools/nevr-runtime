@@ -22,7 +22,7 @@
  *
  * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's constructor.
  *
- * Switch. `combat.meshstep` (default true, as upstream's shipped build turns `--resource-table-step-1` on; this replacement of the constructor has not run on a headset, the plugin's copy having always refused) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
+ * Switch. `combat.meshstep` (default true, the default the q15t plugin's `Q15T_MESHSTEP` has at v6.16.5 (`src/quest/plugins/q15t/CMakeLists.txt:25` at that tag); no upstream shipped build is shown to turn `--resource-table-step-1` on; this replacement of the constructor has not run on a headset, the plugin's copy having always refused) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
  * plugin's data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the 33 code words of meshstep_targets.h are read and compared; a difference refuses the module with
