@@ -259,14 +259,24 @@ the alternatives.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-KNOWN-WRONG #2392: no check enforces the rules in this paragraph. The test that did read the `Nvr` uses, the spelling
-lists (`LEGACY_SPELLINGS`, `BRAND_PROSE_SPELLINGS`), the lifecycle namespace, the `NEVR_` macros, the `nevr_` CMake
-targets, every namespace, the brand in prose, and the old names in `tools/tests/renamed_namespaces/*.json` is not in the
-tree, nothing else reads those JSON files, and the agent definitions under `.claude/agents` do not name these rules.
-Until #2392 is fixed these are the standard only: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
-no non-canonical spelling of the project name, one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand
-spelling `nEVR` in the prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every
-namespace `nevr` or `nevr_<area>` (the exceptions above and the game's namespaces), and no old name of a renamed namespace.
-`python3 tools/naming_inventory.py` lists the breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
-`pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`), with `file:line`; `--summary` gives the counts.
-It has no category for the rules above.
+KNOWN-WRONG #2392: no test or sensor fails on a break of the rules in this paragraph, and none runs the inventory against
+the tree. `python3 tools/naming_inventory.py` lists breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
+`pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`) with `file:line`; `--summary` gives the counts. It
+exits 0 whatever it finds. What it reads for each rule of this paragraph:
+
+- `Nvr` only as the deprecated aliases of the plugin and module C ABI: no category. The `spellings` pattern matches only
+  spellings with an `E` (`NEVR`, `Nevr`, `nEVR`), so `Nvr` is not read.
+- No non-canonical spelling of the project name in a file that does not carry one: `spellings` reports every `nEVR` token
+  in the tree, the prose included (441 findings). It does not implement the file and token exemptions.
+- One spelling of the lifecycle namespace (`nevr::lifecycle`): `lifecycle-namespaces`, in code files.
+- The brand spelling `nEVR` in the prose of documents: `spellings` reports it as a break (88 of its 441 findings are in
+  `.md` files, `AGENTS.md:108` among them), the opposite of this rule. Tracked by #2394.
+- `NEVR_` project macros: `macros` reads the names in CMake compile definitions only. A `#define` in C++ is not read.
+- `nevr_` CMake targets (four named exceptions): `cmake-targets` reads `add_library` and `add_executable` in CMake files
+  and reports the four exceptions (`echovr_server`, `LibOVRPlatform64_1`, `ovrplatformloader`, `breakpad_client`).
+- Every namespace `nevr` or `nevr_<area>`: `pascal-namespaces` reads the namespaces that begin with an upper-case letter,
+  and every namespace under `src/reconstruction/`. A lower-case namespace elsewhere is not read.
+- The old names of renamed namespaces (`tools/tests/renamed_namespaces/*.json`): no category, and nothing reads those
+  files.
+
+Until #2392 is fixed, these rules are the standard, and `naming_inventory.py` is the only automated list of breaks.
