@@ -65,6 +65,13 @@ After "How an agent works here", these come before every other rule in this file
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **Read a text to its end before a claim about what it lacks.** Before you state that a text (an issue, a pull request
+  body, a comment, a file, a log) does not contain something, read all of it. A slice does not count: `head`, `tail`,
+  `cut -c`, `grep -m`, a `[0:N]` slice of `.body` in `gh ... --jq`, or a `Read` with a `limit` that stops short. When the
+  text is too large for one read, page through it (`Read` with `offset` and `limit` until the last line, or the API's
+  paging until the last page) and say how much you read. A statement that a text lacks something names what was read and
+  how much of it. Reason: a claim made from a cut-off text is a claim about the part that was read, and the owner cannot
+  tell which part that was.
 - **Every action follows a documented pattern.** Before an action, name the pattern this repo documents that covers it:
   a rule in this file, a `justfile` recipe, or a step in `RELEASING.md` or a runbook under `docs/`. An action no
   documented pattern covers is not taken: stop, name the gap and the action it blocks, and report it.
