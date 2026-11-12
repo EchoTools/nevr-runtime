@@ -693,6 +693,8 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the plugin ABI's `Nevr*` prefix with its deprecated `Nvr*` aliases are in `docs/standards/naming.md`.
+- **No magic numbers**: every numeric literal in a source file, test files included, under `src/`, `sdk/` or `tools/` is a named constant: a `constexpr` in C++, a `const` in Go, an UPPER_CASE module-level name in Python, a `readonly` variable in shell; never `#define`. The literal other than 0 and 1 appears only in that declaration.
+- **Limit source**: a size or capacity limit that the runtime enforces in a source file under `src/` or `sdk/` takes its value or method from the game's record, the reconstruction (the game's binaries read in a disassembler, and the facts the tree records from them), and is cited by address in a comment at the constant's declaration (`0x140F80ED0` is `CBroadcaster::Listen`). Only if the reconstruction gives neither a value nor a method, compute the limit from the machine at run time. A value the game fixes, or the wire format fixes, is a record value; its declaration holds the literal; any other limit is never a literal in code. Timeouts, waits, retry counts, build, service and job caps, and review limits such as function length are outside this bullet; they are still named constants under the no-magic-numbers rule.
 
 ## Reverse engineering
 
@@ -1357,7 +1359,7 @@ cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 
 ```cpp
 // Good
-constexpr std::size_t kMaxRetries = 3;
+constexpr std::string_view kProjectName = "nEVR";
 using Result = std::variant<Success, Error>;
 
 // Bad
