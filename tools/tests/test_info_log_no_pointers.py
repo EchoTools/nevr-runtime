@@ -65,6 +65,15 @@ class InfoRecordsCarryNoPointers(unittest.TestCase):
         self.assertNotIn("LogLevel::Info", body)
         self.assertNotIn("g_isServer", body)
 
+    def test_party_callback_trace_is_debug(self):
+        # #1292: every game party callback logs one line per call; that is a per-call trace, so it is Debug. The
+        # helpers that make the call are the only writers of the "party callback" line.
+        source = strip_comments((ROOT / "src/runtime/patch/social_facade_object.cpp").read_text(errors="replace"))
+        for signature in ("void CallVoid(", "void CallU32(", "void CallIdName(", "bool CallGate("):
+            body = extract_braced_function(source, signature)
+            self.assertIn("LogLevel::Debug", body, f"{signature} must log its callback trace at Debug")
+            self.assertNotIn("LogLevel::Info", body, f"{signature} logs a per-call trace at Info (#1292)")
+
 
 if __name__ == "__main__":
     unittest.main()

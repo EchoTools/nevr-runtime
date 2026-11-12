@@ -155,20 +155,20 @@ CallbackEntry Entry(void* self, std::size_t index) {
 
 void CallVoid(void* self, std::size_t index) {
   const CallbackEntry e = Entry(self, index);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party callback index=%zu bound=%d", index, e.function != nullptr ? 1 : 0);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] party callback index=%zu bound=%d", index, e.function != nullptr ? 1 : 0);
   if (e.function != nullptr) reinterpret_cast<void (*)(void*, void*)>(e.function)(e.context, e.buffer);
 }
 
 void CallU32(void* self, std::size_t index, std::uint32_t value) {
   const CallbackEntry e = Entry(self, index);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party callback index=%zu arg=%u bound=%d", index, value,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] party callback index=%zu arg=%u bound=%d", index, value,
       e.function != nullptr ? 1 : 0);
   if (e.function != nullptr) reinterpret_cast<void (*)(void*, void*, std::uint32_t)>(e.function)(e.context, e.buffer, value);
 }
 
 void CallIdName(void* self, std::size_t index, std::uint64_t id, const char* name) {
   const CallbackEntry e = Entry(self, index);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party callback index=%zu id=%llu bound=%d", index,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] party callback index=%zu id=%llu bound=%d", index,
       static_cast<unsigned long long>(id), e.function != nullptr ? 1 : 0);
   if (e.function != nullptr)
     reinterpret_cast<void (*)(void*, void*, std::uint64_t, const char*)>(e.function)(e.context, e.buffer, id, name);
@@ -179,7 +179,7 @@ bool CallGate(void* self, std::size_t index) {
   const CallbackEntry e = Entry(self, index);
   if (e.function == nullptr) return true;
   const std::uint64_t result = reinterpret_cast<std::uint64_t (*)(void*, void*)>(e.function)(e.context, e.buffer);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party callback index=%zu gate=%llu", index,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] party callback index=%zu gate=%llu", index,
       static_cast<unsigned long long>(result & 0xFFFFFFFFULL));
   return (result & 0xFFFFFFFFULL) != 0;
 }
