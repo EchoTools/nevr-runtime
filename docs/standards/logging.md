@@ -352,9 +352,10 @@ retry counts, and stable event markers. Three things are logged as values:
   as it is.
 - A peer's endpoint or lobby id that did not parse, which the operator needs to
   see why a session success was refused, is logged through
-  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value
-  (Rule 15): at most 64 bytes of it, inside double quotes, each non-printable
-  byte, each backslash and each double quote written as `\xNN`, so the text
+  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value:
+  at most 64 bytes of it, always inside double quotes, each non-printable
+  byte, each backslash and each double quote written as `\xNN` (Rule 15's
+  `Value` quotes only a value that needs it and writes `\"`, so the two differ), so the text
   cannot end its own field or start another, with its full length beside it
   (`endpoint_len=<n>`, `lobby_len=<n>`, so a cut value says so).
 
