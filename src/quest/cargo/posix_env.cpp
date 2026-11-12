@@ -1,5 +1,6 @@
 #include "quest/cargo/posix_env.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -18,6 +19,9 @@ namespace nevr_quest::cargo {
 namespace {
 
 std::atomic<unsigned> g_tempCounter{0};
+
+constexpr std::uint64_t kMsPerSecond = 1000;
+constexpr std::uint64_t kNsPerMs = 1000000;
 
 bool WriteAll(int fd, const void* data, std::size_t length) noexcept {
   const char* p = static_cast<const char*>(data);
@@ -136,6 +140,27 @@ bool PosixEnv::WriteFileAtomically(const std::string& path, const std::string& d
   std::string error, warning;
   return nevr::quest_auth::AtomicWrite(path, data, error, warning);
 }
+
+bool PosixEnv::ListFiles(const std::string& dir, std::vector<nevr_cargo::DirFile>* out) {
+  out->clear();
+  DIR* d = ::opendir(dir.c_str());
+  if (d == nullptr) return false;
+  const int dirFd = ::dirfd(d);
+  while (const dirent* e = ::readdir(d)) {
+    struct stat st;
+    if (::fstatat(dirFd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(st.st_mode)) continue;
+    nevr_cargo::DirFile f;
+    f.name = e->d_name;
+    f.size = static_cast<std::uint64_t>(st.st_size);
+    f.modified_ms = static_cast<std::uint64_t>(st.st_mtim.tv_sec) * kMsPerSecond +
+                    static_cast<std::uint64_t>(st.st_mtim.tv_nsec) / kNsPerMs;
+    out->push_back(std::move(f));
+  }
+  ::closedir(d);
+  return true;
+}
+
+bool PosixEnv::RemoveFile(const std::string& path) { return ::unlink(path.c_str()) == 0 || errno == ENOENT; }
 
 bool PosixEnv::OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);

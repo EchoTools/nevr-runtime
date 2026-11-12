@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,22 @@ bool WriteIndex(Env& env, const std::string& dir, const Index& index);
 
 // Reads a blob whole through `env` and returns its SHA-256, or an empty string when it cannot be read. For the "already held" check.
 std::string HashFile(Env& env, const std::string& path);
+
+// What an eviction found and did. `over_cap_all_referenced`: still over the cap, and every blob left is named by the index.
+struct EvictReport {
+  std::uint64_t bytes_before = 0;
+  std::uint64_t bytes_after = 0;
+  std::size_t blobs_before = 0;
+  std::size_t evicted = 0;
+  std::size_t failed = 0;  // a removal the platform refused
+  bool listed = true;      // false: the directory could not be read and nothing was done
+  bool over_cap_all_referenced = false;
+};
+
+// Keeps the blobs of `dir` within `cap_bytes`: removes blobs (`<sha256>.blob`, nothing else) that `referenced` does not name, least
+// recently written first (ties by name), until the blobs fit. A blob in `referenced` is never removed, whatever the total; when only
+// those remain over the cap the report says so. docs/adr/0045-cdn-texture-delivery.md D6.
+EvictReport Evict(Env& env, const std::string& dir, std::uint64_t cap_bytes, const std::set<std::string>& referenced);
 
 // What a mount holds: the shadow to publish and the label names the shadow's record tags index.
 struct Mounted {
