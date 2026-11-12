@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import pathlib
 import subprocess
-import tempfile
 
 import gitenv
 
@@ -19,38 +18,17 @@ SUBMODULE_ENV = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.file.all
                  "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
 
 
-def _own_root() -> pathlib.Path:
-    """The directory the tests make their throwaway worktrees in: the temporary directory (#2155)."""
-    return pathlib.Path(tempfile.gettempdir()).resolve()
-
-
-def _worktrees_the_tests_could_change(listing: str) -> list:
-    """The `worktree` and `locked` lines of the entries under the temporary directory, in listing order.
-
-    Another session's worktrees live in its own work root, never in the temporary directory, so a block cannot have
-    changed them. The HEAD an entry reports is left out: it moves whenever any session commits.
-    """
-    kept = []
-    for block in listing.split("\n\n"):
-        lines = [ln for ln in block.splitlines() if ln]
-        if not lines or not lines[0].startswith("worktree "):
-            continue
-        path = pathlib.Path(lines[0][len("worktree "):])
-        if path.is_relative_to(_own_root()):
-            kept += [ln for ln in lines if ln.startswith(("worktree ", "locked"))]
-    return kept
-
-
 def real_repo_state():
-    """The submodule config and the worktrees the tests could have made, and their locks, of the checkout as bytes.
+    """The submodule config and the worktree paths and locks of the checkout the tests run from, as bytes.
 
-    A block that adds, removes or locks a worktree of the checkout under the temporary directory changes this; a
-    worktree another session makes or removes does not (#2155).
+    The worktree list is reduced to its `worktree` and `locked` lines: the HEAD each worktree reports moves
+    whenever any other session commits, and a block that lasts a second must not fail on that.
     """
     def run(*args):
         return gitenv.git(REPO, *args, check=False).stdout
 
-    worktrees = _worktrees_the_tests_could_change(run("worktree", "list", "--porcelain"))
+    worktrees = [ln for ln in run("worktree", "list", "--porcelain").splitlines()
+                 if ln.startswith(("worktree ", "locked"))]
     return (run("config", "--get-regexp", r"^submodule\.") + "\0" + "\n".join(worktrees)).encode()
 
 

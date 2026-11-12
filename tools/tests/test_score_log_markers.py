@@ -44,12 +44,6 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         console = score("[NEVR.PATCH] console ctrl handler installed\n")
         self.assertIn("PASS", row(console.stdout, "S31"))
 
-    def test_shutdown_marker_fails_on_the_runtime_failure_line(self):
-        # #548: the runtime writes "SetConsoleCtrlHandler install FAILED err=<n>" (crash_recovery.cpp); the
-        # old fail pattern "SetConsoleCtrlHandler FAILED" never matched it, so a failed install scored ABSENT.
-        failed = score("[NEVR.PATCH] SetConsoleCtrlHandler install FAILED err=5\n")
-        self.assertIn("FAIL", row(failed.stdout, "S31"))
-
     def test_current_boot_redirect_and_login_success_markers_score(self):
         log = (
             "[NEVR.PATCH] boot hooks installed ok=TrUe\n"

@@ -103,10 +103,6 @@ ccache-stats:
 build: configure
     @cmake --build --preset {{ preset }}
 
-# Build the reconstruction library (src/reconstruction), which the default build leaves out (#1974)
-build-reconstruction: configure
-    cmake --build --preset {{ preset }} --target nevr_r15_reconstruction
-
 # Build only the echovr_server.exe launcher
 launcher: configure
     cmake --build --preset {{ preset }} --target echovr_server
@@ -149,7 +145,7 @@ configure-android: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
-    cd src/quest && cmake --preset android-arm64 -DCMAKE_C_COMPILER_LAUNCHER="$launcher" -DCMAKE_CXX_COMPILER_LAUNCHER="$launcher"
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
@@ -516,10 +512,10 @@ package-dev reference_apk=env("NEVR_QUEST_REFERENCE_APK"):
     out="build/package-dev/${commit:0:7}"
     # Windows DLL: its own build tree (build/mingw-dev).
     # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
-    # Configure through the `configure` recipe, which also runs generate-symcache, _proto-current and _build-inputs.
-    (unset VCPKG_ROOT; just preset=mingw-dev configure)
     (
         unset VCPKG_ROOT
+        just preset=mingw-dev _vcpkg-mingw
+        cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
     # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
@@ -549,7 +545,7 @@ _quest-apk reference_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
-    (cd src/quest && cmake --preset android-arm64-dev -DCMAKE_C_COMPILER_LAUNCHER="$launcher" -DCMAKE_CXX_COMPILER_LAUNCHER="$launcher")
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64-dev)
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
@@ -1048,19 +1044,8 @@ test-auth-unit:
     done
     # The runtime's half of PC self-update (ADR 0024, sections 3 and 6): the decisions, the check, the confirmation and the worker's
     # threads against a fake core, and the Rust core linked into a MinGW binary and called from a worker thread.
-    # test_update_core_link exists only when the configured tree has the Rust core (src/runtime/CMakeLists.txt,
-    # NEVR_UPDATE_CORE_ENABLED); the CI builder image has none. Ask the build graph, and never assume it (#2287).
-    core_targets=$(ninja -C build/{{ preset }} -t targets all)
-    build_targets="--target test_update_worker"
-    if grep -qw test_update_core_link <<<"$core_targets"; then
-        build_targets="$build_targets --target test_update_core_link"
-    fi
-    cmake --build --preset {{ preset }} $build_targets
+    cmake --build --preset {{ preset }} --target test_update_worker --target test_update_core_link
     for name in test_update_worker test_update_core_link; do
-        if [[ "$name" == test_update_core_link ]] && ! grep -qw test_update_core_link <<<"$core_targets"; then
-            echo "test-auth-unit: skipping test_update_core_link: the configured tree does not define it (no Rust core; #2287)" >&2
-            continue
-        fi
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2

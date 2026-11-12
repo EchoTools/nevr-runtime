@@ -206,8 +206,8 @@ nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 find_package(CURL CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 # curl_http.cpp needs CURLOPT_PROTOCOLS_STR (7.85) and CURLOPT_QUICK_EXIT (7.87). The Quest manifest
-# pins its builtin-baseline to .vcpkg-commit (the revision CI checks out), so the ports resolve the same
-# on a local checkout; fail the configure rather than the compile when libcurl is too old anyway.
+# has no builtin-baseline (neither does the root one), so what vcpkg resolves is whatever the
+# local vcpkg checkout carries; fail the configure rather than the compile when it is too old.
 if(NOT CURL_VERSION OR CURL_VERSION VERSION_LESS 7.87.0)
   message(FATAL_ERROR "nevr_quest: libcurl ${CURL_VERSION} found, need >= 7.87.0 (CURLOPT_QUICK_EXIT)")
 endif()
