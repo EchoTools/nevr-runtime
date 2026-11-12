@@ -199,7 +199,7 @@ static constexpr uint64_t VA_SET_WEAPON_ENTITIES = 0x140D42E00;
 // pnsradmatchmaking.dll and XInput through it, with `reuse` set. With `reuse` set it first returns
 // GetModuleHandleA(path) when that module is already loaded; otherwise it widens the path and calls LoadLibraryW.
 // With `call_main` set it then calls the module's RadPluginMain(arg). Returns the module, or null when the load
-// failed. docs/reference/content-packs.md says how a plugin serves a script DLL through it.
+// failed. docs/reference/content-packs.md says how the runtime serves a content pack's script DLL through it.
 // Signature: HMODULE __fastcall (const char* path, void* arg, int call_main, int reuse)
 static constexpr uint64_t VA_LOAD_SCRIPT_DLL = 0x1400EB0F0;
 

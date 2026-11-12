@@ -244,8 +244,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // RunDeferredRuntimeBootstrap, after this call returns.
   // #496: plugins marked `early: true` load here, once, before the original call: the
   // game reads its manifests and opens its packages during it, before the graphics
-  // device exists (where the rest load), so a plugin that serves game data from
-  // elsewhere has to be in place now. Nothing marked early: nothing loads here.
+  // device exists (where the rest load), so an early plugin is in place before that read.
+  // Nothing marked early: nothing loads here.
   static std::atomic_bool s_earlyPlugins{false};
   if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
     LoadPlugins(PluginPhase::Early);

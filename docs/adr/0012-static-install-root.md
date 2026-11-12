@@ -49,7 +49,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | --- | --- |
 | `nevr-runtime.dll` | the changing runtime |
 | `plugins\` | plugin DLLs and their dependencies |
-| `content\` | content packs: `content\<id>\` is one pack's folder, which only the plugin that serves it reads (ADR 0028) |
+| `content\` | content packs: `content\<id>\` is one pack's folder, which the runtime reads and serves itself (ADR 0028) |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
 | `logs\`, `crashes\` | each process's one main log (`nevr-<timestamp>.jsonl`: the host, the boot phase, the runtime and the crash path all write it) and the minidumps and crash reports |

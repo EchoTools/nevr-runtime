@@ -916,8 +916,8 @@ arena:
 #   early     — if true, the plugin loads at the game's first command-line pass,
 #               before the game reads its data (manifests, packages); the rest
 #               load after the graphics device (client) or that pass (server).
-#               For a plugin that must be in place by then, e.g. one that serves
-#               game data from elsewhere; it must stay off the graphics path.
+#               For a plugin that must be in place before that read; it must
+#               stay off the graphics path.
 #               A repeat of an earlier entry for the same file is skipped as
 #               usual, so the first entry decides the pass.
 #

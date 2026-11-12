@@ -40,9 +40,8 @@ struct PluginLoadItem {
 
 // The two load passes (#496). Early runs once, at the game's first
 // PreprocessCommandLine, before the original call: before the game reads its data
-// (manifests, packages), so a plugin that serves game data from elsewhere is in
-// place in time. The rest load in the normal pass, after the graphics device
-// (client) or the first PreprocessCommandLine (server).
+// (manifests, packages), so an early plugin is in place before that read. The rest load in the normal pass,
+// after the graphics device (client) or the first PreprocessCommandLine (server).
 enum class PluginPhase : std::uint8_t { Early = 0, Normal = 1 };
 
 // Whether `phase` loads `item`: the early pass takes the entries marked early, the
