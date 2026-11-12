@@ -114,10 +114,6 @@ void SetLinkGateLibs(const char* spec) noexcept;
 // How many distinct libraries have bound the expression from the link range (each logged one `combat_gates_headset_bind` line).
 std::uint32_t LinkGateLibsSeen() noexcept;
 
-// The row after the last name row of the link gate's policy (SetLinkGateLibs never stores there): 48 bytes the host test fills with a canary and
-// checks after a store that could overrun the last row.
-char* FragmentGuardRowForTest() noexcept;
-
 // The file name (no directory) of the library that holds `addr`; false when dladdr does not know it, and `out` is left alone then.
 bool LibraryName(std::uintptr_t addr, char* out, std::size_t n) noexcept;
 
@@ -146,6 +142,9 @@ Ranges RangesForTest() noexcept;
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 // The pins Install uses; nullptr restores kPins.
 void SetPinsForTest(const Pins* pins) noexcept;
+// The row after the last name row of the link gate's policy (SetLinkGateLibs never stores there): 48 bytes the host test fills with a canary and
+// checks after a store that could overrun the last row.
+char* FragmentGuardRowForTest() noexcept;
 // Forgets the hooks, the ranges, the policy, the game and the counters.
 void ResetForTest() noexcept;
 
