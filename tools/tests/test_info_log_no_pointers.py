@@ -65,6 +65,15 @@ class InfoRecordsCarryNoPointers(unittest.TestCase):
         self.assertNotIn("LogLevel::Info", body)
         self.assertNotIn("g_isServer", body)
 
+    def test_facade_per_call_lines_are_debug(self):
+        # #1292: the facade's first-call lines are per-call traces. Update keeps exactly one Info line, its periodic
+        # summary (Rule 13); SetLocalUser has none.
+        source = strip_comments((ROOT / "src/runtime/patch/social_facade_object.cpp").read_text(errors="replace"))
+        update = extract_braced_function(source, "void Update(void* self, const void* flags)")
+        self.assertEqual(update.count("LogLevel::Info"), 1, "Update must keep only its periodic summary at Info (#1292)")
+        set_local = extract_braced_function(source, "void SetLocalUser(void* self, std::uint32_t userIndex)")
+        self.assertNotIn("LogLevel::Info", set_local, "SetLocalUser's first-call line is a per-call trace (#1292)")
+
     def test_party_callback_trace_is_debug(self):
         # #1292: every game party callback logs one line per call; that is a per-call trace, so it is Debug. The
         # helpers that make the call are the only writers of the "party callback" line.

@@ -690,7 +690,7 @@ void Update(void* self, const void* flags) {
   SyncHostJoinable(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update call_count=1");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] facade update call_count=1");
   }
   if (callCount % kUpdateSummaryInterval == 0) {
     Log(EchoVR::LogLevel::Info,
@@ -707,7 +707,7 @@ void Update(void* self, const void* flags) {
 void SetLocalUser(void* self, std::uint32_t userIndex) {
   const std::uint32_t callCount = CountCall(g_calls.setLocalUser);
   if (callCount == 1) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade set_local_user user_index=%u call_count=1", userIndex);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] facade set_local_user user_index=%u call_count=1", userIndex);
   }
   if (userIndex == 0) {
     Put32(self, 0x200, 1);
