@@ -342,7 +342,8 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
       break;
   }
 } catch (const std::exception&) {
-  Log(EchoVR::LogLevel::Error, "[NEVR.SERVERDB] callback threw and was CONTAINED at=WebSocketClient::OnMessage failure=1");
+  const std::string diagnostic = nevr_log_diagnostics::FormatCallbackFailureDiagnostic("WebSocketClient::OnMessage");
+  Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
 }
 
 VOID WebSocketClient::FlushPendingMessages() {
