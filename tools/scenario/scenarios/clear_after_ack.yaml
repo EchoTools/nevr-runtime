@@ -1,0 +1,26 @@
+# Control for clear_while_update_in_flight (unlocks lead): the same add, but the clear is fired only after the service's ack, so
+# no update is in flight. Expect the clear to be sent at once (`sent profile update: {}`). Needs an item the account does not
+# hold yet, so the add sends an update.
+name: clear_after_ack
+description: add one item, wait for the ack, then fire the clear, and see the clear's update go out
+steps:
+  - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: add one item, so update A goes out
+    fire: {action: add_new_unlocks, item: '0x87d5d9ecb92bdbee'}
+  - name: the add ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] add_new_unlocks item=0x87d5d9ecb92bdbee count_before=\d+ count_after=\d+', timeout: 10}
+  - name: the service acknowledged update A, so nothing is in flight
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}
+  - name: fire the clear after the ack
+    fire: {action: clear_new_unlocks}
+  - name: the clear ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] clear_new_unlocks count_before=\d+ count_after=0 user=present dirty_flags_before=0x[0-9a-f]+ dirty_flags_after=0x[0-9a-f]+', timeout: 10}
+  - name: the game sent the clear's update
+    expect_log: {pattern: '\[NSUSER\] sent profile update: ', timeout: 30}
+  # The run ends when the last step passes and the game is stopped at once, so without this step the clear's update can be cut off
+  # on the wire and a stored-list read afterwards shows nothing about it.
+  - name: the service acknowledged the clear's update
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}
