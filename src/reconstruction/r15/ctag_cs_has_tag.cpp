@@ -7,7 +7,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct CTagCS {};
 
@@ -39,4 +39,4 @@ bool CTagCS_HasTag(void* game_mt, const std::uint64_t* actor_guid,
     return has_tag(handle.component, handle.packed_handle, tag_symbol);
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

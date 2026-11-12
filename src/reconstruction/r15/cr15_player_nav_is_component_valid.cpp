@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 bool CR15PlayerNavCS_IsComponentValid(const void* self, std::uint32_t handle) {
     const auto* const bytes = static_cast<const std::uint8_t*>(self);
@@ -28,4 +28,4 @@ bool CR15PlayerNavCS_IsComponentValid(const void* self, std::uint32_t handle) {
     return dense_index < dense_count;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

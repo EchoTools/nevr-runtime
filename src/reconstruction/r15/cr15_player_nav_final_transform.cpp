@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct CTransfQS {
     float value[12];
@@ -47,4 +47,4 @@ CTransfQS CR15PlayerNavCS_FinalTransform(const void* self,
     return result;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

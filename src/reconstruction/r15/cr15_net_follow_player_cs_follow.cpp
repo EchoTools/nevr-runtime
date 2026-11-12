@@ -14,7 +14,7 @@ extern const float* const kC3VectorZeroAddr;     // *(u64*)0x03815030: address o
 extern const void* const kInvokeTransformCQuat;  // *(u64*)0x0380faa0: InvokeMethod for QueueFunctor<CTransformCS, CQuaternion>
 extern const void* const kInvokePhysicsC3Vec;    // *(u64*)0x03826eb0: InvokeMethod for QueueFunctor<CPhysicsCS, C3Vector>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 // CTransfQS as batch-5 defines it (12 floats). Follow reads value[4..6], the position at sret+0x10.
 struct CTransfQS {
@@ -234,4 +234,4 @@ void CR15NetFollowPlayerCS_Follow(void* self, std::uint64_t handle) {
                           C3Vector{scale * dx, scale * dy, scale * dz});
 }
 
-}  // namespace q15t::r15::reconstruction
+}  // namespace NRadEngine::nevr_reconstruction

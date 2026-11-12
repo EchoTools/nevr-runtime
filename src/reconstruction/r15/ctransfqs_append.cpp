@@ -2,7 +2,7 @@
 // Quest libr15.so, binary 576; raw parent 100227260; reconstruction node 100600324.
 /* @confidence: H */
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct CTransfQS {
     float value[12];
@@ -65,4 +65,4 @@ void CTransfQS::Append(const CTransfQS& other) {
     value[9] *= other.value[9];
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction
