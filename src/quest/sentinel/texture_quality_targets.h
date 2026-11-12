@@ -208,6 +208,26 @@ inline constexpr nevr_quest::combat::pinned::Word kDisplayDestroyKinds[] = {
     {"mov w0,#0xe (CGDisplay::Resize, fourth view)", 0x18348f4ULL, 0x528001c0U},
 };
 
+// CGDisplay::Resize's four calls of CGRawInterfaceVK::DeferredDestroy(SGImage&), each before its destroy above. All four go through one
+// PLT stub (0xf3c3a0) whose JUMP_SLOT (0x36f58b8) is DeferredDestroy(SGImage&) at 0x1888c04.
+inline constexpr PltCall kDisplayDeferredDestroyCalls[] = {
+    {"bl DeferredDestroy(SGImage&) (CGDisplay::Resize, first view)", 0x1834878ULL, 0x97dc1ecaU, 0xf3c3a0ULL, 0x36f58b8ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK15DeferredDestroyERNS_7SGImageE", 0x1888c04ULL},
+    {"bl DeferredDestroy(SGImage&) (CGDisplay::Resize, second view)", 0x18348a4ULL, 0x97dc1ebfU, 0xf3c3a0ULL, 0x36f58b8ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK15DeferredDestroyERNS_7SGImageE", 0x1888c04ULL},
+    {"bl DeferredDestroy(SGImage&) (CGDisplay::Resize, third view)", 0x18348c8ULL, 0x97dc1eb6U, 0xf3c3a0ULL, 0x36f58b8ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK15DeferredDestroyERNS_7SGImageE", 0x1888c04ULL},
+    {"bl DeferredDestroy(SGImage&) (CGDisplay::Resize, fourth view)", 0x18348ecULL, 0x97dc1eadU, 0xf3c3a0ULL, 0x36f58b8ULL,
+     "_ZN10NRadEngine16CGRawInterfaceVK15DeferredDestroyERNS_7SGImageE", 0x1888c04ULL},
+};
+
+// DeferredDestroy(SGImage&) on the last reference calls the deferred-destroy body with kind 0xa: the mov, then the bl (both store words).
+inline constexpr std::uint32_t kLastReferenceKind = 0xa;
+inline constexpr nevr_quest::combat::pinned::Word kLastReferenceKindMov{"mov w0,#0xa (DeferredDestroy, last reference)", 0x1888c30ULL,
+                                                                        0x52800140U};
+inline constexpr nevr_quest::combat::pinned::Word kLastReferenceCall{"bl 0x1888a98 (DeferredDestroy, last reference)", 0x1888c34ULL,
+                                                                     0x97ffff99U};
+
 // The two words both waits read: the gctx pointer word (0x370f360) and the currframe pointer word (0x3729558), through the same
 // adrp + ldr in FlushGPU and in the deferred-destroy body. kGctxPointerVaddr holds the gctx; the offsets 0xb70 (GPU frame) and 0xb50
 // are read from it.
@@ -299,7 +319,7 @@ inline constexpr Branch kBranches[] = {
     {kReapCall, kReapUploadsVaddr},          {kUploadTakeCall, kTakeUploadSlotVaddr},
     {kImageUploadTakeCall, kTakeUploadSlotVaddr}, {kDisplayDestroyCalls[0], kDeferredDestroyBodyVaddr},
     {kDisplayDestroyCalls[1], kDeferredDestroyBodyVaddr}, {kDisplayDestroyCalls[2], kDeferredDestroyBodyVaddr},
-    {kDisplayDestroyCalls[3], kDeferredDestroyBodyVaddr},
+    {kDisplayDestroyCalls[3], kDeferredDestroyBodyVaddr},   {kLastReferenceCall, kDeferredDestroyBodyVaddr},
 };
 
 }  // namespace nevr_quest::texture_quality::targets

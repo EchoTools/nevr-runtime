@@ -181,6 +181,12 @@ int main(int argc, char** argv) {
     QCHECK(MovImmediate(k.word) == tq::kDestroyKind);
     QCHECK(k.vaddr + 4 == tq::kDisplayDestroyCalls[i].vaddr);
   }
+  // DeferredDestroy(SGImage&) calls the body with kind 0xa on the last reference: the mov before the bl, both the file's words.
+  QCHECK(CheckWord(elf, tq::kLastReferenceKindMov));
+  QCHECK((tq::kLastReferenceKindMov.word & 0x7f800000U) == 0x52800000U && Rt(tq::kLastReferenceKindMov.word) == 0);  // mov w0,#imm
+  QCHECK(MovImmediate(tq::kLastReferenceKindMov.word) == tq::kLastReferenceKind);
+  QCHECK(tq::kLastReferenceKindMov.vaddr + 4 == tq::kLastReferenceCall.vaddr);
+  QCHECK(CheckWord(elf, tq::kLastReferenceCall));
 
   // The lock, the count and the queue lock pointer lie in .bss: the game writes them at run time.
   QCHECK(InBss(elf, tq::kUploadLockVaddr, tq::kUploadLockBytes));
@@ -270,6 +276,8 @@ int main(int argc, char** argv) {
   for (const tq::PltCall& c : tq::kResizePath) checkCall(c);
   // FlushGPU's four calls after it gives the lock back go through one stub to one callee.
   for (const tq::PltCall& c : tq::kFlushCalls) checkCall(c);
+  // CGDisplay::Resize's four calls of DeferredDestroy(SGImage&), each through the same stub to the same callee.
+  for (const tq::PltCall& c : tq::kDisplayDeferredDestroyCalls) checkCall(c);
 
   if (quest_test::Failures() == 0) std::printf("texture_quality_pinned_test: ok (%s)\n", buildId);
   return quest_test::Failures() == 0 ? 0 : 1;
