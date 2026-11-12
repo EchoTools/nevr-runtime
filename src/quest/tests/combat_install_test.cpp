@@ -530,7 +530,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed texture_quest2_step_down=off meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
                "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded "
-               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=module_not_loaded aibots=module_not_loaded weapon_arm=module_not_loaded gates=module_not_loaded bvh=module_not_loaded "
+               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=module_not_loaded weapon_arm=module_not_loaded gates=module_not_loaded bvh=module_not_loaded "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=module_not_loaded music=module_not_loaded\""));
     // one record per module with a step, early first: 3 early and 39 normal
@@ -866,6 +866,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.peerclamp = {false, nevr_quest::Source::kFile};
   off.custctx = {false, nevr_quest::Source::kFile};
   off.frozenFrameExit = {false, nevr_quest::Source::kFile};  // the frozen-frame exit (#2377) reads the scope too
+  off.gunconnect = {false, nevr_quest::Source::kFile};       // gun connect reads the scope too (#2382)
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -1041,8 +1042,8 @@ void TheThreeSwitchesAreReportedOneRecordEachFromTheTable() {
 
 // Each of the three rows reads its own key, and aibots also its scenario text: gunconnect off alone, then aibots off alone, then weapon_arm off alone (the level decals are off too: no decals.bin on the host).
 void TheGunAndBotRowsReadTheirKeysFromTheResolvedSection() {
-  const char* const results[3] = {"gunconnect=off_config aibots=module_not_loaded weapon_arm=module_not_loaded", "gunconnect=module_not_loaded aibots=off_config weapon_arm=module_not_loaded",
-                                  "gunconnect=module_not_loaded aibots=module_not_loaded weapon_arm=off_config"};
+  const char* const results[3] = {"gunconnect=off_config aibots=module_not_loaded weapon_arm=module_not_loaded", "gunconnect=scope_not_live aibots=off_config weapon_arm=module_not_loaded",
+                                  "gunconnect=scope_not_live aibots=module_not_loaded weapon_arm=off_config"};
   for (int i = 0; i < 3; ++i) {
     Process(bv::Variant::kCombat);
     nevr_quest::combat::gunconnect::ResetForTest();
@@ -1529,7 +1530,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"custctx", &nevr_quest::CombatConfig::custctx, true},     {"voipdrop", &nevr_quest::CombatConfig::voipdrop, false},
                         {"droneguard", &nevr_quest::CombatConfig::droneguard, false},
                         {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},
-                        {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, true}};  // the sound-symbol guard (#1737) reads the scope too
+                        {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, true},  // the sound-symbol guard (#1737) reads the scope too
+                        {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true}};  // gun connect (#2382) reads the scope too
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1541,6 +1543,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.voipdrop = {false, nevr_quest::Source::kFile};
     cfg.droneguard = {false, nevr_quest::Source::kFile};
     cfg.frozenFrameExit = {false, nevr_quest::Source::kFile};
+    cfg.gunconnect = {false, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();

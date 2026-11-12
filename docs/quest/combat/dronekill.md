@@ -74,8 +74,8 @@ Warning, an Error when one cannot be removed). Last, the kill feed: `ec::OnDrone
 Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module acts only while a
 combat map is loaded: `dronekill::Tick` asks `combat_level::Classify(game, lobby=false)` every 32 frames (`kScopeFrames`) and keeps the answer in
 one atomic, read by `InCombatScope()` (false before the first tick: fail closed). The combat lobby is not the scope (no drone is in it as far as
-this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). The scope moves to `combat_scope`'s `InCombatMap` (F19, PR
-#2246) when that file is on main; `InCombatScope` is the one place that changes.
+this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). Moving the scope to `combat_scope.h`'s
+`InCombatMap` (on main) is tracked in #2382; `InCombatScope` is the one place that changes.
 
 Out of scope: Enter and FireBulletLocal call the game's function and return before anything else (no shot frame, so dronemuzzle passes too);
 AttackTarget returns after its call; Actor returns after its call when no drone Enter is in flight on any thread (always, out of scope); a

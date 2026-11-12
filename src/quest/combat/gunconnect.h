@@ -11,15 +11,17 @@
  * copy hold its start line and never a Connect), so its headset row requires `combat_gunconnect_connect`.
  * The plugin's kill file `gunconnect.off` is no longer read; one found in the plugin's data directory is a Warning (`combat_gunconnect_legacy_switch`).
  *
- * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is (combat_level.h `Classify`);
- * in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds nothing to
- * do, calls nothing of the game's and writes no line. Online it does nothing in any level: the lobby-member event connects the guns first, so
- * (a) is false. KNOWN-WRONG #2168: the scope asks `combat_level` directly, once a pass; moving it to combat_scope.h is tracked in #2382.
+ * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is, as the combat level answer
+ * last saw it (combat_scope.h `InCombatOrLobby`, a look four times a second from the game-thread tick, not believed once the tick has stopped for
+ * a second); in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds
+ * nothing to do, reads nothing of the game's, calls nothing and writes no line. The module is a reader of the scope row: `combat.gunconnect` is in
+ * combat_install.cpp `ScopeNormal()`'s list, and the install refuses (`scope_not_live`) when the answer cannot change. Online it does nothing in
+ * any level: the lobby-member event connects the guns first, so (a) is false.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
- * frame and does one clock read and one compare; a pass runs at 1 Hz (4 Hz while a local gun is unconnected). A pass is the level scan (a few
- * process_vm_readv reads, about 3 us on the machine that built this: gunconnect_test prints it) and, in a combat level, the gun CS search. In an
- * arena level a pass is the level scan alone, 1 Hz. Not measured on a headset.
+ * frame and does one clock read and one compare; a pass runs at 1 Hz (4 Hz while a local gun is unconnected). In an arena level a pass is one
+ * relaxed load of the scope word and a test (gunconnect_test prints the host cost); in a combat level it adds a clock read (the answer's
+ * freshness) and the gun CS search. The level scan is the scope row's, made once for every reader. Not measured on a headset.
  *
  * Origin. The reference build's Fix in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_gunconnect.cpp:1-24,
  * the constants :91-93, FindCs :186-218, ReadLocal :222-240, HasCombatTag :242-254, CountGuns :256-296 and FixPass :312-358. The q15t plugin
@@ -66,8 +68,9 @@ using SymbolLookup = void* (*)(const char* symbol);
 // anything but its fixed address is a refusal (false, `why` is the name).
 bool Resolve(std::uintptr_t base, SymbolLookup lookup, Fns* out, const char** why) noexcept;
 
-// The module's normal step. Off (`on` false): one Info line, nothing registered. On: finds the loaded libr15, checks its build id and the pinned
-// words, resolves the four addresses (by name where the game exports it) and registers the tick callback.
+// The module's normal step. Off (`on` false): one Info line, nothing registered. On: refuses (`scope_not_live`) when the combat level answer
+// cannot change (combat_scope.h `Live`), else finds the loaded libr15, checks its build id and the pinned words, resolves the four addresses (by
+// name where the game exports it) and registers the tick callback.
 ModuleResult Install(bool on) noexcept;
 // The same on the libr15 `lookup` finds, with `symbols` for the name check (the host test supplies an image built in memory).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool on) noexcept;

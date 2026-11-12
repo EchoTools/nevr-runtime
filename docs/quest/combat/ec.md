@@ -137,7 +137,7 @@ kotorvr's echoquest-combat, which pauses its EC client only while an Echo Arena 
 `_b2_lowspec`, `_b_arena`, `_b_social`) the EC client does not run, so `hide` does not cut the tac-mod list (smoke, buff and point) there, as it does in the
 combat lobby and on a combat map (on a server without EC). Which lobby a Quest combat player chooses a loadout in is not established; the headset row below
 has a line for it.
-`combat_scope` (#2246) will replace the cache; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
+Moving the cache to `combat_scope.h` (on main) is tracked in #2382; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
 the PR body (ADR 0038).
 
 ## Config

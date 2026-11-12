@@ -61,7 +61,7 @@ std::atomic<int> g_stage{0};
 std::atomic<std::uintptr_t> g_game{0};
 // The scope: refreshed by the game tick, read by every wrapper. False until a tick saw a combat map or the combat lobby.
 std::atomic<bool> g_inScope{false};
-// The one place the module asks "is this combat?": the game tick's cached answer. When combat_scope (#2246) lands, this reads it instead.
+// The one place the module asks "is this combat?": the game tick's cached answer. combat_scope.h is on main; moving this to it is tracked in #2382.
 inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }
 std::atomic<std::uint32_t> g_frames{0};
 std::atomic<int> g_scopeKind{-1};

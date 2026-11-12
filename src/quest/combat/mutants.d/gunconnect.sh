@@ -35,10 +35,14 @@ runm gc_no_cs_log src/quest/combat/gunconnect.cpp 's/if (!st.seen) {/if (false) 
 runm gc_hold_1s src/quest/combat/gunconnect.cpp 's/kHoldS = 2.0/kHoldS = 1.0/'
 runm gc_retry_half src/quest/combat/gunconnect.cpp 's/kRetryS = 1.0/kRetryS = 0.5/'
 runm gc_tries_9 src/quest/combat/gunconnect.cpp 's/kMaxTries = 10/kMaxTries = 9/'
-runm gc_scope_always src/quest/combat/gunconnect.cpp 's/\&levelId) == level::Kind::kCombatOrLobby;/\&levelId) == level::Kind::kCombatOrLobby || true;/'
-runm gc_scope_no_lobby src/quest/combat/gunconnect.cpp 's/\/\*lobby=\*\/true/\/*lobby=*\/false/'
-runm gc_scope_inverted src/quest/combat/gunconnect.cpp 's/\&levelId) == level::Kind::kCombatOrLobby;/\&levelId) != level::Kind::kCombatOrLobby;/'
+runm gc_scope_always src/quest/combat/gunconnect.cpp 's/^  if (!scope::InCombatOrLobby()) {$/  if (!(scope::InCombatOrLobby() || true)) {/'
+runm gc_scope_no_lobby src/quest/combat/gunconnect.cpp 's/^  if (!scope::InCombatOrLobby()) {$/  if (!scope::InCombatMap()) {/'
+runm gc_scope_inverted src/quest/combat/gunconnect.cpp 's/^  if (!scope::InCombatOrLobby()) {$/  if (scope::InCombatOrLobby()) {/'
+runm gc_scope_stale_believed src/quest/combat/gunconnect.cpp 's/^  if (!scope::InCombatOrLobby()) {$/  if (!scope::SeenCombatOrLobby()) {/'
 runm gc_scope_unseen src/quest/combat/gunconnect.cpp 's/g_scopedOut.fetch_add(1, std::memory_order_relaxed);/;/'
+runm gc_scope_live_unchecked src/quest/combat/gunconnect.cpp 's/^  if (!scope::Live()) return Refused("scope_not_live", "");$//'
+runm gc_scope_live_token src/quest/combat/gunconnect.cpp 's/return Refused("scope_not_live", "");/return Refused("module_not_loaded", "");/'
+runm gc_scope_live_after_image src/quest/combat/gunconnect.cpp '/^  if (!scope::Live()) return Refused/d; s/^  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", "");$/&\n  if (!scope::Live()) return Refused("scope_not_live", "");/'
 runm gc_off_ignored src/quest/combat/gunconnect.cpp 's/  if (!on) {/  if (!on \&\& false) {/'
 runm gc_off_not_off src/quest/combat/gunconnect.cpp 's/return {false, "off_config", true};/return {false, "off_config", false};/'
 runm gc_legacy_unwarned src/quest/combat/gunconnect.cpp 's/if (!legacy::Present("gunconnect.off")) return;/return;/'
@@ -73,13 +77,15 @@ runm gc_key_arm_default_off $Q 's/ReadCombatSwitch(cfg, kCombatWeaponArmKey, r)/
 runm gc_key_arm_misnamed $Q 's/kCombatWeaponArmKey = "combat.weapon_arm"/kCombatWeaponArmKey = "combat.weaponarm"/' quest-host-shared quest_config_test
 runm gc_key_scenario_misnamed $Q 's/kCombatAibotsScenarioKey = "combat.aibots_scenario"/kCombatAibotsScenarioKey = "combat.aibots_scen"/' quest-host-shared quest_config_test
 runm gc_key_scenario_unread $Q 's/r.config.combat.aibotsScenario = ReadCombatText(cfg, kCombatAibotsScenarioKey, r);/;/' quest-host-shared quest_config_test
-runm gc_key_not_on_schema src/core/nevr_config.cpp 's/"gunconnect", "aibots", "aibots_scenario", "weapon_arm"}/"gunconnect", "aibots", "aibots_scenario"}/' quest-host-shared quest_config_test
+runm gc_key_not_on_schema src/core/nevr_config.cpp 's/"texture_quest2_lobby", "gunconnect", "aibots",/"texture_quest2_lobby", "aibots",/' quest-host-shared quest_config_test
 G=src/quest/combat/gunconnect.cpp
-# By count (the arena test counts SafeRead calls and level scans): a read, or a scan, made before the scope test.
-runm gc_read_before_scope $G 's/^  if (!InScope(game)) {$/  (void)ReadLocal(game);\n  if (!InScope(game)) {/'
-runm gc_scan_before_scope $G 's/^  if (!InScope(game)) {$/  (void)level::Scan(game);\n  if (!InScope(game)) {/'
+# By count (the arena test counts SafeRead calls and level scans against the combat level answer's own looks): a read, or a scan, made before the scope test.
+runm gc_read_before_scope $G 's/^  if (!scope::InCombatOrLobby()) {$/  (void)ReadLocal(game);\n  if (!scope::InCombatOrLobby()) {/'
+runm gc_scan_before_scope $G 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^  if (!scope::InCombatOrLobby()) {$/  (void)level::Scan(game);\n  if (!scope::InCombatOrLobby()) {/'
 runm gc_pins_connect_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, netgame::kPins, gamespace::targets::kPins};/'
 runm gc_pins_gamespace_unchecked $G 's/const pinned::Pins lists\[\] = {gt::kPins, gt::kConnectPins, netgame::kPins, gamespace::targets::kPins};/const pinned::Pins lists[] = {gt::kPins, gt::kConnectPins, netgame::kPins};/'
 runm gc_ring_u32 $G 's/c.ring = SafeRead<std::uint64_t>(cs + gt::kConnectRing, \&ok);/c.ring = SafeRead<std::uint32_t>(cs + gt::kConnectRing, \&ok);/'
 
 runm gc_no_pin_check src/quest/combat/gunconnect.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): gun connect keeps the row on alone.
+runm gcrow_scope_reader src/quest/combat/combat_install.cpp 's/g_config.soundSymbolGuard.on ||$/g_config.soundSymbolGuard.on || false ||/; s/^                         g_config.gunconnect.on;$/                         false;/' quest-host-combat combat_install_test

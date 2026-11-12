@@ -28,14 +28,17 @@ tries start again. Any of (a) to (c) false restarts the 2 s hold; an unreadable 
 ## Arena
 
 Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in. The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena
-level is (`combat_level.h`, `Classify` with the lobby): in an arena match, in the lobbies arena players use, in a transition that still holds an arena level and when the game cannot be read,
-it finds nothing to do, calls nothing of the game's and writes no line. `gunconnect_test` shows it for eight such levels and a transition, and the module acting on the four combat maps and
-the combat lobby. Online it does nothing in any level because (a) is false. The plugin's copy was not scoped by level; the combat tag (c) was its only scope.
+level is, as the combat level answer last saw it (`combat_scope.h`, `InCombatOrLobby`: a look four times a second from the game-thread tick, not believed
+once the tick has stopped for a second; the module is one of the scope row's readers and refuses its install with `scope_not_live` when the answer
+cannot change): in an arena match, in the lobbies arena players use, in a transition that still holds an arena level and when the game cannot be read,
+it finds nothing to do, reads and calls nothing of the game's and writes no line. `gunconnect_test` shows it for eight such levels, a transition and a stopped
+tick, and the module acting on the four combat maps and the combat lobby. Online it does nothing in any level because (a) is false. The plugin's copy was not scoped by level; the combat tag (c) was its only scope.
 
 ## Cost (ADR 0038)
 
 With the switch off nothing is registered, so no frame runs any of it. With it on, the tick callback runs once per rendered frame and does one clock read and one compare (about 7 ns on the
-x86 host that built this change). A pass runs at 1 Hz: in an arena level that is the level scan alone, about 3 us (x86 host), so about 3 us a second; in a combat level it adds the gun
+x86 host that built this change). A pass runs at 1 Hz: in an arena level that is one relaxed load of the scope word and a test (well under 1 us on the x86
+host); the level scan is the scope row's, shared by every reader. In a combat level a pass adds a clock read (the answer's freshness), the gun
 system search and the member read, a few more process_vm_readv reads, 4 Hz while a gun is unconnected. `gunconnect_test` prints both numbers. Not measured on a headset.
 
 ## Lines

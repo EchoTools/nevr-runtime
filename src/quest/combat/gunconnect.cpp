@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/gamespace.h"
 #include "quest/combat/gamespace_targets.h"
@@ -175,14 +175,10 @@ GunCounts CountGuns(std::uintptr_t cs, std::uint32_t slot) noexcept {
   return c;
 }
 
-// Whether the loaded levels are a combat map or the combat lobby with no Echo Arena level among them.
-bool InScope(std::uintptr_t game) noexcept {
-  std::uint64_t levelId = 0;
-  return level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
-}
-
 void FixPass(std::uintptr_t game, double now) noexcept {
-  if (!InScope(game)) {
+  // A combat map or the combat lobby with no Echo Arena level, as the combat level answer last saw it (combat_scope.h): a load and a test on an
+  // arena pass, no read of the game.
+  if (!scope::InCombatOrLobby()) {
     g_scopedOut.fetch_add(1, std::memory_order_relaxed);
     for (FixState& s : g_st) s = FixState{};
     g_why[0] = 0;
@@ -302,6 +298,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
                          {"msg", "combat.gunconnect is false: local practice guns the game left unconnected stay as they are"}});
     return {false, "off_config", true};
   }
+  // The pass acts only while the combat level answer says a combat map or the combat lobby is loaded: when that answer cannot change (the tick or the
+  // scope row's refresh is not installed) the module would never act, so it is not installed (combat_scope.h `Live`).
+  if (!scope::Live()) return Refused("scope_not_live", "");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded", "");
   char id[64] = {};

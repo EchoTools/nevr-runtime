@@ -74,8 +74,8 @@ game's own radius check, as it does a radius that is not finite.
 The q15t and combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
 loaded: the game tick asks `combat_level::Classify` once every 32 frames (and when the CR15Game changes) and keeps the answer in an atomic;
 before a tick has seen a level the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
-continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. When `combat_scope` (#2246) lands,
-`InScope()` reads it instead.
+continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. `combat_scope.h` is on main; moving
+`InScope()` to it is tracked in #2382.
 
 ## Lines
 
