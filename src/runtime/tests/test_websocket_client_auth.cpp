@@ -29,6 +29,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -238,6 +239,18 @@ void DeliverForTest(WebSocketClient& client, ix::WebSocketMessageType type, cons
   client.TestDeliverMessage(message);
 }
 
+// One ServerDB message as the wire carries it: the magic, the message id, the payload length, the payload.
+std::string EncodeServerDbMessage(EchoVR::SymbolId messageId, const std::string& payload) {
+  constexpr uint64_t kWireMagic = 0xBB8CE7A278BB40F6ULL;
+  std::string frame(sizeof(kWireMagic) + sizeof(messageId) + sizeof(uint64_t) + payload.size(), '\0');
+  const uint64_t length = payload.size();
+  std::memcpy(frame.data(), &kWireMagic, sizeof(kWireMagic));
+  std::memcpy(frame.data() + sizeof(kWireMagic), &messageId, sizeof(messageId));
+  std::memcpy(frame.data() + sizeof(kWireMagic) + sizeof(messageId), &length, sizeof(length));
+  if (!payload.empty()) std::memcpy(frame.data() + frame.size() - payload.size(), payload.data(), payload.size());
+  return frame;
+}
+
 }  // namespace
 
 TEST(WebSocketClientCallbackBoundary, ContainsConnectionHandlerExceptionAndAcceptsNextEvent) {
@@ -322,6 +335,27 @@ TEST(WebSocketClientCallbackBoundary, QueueAppendExceptionReleasesLockForNextMes
 // memory runs out. The handler is replaced here to observe the overflow.
 static size_t g_capOverflowCalls = 0;
 static void CountCapOverflow(size_t) { ++g_capOverflowCalls; }
+
+// A frame whose messages are more than the receive queue takes: the receive observer sees every message of the frame, and the
+// queue's drop Warning counts the messages it could not queue and names the first one, so a dropped registration answer or
+// session end is visible to the watchdogs and to the log.
+TEST(WebSocketClientReceive, AFullQueueStillShowsEveryMessageToTheObserverAndNamesTheFirstDropped) {
+  ClearLog();
+  WebSocketClient client;
+  std::vector<EchoVR::SymbolId> observed;
+  client.SetReceiveObserver([&observed](EchoVR::SymbolId msgId, VOID*, UINT64) { observed.push_back(msgId); });
+  constexpr size_t kQueueLimit = 1024;
+  constexpr EchoVR::SymbolId kDroppedId = 0x2222;
+  std::string frame;
+  for (size_t i = 0; i < kQueueLimit; ++i) frame += EncodeServerDbMessage(1, "");
+  frame += EncodeServerDbMessage(kDroppedId, "");
+  DeliverForTest(client, ix::WebSocketMessageType::Message, frame, true);
+  EXPECT_EQ(observed.size(), kQueueLimit + 1);
+  ASSERT_FALSE(observed.empty());
+  EXPECT_EQ(observed.back(), kDroppedId);
+  EXPECT_TRUE(LogContains("dropped 1 frame message"));
+  EXPECT_TRUE(LogContains("first msgId 0x2222"));
+}
 
 TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
   ClearLog();
