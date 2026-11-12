@@ -45,7 +45,9 @@
  * Arena (same APK). Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module
  * acts only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h `InCombatMap` on one
  * `LastLook()` record, asked by the module's own tick every kScopeFrames frames and kept in one atomic, InCombatScope; the scope ends after kLeaveAsks
- * no-combat-map answers in a row, so a failed read does not end it, and a stale answer is no combat map). The module is a reader of the scope row:
+ * no-combat-map answers in a row, so a failed read does not end it). The atomic is not judged again between asks: while the game tick is stopped the
+ * scope is held as it was, however old the look is, and a stale or missing look is a no-combat-map answer only at an ask that runs. The module is a
+ * reader of the scope row:
  * `combat.dronekill` is in combat_install.cpp `ScopeNormal()`'s list, and the step refuses (`scope_not_live`) when the answer cannot change.
  * Outside a combat map every hook calls the game's function and returns: Enter and FireBulletLocal before anything else,
  * AttackTarget after its call, Actor after its call when no drone Enter is in flight; OnKilled drops the 'K'; the tick clears the tables when the

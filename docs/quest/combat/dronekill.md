@@ -80,8 +80,15 @@ this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope)
 
 Out of scope: Enter and FireBulletLocal call the game's function and return before anything else (no shot frame, so dronemuzzle passes too);
 AttackTarget returns after its call; Actor returns after its call when no drone Enter is in flight on any thread (always, out of scope); a
-'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-combat-map answers in a row, because a look cannot tell an unreadable game from one with no combat map, and the answer's freshness rule bounds only an answer the tick stopped refreshing; a stale answer counts as no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
-combat map is acted on later. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
+'K' is dropped; the tick does nothing after its level ask; leaving the scope (after `kLeaveAsks` = 3 no-combat-map answers in a row, because a look cannot tell an unreadable game from one with no combat map; entering takes one) empties the group, touch, gun and chase tables, so nothing from a
+combat map is acted on later.
+
+The scope is held, not re-judged. `InCombatScope()` reads the atomic that the tick's last ask stored, and only an ask writes it. While the game tick is
+stopped nothing asks again, so the scope stays as it was for as long as the tick stays stopped, however old the look is. A stale or missing look counts
+as no combat map only at an ask that runs (`scope::InCombatMap` on the record), and leaving takes `kLeaveAsks` such asks in a row. So when the tick runs
+again, a combat map that is still loaded keeps the scope, and a stale look has to be asked three times before the scope ends. `dronekill_test`
+(`TestTheHeldScopeWhileTheTickIsStopped`) pins the held case: 60 s on the scope's clock with no tick leaves `scope::LookIsFresh()` false, `InCombatScope()`
+true, and writes no change line. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
 measurement a headset run gives). `dronekill_test` (`TestArenaLevelsAreLeftAlone`, `TestScopeEndsAtTheLevelChange`) drives a drone's Enter,
 an Actor, a shot, an attack, a 'K' and 65 ticks on `mpl_arena_a`, `mpl_lobby_b2`, `mpl_lobby_b_combat` and no level, and checks that each hook
 called the game's function as it was called and nothing else happened: no look-up, no table entry, no disable, no velocity, no line.

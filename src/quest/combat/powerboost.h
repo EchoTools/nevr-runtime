@@ -19,8 +19,9 @@
  * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
  * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, the answer
  * is "not combat"). The atomic is not judged again: while the tick is stopped the module keeps its last answer. A reader that checks
- * `LookIsFresh()` at call time refuses an answer older than a second (kStaleAfterMs); this module does not check it. Anywhere else every wrapper only calls the game's function, the entry passes every call
- * on, and nothing is logged, held, swallowed or sent. The module is a reader of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
+ * `LookIsFresh()` at call time refuses an answer older than a second (kStaleAfterMs); this module does not check it. Anywhere else every
+ * wrapper only calls the game's function, the entry passes every call on, and nothing is logged, held, swallowed or sent. The module is a reader
+ * of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
  * `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). ResolveBody has 771 callers and runs many times per frame: the entry's path for every call but the cone's is 10

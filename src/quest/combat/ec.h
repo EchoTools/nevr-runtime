@@ -28,7 +28,8 @@
  * fresh, so the arena lobbies, an Echo Arena level and an answer the game thread stopped refreshing for a second are out of scope. A torn read of
  * the answer (no whole record in four tries) is named `no_look` and is out of scope until the next read, 250 ms later (it fails closed). A level
  * change reaches this thread within about 500 ms: the look is made at most every 250 ms and this thread reads at most every 250 ms, plus up to one
- * game frame. The module is a
+ * game frame. A stopped game tick takes this thread out of scope within 1 s plus 250 ms of the tick's last look: the freshness test is made at this
+ * thread's own looks, at most 250 ms apart (ec.cpp `kScopeEveryMs`). The module is a
  * reader of the scope row (`combat.ec` is in combat_install.cpp `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer
  * cannot change. Out of scope the recvfrom and
  * sendto handlers call libc and return (one acquire load and a branch above the thunk), no datagram is consumed, no net tick runs, the thread

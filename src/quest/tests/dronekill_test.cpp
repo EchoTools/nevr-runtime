@@ -2445,6 +2445,22 @@ static void TestAStaleAnswerIsNoCombatMap() {
   CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1), "a stale combat answer kept the scope");
 }
 
+// The held scope (dronekill.md, "Arena"): InCombatScope() reads the atomic the tick's last ask stored, and nothing re-judges it. While the game tick is
+// stopped nothing asks again, so the scope stays as it was however old the look is; a stale look is a no-combat-map answer only at an ask that runs.
+// Here the tick stops in a combat map: 60 s on the scope's clock with no tick leaves the scope's own look not fresh, the module still in scope, and
+// writes no change line.
+static void TestTheHeldScopeWhileTheTickIsStopped() {
+  Result r = Reset(Words{});
+  CHECK(r.ok, "install");
+  Frame();  // a look and an ask: the combat map is the scope
+  CHECK(InCombatScope(), "the combat map is not the scope");
+  const int scopeLines = CountLine("combat_dronekill_scope");
+  g_scopeMs += 60000;  // the game tick is stopped: no Frame and no Tick, so nothing asks again
+  CHECK(!scope::LookIsFresh(), "held: the scope still believes its look 60 s on");
+  CHECK(InCombatScope(), "held: dronekill dropped its scope while the game tick was stopped");
+  CHECK(CountLine("combat_dronekill_scope") == scopeLines, "held: a scope change line was written with the game tick stopped");
+}
+
 // The scope's decision and its change line come from the one record the tick reads (LastLook): a live read of the answer made after the record is
 // stale in this tick, so a decision that asked the answer again would stay out of the scope and write no change line. Out of scope on an arena level,
 // then a combat map loaded: the ask whose record says combat map starts the scope, its line names the map's level, and no live read decides it.
@@ -3262,6 +3278,7 @@ int main() {
   TestArenaLevelsAreLeftAlone();
   TestScopeEndsAtTheLevelChange();
   TestAStaleAnswerIsNoCombatMap();
+  TestTheHeldScopeWhileTheTickIsStopped();
   TestTheRecordDecidesNotTheLiveRead();
   TestProductionStep();
   if (g_fail == 0) std::printf("dronekill_test: all checks passed\n");
