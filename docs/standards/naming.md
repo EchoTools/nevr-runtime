@@ -259,19 +259,25 @@ the alternatives.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-KNOWN-WRONG #2392: no test or sensor fails on a break of the rules in this paragraph, and none runs the inventory against
-the tree. `python3 tools/naming_inventory.py` lists breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
+KNOWN-WRONG #2392: no test or sensor reads most rules in this paragraph, and none runs the inventory against the tree.
+Two tests check part of it: `tools/internal/questwiring/reconstruction_namespace_test.go`
+(`TestEachReconstructionFileOpensAndClosesTheOneNamespaceOnce`) fails when a named reconstruction file does not open and
+close `NRadEngine::nevr_reconstruction` once; and `RuntimeLifecycleInvariantTest.test_dllmain_does_not_run_plugin_shutdown_or_unload`
+in `tools/tests/test_runtime_lifecycle_invariants.py` fails when the deprecated `NvrPluginShutdown` spelling appears in
+`DllMain`'s body. `python3 tools/naming_inventory.py` lists breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
 `pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`) with `file:line`; `--summary` gives the counts. It
 exits 0 whatever it finds. What it reads for each rule of this paragraph:
 
 - `Nvr` only as the deprecated aliases of the plugin and module C ABI: no category. The `spellings` pattern matches only
   spellings with an `E` (`NEVR`, `Nevr`, `nEVR`), so `Nvr` is not read.
 - No non-canonical spelling of the project name in a file that does not carry one: `spellings` reports every `nEVR` token
-  in the tree, the prose included (441 findings). It does not implement the file and token exemptions.
+  in the tree, the prose included (every match is a finding; `--summary` gives the count). It does not implement the file
+  and token exemptions.
 - One spelling of the lifecycle namespace (`nevr::lifecycle`): `lifecycle-namespaces`, in code files.
-- The brand spelling `nEVR` in the prose of documents: `spellings` reports it as a break (88 of its 441 findings are in
-  `.md` files, `AGENTS.md:108` among them), the opposite of this rule. Tracked by #2394.
-- `NEVR_` project macros: `macros` reads the names in CMake compile definitions only. A `#define` in C++ is not read.
+- The brand spelling `nEVR` in the prose of documents: `spellings` reports it as a break, in `.md` files as elsewhere
+  (`--category spellings`), the opposite of this rule. Tracked by #2394.
+- `NEVR_` project macros: `macros` reads the names in `target_compile_definitions(...)` calls only. The
+  `add_compile_definitions` calls in the CMake files, and every `#define` in C++, are not read.
 - `nevr_` CMake targets (four named exceptions): `cmake-targets` reads `add_library` and `add_executable` in CMake files
   and reports the four exceptions (`echovr_server`, `LibOVRPlatform64_1`, `ovrplatformloader`, `breakpad_client`).
 - Every namespace `nevr` or `nevr_<area>`: `pascal-namespaces` reads the namespaces that begin with an upper-case letter,
