@@ -1,0 +1,66 @@
+name: Plugin SDK example
+
+# The bar of the plugin SDK package (#439): a fresh directory outside the tree builds the example plugin for Windows
+# (mingw-w64) and Quest (arm64-android) against the installed SDK only. The SDK is configured from sdk/ alone and
+# installed to a prefix; the example is then configured from a copy of sdk/examples/hello_plugin in an empty directory
+# with only that prefix on the path. It runs when someone asks for it (`gh workflow run plugin-sdk-example.yml --ref <branch>`).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: plugin-sdk-example-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  example:
+    name: example plugin (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [windows-mingw, quest-arm64-android]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        sparse-checkout: |
+          sdk
+        sparse-checkout-cone-mode: false
+
+    - name: Install mingw-w64
+      if: matrix.target == 'windows-mingw'
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64-posix ninja-build
+
+    - name: Set up the Android NDK
+      if: matrix.target == 'quest-arm64-android'
+      uses: ./.github/actions/setup-ndk
+
+    - name: Install the SDK and build the example outside the tree
+      env:
+        TARGET: ${{ matrix.target }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/sdk-example"
+        mkdir -p "$work/example"
+        cmake -S sdk -B "$work/sdk-build"
+        cmake --install "$work/sdk-build" --prefix "$work/prefix"
+        cp sdk/examples/hello_plugin/CMakeLists.txt sdk/examples/hello_plugin/hello_plugin.cpp "$work/example/"
+        # From here nothing of the checkout is on any path: the example sees the installed prefix only.
+        cd "$work"
+        if [ "$TARGET" = "windows-mingw" ]; then
+          cmake -S example -B example-build -G Ninja -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix -DCMAKE_PREFIX_PATH="$work/prefix"
+          artifact=hello_plugin.dll
+        else
+          # The NDK toolchain restricts find_package to its sysroot; CMAKE_FIND_ROOT_PATH adds the prefix.
+          cmake -S example -B example-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static \
+            -DCMAKE_FIND_ROOT_PATH="$work/prefix"
+          artifact=hello_plugin.so
+        fi
+        cmake --build example-build
+        test -f "example-build/$artifact"
+        file "example-build/$artifact"
