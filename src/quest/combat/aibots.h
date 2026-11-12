@@ -19,7 +19,8 @@
  *
  * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle
  * line, no read of the level); and the call itself is refused while the combat level answer does not rule out an Echo Arena level (combat_scope.h `SeenEchoArena`:
- * its last look saw one, or there is no look younger than kStaleAfterMs, so a stopped tick refuses too), whatever the game's flags say, with one Info line per
+ * its last look saw one, or the record is not fresh: it fails closed; the module's tick runs in the same loop right after the scope row's refresh, so its
+ * record is at most 250 ms old, and a stopped tick runs neither), whatever the game's flags say, with one Info line per
  * match (`combat_aibots_scoped_out`, `reason` echo_arena or no_fresh_look). The module is one of the scope row's readers and refuses its install with
  * `scope_not_live` when the answer cannot change (a scenario that is off in a release build is the module off and wins). The combat-map flag the plugin logged
  * beside the call (`combat_map`) is the combat-map bit of the same look record (fresh: a stale record refuses the call), not a copy of its level list.

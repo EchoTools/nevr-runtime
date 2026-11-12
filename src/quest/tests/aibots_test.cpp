@@ -627,7 +627,8 @@ void AnEchoArenaLevelIsLeftAlone() {  // 15
   }
   CHECK(g_calls.empty() && ai::CurrentStats().scopedOut > 0 && Count("combat_aibots_scoped_out", "\"reason\":\"no_fresh_look\"", kInfo) == 1,
         "no look: %zu calls, %u scoped out", g_calls.size(), ai::CurrentStats().scopedOut);
-  // The tick stops (nothing refreshes the answer): a combat map seen once is believed for a second, and the 3 s hold ends after it, so no call.
+  // The answer's refresh stops while the module's tick runs on (the shipped table runs both in one loop, so they stop together; this drives the fail-closed
+  // record): a combat map seen once is believed for a second, and the 3 s hold ends after it, so no call.
   Reset();
   SetLevels({CSymbol64Hash("mpl_combat_dyson")});
   Tick();  // one look: a combat map, no arena level
@@ -709,7 +710,7 @@ void OneLookPerCall() {
   st = ai::CurrentStats();
   CHECK(st.enables == 1 && g_lookReads.load() == st.enables + st.scopedOut && Count("combat_aibots_enable", "\"combat_map\":1") == 1,
         "a combat map: %llu reads for %u calls and %u refused", static_cast<unsigned long long>(g_lookReads.load()), st.enables, st.scopedOut);
-  // a look a second old (one look, then the tick stops): every call is refused, from one read each
+  // a look a second old (one look, then the refresh stops while the module's tick runs on): every call is refused, from one read each
   Reset();
   SetLevels({dyson});
   Tick();

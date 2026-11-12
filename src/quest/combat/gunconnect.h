@@ -12,8 +12,9 @@
  * The plugin's kill file `gunconnect.off` is no longer read; one found in the plugin's data directory is a Warning (`combat_gunconnect_legacy_switch`).
  *
  * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is, as the combat level answer
- * last saw it (combat_scope.h `InCombatOrLobby`, a look four times a second from the game-thread tick, not believed once the tick has stopped for
- * a second); in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds
+ * last saw it (combat_scope.h `InCombatOrLobby`, a look four times a second from the game-thread tick; the pass runs in the same tick loop, right
+ * after the scope row's refresh, so it reads a look at most 250 ms old, and a stopped tick stops the pass with it; the freshness test in
+ * `InCombatOrLobby` is defence in depth for an order the install table does not make); in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds
  * nothing to do, reads nothing of the game's, calls nothing and writes no line. The module is a reader of the scope row: `combat.gunconnect` is in
  * combat_install.cpp `ScopeNormal()`'s list, and the install refuses (`scope_not_live`) when the answer cannot change. Online it does nothing in
  * any level: the lobby-member event connects the guns first, so (a) is false.

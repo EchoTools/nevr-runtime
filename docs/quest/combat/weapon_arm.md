@@ -43,7 +43,9 @@ is a Warning.
 ## Arena
 
 The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (`combat_scope.h` `InCombatMap`: a look four times a second from the
-game-thread tick, not believed once the tick has stopped for a second), and only for a profile with no marker. The module is one of the scope row's readers (`combat.weapon_arm` is in
+game-thread tick; the module's callback runs in the same tick loop, right after the scope row's refresh, so it reads a look at most 250 ms old, and a stopped
+tick stops the callback with it: nothing runs and nothing is set until the tick is back; the freshness test in `InCombatMap` is defence in depth for an order the
+install table does not make), and only for a profile with no marker. The module is one of the scope row's readers (`combat.weapon_arm` is in
 `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer cannot change. The combat lobby is not in scope: its script is shared with the arena
 lobby (`headset_gates.md`), and it is not established that an arena player never has `mpl_lobby_b_combat` loaded. In an arena match, in every lobby and in a transition that still holds an arena level the module does not look for the equipment
 system, does not set the hand, does not write the marker and writes no line. So it cannot change what an arena player sees or the game computes, and it never touches the profile of a player who only plays arena. Where it differs from the

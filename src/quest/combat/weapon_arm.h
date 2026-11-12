@@ -22,7 +22,9 @@
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
  * Arena (same APK). The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h
- * `InCombatMap`, a look four times a second from the game-thread tick, not believed once the tick has stopped for a second): in an arena match, in every lobby
+ * `InCombatMap`, a look four times a second from the game-thread tick; the module's callback runs in the same tick loop, right after the scope row's
+ * refresh, so it reads a look at most 250 ms old, and a stopped tick stops the callback with it; the freshness test in `InCombatMap` is defence in depth
+ * for an order the install table does not make): in an arena match, in every lobby
  * (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an arena player never has mpl_lobby_b_combat loaded)
  * and in a transition that still holds an arena level it neither looks for the equipment system nor sets the hand nor writes the marker, and writes no line. A
  * profile that has a marker never asks: the marker check comes first and ends the module. A profile with no marker that only ever plays arena is looked at

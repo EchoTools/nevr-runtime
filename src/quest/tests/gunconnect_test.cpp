@@ -627,8 +627,8 @@ void ArenaAndOtherLevelsAreLeftAlone() {  // 17
     Run(3);
     CHECK(g_connects.size() == 1, "%s: %zu connects", name, g_connects.size());
   }
-  // The tick stops (nothing refreshes the answer): a combat map seen a second ago is no longer believed, so nothing is connected however long the
-  // module's own callback keeps running (combat_scope.h, kStaleAfterMs).
+  // The answer's refresh stops while the module's own callback runs on (the shipped table runs both in one tick loop, so they stop together; this drives
+  // the freshness test, defence in depth): a combat map seen a second ago is no longer believed, so nothing is connected (combat_scope.h, kStaleAfterMs).
   Reset(1, "mpl_combat_dyson");
   Tick();  // one look: a combat map
   for (int i = 0; i < 160; ++i) {  // 10 s of the module's callback alone
