@@ -1201,6 +1201,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_peer_timeout_log PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_peer_timeout_log DISCOVERY_MODE PRE_TEST)
 
+    # The communication-timeout call site per binary (patch/peer_timeout_call_site.h): the table's bytes decode to its addresses.
+    add_executable(test_peer_timeout_call_site tests/test_peer_timeout_call_site.cpp)
+    set_source_files_properties(tests/test_peer_timeout_call_site.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_peer_timeout_call_site PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_peer_timeout_call_site PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_peer_timeout_call_site DISCOVERY_MODE PRE_TEST)
+
     # #1139: the render_config model against a fake game image (patch/render_config.h; no Windows call).
     add_executable(test_render_config tests/test_render_config.cpp patch/render_config.cpp)
     set_source_files_properties(tests/test_render_config.cpp patch/render_config.cpp
