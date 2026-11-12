@@ -29,6 +29,9 @@ void* HookedDlopen(DlopenThunk::Fn original, const char* name, int flags) noexce
   // The script redirect (script_redirect.h): a stock script library's name becomes its combat build's name when the
   // combat unit registered it, and a failed redirected open is logged there. Every other name passes unchanged.
   char redirected[script_redirect::kNameCapacity];
+  // A map script the channel holds (route B) is opened under the game's own name; this only records the load. With no map
+  // script held it is one name parse and nothing else. Route A (Q4, gated on P3) would open the held file here instead.
+  script_redirect::map_scripts::NoteLoad(name);
   void* const handle = script_redirect::OpenRedirected(original, name, flags, redirected, sizeof redirected);
   if (handle != nullptr) {
     // The game may read errno/dlerror after a successful dlopen; leave them as the loader left them.

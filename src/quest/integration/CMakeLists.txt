@@ -272,3 +272,4 @@ endforeach()
 # The sentinel links the integration, and with it every library package. (Defined here because the
 # integration is the first place all of them exist; CMake resolves the target name at generate time.)
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_integration)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../maps/q3.cmake OPTIONAL)

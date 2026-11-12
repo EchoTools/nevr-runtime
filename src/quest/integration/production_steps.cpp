@@ -29,6 +29,8 @@
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/cargo/cargo_service.h"
+#include "quest/cargo/map_pin.h"
+#include "quest/cargo/map_service.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
@@ -280,6 +282,14 @@ nevr_quest_login::BuildInfo ThisBuild() {
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;
   build.plugin_report = [] { return nevr_quest::plugin::LoginReport(); };
+  build.map_report = [] {
+    std::vector<nevr_quest_login::MapLoginEntry> entries;
+    for (const nevr_quest::maps::pin::LoginEntry& e : nevr_quest::maps::pin::LoginEntries()) {
+      const nevr_quest::maps::pin::Pin& p = e.pin;
+      entries.push_back({p.level, p.id, p.version, p.index_sha256, p.source_sha256, p.platform, e.mounted});
+    }
+    return entries;
+  };
   return build;
 }
 
@@ -613,6 +623,8 @@ class ProductionSteps final : public Steps {
     detail_ = ok ? "ok" : "got_hook_refused";
     // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
     if (ok) nevr_quest::cargo::Start(sentinel::ActiveConfig().assets);
+    // The custom maps (CDN_DESIGN Q2) are served through the same hook; with no maps keys this returns at once and does nothing.
+    if (ok) nevr_quest::maps::StartFromConfig(sentinel::ActiveConfig().maps);
     return ok;
   }
 

@@ -211,3 +211,7 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
           $<TARGET_FILE:ovrplatformloader>
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
+
+# CDN_DESIGN Q1/Q2: the downloaded maps (built, not linked into the loader yet).
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cargo/maps.cmake" OPTIONAL)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../maps/q5.cmake OPTIONAL)
