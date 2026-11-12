@@ -901,8 +901,9 @@ func TestObjectsIsCountedFromTheOutputDirectory(t *testing.T) {
 }
 
 // `records_with_object` is the records that point at an object (the entries, whatever this run wrote), `objects` the unique
-// objects they point at, and `objects_deduplicated` the records whose object this run did not write (records_with_object
-// less objects_written): a count of this run, so a re-run over the same data reports more of them than the first run.
+// objects in the output directory, counted there, and `objects_deduplicated` the records whose object this run did not
+// write (records_with_object less objects_written): a count of this run, so a re-run over the same data reports more of
+// them than the first run.
 func TestTheSummaryCountsRecordsWithAnObjectAndTheUniqueObjects(t *testing.T) {
 	t.Parallel()
 	root := fixture(t, "win10")
