@@ -81,4 +81,4 @@ runm ai_pins_unchecked $A 's/const pinned::Pins lists\[\] = {at::kPins, netgame:
 
 runm ai_no_pin_check src/quest/combat/aibots.cpp 's/  if (pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists\[0\]), \&failure)) {/  if (false \&\& pinned::FirstFailure(image.base, lists, sizeof(lists) \/ sizeof(lists[0]), \&failure)) {/'
 # The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): aibots keeps the row on alone.
-runm airow_scope_reader src/quest/combat/combat_install.cpp 's/ || g_config.aibots.on;$/;/' quest-host-combat combat_install_test
+runm airow_scope_reader src/quest/combat/combat_install.cpp 's/ || g_config.aibots.on || g_config.bvh.on;$/ || g_config.bvh.on;/' quest-host-combat combat_install_test

@@ -62,7 +62,7 @@ runm sc_row_ignores_readers     $I "s/  if (!anyReader) return/  if (false \\&\\
 runm sc_row_off_is_failed       $I "s/return {false, \"off_config\", \\/\\*off=\\*\\/true};/return {false, \"off_config\", \\/\\*off=\\*\\/false};/" quest-host-combat combat_install_test
 runm sc_row_hudmeter_not_reader $I "s/const bool anyReader = g_config.hudmeter.on || /const bool anyReader = /" quest-host-combat combat_install_test
 runm sc_row_gamma_not_reader    $I "s/ || g_config.shieldgammaGamma.on || / || /" quest-host-combat combat_install_test
-runm sc_row_mirror_not_reader   $I "s/ || g_config.shieldgammaTubeMirror.on;/;/" quest-host-combat combat_install_test
+runm sc_row_mirror_not_reader   $I "s/ || g_config.shieldgammaTubeMirror.on || / || /" quest-host-combat combat_install_test
 # the look record (LastLook): one look whole, under the sequence count, on any thread; and the arena question built on it (SeenEchoArena)
 runm lr_odd_ignored             $C "s/^    if ((begin \\& 1U) != 0) continue;  \\/\\/ a look is being written\$//"
 runm lr_end_unchecked           $C "s/^    if (g_seq.load(std::memory_order_relaxed) != begin) continue;.*\$//"

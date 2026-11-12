@@ -530,7 +530,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed texture_quest2_step_down=off meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
                "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded "
-               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=scope_not_live weapon_arm=module_not_loaded gates=module_not_loaded bvh=module_not_loaded "
+               "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=scope_not_live weapon_arm=module_not_loaded gates=module_not_loaded bvh=scope_not_live "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=scope_not_live music=module_not_loaded\""));
     // one record per module with a step, early first: 3 early and 39 normal
@@ -869,6 +869,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.gunconnect = {false, nevr_quest::Source::kFile};       // gun connect reads the scope too (#2382)
   off.sensorwd = {false, nevr_quest::Source::kFile};         // the scanner-sphere watchdog reads the scope too (#2382)
   off.aibots = {false, nevr_quest::Source::kFile};           // practice AI bots read the scope too (#2382)
+  off.bvh = {false, nevr_quest::Source::kFile};              // the static BVH reads the scope too (#2382)
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -882,7 +883,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
-  nevr_quest::CombatConfig gammaOnly;
+  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (ten readers are on by default)
   gammaOnly.hudmeter = {false, nevr_quest::Source::kFile};  // the gamma alone is a reader
   gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
   gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
@@ -891,10 +892,10 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":1,\"tube_mirror\":0"));
   QCHECK(!Has(ResultsOf(Lines("combat_install")[0]), "scope=off_config"));  // one reader on keeps the scope's row on
   Done();
-  // each single reader keeps the row on: the wrist HUD alone, the tube mirror alone
+  // each single reader keeps the row on: the wrist HUD alone, the tube mirror alone (every other reader off, as in `off`)
   for (int only = 0; only < 2; ++only) {
     Process(bv::Variant::kCombat);
-    nevr_quest::CombatConfig one;
+    nevr_quest::CombatConfig one = off;
     one.hudmeter = {only == 0, nevr_quest::Source::kFile};
     one.shieldgammaTubeMirror = {only == 1, nevr_quest::Source::kFile};
     combat::SetConfig(one);
@@ -1390,7 +1391,7 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=module_not_loaded wallfire=bvh_not_installed"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "bvh=scope_not_live wallfire=bvh_not_installed"));
   Done();
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -1535,7 +1536,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, true},  // the sound-symbol guard (#1737) reads the scope too
                         {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},  // gun connect (#2382) reads the scope too
                         {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true},      // the scanner-sphere watchdog (#2382) reads the scope too
-                        {"aibots", &nevr_quest::CombatConfig::aibots, true}};         // practice AI bots (#2382) read the scope too
+                        {"aibots", &nevr_quest::CombatConfig::aibots, true},          // practice AI bots (#2382) read the scope too
+                        {"bvh", &nevr_quest::CombatConfig::bvh, true}};               // the static BVH (#2382) reads the scope too
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1550,6 +1552,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.gunconnect = {false, nevr_quest::Source::kFile};
     cfg.sensorwd = {false, nevr_quest::Source::kFile};
     cfg.aibots = {false, nevr_quest::Source::kFile};
+    cfg.bvh = {false, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();

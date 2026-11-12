@@ -22,7 +22,6 @@ namespace {
 
 constexpr int kMaxTrees = 64;
 constexpr double kSummaryEverySeconds = 10.0;
-constexpr double kLookEverySeconds = 0.25;
 constexpr std::uintptr_t kMarkAllowed = 1;
 
 // ---- state: plain atomics and PODs, no constructors ----
@@ -58,9 +57,7 @@ std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
 std::atomic<bool> g_firstHit{false}, g_firstBlock{false};
 // The tick's: game thread only.
 double g_nextSummary = 0;
-double g_nextLook = 0;
-std::atomic<std::uint64_t> g_scopeLevel{0};
-std::atomic<double> g_lookedAt{0.0};         // the clock of the last look (seconds)
+std::atomic<bool> g_wasInScope{false};       // the combat level answer as the tick last read it: only the tick writes it, to see the edge
 std::atomic<std::uintptr_t> g_game{0};       // the CR15Game the tick last called with: what Initialize asks about the level it is loading
 
 // One pointer-sized value per thread, for code that runs inside a hooked game call, in place of `thread_local` (the Quest build targets API 26,
@@ -417,6 +414,12 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
                         {{"result", "refused"}, {"reason", "already_ran"}, {"msg", "a second step installs nothing"}});
     return {false, "already_ran"};
   }
+  // The query hooks act only while the combat level answer says a combat map or the combat lobby is loaded: when that answer cannot change (the tick
+  // or the scope row's refresh is not installed) the module would never act, so nothing is hooked (combat_scope.h `Live`).
+  if (!scope::Live()) {
+    Refused("scope_not_live", "(none)", "scope_not_live", 0);
+    return {false, "scope_not_live"};
+  }
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
     Refused("module_not_loaded", "(none)", "module_not_loaded", 0);
@@ -427,7 +430,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
     Refused("no_thread_key", "(none)", "no_thread_key", keyError);
     return {false, "no_thread_key"};
   }
-  // The scope is refreshed by the combat tick: with no tick callback it would never turn on and the module would do nothing.
+  // The tick callback keeps the CR15Game Initialize asks about, sees the scope's edge and writes the summary: with no room for it nothing is installed.
   if (!tick::Add(&Tick)) {
     Refused("tick_table_full", "(none)", "tick_table_full", 0);
     return {false, "tick_table_full"};
@@ -534,44 +537,26 @@ void LogSummary() noexcept {
                                "table's entries held by live CBVHTrees (of 64)"}});
 }
 
-void LookAtLevels(std::uintptr_t game, double now) noexcept {
-  std::uint64_t levelId = 0;
-  const bool in = level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
-  const bool before = detail::g_inCombatOrLobby.load(std::memory_order_relaxed);
-  const double last = g_lookedAt.load(std::memory_order_relaxed);
-  if (before && now - last > kStaleAfterSeconds) {
-    // The hooks read the look as stale for this gap and answered with the game's functions: the tick that closed the scope says so when it is back.
-    char gap[24], limit[24], lv[19];
-    std::snprintf(gap, sizeof(gap), "%.2f", now - last);
-    std::snprintf(limit, sizeof(limit), "%.2f", kStaleAfterSeconds);
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_scope_stale",
-                        {{"gap_s", gap}, {"stale_after_s", limit}, {"level", sentinel::HexString(lv, g_scopeLevel.load(std::memory_order_relaxed))},
-                         {"msg", "the combat tick stopped for longer than the scope is believed: the static BVH answered no cast in that gap, the game's "
-                                 "own functions did"}});
-  }
-  g_lookedAt.store(now, std::memory_order_relaxed);  // every look ages from here, whether or not the answer changed
+// The scope as this tick reads it. combat_scope has no change callback, so the tick keeps the answer it read last and says when it changes. The scope row
+// registers its refresh with the tick before this module's row does, so the answer read here is the one the refresh just made (or kept); the level
+// that decided it is on that row's `combat_scope_change` line, and a stalled tick on its `combat_scope_stale` line.
+void NoteScopeEdge() noexcept {
+  const bool in = InCombatOrLobby();
+  const bool before = g_wasInScope.exchange(in, std::memory_order_relaxed);
   if (in == before) return;
-  detail::g_inCombatOrLobby.store(in, std::memory_order_relaxed);
-  g_scopeLevel.store(levelId, std::memory_order_relaxed);
-  char lv[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_scope",
-                      {{"from", before ? 1 : 0}, {"to", in ? 1 : 0}, {"level", sentinel::HexString(lv, levelId)},
+                      {{"from", before ? 1 : 0}, {"to", in ? 1 : 0},
                        {"msg", in ? "a combat map or the combat lobby is loaded: casts are answered from its static BVH"
-                                  : "no combat map or combat lobby is loaded: the game's own answers stand"}});
+                                  : "no combat map or combat lobby is loaded (or the combat level answer is stale): the game's own answers stand"}});
 }
 
 }  // namespace
-
-bool LookIsFresh() noexcept { return NowSeconds() - g_lookedAt.load(std::memory_order_relaxed) <= kStaleAfterSeconds; }
 
 void Tick(std::uintptr_t game) noexcept {
   if (!g_installed.load(std::memory_order_acquire)) return;
   const double now = NowSeconds();
   g_game.store(game, std::memory_order_release);
-  if (now >= g_nextLook) {
-    g_nextLook = now + kLookEverySeconds;
-    LookAtLevels(game, now);
-  }
+  NoteScopeEdge();
   if (now < g_nextSummary) return;
   g_nextSummary = now + kSummaryEverySeconds;
   LogSummary();
@@ -616,12 +601,9 @@ void ResetForTest() noexcept {
   g_ns = g_maxNs = 0;
   g_firstHit = g_firstBlock = false;
   g_nextSummary = 0;
-  g_nextLook = 0;
-  g_scopeLevel.store(0);
-  g_lookedAt.store(0.0);
+  g_wasInScope.store(false);
   g_game.store(0);
   g_skipped.store(0);
-  detail::g_inCombatOrLobby.store(false);
   g_mark.Set(0);
 }
 

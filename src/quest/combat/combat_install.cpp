@@ -73,7 +73,7 @@ ModuleResult RefreshRateNormal() noexcept {
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
                          g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
-                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on;
+                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
@@ -240,8 +240,8 @@ constexpr std::array kModules{
     Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
-    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
-    // the scope the tick refreshes.
+    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks. bvh reads the combat level
+    // answer (#2382), so it comes after the `scope` row, and its switch is one of ScopeNormal()'s readers; wallfire asks bvh's InCombatOrLobby().
     // bvh_gate and bvh_touch are switches of bvh's with no step of their own: their rows exist so each switch is one generated `combat_config_switch` record.
     Module{"bvh", nullptr, &BvhNormal, "combat.bvh", &nevr_quest::CombatConfig::bvh},
     Module{"bvh_gate", nullptr, nullptr, "combat.bvh_gate", &nevr_quest::CombatConfig::bvhGate},

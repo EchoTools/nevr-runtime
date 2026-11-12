@@ -40,7 +40,7 @@
  *   change   {"event":"combat_scope_change","from":<0|1>,"to":<0|1>,"map":<0|1>,"level":"0x%016llx","looks":<n>,"msg":".."}  Info, one per change of
  *            either answer (`from` and `to` are InCombatOrLobby, `map` is InCombatMap after the change); none when an arena match starts
  *   stale    {"event":"combat_scope_stale","gap_ms":<n>,"stale_after_ms":1000,"level":"0x%016llx","msg":".."}  Warning, once per gap, written by the first
- *            look after the tick is back (nothing runs to write it while the tick is stopped, as combat_bvh_scope_stale does): the last look held a combat
+ *            look after the tick is back (nothing runs to write it while the tick is stopped): the last look held a combat
  *            class and was older than kStaleAfterMs, so the readers passed every call through to the game in that gap; `level` is the level of the last look
  *
  * Built with -fno-exceptions, like every combat translation unit.

@@ -97,7 +97,7 @@ void Refresh(std::uintptr_t game) noexcept {
   const std::int64_t last = detail::g_lookedAtMs.load(std::memory_order_relaxed);
   if (CombatOrLobby(before) && now - last > kStaleAfterMs) {
     // For this gap the readers saw a stale look and answered with the game's own functions, and nothing could say so while the tick was stopped: the
-    // first look after it is back does (once per gap, as combat_bvh_scope_stale does), naming the level the answer was held for.
+    // first look after it is back does (once per gap), naming the level the answer was held for.
     char levelText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_scope_stale",
                         {{"gap_ms", static_cast<std::int64_t>(now - last)}, {"stale_after_ms", kStaleAfterMs},

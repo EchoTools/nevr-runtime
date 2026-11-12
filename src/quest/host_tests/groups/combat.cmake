@@ -331,15 +331,15 @@ nevr_ht_test(bvh_core_test GROUP combat NOEXC TIMEOUT 120
 # through their slots against fake stock functions. The answers (nearest hit, segment test, the hit's fields), Initialize's refusals and their lines, the
 # 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install and its rollback, the touch answer, and the scope:
 # every hook calls the game's function while no combat map is loaded (arena shares the APK), the switches and their lines, the legacy kill files.
-# got_pinned_test resolves the six relocations in the real libr15.
+# got_pinned_test resolves the six relocations in the real libr15. The scope is the real combat level answer (combat_scope.cpp, #2382).
 nevr_ht_test(bvh_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/bvh_test.cpp src/quest/combat/bvh.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/bvh_test.cpp src/quest/combat/bvh.cpp ${_cscope_srcs})
 # The wall-fire check (#2182; docs/adr/0046): the real thunk on the QueryCollision slot of the image, on top of the real bvh module, called from two call sites
 # against the engine's stub, a fake CncaGame and a synthetic room. A stock hit passes through, a clear segment is not blocked, a segment through each wall is,
 # another call site gets the stock answer, every wrong game structure and a non-finite segment get the stock answer, the log volume, the refusals and what they
 # leave alone, the switch and its lines, and the scope: no combat map, no check. got_pinned_test resolves the two relocations and the site word.
 nevr_ht_test(wallfire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/wallfire_test.cpp src/quest/combat/wallfire.cpp src/quest/combat/bvh.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/wallfire_test.cpp src/quest/combat/wallfire.cpp src/quest/combat/bvh.cpp ${_cscope_srcs})
 # The combat music (#2184, docs/adr/0046): the real handler through the real thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in
 # memory, against a model of CWwiseEngine::PostSoundEvent that records every call's registers. The 24 bank ids, the Stops before each Play, the game's own
 # registers and answer, the unload tick, the refusals, and the scope: a Play outside a combat map (an arena level, a lobby, no level, no frame yet) is the
