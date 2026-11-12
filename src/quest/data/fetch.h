@@ -28,6 +28,7 @@ enum class FetchStatus {
   kExtractFailed,     // the verified zip did not extract
   kSwapFailed,        // the staged tree could not be moved into place
   kCancelled,
+  kWorkerRefused,     // the whole-game mode's worker (StepConfig::all_assets_ready) answered not-ok; never made by RunFetch
 };
 
 const char* FetchStatusName(FetchStatus status) noexcept;

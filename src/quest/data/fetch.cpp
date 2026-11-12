@@ -234,6 +234,7 @@ const char* FetchStatusName(FetchStatus status) noexcept {
     case FetchStatus::kExtractFailed: return "extract_failed";
     case FetchStatus::kSwapFailed: return "swap_failed";
     case FetchStatus::kCancelled: return "cancelled";
+    case FetchStatus::kWorkerRefused: return "unknown";
   }
   return "unknown";
 }

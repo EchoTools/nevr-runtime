@@ -4,7 +4,7 @@
 # ── data ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 nevr_ht_group(data)
 nevr_ht_obj(o_cargo_device_memory GROUP data NOEXC HOST SRC src/core/device_memory.cpp)
-foreach(f sha256 zip staging fetch data_step pack)
+foreach(f sha256 zip staging fetch data_step pack boot_stub)
   nevr_ht_obj(o_data_${f} GROUP data NOEXC HOST SRC src/quest/data/${f}.cpp)
 endforeach()
 # The tests' scratch directories are made in the build tree (the recipes run from different directories).
@@ -14,7 +14,13 @@ nevr_ht_test(data_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
 nevr_ht_test(fetch_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/fetch_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(data_step_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
-  SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step o_cargo_device_memory LIBS ${NEVR_ZLIB_LIB})
+  SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step o_data_boot_stub o_cargo_device_memory LIBS ${NEVR_ZLIB_LIB})
+# The zero-package stub manifests (src/quest/data/boot_stub.h), read back by the PC server's own manifest reader and by libzstd.
+nevr_ht_obj(o_data_installed_levels GROUP data HOST INCS sdk/include SRC src/runtime/server/installed_levels.cpp)
+nevr_ht_test(boot_stub_test GROUP data HOST INCS sdk/include TIMEOUT 300 ENV ${_data_env}
+  SRC src/quest/tests/boot_stub_test.cpp
+  OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step o_data_boot_stub o_cargo_device_memory o_data_installed_levels
+  LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
 # The CDN texture delivery (docs/adr/0045-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
@@ -70,5 +76,5 @@ nevr_ht_test(data_wiring_test GROUP data-net HOST CURL PTHREAD NOEXC DL NO_TEST 
       src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp
       src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp
-      src/quest/data/data_step.cpp src/core/device_memory.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
+      src/quest/data/data_step.cpp src/quest/data/boot_stub.cpp src/core/device_memory.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
   LIBS ${NEVR_ZLIB_LIB} ssl crypto)

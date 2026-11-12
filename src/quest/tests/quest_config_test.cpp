@@ -837,7 +837,7 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     CHECK(none.config.assets.cdnUrl.empty() && none.config.assets.manifest.empty() && !none.config.assets.requiredOnly);
     CHECK(none.config.assets.labels.empty() && none.config.assets.source == Source::kAbsent);
-    CHECK(EventsContain(none, "config key=assets labels=0 required_only=0 cdn_url=default manifest=default source=default"));
+    CHECK(EventsContain(none, "config key=assets labels=0 required_only=0 cdn_url=default manifest=default whole_game=0 source=default"));
     for (const char* text : {"", "assets: {}\n", "assets:\n"}) {
       const LoadResult r = Load(Full(), text);
       CHECK(r.config.assets.source == Source::kAbsent && !HasLevel(r, LogLevel::kWarn));
@@ -852,7 +852,7 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     CHECK(r.config.assets.labels.size() == 3 && r.config.assets.labels[0].first == "lobby_posters" && r.config.assets.labels[0].second == "required");
     CHECK(r.config.assets.labels[1].second == "off" && r.config.assets.labels[2].second == "on");
     CHECK(r.config.assets.source == Source::kFile);
-    CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config source=config"));
+    CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config whole_game=0 source=config"));
     CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
     CHECK(!EventsContain(r, "cargo.example.test"));  // a configured value is never logged on the Quest
     CHECK(!EventsContain(r, "unknown_nested="));     // every assets key is on the schema
@@ -897,6 +897,25 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     const LoadResult r = Load(Full(), many);
     CHECK(r.config.assets.labels.size() == 32);
     CHECK(EventsContain(r, "reason=too_many_labels more=1"));
+  }
+  {  // assets.whole_game: the whole-game mode, which needs the manifest that holds the game
+    const LoadResult off = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n");
+    CHECK(!off.config.assets.wholeGame);  // not asked: off
+    const LoadResult on = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: true\n");
+    CHECK(on.config.assets.wholeGame && on.config.assets.source == Source::kFile);
+    CHECK(EventsContain(on, "manifest=config whole_game=1 source=config"));
+    CHECK(!HasLevel(on, LogLevel::kWarn));
+    const LoadResult explicitOff = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: false\n");
+    CHECK(!explicitOff.config.assets.wholeGame && !HasLevel(explicitOff, LogLevel::kWarn));
+    // Without a manifest there is nothing to serve the game from: off, with one Warning that names the key.
+    const LoadResult noManifest = Load(Full(), "assets:\n  whole_game: true\n");
+    CHECK(!noManifest.config.assets.wholeGame);
+    CHECK(EventsWithAreAtLevel(noManifest, "key=assets.whole_game rejected reason=no_manifest", LogLevel::kWarn));
+    const LoadResult notBool = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: maybe\n");
+    CHECK(!notBool.config.assets.wholeGame);
+    CHECK(EventsWithAreAtLevel(notBool, "key=assets.whole_game rejected reason=not_a_boolean", LogLevel::kWarn));
+    CHECK(!EventsContain(notBool, "maybe"));
+    CHECK(!EventsContain(on, "unknown_nested="));  // the key is on the schema
   }
   {  // beside the other sections: nothing else moves
     const LoadResult r = Load(Full(), "assets:\n  labels:\n    lobby_posters: off\ngraphics:\n  hand_flip: true\n");

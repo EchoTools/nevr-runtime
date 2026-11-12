@@ -280,6 +280,7 @@ const char* StepOutcomeName(StepOutcome outcome) noexcept {
     case StepOutcome::kFetched: return "fetched";
     case StepOutcome::kFailed: return "failed";
     case StepOutcome::kMissing: return "missing";
+    case StepOutcome::kStubbed: return "stubbed";
   }
   return "unknown";
 }
@@ -309,6 +310,7 @@ std::string BuildFloorMessage(const FloorInfo& info) {
     case FetchStatus::kCancelled:
       text += "The download was cancelled. Start the game again to retry.";
       break;
+    case FetchStatus::kWorkerRefused:
     case FetchStatus::kOk:
       text += "No failure was reported.";
       break;

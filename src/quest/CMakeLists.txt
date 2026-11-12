@@ -228,7 +228,7 @@ target_compile_options(nevr_quest_atomic_write PRIVATE -Wall -Wextra -Werror)
 # The first-run game-data step's core (docs/adr/0011-quest-game-data-first-run.md): sha256, the zip extractor, the
 # pins and decision, the staging swap and the fetch state machine. Plain POSIX plus zlib; built without exceptions (it runs on the game's thread).
 find_package(ZLIB REQUIRED)
-add_library(nevr_quest_data STATIC data/sha256.cpp data/zip.cpp data/staging.cpp data/fetch.cpp data/data_step.cpp data/pack.cpp ../core/device_memory.cpp)
+add_library(nevr_quest_data STATIC data/sha256.cpp data/zip.cpp data/staging.cpp data/fetch.cpp data/data_step.cpp data/boot_stub.cpp data/pack.cpp ../core/device_memory.cpp)
 target_include_directories(nevr_quest_data PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(nevr_quest_data PUBLIC ZLIB::ZLIB PRIVATE nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_data PRIVATE -Wall -Wextra -Werror -fno-exceptions)
