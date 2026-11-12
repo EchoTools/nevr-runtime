@@ -145,7 +145,6 @@ inline Result Patch(const uint8_t* data, size_t size, const std::string& sha256H
 
 /// Registers the transform for the five names (netgun_bullet_ids.cpp). Client and server; logs its decision. Needs the
 /// resource override registry (InstallResourceOverride) to exist.
-/// Returns how many of the five registrations the seam took (#1479).
-size_t Install();
+void Install();
 
 }  // namespace nevr_netgun_bullet_ids

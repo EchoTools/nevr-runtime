@@ -84,17 +84,14 @@ bool Transform(const void* original, uint64_t size, const void** out, uint64_t* 
 
 }  // namespace
 
-size_t Install() {
-  size_t took = 0;
+void Install() {
   for (size_t i = 0; i < kNameCount; ++i) {
     g_targets[i].name = kNames[i];
-    if (RegisterResourceTransform(kResourceType, kNames[i], &Transform, &g_targets[i], "netgun bullet ids")) ++took;
+    RegisterResourceTransform(kResourceType, kNames[i], &Transform, &g_targets[i], "netgun bullet ids");
   }
-  // #1479: the summary counts the registrations that took; a refused one is a Warning.
-  Log(took == kNameCount ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
-      "[NEVR.RESOURCE] netgun bullet ids enabled type=0x%016llx names=%zu registered=%zu pin=%s",
-      static_cast<unsigned long long>(kResourceType), kNameCount, took, kStockSha256);
-  return took;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.RESOURCE] netgun bullet ids enabled type=0x%016llx names=%zu pin=%s",
+      static_cast<unsigned long long>(kResourceType), kNameCount, kStockSha256);
 }
 
 }  // namespace nevr_netgun_bullet_ids
