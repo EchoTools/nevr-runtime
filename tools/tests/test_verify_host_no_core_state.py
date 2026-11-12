@@ -136,8 +136,11 @@ class RecipeWiringTest(unittest.TestCase):
         self.assertIn('--host-dll "build/{{ preset }}/bin/BugSplat64.dll"', line)
         self.assertIn('--lib "build/{{ preset }}/src/core/libnevr_core.a"', line)
         self.assertIn('--lib "build/{{ preset }}/src/abi/libnevr_abi.a"', line)
+        # A failure is recorded and the sensor phase goes on (#1228); the only `||` is the recorder, never a way to pass.
+        command, separator, _ = line.partition(' || sensor_fail "')
+        self.assertEqual(separator, ' || sensor_fail "', line)
         for escape in ("||", "true", "dist/", "strip"):
-            self.assertNotIn(escape, line)
+            self.assertNotIn(escape, command)
 
 
 if __name__ == "__main__":
