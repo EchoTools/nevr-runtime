@@ -283,7 +283,33 @@ if ($p) {{ Remove-Item '{ROOT}\run\hang.dmp' -ErrorAction SilentlyContinue
 
 # --- scenarios --------------------------------------------------------------------
 
+# The sign-in files a game copy must not hold: the name pattern refuse_copy_credentials (tools/lib/game_install.sh)
+# searches for, and the Go system suite (tests/system, copy_credentials_test.go) searches for the same.
+CREDENTIAL_PATTERN = ".credentials.json*"
+
+
+def rig_credential_files(g: Guest) -> list[str]:
+    """Sign-in files under the rig: its echovr folder and its LOCALAPPDATA, which holds the game's nevr root."""
+    out = g.ps(rf"""
+foreach ($d in '{ROOT}\echovr', '{RIG_LOCALAPPDATA}') {{
+  if (Test-Path -LiteralPath $d) {{
+    Get-ChildItem -LiteralPath $d -Recurse -Force -File -Filter '{CREDENTIAL_PATTERN}' | ForEach-Object {{ $_.FullName }}
+  }}
+}}
+""")
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def refuse_copy_credentials(g: Guest) -> None:
+    """A rig that holds a sign-in file would sign the game in as whoever it belongs to: refuse before anything runs."""
+    found = rig_credential_files(g)
+    if found:
+        raise EnvError("the rig holds sign-in file(s) the game would sign in with: " + " ".join(found)
+                       + " (remove them: AGENTS.md \"The game install\", \"Make it safe\")")
+
+
 def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args) -> list[checks.Result]:
+    refuse_copy_credentials(g)  # before the rig is set up, deployed to or launched
     with tempfile.TemporaryDirectory() as t:
         setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore)
     deploy(g, dll)
