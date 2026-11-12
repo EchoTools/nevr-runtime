@@ -53,7 +53,7 @@
  * the wait at 0x25493c8) it sets the playing id to -1 (0x25493cc/0x25493d8) and, when the symbol has no debug name (`cbz x0` 0x25493fc,
  * as in a final build), calls CErrMsg::CreateAndAddError with line 0x51 (0x254947c), the format at .rodata 0x31ec568 ("Error %s. It is
  * not a valid wwise identifier or registered sound symbol. ...", `add x3, x3, #0x568` 0x2549474) and the error type CSymbol64
- * 0x0f986c58c7b3d4fb, the .rodata quad at 0x31ec4f0, loaded by `add x8, x8, #0x4f4` (0x25493f0; it makes 0x31ec4f4), `and x8, x8, #~7` (0x25493f4; it aligns that down to 0x31ec4f0) and `ldr x2, [x8]` (0x25493f8), and returns its status.
+ * 0x0f986c58c7b3d4fb, the .rodata quad at 0x31ec4f0, loaded by `add x8, x8, #0x4f4` (0x25493f0; it makes 0x31ec4f4), `and x8, x8, #~7` (0x25493f4; it aligns that down to 0x31ec4f0) and `ldr x2, [x8]` (0x25493f8), and returns its status. The page is set by `adrp x8, 0x31ec000` (0x25493ec).
  * So 0x0f986c58c7b3d4fb is the error record's type key, not a sound symbol: no CSoundSymbol of that value (or of its low word
  * 0xc7b3d4fb) is posted on this path. The text says only that PostEvent returned 0, for any symbol whose bank is not loaded or that no
  * bank defines. Play3DSound passes the status to OutputError(status, 8) (`bl` 0xf4e4c0 at 0x134b5f0); OutputError returns 0 at once for
@@ -186,6 +186,7 @@ inline constexpr pinned::Word kDropWords[] = {
     {"CSendAmbientSoundActionNode::Enter: bl Play3DSound@plt", 0x272575c, 0x97a0b6fd},
     {"PostSoundEvent: cbz w0 (PostEvent returned 0)", 0x25492d0, 0x340003c0},
     {"PostSoundEvent: mov w8, #-1 (the playing id)", 0x25493cc, 0x12800008},
+    {"PostSoundEvent: adrp x8, 0x31ec000 (the page of the error type key)", 0x25493ec, 0xf0006508},
     {"PostSoundEvent: add x8, x8, #0x4f4 (the error type key)", 0x25493f0, 0x9113d108},
     {"PostSoundEvent: and x8, x8, #~7 (the quad's address, aligned down to 0x31ec4f0)", 0x25493f4, 0x927df108},
     {"PostSoundEvent: ldr x2, [x8]", 0x25493f8, 0xf9400102},

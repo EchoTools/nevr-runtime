@@ -34,7 +34,9 @@
  * and it calls CGDrawDataSet::SetOutlineMode(draw set k, mode, format, prim of k) through the PLT stub at ELF 0xf189b0 (the `bl` at
  * 0x18c51fc), whose `adrp`/`ldr` read the JUMP_SLOT 0x36e3bc0. Within one mesh the same format is passed for every draw set; the
  * format is looked up again for each mesh (`madd x21,x11,x12,x10` at 0x18c51d8 sits in the per-mesh block, after the `cbnz x29` at
- * 0x18c5184, and is the only write to x21 before the return).
+ * 0x18c5184, and is the only write to x21 in the walk's body. That last part is a reading of the listing, not a pinned fact: the test pins that
+ * `madd` and the read `mov x2,x21` (0x18c51f4), not the absence of other writes. The prologue's `stp` (0x18c514c) stores x21 and the epilogue's
+ * `ldp` (0x18c5218) restores it.)
  * The 0x150 stride is the stride of the array at d+0xe0; that the CGVertexFormat sits at offset 0 of each 0x150-byte entry is what the
  * walk passes (the entry's address), not a size of CGVertexFormat.
  * The mesh is a CGMesh. CGMesh::SetOutlineMode (the reconstruction above) walks the same two fields (count [this+0x38], sets [this+0x8],
@@ -181,6 +183,12 @@ inline constexpr pinned::Word kSceneDrawSetCountDown{"subs x29,x29,#0x1 (draw se
 inline constexpr pinned::Word kSceneDrawSetLoop{"b.ne (back to the draw-set call while draw sets are left)", 0x18c5208ULL, 0x54ffff01U};
 inline constexpr pinned::Word kSceneSkipEmptyBranch{"cbz x29 (a mesh whose draw-set count is 0: to the next mesh)", 0x18c51a4ULL, 0xb4ffff3dU};
 inline constexpr pinned::Word kSceneDrawSetLoopExit{"b (the draw-set loop is done: to the next mesh)", 0x18c520cULL, 0x17ffffdfU};
+// The words the `cbz x29` at 0x18c51a4 (the mesh with no draw sets, to the next mesh) reads its condition from: the second copy of the mesh
+// lookup that the skip path makes, whose `ldr x29` is the draw-set count the `cbz` tests.
+inline constexpr pinned::Word kSceneSecondMeshes{"ldr x8,[x19,#0x30] (the skip path's copy of the scene mesh array)", 0x18c5194ULL, 0xf9401a68U};
+inline constexpr pinned::Word kSceneSecondMeshAddr{"madd x28,x23,x27,x8 (the skip path's copy of mesh i)", 0x18c519cULL, 0x9b1b22fcU};
+inline constexpr pinned::Word kSceneSecondDrawSetCount{"ldr x29,[x28,#0x38] (the draw-set count the cbz at 0x18c51a4 tests)", 0x18c51a0ULL,
+                                                       0xf9401f9dU};
 
 inline constexpr std::uintptr_t kSceneMeshCountOffset = pinned::LdrXOffset(kSceneMeshCount.word);
 inline constexpr std::uintptr_t kSceneMeshesOffset = pinned::LdrXOffset(kSceneMeshes.word);
@@ -439,7 +447,8 @@ inline constexpr pinned::Word kWords[] = {
     kSceneFirstPrim, kSceneFormatMadd, kScenePrimField, kScenePrimRead, kSceneDrawSets, kSceneDrawSetCall, kSceneDrawSetStride,
     kSceneSceneReg, kSceneModeReg, kSceneMeshIndexZero, kSceneMeshAddr, kSceneMeshNext, kSceneMeshCompare, kSceneMeshLoopEnd,
     kSceneDrawSetIndexZero, kScenePrimIndexScale, kScenePrimIndexAdd, kSceneModeArg, kSceneFormatArg, kSceneDrawSetArg,
-    kSceneDrawSetCountDown, kSceneDrawSetLoop, kSceneSkipEmptyBranch, kSceneDrawSetLoopExit,
+    kSceneDrawSetCountDown, kSceneDrawSetLoop, kSceneSkipEmptyBranch, kSceneDrawSetLoopExit, kSceneSecondMeshes, kSceneSecondMeshAddr,
+    kSceneSecondDrawSetCount,
     kMeshSkinnedRead, kMeshSkinnedTest, kMeshComputeFormatArg, kMeshCountUsedCall, kMeshCountUsedTest, kMeshComputeVbArg,
     kMeshBindCall, kMeshDrawSetsArg, kMeshStoreAt260, kMeshInitDrawSetStride, kMeshDrawSetInitCall, kMeshThisMove, kMeshThisSave,
     kMeshThisReload, kMeshBindResultArg, kMeshDrawSetInitBufArg,

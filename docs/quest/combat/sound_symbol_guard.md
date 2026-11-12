@@ -61,6 +61,9 @@ where a failed post would give -1 (`bfi x8, x0, #32` at 0x1706a14), the same val
 The -1 path, which a returned -1 would enter, is read from the words 0x1706944 and 0x1706948 (`mov x20, x4`, `mov x19, x3`: the two words PlaySound keeps in x20 and x19) and the words 0x1706998 to 0x1706a04 (`kMinusOneWords` in `sound_symbol_guard_targets.h`). It has three outcomes. With x20 = -1 nothing is logged and it returns -1 (both entries branch to 0x1706a00, at 0x17069a4 and 0x17069d8). With x19 not -1 and x20 not -1 it loads "Sound failed to play from node %llx in %s." (.rodata 0x2c4e2dc) and calls WriteLog (0x17069cc). With x19 = -1 and x20 not -1 it loads "Sound failed to play from %s" (.rodata 0x2c4e307) and calls WriteLog (0x17069fc). Which words a dropped post's caller passes is not established (the callers are not
 reconstructed), so whether a returned -1 prints a line for every drop is not established. The bullet site ignores the answer. Every post that
 is not dropped reaches Play3DSound with the same four arguments (the whole x1 register included), and its answer is returned.
+Not pinned: the two .rodata strings (0x2c4e2dc, 0x2c4e307) are not read by the test; the `bl` words at 0x17069cc and 0x17069fc are pinned, but
+that the stub they reach is WriteLog is not (no stub's JUMP_SLOT symbol is checked); the words from 0x170694c to 0x170698c, which must leave
+x19 and x20 alone, are not pinned (read from the listing); and `bfi x8, x0, #32` (0x1706a14) is not pinned.
 
 ## Log lines (sentinel log)
 
@@ -90,7 +93,7 @@ is not dropped reaches Play3DSound with the same four arguments (the whole x1 re
 - Which emitters the six other callers of Play3DSound's stub post on (Play2DSound, CSoundVolume::PlayAmbientSounds,
   CAmbientSoundCS::PlayAmbientSound, CAmbientSoundCS::SendEvent, PlaySoundAtAttach, CSendAmbientSoundActionNode::Enter): they are never dropped.
 - That no bank loads from outside the two stock packages, and the run-time rate at which symbol 0 and the default reach the two sites.
-- That no other writer stores PlaySound's emitter word or the bullet emitter table (the whole-function reconstructions are requested).
+- That no other writer stores PlaySound's emitter word or the bullet emitter table (not established: the functions are not in the proven reconstruction tree).
 
 ## Headset row
 
