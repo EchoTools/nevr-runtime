@@ -171,6 +171,8 @@ set(PATCHES_SOURCES
     "patch/early_quit_lockout.cpp"
     # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
     "patch/broadcaster_allow_incoming.cpp"
+    "patch/peer_timeout_log_hook.cpp"
+    "compat/peer_timeout_log.cpp"
     "patch/lobby_full_backoff.cpp"
     # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
     "patch/queued_join_log.cpp"
@@ -1189,6 +1191,15 @@ if(BUILD_TESTING)
     target_include_directories(test_broadcaster_allow_incoming PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_broadcaster_allow_incoming PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_broadcaster_allow_incoming DISCOVERY_MODE PRE_TEST)
+
+    # Peer timeout logging (compat/peer_timeout_log.h): the server's communication-timeout line and the client's
+    # in-game send state and no-send warning. Pure rules, no game memory.
+    add_executable(test_peer_timeout_log tests/test_peer_timeout_log.cpp compat/peer_timeout_log.cpp)
+    set_source_files_properties(tests/test_peer_timeout_log.cpp compat/peer_timeout_log.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_peer_timeout_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_peer_timeout_log PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_peer_timeout_log DISCOVERY_MODE PRE_TEST)
 
     # #1139: the render_config model against a fake game image (patch/render_config.h; no Windows call).
     add_executable(test_render_config tests/test_render_config.cpp patch/render_config.cpp)

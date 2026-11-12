@@ -48,6 +48,7 @@
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/equipment_refire.h"
+#include "runtime/patch/peer_timeout_log_hook.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
@@ -170,6 +171,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // Peer timeout log: a client silent to its host for the threshold logs one Warning (runtime/compat/peer_timeout_log.h).
+    nevr_peer_timeout_hook::CheckNoSend();
 
     // #2161: a resource-set mount deferred until the game's manifest exists (run on the game's own thread only), and
     // the sets' read summary.
