@@ -119,6 +119,7 @@ type summary struct {
 	Records            int            `json:"records"`
 	Entries            int            `json:"entries"`
 	ZeroByteRecords    int            `json:"zero_byte_records"`
+	Objects            int            `json:"objects"` // the unique objects in the output directory, counted there
 	ObjectsWritten     int            `json:"objects_written"`
 	ObjectsDedup       int            `json:"objects_deduplicated"`
 	StockChunkBytes    uint64         `json:"stock_chunk_bytes"`
@@ -282,6 +283,34 @@ func (s *store) put(sum string, frame []byte) error {
 	s.written++
 	s.mu.Unlock()
 	return nil
+}
+
+// countObjects is the number of objects in dir: regular files named by 64 lower-case hex digits, which is what a stored frame
+// is named. A temporary file or any other name is not one.
+func countObjects(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Type().IsRegular() && isObjectName(e.Name()) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func isObjectName(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // residentChunk is a decompressed chunk that records are being cut from.
@@ -539,6 +568,10 @@ feed:
 	}
 
 	sum.Entries = len(entries)
+	sum.Objects, err = countObjects(objects.dir)
+	if err != nil {
+		return nil, err
+	}
 	sum.ObjectsWritten = objects.written
 	sum.ObjectsDedup = objects.dedup
 	sum.ObjectBytes = objects.bytes

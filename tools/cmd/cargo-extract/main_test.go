@@ -858,3 +858,44 @@ func TestTheManifestAndTheSummaryNameEachSourceManifestByIdHashAndLength(t *test
 		}
 	}
 }
+
+// `objects` is the number of unique objects in the output directory, counted there: a run over objects that are already
+// present reports the same number as the run that wrote them, and a file that is not an object (a temporary file, any other
+// name) is not counted.
+func TestObjectsIsCountedFromTheOutputDirectory(t *testing.T) {
+	t.Parallel()
+	root := fixture(t, "win10")
+	out := filepath.Join(t.TempDir(), "out")
+	objects := func(r result) any {
+		t.Helper()
+		if r.code != 0 {
+			t.Fatalf("exit %d: %s", r.code, r.stderr)
+		}
+		var sum map[string]any
+		if err := json.Unmarshal([]byte(r.stdout), &sum); err != nil {
+			t.Fatal(err)
+		}
+		return sum["objects"]
+	}
+	first := runTool(t, extractArgs(root, out)...)
+	if got := objects(first); got != float64(5) {
+		t.Errorf("objects = %v after the run that wrote them, want 5", got)
+	}
+	blobs := filepath.Join(out, "blobs", "sha256")
+	for _, name := range []string{".tmp-leftover", "README", strings.Repeat("A", 64), strings.Repeat("a", 63)} {
+		if err := os.WriteFile(filepath.Join(blobs, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(blobs, strings.Repeat("b", 64)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	again := runTool(t, extractArgs(root, out)...)
+	if got := objects(again); got != float64(5) {
+		t.Errorf("objects = %v after a run that wrote none, want 5", got)
+	}
+	var sum summary
+	if err := json.Unmarshal([]byte(again.stdout), &sum); err != nil || sum.ObjectsWritten != 0 {
+		t.Errorf("the second run wrote %d objects (%v)", sum.ObjectsWritten, err)
+	}
+}
