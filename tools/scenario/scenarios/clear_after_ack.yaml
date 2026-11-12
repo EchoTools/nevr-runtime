@@ -1,4 +1,4 @@
-# Control for clear_while_update_in_flight (unlocks lead): the same add, but the clear is fired only after the service's ack, so
+# Control for clear_while_update_in_flight (#2410): the same add, but the clear is fired only after the service's ack, so
 # no update is in flight. Expect the clear to be sent at once (`sent profile update: {}`). Needs an item the account does not
 # hold yet, so the add sends an update.
 name: clear_after_ack

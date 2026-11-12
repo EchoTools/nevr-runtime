@@ -193,6 +193,8 @@ set(PATCHES_SOURCES
     "patch/splash_skip.cpp"
     # #2121: the equipment change the game drops is applied again (pure logic in equipment_refire_rules.h).
     "patch/equipment_refire.cpp"
+    # #2410: a clear of the new unlocks made while a profile update is unacknowledged is sent after it (pure logic in new_unlocks_clear_rules.h).
+    "patch/new_unlocks_clear.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
@@ -2038,6 +2040,13 @@ if(BUILD_TESTING)
     target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
+
+    # test_new_unlocks_clear.cpp (#2410, header-only patch/new_unlocks_clear_rules.h).
+    add_executable(test_new_unlocks_clear tests/test_new_unlocks_clear.cpp)
+    set_source_files_properties(tests/test_new_unlocks_clear.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_new_unlocks_clear PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_new_unlocks_clear PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_new_unlocks_clear DISCOVERY_MODE PRE_TEST)
 
     # test_dronemuzzle_rules.cpp (#2337, header-only patch/dronemuzzle_rules.h; the Quest host test compiles the same header).
     add_executable(test_dronemuzzle_rules tests/test_dronemuzzle_rules.cpp)

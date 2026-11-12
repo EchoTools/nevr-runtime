@@ -49,6 +49,7 @@
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/equipment_refire.h"
+#include "runtime/patch/new_unlocks_clear.h"
 #include "runtime/patch/peer_timeout_log.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
@@ -196,6 +197,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
         // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
+        // #2410: a held clear of the new unlocks is re-armed once its update's acknowledgement has arrived; one pointer test while nothing is held.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_new_unlocks_clear::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

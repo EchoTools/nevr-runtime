@@ -143,6 +143,7 @@ tools/tests/test_module_loader_surface.py	ported by its unit of #2132
 tools/tests/test_naming_inventory.py	ported by its unit of #2132
 tools/tests/test_netgun_bullets_wiring.py	ported by its unit of #2132
 tools/tests/test_nevr_root_wiring.py	ported by its unit of #2132
+tools/tests/test_new_unlocks_clear_wiring.py	extends an existing Python test pattern; port with the G-units
 tools/tests/test_next_release_version.py	ported by its unit of #2132
 tools/tests/test_no_conflict_markers.py	ported by its unit of #2132
 tools/tests/test_noovr_waiver_wiring.py	ported by its unit of #2132

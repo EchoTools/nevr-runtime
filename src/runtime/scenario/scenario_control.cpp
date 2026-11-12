@@ -539,8 +539,12 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
     return std::string();
   }
   if (cmd.action == "clear_new_unlocks") {
+    // The runtime hooks the clear (patch/new_unlocks_clear.cpp), so its prologue is our jump: call through our detour, which runs the
+    // original. Anything else is checked against the game's bytes.
+    void* clearTarget = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kClearNewUnlocksVA);
     auto* clear = reinterpret_cast<ClearNewUnlocksFn>(
-        Checked(kClearNewUnlocksVA, kClearNewUnlocksPrologue, "clear new unlocks", &error));
+        nevr_hook_guard::IsOurDetour(clearTarget) ? clearTarget
+                                                  : Checked(kClearNewUnlocksVA, kClearNewUnlocksPrologue, "clear new unlocks", &error));
     if (clear == nullptr) return error;
     auto* bytes = static_cast<std::uint8_t*>(netGame);
     std::uint64_t countBefore = 0;

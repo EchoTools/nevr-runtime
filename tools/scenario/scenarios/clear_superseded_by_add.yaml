@@ -1,0 +1,33 @@
+# A clear held for the acknowledgement (#2410) is dropped when an add comes after it: the add puts an entry back, so the list is not empty and
+# the add's own update carries it. Sequence: an add sends update A, the clear follows before the ack (held), then a second add (count 0 -> 1),
+# then the poll sees a non-empty list and writes `clear superseded`; the game sends the second add's update, which the service acknowledges.
+# Needs two items the account does not hold, so both adds change the list. The stored list afterwards holds the second item only; it is read by
+# hand with the sent and succeeded lines of the console log.
+name: clear_superseded_by_add
+description: hold a clear for the ack, add an item before the ack, and see the clear superseded and the add's update sent
+steps:
+  - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: add one item, so update A goes out
+    fire: {action: add_new_unlocks, item: '0x81869f816d19265b'}
+  - name: the add ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] add_new_unlocks item=0x81869f816d19265b count_before=\d+ count_after=\d+', timeout: 10}
+  - name: fire the clear before the ack
+    fire: {action: clear_new_unlocks}
+  - name: the clear ran and is held
+    expect_log: {pattern: '\[NEVR\.UNLOCKS\] clear held: .* user_id=\d+ count=\d+', timeout: 10}
+  - name: add a second item before the ack
+    fire: {action: add_new_unlocks, item: '0x84de835287edba77'}
+  - name: the second add ran, the count is 1 (the clear emptied the list first)
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] add_new_unlocks item=0x84de835287edba77 count_before=0 count_after=1', timeout: 10}
+  - name: the held clear is superseded
+    expect_log: {pattern: '\[NEVR\.UNLOCKS\] clear superseded: .* user_id=\d+ count=\d+', timeout: 10}
+  - name: the service acknowledged an update
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}
+  - name: the game sent the second add's update
+    expect_log: {pattern: '\[NSUSER\] sent profile update: .*newunlocks', timeout: 30}
+  # The run ends, and the game is stopped, as soon as the last step passes: wait for that update's own ack so it is not cut off.
+  - name: the service acknowledged it
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}

@@ -1,10 +1,8 @@
-# Hypothesis H (unlocks lead): the clear empties the profile key but not the in-memory array at netGame+0x51c20, so the
-# next AddNewUnlocks (echovr.exe 0x140152c30) rebuilds the whole list. Sequence: (a) the count N the client loaded at
-# login is read by the clear's own log line, (b) the clear, (c) ONE add. H holds if the array count after (c) is N+1,
-# refuted if it is 1. The account must hold N > 0 stored entries (a clear_new_unlocks run left it at 0; an
-# add_new_unlocks run puts entries back). The numbers are read from the console log by hand and written into the report
-# (prediction: scratch 2026-11-12-unlocks-lead/H-PREDICTION.md). The item is an id the spritz account held before the
-# first clear and is not one the account holds after the earlier populate run (0x87d5d9ecb92bdbee).
+# What one add does after a clear: the game's clear zeroes the count of new unlocks at netGame+0x51c50 (echovr.exe 0x1401a06c0), and
+# AddNewUnlocks (0x140152c30) appends after that count, so one add after a clear leaves 1 entry, not the N the client held. Sequence: (b) the
+# clear (count_before is N, the count the client loaded at login), (c) ONE add; read the array count after (c) in the console log: 1. The
+# account must hold N > 0 stored entries (a clear leaves it at 0; an add puts entries back). The item is not one the account holds after a
+# clear (0x87d5d9ecb92bdbee).
 name: clear_then_add_new_unlocks
 description: clear all new unlocks, then add one item, and see how many entries the array and the sent update hold
 steps:

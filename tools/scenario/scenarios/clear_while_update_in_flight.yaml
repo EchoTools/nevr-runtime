@@ -1,10 +1,11 @@
-# A clear fired while a profile update is unacknowledged (unlocks lead, INFLIGHT-PREDICTION.md): an add sends update A, the
-# clear follows one runner step later, before the service's ack. Prediction: no send follows the ack, and the stored list
-# keeps A's entries. The last step is the one the prediction expects to FAIL (no send within 30 s of the ack); every
-# sent and succeeded line is read from the console log by hand. Needs the account to hold at least one stored entry so the
-# clear has a count to clear, and an item it does not hold yet so the add changes the list.
+# A clear fired while a profile update is unacknowledged (#2410): an add sends update A, the clear follows one runner step later,
+# before the service's ack. Without the fix the game merges the clear into A's buffer and drops it at the ack, so no send follows the
+# ack and the stored list keeps A's entries: the step "a send follows the ack" FAILS. With the fix the clear is held and the dirty bit
+# is set again after the ack, so the game sends the clear (`{}`), the service acknowledges it and the stored list is emptied: the
+# scenario PASSES. Needs the account to hold at least one stored entry so the clear has a count to clear, and an item it does not hold
+# yet so the add changes the list. Every sent and succeeded line is read from the console log by hand.
 name: clear_while_update_in_flight
-description: add one item so an update is in flight, fire the clear before the ack, and see whether a send follows the ack
+description: add one item so an update is in flight, fire the clear before the ack, and see that the clear is sent after the ack
 steps:
   - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
     wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
@@ -18,7 +19,10 @@ steps:
     fire: {action: clear_new_unlocks}
   - name: the clear ran
     expect_log: {pattern: '\[NEVR\.SCENARIO\] clear_new_unlocks count_before=\d+ count_after=0 user=present dirty_flags_before=0x[0-9a-f]+ dirty_flags_after=0x[0-9a-f]+', timeout: 10}
-  - name: the service acknowledged an update
+  - name: the service acknowledged update A
     expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}
-  - name: a send follows the ack (the prediction expects this step to fail)
+  - name: a send follows the ack (fails without the fix)
     expect_log: {pattern: '\[NSUSER\] sent profile update: ', timeout: 30}
+  # The run ends, and the game is stopped, as soon as the last step passes: wait for the clear's own ack so its update is not cut off.
+  - name: the service acknowledged the clear's update
+    expect_log: {pattern: '\[NSUSER\] profile update succeeded', timeout: 30}

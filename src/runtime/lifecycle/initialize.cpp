@@ -45,6 +45,7 @@
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
 #include "runtime/patch/equipment_refire.h"
+#include "runtime/patch/new_unlocks_clear.h"
 #include "runtime/patch/lobby_full_backoff.h"
 #include "runtime/patch/lobby_settings_hook.h"
 #include "runtime/patch/queued_join_log.h"
@@ -421,6 +422,9 @@ static VOID InitializeAfterGameImageGuard() {
 
   // The equipment change the game drops is applied again once the slot is still (#2121, equipment_refire.h).
   nevr_equipment_refire::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // A clear of the new unlocks made while a profile update is unacknowledged is sent after it (#2410, new_unlocks_clear.h).
+  nevr_new_unlocks_clear::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // UI, splash and menu textures at their top mip (ui_texture_mips.h).
   nevr_ui_texture_mips::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
