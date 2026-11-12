@@ -1053,7 +1053,7 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   const uint64_t reads0 = ReadCount();
   for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
   CHECK(ReadCount() == reads0 && dc::CountersForTest().tick_calls == 1, "no level yet: %llu reads and %llu calls in 49 updates",
-        (unsigned long long)(ReadCount() - reads0), (unsigned long long)dc::CountersForTest().tick_calls);
+        static_cast<unsigned long long>(ReadCount() - reads0), static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
   // after the skip the space is looked at again, and a space that has become a combat map is found
   s.gs[0x58 / 8] = kDyson;
   for (int i = 0; i < 70; ++i) UpdateSlot()(s.addr());
@@ -1075,7 +1075,7 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   Sys c;
   MakeSys(&c, kDyson);
   for (int i = 0; i < 10; ++i) UpdateSlot()(c.addr());
-  CHECK(dc::CountersForTest().tick_calls == 10, "a combat space ran the state machine %llu times in 10 updates", (unsigned long long)dc::CountersForTest().tick_calls);
+  CHECK(dc::CountersForTest().tick_calls == 10, "a combat space ran the state machine %llu times in 10 updates", static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
 }
 
 // ---- the scope: arena shares the APK, so a game space in an arena level creates and draws nothing ----
@@ -1096,13 +1096,13 @@ void TestArenaScope(const std::string& dir) {
     for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
     CHECK(E.real_updates == 50, "%s: the game's update ran %d times", name, E.real_updates);
     CHECK(ReadCount() == reads0 && ScanCount() == scans0,
-          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, (unsigned long long)(ReadCount() - reads0),
-          (unsigned long long)(ScanCount() - scans0));
+          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, static_cast<unsigned long long>(ReadCount() - reads0),
+          static_cast<unsigned long long>(ScanCount() - scans0));
     CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
     CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
     // the module's lock, its clock and its state machine are reached by the first update and not by the 49 quiet ones (a few relaxed loads each)
     CHECK(dc::CountersForTest().tick_calls == 1, "%s: the state machine ran %llu times in 50 arena updates", name,
-          (unsigned long long)dc::CountersForTest().tick_calls);
+          static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
     CHECK(dc::CountersForTest().nodes_made == 0 && dc::CountersForTest().drawn_quads == 0, "%s: counters", name);
     // Shutdown still passes through, and finds no node
     CHECK(ShutSlot()(s.addr()) == s.addr() + 1 && Index("free") < 0, "%s: Shutdown", name);

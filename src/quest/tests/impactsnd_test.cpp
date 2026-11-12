@@ -439,15 +439,15 @@ static void TestConstants() {
       if (g == 4) name += "_quark";  // smg uses the _quark events
       const impactsnd::Row& r = rows[g * 3 + s];
       const uint64_t key = EchoVR::CSymbol64Hash(subs[s]) ^ EchoVR::CSymbol64Hash(guns[g]);
-      CHECK(r.key == key, "row %d (%s %s): key %016llx, CSymbol64 says %016llx", g * 3 + s, guns[g], subs[s], (unsigned long long)r.key,
-            (unsigned long long)key);
+      CHECK(r.key == key, "row %d (%s %s): key %016llx, CSymbol64 says %016llx", g * 3 + s, guns[g], subs[s], static_cast<unsigned long long>(r.key),
+            static_cast<unsigned long long>(key));
       CHECK(r.id == Fnv1(name.c_str()), "row %d (%s): id %08x, FNV-1 32 of %s is %08x", g * 3 + s, guns[g], r.id, name.c_str(),
             Fnv1(name.c_str()));
     }
   for (size_t i = 0; i < n; ++i)
     for (size_t j = i + 1; j < n; ++j) CHECK(rows[i].key != rows[j].key, "duplicate key rows %zu %zu", i, j);
   CHECK(impactsnd::kDefaultSym == EchoVR::CSymbol64Hash("default") && impactsnd::kDefaultSym == kDefaultSym,
-        "default symbol %016llx", (unsigned long long)EchoVR::CSymbol64Hash("default"));
+        "default symbol %016llx", static_cast<unsigned long long>(EchoVR::CSymbol64Hash("default")));
   CHECK(rows[0].id != kStock && rows[5].id != kStock, "a known id equals the stock id");
 }
 
@@ -459,7 +459,7 @@ static void TestInstall() {
   for (int i = 0; i < 4; ++i) g_code_before.push_back(R32(kCodeVa[i]));
   const nevr_quest::combat::ModuleResult r = Install();
   CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off, "install: %s", r.status);
-  CHECK(R64(kDefaultVa) == kDefaultSym, "D reads %016llx", (unsigned long long)R64(kDefaultVa));
+  CHECK(R64(kDefaultVa) == kDefaultSym, "D reads %016llx", static_cast<unsigned long long>(R64(kDefaultVa)));
   CHECK(R64(kSlotVa) != g_base + kFnVa && R64(kSlotVa) != 0, "load slot not hooked");
   CHECK(R64(kShutSlotVa) != g_base + kShutFnVa && R64(kShutSlotVa) != 0, "Shutdown slot not hooked");
   for (int i = 0; i < 4; ++i) CHECK(R32(kCodeVa[i]) == g_code_before[i], "hit-code word %d changed", i);
@@ -662,7 +662,7 @@ static void TestArenaLoadIsTheGamesOwn() {
     Install();
     g_load_mode = kLoad15;
     const uint64_t rv = CallLoader();
-    CHECK(rv == kLoaderReturn && g_loader_calls == 1, "%s: the game's loader result %llx, calls %d", level, (unsigned long long)rv, g_loader_calls);
+    CHECK(rv == kLoaderReturn && g_loader_calls == 1, "%s: the game's loader result %llx, calls %d", level, static_cast<unsigned long long>(rv), g_loader_calls);
     CHECK(CountRight() == 0 && g_n == 15 && MapFlags() == 1u, "%s: the table was touched (%zu right)", level, CountRight());
     const impactsnd::Stats s = impactsnd::GetStats();
     CHECK(s.loads == 1 && s.scopedLoads == 0 && s.passes == 0 && !s.scoped, "%s: stats l%u s%u p%u scoped %d", level, s.loads, s.scopedLoads, s.passes, s.scoped);
@@ -837,7 +837,7 @@ static void TestRebuiltLoaderInACombatLevel() {
   CHECK(Install().installed && HasLine("rebuild=reconstructed"), "the rebuild is not on with every stub pinned and the Shutdown handler in");
   PublishBig();  // CR15NetBulletCS::Initialize stores the table before it calls the loader
   const uint64_t rv = CallLoader();
-  CHECK(rv == 0 && g_loader_calls == 0, "the game's loader ran (%d) or the result %llx", g_loader_calls, (unsigned long long)rv);
+  CHECK(rv == 0 && g_loader_calls == 0, "the game's loader ran (%d) or the result %llx", g_loader_calls, static_cast<unsigned long long>(rv));
   const auto rows = RowsOf(reinterpret_cast<uintptr_t>(g_bigMap));
   size_t n = 0;
   const impactsnd::Row* known = Known(&n);
@@ -940,13 +940,13 @@ static void TestArenaPaysNothingByCount() {
   const uint64_t reads0 = ReadCount(), scans0 = ScanCount();
   for (int i = 0; i < 300; ++i) impactsnd::Tick(GameAddress());
   CHECK(ReadCount() == reads0 && ScanCount() == scans0,
-        "300 arena frames made %llu reads and %llu scans", (unsigned long long)(ReadCount() - reads0),
-        (unsigned long long)(ScanCount() - scans0));
+        "300 arena frames made %llu reads and %llu scans", static_cast<unsigned long long>(ReadCount() - reads0),
+        static_cast<unsigned long long>(ScanCount() - scans0));
   for (int i = 0; i < 5; ++i) CallShutdown(1);
   CHECK(CountLines("role=shutdown") == 0, "an arena teardown noted its thread (a gettid syscall)");
   CHECK(ReadCount() == reads0 && ScanCount() == scans0,
-        "5 arena Shutdowns made %llu reads and %llu scans", (unsigned long long)(ReadCount() - reads0),
-        (unsigned long long)(ScanCount() - scans0));
+        "5 arena Shutdowns made %llu reads and %llu scans", static_cast<unsigned long long>(ReadCount() - reads0),
+        static_cast<unsigned long long>(ScanCount() - scans0));
   // one load: exactly the reads of the one scan that decides it
   std::uint64_t level = 0;
   const uint64_t r1 = ReadCount();
@@ -954,9 +954,9 @@ static void TestArenaPaysNothingByCount() {
   const uint64_t readsOfOneDecision = ReadCount() - r1;
   const uint64_t reads1 = ReadCount(), scans1 = ScanCount();
   CallLoader();
-  CHECK(ScanCount() - scans1 == 1, "an arena load made %llu scans", (unsigned long long)(ScanCount() - scans1));
+  CHECK(ScanCount() - scans1 == 1, "an arena load made %llu scans", static_cast<unsigned long long>(ScanCount() - scans1));
   CHECK(ReadCount() - reads1 == readsOfOneDecision, "an arena load made %llu reads, its one decision costs %llu",
-        (unsigned long long)(ReadCount() - reads1), (unsigned long long)readsOfOneDecision);
+        static_cast<unsigned long long>(ReadCount() - reads1), static_cast<unsigned long long>(readsOfOneDecision));
   // and after a combat level's table is live, the Shutdown that frees it reads the global once to end the scope
   LoadLevels({"mpl_combat_dyson"});
   impactsnd::SetGameForTest(GameAddress());
@@ -1020,7 +1020,7 @@ static void TestAnArenaSpaceBesideACombatTableGetsTheStockIds() {
   const uint64_t reads0 = ReadCount(), scans0 = ScanCount();
   Polls(40);
   CHECK(impactsnd::GetStats().polls == polls0 && ReadCount() == reads0 && ScanCount() == scans0, "the tick went on after the scope ended: %u polls, %llu reads, %llu scans",
-        impactsnd::GetStats().polls - polls0, (unsigned long long)(ReadCount() - reads0), (unsigned long long)(ScanCount() - scans0));
+        impactsnd::GetStats().polls - polls0, static_cast<unsigned long long>(ReadCount() - reads0), static_cast<unsigned long long>(ScanCount() - scans0));
   CHECK(stock == 14 && CountRight() == 0, "a poll wrote an id again");
   // the combat space leaves first and no level of combat's is loaded: the same end (the other Scope)
   Fresh();
@@ -1117,7 +1117,7 @@ static void TestTheRecheckIsOneScanASecond() {
     g_now += 0.025;
   }
   CHECK(ScanCount() - scans0 == 10 && impactsnd::GetStats().rechecks - rechecks0 == 10, "10 s of a combat match: %llu scans, %u rechecks (want 10)",
-        (unsigned long long)(ScanCount() - scans0), impactsnd::GetStats().rechecks - rechecks0);
+        static_cast<unsigned long long>(ScanCount() - scans0), impactsnd::GetStats().rechecks - rechecks0);
   CHECK(impactsnd::GetStats().scoped && AllRight(), "the combat match lost its ids");
   Fresh();
   LoadLevels({"mpl_arena_a"});
@@ -1128,7 +1128,7 @@ static void TestTheRecheckIsOneScanASecond() {
     impactsnd::Tick(GameAddress());
     g_now += 0.025;
   }
-  CHECK(ScanCount() == scans1 && impactsnd::GetStats().rechecks == 0, "10 s of an arena match: %llu scans", (unsigned long long)(ScanCount() - scans1));
+  CHECK(ScanCount() == scans1 && impactsnd::GetStats().rechecks == 0, "10 s of an arena match: %llu scans", static_cast<unsigned long long>(ScanCount() - scans1));
 }
 
 // The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
@@ -1159,7 +1159,7 @@ static void TestWrapperUnsorted15() {
   Setup();
   g_load_mode = kLoad15;
   const uint64_t rv = CallLoader();
-  CHECK(rv == kLoaderReturn, "return value %llx", (unsigned long long)rv);
+  CHECK(rv == kLoaderReturn, "return value %llx", static_cast<unsigned long long>(rv));
   CHECK(g_loader_calls == 1, "loader called %d times", g_loader_calls);
   CHECK(AllRight() && CountRight() == 15, "after the load: %zu of 15 right", CountRight());
   std::vector<Row> after = Snap();
@@ -1638,8 +1638,8 @@ static void TestShutdownPassThrough() {
   Setup();
   const uint64_t rv = CallShutdown(0xabcdef);
   CHECK(g_shut_calls == 1 && g_shut_self == 0xabcdef, "the real Shutdown did not get its argument: %d %llx", g_shut_calls.load(),
-        (unsigned long long)g_shut_self);
-  CHECK(rv == (0xabcdefull ^ kShutXor), "return value %llx not passed through", (unsigned long long)rv);
+        static_cast<unsigned long long>(g_shut_self));
+  CHECK(rv == (0xabcdefull ^ kShutXor), "return value %llx not passed through", static_cast<unsigned long long>(rv));
 }
 
 static void TestBetweenValidationAndLock() {
