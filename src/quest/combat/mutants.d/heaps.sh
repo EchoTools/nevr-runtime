@@ -140,6 +140,11 @@ runm h_missing_mib         $F "s/{\"system_mib\", SystemBytesFor(headset_profile
 runm h_off_store_skipped   $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (heapsOn) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
 # the refusal path: the switch is stored only when an image lookup is given, so a refused step (no lookup) keeps the value of the step before it
 runm h_refused_store_skipped $F "s/^  g_systemOn.store(systemOn, std::memory_order_relaxed);\$/  if (lookup != nullptr) g_systemOn.store(systemOn, std::memory_order_relaxed);/"
+# the switch is stored one call late: each step logs the value the call before it was handed, so every refusal logs its predecessor's value
+runm h_refused_lagged_memsys $F 's/^  g_systemOn.store(systemOn, std::memory_order_relaxed);$/  { static bool lagged = false; g_systemOn.store(lagged, std::memory_order_relaxed); lagged = systemOn; }/'
+# the switch is stored only once the build ID has been read and compared, just before the build_id_mismatch test: no_build_id refuses without
+# storing, so it logs the value its predecessor left (a store moved, so two lines of heaps.cpp change: the top store and the one before the compare)
+runm h_refused_build_id_store_moved $F 's/^  g_systemOn.store(systemOn, std::memory_order_relaxed);$//;s/^  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", profile);$/  g_systemOn.store(systemOn, std::memory_order_relaxed);\n&/'
 # the build-ID refusals: each logs the switch its step was handed, which the test pins on both refusals (no_build_id and build_id_mismatch)
 runm h_refused_build_id_memsys $F "s/return Refused(\"build_id_mismatch\", profile);/{ g_systemOn.store(!systemOn, std::memory_order_relaxed); return Refused(\"build_id_mismatch\", profile); }/"
 runm h_refused_no_build_id_memsys $F "s/return Refused(\"no_build_id\", profile);/{ g_systemOn.store(!systemOn, std::memory_order_relaxed); return Refused(\"no_build_id\", profile); }/"

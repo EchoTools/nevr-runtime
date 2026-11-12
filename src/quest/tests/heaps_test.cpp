@@ -303,12 +303,14 @@ void TheMemsysFieldIsTheValueTheStepWasHanded() {
   }
 }
 
-// The memsys field of the two build-ID refusals is the value the step was handed, true and false alike. Each refusal follows an installed
-// step that left the other value, so a refusal that stored nothing would log that value and fail here. The module_not_loaded path is pinned
-// above; these two were checked for their status only.
+// The memsys field of each build-ID refusal is the value its own step was handed, true and false alike. Each refusal has its own
+// predecessor: a step on a good image that installs and leaves the OTHER value in the switch, then the refused step, on its bad image, with
+// the value under test. A refusal that stored nothing, or stored the value of an earlier call, logs the predecessor's value and fails.
+// No refusal shares a predecessor with the other one, so neither can pass by reading what the other left.
 void TheBuildIdRefusalsLogTheValueTheStepWasHanded() {
   for (const bool sys : {false, true}) {
     const char* const want = sys ? "\"memsys\":1," : "\"memsys\":0,";
+    // build_id_mismatch, after its own installed predecessor.
     Begin();
     Build();
     QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, !sys).installed);
@@ -318,6 +320,11 @@ void TheBuildIdRefusalsLogTheValueTheStepWasHanded() {
     QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, sys).status, "build_id_mismatch") == 0);
     std::vector<Line> install = Lines("combat_heaps_install");
     QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"build_id_mismatch\"") && Has(install[0].text, want));
+    End();
+    // no_build_id, after its own installed predecessor (not the build_id_mismatch refusal above).
+    Begin();
+    Build();
+    QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, !sys).installed);
     End();
     Begin();
     Build(false, nullptr, /*note=*/false);
