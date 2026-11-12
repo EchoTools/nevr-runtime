@@ -77,35 +77,16 @@ func TestEachKeyIsReadKnownDocumentedAndDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestThePluginHoldsNoneOfThemAndTheDocsMoved(t *testing.T) {
+func TestEachModuleHasItsDocMutantsAndTest(t *testing.T) {
 	for _, n := range gunBotsModules {
-		for _, p := range []string{
-			"src/quest/plugins/q15t/src/" + n + ".cpp", "src/quest/plugins/q15t/src/" + n + ".h",
-			"src/quest/tests/q15t/mod/" + n + ".cmake", "src/quest/tests/q15t/mutants.d/" + n + ".sh", "docs/quest/q15t/modules/" + n + ".md",
-		} {
-			if exists(t, p) {
-				t.Errorf("%s still exists", p)
-			}
-		}
 		for _, p := range []string{"docs/quest/combat/" + n + ".md", "src/quest/combat/mutants.d/" + n + ".sh", "src/quest/tests/" + n + "_test.cpp"} {
 			if !exists(t, p) {
 				t.Errorf("%s does not exist", p)
 			}
 		}
 	}
-	for _, p := range []string{"src/quest/tests/q15t/gunconnect_test.cpp", "src/quest/tests/q15t/aibots_test.cpp", "src/quest/tests/q15t/t26_test.cpp", "docs/quest/q15t/adr/0002-weapon-arm-new-profile.md"} {
-		if exists(t, p) {
-			t.Errorf("%s still exists", p)
-		}
-	}
 	if !exists(t, "docs/quest/combat/adr/0003-weapon-arm-new-profile.md") {
 		t.Error("the weapon-arm decision did not move to docs/quest/combat/adr")
-	}
-	plugin := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
-	for _, bad := range []string{"Q15T_T26", "Q15T_GUNCONNECT", "Q15T_AIBOTS", "GunConnectTick", "AiBotsTick", "WeaponArmTick"} {
-		if strings.Contains(plugin, bad) {
-			t.Errorf("the plugin still names %s", bad)
-		}
 	}
 }
 

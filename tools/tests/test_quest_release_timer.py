@@ -1649,12 +1649,6 @@ class VariantWithoutALibrary(VariantCase):
         events = [(e["event"], e.get("step")) for e in self.events()]
         self.assertLess(events.index(("step_ok", "variant_build")), events.index(("step_ok", "variant_publish")))
 
-    def test_the_variant_build_runs_no_q15t_library_build(self) -> None:
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        joined = [" ".join(c["argv"]) for c in fake.calls]
-        self.assertEqual([j for j in joined if "build-quest-q15t" in j], [])
-
     def test_a_failed_build_publishes_nothing(self) -> None:
         fake = Fake(self.root, fail="variant_build")
         self.assertEqual(self.run_timer(fake), 1)
@@ -2759,7 +2753,7 @@ class VariantRealProcess(TimerCase):
         self.assertEqual((self.served / "nevr-runtime" / TAG / f"{VARIANT_APK}.sha256").read_text(),
                          f"{hashlib.sha256(apk).hexdigest()}  {VARIANT_APK}\n")
         with zipfile.ZipFile(io.BytesIO(apk)) as archive:
-            self.assertEqual([n for n in archive.namelist() if n.endswith("libq15t.so")], [], "the APK carries no plugin library")
+            self.assertNotIn("lib/arm64-v8a/libnevr_plugin_manifest.so", archive.namelist(), "the APK carries no plugin library")
         signer = [c["args"] for c in self.tool_calls() if c["tool"] == "signer"]
         self.assertEqual(signer, [["verify-manifest", "--live"]], "the signer only reads the manifest: no claim, no put")
         just = [c["args"][0] for c in self.tool_calls() if c["tool"] == "just"]
@@ -2794,7 +2788,7 @@ class ReleasingDoc(unittest.TestCase):
         for want in ("variant_configure", "variant_build", "variant_publish",
                      "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env"):
             self.assertIn(want, timer.__doc__)
-        for gone in ("variant_library", "build-quest-q15t", "libq15t.so"):
+        for gone in ("variant_library",):
             self.assertNotIn(gone, section)
             self.assertNotIn(gone, timer.__doc__)
         for gone in ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured", "variant_pins", "private build"):

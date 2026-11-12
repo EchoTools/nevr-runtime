@@ -58,25 +58,10 @@ func TestEachPfxKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestThePluginHoldsNoPfxModuleAndTheDocsMoved(t *testing.T) {
+func TestEachPfxModuleHasItsDoc(t *testing.T) {
 	for _, n := range []string{"pfx", "pfxtev"} {
-		for _, p := range []string{
-			"src/quest/plugins/q15t/src/" + n + ".cpp", "src/quest/plugins/q15t/src/" + n + ".h",
-			"src/quest/tests/q15t/" + n + "_test.cpp", "src/quest/tests/q15t/mod/" + n + ".cmake", "docs/quest/q15t/modules/" + n + ".md",
-		} {
-			if exists(t, p) {
-				t.Errorf("%s still exists", p)
-			}
-		}
 		if !exists(t, "docs/quest/combat/"+n+".md") {
 			t.Errorf("docs/quest/combat/%s.md is missing", n)
-		}
-	}
-	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	for _, bad := range []string{"Q15T_PFX", "InitPfxGate", "PfxGateOn", "PfxTevAllows", "pfx.h"} {
-		if strings.Contains(plugin, bad) || strings.Contains(cmake, bad) {
-			t.Errorf("the plugin still names %s", bad)
 		}
 	}
 }

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// #2181: levelname and the booster pool are the runtime's, and the q15t plugin carries neither. levelname_test, boosterpool_test and
-// combat_install_test drive the behaviour; these pin what they cannot see (the order of a handler's calls, the table, the files that are gone).
+// #2181: levelname and the booster pool are the runtime's. levelname_test, boosterpool_test and combat_install_test drive the behaviour; these
+// pin what they cannot see (the order of a handler's calls, the table, each module's files, the release recipes' marker).
 
 func TestTheTwoModulesAreNormalRowsAfterTheRefreshRateAndTheBoosterNeedsLevelname(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
@@ -56,44 +56,18 @@ func TestTheKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestThePluginCarriesNeitherModuleAndItsMarkerLostTheField(t *testing.T) {
+func TestEachModuleHasItsFilesAndNoRecipeWritesTheOldMarkerField(t *testing.T) {
 	for _, n := range []string{"levelname", "boosterpool"} {
-		for _, e := range []string{"h", "cpp"} {
-			if exists(t, "src/quest/plugins/q15t/src/"+n+"."+e) {
-				t.Errorf("the plugin still has %s.%s", n, e)
-			}
-		}
-		for _, f := range []string{"src/quest/tests/q15t/" + n + "_test.cpp", "src/quest/tests/q15t/mod/" + n + ".cmake", "src/quest/tests/q15t/mutants.d/" + n + ".sh"} {
-			if exists(t, f) {
-				t.Errorf("%s still exists", f)
-			}
-		}
 		for _, f := range []string{"src/quest/combat/" + n + ".cpp", "src/quest/combat/mutants.d/" + n + ".sh", "src/quest/tests/" + n + "_test.cpp"} {
 			if !exists(t, f) {
 				t.Errorf("%s is missing", f)
 			}
 		}
 	}
-	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
-	for _, bad := range []string{"levelname.h", "boosterpool.h", "Q15T_LEVELNAME", "InstallLevelName", "InstallBoosterPool"} {
-		if strings.Contains(plugin, bad) {
-			t.Errorf("plugin.cpp still names %s", bad)
-		}
+	if strings.Contains(read(t, "justfile"), " levelname=1") {
+		t.Error("the justfile still writes the deleted marker field")
 	}
-	for _, f := range []string{"src/quest/plugins/q15t/CMakeLists.txt", "justfile", "src/quest/tests/q15t/mod/wiring.cmake"} {
-		code := pluginRead(t, f)
-		if f == "justfile" {
-			code = read(t, f)
-		}
-		if strings.Contains(code, "Q15T_LEVELNAME") || strings.Contains(code, " levelname=1") {
-			t.Errorf("%s still names the deleted option or its marker field", f)
-		}
-	}
-	if !exists(t, "docs/quest/combat/levelname.md") || exists(t, "docs/quest/q15t/modules/levelname.md") {
+	if !exists(t, "docs/quest/combat/levelname.md") {
 		t.Error("the module doc is not where the combat docs live")
-	}
-	// the bot-body gate (headset_gates.cpp) reads the game's LoadLevelName slot, which levelname's hook takes; the plugin decides nothing about it
-	if strings.Contains(plugin, "DecideCombatGates") || strings.Contains(plugin, "gateOff") {
-		t.Error("plugin.cpp still decides the bot-body gate")
 	}
 }

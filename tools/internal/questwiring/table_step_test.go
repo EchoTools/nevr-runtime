@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// #2177: the four resource table-step modules (meshstep, instmodel, shaderstep, tablestep) are the runtime's, scoped to a combat match, and the q15t
-// plugin installs on none of their slots. The host tests (meshstep_test, instmodel_test, shaderstep_test, tablestep_test, shaderstep_tablestep_test)
+// #2177: the four resource table-step modules (meshstep, instmodel, shaderstep, tablestep) are the runtime's, scoped to a combat match, and nothing
+// else installs on their slots. The host tests (meshstep_test, instmodel_test, shaderstep_test, tablestep_test, shaderstep_tablestep_test)
 // drive the behaviour; these pin what they cannot see: the registration order, that each handler asks the scope before it acts, that the scope is
-// the shared level answer and not a copy, and what the plugin no longer holds.
+// the shared level answer and not a copy, and each module's files.
 
 var tableStepModules = []string{"meshstep", "instmodel", "shaderstep", "tablestep"}
 
@@ -90,34 +90,13 @@ func TestTheScopeIsTheSharedLevelAnswerAndArenaWinsOverACombatMapLoadedDuringATr
 	}
 }
 
-func TestThePluginHoldsNoneOfTheFourModulesAndTheirDocsMoved(t *testing.T) {
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
+func TestEachTableStepModuleHasItsFiles(t *testing.T) {
 	for _, m := range tableStepModules {
-		for _, p := range []string{
-			"src/quest/plugins/q15t/src/" + m + ".h", "src/quest/plugins/q15t/src/" + m + ".cpp",
-			"src/quest/tests/q15t/" + m + "_test.cpp", "src/quest/tests/q15t/mod/" + m + ".cmake", "docs/quest/q15t/modules/" + m + ".md",
-		} {
-			if exists(t, p) {
-				t.Errorf("%s still exists", p)
-			}
-		}
 		for _, p := range []string{"src/quest/combat/" + m + ".h", "src/quest/combat/" + m + ".cpp", "src/quest/combat/" + m + "_targets.h",
 			"src/quest/tests/" + m + "_test.cpp", "docs/quest/combat/" + m + ".md", "src/quest/combat/mutants.d/" + m + ".sh"} {
 			if !exists(t, p) {
 				t.Errorf("%s is missing", p)
 			}
-		}
-		upper := strings.ToUpper(m)
-		for what, text := range map[string]string{"CMake": cmake, "plugin.cpp": plugin} {
-			if strings.Contains(text, "Q15T_"+upper) || strings.Contains(text, `"`+m+`"`) || strings.Contains(text, "src/"+m+".cpp") {
-				t.Errorf("the plugin's %s still names %s", what, m)
-			}
-		}
-	}
-	for _, bad := range []string{"InstallMeshStep", "InstallInstModel", "InstallShaderStep", "InstallTableStep"} {
-		if strings.Contains(plugin, bad) {
-			t.Errorf("plugin.cpp still calls %s", bad)
 		}
 	}
 }

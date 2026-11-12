@@ -76,7 +76,7 @@ func TestTheEntriesAreTopLevelAsmWithCFIAndNeverNaked(t *testing.T) {
 	}
 }
 
-func TestTheGatesRegisterLastInTheNormalTableAndThePluginInstallsNeitherSlot(t *testing.T) {
+func TestTheGatesRegisterLastInTheNormalTable(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
 	if !strings.Contains(table, `Module{"gates", nullptr, &GatesNormal}`) {
 		t.Error("the gates must be a normal-step row of the registration table")
@@ -85,22 +85,6 @@ func TestTheGatesRegisterLastInTheNormalTableAndThePluginInstallsNeitherSlot(t *
 	gates := strings.Index(table, `Module{"gates"`)
 	if tick < 0 || gates < tick {
 		t.Error("the gates row must come after the tick row: the bot gate registers a tick callback")
-	}
-	for _, gone := range []string{
-		"src/quest/plugins/q15t/src/headset_gates.cpp",
-		"src/quest/plugins/q15t/src/headset_gates.h",
-		"src/quest/plugins/q15t/src/combat_gates.h",
-		"src/quest/tests/q15t/mod/combat_gates.cmake",
-	} {
-		if exists(t, gone) {
-			t.Errorf("%s must not exist: the gates are the runtime's", gone)
-		}
-	}
-	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp") + pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	for _, name := range []string{"InstallHeadsetGate", "InstallPartyHeadsetGate", "Q15T_GATE_", "PartyMemberHeadsetType", "CVR11HeadsetType", "SetLinkGateLibs"} {
-		if strings.Contains(plugin, name) {
-			t.Errorf("the q15t plugin must not carry %s", name)
-		}
 	}
 }
 

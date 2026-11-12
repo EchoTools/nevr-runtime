@@ -9,7 +9,7 @@ import (
 )
 
 // #2189: every reconstruction source under src/reconstruction/r15 opens the one namespace NRadEngine::nevr_reconstruction, and
-// none names the retired q15t prefix. docs/standards/naming.md: a namespace the reconstruction writes is the game's prefix
+// none opens a namespace that ends r15::reconstruction. docs/standards/naming.md: a namespace the reconstruction writes is the game's prefix
 // followed by nevr_<area>. The sixteen files listed below include each other through cnca_game.hpp, so a file on any other
 // namespace would not see the shared types: the library would stop building, or it would declare them twice.
 
@@ -79,7 +79,7 @@ func TestEachReconstructionFileOpensAndClosesTheOneNamespaceOnce(t *testing.T) {
 	}
 }
 
-func TestNoReconstructionSourceNamesTheOldNamespaceOrAQ15TNamespace(t *testing.T) {
+func TestNoReconstructionSourceOpensTheOldNamespace(t *testing.T) {
 	t.Parallel()
 	var sources []string
 	for _, f := range trackedFiles(t, "src/reconstruction") {
@@ -96,13 +96,7 @@ func TestNoReconstructionSourceNamesTheOldNamespaceOrAQ15TNamespace(t *testing.T
 			t.Fatal(err)
 		}
 		text := string(b)
-		if strings.Contains(text, "q15t::") {
-			t.Errorf("%s still names a q15t namespace", p)
-		}
 		for _, name := range append(namespaceNames(nsOpenRE, text), namespaceNames(nsCloseRE, text)...) {
-			if anyQ15tRE.MatchString(name) {
-				t.Errorf("%s: namespace %s names q15t", p, name)
-			}
 			if strings.Contains(name, "r15::reconstruction") {
 				t.Errorf("%s: namespace %s is the old r15::reconstruction", p, name)
 			}

@@ -139,16 +139,8 @@ STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" vers
     echo "repack apk={{ apk }} plugin={{ plugin }} version={{ version }} others=[{{ extra_rows }}|{{ patcher }}|{{ json_include }}|{{ plugin_early }}|{{ plugin_off }}] pack={{ pack }} pack_meta={{ pack_meta }}" >> "$CALLS"
     printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
-# A trap: no justfile has a q15t library build, so a release recipe that runs one is recorded here ("q15t-build" in the calls).
-STUB_Q15T_TRAP = """build-quest-q15t:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "q15t-build" >> "$CALLS"
-    mkdir -p build/quest-q15t
-    printf 'libq15t built from the tag' > build/quest-q15t/libq15t.so
-"""
 # The old call shape, `<tag> <plugins> <store>`: a plugin library passed in.
-PLUGINS = "/priv/libq15t.so:/priv/other.so"
+PLUGINS = "/priv/libcombat.so:/priv/other.so"
 # The repack with the script-library parameter (M5): it records the library directory it was given.
 STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
@@ -175,7 +167,7 @@ class RecipesRun(unittest.TestCase):
         self.store.write_bytes(b"store")
         texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk",
                                            "release-quest-arena-apk", "_release-quest-apk")]
-        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK + "\n" + STUB_Q15T_TRAP, encoding="utf-8")
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK, encoding="utf-8")
         for name, text in (("release_preflight.py", STUB_PREFLIGHT), ("quest_release_loader.py", STUB_LOADER),
                            ("package_release.py", STUB_PACKAGE), ("quest_release_base.py", STUB_BASE)):
             (self.dir / "tools" / name).write_text(text)
@@ -276,14 +268,13 @@ class RecipesRun(unittest.TestCase):
         self.assertEqual((out / f"{name}.sha256").read_text(), f"{SHA(apk)}  {name}\n")
         self.assertEqual(self.variants_given(), ["arena"])
         calls = self.calls_made()
-        self.assertNotIn("q15t-build", calls, "arena has no q15t library")
         self.assertFalse([c for c in calls if c.startswith("base prepare")], "the base is the store APK, not the reference build")
         repack = [c for c in calls if c.startswith("repack ")][0]
         self.assertIn(f"apk={self.store} ", repack)
         self.assertEqual(repack.split(" plugin=")[1].split(" ")[0], "")
         self.assertIn(f"base check-arena --apk build/quest-release/v1.2.3/arena/repack/r15_nevr-sentinel_signed.apk", calls)
         self.assertFalse([c for c in calls if c.startswith("base check-release")])
-        self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "variant").exists(), "arena never shares the q15t variant's directory")
+        self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "variant").exists(), "arena never shares the variant's directory")
 
     def test_an_arena_apk_that_carries_combat_is_not_written_out(self):
         result = self.arena(FAIL_BASE="check-arena")
@@ -368,13 +359,12 @@ class RecipesRun(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.variants_given(), [want])
 
-    def test_the_release_apk_never_carries_a_plugin_and_never_builds_the_q15t_libraries(self):
+    def test_the_release_apk_never_carries_a_plugin(self):
         self.assertEqual(self.release().returncode, 0)
         calls = self.calls_made()
-        self.assertNotIn("q15t-build", calls)
         self.assertEqual([c for c in calls if c.startswith("repack ")][0].split(" plugin=")[1].split(" ")[0], "")
 
-    def test_a_variant_and_a_combat_apk_carry_no_plugin_library_and_the_recipes_run_no_q15t_build(self):
+    def test_a_variant_and_a_combat_apk_carry_no_plugin_library(self):
         """The variant word stamps the APK; no library is built from the tag, packaged or handed to the repack."""
         self.use_pack_stub()
         for name, run in (("variant", self.variant), ("combat", self.combat)):
@@ -383,13 +373,10 @@ class RecipesRun(unittest.TestCase):
                 result = run()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = self.calls_made()
-                self.assertNotIn("q15t-build", calls)
                 repack = [c for c in calls if c.startswith("repack ")]
                 self.assertEqual(len(repack), 1)
                 self.assertIn(" plugin= ", repack[0], "the repack's plugin argument is empty")
-                self.assertNotIn("libq15t", result.stderr)
                 self.assertEqual(len(result.stdout.splitlines()), 1, "stdout is the APK's sha256 line only")
-                self.assertFalse((self.dir / "build" / "quest-q15t").exists(), "no library directory is made")
 
     def test_neither_variant_apk_packages_an_early_plugin(self):
         """The heap sizes and the render-target pool are the sentinel's own early step, so the repack is given no library and no early name."""
@@ -404,7 +391,7 @@ class RecipesRun(unittest.TestCase):
     def test_a_plugin_library_passed_in_is_refused_in_the_recipes_name_before_anything_runs(self):
         """The old call shape `<tag> <plugins> <store>`: the APK carries no plugin library, so none is an argument."""
         for recipe_name in ("release-quest-variant-apk", "release-quest-combat-apk"):
-            for given in (PLUGINS, "/priv/libq15t.so"):
+            for given in (PLUGINS, "/priv/libcombat.so"):
                 with self.subTest(recipe=recipe_name, given=given):
                     self.calls.unlink(missing_ok=True)
                     result = self.just(recipe_name, "v1.2.3", given, str(self.store))
@@ -456,7 +443,7 @@ class RecipesRun(unittest.TestCase):
 
     def use_pack_stub(self):
         texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk", "_release-quest-apk")]
-        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_PACK + "\n" + STUB_Q15T_TRAP, encoding="utf-8")
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_PACK, encoding="utf-8")
 
     def test_the_variant_recipe_passes_the_pack_and_its_description_to_the_repack(self):
         self.use_pack_stub()
@@ -484,7 +471,7 @@ class RecipesRun(unittest.TestCase):
     def test_the_combat_recipe_passes_the_script_library_directory_to_the_repack(self):
         texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk",
                                            "_release-quest-apk")]
-        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_LIBS + "\n" + STUB_Q15T_TRAP, encoding="utf-8")
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_LIBS, encoding="utf-8")
         result = self.combat("v1.2.3", "", "", "/p/libs")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"repack apk={self.store} plugin= version=1.2.3 pack= pack_meta= libs=/p/libs",

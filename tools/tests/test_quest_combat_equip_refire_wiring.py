@@ -2,8 +2,8 @@
 
 equip_refire_test.cpp drives the real wrappers through the six installed words and got_pinned_test.cpp checks the six relocations
 and the code pins in the real libr15. This file pins what neither can see: that the rule is the shared header's and is not copied
-into the Quest file, the combat target, the sentinel's install and budget row, the host test's registration, that the module
-changes no code page, and that nothing of it is left in the q15t plugin.
+into the Quest file, the combat target, the sentinel's install and budget row, the host test's registration, and that the module
+changes no code page.
 
 It also holds the wiring of the combat area's two install steps (#2171): combat_install_test.cpp drives the steps over an injected
 table and integration_sequence_test.cpp drives the sequence and the post-load policy over fakes; the classes at the end pin what neither
@@ -133,13 +133,6 @@ class TheModuleChangesNoCodePage(unittest.TestCase):
             self.assertNotIn(token, code)
 
 
-class NothingOfItIsLeftInTheQ15tPlugin(unittest.TestCase):
-    def test_the_plugin_and_its_tests_are_gone(self):
-        # The q15t plugin and its host tests are deleted (#2189): no second copy of the re-fire can come back through them.
-        for path in ("src/quest/plugins/q15t", "src/quest/tests/q15t", "docs/quest/q15t"):
-            self.assertFalse((ROOT / path).exists(), path)
-
-
 class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
     def setUp(self):
         self.steps = strip_comments(read("src/quest/integration/production_steps.cpp"))
@@ -215,11 +208,10 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
             r"\s+src/quest/combat/combat_install\.cpp",
         )
 
-    def test_verify_runs_the_combat_recipe_and_names_no_q15t_one(self):
+    def test_verify_runs_the_combat_recipe(self):
         justfile = read("justfile")
         verify = justfile.split("\nverify:", 1)[1]
         self.assertRegex(verify, r"\n\s+test-quest-combat \\\n")
-        self.assertNotIn("test-quest-q15t", justfile)
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):

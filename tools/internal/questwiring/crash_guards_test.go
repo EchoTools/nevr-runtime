@@ -1,13 +1,12 @@
 package questwiring
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and the q15t plugin installs on
-// none of their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
+// #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and nothing else installs on
+// their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
 // behaviour; these pin what they cannot see: who owns each slot, the table's order, the scope each guard has in arena, the keys.
 
 type guard struct {
@@ -69,44 +68,13 @@ func TestTheGuardsAreNormalPhaseRowsInThePluginsOrderAfterTheScopeRowAndSendguar
 	}
 }
 
-func TestThePluginInstallsOnNoSlotOfTheGuardsAndTheirFilesAreGone(t *testing.T) {
+func TestEachGuardHasItsFiles(t *testing.T) {
 	for _, g := range guards {
-		for _, f := range []string{
-			"src/quest/plugins/q15t/src/" + g.name + ".h", "src/quest/plugins/q15t/src/" + g.name + ".cpp",
-			"src/quest/tests/q15t/" + g.name + "_test.cpp", "src/quest/tests/q15t/mod/" + g.name + ".cmake",
-			"src/quest/tests/q15t/mutants.d/" + g.name + ".sh", "docs/quest/q15t/modules/" + g.name + ".md",
-		} {
-			if exists(t, f) {
-				t.Errorf("%s still exists", f)
-			}
-		}
 		for _, f := range []string{"src/quest/combat/" + g.name + ".h", "src/quest/combat/" + g.name + ".cpp", "src/quest/combat/" + g.name + "_targets.h",
 			"src/quest/tests/" + g.name + "_test.cpp", "src/quest/combat/mutants.d/" + g.name + ".sh", "docs/quest/combat/" + g.name + ".md"} {
 			if !exists(t, f) {
 				t.Errorf("%s is missing", f)
 			}
-		}
-	}
-	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
-	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
-			continue
-		}
-		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
-		for _, g := range guards {
-			for _, bad := range append(append([]string{}, g.symbols...), g.slots...) {
-				if strings.Contains(code, bad) {
-					t.Errorf("%s names %s, which is the runtime's %s", e.Name(), bad, g.name)
-				}
-			}
-		}
-	}
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
-	for _, bad := range []string{"Q15T_FXTRAIL", "Q15T_VOIPDROP", "Q15T_CUSTCTX", "Q15T_DRONEGUARD", "Q15T_PEERCLAMP", "InstallFxTrail", "InstallVoipDrop",
-		"InstallCustCtx", "InstallDroneGuard", "InstallPeerClamp"} {
-		if strings.Contains(cmake, bad) {
-			t.Errorf("the plugin still names %s", bad)
 		}
 	}
 }

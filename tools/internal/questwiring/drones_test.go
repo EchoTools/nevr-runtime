@@ -8,8 +8,7 @@ import (
 // #2187: dronekill and dronemuzzle are the runtime's. The host tests (dronekill_test, dronemuzzle_test) and check/dronemuzzle.sh drive the
 // behaviour and the arm64 entries; these pin what they cannot see on the host: that each continuation reads the next word the manager publishes
 // with an acquire load and the install hands the manager that very word, that the entries are reviewed top-level asm and listed by the frame
-// sensor, that both rows are in the normal step in the plugin's order, that the keys are on the schema and in the example, and that the q15t
-// plugin carries neither module, so one owner holds each slot on a q15t-variant APK.
+// sensor, that both rows are in the normal step in the plugin's order, and that the keys are on the schema and in the example.
 
 func TestEachDroneMuzzleContinuationReadsItsNextWordWithAnAcquireLoadAndTheInstallHandsItOver(t *testing.T) {
 	code := stripComments(read(t, "src/quest/combat/dronemuzzle.cpp"))
@@ -85,7 +84,7 @@ func TestDronekillHooksOnlyThroughTheManager(t *testing.T) {
 	}
 }
 
-func TestTheDroneRowsAreInTheNormalStepInThePluginsOrderAndThePluginCarriesNeither(t *testing.T) {
+func TestTheDroneRowsAreInTheNormalStepInThePluginsOrder(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
 	order := []string{`Module{"refresh_rate"`, `Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill"`, `Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle"`, `Module{"gates"`}
 	last := -1
@@ -95,22 +94,6 @@ func TestTheDroneRowsAreInTheNormalStepInThePluginsOrderAndThePluginCarriesNeith
 			t.Errorf("the normal table must hold %s after the row before it", row)
 		}
 		last = at
-	}
-	for _, gone := range []string{
-		"src/quest/plugins/q15t/src/dronekill.cpp", "src/quest/plugins/q15t/src/dronekill.h", "src/quest/plugins/q15t/src/dronekill_core.h",
-		"src/quest/plugins/q15t/src/dronekill_log.h", "src/quest/plugins/q15t/src/dronemuzzle.cpp", "src/quest/plugins/q15t/src/dronemuzzle.h",
-		"src/quest/plugins/q15t/src/dronemuzzle_core.h", "src/quest/tests/q15t/mod/dronekill.cmake", "src/quest/tests/q15t/mod/dronemuzzle.cmake",
-	} {
-		if exists(t, gone) {
-			t.Errorf("%s must not exist: the drone modules are the runtime's", gone)
-		}
-	}
-	plugin := pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp") + pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	for _, name := range []string{"Q15T_DRONEKILL", "Q15T_DRONEMUZZLE", "InstallDroneKill", "InstallDroneMuzzle", "DroneKill", "0x36cfa18", "0x36f3cf8",
-		"0x36e2080", "0x36cacf8", "0x36c37a8", "0x36e6610"} {
-		if strings.Contains(plugin, name) {
-			t.Errorf("the q15t plugin must not carry %s", name)
-		}
 	}
 }
 

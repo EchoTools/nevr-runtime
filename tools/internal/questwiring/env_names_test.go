@@ -1,19 +1,16 @@
 package questwiring
 
 import (
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
-// #2189: no tracked source names the retired q15t prefix in the Quest checks' environment variables or in the frame sensor's
-// probe symbols. docs/standards/naming.md: an environment variable is NEVR_<NAME>, so the switch that lets a combat check skip
+// #2189: the Quest checks' environment variables are NEVR_ names, and the frame sensor's probe symbols are the ones its test
+// expects (deleted_plugin_name_test.go keeps the deleted plugin's word out of both). docs/standards/naming.md: an environment variable is NEVR_<NAME>, so the switch that lets a combat check skip
 // its qemu run is NEVR_SKIP_QEMU (src/quest/combat/check/*.sh), and the switch that makes a host test dump its module's log
 // records is NEVR_TEST_VERBOSE (src/quest/tests/dronekill_test.cpp, dronemuzzle_test.cpp). The assembly probes of the frame
 // sensor (src/quest/tests/frames_asm_probe_real.cpp) define the symbols the sensor test names
@@ -23,15 +20,13 @@ import (
 const envNamesSelf = "tools/internal/questwiring/env_names_test.go"
 
 var (
-	oldProbeVariables = []string{"Q15T_SKIP_QEMU", "Q15T_TEST_VERBOSE"}
-	combatChecks      = []string{"dronemuzzle", "headset_gates", "powerboost"}
-	verboseTests      = []string{"dronekill_test.cpp", "dronemuzzle_test.cpp"}
-	probeSymbols      = []string{
+	combatChecks = []string{"dronemuzzle", "headset_gates", "powerboost"}
+	verboseTests = []string{"dronekill_test.cpp", "dronemuzzle_test.cpp"}
+	probeSymbols = []string{
 		"probe_dm_tp_ret", "probe_dm_tp_next", "probe_dm_fire_ret", "probe_dm_fire_next", "probe_pb_cone_ret", "probe_pb_resolve_real",
 		"probe_dm_teleport", "probe_dm_fire", "probe_pb_cone_at", "probe_dm_tp_thunk", "probe_dm_fire_thunk", "probe_pb_resolve_thunk",
 	}
 	probeWordRE = regexp.MustCompile(`"(probe_[a-z_]+)"`)
-	anyQ15tRE   = regexp.MustCompile(`(?i)q15t`)
 )
 
 // trackedFiles lists the files git tracks under paths (relative to the repository root), as git ls-files names them.
@@ -51,30 +46,6 @@ func trackedFiles(t *testing.T, paths ...string) []string {
 		}
 	}
 	return files
-}
-
-func TestNoSourceNamesAQ15TVariableOfTheTwoRenamed(t *testing.T) {
-	t.Parallel()
-	for _, p := range trackedFiles(t, "src", "tools", "justfile", "tests", ".github") {
-		if p == envNamesSelf {
-			continue // this file names the variables it forbids
-		}
-		b, err := os.ReadFile(filepath.Join(root(t), p))
-		if os.IsNotExist(err) {
-			continue // tracked but not on disk: there is no text to read
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !utf8.Valid(b) {
-			continue
-		}
-		for _, old := range oldProbeVariables {
-			if strings.Contains(string(b), old) {
-				t.Errorf("%s still names %s", p, old)
-			}
-		}
-	}
 }
 
 func TestEachCombatCheckReadsTheSkipVariableAndSaysSo(t *testing.T) {
@@ -102,12 +73,9 @@ func TestEachVerboseTestReadsTheVerboseVariable(t *testing.T) {
 	}
 }
 
-func TestTheProbeNamesNoQ15TSymbolAndDefinesEachProbeSymbol(t *testing.T) {
+func TestTheProbeDefinesEachProbeSymbol(t *testing.T) {
 	t.Parallel()
 	text := read(t, "src/quest/tests/frames_asm_probe_real.cpp")
-	if anyQ15tRE.MatchString(text) {
-		t.Error("frames_asm_probe_real.cpp names q15t")
-	}
 	for _, sym := range probeSymbols {
 		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(sym) + `\b`).MatchString(text) {
 			t.Errorf("frames_asm_probe_real.cpp does not define %s", sym)
@@ -118,9 +86,6 @@ func TestTheProbeNamesNoQ15TSymbolAndDefinesEachProbeSymbol(t *testing.T) {
 func TestTheSensorTestExpectsTheRenamedEntries(t *testing.T) {
 	t.Parallel()
 	text := read(t, "tests/quest/frames_asm_probes_test.go")
-	if anyQ15tRE.MatchString(text) {
-		t.Error("frames_asm_probes_test.go names q15t")
-	}
 	for _, sym := range []string{"probe_dm_tp_thunk", "probe_dm_fire_thunk", "probe_pb_resolve_thunk"} {
 		if !regexp.MustCompile(`\b` + sym + `\b`).MatchString(text) {
 			t.Errorf("frames_asm_probes_test.go does not expect %s", sym)

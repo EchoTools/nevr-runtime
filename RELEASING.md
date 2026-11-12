@@ -273,7 +273,8 @@ patcher is built with) and `config/public-defaults.env`, as `just build-android`
 the release's own loader and nothing else, so it has no combat (#2298). `just release-quest-arena-apk vX.Y.Z` builds it into
 `build/quest-release/vX.Y.Z/arena/`: no plugin library and no plugin manifest are built or packaged, and the repack stamps the word
 `arena`. `tools/quest_release_base.py check-arena` refuses the APK, before it is copied out, if it holds any entry of the reference
-build (`assets/afk_default_on.txt`, `libassetpatch.so`), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
+build (`assets/afk_default_on.txt`, `libassetpatch.so`), the plugin manifest (which every recipe that packaged a plugin wrote), or a stamp
+other than `arena`. Unlike
 the q15t variant, it is **listed in the manifest**, as the kind `quest-apk-arena` beside the combat `quest-apk` (the reference
 build's repack, whose stamp is empty and which stays the default). `tools/publish_quest_apk.py vX.Y.Z --listed-variant arena`
 puts it up through the signer's `put-quest-apk --kind quest-apk-arena` and keeps the claim with `--extra-out`. The build needs the

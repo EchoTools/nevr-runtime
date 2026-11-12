@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// #2172, #2000: the refresh-rate rule and the game tick are the runtime's, and the q15t plugin installs on neither slot. The host tests
+// #2172, #2000: the refresh-rate rule and the game tick are the runtime's, and nothing else installs on either slot. The host tests
 // (refresh_rate_test, combat_tick_test, combat_level_test, render_config_hook_test) drive the behaviour; these pin what they cannot see.
 
 func root(t *testing.T) string {
@@ -37,43 +37,6 @@ func exists(t *testing.T, path string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(root(t), path))
 	return err == nil
-}
-
-// The q15t plugin and its host tests are deleted (#2189). A check that the plugin holds none of a module's code reads the plugin through
-// these: a deleted plugin holds nothing, so they answer empty; while it exists they read it as before, and a missing file is a failure.
-const pluginDir = "src/quest/plugins/q15t"
-
-func pluginGone(t *testing.T) bool {
-	t.Helper()
-	return !exists(t, pluginDir) && !exists(t, "src/quest/tests/q15t")
-}
-
-func pluginRead(t *testing.T, path string) string {
-	t.Helper()
-	if pluginGone(t) {
-		return ""
-	}
-	return read(t, path)
-}
-
-func pluginEntries(t *testing.T, dir string) []os.DirEntry {
-	t.Helper()
-	if pluginGone(t) {
-		return nil
-	}
-	entries, err := os.ReadDir(filepath.Join(root(t), dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return entries
-}
-
-func TestTheQ15tPluginAndItsTestsAreGone(t *testing.T) {
-	for _, p := range []string{pluginDir, "src/quest/tests/q15t", "docs/quest/q15t"} {
-		if exists(t, p) {
-			t.Errorf("%s exists: the q15t plugin is folded into the runtime (#2189)", p)
-		}
-	}
 }
 
 var blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
@@ -235,47 +198,12 @@ func TestEachKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestThePluginInstallsOnNeitherSlotAndTheDeletedModulesAreGone(t *testing.T) {
-	for _, n := range []string{"refresh_rate", "clock_levels", "plugin_args"} {
-		for _, e := range []string{"h", "cpp"} {
-			if exists(t, "src/quest/plugins/q15t/src/"+n+"."+e) {
-				t.Errorf("%s.%s still exists", n, e)
-			}
-		}
-	}
-	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
-	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
-			continue
-		}
-		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
-		for _, bad := range []string{"vrapi_SetClockLevels", "vrapi_SetDisplayRefreshRate", "Q15T_HZ_MATCH90", "SetClockRaise"} {
-			if strings.Contains(code, bad) {
-				t.Errorf("%s names %s", e.Name(), bad)
-			}
-		}
-	}
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	for _, bad := range []string{"Q15T_HZ_MATCH90", "Q15T_CPU_LEVEL", "Q15T_GPU_LEVEL", "clock_levels", "refresh_rate", "plugin_args"} {
-		if strings.Contains(cmake, bad) {
-			t.Errorf("the plugin's CMake still names %s", bad)
-		}
-	}
-	if !pluginGone(t) && !strings.Contains(cmake, "src/combat_map.cpp") {
-		t.Error("the detector aibots reads is not built")
-	}
-	if strings.Contains(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"), "hz_level") || strings.Contains(read(t, "justfile"), "hz_level") {
+func TestTheRecipesWriteNoHzLevelAndTheCombatADRsAreInPlace(t *testing.T) {
+	if strings.Contains(read(t, "justfile"), "hz_level") {
 		t.Error("the config marker still carries hz_level")
 	}
-	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
-	for _, bad := range []string{"clock_candidate", "clock_arg", "hz_mode", "ArgString"} {
-		if strings.Contains(plugin, bad) {
-			t.Errorf("the init line still has %s", bad)
-		}
-	}
 	for _, n := range []string{"0001-match-refresh-rate.md", "0002-level-refresh-rate-default.md"} {
-		if !exists(t, "docs/quest/combat/adr/"+n) || exists(t, "docs/quest/q15t/adr/"+n) {
+		if !exists(t, "docs/quest/combat/adr/"+n) {
 			t.Errorf("%s is not where the combat ADRs live", n)
 		}
 	}

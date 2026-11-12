@@ -172,14 +172,14 @@ class CheckArena(unittest.TestCase):
         self.assertEqual(qb.check_arena(self.make())["event"], "arena_has_no_combat")
 
     def test_each_combat_entry_is_refused_by_name(self):
-        for entry in (*qb.REFERENCE_ENTRIES, "lib/arm64-v8a/libq15t.so", "lib/arm64-v8a/libnevr_plugin_manifest.so"):
+        for entry in (*qb.REFERENCE_ENTRIES, "lib/arm64-v8a/libnevr_plugin_manifest.so"):
             with self.subTest(entry=entry):
                 refusal = self.refused(self.make(extra=(entry,)))
                 self.assertEqual(refusal.event, "arena_has_combat_entries")
                 self.assertEqual(refusal.fields["entries"], [entry])
 
     def test_a_stamp_other_than_arena_or_none_is_refused(self):
-        for stamp in (None, b"", b"combat", b"q15t", b"Arena", b"arena\n"):
+        for stamp in (None, b"", b"combat", b"perf-probe", b"Arena", b"arena\n"):
             with self.subTest(stamp=stamp):
                 self.assertEqual(self.refused(self.make(stamp=stamp)).event, "arena_stamp_wrong")
 
