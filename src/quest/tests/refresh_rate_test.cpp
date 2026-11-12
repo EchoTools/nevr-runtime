@@ -261,7 +261,13 @@ void TheHeadsetIsTheIdentityStepsProfile() {
                "\"consequence\":\"the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level "
                "rate; the quest2 field of the install line and of each request line reads the generic profile's 0\"}");
   }
-  QCHECK(GameAsks(90.0f) == 90.0f);
+  // The game asks above the level rate and a combat level is loaded: with the rule on, the next frame would re-ask 90 and write a switch
+  // line. With it off the request is logged as the game made it, and the frame re-asks nothing and writes no switch line: this is what pins
+  // the tick's `g_on` gate (a session rate at or below the level rate, or no level, would stop the tick before the gate mattered).
+  QCHECK(GameAsks(120.0f) == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.empty());
   const std::vector<Line> witnessRequest = Lines("combat_refresh_rate_request");
   QCHECK(witnessRequest.size() == 1U && Has(witnessRequest[0].text, "\"mode\":\"witness\"") && Has(witnessRequest[0].text, "\"quest2\":0"));
   QCHECK(Lines("combat_refresh_rate_switch").empty());
