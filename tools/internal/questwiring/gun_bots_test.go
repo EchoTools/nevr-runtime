@@ -111,8 +111,14 @@ func TestThePluginHoldsNoneOfThemAndTheDocsMoved(t *testing.T) {
 
 func TestTheMarkerDirectoryStaysWherePlayersProfilesAre(t *testing.T) {
 	legacy := read(t, "src/quest/combat/legacy_switch.h")
-	if !strings.Contains(legacy, `/sdcard/Android/data/%.160s/files/q15t`) {
-		t.Error("the directory the combat modules read the plugin's files from is not files/q15t")
+	if !strings.Contains(legacy, `inline constexpr const char* kDataSubdir = "q15t";`) ||
+		!strings.Contains(legacy, `"/sdcard/Android/data/%.160s/files/%s", pkg, kDataSubdir`) {
+		t.Error("legacy_switch.h does not name the data directory players' gun-hand markers are in")
+	}
+	for _, f := range []string{"src/quest/combat/table_step.cpp", "src/quest/combat/sendguard.cpp"} {
+		if code := stripComments(read(t, f)); strings.Contains(code, "/files/") || !strings.Contains(code, "legacy::") {
+			t.Errorf("%s names the data directory itself: it takes it from legacy_switch.h", f)
+		}
 	}
 	arm := read(t, "src/quest/combat/weapon_arm.cpp")
 	if !strings.Contains(arm, `"%s/t26arm.%s"`) || !strings.Contains(arm, "legacy::Directory(out, n)") {

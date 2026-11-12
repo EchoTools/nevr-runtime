@@ -76,7 +76,7 @@ runm sg_end_never          $S "s/  if (g_hook.installed()) LogStats(true);/  (vo
 runm sg_off_is_installed   $S "s/    return {false, \"off_config\", true};/    return {true, \"off_config\", true};/"
 runm sg_off_not_off        $S "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
 runm sg_refused_stays_armed $S "s/  if (!installed \&\& !g_hook.installed()) EnterThunk::Disarm();/  (void)g_hook;/"
-runm sg_legacy_subdir      $H "s/kLegacySwitchSubdir = \"q15t\";/kLegacySwitchSubdir = \"q15x\";/"
+runm sg_legacy_subdir      $S "s|sentinel::FilesDir(), legacy::kDataSubdir);|sentinel::FilesDir(), \"data\");|"
 runm sg_legacy_not_looked  $S "s/fits ? dir : nullptr);/fits ? nullptr : nullptr);/"
 # the shared files this module changed (each built and run in its own test)
 CI=src/quest/combat/combat_install.cpp

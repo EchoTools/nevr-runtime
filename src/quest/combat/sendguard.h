@@ -84,9 +84,6 @@ inline constexpr unsigned kDropLines = 8;        // `dropped` lines written per 
 inline constexpr unsigned kStatsEvery = 16384;   // a Debug stats line every this many passes (a power of two)
 inline constexpr unsigned kStatsDropEvery = 1024;  // and every this many drops after the first kDropLines (a power of two)
 
-// The plugin's data directory below the sentinel's files folder (sentinel::FilesDir()), where its switch file `sendguard.off` was read from.
-inline constexpr const char* kLegacySwitchSubdir = "q15t";
-
 // Installs on the libr15 `lookup` finds. `enabled` is combat.sendguard; `legacySwitchDir` is where a `sendguard.off` of the old plugin
 // would sit (nullptr: not looked for). Logs one combat_sendguard_install line.
 // installed true: the wrapper is in. A module that is off by its switch answers `off` (status "off_config"): nothing is wrong and nothing

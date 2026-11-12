@@ -44,6 +44,15 @@ var deletedPluginAllowedEverywhere = []allowance{
 
 // Removed from a line of one file before it is scanned.
 var deletedPluginAllowed = map[string][]allowance{
+	"src/quest/combat/legacy_switch.h": {
+		{`kDataSubdir = "` + deletedWord + `"`, "the data directory below the app's external files folder: players' devices hold their gun-hand markers there (docs/adr/0046 rule 4), so its name is kept"},
+	},
+	"src/quest/tests/sendguard_test.cpp": {
+		{`"/` + deletedWord + `"`, "pins the data directory's name the sendguard install looks in (legacy_switch.h kDataSubdir)"},
+	},
+	"tools/internal/questwiring/gun_bots_test.go": {
+		{`kDataSubdir = "` + deletedWord + `"`, "pins the one definition of the data directory's name (legacy_switch.h)"},
+	},
 	// One entry per file. A change that keeps a name adds its entry above this line.
 }
 

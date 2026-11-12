@@ -55,7 +55,7 @@ void* DlLookup(const char* symbol) noexcept {
   return lib != nullptr ? dlsym(lib, symbol) : nullptr;
 }
 
-// The player's data directory: /sdcard/Android/data/<package>/files/q15t (legacy_switch.h), made when absent. A directory a test names is used as it is.
+// The player's data directory (legacy_switch.h, legacy::Directory), made when absent. A directory a test names is used as it is.
 bool DataDir(char* out, std::size_t n) noexcept {
   if (!legacy::Directory(out, n)) return false;
   if (access(out, W_OK) != 0 && !legacy::g_dirSet.load(std::memory_order_acquire)) mkdir(out, 0770);

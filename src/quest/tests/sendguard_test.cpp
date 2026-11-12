@@ -627,7 +627,8 @@ void TheShippedProcessEndWritesTheFinalLineOnce() {
   Finish();
 }
 
-// The table's row finds the old switch file where the plugin kept it: below the sentinel's files folder, in q15t.
+// The table's row finds the old switch file in the data directory below the sentinel's files folder; the directory's name is
+// pinned here as players' devices hold it (legacy_switch.h kDataSubdir).
 void TheProductionPathLooksWhereThePluginKeptItsSwitchFile() {
   char tmpl[] = "/tmp/nevr-sendguard-files-XXXXXX";
   QCHECK(mkdtemp(tmpl) != nullptr);

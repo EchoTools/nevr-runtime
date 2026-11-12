@@ -115,7 +115,7 @@ Stats CurrentStats() noexcept;
 // restores production.
 using AskFn = int (*)(void* ovr, float hz) noexcept;
 void SetAskForTest(AskFn fn) noexcept;
-// The directory the legacy kill files are looked for in (production: the plugin's data directory, /sdcard/Android/data/<package>/files/q15t).
+// The directory the legacy kill files are looked for in (production: the data directory, legacy_switch.h legacy::Directory).
 // nullptr or "" restores production.
 void SetLegacyDirForTest(const char* dir) noexcept;
 // How the re-ask finds libr15 (production: the loaded image). The re-ask reads vrapi_SetDisplayRefreshRate's slot in the image this finds

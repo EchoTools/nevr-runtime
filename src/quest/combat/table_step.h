@@ -92,7 +92,7 @@ void WarnLegacySwitch(const char* event, const char* file, const char* key) noex
 // The CR15Game the scope reads (production: the object the combat tick verified). nullptr restores production.
 using GameFn = std::uintptr_t (*)() noexcept;
 void SetGameForTest(GameFn fn) noexcept;
-// The directory the kill files are looked for in (production: /sdcard/Android/data/<package>/files/q15t). nullptr or "" restores production.
+// The directory the kill files are looked for in (production: legacy_switch.h, legacy::Directory). nullptr or "" restores production.
 void SetLegacyDirForTest(const char* dir) noexcept;
 // How many times CurrentScope read the game's levels (a call that found no game made no read).
 std::uint32_t ScopeReadsForTest() noexcept;

@@ -8,6 +8,7 @@
 
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
@@ -71,23 +72,13 @@ std::uintptr_t GameNow() noexcept {
   return fn != nullptr ? fn() : tick::Game();
 }
 
-// The plugin's data directory: /sdcard/Android/data/<package>/files/q15t, the package from /proc/self/cmdline (the plugin's own rule), or the
-// test's. False when none can be named.
+// The data directory (legacy_switch.h, legacy::Directory), or the test's. False when none can be named.
 bool LegacyDir(char* out, std::size_t n) noexcept {
   if (g_legacyDirSet.load(std::memory_order_acquire)) {
     std::snprintf(out, n, "%s", g_legacyDir);
     return true;
   }
-  char cmd[256] = {};
-  std::FILE* f = std::fopen("/proc/self/cmdline", "re");
-  if (f == nullptr) return false;
-  const std::size_t got = std::fread(cmd, 1, sizeof(cmd) - 1, f);
-  std::fclose(f);
-  cmd[got] = '\0';
-  if (char* colon = std::strchr(cmd, ':')) *colon = '\0';
-  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return false;
-  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", cmd);
-  return true;
+  return legacy::Directory(out, n);
 }
 
 }  // namespace

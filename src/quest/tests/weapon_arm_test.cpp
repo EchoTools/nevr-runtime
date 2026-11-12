@@ -469,7 +469,7 @@ void AScopeThatCannotChangeRefusesTheInstall() {
 
 void AnUnwritableDirectory() {  // 12. waits and reports, sets nothing (no marker could be kept)
   Reset(1, 0, -1);
-  wa::SetLegacyDirForTest("/nonexistent/q15t");
+  wa::SetLegacyDirForTest("/nonexistent/data");
   for (int i = 0; i < 5; ++i) Pass();
   CHECK(g_setCalls == 0 && HasLine("combat_weapon_arm_waiting", "no writable data directory"), "set without a place for the marker");
   wa::SetLegacyDirForTest(g_dir.c_str());
