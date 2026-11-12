@@ -11,6 +11,7 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -73,31 +74,62 @@ std::vector<std::uint8_t> Slurp(const std::string& path) {
   return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// A descriptor on a copy of `bytes`, as the platform's one read hands the loader its descriptor: what it maps is these bytes,
+// whatever the name holds afterwards. -1 when the copy cannot be made.
+int DescriptorOf(const std::vector<std::uint8_t>& bytes) {
+  const int fd = ::memfd_create("fake-plugin", MFD_CLOEXEC);
+  if (fd < 0) return -1;
+  std::size_t done = 0;
+  while (done < bytes.size()) {
+    const ssize_t put = ::write(fd, bytes.data() + done, bytes.size() - done);
+    if (put <= 0) {
+      ::close(fd);
+      return -1;
+    }
+    done += static_cast<std::size_t>(put);
+  }
+  return fd;
+}
+
 class FakePlatform final : public Platform {
  public:
   ~FakePlatform() override {
     for (auto& entry : handles) ::dlclose(entry.second);  // the next test sees a fresh library
+    // The descriptors stay open until here, so a number is not reused while an object is mapped from its /proc name.
+    for (const int fd : descriptors) ::close(fd);
   }
 
-  bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override {
+  bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes, int* fd) override {
     ++reads;
+    *fd = -1;
     if (throwOnRead == file) throw std::runtime_error("read");
     const auto in_memory = memory.find(file);
     if (in_memory != memory.end()) {
       *bytes = in_memory->second;
-      return true;
+    } else {
+      if (!readFromDisk) return false;
+      *bytes = Slurp(g_dir + "/" + file);
+      if (bytes->empty()) return false;
     }
-    if (!readFromDisk) return false;
-    *bytes = Slurp(g_dir + "/" + file);
-    return !bytes->empty();
+    const int copy = DescriptorOf(*bytes);
+    if (copy < 0) return false;
+    descriptors.push_back(copy);
+    fdFile[copy] = file;
+    *fd = copy;
+    // A write under the name after the read (a racing writer, or a plugin already mapped): the descriptor still holds the
+    // bytes that were read, and the loader must map those.
+    const auto swap = swapAfterRead.find(file);
+    if (swap != swapAfterRead.end()) memory[file] = swap->second;
+    return true;
   }
-  void* Open(const std::string& file) override {
+  void* Open(int fd, const std::string& file) override {
     opened.push_back(file);
-    const auto alias = openAs.find(file);
-    void* handle = ::dlopen((g_dir + "/" + (alias != openAs.end() ? alias->second : file)).c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (refuseMap) return nullptr;
+    void* handle = ::dlopen(("/proc/self/fd/" + std::to_string(fd)).c_str(), RTLD_NOW | RTLD_LOCAL);
     if (handle != nullptr) handles[file] = handle;
     return handle;
   }
+  void CloseFile(int fd) override { closedFds.push_back(fd); }
   void* Symbol(void* handle, const char* name) override {
     if (!throwOnSymbol.empty() && throwOnSymbol == name) throw std::runtime_error("symbol");
     if (std::find(hiddenSymbols.begin(), hiddenSymbols.end(), name) != hiddenSymbols.end()) return nullptr;
@@ -160,7 +192,11 @@ class FakePlatform final : public Platform {
   // the only libr15 a plugin loads on (`libr15_not_verified`); a test that means the stock or an unverified file says so.
   Libr15PatchState patch = {true, kGameBuild};
   std::size_t buildIdReads = 0;
-  std::map<std::string, std::string> openAs;       // file served from `memory` -> the fixture object that is mapped for it
+  bool refuseMap = false;                          // Open says the object does not map (a dlopen refusal)
+  std::map<std::string, std::vector<std::uint8_t>> swapAfterRead;  // what the name holds once the loader has read it
+  std::vector<int> descriptors;                    // every descriptor ReadFile returned, closed with the fake
+  std::map<int, std::string> fdFile;               // the file each descriptor was read as
+  std::vector<int> closedFds;                      // the descriptors the loader handed back through CloseFile
   std::uintptr_t base = 0x7000000000;
   const NevrQuestHostApi* questApi = &kFakeQuestApi;
   MainLevel level;  // the main level the game reports (#1106); none until a case sets it
@@ -778,8 +814,8 @@ const std::string& DerivedId() {
 const char* const kThirdId = "3333333333333333333333333333333333333333";
 
 // Serves libfx_ok.so's bytes as `file` with the declared-IDs note rewritten to `ids` (the note keeps its size: the text is
-// padded with spaces), and maps libfx_ok.so itself when the loader opens it. The declared list is what the loader decides
-// from, so this is a plugin that declares exactly `ids`.
+// padded with spaces). The loader checks these bytes and maps these bytes: the object is the one served, which is a plugin
+// that declares exactly `ids`.
 void ServeDeclaring(FakePlatform& platform, const std::string& file, const std::string& ids) {
   std::vector<std::uint8_t> bytes = Slurp(g_dir + "/libfx_ok.so");
   const std::string original =
@@ -792,7 +828,6 @@ void ServeDeclaring(FakePlatform& platform, const std::string& file, const std::
   text.resize(original.size(), ' ');
   std::copy(text.begin(), text.end(), at);
   platform.memory[file] = bytes;
-  platform.openAs[file] = "libfx_ok.so";
 }
 
 // Our patched libr15 as the loader meets it: the live note is the derived ID and Attach recorded it verified.
@@ -1106,13 +1141,33 @@ TEST(LoaderReportsAMissingFileAsUnreadable) {
 
 TEST(LoaderReportsACheckedFileThatDoesNotMapAsADlopenFailure) {
   Env env;
-  env.platform.memory["libfx_ghost.so"] = Slurp(g_dir + "/libfx_ok.so");  // passes every static check, but is not on disk
+  env.platform.memory["libfx_ghost.so"] = Slurp(g_dir + "/libfx_ok.so");  // passes every static check, and the map refuses it
+  env.platform.refuseMap = true;
   env.loader->Plan({Item("ghost", "libfx_ghost.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("ghost")->outcome == Outcome::kFailed);
   CHECK_EQ(env.platform.Record("ghost")->reason, std::string(reason::kDlopenFailed));
   CHECK_EQ(env.platform.opened.size(), std::size_t{1});
   CHECK(env.platform.closed.empty());  // nothing was mapped, so nothing to close
+  CHECK_EQ(env.platform.closedFds.size(), std::size_t{1});  // the descriptor the check read is still closed
+}
+
+// #1521: the loader checks the bytes of one descriptor and maps that descriptor. A write under the name after the read must
+// not reach the mapping: the object that runs is the one whose hash the record carries.
+TEST(LoaderMapsTheBytesItHashedWhenTheNameChangesAfterTheRead) {
+  Env env;
+  const std::vector<std::uint8_t> good = Slurp(g_dir + "/libfx_ok.so");
+  env.platform.memory["libfx_swap.so"] = good;
+  env.platform.swapAfterRead["libfx_swap.so"] = {'n', 'o', 't', ' ', 'a', ' ', 'p', 'l', 'u', 'g', 'i', 'n'};
+  env.loader->Plan({Item("swap", "libfx_swap.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("swap");
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK_EQ(r->sha256, data::Sha256Hex(good.data(), good.size()));
+  const FxSeen* seen = env.platform.Seen("libfx_swap.so");
+  CHECK(seen != nullptr);
+  if (seen != nullptr) CHECK_EQ(seen->init_count, 1u);  // the hashed object's own init ran
+  CHECK_EQ(env.platform.closedFds.size(), std::size_t{1});  // its descriptor is handed back once the plugin is kept
 }
 
 TEST(LoaderFailsAPluginWithoutGetInfo) {
@@ -1704,6 +1759,14 @@ TEST(PlatformMapsPluginLogLevelsAndDropsDebugOutsideDevelopment) {
   CHECK(SinkLevel(NEVR_LOG_ERROR, false) == LogLevel::kError);
 }
 
+// The read the loader makes, with its descriptor closed again: the test asks only whether the read worked.
+bool ReadsOk(SentinelPlatform& platform, const std::string& file, std::vector<std::uint8_t>* bytes) {
+  int fd = -1;
+  const bool ok = platform.ReadFile(file, bytes, &fd);
+  platform.CloseFile(fd);
+  return ok;
+}
+
 TEST(PlatformReadsARegularFileAndRefusesALinkAndADirectory) {
   char tmpl[] = "/tmp/nevr-plugin-platform-XXXXXX";
   const char* dir = ::mkdtemp(tmpl);
@@ -1718,14 +1781,14 @@ TEST(PlatformReadsARegularFileAndRefusesALinkAndADirectory) {
   CHECK_EQ(::mkfifo((root + "/libfifo.so").c_str(), 0600), 0);  // opens and reads as an empty file, but is not one
   SentinelPlatform platform(root, false);
   std::vector<std::uint8_t> bytes;
-  CHECK(platform.ReadFile("libreal.so", &bytes));
+  CHECK(ReadsOk(platform, "libreal.so", &bytes));
   CHECK_EQ(bytes.size(), std::size_t{5});
-  CHECK(!platform.ReadFile("liblink.so", &bytes));
-  CHECK(!platform.ReadFile("libdir.so", &bytes));
-  CHECK(!platform.ReadFile("libfifo.so", &bytes));
-  CHECK(!platform.ReadFile("libmissing.so", &bytes));
+  CHECK(!ReadsOk(platform, "liblink.so", &bytes));
+  CHECK(!ReadsOk(platform, "libdir.so", &bytes));
+  CHECK(!ReadsOk(platform, "libfifo.so", &bytes));
+  CHECK(!ReadsOk(platform, "libmissing.so", &bytes));
   SentinelPlatform nowhere("", false);
-  CHECK(!nowhere.ReadFile("libreal.so", &bytes));
+  CHECK(!ReadsOk(nowhere, "libreal.so", &bytes));
   ::unlink((root + "/libreal.so").c_str());
   ::unlink((root + "/liblink.so").c_str());
   ::rmdir((root + "/libdir.so").c_str());
@@ -1775,33 +1838,46 @@ TEST(PlatformSaysAbsentForAMissingFileAndUnreadableWithAReasonForTheRest) {
   ::rmdir(root.c_str());
 }
 
-TEST(PlatformOpensTheDirectoryQualifiedPathAndNeverTheBareName) {
+// The object is mapped from the descriptor the read returned, and a name is never looked up: a name the linker resolves from
+// the system, or one absent from the library directory, is never read, so nothing is mapped for it (#1521).
+TEST(PlatformMapsTheDescriptorItReadAndNeverALookupByName) {
   SentinelPlatform platform(g_dir, false);
-  void* const handle = platform.Open("libfx_ok.so");  // only in g_dir: a bare-name dlopen would search elsewhere and fail
+  std::vector<std::uint8_t> bytes;
+  int fd = -1;
+  CHECK(platform.ReadFile("libfx_ok.so", &bytes, &fd));  // only in g_dir: a bare-name dlopen would search elsewhere and fail
+  void* const handle = platform.Open(fd, "libfx_ok.so");
   CHECK(handle != nullptr);
   if (handle != nullptr) {
     CHECK(platform.Symbol(handle, "NevrPluginGetInfo") != nullptr);
     ::dlclose(handle);
   }
-  // A name the linker resolves from the system, absent from the library directory, must not load.
-  CHECK(platform.Open("libc.so.6") == nullptr);
-  CHECK(platform.Open("libmissing.so") == nullptr);
+  platform.CloseFile(fd);
+  int none = -1;
+  CHECK(!platform.ReadFile("libc.so.6", &bytes, &none));
+  CHECK(!platform.ReadFile("libmissing.so", &bytes, &none));
+  CHECK(platform.Open(-1, "libc.so.6") == nullptr);
   SentinelPlatform nowhere("", false);
-  CHECK(nowhere.Open("libc.so.6") == nullptr);
-  CHECK(nowhere.Open("libfx_ok.so") == nullptr);
+  int other = -1;
+  CHECK(!nowhere.ReadFile("libfx_ok.so", &bytes, &other));
+  CHECK(nowhere.Open(-1, "libfx_ok.so") == nullptr);
 }
 
 TEST(PlatformCloseUnmapsWhatOpenMapped) {
-  const std::string path = g_dir + "/libfx_second.so";
-  CHECK(::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD) == nullptr);  // not mapped yet: an earlier test unmapped it
   SentinelPlatform platform(g_dir, false);
-  void* const handle = platform.Open("libfx_second.so");
+  std::vector<std::uint8_t> bytes;
+  int fd = -1;
+  CHECK(platform.ReadFile("libfx_second.so", &bytes, &fd));
+  // The object's name in the process is its descriptor's /proc path, while the descriptor is open.
+  const std::string path = "/proc/self/fd/" + std::to_string(fd);
+  CHECK(::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD) == nullptr);  // not mapped yet
+  void* const handle = platform.Open(fd, "libfx_second.so");
   CHECK(handle != nullptr);
   void* const again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
   CHECK(again != nullptr);
   if (again != nullptr) ::dlclose(again);
   platform.Close(handle);
   CHECK(::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD) == nullptr);
+  platform.CloseFile(fd);
   platform.Close(nullptr);  // nothing to close is not an error
 }
 
