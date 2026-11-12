@@ -911,11 +911,6 @@ static DWORD WINAPI GpuHungDialogThread(LPVOID text) {
 }
 #endif
 
-void nevr_builtin_log_filter::NoteRuntimeAdapter(const char* gpu_name, const char* gpu_driver) {
-    std::lock_guard<std::mutex> lock(g_gpuHungMutex);
-    g_gpuHung.SetKnownAdapter(gpu_name != nullptr ? gpu_name : "", gpu_driver != nullptr ? gpu_driver : "");
-}
-
 static void ObserveGpuHung(const char* line) {
     /* Cheap pre-filter: every game line passes through here. */
     if (std::strstr(line, "DXGI_ERROR_DEVICE_HUNG") == nullptr && std::strstr(line, "Video Card:") == nullptr &&

@@ -68,11 +68,9 @@ class Tracker {
     handled_ = true;
 
     result.action = (isServer || isHeadless) ? Action::LogOnly : Action::LogAndNotify;
-    const std::string& shownCard = video_card_.empty() ? known_card_ : video_card_;
-    const std::string& shownDriver = driver_version_.empty() ? known_driver_ : driver_version_;
     result.log_line = std::string("[NEVR.GPU] the game's graphics device stopped responding (DXGI_ERROR_DEVICE_HUNG)") +
-                      " gpu=\"" + (shownCard.empty() ? "unknown" : shownCard) + "\"" +
-                      " driver=\"" + (shownDriver.empty() ? "unknown" : shownDriver) + "\"" +
+                      " gpu=\"" + (video_card_.empty() ? "unknown" : video_card_) + "\"" +
+                      " driver=\"" + (driver_version_.empty() ? "unknown" : driver_version_) + "\"" +
                       "; this is a known GPU driver problem with Meta Horizon Link, update or roll back the "
                       "driver: " + std::string(kMetaDriverPage) + " (nevr-runtime #553)";
     result.dialog_text =
@@ -83,21 +81,12 @@ class Tracker {
     return result;
   }
 
-  // The adapter the runtime read itself (render_config's first line). The game prints its System Info after the HUNG
-  // line, so this names the card and driver when no System Info line came first; a System Info value seen first wins.
-  void SetKnownAdapter(std::string_view card, std::string_view driver) {
-    if (!card.empty()) known_card_ = std::string(card);
-    if (!driver.empty()) known_driver_ = std::string(driver);
-  }
-
   bool handled() const { return handled_; }
 
  private:
   bool handled_ = false;
   std::string video_card_;
   std::string driver_version_;
-  std::string known_card_;
-  std::string known_driver_;
 };
 
 }  // namespace nevr_gpu_hung

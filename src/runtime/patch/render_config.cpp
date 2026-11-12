@@ -304,7 +304,6 @@ std::string Collector::Poll(std::uint64_t nowMs) {
     // The two values that are not game memory are asked for once, here, and kept: the DXGI walk and the library lookup
     // stay off every later pass.
     if (externals_.gpuDriver && now.gpu.ok) gpuDriver_ = externals_.gpuDriver(now.gpu.value);
-    if (now.gpu.ok) gpuName_ = now.gpu.value;
     if (externals_.runtimeVersion) runtimeVersion_ = externals_.runtimeVersion();
     now.gpuDriver = gpuDriver_;
     now.runtimeVersion = runtimeVersion_;

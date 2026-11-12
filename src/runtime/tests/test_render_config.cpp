@@ -154,18 +154,6 @@ TEST(RenderConfigCollector, TheFirstPassWritesTheFirstFrameLineWithEveryFieldFro
   EXPECT_EQ(c.Poll(0), kFirstFrameLine);
 }
 
-// #1846: the adapter the first line read is kept for the GPU-hung notice, which names it when the game's System Info
-// comes after its HUNG line.
-TEST(RenderConfigCollector, TheGpuAndDriverTheFirstLineReadAreKeptForTheGpuHungNotice) {
-  World w;
-  BootApplyWithSelector(w);
-  Collector c(w.image, kBase, w.observer, w.Ext());
-  EXPECT_EQ(c.GpuName(), "unknown");
-  c.Poll(0);
-  EXPECT_EQ(c.GpuName(), "NVIDIA GeForce GTX 970");
-  EXPECT_EQ(c.GpuDriver(), "31.0.15.3623");
-}
-
 TEST(RenderConfigCollector, ASecondPassWithNothingChangedWritesNothing) {
   World w;
   BootApplyWithSelector(w);

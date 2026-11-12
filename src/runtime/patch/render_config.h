@@ -223,10 +223,6 @@ class Collector {
   /// `nowMs` is a monotonic clock. Returns the line to log, or an empty string when there is nothing to say.
   std::string Poll(std::uint64_t nowMs);
 
-  /// The GPU name and driver the first line read ("unknown" before it), for the GPU-hung notice (#1846).
-  const std::string& GpuName() const { return gpuName_; }
-  const std::string& GpuDriver() const { return gpuDriver_; }
-
  private:
   const MemoryReader& reader_;
   std::uintptr_t imageBase_;
@@ -238,7 +234,6 @@ class Collector {
   std::uint64_t lastEvalMs_ = 0;
   bool emitted_ = false;
   Snapshot last_;
-  std::string gpuName_ = "unknown";
   std::string gpuDriver_ = "unknown";
   std::string runtimeVersion_ = "unknown";
 };
