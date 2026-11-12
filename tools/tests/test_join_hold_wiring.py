@@ -1,4 +1,4 @@
-"""#1737 row 101f: the join hold on the PC dedicated server is wired where its rules need it.
+"""#1737: the join hold on the PC dedicated server is wired where its rules need it.
 
 src/runtime/tests/test_join_hold.cpp drives the pure gate (server/join_hold_rules.h). The call sites live in
 gameserver_callbacks.cpp, gameserver.cpp and boot.cpp, which no test target links, so their order is checked here over

@@ -1,6 +1,6 @@
 #pragma once
 
-// Join hold on the PC dedicated server (#1737 row 101f; rules in join_hold_rules.h, the game's functions in
+// Join hold on the PC dedicated server (#1737; rules in join_hold_rules.h, the game's functions in
 // docs/reference/join-hold.md). With network.join_hold_ms above 0, the server's forward of the service's accept
 // (LobbyAcceptPlayersSuccessV2) waits until the session's levels are seen enabled, then goes to the game in arrival
 // order. Install runs once from RunDeferredRuntimeBootstrap (boot.cpp) after the config is loaded; a client or a

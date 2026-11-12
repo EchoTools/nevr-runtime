@@ -1,6 +1,6 @@
 #pragma once
 
-// Join hold on the PC dedicated server (#1737 row 101f; docs/reference/join-hold.md): the pure decisions. The service's
+// Join hold on the PC dedicated server (#1737; docs/reference/join-hold.md): the pure decisions. The service's
 // accept of an entrant is held while the session's level set is loading, and forwarded once it is enabled. No game
 // image, no clock of its own (the caller passes milliseconds), no lock (join_hold.cpp holds one around the Gate).
 

@@ -67,7 +67,7 @@ bool NevrCfgSocialFacadeEnabled();
 /// false or perf (the result is then 0). Only readable after the CLI is parsed, as every config.yaml read.
 int NevrCfgFrameStatsMode(int* recognised);
 
-/// `network.join_hold_ms` as written in config.yaml (#1737 row 101f, server/join_hold_rules.h ParseJoinHoldMs reads it),
+/// `network.join_hold_ms` as written in config.yaml (#1737, server/join_hold_rules.h ParseJoinHoldMs reads it),
 /// or null when the key is absent or empty. Interned. There is no flat key for it (the N133 map keeps its 36 entries).
 /// Only readable after the CLI is parsed, as every config.yaml read.
 const char* NevrCfgJoinHoldMs();
