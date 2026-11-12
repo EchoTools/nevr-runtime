@@ -132,3 +132,6 @@ Falsifiers (any one disproves it):
 not the stock load, a symbol that is a function, the two switches, the missing and the wrong image, once, the golden lines) and `heap_step_test`.
 `just test-quest-hooks-pinned` runs `got_pinned_test`, which reads the four relocations, their symbol types, the `.rodata` sizes and the reader
 words in the real libr15.
+`src/quest/combat/mutants.sh heaps` runs `mutants.d/heaps.sh`: each rule of `heaps.cpp` and `heaps_targets.h` (every pin, each check before a write, each line field and
+level, the counts, the System heap's headset rule) removed or bent once, and `heaps_test` (or `heap_step_test` for the two rows only the shipped table sees) must fail on each;
+the script's header names the mutants no run can tell from the original and why. The `hrow_` mutants edit the shared install table and are run apart (`mutants.sh heaps '^hrow_'`).

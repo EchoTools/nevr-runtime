@@ -802,6 +802,14 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"lobby\""));
   Done();
+  // And the Quest 2's 72 Hz key off: the module is told so (its install line carries the key's value).
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig noQuest2At72;
+  noQuest2At72.refreshRateQuest2At72 = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(noQuest2At72);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"refresh_rate_quest2_72\":0"));
+  Done();
 }
 
 // levelname and the booster pool (#2181) are one feature behind `combat.levelname`: with the key off (the file's word) both are off and say so; with it

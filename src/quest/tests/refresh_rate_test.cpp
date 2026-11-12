@@ -398,6 +398,7 @@ void AComSessionFromArenaToCombatAndBack() {
   QCHECK(g_asks.size() == 4U && g_asks[3].hz == 120.0f);
   sw = Lines("combat_refresh_rate_switch");
   QCHECK(sw.size() == 4U && Has(sw[3].text, "no combat or lobby level: session rate"));
+  QCHECK(Has(sw[3].text, "\"level\":\"0000000000000000\""));  // no level: zero, written in full
   QCHECK(rr::CurrentStats().switches == 4);
   Done();
 }
@@ -531,7 +532,7 @@ void ALegacyKillFileIsWarnedAboutAndChangesNothing() {
     const char* file;
     const char* replacement;
   };
-  for (const Legacy& legacy : {Legacy{"hzlevel.off", "combat.refresh_rate: false"}, Legacy{"hzlobby90.off", "combat.refresh_rate_lobby: false"},
+  for (const Legacy& legacy : {Legacy{"hzlevel.off", "combat.refresh_rate: false"}, Legacy{"hzlobby90.off", "combat.refresh_rate_lobby: false (the default)"},
                                Legacy{"hz72q2.off", "combat.refresh_rate_quest2_72: false"}}) {
     const std::string path = base + "/" + legacy.file;
     std::FILE* f = std::fopen(path.c_str(), "w");
@@ -546,7 +547,7 @@ void ALegacyKillFileIsWarnedAboutAndChangesNothing() {
     if (w.size() == 1U) {
       QCHECK(w[0].level == sentinel::LogLevel::kWarn);
       QCHECK(Has(w[0].text, std::string("\"file\":\"") + legacy.file + "\""));
-      QCHECK(Has(w[0].text, std::string("\"replaced_by\":\"") + legacy.replacement));
+      QCHECK(Has(w[0].text, std::string("\"replaced_by\":\"") + legacy.replacement + "\""));
       QCHECK(Has(w[0].text, "\"msg\":"));
     }
     QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"lobby\""));
@@ -650,9 +651,118 @@ void TheProductionReaskCallsTheWordNowInTheSlot() {
   ClearGame();
   Frame();
   QCHECK(g_slotCalls.size() == 2U && Lines("combat_refresh_rate_switch").size() == 4U);
+  QCHECK(Has(Lines("combat_refresh_rate_switch")[3].text, "\"rc\":-1"));  // no image: the answer is -1 here too, not a call's result
   rr::SetImageLookupForTest(nullptr);
   Done();
   munmap(block, size);
+}
+
+// What the module reports about the last request and the last send, and the request line's level and result code.
+void TheStatsAndTheRequestLineReportWhatWasAskedAndSent() {
+  World(bv::Variant::kCombat, Keys(true, true, true), 0);
+  InstallRule();
+  g_lines.clear();
+  rr::Note(100.0f, 80.0f, 5);  // a request the game made: 100 asked, 80 sent, the call answered 5
+  rr::Stats stats = rr::CurrentStats();
+  QCHECK(stats.requests == 1 && stats.lastAsked == 100.0f && stats.lastSent == 80.0f);
+  const std::vector<Line> req = Lines("combat_refresh_rate_request");
+  QCHECK(req.size() == 1U);
+  if (req.size() == 1U) {
+    QCHECK(req[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(req[0].text, "\"rc\":5") && Has(req[0].text, "\"asked_hz\":\"100.0\"") && Has(req[0].text, "\"sent_hz\":\"80.0\""));
+  }
+  QCHECK(GameAsks(120.0f) == 120.0f);
+  stats = rr::CurrentStats();
+  QCHECK(stats.requests == 2 && stats.lastAsked == 120.0f && stats.lastSent == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  Frame();
+  stats = rr::CurrentStats();  // the tick's re-ask sets what was sent, not what the game asked
+  QCHECK(stats.switches == 1 && stats.lastAsked == 120.0f && stats.lastSent == 90.0f && stats.inLevel);
+  ClearGame();
+  Frame();
+  stats = rr::CurrentStats();
+  QCHECK(stats.switches == 2 && stats.lastAsked == 120.0f && stats.lastSent == 120.0f && !stats.inLevel);
+  Done();
+}
+
+// The headset reaches the request and the switch lines too, and the Quest 2's level rate is what the tick sends.
+void ATickOnAQuest2SaysSoOnEveryLine() {
+  World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);
+  InstallRule();
+  GameAsks(90.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  Frame();
+  const std::vector<Line> req = Lines("combat_refresh_rate_request");
+  const std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(req.size() == 1U && Has(req[0].text, "\"quest2\":1"));
+  QCHECK(sw.size() == 1U);
+  if (sw.size() == 1U) {
+    QCHECK(Has(sw[0].text, "\"quest2\":1") && Has(sw[0].text, "\"asked_hz\":\"90.0\"") && Has(sw[0].text, "\"sent_hz\":\"72.0\""));
+  }
+  Done();
+}
+
+// The install line's message says which of the three things the rule is doing.
+void TheInstallMessageSaysWhatTheRuleDoes() {
+  World(bv::Variant::kCombat, Keys(false, true, true), 0);
+  InstallRule();
+  std::vector<Line> l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "refresh_rate is off: the game's own rate always, every request logged"));
+  Done();
+  World(bv::Variant::kCombat, Keys(true, true, true), 0);
+  InstallRule();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "combat maps (and, in lobby mode, the combat lobby) ask for the level rate; an Echo Arena level keeps the game's rate"));
+  Done();
+  World(bv::Variant::kCombat);
+  for (std::size_t i = 0; i < combat::tick::kMaxCallbacks; ++i) combat::tick::Add([](std::uintptr_t) noexcept {});
+  InstallRule();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "the game-thread tick table is full, so the rule only lowers requests the game makes; it never re-asks on a level change"));
+  Done();
+}
+
+// The tick looks when 0.5 s have passed, not before: exactly 0.5 s after a look is a look, a hair before is not.
+void TheTickLooksAtExactlyHalfASecond() {
+  World(bv::Variant::kCombat);
+  InstallRule();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  g_now = 101.0;
+  rr::Tick(GameAddress());  // the look: schedules the next at 101.5
+  QCHECK(g_asks.size() == 1U);
+  ClearGame();
+  g_now = 101.49;
+  rr::Tick(GameAddress());
+  QCHECK(g_asks.size() == 1U);  // 0.49 s: no look
+  g_now = 101.5;
+  rr::Tick(GameAddress());
+  QCHECK(g_asks.size() == 2U && g_asks[1].hz == 120.0f);  // 0.5 s: the look
+  Done();
+}
+
+// A request that came with no ovr pointer leaves the tick nothing to ask through.
+void ATickWithoutTheGamesOvrAsksNothing() {
+  World(bv::Variant::kCombat);
+  InstallRule();
+  QCHECK(rr::Choose(nullptr, 120.0f) == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.empty() && !rr::CurrentStats().inLevel);
+  Done();
+}
+
+// With no lookup of the test's own, the re-ask finds libr15 through the loader's lookup: on a host there is none, and the answer is -1.
+void TheProductionReaskWithoutALookupFindsNoImage() {
+  World(bv::Variant::kCombat);
+  rr::SetAskForTest(nullptr);  // the production ask
+  InstallRule();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  const std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 1U && Has(sw[0].text, "\"rc\":-1"));
+  Done();
 }
 
 }  // namespace
@@ -675,6 +785,12 @@ int main() {
   AnArenaMatchOnTheCombatApkKeepsTheGamesRate();
   TheLobbiesArenaPlayersUseKeepTheGamesRate();
   ALegacyKillFileIsWarnedAboutAndChangesNothing();
+  TheStatsAndTheRequestLineReportWhatWasAskedAndSent();
+  ATickOnAQuest2SaysSoOnEveryLine();
+  TheInstallMessageSaysWhatTheRuleDoes();
+  TheTickLooksAtExactlyHalfASecond();
+  ATickWithoutTheGamesOvrAsksNothing();
+  TheProductionReaskWithoutALookupFindsNoImage();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

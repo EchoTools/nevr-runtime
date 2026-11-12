@@ -96,3 +96,8 @@ Falsifiers:
 ## Host tests and mutants
 
 `just test-quest-combat memsys` runs `memsys_test` (the pool is 0..1023 exactly once after the inline fill; the wrong caller and the wrong capacity pass through; five layouts the module does not recognise and a stack in read-only memory leave the stock 512 with one Warning; the witness once, raised or stock; a pinned word that differs and a slot another hook owns each refuse their row alone; the switch; the missing and the wrong image; once; the golden lines) and `heap_step_test`. A test cannot make a call return into libr15: the return-address gate is exercised through two test functions whose return addresses the test passes in through `SetSitesForTest`; that the real sites are `base + 0x18818cc` and `base + 0xf784e8` is the pin table, which `just test-quest-hooks-pinned` reads in the real libr15 (`got_pinned_test`).
+
+`src/quest/combat/mutants.sh memsys` runs `mutants.d/memsys.sh`: each rule of `memsys.cpp` and `memsys_targets.h` (every pin and each of the 21 code words, each doubt that refuses to
+write the pool, the return-address gates, the witness's classes, the install line for each outcome) removed or bent once, and `memsys_test` (or `heap_step_test` for the rows only the
+shipped table sees) must fail on each; the script's header names the mutants no run can tell from the original and why. The `msrow_` mutants edit the shared install table and are run
+apart (`mutants.sh memsys '^msrow_'`).
