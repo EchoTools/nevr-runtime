@@ -55,9 +55,14 @@ constexpr char kReentrantBytes[] = "reentrant";
 struct FakeHeap {
   struct Block {
     std::unique_ptr<std::uint8_t[]> memory;
+    // A reader buffer the test passes in as a static array (GameFinishesBuffer): the game's reader allocated it through
+    // the block's allocator, so the fake records it as allocated there and the game's release may free it.
+    const void* adopted = nullptr;
     std::uint64_t size = 0;
     std::uint64_t alignment = 0;
     bool freed = false;
+
+    const void* Address() const { return memory ? static_cast<const void*>(memory.get()) : adopted; }
   };
   std::mutex mutex;
   std::vector<Block> blocks;
@@ -67,7 +72,7 @@ struct FakeHeap {
   const Block* Find(const void* p) {
     std::lock_guard<std::mutex> lock(mutex);
     for (const Block& b : blocks) {
-      if (b.memory.get() == p) return &b;
+      if (b.Address() == p) return &b;
     }
     return nullptr;
   }
@@ -91,7 +96,7 @@ void* FakeAlloc(void* /*allocator*/, std::uint64_t alignment, std::uint64_t size
 std::uint64_t FakeFree(void* /*allocator*/, void* pointer) {
   std::lock_guard<std::mutex> lock(g_heap.mutex);
   for (FakeHeap::Block& b : g_heap.blocks) {
-    if (b.memory.get() == pointer && !b.freed) {
+    if (b.Address() == pointer && !b.freed) {
       b.freed = true;
       return 0;
     }
@@ -907,6 +912,18 @@ bool ProbeTransform(const void* in, std::uint64_t inSize, const void** out, std:
 // The game finishing buffer `index` of (type, name).
 void GameFinishesBuffer(std::uint64_t type, std::uint64_t name, std::uint32_t index, const void* buffer,
                         std::uint64_t size, const void* blockAllocator = &g_fakeAllocator) {
+  if (blockAllocator == &g_fakeAllocator && buffer != nullptr) {
+    std::lock_guard<std::mutex> lock(g_heap.mutex);
+    bool live = false;
+    for (const FakeHeap::Block& b : g_heap.blocks) live = live || (b.Address() == buffer && !b.freed);
+    if (!live) {
+      FakeHeap::Block adopted;
+      adopted.adopted = buffer;
+      adopted.size = size;
+      adopted.alignment = 16;
+      g_heap.blocks.push_back(std::move(adopted));
+    }
+  }
   std::array<std::uint8_t, 0x40> resource{};
   std::array<std::uint8_t, 0x38> callback{};
   SeedBlock(callback.data());
@@ -1253,17 +1270,14 @@ void* GameReadBuffer(const void* bytes, std::uint64_t size) {
 bool StillAllocated(const void* p) {
   std::lock_guard<std::mutex> lock(g_heap.mutex);
   for (const FakeHeap::Block& b : g_heap.blocks) {
-    if (b.memory.get() == p) return !b.freed;
+    if (b.Address() == p) return !b.freed;
   }
   return false;
 }
 
-// KNOWN-WRONG #2345: a buffer-0 replacement points the block at a copy in the game's heap and leaves the reader's
-// own buffer alone (game_buffer.h: the reader may own it), so nothing frees it: one buffer of orig_bytes stays
-// allocated, unreferenced by the block, for each load served. Serving one load per entry would cap it at one per
-// entry and lose the override on a level reload (#2343); transforms already pay it on every load. This test pins the cost so a
-// change to it is seen; the issue is to establish who owns the reader's buffer and free it.
-TEST_F(ResourceTransforms, EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone) {
+// #2345: a buffer-0 replacement points the block at a copy in the game's heap, and the reader's own buffer is freed
+// through the block's allocator, the one the release uses, once the copy is written. So no load leaves one allocated.
+TEST_F(ResourceTransforms, EachBufferZeroLoadServedFreesTheReadersOwnBufferAndBufferOneLeavesNone) {
   static const std::uint8_t fixed[] = {10, 20, 30, 40};
   RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
   static const std::uint8_t stock[] = {1, 2, 3, 4, 5, 6};
@@ -1274,7 +1288,8 @@ TEST_F(ResourceTransforms, EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllo
     ExpectGameCopy(fixed, sizeof(fixed));
     if (g_seenBuffer != original && StillAllocated(original)) left.push_back(original);
   }
-  EXPECT_EQ(left.size(), 3u) << "one reader buffer of orig_bytes per buffer-0 load served";
+  EXPECT_EQ(left.size(), 0u) << "the reader's buffer is freed through the block's allocator on each buffer-0 load served";
+  EXPECT_EQ(g_heap.foreignFrees, 0u);
 
   // Buffer 1: the payload is written over the reader's own buffer, which the block still holds, so none is left.
   constexpr std::uint64_t kPayloadKey = 0xbeac1969cb7b8861ull;  // Make(CGTextureResource, "Win10GPU")
@@ -1290,6 +1305,21 @@ TEST_F(ResourceTransforms, EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllo
     if (g_seenBuffer != original && StillAllocated(original)) ++payloadLeft;
   }
   EXPECT_EQ(payloadLeft, 0u);
+}
+
+// #2345: a reader buffer whose block names an allocator the release does not use is not the release's to free: the copy
+// is refused, the game keeps its own buffer, and nothing is freed.
+TEST_F(ResourceTransforms, AReaderBufferFromAnotherAllocatorIsKeptAndNotFreed) {
+  static const std::uint8_t fixed[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, fixed, sizeof(fixed), "fixed");
+  static const std::uint8_t stock[] = {1, 2, 3, 4, 5, 6};
+  const FakeAllocator other{g_fakeTable};
+  void* const original = GameReadBuffer(stock, sizeof(stock));
+  GameFinishesBuffer(kTransformType, kTransformName, 0, original, sizeof(stock), &other);
+  EXPECT_EQ(g_seenBuffer, original);
+  EXPECT_TRUE(StillAllocated(original));
+  EXPECT_TRUE(TestLogContains("reason=allocator_mismatch"));
+  EXPECT_EQ(g_heap.foreignFrees, 0u);
 }
 
 class GameHeapCopies : public ResourceTransforms {};
