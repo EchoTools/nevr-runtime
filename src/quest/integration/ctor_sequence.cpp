@@ -225,7 +225,7 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     // The headset identity (ADR 0031): after the reporter, so its one `headset_profile` line is written, and before anything that
-    // reads a headset setting (the texture-quality hook's first size query, the texture menu). Every launch, no feature.
+    // reads a headset setting (the texture-quality hook's first size query, the texture menu, the combat heap sizes). Every launch, no feature.
     r.Run(StepId::kIdentifyHeadset, [&] { return steps.IdentifyHeadset(); });
 
     // The build-time libr15 patch (ADR 0021): the first libr15 step. The reporter is running, so Attach's lines reach the same

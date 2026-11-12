@@ -7,9 +7,10 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/sentinel/hook_log.h"
-#include "quest/sentinel/texture_quality_hook.h"
+#include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest::integration {
 
@@ -61,7 +62,7 @@ bool IdentifyHeadsetWith(PropertyReader read) {
   inputs.systemName = "";  // OpenXR system name: not read yet (ADR 0031, R1)
 
   const headset_profile::Match match = headset_profile::Identify(inputs);
-  texture_quality::SetHeadsetProfile(match.profile);
+  headset_active::SetActive(match.profile);  // every consumer reads it there (quest/headset_active.h)
 
   char consequence[kConsequenceBytes] = {};
   FormatConsequence(*match.profile, consequence);

@@ -9,14 +9,11 @@
 #include <cstdio>
 #include <cstring>
 
-#if defined(__ANDROID__)
-#include <sys/system_properties.h>
-#endif
-
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
@@ -25,6 +22,9 @@
 namespace nevr_quest::combat::refresh_rate {
 
 namespace {
+
+namespace headset_profile = nevr_quest::headset_profile;
+namespace headset_active = nevr_quest::headset_active;
 
 constexpr double kLookEverySeconds = 0.5;
 
@@ -48,7 +48,6 @@ double g_nextLook = 0.0;  // the game thread only
 std::atomic<long> g_reaskThread{0};
 
 std::atomic<AskFn> g_ask{nullptr};
-std::atomic<int> g_quest2Override{-1};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
 
@@ -63,24 +62,23 @@ double Now() noexcept {
   return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
 }
 
-// KNOWN-WRONG #2037: ADR 0031 decision 4 reserves the identity inputs to the identity step; this reads `ro.product.device` itself, as the
-// q15t plugin did, until the headset profile that step chooses is handed to the combat modules. The headset profile's rules name the
-// headset from it (quest/headset_profile.h, IsQuest2Device).
-bool ReadDeviceIsQuest2() noexcept {
-  const int override = g_quest2Override.load(std::memory_order_relaxed);
-  if (override >= 0) return override != 0;
-#if defined(__ANDROID__)
-  char value[PROP_VALUE_MAX] = {};
-  __system_property_get("ro.product.device", value);
-  return IsQuest2Device(value);
-#else
-  return false;
-#endif
+// The headset is the identity step's profile (quest/headset_active.h, ADR 0031 decision 4): this file reads no system property. The step
+// runs in the sentinel's constructor, long before this normal step; with no profile set, the generic profile and one Warning.
+const headset_profile::Profile& Headset() noexcept {
+  if (headset_active::Active() == nullptr) {
+    char hz[16];
+    std::snprintf(hz, sizeof(hz), "%.0f", static_cast<double>(headset_profile::kGeneric.levelHz));
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_profile_missing",
+                        {{"profile", headset_profile::kGeneric.name},
+                         {"level_hz", hz},
+                         {"consequence", "the identity step set no headset profile before this step, so the rule asks the generic profile's level rate"}});
+  }
+  return *headset_active::ActiveOrGeneric();
 }
 
 // The level rates are the headset profiles' (quest/headset_profile.h): a Quest 2 asks its profile's 72, every other profile the match rate.
-static_assert(kQuest2LevelHz == nevr_quest::headset_profile::kQuest2.levelHz, "the Quest 2 level rate is the Quest 2 profile's");
-static_assert(kLevelHz == nevr_quest::headset_profile::kQuest3.levelHz && kLevelHz == nevr_quest::headset_profile::kGeneric.levelHz,
+static_assert(kQuest2LevelHz == headset_profile::kQuest2.levelHz, "the Quest 2 level rate is the Quest 2 profile's");
+static_assert(kLevelHz == headset_profile::kQuest3.levelHz && kLevelHz == headset_profile::kGeneric.levelHz,
               "every other profile's level rate is the match rate");
 
 // The plugin's kill files are not read: a file there turns nothing off (docs/adr/0046 C2). One found is a Warning that names the `combat:` key
@@ -193,7 +191,7 @@ ModuleResult Install(bool rule, bool lobby, bool quest2At72) noexcept {
   inputs.rule = rule;
   inputs.lobby = lobby;
   inputs.quest2At72 = quest2At72;
-  inputs.quest2 = ReadDeviceIsQuest2();
+  inputs.quest2 = Headset().id == headset_profile::Id::kQuest2;
   const Rule decided = Decide(inputs);
   g_quest2.store(inputs.quest2, std::memory_order_relaxed);
   g_levelHz.store(decided.levelHz, std::memory_order_release);
@@ -262,12 +260,6 @@ Stats CurrentStats() noexcept {
 void SetAskForTest(AskFn fn) noexcept { g_ask.store(fn, std::memory_order_release); }
 void SetLegacyDirForTest(const char* dir) noexcept { legacy::SetDirectoryForTest(dir); }
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
-bool IsQuest2Device(const char* device) noexcept {
-  namespace headset_profile = nevr_quest::headset_profile;
-  return headset_profile::IdentifyDevice(device != nullptr ? device : "").profile->id == headset_profile::Id::kQuest2;
-}
-
-void SetQuest2ForTest(int quest2) noexcept { g_quest2Override.store(quest2, std::memory_order_relaxed); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }
 
 void ResetForTest() noexcept {

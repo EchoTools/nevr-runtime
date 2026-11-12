@@ -32,6 +32,7 @@
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/frozen_frame_exit.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "render_config.h"
@@ -333,7 +334,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   ResetAll();
   combat::SetVariant(nevr_quest::build_variant::Variant::kCombat);
   combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
-  rr::SetQuest2ForTest(0);
+  nevr_quest::headset_active::SetActive(&nevr_quest::headset_profile::kQuest3);  // the identity step's profile: not a Quest 2
   PutLibr15();
   rr::SetClockForTest(&FakeClock);
   g_fakeGame = FakeGame{};
@@ -371,7 +372,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   rr::Tick(g_fakeGame.Address());
   QCHECK(g_refreshCalls == 4 && g_refreshSeen == 120.0f);
   DropLibr15();
-  rr::SetQuest2ForTest(-1);
+  nevr_quest::headset_active::SetActive(nullptr);
   rr::SetClockForTest(nullptr);
   combat::tick::ResetForTest();
 }

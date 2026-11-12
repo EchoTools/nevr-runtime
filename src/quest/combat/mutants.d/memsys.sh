@@ -5,8 +5,11 @@
 # `runm <name> <file> <sed> [<build dir> <test target>]`.
 #
 # Not mutated, because no run can tell the mutant from the original:
-#   - `!readable ||` and `stack == 0 ||` in RaisePool: an unreadable pool reads as stack 0, and a stack of 0 is refused by the mapping check that
-#     follows (the Warning's `readable` field is separate, and the test asserts it);
+#   - `!readable ||` and `stack == 0 ||` in RaisePool: the reads stop at the first that fails and leave the fields after it 0. A pool whose first
+#     read fails reads as stack 0, which the mapping check that follows refuses; one whose stack read succeeds and a later read fails keeps a
+#     non-zero stack but is refused all the same: `stackCap < kCapNew` (stackCap unread), `cap != kCapNew` (cap unread), or the check that the
+#     count is writable (count unread: its address is not in a readable mapping). The Warning's `readable` field is separate, and the test
+#     asserts it;
 #   - `!*readable ||` and `*have = 0;` in FirstWordMismatch: an unreadable word reads as 0, which differs from every pinned word, and the line's
 #     `have` comes from the separate `readable` value;
 #   - `ok &&` in the witness's `known = ok && mib != 0`: a failed read leaves 0 bytes, so `mib != 0` is false either way;

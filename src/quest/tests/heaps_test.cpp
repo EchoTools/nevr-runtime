@@ -7,7 +7,8 @@
 // four relocations, symbol types and words in the real store file.
 //
 // What it pins: all four slots are pointed at our values and the game reads the raised sizes, the .rodata and reader words are untouched,
-// the Quest 2's System heap, each refusal (a slot another writer owns, a non-stock size, a reader that is not the stock load, a symbol
+// the Quest 2's System heap from the identity step's profile (quest/headset_active.h, #2037), the generic size and a Warning when no profile
+// was set, each refusal (a slot another writer owns, a non-stock size, a reader that is not the stock load, a symbol
 // that is a function) leaves its row alone and the others go on, the two switches, the module runs once, and the golden lines.
 //
 // Built and run by `just test-quest-combat`.
@@ -22,12 +23,16 @@
 #include <string>
 #include <vector>
 
+#include "quest/headset_active.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
 namespace {
 
 namespace heaps = nevr_quest::combat::heaps;
+namespace hp = nevr_quest::headset_profile;
+namespace active = nevr_quest::headset_active;
 namespace pinned = sentinel::pinned;
 using combat_test::Image;
 using combat_test::Reloc;
@@ -101,6 +106,7 @@ void Begin() {
 }
 void End() {
   heaps::ResetForTest();
+  active::SetActive(nullptr);
   g_image.Drop();
   sentinel::SetLogSink(nullptr);
 }
@@ -119,7 +125,7 @@ void ThePinsAreTheReadelfPins() {
 void AQuest3GetsAllFourSizes() {
   Begin();
   Build();
-  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, "eureka", true, true);
+  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, hp::kQuest3, true, true);
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
   for (int i = 0; i < 4; ++i) {
     QCHECK(GameRead(i) == kExpect[i].target);
@@ -136,7 +142,7 @@ void AQuest3GetsAllFourSizes() {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":4,\"refused\":0,\"left\":0,"
-           "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":512,\"game_space_mib\":128,\"device\":\"eureka\","
+           "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":512,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"the game's heaps are the raised sizes when android_main reads them\"}");
   }
   End();
@@ -145,16 +151,18 @@ void AQuest3GetsAllFourSizes() {
 void AQuest2GetsA512MibSystemHeapAndTheOthersAreUnchanged() {
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, "hollywood", true, true).installed);
+  QCHECK(heaps::InstallAt(&Lookup, hp::kQuest2, true, true).installed);
   QCHECK(GameRead(1) == 512 * kMiB);
   QCHECK(GameRead(0) == 320 * kMiB && GameRead(2) == 512 * kMiB && GameRead(3) == 128 * kMiB);
-  QCHECK(heaps::SystemBytesFor("hollywood") == 512 * kMiB && heaps::SystemBytesFor("eureka") == 640 * kMiB &&
-         heaps::SystemBytesFor("panther") == 640 * kMiB && heaps::SystemBytesFor("hollywood2") == 640 * kMiB &&
-         heaps::SystemBytesFor("") == 640 * kMiB && heaps::SystemBytesFor(nullptr) == 640 * kMiB);
+  // The size is the profile's own value, not a test of which headset it is: a profile with 0 keeps the row's target.
+  QCHECK(heaps::SystemBytesFor(hp::kQuest2) == 512 * kMiB && heaps::SystemBytesFor(hp::kQuest3) == 640 * kMiB &&
+         heaps::SystemBytesFor(hp::kGeneric) == 640 * kMiB);
+  constexpr hp::Profile kOther = {hp::Id::kGeneric, "other", hp::kQuest2Eyes, 300, 90.f};
+  QCHECK(heaps::SystemBytesFor(kOther) == 300 * kMiB);
   End();
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, nullptr, true, true).installed);  // no device property at all: the Quest 3 value
+  QCHECK(heaps::InstallAt(&Lookup, hp::kGeneric, true, true).installed);  // a headset no rule names: the row's target
   QCHECK(GameRead(1) == 640 * kMiB);
   End();
 }
@@ -164,7 +172,7 @@ void AForeignSlotRefusesItsRowAlone() {
   Begin();
   Build();
   g_image.Put<std::uintptr_t>(kExpect[2].slot, 0x1234560);
-  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, "eureka", true, true);
+  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, hp::kQuest3, true, true);
   QCHECK(!r.installed && std::strcmp(r.status, "partial") == 0);
   QCHECK(g_image.Get<std::uintptr_t>(kExpect[2].slot) == 0x1234560);
   QCHECK(GameRead(0) == 320 * kMiB && GameRead(1) == 640 * kMiB && GameRead(3) == 128 * kMiB);
@@ -188,7 +196,7 @@ void ANonStockRodataWordRefusesItsRow() {
   Begin();
   Build();
   g_image.Put<std::uint64_t>(kExpect[3].ro, 128 * kMiB);
-  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, "eureka", true, true);
+  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, hp::kQuest3, true, true);
   QCHECK(!r.installed);
   QCHECK(g_image.Get<std::uintptr_t>(kExpect[3].slot) == g_image.Base() + kExpect[3].ro);
   bool found = false;
@@ -208,7 +216,7 @@ void AReaderThatIsNotTheStockLoadRefusesItsRow() {
   Begin();
   Build();
   g_image.Put<std::uint32_t>(kExpect[0].reader, 0xd503201f);  // nop
-  QCHECK(!heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(!heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   QCHECK(SlotIsStock(0));
   bool found = false;
   for (const Line& l : Lines("combat_heaps_row")) {
@@ -226,7 +234,7 @@ void AReaderThatIsNotTheStockLoadRefusesItsRow() {
 void ASlotThatNamesAFunctionIsNeverWritten() {
   Begin();
   Build(/*functionSymbol=*/true);
-  QCHECK(!heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(!heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   QCHECK(SlotIsStock(2));
   bool found = false;
   for (const Line& l : Lines("combat_heaps_row")) {
@@ -240,7 +248,7 @@ void TheSwitchesTurnTheModuleOrTheSystemHeapOff() {
   // combat.heaps false: nothing is written and the line says why.
   Begin();
   Build();
-  const nevr_quest::combat::ModuleResult off = heaps::InstallAt(&Lookup, "eureka", /*heapsOn=*/false, true);
+  const nevr_quest::combat::ModuleResult off = heaps::InstallAt(&Lookup, hp::kQuest3, /*heapsOn=*/false, true);
   QCHECK(!off.installed && std::strcmp(off.status, "off") == 0);
   for (int i = 0; i < 4; ++i) QCHECK(SlotIsStock(i));
   const std::vector<Line> lines = Lines("combat_heaps_install");
@@ -249,7 +257,7 @@ void TheSwitchesTurnTheModuleOrTheSystemHeapOff() {
   // combat.memsys false: only the System heap stays the game's.
   Begin();
   Build();
-  const nevr_quest::combat::ModuleResult noSystem = heaps::InstallAt(&Lookup, "eureka", true, /*systemOn=*/false);
+  const nevr_quest::combat::ModuleResult noSystem = heaps::InstallAt(&Lookup, hp::kQuest3, true, /*systemOn=*/false);
   QCHECK(noSystem.installed && std::strcmp(noSystem.status, "installed") == 0);
   QCHECK(SlotIsStock(1) && GameRead(1) == 400 * kMiB);
   QCHECK(GameRead(0) == 320 * kMiB && GameRead(2) == 512 * kMiB && GameRead(3) == 128 * kMiB);
@@ -260,16 +268,16 @@ void TheSwitchesTurnTheModuleOrTheSystemHeapOff() {
 
 void AnImageThatIsNotThePatchedLibr15IsRefusedBeforeAnyWord() {
   Begin();
-  QCHECK(std::strcmp(heaps::InstallAt(nullptr, "eureka", true, true).status, "module_not_loaded") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(nullptr, hp::kQuest3, true, true).status, "module_not_loaded") == 0);
   heaps::ResetForTest();
-  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, "eureka", true, true).status, "module_not_loaded") == 0);  // no image
+  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).status, "module_not_loaded") == 0);  // no image
   heaps::ResetForTest();
   Build(false, pinned::kLibR15StockBuildId);  // the stock file's ID: the patched file's is what the sentinel runs on
-  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, "eureka", true, true).status, "build_id_mismatch") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).status, "build_id_mismatch") == 0);
   for (int i = 0; i < 4; ++i) QCHECK(SlotIsStock(i));
   heaps::ResetForTest();
   Build(false, nullptr, /*note=*/false);
-  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, "eureka", true, true).status, "no_build_id") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).status, "no_build_id") == 0);
   for (int i = 0; i < 4; ++i) QCHECK(SlotIsStock(i));
   for (const Line& l : Lines("combat_heaps_install")) QCHECK(l.level == sentinel::LogLevel::kError && Has(l.text, "\"result\":\"refused\""));
   End();
@@ -279,10 +287,10 @@ void AnImageThatIsNotThePatchedLibr15IsRefusedBeforeAnyWord() {
 void TheStepRunsOnce() {
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   const std::uintptr_t first = g_image.Get<std::uintptr_t>(kExpect[0].slot);
   g_lines.clear();
-  const nevr_quest::combat::ModuleResult again = heaps::InstallAt(&Lookup, "hollywood", true, true);
+  const nevr_quest::combat::ModuleResult again = heaps::InstallAt(&Lookup, hp::kQuest2, true, true);
   QCHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0);
   QCHECK(g_image.Get<std::uintptr_t>(kExpect[0].slot) == first && GameRead(1) == 640 * kMiB);  // the Quest 2 value was not applied over it
   QCHECK(Lines("combat_heaps_row").empty());
@@ -298,7 +306,7 @@ void Protect(std::uint64_t vaddr, int prot) {
 void TheRowLinesCarryTheirFields() {
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, "eureka", true, /*systemOn=*/false).installed);
+  QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, /*systemOn=*/false).installed);
   const std::vector<Line> rows = Lines("combat_heaps_row");
   QCHECK(rows.size() == 4U);
   if (rows.size() == 4U) {
@@ -306,16 +314,16 @@ void TheRowLinesCarryTheirFields() {
            rows[3].level == sentinel::LogLevel::kDebug);
     QCHECK(Golden(rows[0].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R06\",\"status\":\"swapped\",\"why\":\"slot_points_at_our_value\","
-           "\"slot_vaddr\":\"0x000000000370b720\",\"value_mib\":320,\"observed_mib\":320,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x000000000370b720\",\"value_mib\":320,\"observed_mib\":320,\"profile\":\"quest3\"}");
     QCHECK(Golden(rows[1].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R07\",\"status\":\"left\",\"why\":\"combat.memsys_is_false\","
-           "\"slot_vaddr\":\"0x000000000371d020\",\"value_mib\":400,\"observed_mib\":400,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x000000000371d020\",\"value_mib\":400,\"observed_mib\":400,\"profile\":\"quest3\"}");
     QCHECK(Golden(rows[2].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R08\",\"status\":\"swapped\",\"why\":\"slot_points_at_our_value\","
-           "\"slot_vaddr\":\"0x0000000003710188\",\"value_mib\":512,\"observed_mib\":512,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x0000000003710188\",\"value_mib\":512,\"observed_mib\":512,\"profile\":\"quest3\"}");
     QCHECK(Golden(rows[3].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R09\",\"status\":\"swapped\",\"why\":\"slot_points_at_our_value\","
-           "\"slot_vaddr\":\"0x0000000003715198\",\"value_mib\":128,\"observed_mib\":128,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x0000000003715198\",\"value_mib\":128,\"observed_mib\":128,\"profile\":\"quest3\"}");
   }
   const std::vector<Line> install = Lines("combat_heaps_install");
   QCHECK(install.size() == 1U);
@@ -323,7 +331,7 @@ void TheRowLinesCarryTheirFields() {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"installed\",\"reason\":\"ok\",\"swapped\":3,\"refused\":0,\"left\":1,"
-           "\"resource_mib\":320,\"system_mib\":400,\"gpu_mib\":512,\"game_space_mib\":128,\"device\":\"eureka\","
+           "\"resource_mib\":320,\"system_mib\":400,\"gpu_mib\":512,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"the game's heaps are the raised sizes when android_main reads them\"}");
   }
   End();
@@ -335,21 +343,21 @@ void ARefusedRowIsNamedWithTheManagersStatusAndReadsZero() {
   Begin();
   Build();
   g_image.Put<std::uintptr_t>(kExpect[2].slot, 0x10);
-  QCHECK(!heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(!heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   const std::vector<Line> rows = Lines("combat_heaps_row");
   QCHECK(rows.size() == 4U);
   if (rows.size() == 4U) {
     QCHECK(rows[2].level == sentinel::LogLevel::kError);
     QCHECK(Golden(rows[2].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R08\",\"status\":\"refused\",\"why\":\"original_mismatch\","
-           "\"slot_vaddr\":\"0x0000000003710188\",\"value_mib\":512,\"observed_mib\":0,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x0000000003710188\",\"value_mib\":512,\"observed_mib\":0,\"profile\":\"quest3\"}");
   }
   const std::vector<Line> install = Lines("combat_heaps_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"partial\",\"reason\":\"row_refused\",\"swapped\":3,\"refused\":1,\"left\":0,"
-           "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":0,\"game_space_mib\":128,\"device\":\"eureka\","
+           "\"resource_mib\":320,\"system_mib\":640,\"gpu_mib\":0,\"game_space_mib\":128,\"profile\":\"quest3\","
            "\"consequence\":\"a refused row keeps the game's stock size; the others are raised\"}");
   }
   End();
@@ -360,14 +368,14 @@ void WhenEveryRowIsRefusedTheResultIsRefused() {
   Begin();
   Build();
   for (const Expect& e : kExpect) g_image.Put<std::uintptr_t>(e.slot, 0x10);
-  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, "eureka", true, true);
+  const nevr_quest::combat::ModuleResult r = heaps::InstallAt(&Lookup, hp::kQuest3, true, true);
   QCHECK(!r.installed && std::strcmp(r.status, "refused") == 0);
   const std::vector<Line> install = Lines("combat_heaps_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"row_refused\",\"swapped\":0,\"refused\":4,\"left\":0,"
-           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"device\":\"eureka\","
+           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }
   End();
@@ -376,34 +384,34 @@ void WhenEveryRowIsRefusedTheResultIsRefused() {
 // The refusals that write no row: the lines say what was refused, what the game keeps, and for which headset.
 void TheRefusalAndOffLinesSayWhatTheGameKeeps() {
   Begin();
-  QCHECK(std::strcmp(heaps::InstallAt(nullptr, "eureka", true, true).status, "module_not_loaded") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(nullptr, hp::kQuest3, true, true).status, "module_not_loaded") == 0);
   std::vector<Line> install = Lines("combat_heaps_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"refused\",\"reason\":\"module_not_loaded\",\"swapped\":0,\"refused\":0,\"left\":0,"
-           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"device\":\"eureka\","
+           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }
   End();
   Begin();
   Build();
-  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, "eureka", false, true).status, "off") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, false, true).status, "off") == 0);
   install = Lines("combat_heaps_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
     QCHECK(Golden(install[0].text) ==
            "\"event\":\"combat_heaps_install\",\"result\":\"off\",\"reason\":\"combat.heaps\",\"swapped\":0,\"refused\":0,\"left\":0,"
-           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"device\":\"eureka\","
+           "\"resource_mib\":0,\"system_mib\":0,\"gpu_mib\":0,\"game_space_mib\":0,\"profile\":\"quest3\","
            "\"consequence\":\"combat.heaps is false: the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)\"}");
   }
   End();
-  // No device name at all reads as the empty one.
+  // The lines name the profile they were given.
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, nullptr, false, true).status != nullptr);
+  QCHECK(heaps::InstallAt(&Lookup, hp::kGeneric, false, true).status != nullptr);
   install = Lines("combat_heaps_install");
-  QCHECK(install.size() == 1U && Has(install[0].text, "\"device\":\"\""));
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"profile\":\"generic\""));
   End();
 }
 
@@ -411,9 +419,9 @@ void TheRefusalAndOffLinesSayWhatTheGameKeeps() {
 void ASecondStepIsAWarningThatWroteNothing() {
   Begin();
   Build();
-  QCHECK(heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   g_lines.clear();
-  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, "eureka", true, true).status, "already_ran") == 0);
+  QCHECK(std::strcmp(heaps::InstallAt(&Lookup, hp::kQuest3, true, true).status, "already_ran") == 0);
   const std::vector<Line> refused = Lines("combat_heaps_refused");
   QCHECK(refused.size() == 1U && refused[0].level == sentinel::LogLevel::kWarn);
   if (refused.size() == 1U) {
@@ -423,28 +431,42 @@ void ASecondStepIsAWarningThatWroteNothing() {
   End();
 }
 
-// The step the sentinel runs reads the device name and finds libr15 through the seams (production: the system property and the loader's lookup).
-void TheInstallEntryReadsTheDeviceAndTheLookup() {
+// The step the sentinel runs reads the identity step's headset profile (quest/headset_active.h, ADR 0031 decision 4, #2037) and finds
+// libr15 through the seam (production: the loader's lookup). It reads no system property of its own.
+void TheInstallEntryReadsTheIdentityStepsProfileAndTheLookup() {
   Begin();
   Build();
   heaps::SetImageLookupForTest(&Lookup);
-  heaps::SetDeviceForTest("hollywood");
+  active::SetActive(&hp::kQuest2);
   const nevr_quest::combat::ModuleResult r = heaps::Install(true, true);
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
   QCHECK(GameRead(1) == 512 * kMiB && GameRead(0) == 320 * kMiB);
   const std::vector<Line> install = Lines("combat_heaps_install");
-  QCHECK(install.size() == 1U && Has(install[0].text, "\"device\":\"hollywood\"") && Has(install[0].text, "\"system_mib\":512"));
-  heaps::SetDeviceForTest(nullptr);
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"profile\":\"quest2\"") && Has(install[0].text, "\"system_mib\":512"));
+  QCHECK(Lines("combat_heaps_profile_missing").empty());
   heaps::SetImageLookupForTest(nullptr);
   End();
+  // A Quest 3 and a headset no rule names: the row's 640 MiB.
+  for (const hp::Profile* profile : {&hp::kQuest3, &hp::kGeneric}) {
+    Begin();
+    Build();
+    heaps::SetImageLookupForTest(&Lookup);
+    active::SetActive(profile);
+    QCHECK(heaps::Install(true, true).installed);
+    QCHECK(GameRead(1) == 640 * kMiB);
+    const std::vector<Line> lines = Lines("combat_heaps_install");
+    QCHECK(lines.size() == 1U && Has(lines[0].text, std::string("\"profile\":\"") + profile->name + "\""));
+    QCHECK(Lines("combat_heaps_profile_missing").empty());
+    heaps::SetImageLookupForTest(nullptr);
+    End();
+  }
   // The two switches reach the right rows through the entry: the System heap alone left, then the whole module off.
   Begin();
   Build();
   heaps::SetImageLookupForTest(&Lookup);
-  heaps::SetDeviceForTest("eureka");
+  active::SetActive(&hp::kQuest3);
   QCHECK(heaps::Install(true, /*systemOn=*/false).installed);
   QCHECK(SlotIsStock(1) && GameRead(1) == 400 * kMiB && GameRead(0) == 320 * kMiB);
-  heaps::SetDeviceForTest(nullptr);
   heaps::SetImageLookupForTest(nullptr);
   End();
   Begin();
@@ -457,10 +479,39 @@ void TheInstallEntryReadsTheDeviceAndTheLookup() {
   // With no lookup of the test's own, the loader's is used: there is no libr15 on a host.
   Begin();
   Build();
-  heaps::SetDeviceForTest("eureka");
+  active::SetActive(&hp::kQuest3);
   QCHECK(std::strcmp(heaps::Install(true, true).status, "module_not_loaded") == 0);
   for (int i = 0; i < 4; ++i) QCHECK(SlotIsStock(i));
-  heaps::SetDeviceForTest(nullptr);
+  End();
+}
+
+// No profile set (a sequence that did not run the identity step before this one): the System heap takes the generic profile's size, never
+// the Quest 2's, and one Warning says so. With combat.heaps false nothing reads the profile, so nothing is said.
+void WithNoProfileTheSystemHeapIsTheGenericOneAndAWarningSaysSo() {
+  Begin();
+  Build();
+  heaps::SetImageLookupForTest(&Lookup);
+  active::SetActive(nullptr);
+  QCHECK(heaps::Install(true, true).installed);
+  QCHECK(GameRead(1) == 640 * kMiB && GameRead(0) == 320 * kMiB);
+  const std::vector<Line> missing = Lines("combat_heaps_profile_missing");
+  QCHECK(missing.size() == 1U);
+  if (missing.size() == 1U) {
+    QCHECK(missing[0].level == sentinel::LogLevel::kWarn);
+    QCHECK(Golden(missing[0].text) ==
+           "\"event\":\"combat_heaps_profile_missing\",\"profile\":\"generic\",\"system_mib\":640,"
+           "\"consequence\":\"the identity step set no headset profile before this step, so the System heap takes the generic profile's size\"}");
+  }
+  const std::vector<Line> install = Lines("combat_heaps_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"profile\":\"generic\""));
+  heaps::SetImageLookupForTest(nullptr);
+  End();
+  Begin();
+  Build();
+  heaps::SetImageLookupForTest(&Lookup);
+  QCHECK(std::strcmp(heaps::Install(/*heapsOn=*/false, true).status, "off") == 0);
+  QCHECK(Lines("combat_heaps_profile_missing").empty());
+  heaps::SetImageLookupForTest(nullptr);
   End();
 }
 
@@ -469,7 +520,7 @@ void AWordThatCannotBeReadIsNamedUnreadable() {
   Begin();
   Build();
   Protect(kExpect[0].reader, PROT_NONE);  // R06, R07 and R08's readers share this page
-  QCHECK(!heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(!heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   Protect(kExpect[0].reader, PROT_READ | PROT_WRITE);
   const std::vector<Line> rows = Lines("combat_heaps_row");
   QCHECK(rows.size() == 4U);
@@ -477,7 +528,7 @@ void AWordThatCannotBeReadIsNamedUnreadable() {
     QCHECK(rows[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Golden(rows[0].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R06\",\"status\":\"refused\",\"why\":\"reader_word_not_stock\","
-           "\"slot_vaddr\":\"0x000000000370b720\",\"have\":\"unreadable\",\"want\":\"0x00000000f9400101\",\"value_mib\":320,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x000000000370b720\",\"have\":\"unreadable\",\"want\":\"0x00000000f9400101\",\"value_mib\":320,\"profile\":\"quest3\"}");
     QCHECK(Has(rows[3].text, "\"status\":\"swapped\""));  // R09's reader is on another page
   }
   QCHECK(SlotIsStock(0) && SlotIsStock(1) && SlotIsStock(2) && !SlotIsStock(3));
@@ -485,14 +536,14 @@ void AWordThatCannotBeReadIsNamedUnreadable() {
   Begin();
   Build();
   Protect(kExpect[0].ro, PROT_NONE);  // R06, R07 and R08's .rodata sizes share this page
-  QCHECK(!heaps::InstallAt(&Lookup, "eureka", true, true).installed);
+  QCHECK(!heaps::InstallAt(&Lookup, hp::kQuest3, true, true).installed);
   Protect(kExpect[0].ro, PROT_READ | PROT_WRITE);
   const std::vector<Line> ro = Lines("combat_heaps_row");
   QCHECK(ro.size() == 4U);
   if (ro.size() == 4U) {
     QCHECK(Golden(ro[0].text) ==
            "\"event\":\"combat_heaps_row\",\"row\":\"R06\",\"status\":\"refused\",\"why\":\"rodata_not_stock\","
-           "\"slot_vaddr\":\"0x000000000370b720\",\"have\":\"unreadable\",\"want\":\"0x000000000ce00000\",\"value_mib\":320,\"device\":\"eureka\"}");
+           "\"slot_vaddr\":\"0x000000000370b720\",\"have\":\"unreadable\",\"want\":\"0x000000000ce00000\",\"value_mib\":320,\"profile\":\"quest3\"}");
   }
   QCHECK(SlotIsStock(0) && SlotIsStock(1) && SlotIsStock(2));
   End();
@@ -516,7 +567,8 @@ int main() {
   WhenEveryRowIsRefusedTheResultIsRefused();
   TheRefusalAndOffLinesSayWhatTheGameKeeps();
   ASecondStepIsAWarningThatWroteNothing();
-  TheInstallEntryReadsTheDeviceAndTheLookup();
+  TheInstallEntryReadsTheIdentityStepsProfileAndTheLookup();
+  WithNoProfileTheSystemHeapIsTheGenericOneAndAWarningSaysSo();
   AWordThatCannotBeReadIsNamedUnreadable();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "heaps_test: %d check(s) failed\n", quest_test::Failures());

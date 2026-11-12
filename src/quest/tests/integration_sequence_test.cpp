@@ -2286,6 +2286,8 @@ void TestTheEarlyCombatStepRunsAfterAttachAndBeforeTheClockHook() {
   QCHECK(s.Index("identify_headset") == s.Index("reporter") + 1);  // the headset identity (ADR 0031) sits between them
   QCHECK(s.Index("attach") == s.Index("identify_headset") + 1);
   QCHECK(s.Index("combat_early") == s.Index("attach") + 1);
+  // The heap sizes read the profile the identity step chose (quest/headset_active.h, #2037): the step runs before the combat early step.
+  QCHECK(s.Index("identify_headset") < s.Index("combat_early"));
   QCHECK(s.Index("clock") == s.Index("combat_early") + 1);
   QCHECK(std::count(s.calls.begin(), s.calls.end(), "combat_early") == 1);
   FakeSteps p = FakeSteps::With(false, false, false, false);

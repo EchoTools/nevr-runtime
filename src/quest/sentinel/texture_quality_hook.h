@@ -121,8 +121,9 @@ void ResetForTest() noexcept;
 Level LatchedLevel() noexcept;
 bool IsLatched() noexcept;
 
-// The headset's profile (headset_profile.h, ADR 0031). The identity step sets it once at start, before the first size query;
-// the hook and the texture menu read it. Null until it is set: the runtime's own sizes stand.
+// The headset's profile (headset_profile.h, ADR 0031): the one quest/headset_active.h holds, which the identity step sets once at start,
+// before the first size query; the hook and the texture menu read it. Null until it is set: the runtime's own sizes stand.
+// SetHeadsetProfile is headset_active::SetActive (tests set the profile through it).
 void SetHeadsetProfile(const headset_profile::Profile* profile) noexcept;
 const headset_profile::Profile* ActiveHeadsetProfile() noexcept;
 

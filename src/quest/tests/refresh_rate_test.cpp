@@ -29,6 +29,8 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/headset_active.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 
 // sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
@@ -141,13 +143,14 @@ void World(bv::Variant variant, const nevr_quest::CombatConfig& config = nevr_qu
   combat::SetConfig(config);
   g_cfg = config;
   rr::SetAskForTest(&FakeAsk);
-  rr::SetQuest2ForTest(quest2);
+  // The headset is the identity step's profile (quest/headset_active.h): a Quest 2, or a Quest 3 for every other case here.
+  nevr_quest::headset_active::SetActive(quest2 != 0 ? &nevr_quest::headset_profile::kQuest2 : &nevr_quest::headset_profile::kQuest3);
   rr::SetClockForTest(&Clock);
   g_lines.clear();  // the combat_active line is combat_active_test's
 }
 void Done() {
   rr::SetAskForTest(nullptr);
-  rr::SetQuest2ForTest(-1);
+  nevr_quest::headset_active::SetActive(nullptr);
   rr::SetClockForTest(nullptr);
   combat::tick::ResetForTest();
   sentinel::SetLogSink(nullptr);
@@ -204,16 +207,47 @@ void TheRuleFollowsItsThreeKeysAndTheHeadset() {
   QCHECK(rr::kLevelHz == 90.0f && rr::kQuest2LevelHz == 72.0f);
 }
 
-// The headset is named by the headset profile's rules (quest/headset_profile.h): "hollywood" is a Quest 2; the Quest 3 ("eureka"), a
-// device no rule names ("panther"), an empty name, a near miss and no name at all are not, so they ask the match rate.
-void TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo() {
-  QCHECK(rr::IsQuest2Device("hollywood"));
-  QCHECK(!rr::IsQuest2Device("eureka"));
-  QCHECK(!rr::IsQuest2Device("panther"));
-  QCHECK(!rr::IsQuest2Device(""));
-  QCHECK(!rr::IsQuest2Device("hollywood2"));
-  QCHECK(!rr::IsQuest2Device("Hollywood"));
-  QCHECK(!rr::IsQuest2Device(nullptr));
+// The headset is the identity step's profile (quest/headset_active.h, ADR 0031 decision 4, #2037): the Quest 2 profile asks 72, the Quest 3
+// and the generic profile ask the match rate. The rule reads no system property of its own. With no profile set (a sequence that did not
+// run the step), the generic profile's answer, never the Quest 2's, and one Warning that says so.
+void TheHeadsetIsTheIdentityStepsProfile() {
+  struct Row {
+    const nevr_quest::headset_profile::Profile* profile;
+    const char* quest2;
+    const char* hz;
+  };
+  const Row rows[] = {{&nevr_quest::headset_profile::kQuest2, "\"quest2\":1", "\"level_hz\":\"72\""},
+                      {&nevr_quest::headset_profile::kQuest3, "\"quest2\":0", "\"level_hz\":\"90\""},
+                      {&nevr_quest::headset_profile::kGeneric, "\"quest2\":0", "\"level_hz\":\"90\""},
+                      {nullptr, "\"quest2\":0", "\"level_hz\":\"90\""}};
+  for (const Row& r : rows) {
+    World(bv::Variant::kCombat, Keys(true, true, true));
+    nevr_quest::headset_active::SetActive(r.profile);
+    QCHECK(InstallRule().installed);
+    const std::vector<Line> l = Lines("combat_refresh_rate_install");
+    QCHECK(l.size() == 1U && Has(l[0].text, r.quest2) && Has(l[0].text, r.hz));
+    const std::vector<Line> missing = Lines("combat_refresh_rate_profile_missing");
+    if (r.profile != nullptr) {
+      QCHECK(missing.empty());
+    } else {
+      QCHECK(missing.size() == 1U);
+      if (missing.size() == 1U) {
+        QCHECK(missing[0].level == sentinel::LogLevel::kWarn);
+        const std::size_t at = missing[0].text.find("\"event\"");
+        QCHECK(at != std::string::npos &&
+               missing[0].text.substr(at) ==
+                   "\"event\":\"combat_refresh_rate_profile_missing\",\"profile\":\"generic\",\"level_hz\":\"90\","
+                   "\"consequence\":\"the identity step set no headset profile before this step, so the rule asks the generic profile's level rate\"}");
+      }
+    }
+    Done();
+  }
+  // In a release APK the rule does not run, so it reads no profile and says nothing about one.
+  World(bv::Variant::kNone);
+  nevr_quest::headset_active::SetActive(nullptr);
+  QCHECK(!InstallRule().installed);
+  QCHECK(Lines("combat_refresh_rate_profile_missing").empty());
+  Done();
 }
 
 void ARequestAboveTheLevelRateInALevelIsKept() {
@@ -769,7 +803,7 @@ void TheProductionReaskWithoutALookupFindsNoImage() {
 
 int main() {
   TheRuleFollowsItsThreeKeysAndTheHeadset();
-  TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo();
+  TheHeadsetIsTheIdentityStepsProfile();
   ARequestAboveTheLevelRateInALevelIsKept();
   ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
   AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();

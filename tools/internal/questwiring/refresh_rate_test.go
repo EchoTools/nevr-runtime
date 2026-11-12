@@ -155,15 +155,41 @@ func TestTheTickIsAThunkInstalledThroughTheManagerWithNoExpectedOriginal(t *test
 	}
 }
 
-func TestTheDeviceIsReadOnlyBehindAKnownWrongMarker(t *testing.T) {
-	code := read(t, "src/quest/combat/refresh_rate.cpp")
-	for _, m := range regexp.MustCompile(`ro\.product\.device`).FindAllStringIndex(code, -1) {
-		lo := m[0] - 900
-		if lo < 0 {
-			lo = 0
+// #2037, ADR 0031 decision 4: the heap sizes and the refresh-rate rule take the headset from the identity step's profile
+// (src/quest/headset_active.h) and read no identity input themselves; the marker that said they did is gone with the read.
+func TestTheCombatModulesReadTheIdentityStepsProfile(t *testing.T) {
+	for _, p := range []string{"src/quest/combat/heaps.cpp", "src/quest/combat/refresh_rate.cpp"} {
+		code := stripComments(read(t, p))
+		for _, banned := range []string{"ro.product", "__system_property_get", "system_properties.h", "IdentifyDevice", "Identify("} {
+			if strings.Contains(code, banned) {
+				t.Errorf("%s contains %q: a combat module names the headset itself (ADR 0031 decision 4)", p, banned)
+			}
 		}
-		if !strings.Contains(code[lo:m[0]], "KNOWN-WRONG #2037") {
-			t.Error("ro.product.device is read without KNOWN-WRONG #2037 above it")
+		if !strings.Contains(code, "headset_active::ActiveOrGeneric()") {
+			t.Errorf("%s does not read the identity step's profile through headset_active::ActiveOrGeneric()", p)
+		}
+		if !strings.Contains(code, "_profile_missing") {
+			t.Errorf("%s says nothing when no profile was set", p)
+		}
+	}
+	marker := "KNOWN-WRONG #" + "2037"
+	for _, dir := range []string{"src/quest", "docs", "tools/internal"} {
+		err := filepath.WalkDir(filepath.Join(root(t), dir), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(b), marker) {
+				rel, _ := filepath.Rel(root(t), path)
+				t.Errorf("%s still carries %s, which #2037 closes", rel, marker)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }

@@ -9,8 +9,8 @@
  *   - the `combat:` keys `refresh_rate` (the rule; off: the game's rate always), `refresh_rate_lobby` (the combat lobby, `mpl_lobby_b_combat`,
  *     also asks for the level rate; off: combat maps only) and `refresh_rate_quest2_72` (a Quest 2 asks 72; off: it asks 90 too);
  *     `refresh_rate` and `refresh_rate_quest2_72` are on by default, `refresh_rate_lobby` is OFF (combat_install.h, quest_config.h CombatConfig);
- *   - the headset: a Quest 2 or not (`quest2`). KNOWN-WRONG #2037: this file reads `ro.product.device` itself (`ReadDeviceIsQuest2`),
- *     which ADR 0031 decision 4 reserves to the identity step; it takes the headset profile from that step when #2037 lands;
+ *   - the headset: a Quest 2 or not (`quest2`), from the profile the identity step chose (quest/headset_active.h, ADR 0031 decision 4);
+ *     this file reads no system property. With no profile set the generic one is taken and one Warning says so;
  *   - the loaded levels (`level`, the deciding level's CSymbol64, from combat_level.h): a combat map or (with refresh_rate_lobby) the combat lobby asks for the level rate, an
  *     Echo Arena level keeps the session rate and wins over any other level still loaded during a transition.
  *
@@ -49,6 +49,8 @@
  *             rate","mode":..,"quest2":..}   one per request of the game, after the original returned
  *   switch   {"event":"combat_refresh_rate_switch","n":<n>,"asked_hz":<session>,"sent_hz":..,"rc":<n>,"level":"%016llx",
  *             "why":"..","mode":..,"quest2":..}   one per change of level, after the re-ask returned
+ *   missing  {"event":"combat_refresh_rate_profile_missing","profile":"generic","level_hz":"90","consequence":".."}   Warning, once, when
+ *             the install step finds no headset profile set
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -89,8 +91,9 @@ float Choose(void* ovr, float askedHz) noexcept;
 // After the original returned: counts and writes the `combat_refresh_rate_request` line. A re-ask of the tick is not counted.
 void Note(float askedHz, float sentHz, int result) noexcept;
 
-// The module's normal step, with the three keys' values (combat_install.cpp reads them from the configuration): reads the headset, publishes
-// the rule, writes the install line (and a Warning for each legacy kill file found) and registers the tick.
+// The module's normal step, with the three keys' values (combat_install.cpp reads them from the configuration): reads the identity step's
+// headset profile (quest/headset_active.h), publishes the rule, writes the install line (and a Warning for each legacy kill file found)
+// and registers the tick.
 ModuleResult Install(bool rule, bool lobby, bool quest2At72) noexcept;
 
 // The callback for combat_tick.h. Exposed for the host test.
@@ -117,11 +120,6 @@ void SetLegacyDirForTest(const char* dir) noexcept;
 // How the re-ask finds libr15 (production: the loaded image). The re-ask reads vrapi_SetDisplayRefreshRate's slot in the image this finds
 // each time it asks, so a test with a word of its own in a block of memory drives the production path. nullptr restores production.
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
-// Whether the device name `device` (a `ro.product.device` value; nullptr reads as "") names a Quest 2: the headset profile's rules
-// (quest/headset_profile.h, IdentifyDevice) choose the Quest 2 profile for it.
-bool IsQuest2Device(const char* device) noexcept;
-// Whether the headset is a Quest 2 (production: IsQuest2Device of ro.product.device). -1 restores production.
-void SetQuest2ForTest(int quest2) noexcept;
 // The monotonic clock in seconds (nullptr restores CLOCK_MONOTONIC).
 void SetClockForTest(double (*clock)() noexcept) noexcept;
 // Forgets the rule, the session, the counters and the tick's schedule.

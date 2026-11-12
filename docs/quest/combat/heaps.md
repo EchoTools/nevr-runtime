@@ -60,7 +60,7 @@ that row only (WARNING), the other rows go on.
 | Row | Symbol | GLOB_DAT slot (ELF) | `readelf -rW` line (R0_readelf_r.txt) | `.rodata` word | reader (disassembly VA, word) | stock | set to |
 |---|---|---|---|---|---|---|---|
 | R06 | `_ZN10NRadEngine22kResourceMemoryAndroidE` | 0x370b720 | 89726 | 0x2b9caa0 | `1078590` `010140f9` ldr x1,[x8]; slot via `ldr x8,[x8,#0x720]` at `1078580` | 206 MiB | 320 MiB |
-| R07 | `_ZN10NRadEngine20kSystemMemoryAndroidE` | 0x371d020 | 98594 | 0x2b9ca90 | `1078524` `010140f9` (slot via `1078514 ldr x8,[x8,#0x20]`) | 400 MiB | 640 MiB, 512 MiB when `ro.product.device` is `hollywood` |
+| R07 | `_ZN10NRadEngine20kSystemMemoryAndroidE` | 0x371d020 | 98594 | 0x2b9ca90 | `1078524` `010140f9` (slot via `1078514 ldr x8,[x8,#0x20]`) | 400 MiB | 640 MiB, the headset profile's `systemHeapMiB` when it has one (512 MiB for the Quest 2 profile) |
 | R08 | `_ZN10NRadEngine17kGpuMemoryAndroidE` | 0x3710188 | 92082 | 0x2b9ca98 | `1078614` `010140f9`; slot via `1078604 ldr x8,[x8,#0x188]` | 160 MiB | 512 MiB |
 | R09 | `_ZN10NRadEngine24kR15GameSpaceMemoryQuestE` | 0x3715198 | 94611 | 0x2b9e1c0 | `12ffdec` `000140f9` ldr x0,[x8] (GameSpaceAllocatorSize); slot via `12ffde8 ldr x8,[x8,#0x198]` | 40 MiB | 128 MiB |
 
@@ -73,8 +73,10 @@ Target values and where each comes from (all from the source build):
 - R06 320 MiB: `the source build's tools,163-170` (default `--mib 320`, accepted range 207..1024, measured peaks gauss 265.5 MB,
   fission 237.4 MB; stock 206 MiB = 0x0CE00000); the source build's on-list.
 - R07 640 / 512 MiB: `the source build's memsys:9` and `:253` (`strcmp(g_dev,"hollywood")==0 ? 512ull : 640ull`);
-  the source build's tools (planner GO, 640 MiB). Quest 2 is `hollywood`. The device string is read through
-  `__system_property_get("ro.product.device")`; an empty string (not Android, property absent) gives 640.
+  the source build's tools (planner GO, 640 MiB). Quest 2 is `hollywood`. This module reads no property: the headset is the profile
+  the identity step chose (`src/quest/headset_active.h`, ADR 0031 decision 4), whose rules name `hollywood` the Quest 2 profile
+  (`src/quest/headset_profile.h`). A Quest 3, a device no rule names and an empty device get 640; with no profile set (a sequence
+  that did not run the identity step) the generic profile's 640 and one Warning, `combat_heaps_profile_missing`.
 - R08 512 MiB: the source build's patch table (160 -> 512, "combat spawn crash"); `res_heap_patch.py:11` ("which W-1's G12 raised to 512 MiB").
 - R09 128 MiB: `the source build's patch table,67-68` ("the dyson HUD canvas overruns 40 MiB").
 Whether a GPU-heap or GameSpace value above these is safe on a Quest 2 (memory pressure) is the source build's decision; I did not
@@ -110,7 +112,9 @@ Each function also has a stock sha256 in the source (`res_heap_patch.py:46-55`);
 
 One aggregate line per run, `combat_heaps_install` (Info; Error when a row was refused), with `result` (`installed`, `partial`, `refused`, `off`),
 `reason`, the counts (`swapped`, `refused`, `left`), the size the game reads through each slot after the step (`resource_mib`, `system_mib`, `gpu_mib`,
-`game_space_mib`: slot -> pointer -> u64, read back, not the intended value), the `device` and the consequence. One `combat_heaps_row` line per row:
+`game_space_mib`: slot -> pointer -> u64, read back, not the intended value), the headset `profile` (`quest2`, `quest3`, `generic`) and the
+consequence. One Warning `combat_heaps_profile_missing` (`profile`, `system_mib`, `consequence`) when `combat.heaps` is on and the identity step
+set no profile. One `combat_heaps_row` line per row:
 Debug when swapped, Warning for a stock-word mismatch (`reader_word_not_stock`, `rodata_not_stock`), Error for a refused write (the manager's status,
 for example `original_mismatch`, `executable_mapping`), Info for a row left alone by `combat.memsys: false`. The sentinel's `combat_install_module`
 record for `heaps` (phase `early`) carries its `outcome` and `status`. No secret is logged. `src/quest/tests/heaps_test.cpp` asserts every line and field against the real code.
@@ -118,7 +122,7 @@ record for `heaps` (phase `early`) carries its `outcome` and `status`. No secret
 ## 5. Prediction (written before any headset run) and falsifiers
 
 Prediction, on a Quest 3 in a combat APK (pinned build b243509c): the sentinel log has `combat_heaps_install result=installed` among the constructor's lines
-with the four sizes above, then `combat_memsys_witness ... system_heap=raised`; on a Quest 2 (`hollywood`) `system_mib` is 512. The heap-exhaustion
+with the four sizes above, then `combat_memsys_witness ... system_heap=raised`; on a Quest 2 (`hollywood`, `profile` `quest2`) `system_mib` is 512. The heap-exhaustion
 crashes (System arena dry; spawn crash) do not recur.
 
 Falsifiers (any one disproves it):

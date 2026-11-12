@@ -25,6 +25,8 @@
 #include "quest/combat/combat_install.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/headset_active.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -165,7 +167,7 @@ void SetUpGame() {
   memsys::SetPinsForTest(&g_pins);
   memsys::SetImageLookupForTest(&Lookup);
   heaps::SetImageLookupForTest(&Lookup);
-  heaps::SetDeviceForTest("eureka");
+  nevr_quest::headset_active::SetActive(&nevr_quest::headset_profile::kQuest3);
 }
 
 void Begin(bv::Variant variant, bool devBuild = false, bool forceAsked = false) {
@@ -186,7 +188,7 @@ void End() {
   memsys::SetPinsForTest(nullptr);
   memsys::SetImageLookupForTest(nullptr);
   heaps::SetImageLookupForTest(nullptr);
-  heaps::SetDeviceForTest(nullptr);
+  nevr_quest::headset_active::SetActive(nullptr);
   g_image.Drop();
   sentinel::SetLogSink(nullptr);
 }
