@@ -20,6 +20,8 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 import quest_autopilot_run as run  # noqa: E402
+sys.path.insert(0, str(REPO / "tools/tests"))
+import signal_exit  # noqa: E402
 import work_root  # noqa: E402
 
 RUNNER = REPO / "tools/quest_autopilot_run.py"
@@ -28,6 +30,7 @@ FILES = "/sdcard/Android/data/com.readyatdawn.r15/files"
 MEDIA_FILES = "/sdcard/Android/media/com.readyatdawn.r15/files"
 ROUTE = f"{FILES}/autopilot/route.txt"
 START = f"{FILES}/autopilot/start"
+INTERRUPT_EXIT_BOUND_S = 60
 
 CONFIG = f"""services:
   socket_uri: wss://example.invalid
@@ -420,13 +423,14 @@ class RunnerTest(unittest.TestCase):
 
     def test_an_interrupt_stops_the_game_and_gives_the_sensor_back(self):
         self.stream.write_text(LOADED + REGISTERED + START_LINE)
+        # A background job (nohup, &) starts with SIGINT ignored, and Python installs no KeyboardInterrupt handler for
+        # a SIGINT ignored on entry: the runner starts with SIGINT at its default, whatever this test run inherited.
         proc = subprocess.Popen(self.argv(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                env=self.env(None))
+                                env=self.env(None), preexec_fn=signal_exit.default_signals(signal.SIGINT))
         for line in proc.stdout:
             if json.loads(line)["event"] == "route_start":
                 break
-        proc.send_signal(signal.SIGINT)
-        proc.communicate(timeout=60)
+        signal_exit.signal_to_exit(self, proc, signal.SIGINT, INTERRUPT_EXIT_BOUND_S)
         self.assertEqual(proc.returncode, 130)
         end = self.last("run_end")
         self.assertEqual((end["result"], end["reason"]), ("interrupted", "interrupted (SIGINT) before the run ended"))
