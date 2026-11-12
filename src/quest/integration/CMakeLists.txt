@@ -59,8 +59,11 @@ add_library(nevr_quest_integration STATIC
   headset_identity_step.cpp
   self_check_wiring.cpp
   dlopen_hook.cpp
-  social_shim.cpp)
-set_source_files_properties(dlopen_hook.cpp social_shim.cpp headset_identity_step.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  social_shim.cpp
+  peer_removal_hook.cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/compat/peer_timeout_log.cpp")
+# peer_removal_hook.cpp includes callback_thunk.h, so it is built without exceptions (as dlopen_hook.cpp and social_shim.cpp are).
+set_source_files_properties(dlopen_hook.cpp social_shim.cpp headset_identity_step.cpp peer_removal_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_integration PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_integration PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
 target_link_libraries(nevr_quest_integration PUBLIC
