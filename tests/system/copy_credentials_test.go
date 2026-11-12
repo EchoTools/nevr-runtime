@@ -64,6 +64,12 @@ func TestCopyCredentials_UnsearchableCopyIsAnErrorNotAClean(t *testing.T) {
 	require.Error(t, checkCopyCredentials())
 }
 
+func TestCopyCredentials_PatternComesFromTheSharedFile(t *testing.T) {
+	pattern, err := copyCredentialPattern()
+	require.NoError(t, err)
+	require.Equal(t, ".credentials.json*", pattern)
+}
+
 func TestCopyCredentials_UnsetIsTheOwnersInstallAndIsNotSearched(t *testing.T) {
 	// The main checkout's own install holds the owner's sign-in, so an unset EVR_GAME_DIR refuses nothing.
 	t.Setenv(envGameDir, "")

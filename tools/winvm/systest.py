@@ -283,9 +283,9 @@ if ($p) {{ Remove-Item '{ROOT}\run\hang.dmp' -ErrorAction SilentlyContinue
 
 # --- scenarios --------------------------------------------------------------------
 
-# The sign-in files a game copy must not hold: the name pattern refuse_copy_credentials (tools/lib/game_install.sh)
-# searches for, and the Go system suite (tests/system, copy_credentials_test.go) searches for the same.
-CREDENTIAL_PATTERN = ".credentials.json*"
+# The sign-in files a game copy must not hold: the one pattern in tools/lib/copy_credential_pattern, which the shell
+# guard (refuse_copy_credentials, tools/lib/game_install.sh) and the Go system suite also read.
+CREDENTIAL_PATTERN = (REPO / "tools" / "lib" / "copy_credential_pattern").read_text(encoding="utf-8").strip()
 
 
 def rig_credential_files(g: Guest) -> list[str]:

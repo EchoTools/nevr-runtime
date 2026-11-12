@@ -46,7 +46,8 @@ class RefuseCopyCredentialsTest(unittest.TestCase):
         (script,) = guest.scripts
         self.assertIn(systest.ROOT + "\\echovr", script)
         self.assertIn(systest.RIG_LOCALAPPDATA, script)
-        self.assertIn(".credentials.json*", script)
+        self.assertIn(systest.CREDENTIAL_PATTERN, script)
+        self.assertEqual(systest.CREDENTIAL_PATTERN, ".credentials.json*")
 
     def test_the_boot_scenario_refuses_before_the_rig_is_set_up_deployed_to_or_launched(self):
         guest = FakeGuest(SIGN_IN_LISTING)
