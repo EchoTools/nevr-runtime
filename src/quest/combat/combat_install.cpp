@@ -279,7 +279,8 @@ constexpr std::array kModules{
     Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd},
     Module{"boosterpool", nullptr, &BoosterPoolNormal, nullptr, nullptr, &boosterpool::NoteEnd},
     // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
-    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    // move before them. sensorwd reads the combat level answer (combat_scope.h: its handlers and its tick), so it comes after the scope's row; music asks
+    // combat_level itself. Each registers a tick callback, which the tick row (above) lets them do before or after its install.
     Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},
     Module{"music", nullptr, &MusicNormal, "combat.music", &nevr_quest::CombatConfig::music},
 };
