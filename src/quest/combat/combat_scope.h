@@ -97,6 +97,9 @@ Look LastLook() noexcept;
 // Arena level, and also when there is no look yet or the last one is older than kStaleAfterMs. Unlike SeenCombatMap and SeenCombatOrLobby, which are
 // unchecked views, this answer is checked, and it fails closed toward arena: the caller acts only on false. Out of line (LastLook).
 bool SeenEchoArena() noexcept;
+// The same rule on a record already taken, so a caller that also needs the record's other fields (aibots' line says why it refused) decides and
+// explains from one look, not from two reads that can see two looks.
+bool SeenEchoArena(const Look& look) noexcept;
 
 // True while a combat map is loaded and no Echo Arena level is (and the answer is fresh).
 inline bool InCombatMap() noexcept { return SeenCombatMap() && LookIsFresh(); }
@@ -126,6 +129,9 @@ void SetClockForTest(std::int64_t (*clockMs)() noexcept) noexcept;
 void SetLookSeamForTest(void (*seam)()) noexcept;
 // Called by LastLook between its read of the classes and its read of the level (nullptr, production: nothing), so a test can write a look in between.
 void SetLookReadSeamForTest(void (*seam)()) noexcept;
+// Called by Refresh right after it closes the sequence count of a look (nullptr, production: nothing), so a test can check that every field of that look
+// was written inside the count: a record read there is the new look whole.
+void SetLookClosedSeamForTest(void (*seam)()) noexcept;
 // Forgets the answer, the schedule, the counters and the registration with the tick.
 void ResetForTest() noexcept;
 

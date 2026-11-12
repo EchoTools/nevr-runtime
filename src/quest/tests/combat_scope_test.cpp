@@ -538,6 +538,35 @@ void AHalfWrittenLookIsNeverHandedOut() {
   End();
 }
 
+// The moment a look's sequence count closes, every field of that look is written: a record read there is the new look whole (its classes, its level, its
+// count and its stamp), never the new classes with the old level. The look comes two seconds after the one before it, so a stamp written after the close
+// would read as stale there.
+scope::Look g_atClose;
+void ReadAtClose() { g_atClose = scope::LastLook(); }
+void AClosedLookIsWholeTheMomentItCloses() {
+  Begin();
+  LookAt({"mpl_combat_dyson"});
+  scope::SetLookClosedSeamForTest(&ReadAtClose);
+  g_atClose = scope::Look{};
+  g_nowMs += 2000;
+  g_model.Only({"mpl_arena_a"});
+  scope::Refresh(g_model.Address());
+  scope::SetLookClosedSeamForTest(nullptr);
+  QCHECK(g_atClose.bits == scope::kBitEchoArena);
+  QCHECK(g_atClose.level == Id("mpl_arena_a"));
+  QCHECK(g_atClose.looks == 2 && g_atClose.fresh);
+  // the rule on a record already taken: the same answer as the call that takes its own
+  QCHECK(scope::SeenEchoArena(g_atClose) && scope::SeenEchoArena(scope::Look{}));
+  scope::Look combat;
+  combat.bits = scope::kBitCombatMap;
+  combat.looks = 1;
+  combat.fresh = true;
+  QCHECK(!scope::SeenEchoArena(combat));
+  combat.fresh = false;
+  QCHECK(scope::SeenEchoArena(combat));
+  End();
+}
+
 }  // namespace
 
 int main() {
@@ -564,6 +593,7 @@ int main() {
   AFullTickTableRefusesAndTheAnswerStaysFalse();
   TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed();
   AHalfWrittenLookIsNeverHandedOut();
+  AClosedLookIsWholeTheMomentItCloses();
   if (quest_test::Failures() == 0) std::printf("combat_scope_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

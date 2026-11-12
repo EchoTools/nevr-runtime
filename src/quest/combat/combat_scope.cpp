@@ -19,6 +19,7 @@ std::atomic<std::int64_t (*)() noexcept> g_clock{nullptr};
 std::atomic<std::uint32_t> g_seq{0};
 std::atomic<void (*)()> g_lookSeam{nullptr};
 std::atomic<void (*)()> g_readSeam{nullptr};
+std::atomic<void (*)()> g_closedSeam{nullptr};
 
 std::int64_t NowMs() noexcept {
   const auto injected = g_clock.load(std::memory_order_acquire);
@@ -32,6 +33,13 @@ bool CombatOrLobby(std::uint32_t bits) noexcept {
   return (bits & kBitEchoArena) == 0 && (bits & (kBitCombatMap | kBitCombatLobby)) != 0;
 }
 bool CombatMap(std::uint32_t bits) noexcept { return (bits & (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }
+
+// Closes the sequence count of the look Refresh is writing (`seq` is its value before the write): every field of the look is stored before this call.
+void CloseLook(std::uint32_t seq) noexcept {
+  g_seq.store(seq + 2, std::memory_order_release);
+  const auto closed = g_closedSeam.load(std::memory_order_acquire);
+  if (closed != nullptr) closed();
+}
 
 }  // namespace
 
@@ -60,10 +68,8 @@ Look LastLook() noexcept {
   return Look{};  // never whole: no look, not fresh (fails closed)
 }
 
-bool SeenEchoArena() noexcept {
-  const Look look = LastLook();
-  return !look.fresh || (look.bits & kBitEchoArena) != 0;
-}
+bool SeenEchoArena(const Look& look) noexcept { return !look.fresh || (look.bits & kBitEchoArena) != 0; }
+bool SeenEchoArena() noexcept { return SeenEchoArena(LastLook()); }
 
 ModuleResult InstallNormal() noexcept {
   if (g_registered.load(std::memory_order_acquire)) return {true, "installed"};
@@ -111,7 +117,7 @@ void Refresh(std::uintptr_t game) noexcept {
   detail::g_lookedAtMs.store(now, std::memory_order_relaxed);
   g_lastLevel.store(levelId, std::memory_order_relaxed);
   detail::g_bits.store(bits, std::memory_order_release);
-  g_seq.store(seq + 2, std::memory_order_release);
+  CloseLook(seq);
   if (CombatOrLobby(bits) == CombatOrLobby(before) && CombatMap(bits) == CombatMap(before)) return;
   char levelText[19];
   const bool in = CombatOrLobby(bits);
@@ -127,6 +133,7 @@ std::uint32_t Looks() noexcept { return g_looks.load(std::memory_order_relaxed);
 void SetClockForTest(std::int64_t (*clockMs)() noexcept) noexcept { g_clock.store(clockMs, std::memory_order_release); }
 void SetLookSeamForTest(void (*seam)()) noexcept { g_lookSeam.store(seam, std::memory_order_release); }
 void SetLookReadSeamForTest(void (*seam)()) noexcept { g_readSeam.store(seam, std::memory_order_release); }
+void SetLookClosedSeamForTest(void (*seam)()) noexcept { g_closedSeam.store(seam, std::memory_order_release); }
 
 void ResetForTest() noexcept {
   detail::g_bits.store(0);
@@ -139,6 +146,7 @@ void ResetForTest() noexcept {
   g_seq.store(0);
   g_lookSeam.store(nullptr);
   g_readSeam.store(nullptr);
+  g_closedSeam.store(nullptr);
 }
 
 }  // namespace nevr_quest::combat::scope
