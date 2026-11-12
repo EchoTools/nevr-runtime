@@ -16,8 +16,9 @@
 # Without -Dir the usual Meta Horizon / Oculus library locations are searched; with more than one
 # install found, pass -Dir. -Root names the nevr folder; the core accepts only the folder the game loads nEVR from
 # (%LOCALAPPDATA%\nevr\echovr, the default) and refuses any other (#1353). A dev or test run passes --dev-nevr-root in
-# -CoreArgs. Without -Version the release the signed manifest names for the channel is installed; an older release over
-# a newer one is refused unless -AllowDowngrade is given.
+# -CoreArgs. Without -Version the release this package is (the NEVR-BUILD literal in its own host or runtime) is installed;
+# when the package names no release, the release the signed manifest names for the channel is installed. A release the
+# manifest does not list stops the run. An older release over a newer one is refused unless -AllowDowngrade is given.
 param([string]$Dir = '', [string]$Root = '', [string]$Version = '', [switch]$AllowDowngrade, [string[]]$CoreArgs = @(), [switch]$Pause, [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -123,6 +124,19 @@ if ($Dir -eq '') {
 }
 if (-not (Test-Echo $Dir)) { throw "no echovr.exe in $Dir" }
 
+# The release this package is: the NEVR-BUILD literal (`NEVR-BUILD <version> <commit40>`, NUL-bounded) in its own host or
+# runtime. Empty when the package carries neither, so the core falls back to the channel's release.
+function Get-PackageVersion([string]$Folder) {
+  foreach ($name in @('BugSplat64.dll', 'nevr-runtime.dll')) {
+    $path = Join-Path $Folder $name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+    $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($path))
+    $found = [regex]::Match($text, 'NEVR-BUILD ([^\s\x00]+) [0-9a-f]{40}\x00')
+    if ($found.Success) { return $found.Groups[1].Value }
+  }
+  return ''
+}
+
 # --package-dir: the core installs this package's own DLLs when their SHA-256 matches the signed manifest's entry for the
 # release, and downloads the package the manifest names only when they are missing or differ.
 $arguments = @('pc', 'install', '--dir', $Dir, '--package-dir', $here)
@@ -131,7 +145,8 @@ if ($Root -ne '') {
   $arguments += @('--nevr-root', $Root)
 }
 if ($AllowDowngrade) { $arguments += '--allow-downgrade' }
-if ($Version) { $arguments += @('--version', $Version) }
+$packageVersion = if ($Version) { $Version } else { Get-PackageVersion $here }
+if ($packageVersion) { $arguments += @('--version', $packageVersion) }
 $arguments += $CoreArgs
 Write-RunLog ("RUN $scriptName install-nevr-runtime.exe $($arguments -join ' ')")
 # The core prints one JSON object on stdout (state, reason, exit code, log path, plan) and "[state] reason" on stderr.
