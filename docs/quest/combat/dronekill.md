@@ -77,7 +77,7 @@ Warning, an Error when one cannot be removed). Last, the kill feed: `ec::OnDrone
 ## Arena (same APK)
 
 Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module acts only while its
-scope is on. The scope is on while a combat map is loaded and no Echo Arena level is, and for the leave window after the map ends (below):
+scope is on. The scope is on while a combat map is loaded and no Echo Arena level is, and for the leave window after the first no-combat-map answer (below, which bounds it against the map's end):
 `dronekill::Tick` asks the combat level answer every 32 frames (`kScopeFrames`), one `combat_scope.h`
 `LastLook()` record judged by `InCombatMap(look)` (a combat map, no Echo Arena level, fresh), whose level the change line names, and keeps the answer in
 one atomic, read by `InCombatScope()` (false before the first tick: fail closed). The combat lobby is not the scope (no drone is in it as far as
@@ -97,15 +97,31 @@ From the first no-combat-map answer until the third, which is two 32-frame asks 
 - the tick runs its due work every frame: the due components are taken and turned off one at a time (`OffOne`, through `Revalidate`), and the
   touch, chase and explosion ticks run under their own words (`TickBody` in `src/quest/combat/dronekill.cpp`). `dronekill_test`
   (`TestScopeEndsAtTheLevelChange`) pins the due work running in the window and not after the scope ends;
-- the in-scope bodies of the four hooks and `OnKilled` run for each call that passes `scope::LookIsFresh()`, which each answer refreshes. No
+- the in-scope bodies of the four hooks and `OnKilled` run for each call that passes `scope::LookIsFresh()`, which the scope row's own look keeps fresh (its `Refresh`, not this module's asks). No
   test pins them in the window; this follows from the code (`g_inScope` is set until the scope ends).
 
-What bounds the due work is `Revalidate` (`dronekill.cpp`). A component is turned off only when its recorded game space and owner are set, the
-system's owner word (read with `SafeRead`) still equals the recorded owner, the system is found again in that space, its `Component()` has the read
-shape and returns the recorded handle. Then `DisableComponent`'s shape is checked, and an invoke-immediate word that is 0 makes the component wait.
-Nothing in that list reads whether the level is still loaded. That an unloaded game space cannot keep a matching owner word is not established.
-So on an arena level, for up to 64 frames after a combat map ends, the due work and the in-scope bodies run on the combat map's recorded
-components. That path is the arena's cost in this window; the out-of-scope path counted under "Arena cost" below is the cost once the scope is off.
+Each kind of due work has its own guard (`dronekill.cpp`), and none of them reads whether the level is still loaded (from the code read; that an
+unloaded game space cannot keep a matching owner word is not established):
+
+- a component turned off or on (`OffOne` and `OnOne`: the due components, the held components an explosion releases, and the touch's off and on)
+  goes through `Revalidate`. It passes only when the system's owner word (read with `SafeRead`) still equals the recorded owner, the system is
+  found again in that space, its `Component()` has the read shape and returns the recorded handle. Then `DisableComponent`'s (or
+  `EnableComponent`'s) shape is checked, and an invoke-immediate word that is 0 makes the component wait.
+- a chase velocity (`ChaseTick`) goes through `ChaseStillOk`: the physics system's owner word equals the recorded one, and the handles are live.
+  Then the physics system's owner word must equal the recorded owner again, and that owner's invoke-immediate flag must be nonzero, before
+  `set_vel`. `Revalidate` is not called.
+- an explosion (`FxTick`, then `RunExplosion`) goes through `EntryOk` for both drone entries (each must be the expected entry of the drone
+  library, by its module and offset) and a `SafeRead` of the context's state word. `Revalidate` is not called; the components it releases go off
+  through `OffOne`, as above.
+- a touch's off (`TouchTick`) first checks that the component or its actor is still in the table (`LiveComp`, `LiveActor`), then calls `OffOne`.
+
+So on an arena level, for up to 64 frames after the first no-combat-map answer, the due work and the in-scope bodies run on the combat map's
+recorded components. That path is the arena's cost in this window; the out-of-scope path counted under "Arena cost" below is the cost once the
+scope is off. The window is counted from that answer, not from the map's end. The asks are 32 frames apart (`n % kScopeFrames`, `Tick`), and the
+first look that reads the map's end comes at most 250 ms after the end while the game tick runs (`kLookEveryMs`, the scope row's look). The
+first no-combat-map ask comes at most 31 frames after that look, and the scope ends 64 frames after that ask. So the due work's last frame is at
+most 94 frames after the first frame whose look reads the end. This assumes one `Tick` call per frame (`dronekill.h` describes the game's frame
+tick that way; the rate is not measured here).
 
 Lines in the window: one `combat_dronekill_scope_wait` (Debug) per no-combat-map answer that does not yet end the scope.
 
