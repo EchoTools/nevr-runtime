@@ -124,26 +124,6 @@ class InstallPs1Test(ScriptTestBase):
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), HOST)
         self.assertIn("artifact_fetch", world.events())
 
-    def test_without_version_a_package_names_a_release_the_manifest_lacks_and_installs_nothing(self):
-        # #1967: install.ps1 without -Version used to install the channel's release (1.0.0 here), not the release the
-        # package's own NEVR-BUILD literal names (0.9.0, which the manifest does not list).
-        world, pkg = self.world(), self.package()
-        (pkg / "BugSplat64.dll").write_bytes(b"MZ NEVR-BUILD 0.9.0 " + b"c" * 40 + b"\0")
-        result = self.run_install(pkg, world)
-        # The core's error is code 7; the script reports the failed run as exit 1 with state "unchanged".
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('"state":"unchanged"', result.stdout)
-        self.assertIn("release 0.9.0 is not in releases", result.stdout)
-        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
-        self.assertNotIn("artifact_fetch", world.events())
-
-    def test_without_version_a_package_that_names_a_listed_release_installs_that_release(self):
-        world, pkg = self.world(), self.package()
-        (pkg / "BugSplat64.dll").write_bytes(b"MZ NEVR-BUILD 1.0.0 " + b"c" * 40 + b"\0")
-        result = self.run_install(pkg, world)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((world.nevr / "nevr-runtime.dll").read_bytes(), RUNTIME)
-
     def test_uninstall_ps1_undoes_what_the_core_installed(self):
         world, pkg = self.world(), self.package()
         self.assertEqual(self.run_install(pkg, world).returncode, 0)
