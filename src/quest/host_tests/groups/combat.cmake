@@ -349,9 +349,9 @@ nevr_ht_test(music_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident
 # the JUMP_SLOT of a libr15 image built in memory, against models of the three game functions and of CModelCS components. A sphere timed and turned off after 6000 ms
 # through the game's own function, turned back on at its actor's next ping, the limits, the sweep, the lock never held across a game call or a log line, all three
 # words or none, and the scope: every handler is a pass-through outside a combat map (an arena level, a lobby, no level, a stale or missing answer). got_pinned_test
-# resolves the three relocations and the 34 code words in the real libr15.
+# resolves the three relocations and the 34 code words in the real libr15. The scope is the real combat level answer (combat_scope.cpp, #2382).
 nevr_ht_test(sensorwd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/sensorwd_test.cpp src/quest/combat/sensorwd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/sensorwd_test.cpp src/quest/combat/sensorwd.cpp ${_cscope_srcs})
 # The frozen-frame exit (#2377, combat/frozen_frame_exit.h): the rule's table, the submit observer (no clock read and no write outside a combat level,
 # a stamp inside one), and the watchdog against a libr15 image built in memory holding the pinned words and the in-VR word, the real combat tick and
 # level answer, a fake clock and fake finish, grace and end steps: the record before the finish, the end after the grace with exit code 1, once; a

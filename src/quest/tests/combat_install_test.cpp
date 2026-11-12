@@ -532,7 +532,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
                "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded "
                "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=module_not_loaded weapon_arm=module_not_loaded gates=module_not_loaded bvh=module_not_loaded "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
-               "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=module_not_loaded music=module_not_loaded\""));
+               "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=scope_not_live music=module_not_loaded\""));
     // one record per module with a step, early first: 3 early and 39 normal
     const std::vector<Line> records = Lines("combat_install_module");
     QCHECK(records.size() == 42U && Has(records[0].text, "\"phase\":\"early\"") && Has(records[1].text, "\"phase\":\"early\"") &&
@@ -867,6 +867,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.custctx = {false, nevr_quest::Source::kFile};
   off.frozenFrameExit = {false, nevr_quest::Source::kFile};  // the frozen-frame exit (#2377) reads the scope too
   off.gunconnect = {false, nevr_quest::Source::kFile};       // gun connect reads the scope too (#2382)
+  off.sensorwd = {false, nevr_quest::Source::kFile};         // the scanner-sphere watchdog reads the scope too (#2382)
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -1274,9 +1275,9 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=module_not_loaded music=module_not_loaded"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=scope_not_live music=module_not_loaded"));
   QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"module_not_loaded\""));
-  QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"module_not_loaded\""));
+  QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"scope_not_live\""));  // the scope cannot change on the host (no tick)
   Done();
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig musicOff;
@@ -1285,7 +1286,7 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   const combat::Outcome mOff = combat::InstallNormal();
   // off by its key: counted apart, not failed (the decals are off too, for want of a decals.bin)
   QCHECK(mOff.modules == 39 && mOff.off == 4 && mOff.installed == 3 && mOff.failed == 32);
-  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=module_not_loaded music=off_config"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "sensorwd=scope_not_live music=off_config"));
   QCHECK(Has(Lines("combat_install")[0].text, "\"off\":4"));
   QCHECK(Has(Lines("combat_install_module").back().text, "\"module\":\"music\",\"outcome\":\"off\",\"status\":\"off_config\""));
   QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"off_config\""));
@@ -1531,7 +1532,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"droneguard", &nevr_quest::CombatConfig::droneguard, false},
                         {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},
                         {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, true},  // the sound-symbol guard (#1737) reads the scope too
-                        {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true}};  // gun connect (#2382) reads the scope too
+                        {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},  // gun connect (#2382) reads the scope too
+                        {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true}};     // the scanner-sphere watchdog (#2382) reads the scope too
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1544,6 +1546,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.droneguard = {false, nevr_quest::Source::kFile};
     cfg.frozenFrameExit = {false, nevr_quest::Source::kFile};
     cfg.gunconnect = {false, nevr_quest::Source::kFile};
+    cfg.sensorwd = {false, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();

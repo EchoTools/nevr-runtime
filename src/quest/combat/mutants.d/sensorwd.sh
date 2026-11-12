@@ -31,16 +31,22 @@ runm sd_undo_enabled_after_disabled $S "s/^    Undo(0);\$/    (void)0;/"
 runm sd_undo_after_full_tick $S "s/^      Undo(1);\$/      (void)0;/"
 runm sd_no_tick         $S "s/    if (!tick::Add(\&Tick)) {/    if (false) {/"
 runm sd_legacy_not_said $S "s/  if (!legacy::Present(\"sensorwd.off\")) return;/  return;/"
-# the scope: where a handler acts
-runm sd_scope_always    $S "s/  if (!g_scope.load(std::memory_order_relaxed)) return false;/  (void)g_scope;/"
-runm sd_scope_never_stale $S "s/  return Now() - g_lookedAtMs.load(std::memory_order_relaxed) < kStaleAfterMs;/  return true;/"
-runm sd_stale_bound     $S "s/  return Now() - g_lookedAtMs.load(std::memory_order_relaxed) < kStaleAfterMs;/  return Now() - g_lookedAtMs.load(std::memory_order_relaxed) <= kStaleAfterMs;/"
-runm sd_scope_lobby     $S "s/  const bool in = level::Classify(game, \/\*lobby=\*\/false, \&levelId) == level::Kind::kCombatOrLobby;/  const bool in = level::Classify(game, \/*lobby=*\/true, \&levelId) == level::Kind::kCombatOrLobby;/"
-runm sd_scope_arena_wins $S "s/  const bool in = level::Classify(game, \/\*lobby=\*\/false, \&levelId) == level::Kind::kCombatOrLobby;/  const bool in = level::Classify(game, \/*lobby=*\/false, \&levelId) != level::Kind::kNone;/"
-runm sd_look_not_stored $S "s/  g_lookedAtMs.store(now, std::memory_order_relaxed);/  g_lookedAtMs.store(now - 2 * kStaleAfterMs, std::memory_order_relaxed);/"
-runm sd_leave_keeps_table $S "s/  if (was) ClearTable();//"
-runm sd_look_period     $S "s/    g_nextLookMs.store(now + kLookEveryMs, std::memory_order_relaxed);/    g_nextLookMs.store(now + kLookEveryMs * 100, std::memory_order_relaxed);/"
-runm sd_scope_line_quiet $S "s/  if (in == was) return;/  return;/"
+# the scope: where a handler acts (the combat level answer, combat_scope.h; its own rules, the arena bit and the staleness bound, are combat_scope's mutants)
+runm sd_scope_always    $S "s/^bool InScope() noexcept { return scope::InCombatMap(); }\$/bool InScope() noexcept { return true; }/"
+runm sd_scope_stale_believed $S "s/^bool InScope() noexcept { return scope::InCombatMap(); }\$/bool InScope() noexcept { return scope::SeenCombatMap(); }/"
+runm sd_scope_lobby     $S "s/^bool InScope() noexcept { return scope::InCombatMap(); }\$/bool InScope() noexcept { return scope::InCombatOrLobby(); }/"
+runm sd_scope_arena_wins $S "s/^bool InScope() noexcept { return scope::InCombatMap(); }\$/bool InScope() noexcept { return (scope::detail::g_bits.load() \& scope::kBitCombatMap) != 0 \&\& scope::LookIsFresh(); }/"
+runm sd_scope_live_unchecked $S "s/^  if (!scope::Live()) return refuse(\"scope_not_live\", \"none\", \"none\", \"none\");\$//"
+runm sd_scope_live_token $S "s/  if (!scope::Live()) return refuse(\"scope_not_live\",/  if (!scope::Live()) return refuse(\"module_not_loaded\",/"
+runm sd_scope_live_after_image $S "/^  if (!scope::Live()) return refuse/d; s/^  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return refuse(\"build_id_mismatch\", \"none\", \"none\", \"none\");\$/&\n  if (!scope::Live()) return refuse(\"scope_not_live\", \"none\", \"none\", \"none\");/"
+# the tick's reading of the scope: the edge it sees, the table it empties, its line
+runm sd_tick_ignores_scope $S "s/^  if (!in) return;\$//"
+runm sd_tick_scope_always $S "s/^  const bool in = InScope();\$/  const bool in = true;/"
+runm sd_tick_scope_stale_believed $S "s/^  const bool in = InScope();\$/  const bool in = scope::SeenCombatMap();/"
+runm sd_leave_keeps_table $S "s/^    if (was) ClearTable();\$//"
+runm sd_scope_line_quiet $S "s/^  if (in != was) {\$/  if (false) {/"
+runm sd_scope_edge_kept  $S "s/  const bool was = g_wasInScope.exchange(in, std::memory_order_relaxed);/  const bool was = g_wasInScope.load(std::memory_order_relaxed);/"
+runm sd_stat_in_scope    $S "s/  s.inScope = g_wasInScope.load();/  s.inScope = false;/"
 # the handlers
 runm sd_enabled_result  $S "/ReportModel(true, seen);/{n;s/  return result;/  return result \& 0xff;/}"
 runm sd_disabled_result $S "/ReportModel(false, seen);/{n;s/  return result;/  return result \& 0xff;/}"
@@ -89,4 +95,6 @@ runm sd_ci_row_key       $CI "s/\"combat.sensorwd\", \&nevr_quest::CombatConfig:
 # arena pays nothing, by count (#2277 review): the sphere check (five reads) before the scope test, in each handler
 runm sd_read_before_scope_enabled $S "/^std::uint64_t OnEnabled/{n;s/^/  (void)IsSphere(reinterpret_cast<std::uintptr_t>(component), handle);\n/}"
 runm sd_read_before_scope_disabled $S "/^std::uint64_t OnDisabled/{n;s/^/  (void)IsSphere(reinterpret_cast<std::uintptr_t>(component), handle);\n/}"
-runm sd_scan_in_event_handler $S "/^std::uint64_t OnEvent/{n;s/^/  (void)level::Classify(0, false, nullptr);\n/}"
+runm sd_scan_in_event_handler $S "s/^#include \"quest\/combat\/combat_scope.h\"\$/&\n#include \"quest\/combat\/combat_level.h\"/; /^std::uint64_t OnEvent/{n;s/^/  (void)level::Classify(0, false, nullptr);\n/}"
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): the watchdog keeps the row on alone.
+runm sdrow_scope_reader $CI "s/^                         g_config.gunconnect.on || g_config.sensorwd.on;\$/                         g_config.gunconnect.on;/" quest-host-combat combat_install_test

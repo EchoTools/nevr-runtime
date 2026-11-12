@@ -73,7 +73,7 @@ ModuleResult RefreshRateNormal() noexcept {
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
                          g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
-                         g_config.gunconnect.on;
+                         g_config.gunconnect.on || g_config.sensorwd.on;
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
 }
