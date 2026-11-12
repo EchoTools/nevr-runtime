@@ -57,10 +57,10 @@ func TestHookedHealDecodesThroughTheSharedRuleAndActsOnUnlinkFirst(t *testing.T)
 		"const bool rez = m.rez != 0;",
 		"if (m.kind == pbr::kDeclined) {",
 		"const ULONGLONG now = GetTickCount64();",
-		"const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;",
 		"g_declined_at.store(now, std::memory_order_relaxed);",
+		"const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;",
 		"if (n <= 32) {",
-		"g_declined_written.store(n, std::memory_order_relaxed);",
+		"RaiseDeclinedWritten(n);",
 		"LogWarning(\"marker %.2f for %p/%u declined",
 		"} else if (n == 33) {",
 		"g_declined_line_at.store(now, std::memory_order_relaxed);",
@@ -97,16 +97,54 @@ func TestTheDeclinedMarkerCountIsFlushedFromTheHealBubbleUpdate(t *testing.T) {
 		"if (n <= written || now - g_declined_at.load(std::memory_order_relaxed) < 10000) return;",
 		"if (!g_declined_written.compare_exchange_strong(written, n, std::memory_order_relaxed)) return;",
 		"LogWarning(\"declined markers: %u in all; the ones since the last line are counted, not logged, and none has come for 10 s\", n);")
-	ordered(t, "Hooked_BubbleUpdate", body(t, src, "void __fastcall Hooked_BubbleUpdate("),
+	bubble := body(t, src, "void __fastcall Hooked_BubbleUpdate(")
+	ordered(t, "Hooked_BubbleUpdate", bubble,
 		"SelfDamageTick(now);",
 		"FlushDeclined(now);")
+	// The pair is adjacent and ungated: a gate in front of the flush (the client's flush missing) is a wiring bug (#2348).
+	if !strings.Contains(bubble, "SelfDamageTick(now);\n    FlushDeclined(now);\n") {
+		t.Errorf("Hooked_BubbleUpdate no longer calls FlushDeclined directly after SelfDamageTick, with no gate:\n%s", bubble)
+	}
+	if strings.Contains(bubble, "if (g_server) FlushDeclined(now);") || strings.Contains(bubble, "if (!g_server) FlushDeclined(now);") {
+		t.Errorf("Hooked_BubbleUpdate gates FlushDeclined on the side (the client's count is never flushed):\n%s", bubble)
+	}
+}
+
+// #2348: the written count only moves forward, and a decline records its time before it counts, so a flush that sees the count sees a
+// fresh time. RaiseDeclinedWritten is the one writer of the count a line covers after the first FlushDeclined claim.
+func TestTheWrittenCountOnlyMovesForwardAndTheTimeComesFirst(t *testing.T) {
+	t.Parallel()
+	src := code(t, pcPowerboost)
+	ordered(t, "RaiseDeclinedWritten", body(t, src, "void RaiseDeclinedWritten("),
+		"unsigned w = g_declined_written.load(std::memory_order_relaxed);",
+		"while (w < n && !g_declined_written.compare_exchange_weak(w, n, std::memory_order_relaxed)) {",
+	)
+	fn := body(t, src, "void __fastcall Hooked_Heal(")
+	ordered(t, "Hooked_Heal decline time", fn,
+		"g_declined_at.store(now, std::memory_order_relaxed);",
+		"const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;")
+	if strings.Contains(fn, "g_declined_written.store(") {
+		t.Error("Hooked_Heal stores the written count directly: a late smaller store can move it back (#2348); use RaiseDeclinedWritten")
+	}
+}
+
+// #2348 step 3: each hook logs the thread it first runs on, once, so the next run's log answers whether the heal and the bubble share one.
+func TestTheDeclinedHooksLogTheThreadTheyFirstRunOn(t *testing.T) {
+	t.Parallel()
+	src := code(t, pcPowerboost)
+	for _, name := range []string{"Hooked_Heal", "Hooked_BubbleUpdate"} {
+		fn := body(t, src, "void __fastcall "+name+"(")
+		if !strings.Contains(fn, "first call thread=%lu\", static_cast<unsigned long>(GetCurrentThreadId())") {
+			t.Errorf("%s no longer logs its thread once (the open question of #2348 is then unanswered)", name)
+		}
+	}
 }
 
 // Each of the three paths that write a declined-marker line (the first 32, the 33rd, the later counted one) records what the line covers.
 func TestEveryDeclinedMarkerLineRecordsWhatItCovers(t *testing.T) {
 	t.Parallel()
 	fn := body(t, code(t, pcPowerboost), "void __fastcall Hooked_Heal(")
-	if got := strings.Count(fn, "g_declined_written.store(n, std::memory_order_relaxed);"); got != 3 {
+	if got := strings.Count(fn, "RaiseDeclinedWritten(n);"); got != 3 {
 		t.Errorf("Hooked_Heal records what a declined-marker line covers %d times, want 3 (the first 32, the 33rd, the counted line)", got)
 	}
 	if strings.Contains(fn, "std::atomic") || strings.Contains(fn, "static ") {
