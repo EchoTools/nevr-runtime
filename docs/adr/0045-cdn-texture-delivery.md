@@ -102,6 +102,12 @@ process.
   drift is ours. Calling the game's function with a shadow manager gets the engine's own result.
 - **Extend ADR 0005's `.evrp` packages.** One symbol per package, a header with reserved bytes, and a payload the engine cannot
   read as it reads stock. Rejected.
+- **Hand the cache to the game as a package (`CResourceManager::AddPackage`).** A package is handed over whole and once. What a
+  client is served would be chosen per load, by the guild of each lobby session success (#2356, work item 6), and it would
+  be fetched in the background without blocking the boot (decision 7). A package would have to be complete in the cache before
+  it is handed over, there would be one for every guild a player can meet, and a load could not get the stock buffer for a name
+  whose bytes have not arrived.
+  The resolver hook answers each request with what the cache holds at that moment. Rejected.
 
 ## Measured
 
