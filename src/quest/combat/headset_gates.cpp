@@ -56,7 +56,9 @@ constexpr int kMaxFragments = 32;
 constexpr std::size_t kFragmentLen = 48;  // a script library's file name is 20 characters
 constexpr int kMaxSeenLibs = 64;
 std::atomic<int> g_linkMode{static_cast<int>(LinkMode::kAll)};
-char g_fragments[kMaxFragments][kFragmentLen];
+// Row kMaxFragments is a guard row: SetLinkGateLibs never stores a name there. A store that wrote one byte past the last name row would land in
+// it, where the host test looks (FragmentGuardRowForTest).
+char g_fragments[kMaxFragments + 1][kFragmentLen];
 std::atomic<int> g_fragmentCount{0};
 
 struct SeenLib {
@@ -317,6 +319,8 @@ void SetLinkGateLibs(const char* spec) noexcept {
 }
 
 std::uint32_t LinkGateLibsSeen() noexcept { return g_seenPublished.load(std::memory_order_relaxed); }
+
+char* FragmentGuardRowForTest() noexcept { return g_fragments[kMaxFragments]; }
 
 void Tick(std::uintptr_t game) noexcept {
   if (g_game.load(std::memory_order_relaxed) != game) g_game.store(game, std::memory_order_release);

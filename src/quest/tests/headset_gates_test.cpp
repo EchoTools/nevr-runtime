@@ -1288,6 +1288,41 @@ void SixtyFourLibrariesAreRemembered() {
   End();
 }
 
+// A name of kFragmentLen (48) characters has no room for its NUL in its 48-byte row, so the store refuses it. A 47-character name fills its row with
+// its NUL and is kept. The 32nd name is the last one the policy keeps (row 31): a 48-character store there would write its NUL one byte past the
+// row, into the guard row FragmentGuardRowForTest returns, which no store reaches. The canary in that row is checked after each store.
+void AFragmentOfTheRowLengthIsRefusedAndWritesNothingPastItsRow() {
+  constexpr char kCanary = '\xa5';
+  constexpr std::size_t kRowLen = 48;  // headset_gates.cpp kFragmentLen: one name row, NUL included
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  char* guard = hg::FragmentGuardRowForTest();
+  const auto intact = [guard]() {
+    for (std::size_t i = 0; i < kRowLen; ++i) {
+      if (guard[i] != kCanary) return false;
+    }
+    return true;
+  };
+  std::string thirtyOne;  // 31 names of 3 characters: rows 0 to 30
+  for (int i = 0; i < 31; ++i) thirtyOne += "a" + std::string(i < 10 ? "0" : "") + std::to_string(i) + " ";
+  // row 31: a 47-character name is kept and answers a library of its own name
+  const std::string longest(47, 'q');
+  std::memset(guard, kCanary, kRowLen);
+  hg::SetLinkGateLibs((thirtyOne + longest).c_str());
+  QCHECK(LinkCall(longest.c_str()) == hg::kLinkHeadset);
+  QCHECK(LinkCall("a30") == hg::kLinkHeadset);
+  QCHECK(intact());
+  // row 31: a 48-character name is refused. The 31 names still answer and nothing is written past row 31.
+  const std::string tooLong(48, 'r');
+  std::memset(guard, kCanary, kRowLen);
+  hg::SetLinkGateLibs((thirtyOne + tooLong).c_str());
+  QCHECK(LinkCall("a30") == hg::kLinkHeadset);
+  QCHECK(intact());
+  End();
+}
+
 }  // namespace
 
 int main() {
@@ -1296,6 +1331,7 @@ int main() {
   TheDefaultPolicyIsTheTwentyOneLibraries();
   EachGateAnswersItsOwnCallerAndNoOther();
   TheLibraryPolicyDecidesWhoGetsTheLinkAnswer();
+  AFragmentOfTheRowLengthIsRefusedAndWritesNothingPastItsRow();
   AnEmptyRangeGatesNothing();
   TheBotGateActsOnlyWhereACombatMapOrLobbyIsLoaded();
   TheBotGateNeedsLevelnameInstalledInTheGame();

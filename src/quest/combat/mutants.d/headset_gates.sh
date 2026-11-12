@@ -12,7 +12,6 @@
 #   - `!*readable ||` in FirstWordMismatch: an unreadable word reads 0, which differs from every pinned word.
 #   - `if (!known) return false;` in LinkLibAnswered: a library that cannot be named is the empty string, which no fragment is a part of.
 #   - the `continue` in SetLinkGateLibs's "none" branch: it ends the loop body, so removing it changes nothing; the branch itself is mutated below.
-#   - `len < kFragmentLen` in SetLinkGateLibs when moved to `<=`: a stored 48-character fragment can never be a part of a library name of at most 47 characters.
 #   - `g_levelNameSlot.store(0)` after a refused headset slot: with no entry on the slot nothing calls the continuation that reads it.
 #   - the arm64 entries' own instructions: check/headset_gates.sh runs them under qemu.
 F=src/quest/combat/headset_gates.cpp
@@ -235,6 +234,10 @@ runm hg_policy_none_stored  $F "s/    } else if (len == 4 \&\& std::strncmp(star
 runm hg_policy_cap_31       $F "s/    } else if (count < kMaxFragments \&\& len < kFragmentLen) {/    } else if (count < 31 \&\& len < kFragmentLen) {/"
 runm hg_policy_len_47       $F "s/    } else if (count < kMaxFragments \&\& len < kFragmentLen) {/    } else if (count < kMaxFragments \&\& len < 47) {/"
 runm hg_policy_len_short    $F "s/    } else if (count < kMaxFragments \&\& len < kFragmentLen) {/    } else if (count < kMaxFragments \&\& len < 20) {/"
+# SetLinkGateLibs (headset_gates.cpp, the name store): a name of kFragmentLen characters has no room for its NUL in its row, so it is refused. `<=`
+# stores it and writes that NUL one byte past the last name row, into the guard row FragmentGuardRowForTest returns; the test's canary there is what breaks
+# (AFragmentOfTheRowLengthIsRefusedAndWritesNothingPastItsRow).
+runm hg_policy_fragment_len_le $F "s/    } else if (count < kMaxFragments \&\& len < kFragmentLen) {/    } else if (count < kMaxFragments \&\& len <= kFragmentLen) {/"
 runm hg_policy_fragment_unterminated $F "s/^      g_fragments\[count\]\[len\] = 0;\$/      (void)0;/"
 runm hg_policy_fragment_copy $F "s/      std::memcpy(g_fragments\[count\], start, len);/      std::memcpy(g_fragments[count], start, len > 1 ? len - 1 : len);/"
 runm hg_policy_count_not_bumped $F "s/^      ++count;\$/      (void)count;/"
