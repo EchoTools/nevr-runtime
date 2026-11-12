@@ -31,7 +31,9 @@ and is built by its CMake, so the boundary separates nothing. What it costs:
   `NEVR_VARIANT_DIR`); a test project of 128 files beside the `test-quest-*` groups.
 
 `src/quest/combat/` already holds combat behaviour built into the sentinel and hooked through the manager (`match_tags.cpp`,
-`equip_refire.cpp`), which install from constructor steps of their own where combat runs (ADR 0047).
+`equip_refire.cpp`), which install from constructor steps of their own where combat runs (ADR 0047), and one module that is not
+combat behaviour: `new_unlocks_clear.cpp`, the Quest half of a profile fix (#2410), which installs on every launch
+(`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`).
 
 ## Decision
 
@@ -64,7 +66,8 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
    the sentinel reads it before its first line, writes it in that line beside the build kind (`nevr_build::kIsDev`, unchanged), and
    `combat::Active()` is true for `q15t` and `combat`. Modules folded from the combat plugin install only when it is true; a development build may
    force it with `combat.force`, a release build may not. `match_tags` and `equip_refire` are inside this gate too (ADR 0047 decision 3:
-   their constructor steps run only when it is true). The combat code is compiled into every sentinel, so the release loader asset serves every variant.
+   their constructor steps run only when it is true). `new_unlocks_clear` is outside this gate: it repairs a profile call that arena makes
+   too (#2410, the same rules as the PC fix, which `initialize.cpp` installs whatever `combat.enabled` says), installs on every launch from `InstallPermissionWaitHook`, and says so in its header. The combat code is compiled into every sentinel, so the release loader asset serves every variant.
    The `arena` variant (the store APK with the release's loader and no plugin, #2298, and the default build, ADR 0047) is
    no combat variant: `combat::Active()` is false for it, and a release build cannot force it.
    The opt-in is the Quest build choice only: the PC runtime installs combat as it always did, with no config key (ADR 0047 decision 4).

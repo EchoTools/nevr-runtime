@@ -263,7 +263,7 @@ same loader asset, stamped with the variant word `q15t`. No release APK carries 
 `android_main` reads them. The combat APK, `just release-quest-combat-apk vX.Y.Z`, is the same repack stamped `combat`.
 Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
 `combat` for the combat APK, `arena` for the arena APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
-(`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).
+(`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`new_unlocks_clear`, a profile fix, runs in every APK).
 No library is an argument to either recipe; a path in the place of the store APK is refused. The repack needs the store APK
 (`NEVR_STORE_APK`, a file). The timer's `variant_configure` step also needs an Android NDK r26d (`ANDROID_NDK_HOME`), a vcpkg checkout
 (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`, which hold the headers the repack's libr15

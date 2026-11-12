@@ -56,6 +56,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/memsys.cpp", 2, 0},
     {"combat/meshstep.cpp", 1, 0},
     {"combat/music.cpp", 1, 0},
+    {"combat/new_unlocks_clear.cpp", 2, 0},
     {"combat/peerclamp.cpp", 1, 0},
     {"combat/powerboost.cpp", 5, 0},
     {"combat/sendguard.cpp", 1, 0},

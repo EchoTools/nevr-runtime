@@ -43,7 +43,7 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         block = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
         self.assertIsNotNone(block)
         # The list grows with each module that moves in, so each file is checked, not the whole list.
-        for name in ("combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"):
+        for name in ("combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp", "new_unlocks_clear.cpp"):
             self.assertIn(name, block.group(1).split())
         options = re.search(r"target_compile_options\(nevr_quest_combat PRIVATE([^)]*)\)", cmake)
         self.assertIsNotNone(options)

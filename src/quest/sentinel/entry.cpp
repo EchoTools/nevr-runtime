@@ -27,6 +27,7 @@
 #include "quest/combat/combat_install.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
+#include "quest/combat/new_unlocks_clear.h"
 #include "build_variant.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
@@ -190,6 +191,10 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
                                      handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
+    // A clear of the new unlocks made while a profile update is unacknowledged is sent after the acknowledgement (#2410): the two words that
+    // hold CR15NetGame::RemoveAllNewlyUnlockedItems, a word that holds anything but the clear refused on its own, and a frame work on the game
+    // thread. Its combat_new_unlocks_clear_install line says which words went in; a refused install leaves the game's calls as they are.
+    nevr_quest::combat::new_unlocks_clear::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();

@@ -37,6 +37,7 @@ add_library(nevr_quest_combat STATIC
   memsys.cpp
   meshstep.cpp
   music.cpp
+  new_unlocks_clear.cpp
   peerclamp.cpp
   pfx.cpp
   pfxtev.cpp

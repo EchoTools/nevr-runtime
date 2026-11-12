@@ -92,6 +92,7 @@ PROGRAMS = {
         "memsys_test",
         "meshstep_test",
         "music_test",
+        "new_unlocks_clear_test",
         "peerclamp_test",
         "refresh_rate_test",
         "sensorwd_test",

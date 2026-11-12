@@ -1226,6 +1226,34 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The new-unlocks clear (#2410, combat/new_unlocks_clear.h): CR15NetGame::RemoveAllNewlyUnlockedItems is held by both a JUMP_SLOT and a GLOB_DAT
+  // word, so the symbol alone names a slot of each kind. Each word resolves at its pin and alone, a pin off by one slot is refused, the clear and
+  // CJson::Empty are the symbols the .dynsym defines at their addresses, and the code the wrapper and the call rest on is the pinned words.
+  for (const RelocKind kind : {RelocKind::kJumpSlot, RelocKind::kGlobDat}) {
+    const GotTarget target = pinned::LibR15NewUnlocksClear(kind);
+    const SlotResolution at = ResolveSlot(r15.image, target, kAarch64Relocs);
+    if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 new-unlocks clear %s\n", RelocKindName(kind));
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == *target.slotVaddr);
+    GotTarget alone = target;
+    alone.slotVaddr = std::nullopt;
+    const SlotResolution only = ResolveSlot(r15.image, alone, kAarch64Relocs);
+    QCHECK_STATUS(only.status, GotStatus::kOk);
+    QCHECK(only.slotVaddr == at.slotVaddr);
+    GotTarget shifted = target;
+    shifted.slotVaddr = *target.slotVaddr + 8;
+    QCHECK_STATUS(ResolveSlot(r15.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+  }
+  CheckDefinedAt(r15, pinned::kNewUnlocksClear.symbol, pinned::kNewUnlocksClear.vaddr);
+  CheckDefinedAt(r15, "_ZNK10NRadEngine5CJson5EmptyEv", pinned::kJsonEmptyVaddr);
+  for (std::size_t i = 0; i < pinned::kNewUnlocksClearCodeCount; ++i) {
+    const pinned::PinnedCode& block = pinned::kNewUnlocksClearCode[i];
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
+                   static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
   // The combat tick (#2172, combat_tick_targets.h): the JUMP_SLOT of CncaGame::ExclusiveUpdateGame at its pinned address, the symbol defined at the
   // stock address the slot holds, and CR15Game's first word's value (the vtable's first virtual).
   CheckTarget(r15, nevr_quest::combat::tick::targets::Target(), "libr15 CncaGame::ExclusiveUpdateGame JUMP_SLOT");

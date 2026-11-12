@@ -189,6 +189,7 @@ tools/tests/test_quest_keystore.py	ported by its unit of #2132
 tools/tests/test_quest_link_objects.py	ported by its unit of #2132
 tools/tests/test_quest_login_title_wiring.py	ported by its unit of #2132
 tools/tests/test_quest_menu_version_wiring.py	ported by its unit of #2132
+tools/tests/test_quest_new_unlocks_clear_wiring.py	extends an existing Python test pattern; port with the G-units
 tools/tests/test_quest_no_code_writes.py	ported by its unit of #2132
 tools/tests/test_quest_pack_from_game_data.py	ported by its unit of #2132
 tools/tests/test_quest_patcher_cmake.py	ported by its unit of #2132

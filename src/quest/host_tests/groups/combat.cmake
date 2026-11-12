@@ -89,6 +89,13 @@ nevr_ht_test(match_tag_default_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccor
 # relocations and the code pins in the real libr15.
 nevr_ht_test(equip_refire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/equip_refire_test.cpp src/quest/combat/equip_refire.cpp src/quest/invite/frame_dispatch.cpp)
+# The new-unlocks clear (#2410): the real wrappers through the two thunks, installed by the real GotHook into the two words of a libr15 image built in
+# memory (JUMP_SLOT and GLOB_DAT of CR15NetGame::RemoveAllNewlyUnlockedItems), against models of the clear and CJson::Empty. The shared rule is the
+# header's GTest; here are the words hooked, each word's own original, the table entries, the frame work setting the dirty bit once the buffer is
+# empty, the held / re-armed / superseded / dropped lines, a word that is not the clear refused alone, and a pin that differs refusing the module.
+# got_pinned_test resolves the two relocations and the two code pins in the real libr15.
+nevr_ht_test(new_unlocks_clear_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/new_unlocks_clear_test.cpp src/quest/combat/new_unlocks_clear.cpp src/quest/invite/frame_dispatch.cpp)
 # The four heap sizes (#2175): the real module writing through the real GotDataSlot into the four GLOB_DAT words of a libr15 image built in
 # memory, against a model of the reader (`ldr x8,[slot]; ldr x1,[x8]`). All four slots, the Quest 2's System heap, each refusal alone, the two
 # switches, once, the golden lines. got_pinned_test resolves the four relocations, their symbol types and the words in the real libr15.
