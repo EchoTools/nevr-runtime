@@ -997,6 +997,44 @@ void TestInstall(const std::string& dir) {
   dc::ResetForTest();
 }
 
+// Every combat_decals_install line names the two flips the step was handed (#2382), on every path: u handed on and v off, so a line that drops one, or
+// names one for the other, shows.
+static void TestEveryInstallLineNamesTheFlips(const std::string& dir) {
+  const dc::Api api = MakeApi();
+  std::vector<GroupIn> in(1);
+  in[0] = {kDyson, 0x1111, 0, {MakeQuad(1)}};
+  const std::string table = WriteFile(dir, "flips.bin", Bytes(in));
+  std::vector<uint8_t> broken = Bytes(in);
+  broken[0] = 'X';
+  const std::string bad = WriteFile(dir, "flips-bad.bin", broken);
+  const std::string big = WriteFile(dir, "flips-big.bin", Bytes(in));
+  CHECK(truncate(big.c_str(), static_cast<off_t>(dc::kMaxFileBytes) + 1) == 0, "a table one byte over the limit");
+  dc::Api incomplete = api;
+  incomplete.init = nullptr;
+  const dc::Switches sw{true, true, false};
+  const auto named = [](const char* what, const combat::ModuleResult& r, const char* status) {
+    CHECK(std::strcmp(r.status, status) == 0 && CountLines("\"event\":\"combat_decals_install\"") == 1 &&
+              CountLines("\"decals_flip_u\":1,\"decals_flip_v\":0") == 1,
+          "%s: the install line does not name the flips it was handed (%s)", what, r.status);
+    g_lines.clear();
+  };
+  Fresh();
+  named("installed", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "installed");
+  named("a second install", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "already_installed");
+  Fresh();
+  named("off", dc::InstallAt(dc::Switches{false, true, false}, &Lookup, table.c_str(), &api), "off_config");
+  named("no table", dc::InstallAt(sw, &Lookup, (dir + "/flips-none.bin").c_str(), &api), "no_table");
+  named("a table too big to read", dc::InstallAt(sw, &Lookup, big.c_str(), &api), "table_unreadable");
+  named("a bad table", dc::InstallAt(sw, &Lookup, bad.c_str(), &api), "bad_table");
+  named("no engine export", dc::InstallAt(sw, &Lookup, table.c_str(), nullptr), "engine_export_missing");
+  named("an incomplete engine", dc::InstallAt(sw, &Lookup, table.c_str(), &incomplete), "engine_export_missing");
+  named("no libr15", dc::InstallAt(sw, nullptr, table.c_str(), &api), "module_not_loaded");
+  std::remove(table.c_str());
+  std::remove(bad.c_str());
+  std::remove(big.c_str());
+  dc::ResetForTest();
+}
+
 // A game space whose level is not stored yet (the constructor leaves 0 or -1) has no record; its updates are throttled the same way: no read on each frame.
 static void TestNoLevelYetIsThrottled(const std::string& dir) {
   const dc::Api api = MakeApi();
@@ -1084,6 +1122,7 @@ int main() {
   TestInstall(dir);
   TestArenaScope(dir);
   TestNoLevelYetIsThrottled(dir);
+  TestEveryInstallLineNamesTheFlips(dir);
 
   std::string cmd = "rm -rf " + dir;
   if (std::system(cmd.c_str()) != 0) std::printf("note: could not remove %s\n", dir.c_str());

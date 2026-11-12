@@ -124,7 +124,8 @@ Read in the pinned library (GNU build id `b243509c08ce677aeb95fa348016949b3fc452
 ## Logging (AGENTS.md)
 
 Info `combat_decals_table` (path, groups, quads, groups cut to 160 quads, trailing bytes, `flip_u`, `flip_v`), one `combat_decals_hook` per hook (`hook`:
-`update` or `shutdown`, `status`) and one `combat_decals_install` (`result`: `installed`, `off` or `refused`; `status`; `reason`); Error when a refusal leaves
+`update` or `shutdown`, `status`) and one `combat_decals_install` (`result`: `installed`, `off` or `refused`; `status`; `reason`; `decals_flip_u` and
+`decals_flip_v`, the two flip keys' values the step was handed, 0 or 1, on every path, so a run that never loads a table still shows them); Error when a refusal leaves
 the module out (`bad_table`, `empty_table`, `table_unreadable`, `engine_export_missing`, `module_not_loaded`, a hook refused) with the reason; Info `combat_decals_game_space`
 once a system (`level`, `acts`, groups, quads); `combat_decals_node` (`made`, Warning with `rc`, the engine's answer, when not made) for the first 64 nodes of
 a run; `combat_decals_window` every 10 s of drawing (frames, nodes, quads); `combat_decals_level_changed` and `combat_decals_system_shutdown` with the system and

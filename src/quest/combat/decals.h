@@ -36,7 +36,8 @@
  * `decals.cpp` (imported in #1591). The table format and the draw path are that plugin's.
  *
  * Lines (sentinel log):
- *   install   {"event":"combat_decals_install","result":"installed|off|refused","status":"<token>","reason":"..","msg":".."}
+ *   install   {"event":"combat_decals_install","result":"installed|off|refused","status":"<token>","reason":"..","decals_flip_u":0|1,"decals_flip_v":0|1,"msg":".."}
+ *             `decals_flip_u` and `decals_flip_v` are the `combat.decals_flip_u` and `combat.decals_flip_v` values the step was handed, on every path
  *   table     {"event":"combat_decals_table","path":"..","groups":<n>,"quads":<n>,"groups_cut_to_160_quads":<n>,"trailing_bytes":<n>,"flip_u":0|1,"flip_v":0|1}
  *   hook      {"event":"combat_decals_hook","hook":"shutdown|update","status":"<GotStatus>"}
  *   node      {"event":"combat_decals_node","made":0|1,"system":..,"node":..,"material":"0x..","quads":<n>,"rc":<n>,"blend":<n>}   the first 64

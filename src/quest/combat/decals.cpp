@@ -317,8 +317,11 @@ std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcep
 NEVR_HOOK_RECORD(kUpdateRecord, UpdateThunk, &OnUpdate);
 NEVR_HOOK_RECORD(kShutdownRecord, ShutdownThunk, &OnShutdown);
 
-ModuleResult Refused(const char* reason, LogLevel level, const char* msg) noexcept {
-  sentinel::LogFields(level, "combat_decals_install", {{"result", level == LogLevel::kInfo ? "off" : "refused"}, {"status", reason}, {"reason", reason}, {"msg", msg}});
+ModuleResult Refused(const Switches& switches, const char* reason, LogLevel level, const char* msg) noexcept {
+  sentinel::LogFields(level, "combat_decals_install",
+                      {{"result", level == LogLevel::kInfo ? "off" : "refused"}, {"status", reason}, {"reason", reason},
+                       {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
+                       {"msg", msg}});
   return {false, reason, level == LogLevel::kInfo};
 }
 
@@ -338,13 +341,14 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
   if (!switches.on) {
     sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
                         {{"result", "off"}, {"status", "off_config"}, {"reason", "off_config"}, {"switch", "combat.decals"},
+                         {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                          {"msg", "combat.decals is false: nothing is drawn and no hook is installed"}});
     return {false, "off_config", true};
   }
   // A second install would reset the live state (the node records, the counters) and, when its slot check then refuses, switch the module off: refuse
   // before anything is touched, with the first install still running.
   if (g_on.load(std::memory_order_acquire))
-    return Refused("already_installed", LogLevel::kWarn, "decals is already installed; the running install is left as it is");
+    return Refused(switches, "already_installed", LogLevel::kWarn, "decals is already installed; the running install is left as it is");
   // 1. the table
   char found[400] = "";
   char searched[1300] = "";
@@ -376,12 +380,14 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
   if (bytes == nullptr && problem != nullptr) {
     sentinel::LogFields(LogLevel::kError, "combat_decals_install",
                         {{"result", "refused"}, {"status", "table_unreadable"}, {"reason", "table_unreadable"}, {"why", problem},
+                         {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                          {"msg", "a decals.bin exists but cannot be read, so nothing is drawn"}});
     return {false, "table_unreadable"};
   }
   if (bytes == nullptr) {
     sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
                         {{"result", "off"}, {"status", "no_table"}, {"reason", "no_table"}, {"why", why},
+                         {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                          {"msg", "no readable decals.bin: the module draws nothing without the content pack's table and installs no hook"}});
     return {false, "no_table", true};
   }
@@ -392,6 +398,7 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
     const char* reason = lr != LoadResult::kOk ? LoadResultName(lr) : "no_groups";
     sentinel::LogFields(LogLevel::kError, "combat_decals_install",
                         {{"result", "refused"}, {"status", lr != LoadResult::kOk ? "bad_table" : "empty_table"}, {"reason", reason}, {"bytes", len},
+                         {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                          {"msg", "decals.bin is not a usable table, so nothing is drawn"}});
     FreeTable(&table);
     return {false, lr != LoadResult::kOk ? "bad_table" : "empty_table"};
@@ -403,6 +410,7 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
     if (!Resolve(&resolved) || !Complete(resolved)) {
       sentinel::LogFields(LogLevel::kError, "combat_decals_install",
                           {{"result", "refused"}, {"status", "engine_export_missing"}, {"reason", "engine_export_missing"},
+                           {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                            {"msg", "libr15.so is not loaded or lacks an export the draw path needs (not the pinned build?), so nothing is drawn"}});
       FreeTable(&table);
       return {false, "engine_export_missing"};
@@ -410,12 +418,12 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
     use = &resolved;
   } else if (!Complete(*use)) {
     FreeTable(&table);
-    return Refused("engine_export_missing", LogLevel::kError, "the engine calls given are incomplete, so nothing is drawn");
+    return Refused(switches, "engine_export_missing", LogLevel::kError, "the engine calls given are incomplete, so nothing is drawn");
   }
   sentinel::ElfImage image{};
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
     FreeTable(&table);
-    return Refused("module_not_loaded", LogLevel::kError, "libr15.so is not loaded, so no hook can be installed and nothing is drawn");
+    return Refused(switches, "module_not_loaded", LogLevel::kError, "libr15.so is not loaded, so no hook can be installed and nothing is drawn");
   }
   const std::uintptr_t base = image.base;
   // 3. the state: set before either handler can run
@@ -454,6 +462,7 @@ ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, c
                        {"trailing_bytes", g_table.trailing_bytes}, {"flip_u", switches.flipU ? 1 : 0}, {"flip_v", switches.flipV ? 1 : 0}});
   sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
                       {{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},
+                       {"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},
                        {"msg", "the static level decals are drawn from the table in dynamic-mesh nodes, in combat levels only"}});
   return {true, "installed"};
 }

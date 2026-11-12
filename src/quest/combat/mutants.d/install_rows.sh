@@ -13,7 +13,6 @@
 # ffe_not_a_scope_reader).
 #
 # Not listed (no host test can tell them from the original: on the host the module refuses before it reads the switch, and its lines do not carry it):
-#   ir_fn_decals_flip_u_on/_off, ir_fn_decals_flip_v_on/_off   DecalsNormal hands fixed flips (the flips are logged only once a decals.bin loads)
 #   ir_fn_bvh_gate_off, ir_fn_bvh_touch_off   BvhNormal hands gate/touch false (logged only on an installed BVH; the host refuses scope_not_live)
 #   ir_fn_droneguard_stage1_on/_off   DroneguardNormal hands a fixed stage1 (logged only on an installed guard)
 #   ir_fn_booster_needs_false  BoosterPoolNormal hands `false` for levelname::Installed() (levelname is never installed on the host)
@@ -53,6 +52,10 @@ runm ir_fn_impactsnd_write_on src/quest/combat/combat_install.cpp 's#^ModuleResu
 runm ir_fn_impactsnd_write_off src/quest/combat/combat_install.cpp 's#^ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config\.impactsnd\.on, g_config\.impactsndWrite\.on); }$#ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, false); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_decals_on src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.decals\.on;$#  switches.on = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_decals_off src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.decals\.on;$#  switches.on = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_decals_flip_u_on src/quest/combat/combat_install.cpp 's#^  switches\.flipU = g_config\.decalsFlipU\.on;$#  switches.flipU = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_decals_flip_u_off src/quest/combat/combat_install.cpp 's#^  switches\.flipU = g_config\.decalsFlipU\.on;$#  switches.flipU = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_decals_flip_v_on src/quest/combat/combat_install.cpp 's#^  switches\.flipV = g_config\.decalsFlipV\.on;$#  switches.flipV = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
+runm ir_fn_decals_flip_v_off src/quest/combat/combat_install.cpp 's#^  switches\.flipV = g_config\.decalsFlipV\.on;$#  switches.flipV = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_ec_on src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.ec\.on;$#  switches.on = true;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_ec_off src/quest/combat/combat_install.cpp 's#^  switches\.on = g_config\.ec\.on;$#  switches.on = false;#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key
 runm ir_fn_ecfx_on src/quest/combat/combat_install.cpp 's#^ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config\.ecfx\.on); }$#ModuleResult EcfxNormal() noexcept { return ecfx::Install(true); }#' quest-host-combat combat_install_test  # the row passes a fixed value instead of the key

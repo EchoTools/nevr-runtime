@@ -1862,6 +1862,26 @@ void TheImpactsndRowHandsTheModuleItsWriteKey() {
   combat::SetConfig(nevr_quest::CombatConfig{});
 }
 
+// decals finds no decals.bin on the host and is off before it reads a flip, and its install line names the two flip keys' values the row handed it
+// (#2382): u on and v off, then u off and v on, each set by the file.
+void TheDecalsRowHandsTheModuleItsFlipKeys() {
+  for (const bool u : {true, false}) {
+    nevr_quest::combat::decals::ResetForTest();
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.decalsFlipU = {u, nevr_quest::Source::kFile};
+    cfg.decalsFlipV = {!u, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    combat::InstallNormal();
+    const std::vector<Line> install = Lines("combat_decals_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"no_table\"") &&
+           Has(install[0].text, u ? "\"decals_flip_u\":1,\"decals_flip_v\":0" : "\"decals_flip_u\":0,\"decals_flip_v\":1"));
+    QCHECK(NoLineIsCut());
+    Done();
+  }
+  combat::SetConfig(nevr_quest::CombatConfig{});
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -1907,6 +1927,7 @@ int main() {
   TheRowsHandTheirModulesTheKeysTheFileGave();
   TheHeapsRowHandsTheModuleItsMemsysKey();
   TheImpactsndRowHandsTheModuleItsWriteKey();
+  TheDecalsRowHandsTheModuleItsFlipKeys();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
