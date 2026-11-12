@@ -7908,6 +7908,11 @@ TEST(CliOptionValue, AnOptionAfterAValueOptionIsNotItsValue) {
     EXPECT_EQ(nevr_cli::OptionValue(3, argvPlus, 1), nullptr);
     wchar_t* argvDash[] = {exe, flag, dash};
     EXPECT_EQ(nevr_cli::OptionValue(3, argvDash, 1), nullptr);
+    // #685: the game's tokenizer also takes 0x96 (the ANSI en dash) as an option prefix; after
+    // CommandLineToArgvW that byte arrives as U+2013.
+    wchar_t enDashFlag[] = L"–noconsole";
+    wchar_t* argvEnDash[] = {exe, flag, enDashFlag};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvEnDash, 1), nullptr) << "-timestep then an en-dash token must leave the token to the parse";
 }
 
 TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {
