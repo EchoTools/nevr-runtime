@@ -338,7 +338,9 @@ class Timer:
         return {"name": found[0].get("name"), "size": found[0].get("size")} if found else None
 
     def check_checkout(self) -> None:
-        """The checkout this runs from is the code that ships: clean, and exactly the freshly fetched origin/main."""
+        """The checkout this runs from is the code that ships: clean, and exactly the freshly fetched origin/main. A clean
+        checkout that is behind origin/main (HEAD is an ancestor of it) is advanced to it by a fast-forward-only merge, the
+        old and new sha logged (#1945). A dirty checkout, one that has diverged, or one ahead of origin/main is refused."""
         step = "checkout"
         repo = str(self.repo)
         self.cmd(step, ["git", "-C", repo, "fetch", "--quiet", "origin", "main"])
@@ -348,7 +350,15 @@ class Timer:
         head = self.cmd(step, ["git", "-C", repo, "rev-parse", "HEAD"]).stdout.strip()
         main = self.cmd(step, ["git", "-C", repo, "rev-parse", "origin/main"]).stdout.strip()
         if head != main:
-            raise Refusal(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
+            behind = self.cmd(step, ["git", "-C", repo, "merge-base", "--is-ancestor", "HEAD", "origin/main"],
+                              ok_codes=(0, 1)).returncode == 0
+            if not behind:
+                raise Refusal(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
+            self.cmd(step, ["git", "-C", repo, "merge", "--ff-only", "--quiet", "origin/main"])
+            self.log.event("checkout_fast_forward", step=step, from_sha=head, to_sha=main)
+            head = self.cmd(step, ["git", "-C", repo, "rev-parse", "HEAD"]).stdout.strip()
+            if head != main:
+                raise Refusal(step, f"the fast-forward left the checkout at {head[:12]}, not the fetched origin/main {main[:12]}")
         self.ok(step, head=head)
 
     def check_tags(self) -> None:
