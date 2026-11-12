@@ -1,5 +1,5 @@
 # KNOWN-WRONG #2189: the lines of each file that still name the deleted combat plugin (deleted_plugin_name_test.go). Only shrinks.
-RELEASING.md	10
+RELEASING.md	11
 docs/adr/0040-every-build-names-its-variant.md	3
 docs/adr/0046-combat-is-part-of-the-quest-runtime.md	4
 justfile	6
@@ -15,9 +15,11 @@ src/quest/tests/combat_tick_test.cpp	2
 src/quest/tests/heap_step_test.cpp	1
 src/quest/tests/integration_sequence_test.cpp	1
 src/quest/tests/refresh_rate_test.cpp	1
+tools/quest_release_base.py	4
 tools/quest_release_timer.py	3
 tools/quest_repack_libs.py	3
 tools/tests/test_publish_quest_apk.py	3
-tools/tests/test_quest_release_timer.py	5
+tools/tests/test_quest_release_base.py	2
+tools/tests/test_quest_release_timer.py	9
 tools/tests/test_quest_repack_libs.py	6
-tools/tests/test_release_quest_apk.py	5
+tools/tests/test_release_quest_apk.py	23

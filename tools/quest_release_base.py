@@ -15,8 +15,8 @@ WHAT.
         the `just quest-reference-base` step), and refuses unless BASE.apk holds every REFERENCE_ENTRIES name.
 
     quest_release_base.py check-arena --apk ARENA.apk
-        Refuses unless ARENA.apk (the store APK repacked with the release's loader, #2298) holds none of REFERENCE_ENTRIES and no
-        plugin manifest, and its variant stamp is exactly `arena`.
+        Refuses unless ARENA.apk (the store APK repacked with the release's loader, #2298) holds none of REFERENCE_ENTRIES, no
+        q15t library and no plugin manifest, and its variant stamp is exactly `arena`.
 
     quest_release_base.py check-release --apk RELEASE.apk --base BASE.apk
         Refuses unless BASE.apk holds every REFERENCE_ENTRIES name and RELEASE.apk holds every entry name of BASE.apk
@@ -49,9 +49,8 @@ REFERENCE_ENTRIES = ("assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.s
 
 LABEL = "Echo VR"
 
-# What an arena APK must not carry besides REFERENCE_ENTRIES (#2298): the manifest that lists packaged plugins. Every release recipe that
-# packaged a plugin library wrote this manifest with it, so an APK that carries a plugin library carries the manifest too.
-ARENA_FORBIDDEN_ENTRIES = ("lib/arm64-v8a/libnevr_plugin_manifest.so",)
+# What an arena APK must not carry besides REFERENCE_ENTRIES (#2298): the q15t library and the manifest that lists packaged plugins.
+ARENA_FORBIDDEN_ENTRIES = ("lib/arm64-v8a/libq15t.so", "lib/arm64-v8a/libnevr_plugin_manifest.so")
 ARENA_STAMP_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"
 
 
@@ -124,7 +123,7 @@ def check_release(apk: Path, base: Path) -> dict:
 
 
 def check_arena(apk: Path) -> dict:
-    """The arena APK carries no combat (#2298): none of the reference build's entries, no plugin manifest, and the
+    """The arena APK carries no combat (#2298): none of the reference build's entries, no q15t library, no plugin manifest, and the
     variant stamp `arena` (the exact bytes). A refusal names every offending entry."""
     try:
         with zipfile.ZipFile(apk) as z:
