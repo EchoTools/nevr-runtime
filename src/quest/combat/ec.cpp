@@ -13,8 +13,7 @@
 #include <cstring>
 #include <string>
 
-#include "quest/combat/combat_level.h"
-#include "quest/combat/combat_tick.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/ec_core.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
@@ -83,10 +82,9 @@ bool g_noThread = false;  // test seam
 
 // the scope
 std::atomic<bool> g_inScope{false};
-std::atomic<std::uintptr_t> g_game{0};
 std::atomic<int> g_forceScope{-1};
 std::uint64_t g_nextScopeMs = 0;  // the ec thread only (and tests)
-level::Kind g_lastKind = level::Kind::kNone;
+scope::LookClass g_lastClass = scope::LookClass::kNoLook;
 bool g_scopeLogged = false;
 
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
@@ -526,27 +524,19 @@ ModuleResult Refused(const char* token) noexcept {
 
 bool InCombatScope() noexcept { return g_inScope.load(std::memory_order_acquire); }
 
-void Tick(std::uintptr_t game) noexcept {
-  if (g_game.load(std::memory_order_relaxed) != game) g_game.store(game, std::memory_order_release);
-}
-
 bool RefreshScope(std::uint64_t nowMs) noexcept {
   if (g_nextScopeMs != 0 && nowMs < g_nextScopeMs) return InCombatScope();
   g_nextScopeMs = nowMs + kScopeEveryMs;
   const int forced = g_forceScope.load(std::memory_order_acquire);
-  level::Kind kind = level::Kind::kNone;
-  std::uint64_t levelId = 0;
-  const std::uintptr_t game = g_game.load(std::memory_order_acquire);
-  if (forced >= 0) {
-    kind = forced != 0 ? level::Kind::kCombatOrLobby : level::Kind::kNone;
-  } else if (game != 0) {
-    kind = level::Classify(game, /*lobby=*/true, &levelId);
-  }
-  const bool in = kind == level::Kind::kCombatOrLobby;
+  // One record of the combat level answer (combat_scope.h LastLook, read whole on this thread) decides, classes and names the level, so the line
+  // cannot describe another look than the one that decided. A test's forced scope has no record (level 0).
+  const scope::Look look = forced >= 0 ? scope::Look{} : scope::LastLook();
+  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);
+  const scope::LookClass cls = forced >= 0 ? (in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);
   const bool was = g_inScope.exchange(in, std::memory_order_acq_rel);
-  if (in != was || kind != g_lastKind || !g_scopeLogged) {
+  if (in != was || cls != g_lastClass || !g_scopeLogged) {
     g_scopeLogged = true;
-    g_lastKind = kind;
+    g_lastClass = cls;
     if (!in) {  // leaving: no server, no net tick, the page's answer word cleared
       g_gameFd.store(-1, std::memory_order_relaxed);
       g_gameSrc.store(0, std::memory_order_relaxed);
@@ -556,8 +546,8 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
     char levelText[19];
     sentinel::LogFields(LogLevel::kInfo, "combat_ec_scope",
                         {{"in_scope", in ? 1 : 0},
-                         {"level_class", kind == level::Kind::kCombatOrLobby ? "combat_or_lobby" : kind == level::Kind::kEchoArena ? "echo_arena" : game == 0 && forced < 0 ? "no_game" : "other"},
-                         {"level", sentinel::HexString(levelText, levelId)},
+                         {"level_class", scope::LookClassName(cls)},
+                         {"level", sentinel::HexString(levelText, look.level)},
                          {"msg", in ? "a combat map or the combat lobby is loaded: the EC client acts"
                                     : "no combat map or combat lobby is loaded: the EC client passes every call to the game and sends nothing"}});
   }
@@ -609,6 +599,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Log
                        {"hide_write", g_hideWrite ? 1 : 0}, {"equip_store", g_equipStore ? 1 : 0},
                        {"loctoken_s", static_cast<long long>(g_locTokenS)}});
 
+  // The scope is the combat level answer (combat_scope.h), which this client's thread reads: when it cannot change (the tick or the scope row's
+  // refresh is not installed) the client could never act, so nothing is hooked. After the words line, so the words the file gave are on record.
+  if (!scope::Live()) return Refused("scope_not_live");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded");
   char id[64] = {};
@@ -616,9 +609,6 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Log
   if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch");
   const std::uintptr_t base = image.base;
   g_logLibs = logLibs;
-
-  // The scope reads the game the tick hands it: with no tick the client could never act, so it installs nothing.
-  if (!tick::Add(&Tick)) return Refused("tick_table_full");
 
   // recvfrom + sendto: both or none.
   const sentinel::GotStatus recv = InstallOne<RecvThunk>(g_recvHook, LibcTarget(kRecvfromSymbol, pins.recvfromSlot), kRecvRecord, lookup);
@@ -935,10 +925,9 @@ void ResetForTest() noexcept {
   for (auto& on : g_logOn) on = false;
   for (int& c : g_platformLogged) c = -1;
   g_inScope = false;
-  g_game = 0;
   g_forceScope = -1;
   g_nextScopeMs = 0;
-  g_lastKind = level::Kind::kNone;
+  g_lastClass = scope::LookClass::kNoLook;
   g_scopeLogged = false;
   g_lookup = nullptr;
   g_pinsOverride = nullptr;

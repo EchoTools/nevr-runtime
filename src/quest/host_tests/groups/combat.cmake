@@ -247,11 +247,10 @@ nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_c
 # The EC client (#2187, docs/quest/combat/ec.md): the pure rules, the list hide, the real thunks installed by the real GotHook into the five slots of
 # a libr15 image built in memory and the WriteLogV slots of two platform-library images, called through the slots against a fake libc, the game's
 # WriteLog (a va_list through the WriteLogV slot) and a fake clock; the net tick, the step, the hide, the selection, the observer install, the
-# keys and the legacy files, and the scope (arena, the arena lobbies, the 250 ms cadence) against a fake CR15Game. got_pinned_test resolves every
-# relocation and word in the real files.
+# keys and the legacy files, and the scope (arena, the arena lobbies, the 250 ms cadence, a stale answer) against a fake CR15Game. got_pinned_test
+# resolves every relocation and word in the real files. The scope is the real combat level answer (combat_scope.cpp, #2382).
 nevr_ht_test(ec_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic
-  SRC src/quest/tests/ec_test.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp
-      src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+  SRC src/quest/tests/ec_test.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp ${_cscope_srcs})
 # The page as a symbol of the sentinel (#2187): ec_page.cpp built into a shared object with the sentinel's flags, loaded RTLD_LOCAL as a dependency
 # of a stand-in for libr15, asked by dlsym(RTLD_DEFAULT) from a third object before and after PublishEcPage, and with another object that already
 # exports re33_ec_page (the sentinel must still write its own storage). glibc; bionic is not covered (docs/quest/combat/ec.md (a)).
@@ -275,7 +274,7 @@ set_target_properties(ecfx_stub_full PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAK
 set_target_properties(ecfx_stub_missing PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/combat/ecfx_missing")
 nevr_ht_test(ecfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic DEPENDS ecfx_stub_full ecfx_stub_missing
   SRC src/quest/tests/ecfx_test.cpp src/quest/combat/ecfx.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp
-      src/quest/integration/module_observers.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/integration/module_observers.cpp ${_cscope_srcs}
   ARGS full $<TARGET_FILE:ecfx_stub_full>)
 nevr_ht_rerun(ecfx_test_missing ecfx_test GROUP combat ARGS missing $<TARGET_FILE:ecfx_stub_missing>)
 # dronekill (#2187, docs/adr/0046): the real handlers through the four CallbackThunks, installed by the real GotHook into four JUMP_SLOTs of a libr15

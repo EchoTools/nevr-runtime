@@ -97,3 +97,13 @@ runm sea_record_ignores_stale   $C "s/^bool SeenEchoArena(const Look\\& look) no
 runm icm_record_ignores_stale   $H 's/^inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& /inline bool InCombatMap(const Look\& look) noexcept { return /'
 runm icm_record_ignores_arena   $H 's/^\(inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& \)(look.bits \& (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }/\1(look.bits \& kBitCombatMap) != 0; }/'
 runm icm_record_lobby           $H 's/^\(inline bool InCombatMap(const Look\& look) noexcept { return look.fresh \&\& \)(look.bits \& (kBitCombatMap | kBitEchoArena)) == kBitCombatMap; }/\1(look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0; }/'
+# InCombatOrLobby on a record and the class of a look (ec's level_class, powerboost's kind)
+runm icl_record_ignores_stale   $H 's/^  return look.fresh \&\& (look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0;$/  return (look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0;/'
+runm icl_record_ignores_arena   $H 's/^  return look.fresh \&\& (look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0;$/  return look.fresh \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0;/'
+runm icl_record_no_lobby        $H 's/^  return look.fresh \&\& (look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& (kBitCombatMap | kBitCombatLobby)) != 0;$/  return look.fresh \&\& (look.bits \& kBitEchoArena) == 0 \&\& (look.bits \& kBitCombatMap) != 0;/'
+runm cls_stale_is_no_look       $C 's/return look.looks == 0 ? LookClass::kNoLook : LookClass::kStale;/return LookClass::kNoLook;/'
+runm cls_fresh_unchecked        $C 's/^  if (!look.fresh) return look.looks == 0/  if (look.looks == 0) return look.looks == 0/'
+runm cls_arena_ignored          $C '/^  if ((look.bits \& kBitEchoArena) != 0) return LookClass::kEchoArena;$/d'
+runm cls_lobby_is_other         $C 's/^  if (CombatOrLobby(look.bits)) return LookClass::kCombatOrLobby;$/  if (CombatMap(look.bits)) return LookClass::kCombatOrLobby;/'
+runm cls_name_stale             $C 's/case LookClass::kStale: return "stale";/case LookClass::kStale: return "no_look";/'
+runm cls_name_other             $C 's/case LookClass::kOther: return "other";/case LookClass::kOther: return "none";/'

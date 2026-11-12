@@ -529,7 +529,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(ResultsOf(lines[1]) ==
            std::string("\"results\":\"script_redirect=missing_library tick=module_not_loaded scope=tick_not_installed frozen_frame_exit=scope_not_live refresh_rate=installed texture_quest2_step_down=off meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
-               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=module_not_loaded ecfx=needs_ec dronekill=scope_not_live "
+               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table ec=scope_not_live ecfx=needs_ec dronekill=scope_not_live "
                "bullet_velocity_guard=module_not_loaded sound_symbol_guard=off dronemuzzle=needs_dronekill_shot powerboost=module_not_loaded gunconnect=scope_not_live aibots=scope_not_live weapon_arm=scope_not_live gates=module_not_loaded bvh=scope_not_live "
                "wallfire=bvh_not_installed sendguard=module_not_loaded fxtrail=scope_not_live voipdrop=module_not_loaded custctx=module_not_loaded droneguard=module_not_loaded "
                "peerclamp=scope_not_live pfx=installed pfxtev=installed hudmeter=scope_not_live shieldgamma=scope_not_live levelname=module_not_loaded boosterpool=needs_levelname sensorwd=scope_not_live music=module_not_loaded\""));
@@ -872,6 +872,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   off.bvh = {false, nevr_quest::Source::kFile};              // the static BVH reads the scope too (#2382)
   off.weaponArm = {false, nevr_quest::Source::kFile};        // the gun hand default reads the scope too (#2382)
   off.dronekill = {false, nevr_quest::Source::kFile};        // dronekill reads the scope too (#2382)
+  off.ec = {false, nevr_quest::Source::kFile};               // the EC client reads the scope too (#2382)
   combat::SetConfig(off);
   combat::InstallNormal();
   QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "hudmeter=off shieldgamma=off"));
@@ -885,7 +886,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
-  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (twelve readers are on by default)
+  nevr_quest::CombatConfig gammaOnly = off;  // every other reader of the scope off (thirteen readers are on by default)
   gammaOnly.hudmeter = {false, nevr_quest::Source::kFile};  // the gamma alone is a reader
   gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
   gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
@@ -1236,7 +1237,7 @@ void TheEcRowsReadTheirKeysFromTheResolvedSection() {
   const std::vector<Line> line = Lines("combat_ec_words");
   QCHECK(line.size() == 1U && Has(line[0].text, "\"source\":\"config\"") && Has(line[0].text, "\"types_mask\":\"0x0000000000000001\"") &&
          Has(line[0].text, "\"equip_store\":0"));
-  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "ec=module_not_loaded ecfx=needs_ec"));
+  QCHECK(Has(ResultsOf(Lines("combat_install")[0]), "ec=scope_not_live ecfx=needs_ec"));  // the words are read before the scope refuses
   Done();
   // The defaults: the shipped words.
   Process(bv::Variant::kCombat);
@@ -1541,7 +1542,8 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
                         {"aibots", &nevr_quest::CombatConfig::aibots, true},          // practice AI bots (#2382) read the scope too
                         {"bvh", &nevr_quest::CombatConfig::bvh, true},                // the static BVH (#2382) reads the scope too
                         {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true},   // the gun hand default (#2382) reads the scope too
-                        {"dronekill", &nevr_quest::CombatConfig::dronekill, true}};   // dronekill (#2382) reads the scope too
+                        {"dronekill", &nevr_quest::CombatConfig::dronekill, true},    // dronekill (#2382) reads the scope too
+                        {"ec", &nevr_quest::CombatConfig::ec, true}};                 // the EC client (#2382) reads the scope too
   for (const Only& c : cases) {
     Process(bv::Variant::kCombat);
     nevr_quest::CombatConfig cfg;
@@ -1559,6 +1561,7 @@ void TheScopeRowStaysOnForEachGuardThatReadsItAndOffForTheOthers() {
     cfg.bvh = {false, nevr_quest::Source::kFile};
     cfg.weaponArm = {false, nevr_quest::Source::kFile};
     cfg.dronekill = {false, nevr_quest::Source::kFile};
+    cfg.ec = {false, nevr_quest::Source::kFile};
     cfg.*c.member = {true, nevr_quest::Source::kFile};
     combat::SetConfig(cfg);
     combat::InstallNormal();

@@ -119,8 +119,11 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
 ## Arena
 
 Arena and combat run on the same APK, so every hook above is installed while a player is in an arena match. The scope is `ec::InCombatScope()`:
-an atomic the ec thread refreshes at most every 250 ms from `combat_level` (`Classify(game, lobby=true)`) on the CR15Game the combat tick hands it,
-true only while a combat map (`mpl_combat_*`) or the combat lobby (`mpl_lobby_b_combat`) is loaded. An Echo Arena level is out, and so are the
+an atomic the ec thread refreshes at most every 250 ms from one record of the combat level answer (`combat_scope.h` `LastLook()`, read whole on
+that thread, judged by `InCombatOrLobby(look)`), true only while a combat map (`mpl_combat_*`) or the combat lobby (`mpl_lobby_b_combat`) is loaded
+and the answer is fresh. A combat answer older than 1 s (the game thread stopped refreshing it) is out: the client leaves the scope until the tick is
+back, and its line names the class `stale`. The module is one of the scope row's readers (`combat.ec` is in `ScopeNormal()` in `combat_install.cpp`),
+and its install refuses with `scope_not_live` when the answer cannot change. An Echo Arena level is out, and so are the
 lobbies arena players use (`mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena`, `_b_social`), which are no Echo Arena level. Out of scope:
 
 - recvfrom and sendto call libc and return: no datagram is consumed, nothing is counted, no lock is taken, no net tick runs (so ecfx never drains
@@ -137,7 +140,7 @@ kotorvr's echoquest-combat, which pauses its EC client only while an Echo Arena 
 `_b2_lowspec`, `_b_arena`, `_b_social`) the EC client does not run, so `hide` does not cut the tac-mod list (smoke, buff and point) there, as it does in the
 combat lobby and on a combat map (on a server without EC). Which lobby a Quest combat player chooses a loadout in is not established; the headset row below
 has a line for it.
-Moving the cache to `combat_scope.h` (on main) is tracked in #2382; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
+The cost per call is in the unit's arena notes and
 the PR body (ADR 0038).
 
 ## Config
@@ -159,7 +162,7 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_lobby_settings","statement":"stated|not_stated|malformed","features":"..","dropped":<n>,"bytes":<n>,"changed":0|1,"msg":".."}
     {"event":"combat_ec_page","page":"0x..","global_lookup":"0x..","reopened_global":0|1,"state":"visible|invisible|other","msg":".."}
     {"event":"combat_ec_words","source":"default|config","types_mask":"0x..","hide_write":0|1,"equip_store":0|1,"loctoken_s":<n>}
-    {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_game","level":"0x..","msg":".."}
+    {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x..","msg":".."}   (combat_scope.h LookClassName; level: the look's)
     {"event":"combat_ec_platform","lib":"libpnsovr|libpnsrad","status":"..","msg":".."}
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
     combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall

@@ -33,6 +33,7 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ec_core.h"
@@ -42,6 +43,7 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "runtime/compat/server_features.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
@@ -102,6 +104,8 @@ static bool HasSumLine(const char* needle) {
 static uint64_t g_now100 = 1000ull * 10000;  // 1000 ms
 static uint64_t Clock() { return g_now100; }
 static void AdvanceMs(uint64_t ms) { g_now100 += ms * 10000; }
+// The combat level answer's clock (combat_scope.h) is the same fake clock, in ms.
+static std::int64_t ScopeClock() noexcept { return static_cast<std::int64_t>(g_now100 / 10000); }
 static uint8_t* EcPage() { return sentinel::EcPage(); }
 
 // ---- the fakes the slots hold ----
@@ -125,6 +129,22 @@ static std::uintptr_t FakeWriteLogVRad(int level, unsigned long long flags, cons
 
 // ---- the images ----
 static Image g_image, g_ovr, g_rad;
+// A libr15 image with the tick's slot row, on which the tick is installed and the scope row registers its refresh: the combat level answer can
+// change, as the shipped table leaves it before this module's row.
+static Image g_tickImage;
+static bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+static void StartTheScope() {
+  nevr_quest::combat::tick::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  nevr_quest::combat::scope::SetClockForTest(&ScopeClock);
+  g_tickImage.Build({combat_test::scope_world::TickRow()});
+  combat_test::scope_world::PutTickSlot(g_tickImage);
+  CHECK(combat_test::scope_world::StartScope(&TickImageLookup), "the tick and the scope row did not start");
+}
 static uintptr_t g_base = 0;
 static Pins g_pins = kPins;
 static LogLib g_libs[kLogLibs] = {kLogLib[0], kLogLib[1], kLogLib[2]};
@@ -327,7 +347,7 @@ static void ResetAll(unsigned bad = 0, const char* words = "types=VPTO equip hid
   g_settings_msg = nullptr;
   g_now100 = 1000ull * 10000;
   ResetForTest();
-  nevr_quest::combat::tick::ResetForTest();
+  StartTheScope();
   nevr_quest::integration::ClearModuleLoadedObserversForTest();
   SetNoThreadForTest(true);
   SetClockForTest(&Clock);
@@ -1175,7 +1195,7 @@ static void InstallTests() {
   Stats s = StatsNow();
   CHECK(s.listOn && s.hideWrite && s.equipStore && s.types == 15 && s.logLib[0], "words not applied: list %d hide %d equip %d types %u", s.listOn, s.hideWrite, s.equipStore, s.types);
   CHECK(HasLine("\"event\":\"combat_ec_page\"") && (HasLine("\"state\":\"visible\"") || HasLine("\"state\":\"invisible\"") || HasLine("\"state\":\"other\"")), "no page line");
-  CHECK(Installed() && nevr_quest::combat::tick::Count() == 1, "the scope's tick callback not registered");
+  CHECK(Installed() && nevr_quest::combat::tick::Count() == 1, "the client registered a tick callback (the one callback is the scope row's refresh)");
   CHECK(std::string(InstallWords("").status) == "already_ran", "a second install must refuse");
 
   // 1b. #2333: the lobby settings callback's word holds another function: partial and loud, that word untouched, the rest of the client
@@ -1228,7 +1248,7 @@ static void InstallTests() {
   r = InstallWords("types=T hide");
   CHECK(r.installed && !StatsNow().listOn && *W(kPins.unloadSlot) == reinterpret_cast<uintptr_t>(&RealUnload), "Reload refused: Unload must stay untouched");
 
-  // 6. the refusals before any slot: no libr15, another build, no tick slot
+  // 6. the refusals before any slot: no libr15, another build, a combat level answer that cannot change
   ResetAll();
   g_image.Drop();
   CHECK(std::string(InstallWords("").status) == "module_not_loaded", "no libr15");
@@ -1236,10 +1256,18 @@ static void InstallTests() {
   g_image.Build({{kRecvfromSymbol, kPins.recvfromSlot, false, false, 0}}, "0123456789012345678901234567890123456789");
   CHECK(std::string(InstallWords("").status) == "build_id_mismatch" && !HasLine("\"event\":\"combat_ec_hook\""), "another build: refused before any hook");
   ResetAll();
-  for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i)
-    nevr_quest::combat::tick::Add(&Tick);
+  nevr_quest::combat::tick::ResetForTest();  // the tick is not installed, so the scope row registered no refresh
+  nevr_quest::combat::scope::ResetForTest();
+  g_lines.clear();
   const uint64_t recvBefore = *W(kPins.recvfromSlot);
-  CHECK(std::string(InstallWords("").status) == "tick_table_full" && *W(kPins.recvfromSlot) == recvBefore, "a full tick table must refuse before any slot");
+  CHECK(std::string(InstallWords("").status) == "scope_not_live" && *W(kPins.recvfromSlot) == recvBefore && HasLine("\"event\":\"combat_ec_words\"") &&
+            HasLine("\"event\":\"combat_ec_install\",\"result\":\"refused\"", 3),
+        "a combat level answer that cannot change must refuse before any slot, after the words line");
+  ResetAll();
+  nevr_quest::combat::tick::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  g_image.Drop();  // no libr15 either: the scope is asked first
+  CHECK(std::string(InstallWords("").status) == "scope_not_live", "a dead scope is asked after the image");
 }
 
 // ===================== the platform libraries =====================
@@ -1340,15 +1368,19 @@ static void ConfigTests() {
 }
 
 // ===================== arena (the scope) =====================
+// The combat level answer looks at the game (the scope row's refresh, on the game thread), then the ec thread asks it (RefreshScope).
+static bool LookAndAsk() {
+  nevr_quest::combat::scope::Refresh(GameAddress());
+  return RefreshScope(g_now100 / 10000);
+}
 static void ArenaTests() {
   // An Echo Arena level: every datagram goes to the game as libc gave it, nothing is counted, no net tick, nothing is consumed
   ResetAll();
   ForceScopeForTest(-1);
   InstallOk();
-  Tick(GameAddress());
   LoadLevels({"mpl_arena_a"});
   AdvanceMs(300);
-  CHECK(!RefreshScope(g_now100 / 10000) && !InCombatScope(), "an Echo Arena level is in scope");
+  CHECK(!LookAndAsk() && !InCombatScope(), "an Echo Arena level is in scope");
   CHECK(HasLine("\"in_scope\":0,\"level_class\":\"echo_arena\""), "no scope line for arena");
   OnNetTick(&NetTick);
   g_tick_calls = 0;
@@ -1368,32 +1400,49 @@ static void ArenaTests() {
   for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
     LoadLevels({lobby});
     AdvanceMs(300);
-    CHECK(!RefreshScope(g_now100 / 10000), "%s is in scope", lobby);
+    CHECK(!LookAndAsk(), "%s is in scope", lobby);
   }
   // the combat lobby and a combat map are; the level is read at most every 250 ms
   LoadLevels({"mpl_lobby_b_combat"});
   AdvanceMs(300);
-  CHECK(RefreshScope(g_now100 / 10000) && InCombatScope(), "the combat lobby is not in scope");
+  CHECK(LookAndAsk() && InCombatScope(), "the combat lobby is not in scope");
+  // the ec thread asks at most every 250 ms, whatever the answer's own looks: a look made 200 ms before this thread's ask is read, and a newer one
+  // (an Echo Arena level) is not read until 250 ms after that ask
+  AdvanceMs(300);
+  nevr_quest::combat::scope::Refresh(GameAddress());  // a look: the combat lobby
+  AdvanceMs(200);
+  CHECK(RefreshScope(g_now100 / 10000), "the combat lobby is not in scope");
   LoadLevels({"mpl_arena_a"});
   AdvanceMs(100);
-  CHECK(RefreshScope(g_now100 / 10000), "the level was read again before 250 ms");
+  CHECK(LookAndAsk(), "the answer was read again 100 ms after the last ask (the arena look is newer than it)");
   AdvanceMs(150);
-  CHECK(!RefreshScope(g_now100 / 10000), "the level was not read again at 250 ms");
+  CHECK(!LookAndAsk(), "the answer was not read again 250 ms after the last ask");
   LoadLevels({"mpl_combat_dyson"});
   AdvanceMs(250);
-  CHECK(RefreshScope(g_now100 / 10000), "a combat map is not in scope");
+  CHECK(LookAndAsk(), "a combat map is not in scope");
   GameTalks();
   CHECK(StatsNow().sends == 1 && StatsNow().haveServer, "in scope a send is not counted");
   // leaving: the page's answer word is cleared and no server is kept for the net tick
   Store32(EcPage() + kQuestEcServer, 1);
   LoadLevels({"mpl_arena_a"});
   AdvanceMs(250);
-  CHECK(!RefreshScope(g_now100 / 10000) && Load32(EcPage() + kQuestEcServer) == 0, "leaving the scope kept the answer word");
-  // no game seen yet: out of scope
+  CHECK(!LookAndAsk() && Load32(EcPage() + kQuestEcServer) == 0, "leaving the scope kept the answer word");
+  // the tick stops (nothing refreshes the answer): a combat answer older than 1 s is not believed, so the client leaves the scope (this thread
+  // keeps asking while the game thread is stalled), and the line names the class `stale`
+  LoadLevels({"mpl_combat_dyson"});
+  AdvanceMs(250);
+  CHECK(LookAndAsk(), "a combat map is not in scope");
+  AdvanceMs(1001);
+  CHECK(!RefreshScope(g_now100 / 10000) && HasLine("\"in_scope\":0,\"level_class\":\"stale\""), "a stale combat answer kept the scope");
+  // a transition: an Echo Arena level still loaded beside a combat map wins
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  AdvanceMs(250);
+  CHECK(!LookAndAsk(), "a transition holding an Echo Arena level is in scope");
+  // no look yet: out of scope
   ResetAll();
   ForceScopeForTest(-1);
   InstallOk();
-  CHECK(!InCombatScope() && HasLine("\"level_class\":\"no_game\""), "no game reads as in scope");
+  CHECK(!InCombatScope() && HasLine("\"level_class\":\"no_look\""), "no look reads as in scope");
 }
 
 static void PageTests() {

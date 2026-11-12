@@ -522,6 +522,33 @@ void TheRecordQuestionsAnswerAsTheLiveOnes() {
   End();
 }
 
+// InCombatOrLobby on a record already taken, and the class of a look as a module's line names it (ClassOf, LookClassName: ec's `level_class`,
+// powerboost's `kind`): one rule for every module.
+void TheClassOfALookIsOneRule() {
+  Begin();
+  QCHECK(!scope::InCombatOrLobby(scope::Look{}) && scope::ClassOf(scope::Look{}) == scope::LookClass::kNoLook);
+  QCHECK(scope::ClassOf(scope::LastLook()) == scope::LookClass::kNoLook);  // no look yet
+  LookAt({"mpl_lobby_b_combat"});
+  QCHECK(scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kCombatOrLobby);
+  LookAt({"mpl_combat_dyson"});
+  QCHECK(scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kCombatOrLobby);
+  LookAt({"mpl_combat_gauss", "mpl_arena_a"});  // a transition: arena wins
+  QCHECK(!scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kEchoArena);
+  LookAt({"mpl_lobby_b"});  // a lobby arena players use: no class
+  QCHECK(!scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kOther);
+  LookAt({"mpl_combat_fission"});
+  const std::int64_t looked = g_nowMs;
+  g_nowMs = looked + scope::kStaleAfterMs;  // believed at the limit
+  QCHECK(scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kCombatOrLobby);
+  g_nowMs = looked + scope::kStaleAfterMs + 1;  // not a millisecond after
+  QCHECK(!scope::InCombatOrLobby(scope::LastLook()) && scope::ClassOf(scope::LastLook()) == scope::LookClass::kStale);
+  QCHECK(std::string(scope::LookClassName(scope::LookClass::kNoLook)) == "no_look" && std::string(scope::LookClassName(scope::LookClass::kStale)) == "stale" &&
+         std::string(scope::LookClassName(scope::LookClass::kEchoArena)) == "echo_arena" &&
+         std::string(scope::LookClassName(scope::LookClass::kCombatOrLobby)) == "combat_or_lobby" &&
+         std::string(scope::LookClassName(scope::LookClass::kOther)) == "other");
+  End();
+}
+
 // A record read while a look is being written is not handed out (its fields could be of two looks): the read gives up after kLookReadTries and answers
 // "no look, not fresh", so SeenEchoArena is true. Once the write ends, the new look is read whole.
 scope::Look g_midWrite;
@@ -616,6 +643,7 @@ int main() {
   AFullTickTableRefusesAndTheAnswerStaysFalse();
   TheLastLookIsOneRecordAndTheArenaQuestionFailsClosed();
   TheRecordQuestionsAnswerAsTheLiveOnes();
+  TheClassOfALookIsOneRule();
   AHalfWrittenLookIsNeverHandedOut();
   AClosedLookIsWholeTheMomentItCloses();
   if (quest_test::Failures() == 0) std::printf("combat_scope_test: all checks passed\n");

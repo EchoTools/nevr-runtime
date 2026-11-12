@@ -71,6 +71,24 @@ Look LastLook() noexcept {
 bool SeenEchoArena(const Look& look) noexcept { return !look.fresh || (look.bits & kBitEchoArena) != 0; }
 bool SeenEchoArena() noexcept { return SeenEchoArena(LastLook()); }
 
+LookClass ClassOf(const Look& look) noexcept {
+  if (!look.fresh) return look.looks == 0 ? LookClass::kNoLook : LookClass::kStale;
+  if ((look.bits & kBitEchoArena) != 0) return LookClass::kEchoArena;
+  if (CombatOrLobby(look.bits)) return LookClass::kCombatOrLobby;
+  return LookClass::kOther;
+}
+
+const char* LookClassName(LookClass c) noexcept {
+  switch (c) {
+    case LookClass::kNoLook: return "no_look";
+    case LookClass::kStale: return "stale";
+    case LookClass::kEchoArena: return "echo_arena";
+    case LookClass::kCombatOrLobby: return "combat_or_lobby";
+    case LookClass::kOther: return "other";
+  }
+  return "other";
+}
+
 ModuleResult InstallNormal() noexcept {
   if (g_registered.load(std::memory_order_acquire)) return {true, "installed"};
   const bool tickUp = tick::Installed();

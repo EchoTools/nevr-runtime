@@ -109,6 +109,18 @@ inline bool InCombatMap(const Look& look) noexcept { return look.fresh && (look.
 
 // True while a combat map or the combat lobby is loaded and no Echo Arena level is (and the answer is fresh).
 inline bool InCombatOrLobby() noexcept { return SeenCombatOrLobby() && LookIsFresh(); }
+// The same rule on a record already taken (LastLook), for a caller off the game thread that also names the record's class and level (the EC client).
+inline bool InCombatOrLobby(const Look& look) noexcept {
+  return look.fresh && (look.bits & kBitEchoArena) == 0 && (look.bits & (kBitCombatMap | kBitCombatLobby)) != 0;
+}
+
+// The class of a look as a module's own scope line names it (ec's `level_class`, powerboost's `kind`): one rule, so two modules never name one look
+// two ways. No look yet; a look older than kStaleAfterMs; an Echo Arena level (it wins over any other level still loaded); a combat map or the combat
+// lobby; none of these (the lobbies arena players use, no level, an unreadable game).
+enum class LookClass { kNoLook, kStale, kEchoArena, kCombatOrLobby, kOther };
+LookClass ClassOf(const Look& look) noexcept;
+// "no_look", "stale", "echo_arena", "combat_or_lobby", "other".
+const char* LookClassName(LookClass c) noexcept;
 
 // The module's normal step (the `scope` row): registers the refresh with the combat tick, once. Not installed (and nothing registered) when the
 // tick's own install was refused: the callback would never run.

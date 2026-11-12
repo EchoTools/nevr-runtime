@@ -23,13 +23,16 @@
  *                   recvfrom. dronekill registers it.
  *
  * Arena (same APK). Every hook is installed while a player is in an arena match. The scope is `InCombatScope()`: a cached atomic the ec thread
- * refreshes from combat_level (`Classify(game, lobby=true)`) at most every 250 ms, on the CR15Game the combat tick hands it; it is true only
- * while a combat map or the combat lobby is loaded, so the arena lobbies and an Echo Arena level are out of scope. Out of scope the recvfrom and
+ * refreshes at most every 250 ms from one record of the combat level answer (combat_scope.h `LastLook`, read whole on this thread; `InCombatOrLobby`
+ * on it, and its class and level on the `combat_ec_scope` line); it is true only while a combat map or the combat lobby is loaded and the answer is
+ * fresh, so the arena lobbies, an Echo Arena level and an answer the game thread stopped refreshing for a second are out of scope. The module is a
+ * reader of the scope row (`combat.ec` is in combat_install.cpp `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer
+ * cannot change. Out of scope the recvfrom and
  * sendto handlers call libc and return (one acquire load and a branch above the thunk), no datagram is consumed, no net tick runs, the thread
  * sleeps 250 ms between looks and sends nothing. Two things act everywhere, on purpose: the WriteLogV handler stores a selected tac mod in
  * re33_ec_page (memory of ours that no arena code reads; a selection made in a menu must reach the combat lobby), and the gear gate takes its
  * mutex around ReloadEquipmentConfig / UnloadEquipmentConfig (an event, not a frame) so a rebuild that started before the scope changed is
- * never read half-built. The cache is read from `combat_level`; moving it to `combat_scope.h` is tracked in #2382. `InCombatScope()` is the one place that changes.
+ * never read half-built.
  *
  * Config (`combat:` in config.yaml): `ec` (default true), `ec_words` (default `types=VPTO equip hide`): the words are `types=<letters of VPTO>`
  * (the packet types this client carries; no word, an empty list or another letter: 'T' only), `equip` / `noequip` (store the selection or
@@ -78,7 +81,8 @@ struct Switches {
 };
 
 // The step on the loaded libr15. Fixed tokens: "installed", "partial" (the net pair is in, a WriteLogV or the gear gate is not), "refused",
-// "off", "already_ran", "module_not_loaded", "no_build_id", "build_id_mismatch", "tick_table_full".
+// "off", "already_ran", "scope_not_live" (the combat level answer cannot change: combat_scope.h Live), "module_not_loaded", "no_build_id",
+// "build_id_mismatch".
 ModuleResult Install(const Switches& switches) noexcept;
 // The same on the images `lookup` finds, with libr15's `pins` and the three log libraries' `logLibs` (kPins and kLogLib in production).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const LogLib* logLibs, const Switches& switches) noexcept;
@@ -87,8 +91,6 @@ bool Installed() noexcept;
 
 // The scope (see "Arena"): true while a combat map or the combat lobby is loaded. A cached load; never a read of the game.
 bool InCombatScope() noexcept;
-// The combat tick's callback: remembers the CR15Game the scope is read from.
-void Tick(std::uintptr_t game) noexcept;
 // Reads the scope again when `nowMs` is 250 ms or more past the last read (the ec thread calls it). Returns the scope.
 bool RefreshScope(std::uint64_t nowMs) noexcept;
 

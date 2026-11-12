@@ -72,14 +72,23 @@ runm ec_loc_arm         $E "s#^    if (!first) {#    if (!first || true) {#"
 runm ec_pow2            $E "s#(Pow2(steps) || steps < L.seenSteps)#(Pow2(steps) || true)#"
 # the scope
 runm ec_scope_cadence   $E "s#  if (g_nextScopeMs != 0 \&\& nowMs < g_nextScopeMs) return InCombatScope();##"
-runm ec_scope_lobby     $E "s#kind = level::Classify(game, /\*lobby=\*/true, \&levelId);#kind = level::Classify(game, /*lobby=*/false, \&levelId);#"
-runm ec_scope_kind      $E "s#  const bool in = kind == level::Kind::kCombatOrLobby;#  const bool in = kind != level::Kind::kNone;#"
+runm ec_scope_lobby     $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatMap(look);#"
+runm ec_scope_kind      $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::ClassOf(look) != scope::LookClass::kOther;#"
+runm ec_scope_stale_believed $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::SeenCombatOrLobby();#"
+runm ec_scope_class_unlogged $E "s#  if (in != was || cls != g_lastClass || !g_scopeLogged) {#  if (in != was || !g_scopeLogged) {#"
+runm ec_scope_class_dropped $E "s#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::LookClass::kOther;#"
 runm ec_scope_leave     $E "s#      Store32(sentinel::EcPage() + kQuestEcServer, 0);##"
 runm ec_scope_every     $E "s#kScopeEveryMs = 250;#kScopeEveryMs = 100;#"
 # the install
 runm ec_net_both        $E "s#^    g_recvHook.Remove();#    (void)0;#"
 runm ec_gear_both       $E "s#^      g_reloadHook.Remove();#      (void)0;#"
-runm ec_tick_needed     $E "s#  if (!tick::Add(\&Tick)) return Refused(\"tick_table_full\");#  tick::Add(\&Tick);#"
+runm ec_scope_live_unchecked $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d"
+runm ec_scope_live_token $E "s#return Refused(\"scope_not_live\");#return Refused(\"module_not_loaded\");#"
+runm ec_scope_live_after_image $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");\$#&\n  if (!scope::Live()) return Refused(\"scope_not_live\");#"
+runm ec_scope_live_before_words $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (g_ran.exchange(true, std::memory_order_acq_rel)) return Refused(\"already_ran\");\$#&\n  if (!scope::Live()) return Refused(\"scope_not_live\");#" quest-host-combat combat_install_test
+runm ec_scope_live_over_off $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (!switches.on) {\$#  if (!scope::Live()) return Refused(\"scope_not_live\");\n&#"
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): the EC client keeps the row on alone.
+runm ecrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.ec\.on/\1false/' quest-host-combat combat_install_test
 runm ec_off_switch      $E "s#  if (!switches.on) {#  if (false) {#"
 # the server's statement (#2333)
 runm ec_gate_source     $E "s#  ans = nevr_server_features::Client().Current().echoCombat;#  ans = false;#"
@@ -111,7 +120,7 @@ runm ec_page_alias      $P "s#visibility(\"default\"), alias#visibility(\"hidden
 runm ec_page_publish    $P "s#RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL#RTLD_NOW | RTLD_NOLOAD#" quest-host-combat ec_page_test
 # arena pays nothing, by count (the send / receive handler reads game memory, or scans the levels, before the scope test)
 runm ec_arena_reads_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(buf), \&ok_); }\n  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#'
-runm ec_arena_scans_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
+runm ec_arena_scans_before_scope $E 's#^\#include "quest/combat/combat_scope.h"$#&\n\#include "quest/combat/combat_level.h"#; s#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
 # off by its key is counted off on the phase line (combat_install_test)
 runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
 # the arena APK and a plain release run no normal step, so no #2187 module writes a line (combat_install_test, TheRealStepsConsultTheGate)
