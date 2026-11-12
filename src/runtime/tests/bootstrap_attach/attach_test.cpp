@@ -963,7 +963,7 @@ void RunChild(const std::wstring& command_line, const char* label) {
   }
 }
 
-int RunSuite() {
+int RunSuite(bool held_lock_round) {
   const std::wstring root = ExecutableDirectory();
   wchar_t self[MAX_PATH] = {};
   const DWORD length = GetModuleFileNameW(nullptr, self, MAX_PATH);
@@ -1002,6 +1002,29 @@ int RunSuite() {
     SetEnvironmentVariableW(L"LOCALAPPDATA", directory.c_str());
     SetEnvironmentVariableW(L"TEMP", directory.c_str());
   };
+  if (held_lock_round) {
+    // The exit wait's timeout, forced on demand (`test_bootstrap_attach.exe --held-lock-round`; the default suite does
+    // not run it, so it stays green until the fix is chosen, #1152). This process holds the named log mutex for the
+    // whole round, so each child's last flush waits its bound (kBootstrapExitLogLockWaitMs) and then writes nothing.
+    // Every child must leave both records. The round fails and names each pid that left none.
+    constexpr int kHeldLockRuns = 12;
+    StageRuntimeFixture(root, L"good");
+    use_scenario_directory(L"exit-at-once-held-lock");
+    HANDLE held = CreateMutexW(nullptr, FALSE, nevr_run_log::kMutexName);
+    Require(held != nullptr, "could not create the log mutex for the held-lock round");
+    Require(WaitForSingleObject(held, 0) == WAIT_OBJECT_0, "could not take the log mutex for the held-lock round");
+    const std::vector<DWORD> pids =
+        RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kHeldLockRuns,
+                          "exit-at-once-held-lock");
+    ReleaseMutex(held);
+    CloseHandle(held);
+    const std::vector<nlohmann::json> records = ReadHostRecords();
+    RequireRecordFromEachPid(records, pids, "prologue_check",
+                             "a child whose exit flush timed out on the held log mutex left no prologue record");
+    RequireRecordFromEachPid(records, pids, "image_check",
+                             "a child whose exit flush timed out on the held log mutex left no image check record");
+    return 0;
+  }
   for (const Scenario& scenario : scenarios) {
     StageRuntimeFixture(root, scenario.fixture);
     std::wstring mode(scenario.mode, scenario.mode + std::strlen(scenario.mode));
@@ -1063,8 +1086,9 @@ int RunSuite() {
 
 int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return RunChildScenario(argv[2]);
-  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario>]");
-  return RunSuite();
+  if (argc == 2 && std::strcmp(argv[1], "--held-lock-round") == 0) return RunSuite(true);
+  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario> | --held-lock-round]");
+  return RunSuite(false);
 }
 
 #endif
