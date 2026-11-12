@@ -54,7 +54,7 @@ runm rr_install_gate           $F "s/  if (!Active()) return {false, \"inactive\
 runm rr_install_rule_arg       $F "s/  inputs.rule = rule;/  inputs.rule = rule || true;/"
 runm rr_install_lobby_arg      $F "s/  inputs.lobby = lobby;/  inputs.lobby = lobby \&\& false;/"
 runm rr_install_q2key_arg      $F "s/  inputs.quest2At72 = quest2At72;/  inputs.quest2At72 = quest2At72 || true;/"
-runm rr_install_headset        $F "s/  inputs.quest2 = Headset().id == headset_profile::Id::kQuest2;/  inputs.quest2 = Headset().id == headset_profile::Id::kQuest2 \&\& false;/"
+runm rr_install_headset        $F "s/  inputs.quest2 = Headset(rule).id == headset_profile::Id::kQuest2;/  inputs.quest2 = Headset(rule).id == headset_profile::Id::kQuest2 \&\& false;/"
 runm rr_install_q2_kept        $F "s/  g_quest2.store(inputs.quest2, std::memory_order_relaxed);/  (void)inputs;/"
 runm rr_install_hz_kept        $F "s/  g_levelHz.store(decided.levelHz, std::memory_order_release);/  (void)decided;/"
 runm rr_install_lobby_kept     $F "s/  g_lobby.store(decided.lobby, std::memory_order_release);/  (void)decided;/"
@@ -134,12 +134,15 @@ runm rr_slot_empty_word        $F "s/  if (word == nullptr) return -1;/  if (wor
 runm rr_slot_offset            $F "s/image.base + \*target.slotVaddr);/image.base + *target.slotVaddr + 8);/"
 runm rr_slot_hz                $F "s/OvrMobileOpaque\*>(ovr), hz);/OvrMobileOpaque*>(ovr), hz + 1.0f);/"
 # the headset: the identity step's profile (quest/headset_active.h, #2037), the generic one and a Warning when none was set
-runm rr_headset_inverted       $F "s/  inputs.quest2 = Headset().id == headset_profile::Id::kQuest2;/  inputs.quest2 = Headset().id != headset_profile::Id::kQuest2;/"
+runm rr_headset_inverted       $F "s/  inputs.quest2 = Headset(rule).id == headset_profile::Id::kQuest2;/  inputs.quest2 = Headset(rule).id != headset_profile::Id::kQuest2;/"
 runm rr_headset_generic        $F "s/  return \*headset_active::ActiveOrGeneric();/  return headset_profile::kGeneric;/"
 runm rr_missing_inverted       $F "s/  if (headset_active::Active() == nullptr) {/  if (headset_active::Active() != nullptr) {/"
 runm rr_missing_level          $F "s/sentinel::LogLevel::kWarn, \"combat_refresh_rate_profile_missing\"/sentinel::LogLevel::kInfo, \"combat_refresh_rate_profile_missing\"/"
 runm rr_missing_hz             $F "s/static_cast<double>(headset_profile::kGeneric.levelHz));/static_cast<double>(headset_profile::kQuest2.levelHz));/"
 runm rr_missing_profile        $F "s/{{\"profile\", headset_profile::kGeneric.name},/{{\"profile\", headset_profile::kQuest3.name},/"
+runm rr_missing_witness_text   $F "s/; refresh_rate is off, so the rule asks no level rate/; refresh_rate is on, so the rule asks no level rate/"
+runm rr_missing_mode_inverted  $F "s/^    if (ruleOn) {/    if (!ruleOn) {/"
+runm rr_missing_rule_arg       $F "s/  inputs.quest2 = Headset(rule).id == headset_profile::Id::kQuest2;/  inputs.quest2 = Headset(true).id == headset_profile::Id::kQuest2;/"
 runm rr_holder_null_q2         src/quest/headset_active.h "s/  return profile != nullptr ? profile : \\&headset_profile::kGeneric;/  return profile != nullptr ? profile : \\&headset_profile::kQuest2;/"
 # the table row (combat_install.cpp, shared) and its tests: each key reaches the module, the step is a normal one, the name is the module's
 runm rrrow_rule_key        $CI "s/  return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);/  return refresh_rate::Install(true, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);/" quest-host-combat combat_install_test

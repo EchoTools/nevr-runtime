@@ -63,15 +63,23 @@ double Now() noexcept {
 }
 
 // The headset is the identity step's profile (quest/headset_active.h, ADR 0031 decision 4): this file reads no system property. The step
-// runs in the sentinel's constructor, long before this normal step; with no profile set, the generic profile and one Warning.
-const headset_profile::Profile& Headset() noexcept {
+// runs in the sentinel's constructor, long before this normal step; with no profile set, the generic profile and one Warning whose
+// consequence is the one true in the mode the rule is in: on, it asks the generic profile's level rate; off (witness), it asks none and
+// only the install line's `quest2` field takes the generic profile's value.
+const headset_profile::Profile& Headset(bool ruleOn) noexcept {
   if (headset_active::Active() == nullptr) {
-    char hz[16];
-    std::snprintf(hz, sizeof(hz), "%.0f", static_cast<double>(headset_profile::kGeneric.levelHz));
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_profile_missing",
-                        {{"profile", headset_profile::kGeneric.name},
-                         {"level_hz", hz},
-                         {"consequence", "the identity step set no headset profile before this step, so the rule asks the generic profile's level rate"}});
+    if (ruleOn) {
+      char hz[16];
+      std::snprintf(hz, sizeof(hz), "%.0f", static_cast<double>(headset_profile::kGeneric.levelHz));
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_profile_missing",
+                          {{"profile", headset_profile::kGeneric.name},
+                           {"level_hz", hz},
+                           {"consequence", "the identity step set no headset profile before this step, so the rule asks the generic profile's level rate"}});
+    } else {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_profile_missing",
+                          {{"profile", headset_profile::kGeneric.name},
+                           {"consequence", "the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level rate and only the install line's quest2 field reads the generic profile's 0"}});
+    }
   }
   return *headset_active::ActiveOrGeneric();
 }
@@ -191,7 +199,7 @@ ModuleResult Install(bool rule, bool lobby, bool quest2At72) noexcept {
   inputs.rule = rule;
   inputs.lobby = lobby;
   inputs.quest2At72 = quest2At72;
-  inputs.quest2 = Headset().id == headset_profile::Id::kQuest2;
+  inputs.quest2 = Headset(rule).id == headset_profile::Id::kQuest2;
   const Rule decided = Decide(inputs);
   g_quest2.store(inputs.quest2, std::memory_order_relaxed);
   g_levelHz.store(decided.levelHz, std::memory_order_release);

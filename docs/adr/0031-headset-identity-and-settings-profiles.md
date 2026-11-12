@@ -98,7 +98,7 @@ per-headset values lists; a search alone cannot tell an inference or a hard-code
 
 ## Not claimed
 
-The identity values of any headset other than a Quest 2 (`hollywood`, `src/quest/combat/heaps.cpp`). Whether
+The identity values of any headset other than a Quest 2 (`hollywood`, `kRules` in `src/quest/headset_profile.h`). Whether
 the Quest step can wait for the OpenXR system and still run before the first setting is read; until a run shows it can,
 Quest rules match on the Android properties. Which
 property or file tells a Lepton container apart from a headset's own Android is not measured here; the first Steam

@@ -44,13 +44,14 @@
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_refresh_rate_install","mode":"witness|match|lobby","refresh_rate":<0|1>,"refresh_rate_lobby":<0|1>,
- *             "refresh_rate_quest2_72":<0|1>,"quest2":<0|1>,"level_hz":<n>,"tick":"registered|full|not_needed","msg":".."}
+ *             "refresh_rate_quest2_72":<0|1>,"quest2":<0|1>,"level_hz":"<n>","tick":"registered|full|not_needed","msg":".."}
  *   request  {"event":"combat_refresh_rate_request","n":<n>,"asked_hz":..,"sent_hz":..,"rc":<n>,"why":"game request|kept at the level
  *             rate","mode":..,"quest2":..}   one per request of the game, after the original returned
  *   switch   {"event":"combat_refresh_rate_switch","n":<n>,"asked_hz":<session>,"sent_hz":..,"rc":<n>,"level":"%016llx",
  *             "why":"..","mode":..,"quest2":..}   one per change of level, after the re-ask returned
  *   missing  {"event":"combat_refresh_rate_profile_missing","profile":"generic","level_hz":"90","consequence":".."}   Warning, once, when
- *             the install step finds no headset profile set
+ *             the install step finds no headset profile set; `level_hz` only with the rule on (with it off the rule asks no level rate, the
+ *             line has no `level_hz` and its consequence says so)
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
