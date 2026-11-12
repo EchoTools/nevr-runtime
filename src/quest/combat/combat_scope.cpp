@@ -114,14 +114,16 @@ void Refresh(std::uintptr_t game) noexcept {
   const std::uint32_t before = detail::g_bits.load(std::memory_order_relaxed);
   const std::int64_t last = detail::g_lookedAtMs.load(std::memory_order_relaxed);
   if (CombatOrLobby(before) && now - last > kStaleAfterMs) {
-    // For this gap the readers saw a stale look and answered with the game's own functions, and nothing could say so while the tick was stopped: the
-    // first look after it is back does (once per gap), naming the level the answer was held for.
+    // In this gap no tick callback ran (the modules' ticks run in the same loop as this refresh), every hook that judges the answer at its call
+    // passed its calls through once the look was older than kStaleAfterMs, and nothing could say so while the tick was stopped: the first look after
+    // it is back does (once per gap), naming the level of the last look (combat_scope.h, `stale`).
     char levelText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_scope_stale",
                         {{"gap_ms", static_cast<std::int64_t>(now - last)}, {"stale_after_ms", kStaleAfterMs},
                          {"level", sentinel::HexString(levelText, g_lastLevel.load(std::memory_order_relaxed))},
-                         {"msg", "the combat tick stopped for longer than the level answer is believed: every combat module that reads it passed every call "
-                                 "through to the game in that gap"}});
+                         {"msg", "the combat tick stopped for longer than the level answer is believed: no combat module's tick ran in that gap, every combat "
+                                 "hook that judges the answer passed every call through to the game once it was older than that, the EC "
+                                 "client left its scope within 250 ms more, and the frozen-frame watch, which reads it unchecked, kept watching"}});
   }
   const std::uint64_t levelId = loaded.echoArena ? loaded.echoArenaLevel : (loaded.combatMap ? loaded.combatMapLevel : loaded.combatLobbyLevel);
   // The record is written under the sequence count (odd while it is written), so LastLook reads one look whole on any thread.

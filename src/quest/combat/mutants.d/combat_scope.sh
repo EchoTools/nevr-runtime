@@ -83,7 +83,8 @@ runm sea_inverted               $C "s/return !look.fresh || (look.bits \\& kBitE
 # the texts of the three lines name every reader of the answer, not two of them
 runm sc_change_msg_old          $C "s/a combat level is loaded: the combat modules that read the level answer act/a combat level is loaded: the wrist HUD and shield colour modules act/"
 runm sc_change_out_msg_old      $C "s/no combat level is loaded: the combat modules that read the level answer pass every call through/no combat level is loaded: the wrist HUD and shield colour modules pass every call through/"
-runm sc_stale_msg_old           $C "s/every combat module that reads it passed every call /the wrist HUD and shield colour modules passed every call /"
+runm sc_stale_msg_old           $C "s/no combat module's tick ran in that gap, every combat \"/every combat module that reads it passed every call \"/"
+runm sc_stale_msg_no_ec         $C "s/client left its scope within 250 ms more, and the frozen-frame watch, which reads it unchecked, kept watching\"/client left its scope within 250 ms more\"/"
 runm sc_install_msg_old         $C "s/, four times a second, for every combat module that reads it\"/, four times a second\"/"
 runm sc_refused_msg_old         $C "s/so the combat modules that read it are not installed/so the modules that read it are not installed/"
 # every field of a look is written inside its sequence count (a field stored after the close is a torn read on another thread: the closed-count seam,

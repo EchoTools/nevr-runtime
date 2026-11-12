@@ -40,8 +40,12 @@
  *   change   {"event":"combat_scope_change","from":<0|1>,"to":<0|1>,"map":<0|1>,"level":"0x%016llx","looks":<n>,"msg":".."}  Info, one per change of
  *            either answer (`from` and `to` are InCombatOrLobby, `map` is InCombatMap after the change); none when an arena match starts
  *   stale    {"event":"combat_scope_stale","gap_ms":<n>,"stale_after_ms":1000,"level":"0x%016llx","msg":".."}  Warning, once per gap, written by the first
- *            look after the tick is back (nothing runs to write it while the tick is stopped): the last look held a combat
- *            class and was older than kStaleAfterMs, so the readers passed every call through to the game in that gap; `level` is the level of the last look
+ *            look after the tick is back (nothing runs to write it while the tick is stopped): the last look held a combat class and was older than
+ *            kStaleAfterMs. What each kind of reader did in that gap: no tick callback ran (the modules' own ticks, POWER BOOST's and dronekill's asks
+ *            among them, run in the same loop as `Refresh` and stop with it); every hook that reads the answer judged it at its call (`LookIsFresh()`,
+ *            `fresh` on a record, or its in-scope body's `LookIsFresh()` after a test of its own tick's copy) and passed every call through to the game
+ *            once the look was older than kStaleAfterMs; the EC client judges it on its own thread every 250 ms and left its scope within 250 ms more;
+ *            frozen_frame_exit reads it unchecked on purpose (a freeze is what it watches for). `level` is the level of the last look
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
