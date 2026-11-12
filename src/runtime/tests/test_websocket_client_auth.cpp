@@ -29,6 +29,8 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <stdexcept>
@@ -277,23 +279,42 @@ TEST(WebSocketClientCallbackBoundary, QueueAppendExceptionReleasesLockForNextMes
   const auto queued = encoder.TestCopyPendingMessages();
   ASSERT_EQ(queued.size(), 1U);
 
-  WebSocketClient client;
-  client.TestSetBeforeReceiveEnqueue([] { throw std::bad_alloc(); });
-  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  // Owned by a shared_ptr so the probe thread below can outlive this function on the failure path.
+  auto client = std::make_shared<WebSocketClient>();
+  client->TestSetBeforeReceiveEnqueue([] { throw std::bad_alloc(); });
+  EXPECT_NO_THROW(DeliverForTest(*client, ix::WebSocketMessageType::Message, queued.front(), true));
   EXPECT_TRUE(LogContains("callback threw and was CONTAINED at=WebSocketClient::OnMessage"));
   EXPECT_TRUE(LogContains("failure=1"));
 
-  client.TestSetBeforeReceiveEnqueue({});
-  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  // The lock must be free for another thread. Re-locking on this thread proves nothing: a leaked std::mutex is
+  // undefined behaviour to re-lock, and a leaked recursive lock would pass. The probe waits on the receive mutex
+  // from a second thread, with a deadline.
+  auto probed = std::make_shared<std::promise<void>>();
+  std::future<void> probedDone = probed->get_future();
+  std::thread probe([client, probed]() {
+    client->TestCopyPendingMessages();
+    probed->set_value();
+  });
+  constexpr auto kProbeDeadline = std::chrono::seconds(5);
+  const bool released = probedDone.wait_for(kProbeDeadline) == std::future_status::ready;
+  if (released) {
+    probe.join();
+  } else {
+    probe.detach();
+  }
+  EXPECT_TRUE(released) << "receive mutex still held by the thread that threw";
+
+  client->TestSetBeforeReceiveEnqueue({});
+  EXPECT_NO_THROW(DeliverForTest(*client, ix::WebSocketMessageType::Message, queued.front(), true));
   int received = 0;
-  client.SetMessageHandler([&](EchoVR::SymbolId id, VOID* bytes, UINT64 size) {
+  client->SetMessageHandler([&](EchoVR::SymbolId id, VOID* bytes, UINT64 size) {
     EXPECT_EQ(id, 0x1234U);
     ASSERT_NE(bytes, nullptr);
     ASSERT_EQ(size, 1U);
     EXPECT_EQ(*static_cast<std::uint8_t*>(bytes), payload);
     ++received;
   });
-  client.ProcessReceivedMessages();
+  client->ProcessReceivedMessages();
   EXPECT_EQ(received, 1);
 }
 
