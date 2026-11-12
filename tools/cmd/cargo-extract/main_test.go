@@ -901,12 +901,16 @@ func TestObjectsIsCountedFromTheOutputDirectory(t *testing.T) {
 }
 
 // `records_with_object` is the records that point at an object (the entries, whatever this run wrote), `objects` the unique
-// objects they point at; there is no `objects_deduplicated`.
+// objects they point at, and `objects_deduplicated` the records whose object this run did not write (records_with_object
+// less objects_written): a count of this run, so a re-run over the same data reports more of them than the first run.
 func TestTheSummaryCountsRecordsWithAnObjectAndTheUniqueObjects(t *testing.T) {
 	t.Parallel()
 	root := fixture(t, "win10")
 	out := filepath.Join(t.TempDir(), "out")
-	for _, run := range []string{"the run that wrote the objects", "a run over objects already present"} {
+	for _, run := range []struct {
+		name         string
+		deduplicated float64
+	}{{"the run that wrote the objects", 2}, {"a run over objects already present", 7}} {
 		r := runTool(t, extractArgs(root, out)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d: %s", r.code, r.stderr)
@@ -916,13 +920,13 @@ func TestTheSummaryCountsRecordsWithAnObjectAndTheUniqueObjects(t *testing.T) {
 			t.Fatal(err)
 		}
 		if sum["records_with_object"] != float64(7) || sum["objects"] != float64(5) {
-			t.Errorf("%s: records_with_object = %v, objects = %v, want 7 and 5", run, sum["records_with_object"], sum["objects"])
+			t.Errorf("%s: records_with_object = %v, objects = %v, want 7 and 5", run.name, sum["records_with_object"], sum["objects"])
 		}
-		if _, old := sum["objects_deduplicated"]; old {
-			t.Errorf("%s: the summary still has objects_deduplicated", run)
+		if sum["objects_deduplicated"] != run.deduplicated {
+			t.Errorf("%s: objects_deduplicated = %v, want %v", run.name, sum["objects_deduplicated"], run.deduplicated)
 		}
 		if _, ok := sum["bytes_saved_by_dedup"]; ok {
-			t.Errorf("%s: the summary has a bytes_saved_by_dedup the tool does not know", run)
+			t.Errorf("%s: the summary has a bytes_saved_by_dedup the tool does not know", run.name)
 		}
 	}
 }

@@ -121,7 +121,8 @@ type summary struct {
 	ZeroByteRecords    int            `json:"zero_byte_records"`
 	Objects            int            `json:"objects"` // the unique objects in the output directory, counted there
 	ObjectsWritten     int            `json:"objects_written"`
-	RecordsWithObject  int            `json:"records_with_object"` // the records that point at an object: the entries
+	ObjectsDedup       int            `json:"objects_deduplicated"` // records_with_object less objects_written: this run's count, not the data's
+	RecordsWithObject  int            `json:"records_with_object"`  // the records that point at an object: the entries
 	StockChunkBytes    uint64         `json:"stock_chunk_bytes"`
 	StockChunkPlain    uint64         `json:"stock_chunk_decompressed_bytes"`
 	RecordBytes        uint64         `json:"record_bytes"`
@@ -578,6 +579,7 @@ feed:
 	}
 	sum.ObjectsWritten = objects.written
 	sum.RecordsWithObject = len(entries)
+	sum.ObjectsDedup = sum.RecordsWithObject - sum.ObjectsWritten
 	sum.ObjectBytes = objects.bytes
 	sum.LargestObject = objects.largest
 	sum.CargoRules = cargoRulesOf(entries, len(empties), len(body), objects.bytes)
