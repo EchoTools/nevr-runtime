@@ -243,7 +243,7 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		}
 	}
 	just := read(t, "justfile")
-	for _, want := range []string{"--target test_update_worker --target test_update_core_link", "for name in test_update_worker test_update_core_link; do"} {
+	for _, want := range []string{"build_targets=\"--target test_update_worker\"", "grep -qw test_update_core_link <<<\"$core_targets\"", "for name in test_update_worker test_update_core_link; do"} {
 		if !strings.Contains(just, want) {
 			t.Errorf("justfile: no %q", want)
 		}

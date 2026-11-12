@@ -1029,8 +1029,19 @@ test-auth-unit:
     done
     # The runtime's half of PC self-update (ADR 0024, sections 3 and 6): the decisions, the check, the confirmation and the worker's
     # threads against a fake core, and the Rust core linked into a MinGW binary and called from a worker thread.
-    cmake --build --preset {{ preset }} --target test_update_worker --target test_update_core_link
+    # test_update_core_link exists only when the configured tree has the Rust core (src/runtime/CMakeLists.txt,
+    # NEVR_UPDATE_CORE_ENABLED); the CI builder image has none. Ask the build graph, and never assume it (#2287).
+    core_targets=$(ninja -C build/{{ preset }} -t targets all)
+    build_targets="--target test_update_worker"
+    if grep -qw test_update_core_link <<<"$core_targets"; then
+        build_targets="$build_targets --target test_update_core_link"
+    fi
+    cmake --build --preset {{ preset }} $build_targets
     for name in test_update_worker test_update_core_link; do
+        if [[ "$name" == test_update_core_link ]] && ! grep -qw test_update_core_link <<<"$core_targets"; then
+            echo "test-auth-unit: skipping test_update_core_link: the configured tree does not define it (no Rust core; #2287)" >&2
+            continue
+        fi
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
