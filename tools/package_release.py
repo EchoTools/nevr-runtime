@@ -291,10 +291,8 @@ def gate(args, work: Path) -> dict:
     if version is not None:
         if info["kVersion"] != version:
             problems.append(f"quest: build info version '{info['kVersion']}' is not the DLL's '{version}'")
-        if version.encode() not in sentinel.read_bytes():
-            problems.append(f"quest: version {version} is not in the sentinel library")
-        if args.commit[:7].encode() not in sentinel.read_bytes():
-            problems.append(f"quest: commit {args.commit[:7]} is not in the sentinel library")
+        # The same whole-string check the release job runs (quest_library_problems), not a substring test.
+        problems += [f"quest: {p}" for p in quest_library_problems(sentinel.read_bytes(), version, args.commit)]
     if problems:
         raise GateFailure("\n".join(problems))
     return info
@@ -335,11 +333,8 @@ def check_apk_version(apk: Path, version: str, commit: str) -> None:
             blob = z.read(SENTINEL_IN_APK)
     except KeyError:
         raise GateFailure(f"{apk.name} has no {SENTINEL_IN_APK}")
-    if version.encode() not in blob:
-        raise GateFailure(f"{apk.name}: its sentinel library does not carry version '{version}'")
-    if commit.encode()[:7] not in blob:
-        raise GateFailure(f"{apk.name}: commit {commit[:7]} is not in its sentinel library")
-    problems = apk_version_code_problems(apk, version)
+    problems = [f"{apk.name}: {p}" for p in quest_library_problems(blob, version, commit)]
+    problems += apk_version_code_problems(apk, version)
     if problems:
         raise GateFailure("\n".join(problems))
 
