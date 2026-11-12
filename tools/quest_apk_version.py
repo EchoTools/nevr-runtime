@@ -204,17 +204,28 @@ def newest_release(repo: Path = REPO) -> tuple:
     return best[0], best[1][0]
 
 
+def release_code_of(tag: str) -> int:
+    """The versionCode of a release tag's own version: its slot is RELEASE_SLOT, so a release beats every dev build of
+    the same X.Y.Z."""
+    return version_code_for(tag[1:])
+
+
 def stamp_code_for(version: str, repo: Path = REPO) -> int:
     """The versionCode a stamp writes: version_code_for, refused when the version's major is below the newest release
-    tag's. A build with no git reports 1.0.0 (cmake/set_project_version_from_git.cmake), and a stamp below the newest
-    release's major is a downgrade for a headset on that release: Android refuses a lower versionCode. Each new major
-    raises this floor with it."""
+    tag's, or when its versionCode is below the newest release tag's versionCode. A build with no git reports 1.0.0
+    (cmake/set_project_version_from_git.cmake), and a stamp below the newest release is a downgrade for a headset on
+    that release: Android refuses a lower versionCode. Each new major raises the major floor with it."""
     code = version_code_for(version)
     tag, floor = newest_release(repo)
     major = _parts(version)[0]
     if major < floor:
         raise VersionError(f"version '{version}' is below major {floor}, the major of the newest release tag {tag}: a "
                            f"stamp that low would be a downgrade for a headset on {tag} (Android refuses a lower versionCode)")
+    release = release_code_of(tag)
+    if code < release:
+        raise VersionError(f"version '{version}' is refused: versionCode {code} is below {release}, the versionCode of the "
+                           f"newest release tag {tag}: a stamp that low would be a downgrade for a headset on {tag} "
+                           f"(Android refuses a lower versionCode)")
     return code
 
 
@@ -428,7 +439,8 @@ def main(argv=None) -> int:
             code_value = version_code_for(args.version)
             tag, floor = newest_release()
             _log("version_code", version=args.version, version_code=code_value, newest_release=tag, floor_major=floor,
-                 stampable=_parts(args.version)[0] >= floor)
+                 release_version_code=release_code_of(tag),
+                 stampable=_parts(args.version)[0] >= floor and code_value >= release_code_of(tag))
             print(code_value)
         elif args.command == "read":
             print(version_code_of_apk(args.apk))
