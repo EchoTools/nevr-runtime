@@ -131,8 +131,8 @@ lobbies arena players use (`mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena`, `_b_
 
 - recvfrom and sendto call libc and return: no datagram is consumed, nothing is counted, no lock is taken, no net tick runs (so ecfx never drains
   and powerboost never sends there);
-- the thread sleeps 250 ms between looks and sends nothing (no hello, no use packet); leaving the scope clears the page's +0x40 word and the
-  game socket the net tick follows.
+- the thread sleeps 250 ms between looks and sends nothing (no hello, no use packet); leaving the scope clears the page's +0x40 word (and the
+  step's record of it, so the first step back writes it again on a server that states EchoCombat) and the game socket the net tick follows.
 
 Two parts act in every level, on purpose: the WriteLogV handler stores a selected tac mod into re33_ec_page (memory of ours; a selection made in a
 menu must reach the combat lobby) and writes its capped `combat_ec_sel` line, and the gear gate takes its mutex around ReloadEquipmentConfig /

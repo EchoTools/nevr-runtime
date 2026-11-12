@@ -963,6 +963,39 @@ static void NetTickTests() {
   CHECK(s.haveServer, "server");
 }
 
+// Leaving the scope and coming back (ec.cpp RefreshScope, the `if (!in)` block; #2386). The leave clears the page's +0x40 word and the step's
+// copy of it, so the first step back on a server that states EchoCombat writes the word again; and it clears the game socket the net tick follows,
+// so a datagram that arrives after the client is back in scope and before its step has run again does not tick.
+static void LeaveTests() {
+  ResetAll();
+  InstallOk();
+  CHECK(OnNetTick(&NetTick), "no tick slot");
+  g_tick_calls = 0;
+  GameTalks(7);
+  ServerStates(true);
+  Step(g_now100);
+  CHECK(Load32(EcPage() + kQuestEcServer) == 1, "setup: the step did not set the page's +0x40 word");
+  uint8_t buf[64];
+  sockaddr_in from{};
+  socklen_t fl = sizeof from;
+  g_in.push_back(Plain(20, Server(), SPort()));
+  GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
+  CHECK(g_tick_calls == 1, "setup: the server's datagram on the game socket did not run the net tick: %d", g_tick_calls);
+  ForceScopeForTest(0);
+  CHECK(!RefreshScope(g_now100 / 10000) && Load32(EcPage() + kQuestEcServer) == 0, "setup: leaving the scope kept the page's +0x40 word");
+  ForceScopeForTest(1);
+  CHECK(RefreshScope(g_now100 / 10000), "setup: not back in scope");
+  // back in scope, before the step: the socket of the last scope is not followed
+  g_in.push_back(Plain(20, Server(), SPort()));
+  fl = sizeof from;
+  GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
+  CHECK(g_tick_calls == 1, "back in scope and before the step, a datagram on the last scope's game socket ran the net tick: %d", g_tick_calls);
+  // the first step back writes the word again: the server still states EchoCombat
+  AdvanceMs(5);
+  Step(g_now100);
+  CHECK(Load32(EcPage() + kQuestEcServer) == 1, "back in scope on a server that states EchoCombat, the step left the page's +0x40 word at 0");
+}
+
 static void StepTests() {
   // use counters -> packets twice to the server, hello every 2 s, server line once
   ResetAll();
@@ -1540,6 +1573,7 @@ int main() {
   InstallTests();
   WrapperTests();
   NetTickTests();
+  LeaveTests();
   StepTests();
   HideTests();
   SelectionTests();

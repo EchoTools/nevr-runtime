@@ -140,3 +140,7 @@ runm ec_level_zero      $E "s#sentinel::HexString(levelText, look.level)#sentine
 runm ec_forced_class_swap $E "s#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);#(in ? scope::LookClass::kOther : scope::LookClass::kCombatOrLobby) : scope::ClassOf(look);#"
 # the stale leave clears the server and the answer word (#2382, F3)
 runm ec_stale_leave_keeps $E "s#^    if (!in) {  // leaving#    if (false) {  // leaving#"
+# the leave's two other clears, one at a time (#2386): the game socket (a datagram back in scope before the step ticks) and the step's copy of
+# the answer word (the first step back leaves the word at 0)
+runm ec_leave_fd        $E "s#^      g_gameFd.store(-1, std::memory_order_relaxed);#      (void)0;#"
+runm ec_leave_ans       $E "s#^      g_loop.pageAns = false;#      (void)0;#"

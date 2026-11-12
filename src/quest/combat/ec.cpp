@@ -537,9 +537,9 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
   if (in != was || cls != g_lastClass || !g_scopeLogged) {
     g_scopeLogged = true;
     g_lastClass = cls;
-    if (!in) {  // leaving: no server, no net tick, the page's answer word cleared
+    if (!in) {  // leaving: no game socket for the net tick, the page's answer word cleared and the step's copy of it (the first step back writes it)
+      // g_gameSrc is not cleared: it is read only behind a match of g_gameFd (RecvInScope), and the step writes it before it writes g_gameFd
       g_gameFd.store(-1, std::memory_order_relaxed);
-      g_gameSrc.store(0, std::memory_order_relaxed);
       Store32(sentinel::EcPage() + kQuestEcServer, 0);
       g_loop.pageAns = false;
     }
