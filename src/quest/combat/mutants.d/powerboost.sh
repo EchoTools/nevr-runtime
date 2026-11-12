@@ -150,3 +150,14 @@ runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, d
 runm pb_arena_scans_before_scope $P 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
 # off by its key (stage 0) is counted off on the phase line (combat_install_test)
 runm pb_off_not_counted $P "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
+# the one look and the scope line's fields (0cdaf99db review, F1/F2): the decision, the logged class and the logged level come from the one record
+runm pb_one_look_in        $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::InCombatOrLobby(scope::LastLook());/'
+runm pb_one_look_kind      $P 's/^  const scope::LookClass cls = scope::ClassOf(look);$/  const scope::LookClass cls = scope::ClassOf(scope::LastLook());/'
+runm pb_one_look_level     $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, scope::LastLook().level)}/'
+runm pb_kind_other_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kOther ? "combat_or_lobby" : scope::LookClassName(cls)}/'
+runm pb_kind_lobby_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kCombatOrLobby ? "combat_lobby" : scope::LookClassName(cls)}/'
+runm pb_kind_nolook_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kNoLook ? "stale" : scope::LookClassName(cls)}/'
+runm pb_level_zero         $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, 0)}/'
+runm pb_msg_swapped        $P 's/{"msg", in ? "a combat map/{"msg", !in ? "a combat map/'
+runm pb_kind_gate_in_only  $P 's/if (g_scopeKind.exchange(static_cast<int>(cls), std::memory_order_acq_rel) != static_cast<int>(cls) \&\&/if (g_scopeKind.exchange(in ? 1 : 0, std::memory_order_acq_rel) != (in ? 1 : 0) \&\&/'
+runm pb_level_zero_stale   $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, cls == scope::LookClass::kStale ? 0 : look.level)}/'

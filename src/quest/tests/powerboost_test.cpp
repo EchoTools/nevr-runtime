@@ -196,7 +196,13 @@ uint64_t g_now = 1000;
 uint64_t Clock() { return g_now; }
 // The combat level answer's own clock (combat_scope.h), in ms: each test frame moves it one look spacing, so each frame's refresh looks at the game.
 std::int64_t g_scopeMs = 1000;
-std::int64_t ScopeClock() noexcept { return g_scopeMs; }
+// Armed (g_armedReads >= 0): the first clock read is the record's own (LastLook's staleness test), every later read sees the look older than
+// kStaleAfterMs. A decision made from a second read of the record, or from a live read, sees the answer stale (TestOneLook).
+int g_armedReads = -1;
+std::int64_t ScopeClock() noexcept {
+  if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + nevr_quest::combat::scope::kStaleAfterMs + 1;
+  return g_scopeMs;
+}
 
 pb::Fns Fns() {
   pb::Fns f{};
@@ -303,6 +309,30 @@ void StartTheScope() {
 void Rescope() {
   pb::GameTick(0);
   Frame();
+}
+
+// The look seam (combat_scope.h SetLookReadSeamForTest), set only inside TestOneLook: the second LastLook of the armed tick runs it between
+// the record's classes and its level, and it writes the arena level's look there, so a caller that reads the record a second time sees another look.
+int g_lookReads = 0;
+void SecondLookWritesArena() {
+  if (++g_lookReads != 2) return;
+  BuildWorld(true, "mpl_arena_a");
+  nevr_quest::combat::scope::Refresh(Game());
+}
+// One raw line that holds every needle (the sentinel's JSON text, as the scope line writes it).
+bool HasRawLine(std::initializer_list<const char*> needles) {
+  for (const Line& l : g_lines) {
+    bool all = true;
+    for (const char* n : needles) all = all && l.text.find(n) != std::string::npos;
+    if (all) return true;
+  }
+  return false;
+}
+// The JSON fragment of a level field: `"level":"0x%016llx"` for the level's symbol hash, as the scope's records write it (combat_scope.h).
+std::string LevelField(const char* name) {
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "\"level\":\"0x%016llx\"", static_cast<unsigned long long>(CSymbol64Hash(name)));
+  return buf;
 }
 
 void Fresh(const char* level = "mpl_combat_dyson") {
@@ -1111,6 +1141,8 @@ int main() {
     g_scopeMs += nevr_quest::combat::scope::kStaleAfterMs + 1;
     for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) pb::GameTick(Game());  // the module's game tick alone
     CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"stale\"") == 1, "a stale combat answer kept the scope");
+    // the stale line names the class and the level the answer was held for (the record's level, not zero)
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"stale\"", LevelField("mpl_combat_dyson").c_str()}), "the stale line does not name the held level");
   }
   // the scope's cadence: the level is asked once every kScopeEveryFrames frames of one game, never per call
   {
@@ -1123,6 +1155,63 @@ int main() {
     BuildWorld(true, "mpl_arena_a");  // the level changes under the same game: seen within kScopeEveryFrames frames
     for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) Frame();
     CHECK(!pb::InScope(), "an arena level was not seen within %u frames", pb::kScopeEveryFrames);
+  }
+
+  // ---- the one look (TestTheRecordDecidesNotTheLiveRead, dronekill's case): the decision, the logged class and the logged level come from the one
+  // record the tick reads. The clock is armed, so the record's own read is fresh and every later read sees it older than kStaleAfterMs; the second
+  // read of the record writes the arena level's look, so a second read names another look. The one record must decide all three.
+  {
+    Fresh("mpl_arena_a");
+    Inst(pb::kRead, &fns);  // the first line: echo_arena, out of scope
+    CHECK(!pb::InScope() && HasRawLine({"\"in_combat\":0,\"kind\":\"echo_arena\"", LevelField("mpl_arena_a").c_str()}), "the arena line");
+    BuildWorld(true, "mpl_combat_fission");
+    g_scopeMs += nevr_quest::combat::scope::kLookEveryMs;
+    nevr_quest::combat::scope::Refresh(Game());  // the look the tick decides from: a combat map
+    g_lookReads = 0;
+    g_armedReads = 0;
+    nevr_quest::combat::scope::SetLookReadSeamForTest(&SecondLookWritesArena);
+    const uint32_t checks0 = pb::CurrentStats().scopeChecks;
+    for (uint32_t i = 0; i <= pb::kScopeEveryFrames && pb::CurrentStats().scopeChecks == checks0; ++i) pb::GameTick(Game());
+    nevr_quest::combat::scope::SetLookReadSeamForTest(nullptr);
+    g_armedReads = -1;
+    CHECK(pb::CurrentStats().scopeChecks == checks0 + 1, "the tick did not ask the answer once in %u frames", pb::kScopeEveryFrames);
+    CHECK(pb::InScope(), "the record says a combat map, but the scope did not start: a live read decided it");
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_combat_fission").c_str()}),
+          "the change line does not name the record's class and level");
+  }
+
+  // ---- the scope line's fields, per class (combat_scope.h LookClassName): a combat map, the combat lobby, another lobby, no look yet
+  {
+    Fresh("mpl_combat_dyson");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_combat_dyson").c_str(),
+                      "\"msg\":\"a combat map or the combat lobby is loaded: POWER BOOST acts\""}),
+          "combat map: the scope line");
+  }
+  {
+    Fresh("mpl_lobby_b_combat");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_lobby_b_combat").c_str()}), "combat lobby: the scope line");
+  }
+  {
+    Fresh("mpl_lobby_b");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"other\"", "\"msg\":\"no combat map or combat lobby is loaded: POWER BOOST only passes every call on\""}),
+          "another lobby: the scope line");
+  }
+  {
+    Fresh();  // no look yet: the first ask reads an answer that was never made
+    pb::GameTick(Game());
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"no_look\"", "\"level\":\"0x0000000000000000\""}), "no look yet: the scope line");
+  }
+  // a class that changes while the scope stays out keeps its line: other (a lobby) to echo_arena, both out of scope
+  {
+    Fresh("mpl_lobby_b");
+    Inst(pb::kRead, &fns);
+    const int before = Events("scope");
+    BuildWorld(true, "mpl_arena_a");
+    Rescope();
+    CHECK(EventsWith("scope", "\"kind\":\"echo_arena\"") == 1 && Events("scope") == before + 1, "other -> echo arena, both out of scope: no change line");
   }
 
   // ---- the stage numbers: 1..3 install that stage, 0 and anything else nothing

@@ -78,7 +78,10 @@ answer is older than a second, the answer is "not combat". Outside that scope ev
 continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. The module is one of the scope row's readers
 (`combat.powerboost_stage` 1 to 3 is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer
 cannot change. `combat_powerboost_scope` names the look's class as `kind` (`combat_scope.h` `LookClassName`: `combat_or_lobby`, `echo_arena`,
-`other`, `no_look`, `stale`) and its `level`.
+`other`, `no_look`, `stale`) and its `level`. The look is made by the scope's `Refresh`, at most once every `kLookEveryMs` (250 ms), so the ask a
+game change triggers (it does not wait for the 32-frame cadence) reads the last look, which can still be the previous game's until the next look:
+the previous game's answer can be held for up to about 250 ms; if the tick has stopped, a look is believed for `kStaleAfterMs` (1 s), so the
+answer can be held for about 1 s after the tick's last look. Every reader of the scope has this window, not only POWER BOOST.
 
 ## Lines
 

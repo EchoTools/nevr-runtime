@@ -43,7 +43,7 @@
  *   cone       {"target":..,"dist_m":"..","max_m":"..","off_deg":"..","max_deg":..,"verdict":"LINK|no"}   at most twice a second
  *   link_marker {"direction":"link to|unlink from","index":..,"marker":".."} sent, or {"why":".."} not sent
  *   capped     {"kind":"..","cap":<n>}   once per kind, when its cap is reached
- *   scope      {"in_combat":0|1,"kind":"combat_or_lobby|echo_arena|none","level":"0x.."}   each change, the first 64
+ *   scope      {"in_combat":0|1,"kind":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x.."}   each change of the class, the first 64
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
