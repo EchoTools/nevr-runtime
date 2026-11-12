@@ -98,7 +98,21 @@ fn finish(sess: Option<&Session>, ended: Ended, plan: Option<Value>) -> ExitCode
     ExitCode::from(code as u8)
 }
 
-fn game_running() -> bool {
+/// Set to `0` or `1` to answer "is echovr.exe running" without asking the machine (the tests use it). Any other value is ignored.
+const GAME_RUNNING_ENV: &str = "NEVR_INSTALL_GAME_RUNNING";
+
+fn game_running_override() -> Option<bool> {
+    match std::env::var(GAME_RUNNING_ENV).ok().as_deref() {
+        Some("0") => Some(false),
+        Some("1") => Some(true),
+        _ => None,
+    }
+}
+
+fn game_running(cfg: &Config) -> bool {
+    if let Some(running) = cfg.game_running {
+        return running;
+    }
     if cfg!(windows) {
         return nevr_install::device::run_with_timeout("tasklist", &["/FI", "IMAGENAME eq echovr.exe", "/NH"], std::time::Duration::from_secs(20)).map(|o| o.text.to_lowercase().contains("echovr.exe")).unwrap_or(true);
     }
@@ -123,6 +137,7 @@ fn main() -> ExitCode {
     // the canonical one is refused where the PC plan uses it (`Session::check_nevr_root`), unless `--dev-nevr-root` is given.
     cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| cfg.canonical_nevr_root.clone());
     cfg.dev_nevr_root = args.flag("--dev-nevr-root");
+    cfg.game_running = game_running_override();
     // Echo VR Launcher's data folder (#1285): `--launcher-dir`, else %LOCALAPPDATA%\EchoVR_Launcher on Windows, else none.
     cfg.launcher_dir = args.val("--launcher-dir").map(PathBuf::from).or_else(|| {
         if cfg!(windows) {
@@ -282,7 +297,7 @@ fn main() -> ExitCode {
             // No manifest is fetched and no stdin is read: the record and the files are the whole input (#1497).
             ("pc", "uninstall") => {
                 let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);
-                let (end, plan) = sess.pc_uninstall(&dir, game_running(), &package_sums())?;
+                let (end, plan) = sess.pc_uninstall(&dir, game_running(&sess.cfg), &package_sums())?;
                 Ok((end, Some(plan)))
             }
             ("pc", c) => {
@@ -292,7 +307,7 @@ fn main() -> ExitCode {
                 } else {
                     sess.manifest()?;
                 }
-                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running(), args.val("--package-dir").map(PathBuf::from).as_deref())?;
+                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running(&sess.cfg), args.val("--package-dir").map(PathBuf::from).as_deref())?;
                 Ok((end, Some(plan)))
             }
             _ => unreachable!("the command table above is exhaustive"),
