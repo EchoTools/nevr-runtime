@@ -367,7 +367,7 @@ void TheShippedTableRowsAreWiredToTheirSteps() {
   };
   QCHECK(count >= 2 && std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
   QCHECK(count >= 2 && std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
-  // the script redirect (#2189): the first normal row, before the tick, where the q15t plugin's init registered it; no switch
+  // the script redirect (#2189): the first normal row, before the tick, where the combat plugin's init registered it; no switch
   // the texel-buffer guard (#1650): early, right after memsys (its requests go to vk_ext_window before the game's first lookup), with its switch and end
   QCHECK(count >= 3 && std::strcmp(table[2].name, "texel_buffer_guard") == 0 && table[2].early != nullptr && table[2].normal == nullptr &&
          table[2].end != nullptr && table[2].switchKey != nullptr && std::strcmp(table[2].switchKey, "combat.texel_buffer_guard") == 0 &&

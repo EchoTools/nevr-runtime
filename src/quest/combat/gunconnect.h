@@ -4,10 +4,10 @@
  * (inst+0xd8 != 0), (b) the connect ring is empty and (c) the local member's actor carries the combat tag, and (a)-(c) held for 2 s,
  * Connect(cs, userId) once; re-check after 1 s and retry while (a) holds, up to 10 times, then log and stop for that gun CS.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.gunconnect` in config.yaml, on unless the file says false (UPSTREAM-DEFAULTS: the reference build's `gunconnect` is on in its shipped
- * build, afk_gunconnect.cpp:9,747; the q15t plugin had it on). No headset log shows the module acting yet (the headset runs that loaded the plugin's
+ * build, afk_gunconnect.cpp:9,747; the combat plugin imported in #1591 had it on). No headset log shows the module acting yet (the headset runs that loaded the plugin's
  * copy hold its start line and never a Connect), so its headset row requires `combat_gunconnect_connect`.
  * The plugin's kill file `gunconnect.off` is no longer read; one found in the plugin's data directory is a Warning (`combat_gunconnect_legacy_switch`).
  *
@@ -24,8 +24,8 @@
  * freshness) and the gun CS search. The level scan is the scope row's, made once for every reader. Not measured on a headset.
  *
  * Origin. The reference build's Fix in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_gunconnect.cpp:1-24,
- * the constants :91-93, FindCs :186-218, ReadLocal :222-240, HasCombatTag :242-254, CountGuns :256-296 and FixPass :312-358. The q15t plugin
- * reconstructed it (`gunconnect.cpp`); this file moves that reconstruction into the runtime. Not ported: the diagnostic and the tick-callback registry.
+ * the constants :91-93, FindCs :186-218, ReadLocal :222-240, HasCombatTag :242-254, CountGuns :256-296 and FixPass :312-358. The combat plugin imported in #1591
+ * reconstructed it (`gunconnect.cpp`); this file is that reconstruction. Not ported: the diagnostic and the tick-callback registry.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_gunconnect_install","result":"installed|off|refused","reason":"..","named":<0-4>,"msg":".."}   Info; Error when refused

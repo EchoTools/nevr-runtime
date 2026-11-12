@@ -1,4 +1,4 @@
-// Host test of gun connect (src/quest/combat/gunconnect.cpp, #2185; moved from the q15t plugin's gunconnect). A fake CR15Game: the two gamespace
+// Host test of gun connect (src/quest/combat/gunconnect.cpp, #2185). A fake CR15Game: the two gamespace
 // tables, one or two gun component systems with the layout the module reads (cs+0xf2 count, +0xf8 instances of 0x168, +0xb8 -> props of 0xa0, +0x1c0
 // ring), a fake CR15NetGame member table. Real SafeRead, a fake clock; Connect, UserActor, HasTag and the combat tag are fakes.
 //

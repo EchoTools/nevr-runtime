@@ -6,7 +6,7 @@
 //      when Init is reached and before the model reads the heaps, and it names the raised System heap. A step that runs after the model
 //      (the control) leaves every size stock and writes no witness, so the test can tell early from late;
 //   2. the step runs once: a second InstallEarly runs nothing and writes nothing;
-//   3. the step runs only where the gate allows: the q15t and combat variants, and a development build forced with combat.force; a plain
+//   3. the step runs only where the gate allows: the combat variants, and a development build forced with combat.force; a plain
 //      release, the measurement build and a release build asked to force install nothing and leave every slot as the loader wrote it;
 //   4. the shipped rows read their switch: combat.heaps false leaves the four sizes, combat.memsys false leaves the System heap and the pool.
 //

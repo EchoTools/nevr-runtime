@@ -22,7 +22,7 @@
  * thread. Both slots are libr15's own JUMP_SLOTs of a BIND_NOW image, filled before any constructor runs, and each must hold
  * base + the function (the target's expected original); a slot another hook took first is refused and left alone.
  *
- * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's pool.
+ * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's pool.
  *
  * Switch. `combat.memsys` (default true) in config.yaml (docs/adr/0046 rule 4): false installs nothing here and also leaves the System heap
  * (heaps.h, R07) alone, because the heap and the pool are one memory change.

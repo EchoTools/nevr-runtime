@@ -1,4 +1,4 @@
-/* The scanner-sphere watchdog (#2184, docs/adr/0046; moved from the q15t plugin's `sensorwd`).
+/* The scanner-sphere watchdog (#2184, docs/adr/0046).
  *
  * What the game does. The threat scanner's sensor sphere (model record `ac2d3f9f080ba45f`, one on every player actor that carries the combat
  * ability script `mp_combat_ability_sensor`) is enabled by the script's TriggeredPing and disabled again by FinishedPing 4.0 s later. On the Quest a sphere
@@ -10,10 +10,10 @@
  * libr15's JUMP_SLOT of CncaGameSpace::SendComponentEventGlobal (the event that carries TriggeredPing), each only while it holds the game's function. The
  * code words the wrappers' reads were derived from are checked first (sensorwd_targets.h).
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs.
  *
- * Switch. `combat.sensorwd` in config.yaml, true unless the file says false: the q15t plugin's `Q15T_SENSORWD` was on by default in v6.16.5
- * (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50: `option(Q15T_SENSORWD "... default ON ..." ON)`). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
+ * Switch. `combat.sensorwd` in config.yaml, true unless the file says false: the combat plugin's sensorwd option was on by default in v6.16.5
+ * (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50, default ON). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
  * and gated to combat maps (`afk_fx.cpp:127-137`). No headset session of ours has yet shown it acting (the reference build's
  * combat match counts no sphere enable, no TriggeredPing and no watchdog action), so its headset row requires `combat_sensorwd_first`
  * (docs/quest/combat/sensorwd.md). The plugin's kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).

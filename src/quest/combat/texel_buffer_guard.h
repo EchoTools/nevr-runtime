@@ -32,7 +32,7 @@
  * table look-up per set under one mutex; per layout created: one walk of its bindings. Not per frame unless the game allocates sets per frame
  * (not established: the count line at powers of two shows how often).
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants: the early step of combat_install.h registers the request, before
+ * Which APKs (ADR 0046 rule 5). The combat variants: the early step of combat_install.h registers the request, before
  * install_vk_ext_window and before the game's first Vulkan lookup. Switch: `combat.texel_buffer_guard`, default true (the reference build
  * ships it on). With the key false, or in an APK where combat does not run, nothing is requested and the game's lookups are unchanged.
  *

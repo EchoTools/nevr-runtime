@@ -170,8 +170,8 @@ ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx
 ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
 ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
 
-// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
-// plugin installed it, and nowhere else; the count is deduced.
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the combat
+// plugin imported in #1591 installed it, and nowhere else; the count is deduced.
 //   sendguard is installed where the plugin installed it: in the normal phase after the modules that hook the tick, before the two decisions.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
 //   before android_main reads the sizes.

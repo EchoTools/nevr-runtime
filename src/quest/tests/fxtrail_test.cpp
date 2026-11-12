@@ -4,7 +4,7 @@
 // and a stand-in for EffectTime itself. The level the guard is scoped by is the real combat level answer (combat_scope.h), refreshed through the tick's
 // callback against a model of the game's gamespace tables (combat_game_model.h, combat_scope_world.h).
 //
-// What it pins (the q15t plugin's fxtrail_test assertions, on the new fixture): an effect with no instance answers FLT_MAX with the game's function
+// What it pins: an effect with no instance answers FLT_MAX with the game's function
 // called once with the same arguments, an effect with an instance answers the game's value, the lookup's stride and index mask, the ended line at
 // 1, 2, 4 ..., a failed read answers the game's value, a slot that does not hold EffectTime is refused and left alone with the pin named, every
 // code word flipped in turn refuses the install, and an unreadable word does too. New with the move: the guard acts only while a combat map is

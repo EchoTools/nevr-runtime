@@ -1,6 +1,6 @@
 /* The slot and the data layout of the shield colour module (shieldgamma.h), pinned to the store libr15 (build ID in pinned_targets.h).
  *
- *   R58  CSetMaterialPropertyNode::Update   JUMP_SLOT 0x36d2020 -> 0x272d55c   (`readelf -rW`, the slot the q15t plugin hooked)
+ *   R58  CSetMaterialPropertyNode::Update   JUMP_SLOT 0x36d2020 -> 0x272d55c   (`readelf -rW`)
  *
  * The function is libr15's own, so the slot holds `base + 0x272d55c` in this BIND_NOW image (got_hook.h) and the target says so.
  * got_pinned_test.cpp checks the relocation, the symbol's address and every code word below against the real file

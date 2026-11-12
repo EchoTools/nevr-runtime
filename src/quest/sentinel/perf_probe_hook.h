@@ -5,7 +5,7 @@
  * carries it. Installed right after the libr15 attach step accepts the file, on either input it accepts: the patched file
  * (the release's reference base, and the store base) or the pinned service-only file (every target is
  * GotTarget::ServiceSide(), like path_rewrite_hook.h). No sentinel hook uses these six slots. The combat area's headset gates take two of
- * them (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType; combat/headset_gates_targets.h) and run only in the q15t and combat
+ * them (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType; combat/headset_gates_targets.h) and run only in the combat
  * variants (combat::Active()), so a probe APK, whose variant is perf-probe, runs no combat module on them.
  *
  * Six JUMP_SLOT imports of libr15.so (link-time slot addresses from `readelf -r` of the pinned file), each wrapped, timed
@@ -26,7 +26,7 @@
  * Log: one `perf_probe_install` line per slot and one `perf_probe` summary line at install. Then, per 10 s window in which
  * any probed function was called, written by the call that crosses the 10 s mark: one `perf_probe_calls` line at Info (the
  * counts, the mean and largest time spent in each original, and one timed dladdr of an address in the most recently loaded
- * script library: the per-call cost of the q15t link gate's library lookup), and, when the voice path read the microphone in
+ * script library: the per-call cost of the link gate's library lookup), and, when the voice path read the microphone in
  * that window, one `perf_probe_mic` line at Info (the provider's answer, the answer given, and the read sizes by Opus frame).
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.

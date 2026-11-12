@@ -2,7 +2,7 @@
  * may create. A decision only: the renderer that would ask is #1631 (the pfx gate, pfx.h), which is not in the tree, so nothing calls
  * `Allows` or `AllowsIn` yet and the switch changes nothing on a headset. The id list is the particle renderer's event tier.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only.
+ * Which APKs (ADR 0046 rule 5). The combat variants only.
  *
  * Switch. `combat.pfxtev` in config.yaml, true unless the file says false. The plugin's kill file `pfxtev.off` is no longer read: one found
  * in the plugin's data directory is a Warning (`combat_pfxtev_legacy_switch`) that names the key replacing it. (The plugin never called

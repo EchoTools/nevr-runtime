@@ -27,7 +27,7 @@
  * The combat body is `[[gnu::noinline]]` and starts with `scope::LookIsFresh()`. The switch is in `ScopeNormal()`'s reader list, and the install
  * refuses `scope_not_live` when the answer cannot change.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants (the normal step of combat_install.h). Switch: `combat.sound_symbol_guard`, default
+ * Which APKs (ADR 0046 rule 5). The combat variants (the normal step of combat_install.h). Switch: `combat.sound_symbol_guard`, default
  * false: upstream ships its sound guard off, and with no fault shown the guard is a cost saving a player opts into.
  *
  * Owner (ADR 0039). This file owns whether a post of an unplayable symbol from PlaySound or the bullet site reaches Play3DSound. Nothing else hooks

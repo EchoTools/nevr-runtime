@@ -10,14 +10,14 @@
  * and the combat APK; Android clears the app's external files directory on an uninstall, inferred, not measured), and the player switches it back.
  * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile.
  *
- * Player state (ADR 0046 rule 4). The marker directory is `/sdcard/Android/data/<package>/files/q15t`, where the plugin's markers already are; it is
+ * Player state (ADR 0046 rule 4). The marker directory is the data directory (legacy_switch.h kDataSubdir), where players' markers already are; it is
  * state, not a switch, and renaming it would make every profile look unhandled. A marker the plugin wrote stops this module from touching that
  * profile (weapon_arm_test). The marker file is the module's only write.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.weapon_arm` in config.yaml, on unless the file says false (the reference build's T-26 is on in its shipped build,
- * afk_gunconnect.cpp:58-64,587; the q15t plugin had it on). The headset runs that loaded the plugin's copy wrote the marker for a profile already on the
+ * afk_gunconnect.cpp:58-64,587; the combat plugin imported in #1591 had it on). The headset runs that loaded the plugin's copy wrote the marker for a profile already on the
  * right hand and found the marker on later runs, and never a `set`, so its headset row requires `combat_weapon_arm_set`. The plugin's kill file
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
@@ -36,7 +36,7 @@
  * headset; weapon_arm_test prints the host cost of the arena pass.
  *
  * Origin. The reference build's T-26 in kotorvr's echoquest-combat repository (commit c5a67e8): runtime/native/afkxr/afk_gunconnect.cpp:58-64 (the
- * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the q15t plugin reconstructed (`weapon_arm.cpp`); this file moves that reconstruction into the runtime.
+ * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the combat plugin imported in #1591 reconstructed (`weapon_arm.cpp`); this file is that reconstruction.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_weapon_arm_install","result":"installed|off|refused","reason":"..","msg":".."}

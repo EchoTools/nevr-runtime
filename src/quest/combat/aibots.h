@@ -7,10 +7,10 @@
  * count changes later; re-armed when the net game leaves "in game". Bots exist only in Practice AI, so "bot count non-zero in a combat match" is the
  * offline-practice condition: arena, lobby and online matches have no agents and nothing happens.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switches. `combat.aibots` in config.yaml, on unless the file says false (the reference build's aibots is on in its shipped build, afk_aibots.cpp:19,145;
- * the q15t plugin had it on). No headset log shows the module calling EnableScenario yet (the headset runs that loaded the plugin's copy hold its start
+ * the combat plugin imported in #1591 had it on). No headset log shows the module calling EnableScenario yet (the headset runs that loaded the plugin's copy hold its start
  * line and one `idle` line, never an enable), so its headset row requires `combat_aibots_enable`. `combat.aibots_scenario` is the scenario it enables: a number 0-6 or one of patrol, randomattack (the default), weaponattack,
  * spike, aithrowtest, aionevone, aibdebugarena; `off` is the module off. It is read once, at install. A word that is none of these keeps the default
  * with a Warning (`combat_aibots_scenario`) that does not name the word. In a development build the plugin's request file `<data dir>/aibots.req`
@@ -30,8 +30,8 @@
  * moment of a call it reads the combat level answer (a sequence-count read and a clock read). Not measured on a headset; aibots_test prints the host cost of a look.
  *
  * Origin. The reference build's aibots in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_aibots.cpp:1-27,
- * the constants :52-62, the request protocol (ParseScenario :158, ReadRequest :167) and afk_aibots_tick :306-346. The q15t plugin reconstructed it
- * (`aibots.cpp`); this file moves that reconstruction into the runtime. Not ported: the watcher thread and its vptr scan for the CR15Game (the game
+ * the constants :52-62, the request protocol (ParseScenario :158, ReadRequest :167) and afk_aibots_tick :306-346. The combat plugin imported in #1591
+ * reconstructed it (`aibots.cpp`); this file is that reconstruction. Not ported: the watcher thread and its vptr scan for the CR15Game (the game
  * tick passes it), the debug dump and aibots.done.
  *
  * Lines (sentinel log):

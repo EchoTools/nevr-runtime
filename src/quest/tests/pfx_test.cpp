@@ -1,4 +1,4 @@
-// Host test of the particle-renderer gate (src/quest/combat/pfx.cpp, #2188; moved from the q15t plugin's pfx, #1631). The decision is on
+// Host test of the particle-renderer gate (src/quest/combat/pfx.cpp, #2188, #1631). The decision is on
 // by default and off only when `combat.pfx` is false; the gate reads off until the install step has decided; the plugin's `pfx.off` kill
 // file is no longer read and one found is a Warning. New with the move: the gate is scoped to combat maps, because arena runs on the same
 // APK, and a fake CR15Game (the two gamespace tables, read by process_vm_readv as in production) shows it shut on every Echo Arena level.

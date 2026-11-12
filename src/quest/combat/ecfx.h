@@ -11,8 +11,8 @@
  * The thread. Until the wall library is loaded (it loads with the first EC level), a thread looks for it once a second with
  * dlopen(RTLD_NOLOAD) and stops once it is found or refused.
  *
- * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 54, 61, 210-211). The q15t plugin's
- * `ecfx.cpp` / `ecfx_core.h`, a port of the reference build's `runtime/native/afkxr/afk_ecfx.cpp` and `afk_ecfx_core.h` (at `1357409`), whose
+ * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 54, 61, 210-211). The combat plugin's
+ * `ecfx.cpp` / `ecfx_core.h` (imported in #1591), a port of the reference build's `runtime/native/afkxr/afk_ecfx.cpp` and `afk_ecfx_core.h` (at `1357409`), whose
  * rules are EchoCombat v2.0.0's NEUTRON effects deferral in DroneFix, `plugin/dronefix.cpp` at `c14c3e0a` L332-409 (WallFxDue L374-409, SoundAgain
  * L352-359), L682-689, L1683-1686.
  *

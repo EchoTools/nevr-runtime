@@ -1,4 +1,4 @@
-// Host test of the impact-sound module (src/quest/combat/impactsnd.cpp, #2183; moved from the q15t plugin's impactsnd): the real handlers through the
+// Host test of the impact-sound module (src/quest/combat/impactsnd.cpp, #2183): the real handlers through the
 // two thunks, installed by the real GotHook into the JUMP_SLOT of LoadSoundSettings and the vtable word (ABS64) of CR15NetBulletCS::Shutdown of a libr15
 // image built in memory that holds the pinned ELF vaddrs (the hit-code words, the kSoundSettings GLOB_DAT word, the .bss words D and kSoundSettings, a
 // trampoline at each function's address) and a fake impact table on the host heap laid out as the game's (map+0x00 data, +0x30 count, +0x38 flags;

@@ -2,7 +2,7 @@
 // real GotHook into the JUMP_SLOT of a libr15 image built in memory (combat_libr15_image.h) whose slot holds base + the pinned function, and
 // called the way the game calls it: through the slot. The fake CSetMaterialPropertyNode::Update records every call.
 //
-// The checks 1 to 10 are the q15t plugin's shieldgamma_test, moved: the assertions are the same and the fixture is the manager's (the image, the
+// The checks 1 to 10 are the combat plugin's shieldgamma_test (#1591): the assertions are the same and the fixture is the manager's (the image, the
 // slot and the log lines are the combat area's, and the module acts in a combat level, which the test puts the game in through the real combat
 // level answer, combat_scope.h). The rest is new: the arena path (no combat level loaded: the game's function with the same arguments, no read of
 // the data, no write, no second call, no line), the combat lobby and the lobbies arena players use, and each refusal.

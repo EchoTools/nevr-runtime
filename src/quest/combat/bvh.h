@@ -19,9 +19,9 @@
  *
  * The tree table has 64 entries, each owned by the CBVHTree that built it and freed by that CBVHTree's Shutdown (docs/quest/combat/bvh.md "Table lifetime").
  *
- * Owner (ADR 0039). This file owns the six slots. The q15t plugin no longer installs any of them.
+ * Owner (ADR 0039). This file owns the six slots.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in. Every query hook answers
  * the game's own function while no combat map and no combat lobby is loaded, or while an Echo Arena level is (it wins): `InCombatOrLobby()` below is the

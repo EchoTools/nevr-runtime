@@ -4,7 +4,7 @@
  *
  * Owner (ADR 0039). This file owns the rate `vrapi_SetDisplayRefreshRate` is called with. It is the one decision about it: the
  * render-configuration hook (sentinel/render_config_hook.cpp) holds the slot and asks `Choose` for the rate its original is called with;
- * no other module hooks that slot, and the q15t plugin no longer does. The inputs it combines, each named on every line it writes:
+ * no other module hooks that slot. The inputs it combines, each named on every line it writes:
  *   - the game's request (`asked_hz`), and the session rate it keeps from it;
  *   - the `combat:` keys `refresh_rate` (the rule; off: the game's rate always), `refresh_rate_lobby` (the combat lobby, `mpl_lobby_b_combat`,
  *     also asks for the level rate; off: combat maps only) and `refresh_rate_quest2_72` (a Quest 2 asks 72; off: it asks 90 too);
@@ -17,12 +17,12 @@
  * Arena (same APK). Arena and combat run on the same APK, so the rule is scoped by the loaded level, not by the APK: in an Echo Arena match the
  * game's own rate stands, and a player who leaves combat for arena gets the session rate back at the tick's next look. The other lobbies are
  * neither: the lobby levels arena players use (`mpl_lobby_b`, `_b2`, ...) keep the game's rate always, and only the combat lobby can ask for the
- * level rate, and only with `refresh_rate_lobby` on. Where this departs from the q15t plugin (and docs/quest/combat/adr/0002): the plugin took
+ * level rate, and only with `refresh_rate_lobby` on. Where this departs from the combat plugin imported in #1591 (and docs/quest/combat/adr/0002): that plugin took
  * every lobby level and turned it on by default; the game holds 118-120 Hz in the lobby (ADR 0001), so arena's lobby is left alone.
  * The kill files `hzlevel.off`, `hzlobby90.off` and `hz72q2.off` of the plugin are no longer read: one found in the plugin's data directory is a
  * Warning (`combat_refresh_rate_legacy_switch`) naming the key that replaces it.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false `Choose` answers the game's own rate,
+ * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false `Choose` answers the game's own rate,
  * `Note` writes nothing and no tick is registered, so the release APK, whose base carries the reference build's own combat modules,
  * has no second owner of the rate.
  *
@@ -35,8 +35,8 @@
  *
  * Origin. The reference build's `hz` rule, reconstructed here in our own code (nothing verbatim): the level lists, CR15Game's two
  * gamespace tables (offsets 0x1f48/0x1f78 and 0x1f88/0x1fb8) and a gamespace's level at +0x58 are the pinned build's
- * (docs/quest/combat/adr/0001-match-refresh-rate.md, 0002-level-refresh-rate-default.md). The q15t plugin carried it as
- * `refresh_rate.cpp` (shipped as `hzlobby90` and `hz72q2`) until this module replaced it.
+ * (docs/quest/combat/adr/0001-match-refresh-rate.md, 0002-level-refresh-rate-default.md). The combat plugin imported in #1591 carried it as
+ * `refresh_rate.cpp` (shipped as `hzlobby90` and `hz72q2`).
  *
  * Frequency (ADR 0038). `Choose` and `Note` run once per request of the game, which asks once per session start; the tick runs once per
  * frame and does one clock read and one compare, and looks at the game every 0.5 s (a few reads with process_vm_readv, which never

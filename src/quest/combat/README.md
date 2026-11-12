@@ -2,7 +2,7 @@
 
 Combat behaviour that is part of the Quest runtime (docs/adr/0046-combat-is-part-of-the-quest-runtime.md). The code is compiled into every
 sentinel, built into `nevr_quest_combat` without exceptions and with hidden visibility, and hooked through the sentinel's hook manager
-(`nevr_quest_got_hook`). It runs in the `q15t` and `combat` APKs only (`combat_active.h`), except the two files that say on their header
+(`nevr_quest_got_hook`). It runs in the combat APKs only (`combat_active.h`), except the two files that say on their header
 that they ship to every APK (`match_tags`, `equip_refire`).
 
 ## Layout
@@ -32,8 +32,8 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
 
 ## The module rules
 
-1. A module registers one function per phase it has a step in, as one row of the table in `combat_install.cpp`, at the position the q15t
-   plugin installed it. The order is explicit; decals stays after impactsnd.
+1. A module registers one function per phase it has a step in, as one row of the table in `combat_install.cpp`, at the position the combat
+   plugin imported in #1591 installed it. The order is explicit; decals stays after impactsnd.
 2. Every hook goes through the hook manager (`InstallThunk` and its siblings). A module writes no code pointer and no data pointer of a
    game library any other way (ADR 0046 C1).
 3. A module's switch is a key under `combat:` in `config.yaml`, read by `quest_config` and reported by its own `combat_config_switch` record, generated from the module's row in the registration table (`Module::switchKey`, `Module::switchMember`; the modules that predate the record are on the `combat_config` line, or a `combat_config_<module>` line beside it when their keys do not fit its 768-byte buffer). No file under

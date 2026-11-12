@@ -18,7 +18,7 @@
  * code arena and combat share, and every call that does not take that path reaches FireBullet unchanged, so an arena match sees the game's own
  * function. Cost per FireBullet call (once per shot, not per frame): one relaxed atomic increment, three multiplies, two adds and two compares.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants (the normal step of combat_install.h). Switch: `combat.bullet_velocity_guard`, default
+ * Which APKs (ADR 0046 rule 5). The combat variants (the normal step of combat_install.h). Switch: `combat.bullet_velocity_guard`, default
  * true (upstream's recipe ships its fireguard off; the doc says why this one is on).
  *
  * Owner (ADR 0039). This file owns whether a FireBullet call with no usable velocity reaches FireBullet. dronemuzzle owns the slot's newest hook.

@@ -2,7 +2,7 @@
  * step and logged. It installs no hook, registers no tick and writes no byte; the renderer it enables is not ported (docs/quest/combat/pfx.md
  * says what is missing), so nothing reads the gate on a frame today.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs and the gate reads off.
+ * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs and the gate reads off.
  *
  * Switch. `combat.pfx` in config.yaml, true unless the file says false (the working build has the renderer on; the reference build keeps it
  * off unless its own switch file says otherwise). The plugin's kill file `pfx.off` is no longer read: one found in the plugin's data

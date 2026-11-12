@@ -3,7 +3,7 @@
 // distinct call sites; the engine's stub is a fake that follows CncaGameSpace -> CncaGame -> vtable +0x278 into a fake
 // CncaGame::StaticRaycastOccluded, which calls CBVHTree::Occluded through bvh's own hook on a synthetic room mesh.
 //
-// Moved from the q15t plugin's wallfire_test: the assertions on the shots are the same (a stock hit passes through, a clear segment is not
+// From the combat plugin's wallfire_test (#1591): the assertions on the shots are the same (a stock hit passes through, a clear segment is not
 // blocked, a segment through each wall is, another call site gets the stock answer, a null gamespace, a non-finite segment and every wrong game
 // structure get the stock answer, the log volume, the refusals and what they leave alone). What changed is the fixture (the manager's install on an
 // image, not a slot swap; the plugin's kill file is the `combat.wallfire` switch) and three deliberate behaviours: the check acts only on a combat map

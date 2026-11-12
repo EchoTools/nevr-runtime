@@ -1,4 +1,4 @@
-// Host test of pfxtev (src/quest/combat/pfxtev.cpp, #2188; moved from the q15t plugin, #1642): the switch, the six event ids, the
+// Host test of pfxtev (src/quest/combat/pfxtev.cpp, #2188, #1642): the switch, the six event ids, the
 // non-event pass-through, and one line per event-id decision. The assertions are the plugin test's; the fixtures are the combat
 // area's (the key `combat.pfxtev` for the kill file, the sentinel's log sink). New with the move: the decision is scoped to combat
 // maps (`AllowsIn`), because arena runs on the same APK, and the plugin's `pfxtev.off` file is no longer read.

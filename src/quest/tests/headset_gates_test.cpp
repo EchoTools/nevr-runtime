@@ -2,7 +2,7 @@
 // JUMP_SLOTs of a libr15 image built in memory, and called the way the game calls them: through the slot, from functions whose addresses the
 // gates' ranges name. A call that returns into a gate's range gets the gate's answer; every other caller gets the real one.
 //
-// Moved from the q15t plugin's gates_test: the assertions on the answers are the same (a call from the gated range answers "not a Quest", any
+// From the combat plugin's gates_test (#1591): the assertions on the answers are the same (a call from the gated range answers "not a Quest", any
 // other caller the real answer, the link range its own kind, both edges of the link range, an empty range gates nothing, the library policy, a
 // foreign slot word refused and left alone). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's
 // install, not a slot swap), the permission range and the bot range being two ranges (the plugin test used one section for both), and the bot

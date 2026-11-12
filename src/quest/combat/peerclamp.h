@@ -1,5 +1,5 @@
-/* A peer's last-received stamp that is above the broadcaster's "now" is pulled down to "now" before the stock timeout loop runs (#2178, #1625; the
- * q15t plugin's peerclamp, moved here).
+/* A peer's last-received stamp that is above the broadcaster's "now" is pulled down to "now" before the stock timeout loop runs (#2178,
+ * #1625).
  *
  * What the game does. SBroadcasterData::CleanupPeers computes age = bd[+0x478] ("now", us) - entry[+0x228] (the peer's last-received stamp) as an
  * unsigned 64-bit subtract with no clamp (peerclamp_targets.h). A stamp above "now" reads as about 2^64 us of silence, every timeout branch fires at
@@ -11,7 +11,7 @@
  * peer, a real silence included) is never touched, and "now" is never written. Every read is a never-faulting read; the one write is the 8-byte stamp,
  * at an address that was just read. Same thread as the stock loop; no lock, no allocation, no game call before the original.
  *
- * Arena (same APK). It writes the game's memory (the q15t plugin declared it altering gameplay, and upstream it was TEST ONLY), so it acts only while a
+ * Arena (same APK). It writes the game's memory (the combat plugin imported in #1591 declared it altering gameplay, and upstream it was TEST ONLY), so it acts only while a
  * combat map or the combat lobby is loaded (combat_scope.h `SeenCombatOrLobby`: a combat map or the combat lobby was loaded at the last look and no Echo Arena
  * level was; an Echo Arena level that is loaded wins over any combat level still loaded during a transition; the lobbies arena players use never enable it).
  * The handler tests that first and, outside it, calls the game's function with the same argument and does nothing else: no read, no write, no counter, no
@@ -21,8 +21,8 @@
  * lobby that is not the combat lobby is not covered (not established whether the race happens there; `combat_peerclamp_clamped` and
  * `combat_peerclamp_stats` on a headset would show it).
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.peerclamp` in
- * config.yaml (default true; upstream it was off unless asked, and the q15t plugin built it on). The plugin had no switch file for it.
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switch is `combat.peerclamp` in
+ * config.yaml (default true; upstream it was off unless asked, and the combat plugin imported in #1591 built it on). There is no switch file for it.
  *
  * Install. The patched build ID, then the code words (peerclamp_targets.h), then the GOT word that holds &SAddress::kInvalid (read once; unreadable or
  * null refuses, `invalid_unreadable`), then the JUMP_SLOT, which must hold CleanupPeers itself. The scope must be live first (`scope::Live()`: the `scope` row
@@ -36,7 +36,7 @@
  *
  * Owner (ADR 0039). This file owns the last-received stamps of the broadcaster's peers, in a combat map or the combat lobby.
  *
- * Origin. The q15t plugin's `peerclamp.cpp`, written here (imported in #1591) on the reference build's `afk_peerclamp.cpp` (Ducky's echoquest-combat;
+ * Origin. Written here (imported in #1591) on the reference build's `afk_peerclamp.cpp` (Ducky's echoquest-combat;
  * docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242: afk_peerclamp.cpp:1,39-44,50-62,55-57,83-116). The scope is the runtime's
  * (combat_scope.h, #2246).
  *

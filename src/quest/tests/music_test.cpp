@@ -1,4 +1,4 @@
-// Host test of the combat music module (src/quest/combat/music.cpp, #2184; moved from the q15t plugin's music_test): the real handler through the real
+// Host test of the combat music module (src/quest/combat/music.cpp, #2184): the real handler through the real
 // thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in memory, and called the way the game calls it: through the slot.
 // The game side is a model of CWwiseEngine::PostSoundEvent that records every call's registers.
 //

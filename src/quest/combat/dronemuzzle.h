@@ -14,15 +14,15 @@
  * Needs dronekill's shot. The step installs only when dronekill's FireBulletLocal hook is installed (dronekill::ShotActive); otherwise it refuses
  * with `needs_dronekill_shot` and installs nothing.
  *
- * Owner (ADR 0039). This file owns both slots. The q15t plugin no longer carries dronemuzzle; it had no switch file. The switch is
- * `combat.dronemuzzle`, default true: the reference build ships `dronemuzzle.on` and the q15t plugin built it on (`Q15T_DRONEMUZZLE`).
+ * Owner (ADR 0039). This file owns both slots. The module never had a switch file. The switch is
+ * `combat.dronemuzzle`, default true: the reference build ships `dronemuzzle.on` and the combat plugin imported in #1591 built it on.
  *
  * Arena (same APK). The continuation acts only inside a drone shot, and dronekill makes no shot frame outside a combat map, so in an arena level
  * nothing is moved or written. A non-drone call (every WorldTeleport and FireBullet call an arena level makes) runs ten instructions of the
  * entry: `bti c`, three to load the call-site word with ldar, `cmp`, `b.eq` (not taken), three to load the next word with ldar, `br`
  * (docs/quest/combat/dronemuzzle.md, "Arena cost"). The tick only times frames.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Origin. The reference build's `runtime/native/afkxr/afk_dronemuzzle.cpp` (kotorvr's echoquest-combat; its thunks at lines 145-182), which ports
  * EchoCombat `c14c3e0a` `plugin/dronefix.cpp`: the muzzle transform df 916-941, FireBullet df 943-1019 (shooter velocity df 1012, tracers

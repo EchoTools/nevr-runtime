@@ -1,5 +1,5 @@
 /* A read of game memory that never faults: process_vm_readv on our own pid, for which an unmapped address is EFAULT and never a signal.
- * The combat modules read the game's objects through it (the q15t plugin's `SafeRead`, reconstructed; a scan of /proc/self/maps per read,
+ * The combat modules read the game's objects through it (the combat plugin's `SafeRead` (#1591), reconstructed; a scan of /proc/self/maps per read,
  * which mapping_perms.h does, is too dear for a per-frame or twice-a-second read). Header only.
  */
 #pragma once

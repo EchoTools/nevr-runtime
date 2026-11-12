@@ -3,7 +3,7 @@
 // CR15NetFollowPlayerCS (target at +0x140, the player handle's cache at +0x148 / +0x16c / +0x188 / +0x190), a stand-in for Follow, and fake
 // RefreshCache / IsComponentValid.
 //
-// What it pins (the q15t plugin's droneguard_test assertions, on the new fixture): a set target reaches the game's Follow with the same arguments, a null
+// What it pins: a set target reaches the game's Follow with the same arguments, a null
 // target never does (one first-skip line, a total every 600th skip at most 8 times, a target-set line when it arrives), the state line on a change of the
 // cache (at most 16, read-only), an unreadable system goes to Follow, stage 1 refreshes first and then skips on idx ffff, handle-sys 0 or a refused index
 // (reading the cache the refresh just wrote), the missing or misplaced engine functions and a changed stage-1 word leave the null half only with one Error

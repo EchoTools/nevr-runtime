@@ -1,6 +1,6 @@
 // Host test for LibraryName's dladdr refusal (src/quest/combat/headset_gates.cpp, the menu gate's caller). The Bind frame that feeds LibraryName
 // is absent on the host (the host entry passes a zero bind sp), so headset_gates_test never reaches the dladdr branch; this test calls
-// LibraryName directly. Moved from the q15t plugin's library_name_test, which included the plugin's .cpp to reach an anonymous-namespace
+// LibraryName directly. From the combat plugin's library_name_test (#1591), which included the plugin's .cpp to reach an anonymous-namespace
 // function; LibraryName is a member of the module's header here, and the assertions are the same.
 //
 // Built and run by `just test-quest-combat`.

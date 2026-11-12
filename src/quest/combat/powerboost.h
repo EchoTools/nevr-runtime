@@ -15,7 +15,7 @@
  * Switch. `combat.powerboost_stage` in config.yaml, an integer 0..3, default 3: what kotorvr's echoquest-combat ships (its wave-2
  * recipe qa-1104-aj4-w2z22.json lists an empty powerboost.on, whose words are `swallow cone`, afk_powerboost.cpp:89). 0 installs nothing.
  *
- * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map
+ * Arena (same APK). Every install happens on the combat APKs, which also play Echo Arena. The module acts only while a combat map
  * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
  * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, the answer
  * is "not combat"). The atomic is not judged again: while the tick is stopped the module keeps its last answer. A reader that checks
@@ -29,7 +29,7 @@
  * per heal node a script runs; SetTargetInsideBubble once per bubble target per update of a heal bubble. Their thunks' arena path is the
  * thunk's counter, two acquire loads, one acquire load of the scope and the game's call.
  *
- * Owner (ADR 0039). This file owns the five words. The q15t plugin no longer installs any of them.
+ * Owner (ADR 0039). This file owns the five words.
  *
  * Origin. The reference build's runtime/native/afkxr/afk_powerboost.cpp (1357409; docs/audits/2026-11-05-q15t-origin-citations.md rows
  * 244-254, 273), and the EchoCombat c14c3e0a plugin/powerboost.cpp rules it ports: the cone filter :574-623, the link state :487-505, the

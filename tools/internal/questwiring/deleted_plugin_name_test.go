@@ -53,6 +53,9 @@ var deletedPluginAllowed = map[string][]allowance{
 	"tools/internal/questwiring/gun_bots_test.go": {
 		{`kDataSubdir = "` + deletedWord + `"`, "pins the one definition of the data directory's name (legacy_switch.h)"},
 	},
+	"src/quest/combat/sensorwd.h": {
+		{"v6.16.5:src/quest/plugins/" + deletedWord + "/CMakeLists.txt", "a file at the released tag v6.16.5, the evidence for the switch's default"},
+	},
 	// One entry per file. A change that keeps a name adds its entry above this line.
 }
 

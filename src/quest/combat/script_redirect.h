@@ -6,7 +6,7 @@
  * When. The combat area's normal install step (combat_install.h), first of its rows. That step runs on the thread that ran the plugin pass,
  * right after the pass returned, at the first non-null dlopen after the sentinel's login and matchmaking installs (integration/post_load.h):
  * the moment a plugin's init would run, so a script load that the plugin pass or a later row causes is already redirected. A script-library load before it is not redirected; its
- * `script_load` line (registry_set=false) shows it. Which APKs: the q15t and combat variants only (combat::Active()); a plain release never
+ * `script_load` line (registry_set=false) shows it. Which APKs: the combat variants only (combat::Active()); a plain release never
  * reaches the step, registers nothing, and every script loads under its own name.
  *
  * Switch. None: an APK that carries the nine combat builds needs them loaded, so the redirect is not a player's choice.

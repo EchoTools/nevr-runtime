@@ -1,4 +1,4 @@
-// Host test of practice AI bots (src/quest/combat/aibots.cpp, #2185; moved from the q15t plugin's aibots) against a fake CR15Game / CR15NetGame /
+// Host test of practice AI bots (src/quest/combat/aibots.cpp, #2185) against a fake CR15Game / CR15NetGame /
 // CR15NetAIScenarios. Real SafeRead, real request file, a fake clock; EnableScenario is a fake that records its calls.
 //
 // Moved: sections 0 to 11 are the plugin test's sections with the same assertions (the defaults, the 3 s hold and its exact timing, zero bots, not in

@@ -9,8 +9,8 @@
  * The four hit-code words and D (the "default" symbol word the hit code XORs into the gun symbol) are checked, never changed. No code page is written.
  *
  * Owner (ADR 0039). This file owns CR15NetBulletCS::LoadSoundSettings' JUMP_SLOT and CR15NetBulletCS::Shutdown's vtable word as the first handler on
- * the latter; the decals module (decals.h) joins the Shutdown word's chain above this one. The q15t plugin no longer installs this module, so
- * nothing else installs on either word; its build option and its data file (none) are gone.
+ * the latter; the decals module (decals.h) joins the Shutdown word's chain above this one; nothing
+ * else installs on either word.
  *
  * Arena (same APK). The impact table and these two game functions exist in an arena match too, and the sounds they feed play there, so the module
  * acts only where a combat level is loaded (combat_level.h; `Classify` with the combat lobby on: an Echo Arena level that is loaded wins, and the
@@ -29,14 +29,14 @@
  *     `combat_impactsnd_unscoped` record says so, and the tick stops polling: that level plays what stock plays. Rows, keys and count are not changed.
  * A table is "ours" from the load that decided combat until the game frees it (the global reads 0 after Shutdown) or no combat level is loaded any more.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Frequency (ADR 0038). LoadSoundSettings: once per game-space load (CR15NetBulletCS::Initialize). Shutdown: once per bullet system teardown. The
  * tick callback: once per rendered frame; a poll (four a second) and the level ask (once a second) only while the scope flag is set. Arena cost, per call and per frame, is in the
  * module doc ("Arena cost") with the measured host numbers.
  *
  * Origin. The reference build's `impactsnd` (the source build's impactsnd v1..v6; rows R12..R16, docs/audits/2026-11-05-q15t-origin-citations.md lists
- * its file and lines), reconstructed in the q15t plugin and moved here; R17 (the Shutdown lock) is ours. It is the reference build's logic, so the move
+ * its file and lines), reconstructed in the combat plugin imported in #1591; R17 (the Shutdown lock) is ours. It is the reference build's logic, so the move
  * carries kotorvr's credit.
  *
  * Lines (sentinel log; every record's fields are typed, a value is never a free-text sentence):

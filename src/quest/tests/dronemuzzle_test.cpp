@@ -6,7 +6,7 @@
 // next word); the arm64 entries are the top-level asm() of dronemuzzle_entry.inc, which src/quest/combat/check/dronemuzzle.sh disassembles,
 // checks for ldar and runs under qemu (src/quest/tests/dronemuzzle_qemu.cpp).
 //
-// Moved from the q15t plugin's dronemuzzle_test: the core's oracle, the teleport, the frame tick, the bullet record and the tracer cap are the same
+// From the combat plugin's dronemuzzle_test (#1591): the core's oracle, the teleport, the frame tick, the bullet record and the tracer cap are the same
 // checks. What changed is the fixture (an image and the manager's install, not a slot page and a swap; the call sites the entries act on are
 // calibrated as before), the log lines (sentinel records, rendered as in dronekill_test), and the install cases: the plugin's "no arm64 thunk"
 // refusals have no counterpart (the entries are always built), and a slot the manager cannot write is outside the image's writable segment. New

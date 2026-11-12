@@ -3,7 +3,7 @@
 // the engine functions are fakes that record their arguments. The arm64 entry cannot run on this x86 host (src/quest/combat/check/powerboost.sh
 // runs it under qemu); its continuation (ConeAt) is tested directly here.
 //
-// Moved from the q15t plugin's powerboost_test: the assertions on the marker decode, the three stages, the hold, the cone and the link / unlink
+// From the combat plugin's powerboost_test (#1591): the assertions on the marker decode, the three stages, the hold, the cone and the link / unlink
 // markers are the same. What changed is the fixture (the plugin's fake slot pages are a libr15 image and the manager's install), the log form
 // (structured `combat_powerboost_*` records, matched by event and field, where the plugin's lines were matched by their text), the install's
 // statuses (GotStatus names and the module's tokens, `ok` for the plugin's `kOk` and `original_mismatch` for its `kUnexpectedOriginal`), and

@@ -1,4 +1,4 @@
-// Host test of the level-decals module (src/quest/combat/decals.{h,cpp}, decals_core.h, #2183; moved from the q15t plugin's decals, #1619). Three layers:
+// Host test of the level-decals module (src/quest/combat/decals.{h,cpp}, decals_core.h, #2183, #1619). Three layers:
 //   1. the table file: the parser's refusals, the uv flips, the blend, the level gate, the index and vertex fill;
 //   2. the per-system state machine (decals::Host) over stand-in operations: gating, retries, level changes, shutdown, the war room, and the scope (a game
 //      space in a level that is not a combat map or the war room draws and creates nothing, and its level is read once a second, not on every update);

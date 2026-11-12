@@ -39,8 +39,8 @@
  * The kill feed. The EC client hands each first-time 'K' datagram (a drone's health ran out on the server) to OnKilled: the install registers it
  * with ec::OnDroneKilled (ec.h). Without an EC server no 'K' arrives and `kill` never fires; lock-on, gun, chase and shot do not need it.
  *
- * Owner (ADR 0039). This file owns the four slots. The q15t plugin no longer carries dronekill. It never had a switch file, so there is no legacy
- * file to warn about; the switch is `combat.dronekill`, default true: the reference build ships `dronekill2.on` (all five words) and the q15t plugin built it on (`Q15T_DRONEKILL`).
+ * Owner (ADR 0039). This file owns the four slots. The module never had a switch file, so there is no legacy
+ * file to warn about; the switch is `combat.dronekill`, default true: the reference build ships `dronekill2.on` (all five words) and the combat plugin imported in #1591 built it on.
  *
  * Arena (same APK). Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module
  * acts only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h `InCombatMap` on one
@@ -54,7 +54,7 @@
  * scope ends. An arena level writes only the one `combat_dronekill_scope` line per change of scope; the process writes the final
  * `combat_dronekill_stats` record at its end whenever the module is installed, with zero counts if no combat map was seen.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Frequency (ADR 0038). Enter and Actor run once per execution of a script node of that kind, in any level; FireBulletLocal once per drone shot;
  * AttackTarget once per frame per drone that has a target. Not measured on a headset: the `combat_dronekill_scope` line carries each hook's call

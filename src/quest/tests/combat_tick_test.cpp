@@ -371,7 +371,7 @@ void ARefusedInstallLeavesTheSlotAloneAndSaysWhy() {
   Done();
 }
 
-// The q15t variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
+// A combat variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
 // the combat variant: the game's function runs once, then combat's callbacks, and nothing logs `unexpected_original`.
 void OnACombatVariantApkTheRunnersStepInstallsTheTickAlone() {
   World(bv::Variant::kQ15t);

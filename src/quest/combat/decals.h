@@ -12,7 +12,7 @@
  *     destroyed before the system is.
  *
  * Owner (ADR 0039). This file owns UpdateMovement's GLOB_DAT word; the Shutdown word is shared with impactsnd (it installs first, in the table's
- * order). The q15t plugin no longer installs this module, and its kill file `decals.off` and the two flip files `decalflipu.on` and `decalflipv.on`
+ * order). The kill file `decals.off` and the two flip files `decalflipu.on` and `decalflipv.on`
  * are no longer read: one found in the plugin's data directory is a Warning (`combat_decals_legacy_switch`) that names the key that replaces it.
  * `decals.bin` is a data file, not a switch, and is read where it was.
  *
@@ -20,11 +20,11 @@
  * `IsCombatMap`) or the war room, and a group is drawn in the game space of the level it names (the war room's also in a combat map's). So a table that
  * names an arena level, or a bullet system of an arena match, draws nothing and creates nothing. This is the one answer to "is this combat?" that the
  * other combat modules use; there is no second level list here. The SDK's `LevelGate` (sdk/include/nevr/level_gate.h) is the PC plugin API's
- * per-context gate over the host's main level; the q15t plugin never used it for decals (its gate was this module's table), so nothing moves off it, and
- * it stays for plugins. The combat level answer (combat_scope.h, the loaded levels as a whole) does not answer this module's question, by decision:
+ * per-context gate over the host's main level; this module's gate is its own table, not that gate, which
+ * stays for plugins. The combat level answer (combat_scope.h, the loaded levels as a whole) does not answer this module's question, by decision:
  * the question is about one game space's level, which the handler reads from the system it was called with.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h), and only with `combat.decals` true and a
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h), and only with `combat.decals` true and a
  * readable decals.bin: with `combat.decals` false or no table the module installs nothing and an arena match pays nothing.
  *
  * Frequency (ADR 0038). UpdateMovement runs once per rendered frame per bullet system (one per game space, each on its own update thread); Shutdown once
@@ -32,8 +32,8 @@
  * clock; the level is read again (two process_vm_readv calls) once a second per system. In a combat level it also draws up to 24 nodes of up to 160 quads
  * each. Numbers: docs/quest/combat/decals.md, "Arena cost".
  *
- * Origin. The reference build's level decals (`afk_*` decal drawing, docs/audits/2026-11-05-q15t-origin-citations.md) by way of the q15t plugin's
- * `decals.cpp`, which this moves. The table format and the draw path are the plugin's.
+ * Origin. The reference build's level decals (`afk_*` decal drawing, docs/audits/2026-11-05-q15t-origin-citations.md) by way of the combat plugin's
+ * `decals.cpp` (imported in #1591). The table format and the draw path are that plugin's.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_decals_install","result":"installed|off|refused","status":"<token>","reason":"..","msg":".."}

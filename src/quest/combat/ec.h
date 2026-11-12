@@ -44,8 +44,8 @@
  * switch files `ec.on`, `ec.off` and `ec_preset1.on` .. `ec_preset3.on` are no longer read: one found is a Warning
  * (`combat_ec_legacy_switch`) naming the key.
  *
- * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-209). The q15t plugin's
- * `ec.cpp` / `ec_core.h`, a port of the reference build's `runtime/native/afkxr/afk_ec.cpp` (at `1357409`: the slots :99,102, the platform
+ * Origin (rule 5 of src/quest/combat/README.md; docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-209). The combat plugin's
+ * `ec.cpp` / `ec_core.h` (imported in #1591), a port of the reference build's `runtime/native/afkxr/afk_ec.cpp` (at `1357409`: the slots :99,102, the platform
  * libraries :123-127,419-448) and `afk_ec_core.h` (:20-33 the page layout, :162-170,247 the tac mods). Its network rules are EchoCombat v2.0.0's
  * VeilNet, `plugin/veilnet.cpp`, shared with PC in `src/runtime/patch/ec_rules.h` (the header cites the lines it follows). The pins, the hidden
  * page with its exported alias, the WriteLogV hooks and the scope are ours.

@@ -1,4 +1,4 @@
-// Host test of the gun hand (src/quest/combat/weapon_arm.cpp, #2185, T-26; moved from the q15t plugin's weapon_arm): a profile whose weaponarm is not 1 is set to
+// Host test of the gun hand (src/quest/combat/weapon_arm.cpp, #2185, T-26): a profile whose weaponarm is not 1 is set to
 // the right hand once per marker. It runs against a fake CR15Game laid out as the game's gamespace tables and a fake equipment component system. Real SafeRead, real files, a fake clock; the nine engine calls are fakes.
 //
 // Moved: sections 1 to 13 are the plugin test's sections with the same assertions (the hold of 3 passes, the direct and the deferred route with the functor's
@@ -501,7 +501,7 @@ void AMarkerThePluginWroteStopsTheModule() {  // 14
     CHECK(wa::CurrentStats().scopedOut == 0, "a profile with a marker scanned the levels");
     CHECK(nevr_quest::combat::level::ScanCalls() == scans0 && SafeReadCalls() == reads0, "a profile with a marker scanned or read the game");
   }
-  // The module's own marker is the plugin's file name: the directory is files/q15t, the name t26arm.<id> with the id's odd characters made '_'.
+  // The module's own marker is the plugin's file name: the directory is the data directory (legacy_switch.h), the name t26arm.<id> with the id's odd characters made '_'.
   Reset(1, 1, -1);
   g_xplat = "OVR-ORG-12/34 56";
   for (int i = 0; i < 4; ++i) Pass();

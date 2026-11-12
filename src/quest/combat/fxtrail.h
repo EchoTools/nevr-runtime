@@ -1,4 +1,4 @@
-/* A bullet whose trail effect has no instance ends its trail, so the bullet can be freed (#2178, #1737; the q15t plugin's fxtrail, moved here).
+/* A bullet whose trail effect has no instance ends its trail, so the bullet can be freed (#2178, #1737).
  *
  * What the game does. A bullet is freed only once every effect slot of it reports done; a trail slot is done when
  * CParticleEffectCS::EffectTime(handle) is above the trail's time after impact (FXUpdateTrail, the function's one caller in libr15). The Quest
@@ -20,8 +20,8 @@
  * of bullets, which only combat has; that is why it is scoped and the crash-only guards are not.
  * The answer lags a level change by up to scope::kLookEveryMs (a quarter of a second): the leak it guards is one of a match, not of its first quarter second.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.fxtrail` in
- * config.yaml (default true). The plugin's `fxtrail.off` file is no longer read; one found in the files folder's q15t directory is a Warning
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switch is `combat.fxtrail` in
+ * config.yaml (default true). The plugin's `fxtrail.off` file is no longer read; one found in the data directory (legacy_switch.h) is a Warning
  * that names the key.
  *
  * Install. The scope must be live (`scope::Live()`: the `scope` row of the install table registered the refresh and the tick is installed; else `scope_not_live`
@@ -36,7 +36,7 @@
  *
  * Owner (ADR 0039). This file owns the value EffectTime answers for an effect with no instance, in a combat map.
  *
- * Origin. The q15t plugin's `fxtrail.cpp`, written here (imported in #1591) on the reference build's `afk_fxtrail.cpp` (Ducky's echoquest-combat;
+ * Origin. Written here (imported in #1591) on the reference build's `afk_fxtrail.cpp` (Ducky's echoquest-combat;
  * docs/audits/2026-11-05-q15t-origin-citations.md rows 63-68 and 212-213: afk_fxtrail.cpp:1,41,60-77 and the rule at :1-24). The plugin's
  * word pins are an addition to it; the scope is the runtime's (combat_scope.h, #2246).
  *

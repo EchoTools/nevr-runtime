@@ -49,7 +49,7 @@
 //
 // `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
 // pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
-// value. They only matter in the q15t and combat APKs, where the modules run.
+// value. They only matter in the combat APKs, where the modules run.
 //
 // `combat.levelname` (#2181) is a boolean, true when absent, read the same way: `false` leaves the game's cut global level (combat/levelname.h) and, with it,
 // the booster pool's companion (combat/boosterpool.h).
@@ -234,7 +234,7 @@ struct CombatConfig {
   CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
   CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
   CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on by default upstream, afk_music.cpp:1
-  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the q15t plugin's Q15T_SENSORWD was in v6.16.5
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the combat plugin's sensorwd option was in v6.16.5
   CombatSwitch ec;      // `combat.ec`: the EC network client and the writer of re33_ec_page (combat/ec.h)
   CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
   CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)

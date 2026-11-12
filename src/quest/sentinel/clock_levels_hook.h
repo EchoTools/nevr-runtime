@@ -13,7 +13,7 @@
  * The original's result is returned as it came, and the render_config line reports the levels applied (cpu_level, gpu_level)
  * and VrApi's answer (clock_result), so a run says whether the headset granted what was asked.
  *
- * Owner (ADR 0039). This file owns the clock levels: no other module hooks vrapi_SetClockLevels or changes the levels (the q15t
+ * Owner (ADR 0039). This file owns the clock levels: no other module hooks vrapi_SetClockLevels or changes the levels (the combat
  * plugin's clock raise is `diagnostics.clock_levels_override: true`, ADR 0046 rule 3). Its inputs are the game's request and that switch,
  * both named on the `clock_levels_arm` line and the render_config line.
  *

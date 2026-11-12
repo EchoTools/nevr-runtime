@@ -18,21 +18,21 @@
  *   adrp x8, g_bits; mov x3, x0; ldr w8, [x8]; tbnz w8, #2, pass; and w8, w8, #3; cbz w8, pass; mov x0, x3; b ActInCombat
  *   pass: mov x0, x1; mov x1, x2; br x3
  * (NDK r26d clang -O2: no frame, no stack canary, no call; the arena path is the tbnz or the cbz, then the `br`.)
- * where the q15t plugin it replaces read 0x40 bytes of the data with process_vm_readv on every call, in every level.
+ * where the combat plugin imported in #1591 read 0x40 bytes of the data with process_vm_readv on every call, in every level.
  *
- * Owner (ADR 0039). This file owns the size of `weapon_meter` the game's Enter is called with; the q15t plugin no longer hooks this slot.
+ * Owner (ADR 0039). This file owns the size of `weapon_meter` the game's Enter is called with.
  *
- * Which APKs (ADR 0046 rule 5). The normal step of the q15t and combat variants (combat::Active()); the release APK installs nothing.
+ * Which APKs (ADR 0046 rule 5). The normal step of the combat variants (combat::Active()); the release APK installs nothing.
  *
- * Switch (rule 4). `combat.hudmeter`, default true. Off: Info `combat_hudmeter_install` with `reason: off_config`, nothing installed. The q15t
- * plugin's `hudmeter.on` file is not read.
+ * Switch (rule 4). `combat.hudmeter`, default true. Off: Info `combat_hudmeter_install` with `reason: off_config`, nothing installed. A
+ * `hudmeter.on` file is not read.
  *
  * Frequency (ADR 0038). Enter runs once per script update of a canvas-attribute node: its rate per frame is NOT measured (no headset run; the
  * reference build's lobby log says the weapon_meter writes are a few per second while the HUD fills, and no count of the other nodes). The handler's
  * cost on a call that is not a combat level's is the thunk plus the instructions above. In combat it adds one process_vm_readv of 0x40 bytes per call,
  * which is the cost the plugin had in every level.
  *
- * Origin. The q15t plugin's `hudmeter.cpp`, which is our implementation of the reference build's `runtime/native/afkxr/afk_hudmeter.cpp` (see
+ * Origin. The combat plugin's `hudmeter.cpp`, which is our implementation of the reference build's `runtime/native/afkxr/afk_hudmeter.cpp` (see
  * hudmeter_targets.h for the lines); the rev 4 "old bar" part of the reference build is not built. Imported in #1591 from kotorvr's
  * echoquest-combat work.
  *

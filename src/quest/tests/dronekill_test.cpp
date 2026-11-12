@@ -3,7 +3,7 @@
 // reads it (component systems with the real read-shape words, a fake auto-target system for chase), real SafeRead (process_vm_readv). The calls
 // into game code through vtable slots are replaced through the module's test seam (a slot's words are aarch64 data on the host).
 //
-// Moved from the q15t plugin's dronekill_test: the assertions on what the module does are the same. What changed is the fixture (the plugin's
+// The assertions of the combat plugin's dronekill_test (#1591): the assertions on what the module does are the same. What changed is the fixture (the plugin's
 // fake slot page is a libr15 image and the manager's install; a slot the manager cannot write is one outside the image's writable segment, where
 // the plugin test used an executable page), the log lines (sentinel records; the text a check looks for is the record's event and fields, see
 // Render), the API names (namespace nevr_quest::combat::dronekill), and the scope: a combat map is loaded and the module's tick has seen it before a

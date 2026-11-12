@@ -1,4 +1,4 @@
-// Host test of the scanner-sphere watchdog (src/quest/combat/sensorwd.cpp, #2184; moved from the q15t plugin's sensorwd_test): the real handlers through the
+// Host test of the scanner-sphere watchdog (src/quest/combat/sensorwd.cpp, #2184): the real handlers through the
 // real thunks, installed by the real GotHook into the two vtable words (ABS64) and the JUMP_SLOT of a libr15 image built in memory, and called the way the game
 // calls them: through the word. The game side is a model of OnComponentEnabled, OnComponentDisabled and SendComponentEventGlobal that records every call, and
 // models of CModelCS components laid out where the handlers read them (the offsets are spelled here, not taken from the module).

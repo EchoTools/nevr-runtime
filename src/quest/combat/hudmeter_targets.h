@@ -1,6 +1,6 @@
 /* The slot and the data layout of the wrist HUD module (hudmeter.h), pinned to the store libr15 (build ID in pinned_targets.h).
  *
- *   R57  CSetCanvasElementAttributesNode::Enter   JUMP_SLOT 0x36c6ce8 -> 0x2726eac   (`readelf -rW`, the slot the q15t plugin hooked)
+ *   R57  CSetCanvasElementAttributesNode::Enter   JUMP_SLOT 0x36c6ce8 -> 0x2726eac   (`readelf -rW`)
  *
  * The function is libr15's own, so the slot holds `base + 0x2726eac` in this BIND_NOW image (got_hook.h) and the target says so.
  * got_pinned_test.cpp checks the relocation, the symbol's address and every code word below against the real file

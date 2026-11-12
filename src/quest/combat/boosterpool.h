@@ -20,7 +20,7 @@
  * keeps it from the same crash. The cost is on every caller of AllocatePooledActor, arena's included; see docs/quest/combat/levelname.md ("What an
  * arena match gets").
  *
- * Which APKs. The q15t and combat variants (`combat::Active()`), and only where `combat.levelname` is on; with it off, or with levelname not
+ * Which APKs. The combat variants (`combat::Active()`), and only where `combat.levelname` is on; with it off, or with levelname not
  * installed, the game keeps its allocations.
  *
  * Switch (ADR 0046 rule 4): `combat.levelname`, the same key as levelname.h (the two are one feature), default true.
@@ -32,7 +32,7 @@
  * Origin. The reference build's `booster_pool.plain_name` word row (its patch table, `tbz` at 0x2110f40 stock 0x36f8012a to `b` 0x14000009;
  * docs/audits/2026-11-05-q15t-origin-citations.md, the `levelname` rows). Upstream pins the word in the tools directory of `kotorvr/echoquest-combat`:
  * `qcp_patches.py:380` (`LOWSPEC_BOOSTER_PATTERN`) and `:407-408` (the G7 booster patch). The word row is not applied here: this is our own implementation, reached
- * through the import slot, moved from the q15t plugin's boosterpool.cpp (imported from kotorvr's echoquest-combat).
+ * through the import slot, from the combat plugin's boosterpool.cpp (imported in #1591 from kotorvr's echoquest-combat).
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_boosterpool_install","result":"installed|refused|off","reason":"ok|off_config|needs_levelname|<GotStatus token>|<status token>","key":"combat.levelname",

@@ -2,7 +2,7 @@
 // GotHook into the JUMP_SLOT of a libr15 image built in memory (combat_libr15_image.h) whose slot holds base + the pinned function, and called
 // the way the game calls it: through the slot. The fake CSetCanvasElementAttributesNode::Enter records what it was called with.
 //
-// The checks 2 to 11 are the q15t plugin's hudmeter_test, moved: the assertions are the same and the fixture is the manager's (the image, the
+// The checks 2 to 11 are the combat plugin's hudmeter_test (#1591): the assertions are the same and the fixture is the manager's (the image, the
 // slot and the log lines are the combat area's, and the module acts in a combat level, which the test puts the game in through the real combat
 // level answer, combat_scope.h). The rest is new: the arena path (no combat level loaded: the game's function with the same arguments, no read of
 // the data, no write, no line), the combat lobby and the lobbies arena players use, the switch, and each refusal.

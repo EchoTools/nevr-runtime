@@ -4,7 +4,7 @@
 // SAddress::kInvalid reached through its GOT word, and a stand-in for CleanupPeers itself. The levels the guard is scoped by are the real combat level answer
 // (combat_scope.h), refreshed through the tick's callback against a model of the game's gamespace tables (combat_game_model.h, combat_scope_world.h).
 //
-// What it pins (the q15t plugin's peerclamp_test assertions, on the new fixture): the walk lowers a stamp above "now" to "now" and nothing else, the game's
+// What it pins: the walk lowers a stamp above "now" to "now" and nothing else, the game's
 // function runs once with the same argument (after the clamp), nothing to walk and every unreadable read leave the stamps alone, the walk stops at 4096
 // entries with one Warning, the clamp lines are capped, a slot that does not hold CleanupPeers is refused and left alone with the pin named, an unreadable
 // or null kInvalid refuses the install, every code word flipped in turn refuses the install, and an unreadable word does too. New with the move: the guard

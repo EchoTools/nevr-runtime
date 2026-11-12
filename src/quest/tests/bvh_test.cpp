@@ -2,7 +2,7 @@
 // image built in memory, and called the way the game calls them: through the slot, against fake stock functions and fake game structures laid out
 // as the pinned build's code reads them (docs/quest/combat/bvh.md section 3). Synthetic meshes, no game-derived bytes.
 //
-// Moved from the q15t plugin's bvh_test: the assertions on the answers are the same (the nearest hit, the segment test, the hit's fields, the
+// The assertions on the answers are bvh_test's from the combat plugin imported in #1591 (the nearest hit, the segment test, the hit's fields, the
 // refusals of Initialize and their lines, the 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install, the
 // touch answer, and a Shutdown freeing its CBVHTree's table entry). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
 // plugin's kill files are `combat:` switches) and three deliberate behaviours: every answer is scoped to a combat map (the arena path calls the

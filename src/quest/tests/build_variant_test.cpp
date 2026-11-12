@@ -77,7 +77,7 @@ void TheNamesAreTheWordsAndNoneForNoVariant() {
   QCHECK(std::strcmp(bv::SourceName(bv::StampSource::kInvalid), "invalid") == 0);
 }
 
-// Only the q15t and combat variants run the folded combat modules (docs/adr/0046 rule 5); a plain release and the measurement build do not.
+// Only the combat variants run the folded combat modules (docs/adr/0046 rule 5); a plain release and the measurement build do not.
 void OnlyTheCombatVariantsRunFoldedCombat() {
   QCHECK(!bv::RunsFoldedCombat(bv::Variant::kNone));
   QCHECK(bv::RunsFoldedCombat(bv::Variant::kQ15t));

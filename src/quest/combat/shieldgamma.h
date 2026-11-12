@@ -22,21 +22,21 @@
  *   adrp x8, g_bits; mov x3, x0; ldr w8, [x8]; tbnz w8, #2, pass; and w8, w8, #3; cbz w8, pass; mov x0, x3; b ActInCombat
  *   pass: mov x0, x1; mov x1, x2; br x3
  * (NDK r26d clang -O2: no frame, no stack canary, no call; the arena path is the tbnz or the cbz, then the `br`.)
- * where the q15t plugin it replaces read 0x58 bytes with process_vm_readv on every call.
+ * where the combat plugin imported in #1591 read 0x58 bytes with process_vm_readv on every call.
  *
  * Owner (ADR 0039). This file owns the colour the game's Update is called with for the shield material and the second write to the tube
- * window material; the q15t plugin no longer hooks this slot.
+ * window material.
  *
- * Which APKs (ADR 0046 rule 5). The normal step of the q15t and combat variants (combat::Active()); the release APK installs nothing.
+ * Which APKs (ADR 0046 rule 5). The normal step of the combat variants (combat::Active()); the release APK installs nothing.
  *
  * Switches (rule 4). `combat.shieldgamma_gamma` (false) and `combat.shieldgamma_tube_mirror` (true). Both false: Info `combat_shieldgamma_install` with
- * `reason: off_config`, nothing installed. The q15t plugin's build bitmask `Q15T_SHIELDGAMMA` is gone; the switch files its header named are not read.
+ * `reason: off_config`, nothing installed. No switch file is read.
  *
  * Frequency (ADR 0038). Update runs once per update of a material-property node, every update while its duration runs; its rate per frame is NOT
  * measured (no headset run). The handler's cost on a call that is not a combat level's is the thunk plus the instructions above. In combat each call adds
  * one process_vm_readv of 0x58 bytes, as the plugin's did in every level.
  *
- * Origin. The q15t plugin's `shieldgamma.cpp`, our implementation of the reference build's `runtime/native/afkxr/afk_shieldgamma.cpp` (see
+ * Origin. The combat plugin's `shieldgamma.cpp`, our implementation of the reference build's `runtime/native/afkxr/afk_shieldgamma.cpp` (see
  * shieldgamma_targets.h for the lines). Imported in #1591 from kotorvr's echoquest-combat work.
  *
  * Lines (sentinel log):

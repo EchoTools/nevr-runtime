@@ -226,19 +226,19 @@ nevr_ht_test(shieldgamma_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
   SRC src/quest/tests/shieldgamma_test.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
 
-# Gun connect (#2185, docs/adr/0046; moved from the q15t plugin's gunconnect): the plugin test's fourteen sections with the same assertions against a fake
+# Gun connect (#2185, docs/adr/0046): the plugin test's fourteen sections with the same assertions against a fake
 # CR15Game, then the switch (on by default; off registers nothing), the plugin's kill file not read and warned about, the scope (no Echo Arena level, lobby
 # or transition ever reaches the game's functions), the install on a libr15 image built in memory (build id, every pinned word, a name that resolves
 # elsewhere, a full tick table) and the host cost of a pass in an arena level. got_pinned_test resolves the symbols and words in the real libr15. The
 # scope is the real combat level answer (combat_scope.cpp, #2382).
 nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/gunconnect_test.cpp src/quest/combat/gunconnect.cpp src/quest/combat/gamespace.cpp ${_cscope_srcs})
-# Practice AI bots (#2185; moved from the q15t plugin's aibots): the plugin test's sections, then the switches and the scenario key, the request file in a
+# Practice AI bots (#2185): the plugin test's sections, then the switches and the scenario key, the request file in a
 # development build only, the Echo Arena scope, the install on an image and the host cost of a look. The scope is the real combat level answer
 # (combat_scope.cpp, #2382): an Echo Arena level, no look or a stale look refuses the call (SeenEchoArena).
 nevr_ht_test(aibots_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp ${_cscope_srcs})
-# The gun hand default (#2185; moved from the q15t plugin's weapon_arm, T-26): the plugin test's sections, a marker the plugin wrote that stops the
+# The gun hand default (#2185, T-26): the plugin test's sections, a marker the plugin wrote that stops the
 # module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image. The
 # scope is the real combat level answer (combat_scope.cpp, #2382): a stale look sets nothing, and a scope that cannot change refuses the install.
 nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
@@ -308,7 +308,7 @@ nevr_ht_test(texture_quest2_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
 # vkGetDeviceProcAddr) by the real vk_ext_window against a fake driver: the writes, the zeroed view, its failure, the refusals, the lines.
 nevr_ht_test(texel_buffer_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/texel_buffer_guard_test.cpp src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp)
-# The impact sounds (#2183, docs/adr/0046; moved from the q15t plugin's impactsnd): the real handlers through the two thunks, installed by the real
+# The impact sounds (#2183, docs/adr/0046): the real handlers through the two thunks, installed by the real
 # GotHook into the load JUMP_SLOT and the Shutdown vtable word (ABS64) of a libr15 image built in memory, against a fake impact table, a fake loader and
 # Shutdown, a fake clock and a fake CR15Game that says which level is loaded. Every assertion of the plugin's test about the table, the loaders, the tick and
 # the lock; the install checks (D is read and never written, the write switch); and the scope: an arena level, an arena lobby, a transition with an arena
@@ -320,7 +320,7 @@ nevr_ht_test(impactsnd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # impactsnd's. The scope: a game space in an arena level (or an arena lobby) draws and creates nothing and is read again once a second.
 nevr_ht_test(decals_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/decals_test.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
-# The pure BVH code (#2182, moved from the q15t plugin's bvh_core_test): synthetic meshes in the game's Embree BVH2<Triangle4> format, ray hits, misses and
+# The pure BVH code (#2182): synthetic meshes in the game's Embree BVH2<Triangle4> format, ray hits, misses and
 # occlusion against known geometry, a random soup against two brute-force references, degenerate input, malformed trees, the node / stack / size limits.
 nevr_ht_test(bvh_core_test GROUP combat NOEXC TIMEOUT 120
   SRC src/quest/tests/bvh_core_test.cpp)

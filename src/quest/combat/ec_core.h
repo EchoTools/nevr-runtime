@@ -2,7 +2,7 @@
  * switch words, the gear gate, and the reads of game memory the shared tac-mod hide makes (through SafeRead). The EC network rules (the
  * packet and its types, the receive test and its cap, the tokens, the dedupe ring, the server pick, the client branch, the use watcher, the
  * tac-mod parse and the list hide) are runtime/patch/ec_rules.h, which PC's runtime/combat/veilnet.cpp compiles too (#2358). The words and
- * the gate are the reference build's `afk_ec_core.h` (kotorvr's q15t-upstream). Deliberate differences from it:
+ * the gate are the reference build's `afk_ec_core.h` (kotorvr's echoquest-combat). Deliberate differences from it:
  *   - no MD5 / libr15 file identity: the install checks the pinned build ID;
  *   - every read of game memory goes through SafeRead (combat/safe_read.h);
  *   - the gear gate is a pthread recursive mutex with a static initializer (std::recursive_mutex has a non-constexpr constructor in libc++,

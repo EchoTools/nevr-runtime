@@ -1,5 +1,5 @@
-// Host test for the gate on the folded combat modules (#2170, docs/adr/0046 rule 5): `combat::Active()` is true for the `q15t` and
-// `combat` variants only, a development build may force it with combat.force, a release build may not, and the decision is logged
+// Host test for the gate on the folded combat modules (#2170, docs/adr/0046 rule 5): `combat::Active()` is true for the combat
+// variants only, a development build may force it with combat.force, a release build may not, and the decision is logged
 // once with its reason. The rule is tested as a table over every variant, both build kinds and both force answers, then through the
 // process state a hook reads (Resolve, Active), so a variant read wrong shows here: a plain release turning combat on, or a combat APK
 // running without it.
@@ -50,7 +50,7 @@ const Row kTable[] = {
     {bv::Variant::kNone, false, true, false, R::kNotACombatVariant, F::kRefused},
     {bv::Variant::kNone, true, false, false, R::kNotACombatVariant, F::kNotAsked},
     {bv::Variant::kNone, true, true, true, R::kForced, F::kHonoured},
-    // the q15t variant carries combat in a release build and in a development build; force changes nothing
+    // a combat variant carries combat in a release build and in a development build; force changes nothing
     {bv::Variant::kQ15t, false, false, true, R::kVariantCarriesCombat, F::kNotAsked},
     {bv::Variant::kQ15t, false, true, true, R::kVariantCarriesCombat, F::kRefused},
     {bv::Variant::kQ15t, true, false, true, R::kVariantCarriesCombat, F::kNotAsked},

@@ -14,7 +14,7 @@
  * and HeadsetType's JUMP_SLOTs) hold assembly entries (callback_thunk.h rule 7, headset_gates.cpp): a CallbackThunk's handler would see its own
  * thunk's return address, not the game's. HeadsetType's one entry serves both gates on its slot; a gate that is off has an empty range.
  *
- * Owner (ADR 0039). This file owns both slots. The q15t plugin no longer installs either, and its kill files `gate_perm.off`, `gate_bots.off` and
+ * Owner (ADR 0039). This file owns both slots. The kill files `gate_perm.off`, `gate_bots.off` and
  * the data file `gate_libs.txt` are no longer read: one found in the plugin's data directory is a Warning (`combat_gates_legacy_switch`) that
  * names the key that replaces it.
  *
@@ -39,7 +39,7 @@
  *   - gate_link acts for the script libraries of the policy, in the menus and the lobby script wherever they run. The lobby script is shared by
  *     the arena and combat lobbies (it loads the lobby's combat wing); its answer is the same in both.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Frequency (ADR 0038). An entry runs once per call of its function by anyone: PartyMemberHeadsetType once per party member each time the
  * expression is evaluated; HeadsetType once per Bind of the expression (a menu script's node) and once per BotActorId. None is a per-frame call
@@ -47,7 +47,7 @@
  * an acquire load, the real call, two relaxed counters and a range compare; a call in the link range also names the Bind's library (dladdr) and takes
  * a mutex once per bind; a bot call also reads the loaded levels (process_vm_readv, never faults).
  *
- * Origin. The q15t plugin's `headset_gates.cpp` (return-address-gated wrappers; its trampoline reads the caller's sp and x30) and `combat_gates.h`,
+ * Origin. The combat plugin's `headset_gates.cpp` (imported in #1591) (return-address-gated wrappers; its trampoline reads the caller's sp and x30) and `combat_gates.h`,
  * reconstructed on the manager. docs/audits/2026-11-05-q15t-origin-citations.md lists no reference-build file or EchoCombat line for them.
  *
  * Lines (sentinel log):

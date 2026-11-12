@@ -1,4 +1,4 @@
-/* The drone's follow update is skipped while its target is null, instead of crashing the game (#2178; the q15t plugin's droneguard, moved here).
+/* The drone's follow update is skipped while its target is null, instead of crashing the game (#2178).
  *
  * What the game does. CR15NetFollowPlayerCS::Update calls Follow(SCompactPoolHandle) once per enabled component, through its PLT stub (the one
  * caller). Follow loads [cs+0x140], the CR15PlayerNavCS system the component follows, and passes it as `this` to CR15PlayerNavCS::FinalTransform
@@ -17,7 +17,7 @@
  * where the stock call would dereference null; every other call reaches the game's Follow with the same two arguments. Whether the arena
  * has CR15NetFollowPlayerCS components at all is not established; `combat_droneguard_stats` gives the call count on a headset.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switches are `combat.droneguard` (default
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switches are `combat.droneguard` (default
  * true) and `combat.droneguard_stage1` (default false; read only when the first is on) in config.yaml. The plugin had no switch file, and its build option
  * for the second stage is gone.
  *
@@ -33,7 +33,7 @@
  *
  * Owner (ADR 0039). This file owns whether Follow runs for a component whose target is null (stage 0) or whose cache is stale (stage 1).
  *
- * Origin. The q15t plugin's `droneguard.cpp` (imported in #1591), written on the reference build's `afk_droneguard.cpp` (Ducky's echoquest-combat;
+ * Origin. Imported in #1591, written on the reference build's `afk_droneguard.cpp` (Ducky's echoquest-combat;
  * docs/audits/2026-11-05-q15t-origin-citations.md rows 34-36 and 149-150: afk_droneguard.cpp:1,42-48,43-44,46-60,57-58,66-80,76-77,86-99,108-124,126-146).
  *
  * Lines (sentinel log):

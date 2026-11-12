@@ -10,9 +10,9 @@
  *
  * Switch (docs/adr/0046 C2): `combat.wallfire` (default true, as the reference build has it; it needs `combat.bvh` and installs nothing without it). The plugin's kill file `wallfire.off` is no longer read: one found is a Warning (`combat_wallfire_legacy_switch`) that names the key.
  *
- * Owner (ADR 0039). This file owns the QueryCollision slot. The q15t plugin no longer installs it.
+ * Owner (ADR 0039). This file owns the QueryCollision slot.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h), after bvh in the registration table.
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h), after bvh in the registration table.
  *
  * Arena (same APK). The check acts only at FireGunLocal's call site and only while `bvh::InCombatOrLobby()` (a combat map or the combat lobby, a fresh look); the arena path of a QueryCollision call
  * is the game's function, a compare of the caller with the site and a return.

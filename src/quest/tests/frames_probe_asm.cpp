@@ -6,7 +6,7 @@
 //                            NEVR_OUTSIDE_GAME_CALL: the sensor MUST pass it
 //   frames_asm_probe_bad     the helper is NOT annotated: it is live across the call, so the sensor MUST fail it
 //   frames_asm_probe_nocfi   the entry has no CFI, so no FDE and a game exception cannot unwind through it: the sensor MUST fail it
-//   frames_asm_probe_naked   the same body as an __attribute__((naked)) function with no CFI (the shape of the q15t entries):
+//   frames_asm_probe_naked   the same body as an __attribute__((naked)) function with no CFI (the shape of a naked assembly entry):
 //                            clang gives it an FDE whose one row is CFA=sp, wrong after the stp and at the bl: the sensor MUST
 //                            fail it
 //   frames_asm_probe_ldr     the two words are read with a plain ldr (#2216's shape): the sensor MUST fail it

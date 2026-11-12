@@ -3,7 +3,7 @@
 // (libpnsovr.so, libpnsrad.so: their WriteLogV slot, body and stub), a fake libc (scripted datagrams), a fake clock and a fake CR15Game (the
 // levels combat_level reads). Real GotHook, real thunks, the real handlers called THROUGH the slots as the game calls them.
 //
-// Moved from the q15t plugin's ec_test: the pure rules, the list hide, the wrappers, the net tick, the step, the hide and the selection keep
+// From the combat plugin's ec_test (#1591): the pure rules, the list hide, the wrappers, the net tick, the step, the hide and the selection keep
 // their assertions. What changed, necessarily: the fixture (an ELF image and the manager's install, not a slot swap; a slot's original is what
 // it held before the install, so the fakes are in the slots first), the lines (sentinel JSON records, `combat_ec_*`), the switch (`combat.ec` and
 // `combat.ec_words`, not files: the plugin's files are warned about), recvfrom / sendto refused for an implausible word (the manager checks a

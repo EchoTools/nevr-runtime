@@ -19,7 +19,7 @@
  * address), so a step that ran too early says so and writes nothing. memsys.h's witness line says on a headset whether the sizes
  * were in place when android_main started.
  *
- * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's sizes.
+ * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's sizes.
  *
  * Switches (docs/adr/0046 rule 4, `combat:` in config.yaml): `combat.heaps` (default true) turns the module off; `combat.memsys` false
  * leaves the System heap (R07) as the game has it, because the System heap and the render-target pool are one memory change

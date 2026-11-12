@@ -1,5 +1,5 @@
 // Host test for the combat refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3, docs/adr/0039): src/quest/combat/refresh_rate.cpp,
-// built without exceptions as the sentinel builds it. The rule moved here from the q15t plugin (refresh_rate.cpp), whose host test cases
+// built without exceptions as the sentinel builds it. The rule is the combat plugin's (refresh_rate.cpp, #1591), whose host test cases
 // are these: the level rate (90, 72 on a Quest 2), a combat or lobby level asks for it, an Echo Arena level keeps the session rate, a
 // request above the level rate while a level is loaded is kept at it, the tick re-asks on a change of level only, and the three keys
 // switch the parts. What is new is the owner's shape: with `combat::Active()` false the answer is the game's own rate and nothing is
@@ -326,7 +326,7 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
   }
 }
 
-// On a q15t or combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
+// On a combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
 void ACombatVariantApkOwnsTheRuleAndSaysWhatItCombined() {
   for (const bv::Variant variant : {bv::Variant::kQ15t, bv::Variant::kCombat}) {
     World(variant);

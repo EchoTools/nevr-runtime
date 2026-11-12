@@ -5,7 +5,7 @@
  * full-size global_mp, which loads only where levelname's hook is on the game's LoadLevelName slot. The gate asks the game, once per bot call
  * (headset_gates.h "The bot gate"), so it holds whichever module installs levelname and whatever switch turns it off.
  *
- * Origin. The q15t plugin's `combat_gates.h` (`DecideCombatGates`), with its build options and kill files replaced by the `combat:` keys
+ * Origin. The combat plugin's `combat_gates.h` (`DecideCombatGates`, imported in #1591), with its build options and kill files replaced by the `combat:` keys
  * (docs/adr/0046 rule 3). docs/audits/2026-11-05-q15t-origin-citations.md lists no reference-build file or EchoCombat line for these gates.
  *
  * Header only, constexpr, built with -fno-exceptions like every combat file.
