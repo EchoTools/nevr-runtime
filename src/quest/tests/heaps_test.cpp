@@ -304,9 +304,9 @@ void TheMemsysFieldIsTheValueTheStepWasHanded() {
 }
 
 // The memsys field of each build-ID refusal is the value its own step was handed, true and false alike. Each refusal has its own
-// predecessor: a step on a good image that installs and leaves the OTHER value in the switch, then the refused step, on its bad image, with
-// the value under test. A refusal that stored nothing, or stored the value of an earlier call, logs the predecessor's value and fails.
-// No refusal shares a predecessor with the other one, so neither can pass by reading what the other left.
+// predecessor: a step on a good image that installs and leaves the OTHER value in the switch, then the refused step, on its bad
+// image, with the value under test. The test catches a refusal that stored nothing, or kept the value left by the call immediately
+// before it: either logs the predecessor's value and fails. It does not claim to catch a lag of two or more calls.
 void TheBuildIdRefusalsLogTheValueTheStepWasHanded() {
   for (const bool sys : {false, true}) {
     const char* const want = sys ? "\"memsys\":1," : "\"memsys\":0,";
