@@ -14,24 +14,110 @@
   ],
   "entries": [
     {
-      "name": "Xenomega",
-      "section": "projects",
-      "headings": ["code-contributions"],
-      "link": "https://github.com/Xenomega",
-      "what": "[EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation. Its C++ patch and game-server libraries were imported into this repository.",
+      "name": "arii",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
-        "https://github.com/Xenomega/EchoRelay",
-        "docs/reference/legacy-translator.md"
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
-      "name": "kfc",
+      "name": "AvaGoosa",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "babs",
       "section": "projects",
       "headings": ["code-contributions"],
-      "link": "",
-      "what": "Helped write a lot of EchoRelay.",
+      "link": "https://github.com/nmdurkee",
+      "what": "Echo Frenzy, a community game mode for Echo VR that paved the way for others making game modes; the pipeline for editing Echo's in-game screens (Doom on Echo is built on it); EchoCraft; and the moderator tablet for kicking players from lobbies. Has been there every step of the way, before and since Echo's shutdown.",
       "sources": [
-        "named by the project owner, 10-19"
+        "https://github.com/nmdurkee",
+        "named by the project owner, 10-27"
+      ]
+    },
+    {
+      "name": "berg",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "One of the party of three in #888: left out of the arena match once, and rejoined through a link. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "brysonak",
+      "section": "people",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/brysonak",
+      "what": "Opened #12, which changed the server log file names and added a flag to keep the old names.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/pull/12"
+      ]
+    },
+    {
+      "name": "chinmayee5599",
+      "section": "people",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/chinmayee5599",
+      "what": "Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/pull/510"
+      ]
+    },
+    {
+      "name": "Crafter",
+      "section": "projects",
+      "headings": ["testers"],
+      "link": "https://github.com/Crafter-1",
+      "what": "[Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "https://github.com/Crafter-1/Quest-EchoVR-Installer",
+        "docs/adr/0011-quest-game-data-first-run.md",
+        "https://github.com/EchoTools/nevr-runtime/issues/925",
+        "https://github.com/EchoTools/nevr-runtime/issues/621",
+        "named by the project owner",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "CyanoTex",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "DC Coffey",
+      "section": "people",
+      "headings": ["code-contributions"],
+      "link": "https://www.dccoffey.com/work/echo-vr",
+      "what": "Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.",
+      "sources": ["https://www.dccoffey.com/work/echo-vr"]
+    },
+    {
+      "name": "DinkyBoi",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated \"server full\" message when joining a full social lobby (#889). Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
+        "https://github.com/EchoTools/nevr-runtime/issues/889",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
@@ -49,6 +135,81 @@
         "docs/engine/early-quit.md",
         "https://github.com/EchoTools/nevr-runtime/pull/678",
         "https://github.com/EchoTools/nevr-runtime/issues/906"
+      ]
+    },
+    {
+      "name": "Ducky",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "",
+      "what": "The reverse engineer behind the Echo Combat Quest port. The Quest combat work here reconstructs the behavior of Ducky's reference combat build.",
+      "sources": [
+        "named by the project owner, 10-13",
+        "https://github.com/EchoTools/nevr-runtime/issues/1737"
+      ]
+    },
+    {
+      "name": "EchoCombat",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/heisthecat31/EchoCombat",
+      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The DroneFix, PowerBoost and VeilNet plugins of he_is_the_cat are built into the PC runtime's combat module nearly as written, with the balance values of he_is_the_cat (#2242). The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.",
+      "sources": [
+        "https://github.com/heisthecat31/EchoCombat",
+        "named by the project owner",
+        "#2121",
+        "#2242"
+      ]
+    },
+    {
+      "name": "Elominator",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "Furo",
+      "section": "people",
+      "headings": ["supporters"],
+      "link": "",
+      "what": "Supporter of nevr-runtime.",
+      "sources": [
+        "named by the project owner, 10-27"
+      ]
+    },
+    {
+      "name": "h4ck3r210",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "he_is_the_cat",
+      "section": "thanks",
+      "headings": ["thanks", "testers"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "echoApkPatch credit strings",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "kfc",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "",
+      "what": "Helped write a lot of EchoRelay.",
+      "sources": [
+        "named by the project owner, 10-19"
       ]
     },
     {
@@ -81,99 +242,23 @@
       ]
     },
     {
-      "name": "Crafter",
-      "section": "projects",
-      "headings": ["testers"],
-      "link": "https://github.com/Crafter-1",
-      "what": "[Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat. Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "https://github.com/Crafter-1/Quest-EchoVR-Installer",
-        "docs/adr/0011-quest-game-data-first-run.md",
-        "https://github.com/EchoTools/nevr-runtime/issues/925",
-        "https://github.com/EchoTools/nevr-runtime/issues/621",
-        "named by the project owner",
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "Ducky",
-      "section": "projects",
-      "headings": ["code-contributions"],
+      "name": "marshmallow_mia",
+      "section": null,
+      "headings": ["thanks"],
       "link": "",
-      "what": "The reverse engineer behind the Echo Combat Quest port. The Quest combat work here reconstructs the behavior of Ducky's reference combat build.",
+      "what": "The patcher's spelling of marshmallow-mia's own thank-you string; the README shows the person once, as marshmallow-mia.",
       "sources": [
-        "named by the project owner, 10-13",
-        "https://github.com/EchoTools/nevr-runtime/issues/1737"
+        "echoApkPatch credit strings"
       ]
     },
     {
-      "name": "babs",
-      "section": "projects",
-      "headings": ["code-contributions"],
-      "link": "https://github.com/nmdurkee",
-      "what": "Echo Frenzy, a community game mode for Echo VR that paved the way for others making game modes; the pipeline for editing Echo's in-game screens (Doom on Echo is built on it); EchoCraft; and the moderator tablet for kicking players from lobbies. Has been there every step of the way, before and since Echo's shutdown.",
-      "sources": [
-        "https://github.com/nmdurkee",
-        "named by the project owner, 10-27"
-      ]
-    },
-    {
-      "name": "EchoCombat",
-      "section": "projects",
-      "headings": ["code-contributions"],
-      "link": "https://github.com/heisthecat31/EchoCombat",
-      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The DroneFix, PowerBoost and VeilNet plugins of he_is_the_cat are built into the PC runtime's combat module nearly as written, with the balance values of he_is_the_cat (#2242). The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.",
-      "sources": [
-        "https://github.com/heisthecat31/EchoCombat",
-        "named by the project owner",
-        "#2121",
-        "#2242"
-      ]
-    },
-    {
-      "name": "Trodd-",
+      "name": "MyGuyChromium",
       "section": "people",
-      "headings": ["testers"],
+      "headings": ["code-contributions", "supporters"],
       "link": "",
-      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Built the echovrce.com website. Tested nevr-runtime in #nevr-runtime-testing.",
+      "what": "Code contributions to nevr-runtime. Supporter of nevr-runtime.",
       "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/877",
-        "echovrce.com website",
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "DinkyBoi",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated \"server full\" message when joining a full social lobby (#889). Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/888",
-        "https://github.com/EchoTools/nevr-runtime/issues/889",
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "berg",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "One of the party of three in #888: left out of the arena match once, and rejoined through a link. Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/888",
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "zebra",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "One of the party of three in #888, left out of the arena match. Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/888",
-        "tested in #nevr-runtime-testing (Discord)"
+        "named by the project owner, 11-12"
       ]
     },
     {
@@ -192,16 +277,6 @@
       ]
     },
     {
-      "name": "CyanoTex",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
       "name": "spike4887",
       "section": "people",
       "headings": ["testers"],
@@ -209,145 +284,6 @@
       "what": "Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "TekEmperor",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "arii",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
-      "sources": [
-        "tested in #nevr-runtime-testing (Discord)"
-      ]
-    },
-    {
-      "name": "Vibinator",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Reported players being split from the party in Echo Combat, and a spectator being disconnected.",
-      "sources": [
-        "named by the project owner, 11-12"
-      ]
-    },
-    {
-      "name": "Grumpy",
-      "section": "people",
-      "headings": ["testers"],
-      "link": "",
-      "what": "Tested release signing on a clean Windows machine, which caught an antivirus false positive before release.",
-      "sources": [
-        "named by the project owner, 11-12"
-      ]
-    },
-
-    {
-      "name": "DC Coffey",
-      "section": "people",
-      "headings": ["code-contributions"],
-      "link": "https://www.dccoffey.com/work/echo-vr",
-      "what": "Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.",
-      "sources": ["https://www.dccoffey.com/work/echo-vr"]
-    },
-    {
-      "name": "chinmayee5599",
-      "section": "people",
-      "headings": ["code-contributions"],
-      "link": "https://github.com/chinmayee5599",
-      "what": "Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.",
-      "sources": [
-        "https://github.com/EchoTools/nevr-runtime/pull/510"
-      ]
-    },
-    {
-      "name": "brysonak",
-      "section": "people",
-      "headings": ["code-contributions"],
-      "link": "https://github.com/brysonak",
-      "what": "Opened #12, which changed the server log file names and added a flag to keep the old names.",
-      "sources": [
-        "https://github.com/EchoTools/nevr-runtime/pull/12"
-      ]
-    },
-    {
-      "name": "Coastermaster77",
-      "section": "people",
-      "headings": ["code-contributions"],
-      "link": "",
-      "what": "Built a custom physics plugin on the nevr-runtime plugin template, and hosts community game servers.",
-      "sources": [
-        "named by the project owner, 11-12"
-      ]
-    },
-    {
-      "name": "Furo",
-      "section": "people",
-      "headings": ["supporters"],
-      "link": "",
-      "what": "Supporter of nevr-runtime.",
-      "sources": [
-        "named by the project owner, 10-27"
-      ]
-    },
-    {
-      "name": "MyGuyChromium",
-      "section": "people",
-      "headings": ["testers", "supporters"],
-      "link": "",
-      "what": "Tested pre-release nevr-runtime builds on a personal PC. Supporter of nevr-runtime.",
-      "sources": [
-        "named by the project owner, 11-12"
-      ]
-    },
-    {
-      "name": "marshmallow_mia",
-      "section": null,
-      "headings": ["thanks"],
-      "link": "",
-      "what": "The patcher's spelling of marshmallow-mia's own thank-you string; the README shows the person once, as marshmallow-mia.",
-      "sources": [
-        "echoApkPatch credit strings"
-      ]
-    },
-    {
-      "name": "AvaGoosa",
-      "section": "thanks",
-      "headings": ["thanks"],
-      "link": "",
-      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
-      "sources": [
-        "echoApkPatch credit strings"
-      ]
-    },
-    {
-      "name": "h4ck3r210",
-      "section": "thanks",
-      "headings": ["thanks"],
-      "link": "",
-      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
-      "sources": [
-        "echoApkPatch credit strings"
-      ]
-    },
-    {
-      "name": "Elominator",
-      "section": "thanks",
-      "headings": ["thanks"],
-      "link": "",
-      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
-      "sources": [
-        "echoApkPatch credit strings"
       ]
     },
     {
@@ -361,19 +297,52 @@
       ]
     },
     {
-      "name": "he_is_the_cat",
-      "section": "thanks",
-      "headings": ["thanks", "testers"],
+      "name": "TekEmperor",
+      "section": "people",
+      "headings": ["testers"],
       "link": "",
-      "what": "Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing.",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
-        "echoApkPatch credit strings",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "Trodd-",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Built the echovrce.com website. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/877",
+        "echovrce.com website",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "Xenomega",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/Xenomega",
+      "what": "[EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation. Its C++ patch and game-server libraries were imported into this repository.",
+      "sources": [
+        "https://github.com/Xenomega/EchoRelay",
+        "docs/reference/legacy-translator.md"
+      ]
+    },
+    {
+      "name": "zebra",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "One of the party of three in #888, left out of the arena match. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
         "tested in #nevr-runtime-testing (Discord)"
       ]
     }
   ],
   "notes": [
-    "sprockee is listed exactly once in each rendered list: in the thanks group, in the group's ordinary order, never first. No heading, README line or project-owner text is given to the name. tools/tests/test_credits.py enforces this.",
+    "sprockee is listed exactly once in each rendered list: in the thanks group, in alphabetical order, never first. No heading, README line or project-owner text is given to the name. tools/tests/test_credits.py enforces this.",
     "The thanks group is the six credit strings of the community installer's patcher, spelled exactly as the patcher spells them: configs/libr15.so.yaml lines 306 to 348 at 93a2a055 in the echoApkPatch repository, which is not public. The facts are recorded here and no text is copied from it.",
     "Everyone named as having tested in #nevr-runtime-testing is also under the testers heading, whatever other heading they have. One person is one entry: Trodd- is shown with the dash under People and under Testers.",
     "marshmallow_mia is the patcher's spelling and belongs to the thanks group only; the README shows the person once, as marshmallow-mia."

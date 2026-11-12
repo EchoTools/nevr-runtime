@@ -73,6 +73,8 @@ INGAME_MAX_LINE_BYTES = 64
 INGAME_REVIEW_LINE_BYTES = 40
 INGAME_MAX_LINES = 200
 INGAME_BLANKS_AFTER_GROUP = 3
+INGAME_NAMES_PER_LINE = 4
+INGAME_NAME_SEPARATOR = "   "
 INGAME_FORBIDDEN = set("\n\r\x00|")
 # What the game's font draws, measured on the running game (#938): printable ASCII and the copyright sign (0xA9,
 # which the game's own credits use). U+00EB (0xEB) draws as '?', so a character outside this set is refused at
@@ -171,11 +173,33 @@ def ingame_groups(data: dict) -> list[dict]:
     return groups
 
 
+def _nbytes(text: str) -> int:
+    """The bytes the game shows for text. A character outside the game's encoding counts one byte here; the
+    refusal for that character is reported by ingame_problems, not by the layout."""
+    return len(text.encode(INGAME_ENCODING, errors="replace"))
+
+
+def _ingame_rows(names: list[str]) -> list[str]:
+    """One heading's names as lines, in the order given: a line takes up to INGAME_NAMES_PER_LINE names joined by
+    INGAME_NAME_SEPARATOR, and the next name starts a new line when it would not fit INGAME_MAX_LINE_BYTES."""
+    rows: list[str] = []
+    row: list[str] = []
+    for name in names:
+        if row and (len(row) == INGAME_NAMES_PER_LINE
+                    or _nbytes(INGAME_NAME_SEPARATOR.join(row + [name])) > INGAME_MAX_LINE_BYTES):
+            rows.append(INGAME_NAME_SEPARATOR.join(row))
+            row = []
+        row.append(name)
+    if row:
+        rows.append(INGAME_NAME_SEPARATOR.join(row))
+    return rows
+
+
 def _ingame_lines(data: dict) -> list[str]:
-    """Each shown group: its heading, a blank line, its names, then blank lines before the next group."""
+    """Each shown group: its heading, a blank line, its names as rows, then blank lines before the next group."""
     lines: list[str] = []
     for group in ingame_groups(data):
-        lines += [group["ingame"], ""] + group["names"] + [""] * INGAME_BLANKS_AFTER_GROUP
+        lines += [group["ingame"], ""] + _ingame_rows(group["names"]) + [""] * INGAME_BLANKS_AFTER_GROUP
     return lines
 
 

@@ -23,8 +23,8 @@ CREDITS = ROOT / "config" / "credits.json"
 TOOL = ROOT / "tools" / "render_credits.py"
 
 SECTION_HEADING = "## Built on, and thanks"
-# The six names the community installer's patcher thanks, spelled exactly as it spells them (#974).
-THANKS = ["marshmallow_mia", "AvaGoosa", "h4ck3r210", "Elominator", "sprockee", "he_is_the_cat"]
+# The six names the community installer's patcher thanks, spelled exactly as it spells them (#974), in alphabetical order.
+THANKS = ["AvaGoosa", "Elominator", "h4ck3r210", "he_is_the_cat", "marshmallow_mia", "sprockee"]
 # Everyone named as having tested in #nevr-runtime-testing (#974): the set, not an order.
 TESTERS = {"Crafter", "Nebula", "CyanoTex", "spike4887", "Trodd-", "DinkyBoi", "he_is_the_cat", "TekEmperor",
            "marshmallow-mia", "arii", "berg", "zebra"}
@@ -137,17 +137,18 @@ class SharedFile(unittest.TestCase):
         return found[0]
 
     def test_in_game_groups_are_these_names_in_file_order(self):
+        # The file is sorted by name (B), so file order is alphabetical order.
         self.assertEqual(
             self.tool.ingame_groups(self.data),
             [
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
-                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "EchoCombat",
-                           "DC Coffey", "chinmayee5599", "brysonak"]},
+                 "names": ["babs", "brysonak", "chinmayee5599", "DC Coffey", "Dualgame", "Ducky", "EchoCombat",
+                           "kfc", "marshmallow-mia", "MyGuyChromium", "Xenomega"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
-                 "names": ["marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula",
-                           "CyanoTex", "spike4887", "TekEmperor", "arii", "he_is_the_cat"]},
-                {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo"]},
+                 "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "he_is_the_cat", "marshmallow-mia",
+                           "Nebula", "spike4887", "TekEmperor", "Trodd-", "zebra"]},
+                {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo", "MyGuyChromium"]},
             ],
         )
 
@@ -251,7 +252,9 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(trodd_lines[0][0], "People")
         self.assertTrue(trodd_lines[0][1].startswith("- **Trodd-**: "))
         block = self.tool.ingame_text(self.data)
-        self.assertEqual(block.count(b"Trodd-\n"), 1)
+        tokens = re.split(rb"\n|   ", block)
+        self.assertEqual(tokens.count(b"Trodd-"), 1)
+        self.assertNotIn(b"Trodd", tokens)
         self.assertNotIn(b"Trodd\n", block)
 
     def test_trodd_dash_built_the_website_and_it_is_said_neutrally(self):
@@ -276,7 +279,8 @@ class SharedFile(unittest.TestCase):
         # The ruled placement: one name among the helpers' thanks, in that group's ordinary order; never first,
         # never under a heading or a line of his own, never described as the owner or the lead.
         lines = [line for line in self.tool.ingame_text(self.data).decode("cp1252").split("\n")]
-        self.assertEqual(lines.count("sprockee"), 1, "once in the in-game block")
+        names = [name for line in lines for name in line.split("   ")]
+        self.assertEqual(names.count("sprockee"), 1, "once in the in-game block")
         self.assertEqual(sum("sprockee" in line for line in lines), 1)
         groups = {g["id"]: g["names"] for g in self.tool.ingame_groups(self.data)}
         self.assertEqual([i for i, names in groups.items() if "sprockee" in names], ["thanks"])
@@ -396,6 +400,42 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(problems(lambda d: d["entries"][0].update(sources=[PORTFOLIO])), [], "as the source")
         self.assertTrue(problems(lambda d: d["entries"][0].update(what="")), "README entry says nothing")
 
+    def test_myguychromium_is_credited_for_code_and_support_not_testing(self):
+        entry = self.entry("MyGuyChromium")
+        self.assertEqual(entry["section"], "people")
+        self.assertEqual(entry["headings"], ["code-contributions", "supporters"])
+        self.assertEqual(entry["what"], "Code contributions to nevr-runtime. Supporter of nevr-runtime.")
+        self.assertEqual(entry["sources"], ["named by the project owner, 11-12"])
+        self.assertNotIn("testers", entry["headings"])
+
+    def test_every_rendered_list_is_alphabetical_ignoring_case_ties_by_bytes(self):
+        def order(names):
+            return sorted(names, key=lambda n: (n.casefold(), n.encode("utf-8")))
+
+        title, readme = None, {}
+        for line in self.tool.render_readme(self.data).splitlines():
+            if line.startswith("### "):
+                title = line[4:]
+            elif line.startswith("- **"):
+                match = re.match(r"^- \*\*(?:\[([^\]]+)\]\([^)]*\)|([^*]+))\*\*: ", line)
+                self.assertIsNotNone(match, line)
+                readme.setdefault(title, []).append(match.group(1) or match.group(2))
+        self.assertEqual(set(readme), {"Projects", "People", "Thanks"})
+        for title, names in readme.items():
+            self.assertEqual(names, order(names), f"README section {title}")
+
+        lists, heading = {}, None
+        headings = {h["ingame"] for h in self.data["headings"]}
+        for line in self.tool.ingame_text(self.data).decode("cp1252").split("\n"):
+            if line in headings:
+                heading = line
+                lists[heading] = []
+            elif line:
+                lists[heading] += line.split("   ")
+        self.assertTrue(lists)
+        for heading, names in lists.items():
+            self.assertEqual(names, order(names), f"in-game {heading}")
+
 
 class CheckerCatchesDrift(unittest.TestCase):
     """Mutants of the pair: change one side only and --check must say so."""
@@ -490,18 +530,34 @@ class IngameText(unittest.TestCase):
                                 "sources": ["#938"]})
         return {"schema": 1, "headings": headings, "sections": [], "entries": entries, "notes": [], "closing": ""}
 
-    def test_the_real_file_renders_each_heading_a_blank_the_names_and_three_blanks(self):
-        expected = "".join(
-            group["ingame"] + "\n\n" + "".join(n + "\n" for n in group["names"]) + "\n\n\n"
-            for group in self.tool.ingame_groups(self.data)
+    def test_the_real_file_renders_each_heading_a_blank_the_names_as_rows_of_four_and_three_blanks(self):
+        # Rows of up to four names, three spaces apart, filled in file order up to 64 bytes.
+        expected = (
+            "CODE CONTRIBUTIONS\n\n"
+            "babs   brysonak   chinmayee5599   DC Coffey\n"
+            "Dualgame   Ducky   EchoCombat   kfc\n"
+            "marshmallow-mia   MyGuyChromium   Xenomega\n"
+            "\n\n\n"
+            "THANKS\n\n"
+            "AvaGoosa   Elominator   h4ck3r210   he_is_the_cat\n"
+            "marshmallow_mia   sprockee\n"
+            "\n\n\n"
+            "TESTERS\n\n"
+            "arii   berg   Crafter   CyanoTex\n"
+            "DinkyBoi   he_is_the_cat   marshmallow-mia   Nebula\n"
+            "spike4887   TekEmperor   Trodd-   zebra\n"
+            "\n\n\n"
+            "SUPPORTERS\n\n"
+            "Furo   MyGuyChromium\n"
+            "\n\n\n"
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
-        self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nXenomega\n"))
-        self.assertEqual(expected.count("\n"), 49, "four groups of 10, 6, 12 and 1 names: 15 + 11 + 17 + 6 lines")
+        self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nbabs   brysonak   chinmayee5599   DC Coffey\n"))
+        self.assertEqual(expected.count("\n"), 29, "rows: 3 + 2 + 3 + 1 for the four groups; 8 + 7 + 8 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
-        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na\nb\n\n\n\nTWO\n\nc\n\n\n\n")
+        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na   b\n\n\n\nTWO\n\nc\n\n\n\n")
 
     def test_an_empty_heading_emits_nothing_not_even_its_blank_lines(self):
         data = self.data_with({"ONE": ["a"], "EMPTY": [], "TWO": ["c"]})
@@ -514,7 +570,7 @@ class IngameText(unittest.TestCase):
     def test_names_are_encoded_as_the_games_single_byte_text(self):
         data = self.data_with({"ONE": ["\u00a9 Name", "plain"]})
         text = self.tool.ingame_text(data)
-        self.assertIn(b"\xa9 Name\n", text)
+        self.assertIn(b"\xa9 Name   plain\n", text)
         self.assertIn(b"plain\n", text)
         self.assertNotIn(b"\xc3", text)  # no UTF-8 lead byte
 
@@ -568,10 +624,10 @@ class IngameText(unittest.TestCase):
         self.assertTrue(self.problems({"ONE": ["\u00a9" * 65]}))
 
     def test_two_hundred_lines_is_the_cap(self):
-        # one group is N + 5 lines: heading, blank, N names, three blanks
-        self.assertEqual(self.problems({"ONE": [f"n{i}" for i in range(195)]}), [])
-        self.assertTrue(self.problems({"ONE": [f"n{i}" for i in range(196)]}))
-        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [f"n{i}" for i in range(195)]})).count(b"\n"), 200)
+        # one group is ceil(N / 4) + 5 lines: heading, blank, rows of four names, three blanks; 780 names make 195 rows
+        self.assertEqual(self.problems({"ONE": [f"n{i}" for i in range(780)]}), [])
+        self.assertTrue(self.problems({"ONE": [f"n{i}" for i in range(781)]}))
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [f"n{i}" for i in range(780)]})).count(b"\n"), 200)
 
     def test_a_name_over_the_review_length_is_a_warning_not_a_problem(self):
         data = self.data_with({"ONE": ["W" * 41, "ok"]})
@@ -599,7 +655,7 @@ class IngameText(unittest.TestCase):
     def test_a_question_mark_is_escaped_so_no_trigraph_can_form(self):
         source = self.tool.ingame_source(self.data_with({"ONE": ["a??/b", "what?"]}))
         self.assertNotIn("??", source)
-        self.assertEqual(c_literal_bytes(source, "kText").count(b"a??/b\n"), 1)
+        self.assertEqual(c_literal_bytes(source, "kText").count(b"a??/b   what?\n"), 1)
 
     def test_validate_includes_the_in_game_rules_so_check_and_the_build_agree(self):
         data = copy.deepcopy(self.data)
@@ -640,6 +696,26 @@ class IngameText(unittest.TestCase):
                 self.assertIn("Zo\u00eb", proc.stderr)
                 self.assertIn("field name", proc.stderr)
                 self.assertIn("U+00EB", proc.stderr)
+
+    def test_nine_names_under_one_heading_render_as_rows_of_four_four_and_one(self):
+        names = ["Ann", "Ben", "Cal", "Dee", "Eve", "Fay", "Gus", "Hal", "Ivy"]
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": names})),
+                         b"ONE\n\nAnn   Ben   Cal   Dee\nEve   Fay   Gus   Hal\nIvy\n\n\n\n")
+
+    def test_names_too_long_for_four_wrap_within_64_bytes_without_dropping_or_reordering(self):
+        names = [f"N{i:02d}" + "x" * 12 for i in range(10)]  # 15 bytes each: four on a line would be 69 bytes
+        rows = self.tool.ingame_text(self.data_with({"ONE": names})).decode("cp1252").split("\n")[2:-4]
+        self.assertEqual([len(row.encode("cp1252")) for row in rows], [51, 51, 51, 15])
+        self.assertTrue(all(len(row.encode("cp1252")) <= 64 for row in rows))
+        self.assertEqual([row.split("   ") for row in rows], [names[0:3], names[3:6], names[6:9], names[9:]])
+
+    def test_a_line_filled_to_64_bytes_keeps_its_names_and_the_next_name_starts_a_line(self):
+        names = ["a", "b", "c" * 60, "d"]
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": names})),
+                         ("ONE\n\na   b\n" + "c" * 60 + "   d\n\n\n\n").encode("cp1252"))
+
+    def test_a_heading_with_one_name_renders_one_line(self):
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": ["Solo"]})), b"ONE\n\nSolo\n\n\n\n")
 
 
 if __name__ == "__main__":
