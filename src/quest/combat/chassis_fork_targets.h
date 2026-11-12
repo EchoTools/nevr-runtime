@@ -1,6 +1,6 @@
-/* The pinned sites of the chassis-fork module (#1649, #1669, #1644; the module itself is not in the tree yet): the model swapper's BeginModelSwap, the resource
+/* The pinned sites of the chassis-fork module (#1649, #1669, #1644; the module itself is not in this tree): the model swapper's BeginModelSwap, the resource
  * manager's LookupResourcePath, the resource manager's word in .bss and the store that writes it. Behaviour is in the upstream
- * reference (kotorvr/echoquest-combat at c5a67e8, runtime/native/afkxr/afk_fx.cpp, RE-52 fxchassisfork around lines 7529-7560).
+ * reference (kotorvr/echoquest-combat, runtime/native/afkxr/afk_fx.cpp, RE-52 fxchassisfork around lines 7529-7560).
  *
  * Every address is an ELF virtual address in the store libr15 (its build ID is kLibR15StockBuildId in pinned_targets.h). The
  * disassembly's address is the ELF address plus 0x100000 (ReVault project echovr, binary libr15.so).
@@ -23,7 +23,7 @@
  *   All four are in CEngine::InitGlobals (ReVault VA 0x2ba87ec, size 2664). A second store writes the same word, clearing it with
  *   `str xzr, [x21, #0xd60]` at 0x2aac4c0 (ReVault VA 0x2bac4c0); it is not pinned here.
  *
- * Upstream's tables (kotorvr/echoquest-combat at c5a67e8, afk_fx.cpp): 32 combat pairs, `kChFork[32]` at line 7553, which the
+ * Upstream's tables (kotorvr/echoquest-combat, afk_fx.cpp): 32 combat pairs, `kChFork[32]` at line 7553, which the
  * lobby combat wing shares (loops at 7792 and 7876), and 32 social pairs, `kChForkSoc[32]` at line 7592. No separate lobby table.
  *
  * src/quest/tests/chassis_fork_pinned_test.cpp checks every site against the real file (`just test-quest-hooks-pinned`).

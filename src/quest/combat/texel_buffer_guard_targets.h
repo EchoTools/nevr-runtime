@@ -44,7 +44,7 @@
  * CGS::Initialize, so when the table is filled does not matter: the game stores whatever its lookup returns. Not established: that
  * nothing else writes these slots after the fill (CGS::Initialize and InitCGS are not reconstructed).
  *
- * Drift from the upstream reference (kotorvr/echoquest-combat at c5a67e8), recorded here, not carried as fact. Upstream's comments
+ * Drift from the upstream reference (kotorvr/echoquest-combat), recorded here, not carried as fact. Upstream's comments
  * name its libr15 build "4911ef7f"; the store file this header is pinned to has build id b243509c08ce677aeb95fa348016949b3fc45230
  * (sha256 8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20, which ReVault's libr15.so also has). The ELF offsets
  * upstream gives for the table slots match this file.

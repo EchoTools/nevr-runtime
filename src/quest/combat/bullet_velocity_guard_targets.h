@@ -10,7 +10,7 @@
  * FireBullet normalises its 3-vector argument with no test: `fmov s3, #1.0` at 0x210ccac, `fsqrt s4, s4` at 0x210ccc0 (|v|) and
  * `fdiv s3, s3, s4` at 0x210ccc4 (1.0 / |v|), with no compare between them. A zero vector therefore divides by zero.
  *
- * Upstream: `kotorvr/echoquest-combat` at `c5a67e8`, runtime/native/afkxr/afk_fx.cpp (the fireguard flag, around lines 214 and 5148-5264).
+ * Upstream: `kotorvr/echoquest-combat`, runtime/native/afkxr/afk_fx.cpp (the fireguard flag, around lines 214 and 5148-5264).
  *
  * PC (echovr.exe): echovr.exe CR15NetBulletCS::FireBullet is VA 0x140ce2020 and its normalise divides by |v| with no guard (SQRTSS at
  * 0x140ce2442, DIVSS at 0x140ce244e).

@@ -1,7 +1,7 @@
-/* The pinned facts of the outline-mode module (#1640 and #1656; the module itself is not in the tree yet): the two SetOutlineMode JUMP_SLOTs, the
+/* The pinned facts of the outline-mode module (#1640 and #1656; the module itself is not in this tree): the two SetOutlineMode JUMP_SLOTs, the
  * scene walk the module replaces, the field that says whether a mesh's draw sets were built with a merged vertex format, the merge rule
  * the game applies there, and the five CGVertexFormat functions the module calls to build that format. Behaviour is in the upstream reference
- * (kotorvr/echoquest-combat at c5a67e8, runtime/native/afkxr/afk_fx.cpp: fxoutlinefix2 and olnoteam, around lines 5267-5345 and 8152-8202).
+ * (kotorvr/echoquest-combat, runtime/native/afkxr/afk_fx.cpp: fxoutlinefix2 and olnoteam).
  *
  * Every address is an ELF virtual address in the store libr15 (its build ID is kLibR15StockBuildId in pinned_targets.h). The
  * disassembly's address is the ELF address plus 0x100000 (ReVault project echovr, binary libr15.so). Every word below was read from the
@@ -17,7 +17,7 @@
  * 0x18c5140), CGDrawDataSet::SetOutlineMode (0x183ab9c), CountUsed (0x2809438), GetElement(u64) (0x28094a8), CGMesh::Initialize (0x1857ab8),
  * CGMesh::InitializeComputeSkinning (0x18631c0), CGComputeVertexBuffer::Bind (0x25bdbac), CGDrawDataSet::InitOutlineDraw (0x18394fc),
  * CGRenderer::OutlineRenderPool (0x183b21c) and CModelSetOutlineModeNode::Enter (0x2647ff8). Of each, only what pinned words carry is
- * stated; anything else about them is written "not established (reconstruction pending)".
+ * stated; anything else about them is written "not established (the function is not in the proven reconstruction tree)".
  *
  * 1. The slots.
  *   CGScene::SetOutlineMode(EMeshOutlineMode)                                          JUMP_SLOT 0x36fb718 -> 0x18c5140  (size 236)
@@ -40,8 +40,8 @@
  * 0x1857e98 and reloaded by `ldr x23,[sp,#0x78]` at 0x1858044, with no other write of x23 between 0x1858044 and 0x1858300 in the listing):
  * `add x0,x23,#0x8` (0x18582dc) is the address of the draw-set table field, `mov w9,#0x778` (0x1858670) is a stride of 0x778, and the call
  * at 0x185868c goes to CGDrawDataSet::Initialize. That the loop around these words builds the draw sets at [this+0x8] + k*0x778 is not
- * established (reconstruction pending). The scene's mesh stride 0x268 is above the store `str wzr,[x23,#0x260]` (0x18582f8); what else
- * Initialize writes at or above that offset is not established (reconstruction pending).
+ * established (the function is not in the proven reconstruction tree). The scene's mesh stride 0x268 is above the store `str wzr,[x23,#0x260]` (0x18582f8); what else
+ * Initialize writes at or above that offset is not established (the function is not in the proven reconstruction tree).
  *
  * 3. The merged format, in CGMesh::Initialize (x23 = this, above). The words at ELF 0x1858300..0x1858324:
  *   ldr w8,[x23,#0xd8]; cbz w8 -> 0x1858338                (0x1858300, 0x1858308: a zero word branches past the Bind call)
@@ -50,12 +50,12 @@
  *                                                            result is the buffer at sp+0x98)
  * and the draw-set Initialize call at 0x185868c has x1 = sp+0x98 (`add x1,sp,#0x98` at 0x1858674, no write to x1 between it and the call
  * in the listing). So u32[this+0xd8] != 0 and a non-empty format at this+0xf0 are the two conditions of the Bind call. Not established
- * (reconstruction pending): what else writes sp+0x98 on the path that skips Bind, and so whether every draw set of a mesh that passes both
+ * (the function is not in the proven reconstruction tree): what else writes sp+0x98 on the path that skips Bind, and so whether every draw set of a mesh that passes both
  * conditions is initialized from Bind's result. Upstream's module applies the same two reads, in the same order, as its test for a mesh whose
  * draw sets were built with a merged format ("skinned" in upstream's word).
  * The compute vertex buffer is at mesh+0x40 and its format at +0xb0 in it (`add x23,x23,#0xb0` at 0x25bdce0, the format Bind reads), so
  * mesh+0xf0 = 0x40 + 0xb0.
- * Not established (reconstruction pending): which function writes u32[mesh+0xd8] (u32 at +0x98 of the compute vertex buffer), and so what
+ * Not established (the function is not in the proven reconstruction tree): which function writes u32[mesh+0xd8] (u32 at +0x98 of the compute vertex buffer), and so what
  * its nonzero values mean beyond the gate above; what CGMesh::InitializeComputeSkinning (ELF 0x18631c0) does with the compute vertex buffer.
  *
  * 4. The merge rule, CGComputeVertexBuffer::Bind(CGVertexBuffer const&) (ELF 0x25bdbac, size 668). `mov x23,x0` (0x25bdbcc) is `this`,
@@ -77,7 +77,7 @@
  *     is then appended. Usages 1 and 4..10 go to 0x25bdcfc and are appended as read.
  * The merged format at sp+0x18 is then copied whole, 0x128 bytes (`add x1,sp,#0x18` 0x25bdd94, `mov w2,#0x128` 0x25bdd98, `mov x0,x19`
  * 0x25bdd9c, `bl` to memcpy through its stub 0x25bdda0), to offset 0 of the result.
- * Not established (reconstruction pending): how the format at sp+0x18 is initialized before the loop (the call at 0x25bdcc8 is to CGVertexFormat
+ * Not established (the function is not in the proven reconstruction tree): how the format at sp+0x18 is initialized before the loop (the call at 0x25bdcc8 is to CGVertexFormat
  * C1 in the listing; its arguments are not pinned), the loop's index (x24: its start and step) and its bound and end (CountUsed(input) in the listing, 0x25bdd08..0x25bdd18),
  * and what Bind writes to the rest of the result.
  *
@@ -91,7 +91,7 @@
  *
  * 6. The modes.
  * CGDrawDataSet::InitOutlineDraw (ELF 0x18394fc): `ldr w21,[x1,#0x68]` (0x1839514) reads a u32 from its second argument, `cmp w21,#0xd`
- * (0x1839518) compares it with 13, and `b.lo` (0x183951c) branches when it is lower. Not established (reconstruction pending): that the u32
+ * (0x1839518) compares it with 13, and `b.lo` (0x183951c) branches when it is lower. Not established (the function is not in the proven reconstruction tree): that the u32
  * is the EMeshOutlineMode, what the function does on either side of the compare (a refusal of a mode >= 13, a message), and so how many
  * modes there are.
  * CGRenderer::OutlineRenderPool(EMeshOutlineMode) (ELF 0x183b21c, size 16): its four words are pinned, `adrp x8,0x2d6e000`, `add x8,x8,#0x59c`,
@@ -101,7 +101,7 @@
  * (0x26480b0) reads the u32 at data+0x20; `mov w2,w19` (0x26480c4) and the `bl` at 0x26480c8, through the stub at ELF 0xf1e490 whose
  * JUMP_SLOT names CModelCS::SetOutlineMode, call it with that u32 as the mode. The path through those words is the one that does not take
  * the `cbz w9` at 0x26480b8; what the taken path does, and where the node's data comes from (the level's script data), are not established
- * (reconstruction pending). Which mode values the game uses is not established: that 7 is the teammate outline and 12 the scanner outline are
+ * (the function is not in the proven reconstruction tree). Which mode values the game uses is not established: that 7 is the teammate outline and 12 the scanner outline are
  * upstream's labels (afk_fx.cpp), not read from the binary.
  */
 #pragma once
@@ -160,6 +160,23 @@ inline constexpr pinned::Word kScenePrimRead{"ldr w3,[x25],#0x70 (prim of draw s
 inline constexpr pinned::Word kSceneDrawSets{"ldr x8,[x28,#0x8] (mesh draw-set array)", 0x18c51ecULL, 0xf9400788U};
 inline constexpr pinned::Word kSceneDrawSetCall{"bl 0xf189b0 (CGDrawDataSet::SetOutlineMode stub)", 0x18c51fcULL, 0x97d94dedU};
 inline constexpr pinned::Word kSceneDrawSetStride{"add x24,x24,#0x778 (draw-set stride)", 0x18c5204ULL, 0x911de318U};
+// The words that carry the rest of section 2: the scene and the mode the walk keeps, the mesh index i and its loop, the mesh address
+// (the madd that makes [scene+0x30] + i*0x268), the draw-set index k and its loop, the prim index term and the three call arguments.
+inline constexpr pinned::Word kSceneSceneReg{"mov x19,x0 (x19 = the scene)", 0x18c5160ULL, 0xaa0003f3U};
+inline constexpr pinned::Word kSceneModeReg{"mov w20,w1 (w20 = the mode)", 0x18c5164ULL, 0x2a0103f4U};
+inline constexpr pinned::Word kSceneMeshIndexZero{"mov x23,xzr (mesh index i starts at 0)", 0x18c5168ULL, 0xaa1f03f7U};
+inline constexpr pinned::Word kSceneMeshAddr{"madd x28,x23,x27,x8 (mesh i = [scene+0x30] + i*0x268)", 0x18c517cULL, 0x9b1b22fcU};
+inline constexpr pinned::Word kSceneMeshNext{"add x23,x23,#0x1 (next mesh)", 0x18c5188ULL, 0x910006f7U};
+inline constexpr pinned::Word kSceneMeshCompare{"cmp x23,x22 (against the scene's mesh count)", 0x18c518cULL, 0xeb1602ffU};
+inline constexpr pinned::Word kSceneMeshLoopEnd{"b.eq (every mesh done)", 0x18c5190ULL, 0x54000400U};
+inline constexpr pinned::Word kSceneDrawSetIndexZero{"mov x24,xzr (draw set k starts at 0)", 0x18c51b4ULL, 0xaa1f03f8U};
+inline constexpr pinned::Word kScenePrimIndexScale{"mul x9,x9,x26 (first prim index * 0x70)", 0x18c51dcULL, 0x9b1a7d29U};
+inline constexpr pinned::Word kScenePrimIndexAdd{"add x8,x8,x9 (the prim array + that offset)", 0x18c51e0ULL, 0x8b090108U};
+inline constexpr pinned::Word kSceneModeArg{"mov w1,w20 (arg 2: the mode)", 0x18c51f0ULL, 0x2a1403e1U};
+inline constexpr pinned::Word kSceneFormatArg{"mov x2,x21 (arg 3: the format)", 0x18c51f4ULL, 0xaa1503e2U};
+inline constexpr pinned::Word kSceneDrawSetArg{"add x0,x8,x24 (arg 1: draw set k)", 0x18c51f8ULL, 0x8b180100U};
+inline constexpr pinned::Word kSceneDrawSetCountDown{"subs x29,x29,#0x1 (draw sets left in the mesh)", 0x18c5200ULL, 0xf10007bdU};
+inline constexpr pinned::Word kSceneDrawSetLoop{"b.ne (back to the draw-set call while draw sets are left)", 0x18c5208ULL, 0x54ffff01U};
 
 inline constexpr std::uintptr_t kSceneMeshCountOffset = pinned::LdrXOffset(kSceneMeshCount.word);
 inline constexpr std::uintptr_t kSceneMeshesOffset = pinned::LdrXOffset(kSceneMeshes.word);
@@ -416,6 +433,9 @@ inline constexpr pinned::Word kWords[] = {
     kSceneMeshCount, kScenePrimStride, kSceneMeshStride, kSceneMeshes, kSceneDrawSetCount, kSceneSkipEmpty, kSceneData,
     kSceneRecordStride, kSceneFormatStride, kSceneRecords, kSceneFormats, kScenePrims, kSceneRecordMadd, kSceneFormatIndex,
     kSceneFirstPrim, kSceneFormatMadd, kScenePrimField, kScenePrimRead, kSceneDrawSets, kSceneDrawSetCall, kSceneDrawSetStride,
+    kSceneSceneReg, kSceneModeReg, kSceneMeshIndexZero, kSceneMeshAddr, kSceneMeshNext, kSceneMeshCompare, kSceneMeshLoopEnd,
+    kSceneDrawSetIndexZero, kScenePrimIndexScale, kScenePrimIndexAdd, kSceneModeArg, kSceneFormatArg, kSceneDrawSetArg,
+    kSceneDrawSetCountDown, kSceneDrawSetLoop,
     kMeshSkinnedRead, kMeshSkinnedTest, kMeshComputeFormatArg, kMeshCountUsedCall, kMeshCountUsedTest, kMeshComputeVbArg,
     kMeshBindCall, kMeshDrawSetsArg, kMeshStoreAt260, kMeshInitDrawSetStride, kMeshDrawSetInitCall, kMeshThisMove, kMeshThisSave,
     kMeshThisReload, kMeshBindResultArg, kMeshDrawSetInitBufArg,

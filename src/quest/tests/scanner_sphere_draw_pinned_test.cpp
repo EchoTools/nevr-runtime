@@ -388,7 +388,8 @@ int main(int argc, char** argv) {
   QCHECK(cbs.st_value == sd::kCreateBlendStateVaddr);
   QCHECK(AdrpPage(sd::kCreateBlendStateWords[0].word, sd::kCreateBlendStateVaddr) + AddImmediate(sd::kCreateBlendStateWords[1].word) ==
          sd::kBlendFactorTableVaddr);
-  QCHECK(AdrpPage(sd::kCreateBlendStateWords[0].word, sd::kCreateBlendStateVaddr) + AddImmediate(sd::kCreateBlendStateWords[2].word) ==
+  // The ops table's adrp is its own word (x12's, at 0x1881950), not x11's: each table is named by its own page and add.
+  QCHECK(AdrpPage(sd::kCreateBlendStateWords[6].word, sd::kCreateBlendStateWords[6].vaddr) + AddImmediate(sd::kCreateBlendStateWords[2].word) ==
          sd::kBlendOpTableVaddr);
   QCHECK(AddImmediate(sd::kCreateBlendStateWords[3].word) == sd::kBlendStateAttachmentsOffset);
   for (std::size_t i = 0; i < std::size(sd::kBlendFactorTable); ++i) {

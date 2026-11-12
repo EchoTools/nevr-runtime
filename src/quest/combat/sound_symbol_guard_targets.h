@@ -46,7 +46,7 @@
  * 0x1706fd4, the bullet site 0x21230d0, TriggerSingle 0x24bd5ac, CSendAmbientSoundActionNode::Enter 0x272575c (`llvm-objdump -d` of the
  * whole file; no relocation other than the JUMP_SLOT names Play3DSound). Which emitter the five not named above post on is not established.
  * Read from the instruction words; the whole-function reconstructions of CreateEmitterNoLock, InitSoundCI, CR15NetBulletCS::Initialize,
- * TriggerSingle and RemoveSound are not reconstructed (reconstruction pending), so "no other writer of entry+4 / of the bullet table" is not established.
+ * TriggerSingle and RemoveSound are not reconstructed (the function is not in the proven reconstruction tree), so "no other writer of entry+4 / of the bullet table" is not established.
  *
  * Where the "not a valid wwise identifier" text is made, and where it is written. CWwiseEngine::PostSoundEvent (0x2549264, through
  * the PLT stub 0xf00000 that Play3DSound calls at 0x134b5e8) posts the event; when the post returns 0 (`cbz w0` 0x25492d0, and again after
@@ -62,7 +62,7 @@
  * record at env+0x40008+(status-1)*0x18. When that record is incomplete it takes a null record (`mov x20, xzr` 0x11d1d5c) and still calls
  * through it (`ldr x8, [x20]` at 0x11d1ddc on the JSON path and 0x11d1ee4 on the text path): a null dereference inside OutputError. So
  * OutputError has a fault path on a non-zero status; whether CErrorDb::AddError ever returns a status whose record is incomplete, and
- * whether the CConsoleStream constructor can fault, are not established (both not reconstructed, reconstruction pending). Decompilations read:
+ * whether the CConsoleStream constructor can fault, are not established (both: the function is not in the proven reconstruction tree). Decompilations read:
  * the reconstructions of Play3DSound (0x144b468), OutputError (0x12d1b38), PostSoundEvent (0x2649264) and CreateAndAddError (0x12ce4dc)
  * in the project's reconstruction tree (disassembly VAs), each checked here against the store file's words above.
  *
@@ -78,7 +78,7 @@
  * per-shot print upstream measured. Not shown: that the game loads no bank from anywhere else (the OBB's other files are the two
  * manifests, and the APK holds no .bnk), and the run-time rate at which the default reaches the site.
  *
- * Upstream: `kotorvr/echoquest-combat` at `c5a67e8`, runtime/native/afkxr/afk_fx.cpp (the sound guards, around lines 5148-5264).
+ * Upstream: `kotorvr/echoquest-combat`, runtime/native/afkxr/afk_fx.cpp (the sound guards, around lines 5148-5264).
  *
  * PC (echovr.exe): echovr.exe CSoundCS::PlaySound is VA 0x1403f94c0, its play call is 0x14020b780, OutputError (0x14151ee70) is called at
  * 0x14020b8c1 after PostSoundEvent with no test of the symbol for 0, and whether that call faults on PC is not established.

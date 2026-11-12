@@ -1,4 +1,4 @@
-/* The pinned draw site of the scanner sphere (the scanner-sphere module, not in the tree yet): the place in the store libr15 where the eye pass draws its
+/* The pinned draw site of the scanner sphere (the scanner-sphere module is not in this tree): the place in the store libr15 where the eye pass draws its
  * pool-11 entries, the call the module follows with a second draw of pool 18, and the words that call goes through; and the facts of the
  * game's own pool-18 draw that the module copies: the low-res transparents pass, the command buffer it records into, its blend constants, its
  * frame key, and how the game makes the pipelines a draw binds. Checked against the store libr15 by
@@ -51,7 +51,7 @@
  * its x4) to pool 11: a pool-18 draw made after the pool-11 call can pass x3 of that call. The constants are set on the command buffer
  * before the draw. The function has no other load from gctx+0x368 in its 852 bytes (a scan of the listing, not made by the test), so its own
  * code sets the constants once and does not put other values back; what the pools it draws after the return site (0x1d, 0x1f, 0x20, 0x1c,
- * 0x1e, through CGDrawData::Render) do with the command buffer's state is not established (reconstruction pending).
+ * 0x1e, through CGDrawData::Render) do with the command buffer's state is not established (the function is not in the proven reconstruction tree).
  * CGRenderPassMainAndroid::Render (ELF 0x189e838, size 2444) has no load from gctx+0x368 and no `fmov v0.4s,#1.0` in its 2444 bytes (a scan
  * of the listing, not made by the test): the eye pass's own code never sets blend constants.
  *
@@ -79,16 +79,16 @@
  * A scan of the listing for a load of gctx+0x258 from a register just loaded from the gctx word finds this one site in libr15 (the
  * game's only vkCreateGraphicsPipelines call; the scan is a pattern over the listing, not made by the test).
  * Words in that function index CGRawInterface::blendstates by the u32 at desc+0x2d8 (that the indexed entry is the pipeline's colour-blend
- * state is not established, reconstruction pending):
+ * state is not established (the function is not in the proven reconstruction tree)):
  *   ELF 0x18da034  ldr w10,[x0,#0x2d8] / 0x18da038 cmp w10,#0x19   the u32 and its compare with 25 (blendstates has 26 entries)
  *   ELF 0x18da314  adrp x2,0x3718000 / 0x18da318 ldr x2,[x2,#0xc70]   GLOB_DAT CGRawInterface::blendstates
  *   ELF 0x18da324  mov w17,#0x558 / 0x18da334 madd x10,x10,x17,x2     &blendstates[mode], 0x558 bytes each
  * CGRawInterface::blendstates (ELF 0x3782b88, .bss, 35568 bytes = 26 * 0x558) is the array the `madd` above indexes. Not established
- * (reconstruction pending): what fills it. CGRawInterface::CreateBlendState(SGBlendStateDesc const&, SGBlendState&) (ELF 0x188194c, size 148,
+ * (the function is not in the proven reconstruction tree): what fills it. CGRawInterface::CreateBlendState(SGBlendStateDesc const&, SGBlendState&) (ELF 0x188194c, size 148,
  * .dynsym) has no reconstruction yet; that it fills a blendstates entry, the layout of its SGBlendStateDesc argument (and which of its fields
  * are an enable, an operation or a factor), the attachment layout it writes (an entry's pAttachments, attachment count and stride), and
  * how it indexes the two tables named below are not established. What its words carry: `adrp x11,0x2d6d000` (ELF 0x188194c) with
- * `add x11,x11,#0xd38` (0x1881960) names the u32 table at ELF 0x2d6dd38 and `add x12,x12,#0xd84` (0x1881964, same adrp page) the u32 table
+ * `add x11,x11,#0xd38` (0x1881960) names the u32 table at ELF 0x2d6dd38 and `add x12,x12,#0xd84` (0x1881964; the adrp that sets x12 is at 0x1881950, pinned) the u32 table
  * at ELF 0x2d6dd84; the first 19 words of the first (0, 1, 2, 3, 6, 7, 8, 9, 4, 5, 14, 10, 11, 12, 13, 15, 16, 17, 18) and the first 5 of
  * the second (0, 3, 4, 1, 2) are pinned data (in Vulkan's enums 1 is VK_BLEND_FACTOR_ONE and 0 is VK_BLEND_OP_ADD; what indexes the tables
  * is not established); and the constants it loads are 0x1a (`mov w9,#0x1a` 0x18819bc, the number of
@@ -288,6 +288,7 @@ inline constexpr pinned::Word kCreateBlendStateWords[] = {
     {"CreateBlendState: add x8,x1,#0x158 (pAttachments)", 0x18819b8ULL, 0x91056028U},
     {"CreateBlendState: mov w9,#0x1a (sType)", 0x18819bcULL, 0x52800349U},
     {"CreateBlendState: mov x10,#0x800000000 (attachmentCount 8)", 0x18819c0ULL, 0xd2c0010aU},
+    {"CreateBlendState: adrp x12,0x2d6d000 (the ops table's page)", 0x1881950ULL, 0x9000a76cU},
 };
 
 // (d) The two table fills in CGS::Initialize (the vkCmdSetBlendConstants store is kFillBlendConstants).
