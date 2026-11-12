@@ -44,7 +44,7 @@
  *            kStaleAfterMs. What each kind of reader did in that gap: no tick callback ran (the modules' own ticks, POWER BOOST's and dronekill's asks
  *            among them, run in the same loop as `Refresh` and stop with it); every hook that reads the answer judged it at its call (`LookIsFresh()`,
  *            `fresh` on a record, or its in-scope body's `LookIsFresh()` after a test of its own tick's copy) and passed every call through to the game
- *            once the look was older than kStaleAfterMs; the EC client judges it on its own thread every 250 ms and left its scope within 250 ms more;
+ *            once the look was older than kStaleAfterMs; the EC client judges it on its own thread every 250 ms and leaves its scope at its next look, at most 250 ms (and one pass of its loop) after the answer goes stale;
  *            frozen_frame_exit reads it unchecked on purpose (a freeze is what it watches for). `level` is the level of the last look
  *
  * Built with -fno-exceptions, like every combat translation unit.

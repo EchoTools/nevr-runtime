@@ -318,7 +318,8 @@ void AStaleGapIsOneWarningWhenTheTickIsBack() {
     QCHECK(Has(stale[0].text, "\"gap_ms\":1001,\"stale_after_ms\":1000,") && Has(stale[0].text, idOf("mpl_combat_dyson")));
     QCHECK(Has(stale[0].text, "\"msg\":\"the combat tick stopped for longer than the level answer is believed: no combat module's tick ran in that "
                               "gap, every combat hook that judges the answer passed every call through to the game once it was older than that, the "
-                              "EC client left its scope within 250 ms more, and the frozen-frame watch, which reads it unchecked, kept watching\""));
+                              "EC client leaves its scope at its next look at the answer, at most 250 ms (and one pass of its loop) after the answer "
+                              "went stale, and the frozen-frame watch, which reads it unchecked, kept watching\""));
   }
   Look();  // the next looks age from the one that said it: no second record
   Look();

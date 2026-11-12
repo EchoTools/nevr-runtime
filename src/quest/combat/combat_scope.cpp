@@ -123,7 +123,8 @@ void Refresh(std::uintptr_t game) noexcept {
                          {"level", sentinel::HexString(levelText, g_lastLevel.load(std::memory_order_relaxed))},
                          {"msg", "the combat tick stopped for longer than the level answer is believed: no combat module's tick ran in that gap, every combat "
                                  "hook that judges the answer passed every call through to the game once it was older than that, the EC "
-                                 "client left its scope within 250 ms more, and the frozen-frame watch, which reads it unchecked, kept watching"}});
+                                 "client leaves its scope at its next look at the answer, at most 250 ms (and one pass of its loop) after the answer "
+                                 "went stale, and the frozen-frame watch, which reads it unchecked, kept watching"}});
   }
   const std::uint64_t levelId = loaded.echoArena ? loaded.echoArenaLevel : (loaded.combatMap ? loaded.combatMapLevel : loaded.combatLobbyLevel);
   // The record is written under the sequence count (odd while it is written), so LastLook reads one look whole on any thread.
