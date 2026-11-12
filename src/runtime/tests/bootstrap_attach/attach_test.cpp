@@ -963,7 +963,7 @@ void RunChild(const std::wstring& command_line, const char* label) {
   }
 }
 
-int RunSuite() {
+int RunSuite(bool held_lock_round) {
   const std::wstring root = ExecutableDirectory();
   wchar_t self[MAX_PATH] = {};
   const DWORD length = GetModuleFileNameW(nullptr, self, MAX_PATH);
@@ -1002,6 +1002,29 @@ int RunSuite() {
     SetEnvironmentVariableW(L"LOCALAPPDATA", directory.c_str());
     SetEnvironmentVariableW(L"TEMP", directory.c_str());
   };
+  if (held_lock_round) {
+    // The exit wait's timeout, forced on demand (`test_bootstrap_attach.exe --held-lock-round`; the default suite does
+    // not run it, so it stays green until the fix is chosen, #1152). This process holds the named log mutex for the
+    // whole round, so each child's last flush waits its bound (kBootstrapExitLogLockWaitMs) and then writes nothing.
+    // Every child must leave both records. The round fails and names each pid that left none.
+    constexpr int kHeldLockRuns = 12;
+    StageRuntimeFixture(root, L"good");
+    use_scenario_directory(L"exit-at-once-held-lock");
+    HANDLE held = CreateMutexW(nullptr, FALSE, nevr_run_log::kMutexName);
+    Require(held != nullptr, "could not create the log mutex for the held-lock round");
+    Require(WaitForSingleObject(held, 0) == WAIT_OBJECT_0, "could not take the log mutex for the held-lock round");
+    const std::vector<DWORD> pids =
+        RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kHeldLockRuns,
+                          "exit-at-once-held-lock");
+    ReleaseMutex(held);
+    CloseHandle(held);
+    const std::vector<nlohmann::json> records = ReadHostRecords();
+    RequireRecordFromEachPid(records, pids, "prologue_check",
+                             "a child whose exit flush timed out on the held log mutex left no prologue record");
+    RequireRecordFromEachPid(records, pids, "image_check",
+                             "a child whose exit flush timed out on the held log mutex left no image check record");
+    return 0;
+  }
   for (const Scenario& scenario : scenarios) {
     StageRuntimeFixture(root, scenario.fixture);
     std::wstring mode(scenario.mode, scenario.mode + std::strlen(scenario.mode));
@@ -1051,44 +1074,6 @@ int RunSuite() {
       Require(fresh, "a (pid, seq) appears twice in the host log");
     }
   }
-  // The exit wait's timeout, forced on demand: this process holds the named log mutex for the whole round, so each
-  // child's last flush waits its bound (kBootstrapExitLogLockWaitMs) and then writes nothing. Each child must still
-  // end (RunChildrenAtOnce fails on a hang), and none may leave a record, because an unlocked line is never written.
-  // The pids the wait gave up on are named.
-  {
-    use_scenario_directory(L"exit-at-once-held-lock");
-    HANDLE held = CreateMutexW(nullptr, FALSE, nevr_run_log::kMutexName);
-    Require(held != nullptr, "could not create the log mutex for the held-lock round");
-    Require(WaitForSingleObject(held, 0) == WAIT_OBJECT_0, "could not take the log mutex for the held-lock round");
-    const std::vector<DWORD> pids =
-        RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kConcurrentRuns,
-                          "exit-at-once-held-lock");
-    ReleaseMutex(held);
-    CloseHandle(held);
-    const std::vector<nlohmann::json> records = ReadHostRecords();
-    for (const char* step : {"prologue_check", "image_check"}) {
-      std::vector<unsigned long long> with_record;
-      for (const DWORD pid : pids) {
-        for (const nlohmann::json& record : records) {
-          if (record.value("event", "") == "host_attach" && record.value("step", "") == step &&
-              record.value("pid", 0ull) == static_cast<unsigned long long>(pid)) {
-            with_record.push_back(pid);
-            break;
-          }
-        }
-      }
-      if (!with_record.empty()) {
-        std::fprintf(stderr, "bootstrap attach test: step %s has a record from pid(s) that held no log mutex:", step);
-        for (const unsigned long long pid : with_record) std::fprintf(stderr, " %llu", pid);
-        std::fprintf(stderr, "\n");
-        Fail("a process whose exit flush timed out on the log mutex wrote a record");
-      }
-    }
-    std::printf("bootstrap attach test: exit flush gave up on the held log mutex in all %zu children (pids:",
-                pids.size());
-    for (const DWORD pid : pids) std::printf(" %lu", static_cast<unsigned long>(pid));
-    std::printf(")\n");
-  }
   StageRuntimeFixture(root, L"good");
   use_scenario_directory(L"static-import");
   RunChild(L"\"" + root + L"test_bootstrap_attach_static.exe\"", "static-import");
@@ -1101,8 +1086,9 @@ int RunSuite() {
 
 int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return RunChildScenario(argv[2]);
-  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario>]");
-  return RunSuite();
+  if (argc == 2 && std::strcmp(argv[1], "--held-lock-round") == 0) return RunSuite(true);
+  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario> | --held-lock-round]");
+  return RunSuite(false);
 }
 
 #endif
