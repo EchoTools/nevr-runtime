@@ -1,6 +1,6 @@
 /* The map channel's cache index, <MapsCacheDir>/index.json (docs/adr/0047-custom-maps-channel.md decisions 3 and 4): which version
- * of each map the cache holds, the stamp of every file the boot mount opens, and the serial and version floors per channel, guild
- * and key. It is written last, whole and atomically, so it is the commit point of a fetch: a version directory it does not name is
+ * of each map the cache holds, the stamp of every file the mount opens, the serial and version floors per channel, guild and key,
+ * and the lobby groups whose maps it keeps, the latest first. It is written last, whole and atomically, so it is the commit point of a fetch: a version directory it does not name is
  * garbage. Its schema, file names and the version directory's name length are map_format.h's.
  */
 #pragma once
@@ -48,9 +48,20 @@ struct CachedMap {
   bool operator==(const CachedMap& o) const;
 };
 
+// A lobby group whose maps the cache keeps (ADR 0047: a client and a server both take their group from the lobby session). The
+// id is opaque (IsPathSafeGroupId). `maps` are the "<id>/<platform>" keys its last verified manifest listed for this platform, and
+// `bytes` what keeping the group costs the disk: its stored manifest and the bytes those maps list.
+struct CachedGroup {
+  std::string id;
+  std::uint64_t bytes = 0;
+  std::vector<std::string> maps;
+  bool operator==(const CachedGroup& o) const { return id == o.id && bytes == o.bytes && maps == o.maps; }
+};
+
 struct CacheIndex {
   FloorBook floors;
   std::map<std::string, CachedMap> maps;  // keyed by "<id>/<platform>"
+  std::vector<CachedGroup> groups;        // the groups fetched, the latest first
 };
 
 std::string MapKey(const std::string& id, const std::string& platform);
