@@ -180,7 +180,7 @@ bool FloorsFromJson(const json& value, FloorBook* out) {
     for (auto g = it.value().begin(); g != it.value().end(); ++g) {
       // Floors are kept per guild (ADR 0047 decision 3): an entry that is not a guild id is not a floor and is dropped; the
       // next accepted manifest of each guild sets its own.
-      if (!IsValidGuildId(g.key()) || !g.value().is_object()) continue;
+      if (!IsPathSafeGroupId(g.key()) || !g.value().is_object()) continue;
       auto& by_key = by_guild[g.key()];
       for (auto k = g.value().begin(); k != g.value().end(); ++k) {
         // A floor whose name is not a key id has no key to hold it to, so it is dropped the same way.

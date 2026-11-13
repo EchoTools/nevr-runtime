@@ -271,7 +271,7 @@ void ReadBody(std::string_view body, const FloorBook& floors, const std::set<std
     return;
   }
   const std::string* guild = guild_value->get_ptr<const std::string*>();
-  if (guild == nullptr || !IsValidGuildId(*guild)) {
+  if (guild == nullptr || !IsPathSafeGroupId(*guild)) {
     out->reason = "bad_guild";
     return;
   }
@@ -816,14 +816,10 @@ bool IsValidChannel(std::string_view channel) {
   return std::all_of(channel.begin(), channel.end(), [&](char c) { return lower_digit(c) || c == '.' || c == '-'; });
 }
 
-bool IsValidGuildId(std::string_view guild) {
-  if (guild.size() != kGuildIdChars) return false;
-  for (std::size_t i = 0; i < guild.size(); ++i) {
-    const bool dash_at = std::find(std::begin(kGuildIdDashes), std::end(kGuildIdDashes), i) != std::end(kGuildIdDashes);
-    unsigned ignored = 0;
-    if (dash_at ? guild[i] != '-' : !nevr_cargo::HexDigitValue(guild[i], &ignored)) return false;
-  }
-  return true;
+bool IsPathSafeGroupId(std::string_view group) {
+  if (group.empty() || group.size() > kGroupIdMaxBytes) return false;
+  return std::all_of(group.begin(), group.end(),
+                     [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
 }
 
 bool IsValidUtc(std::string_view t) {

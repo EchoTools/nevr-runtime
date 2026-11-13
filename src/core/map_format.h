@@ -64,10 +64,12 @@ inline constexpr std::uint64_t kManifestSchemaVersion = 1;
 inline constexpr int kMaxJsonDepth = 16;  // both documents: deeper nesting is refused, so no two readers disagree on one
 // A channel name: [a-z0-9][a-z0-9.-]{0,63}.
 inline constexpr std::size_t kMaxChannelChars = 64;
-// The guild a manifest is for: the group id as the game service writes it, a UUID in its canonical text form (RFC 9562
-// section 4: 8-4-4-4-12 hex digits), lower case.
-inline constexpr std::size_t kGuildIdChars = 36;
-inline constexpr std::size_t kGuildIdDashes[] = {8, 13, 18, 23};
+// The guild a manifest is for: the lobby group id as the game service writes it, held as an opaque string. It names a URL path
+// segment and a cache directory, so the only rule is that it is safe there: 1 to kGroupIdMaxBytes characters, each a lowercase
+// letter, a digit or '-'. It is never parsed as a UUID, because the service may change the form of its group ids. The bound
+// leaves room for both forms an id has had or may take: a canonical UUID is 36 characters and a 64-bit snowflake at most 20
+// digits; 64 holds either with room to spare and stays far below a path component's limit (255 bytes on NTFS and ext4).
+inline constexpr std::size_t kGroupIdMaxBytes = 64;
 // A map id: [a-z][a-z0-9_]{0,54}. The Quest level name is the id and kQuestLevelSuffix, and a level name is at most
 // kMaxSymbolNameChars, so an id leaves room for the suffix.
 inline constexpr const char* kQuestLevelSuffix = "_lowspec";
