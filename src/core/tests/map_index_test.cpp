@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "core/map_index.h"
 #include "quest/tests/cargo_fake_env.h"
 
@@ -85,6 +87,35 @@ TEST(MapCacheIndex, AFloorWithNoGuildOrNoKeyIsDropped) {
   ASSERT_TRUE(nevr_maps::CacheIndexFromJson(text, &index));
   ASSERT_EQ(index.floors.channels.at(kChannel).size(), 1u);
   EXPECT_EQ(index.floors.channels.at(kChannel).at(kOtherGuild).at(kKeyId).serial, 9u);
+}
+
+// The lobby groups the cache keeps, the latest first: they round trip in order, an index written before groups were kept has
+// none, and a group that is not a path-safe id, or one listed twice, makes the index invalid.
+TEST(MapCacheIndex, KeepsItsGroupsInOrder) {
+  CacheIndex index = SampleIndex();
+  nevr_maps::CachedGroup latest;
+  latest.id = "123456789012345678";
+  latest.bytes = 4000;
+  latest.maps = {"arena/windows-x86_64"};
+  nevr_maps::CachedGroup older;
+  older.id = kGuild;
+  index.groups = {latest, older};
+  CacheIndex back;
+  ASSERT_TRUE(nevr_maps::CacheIndexFromJson(nevr_maps::CacheIndexToJson(index), &back));
+  EXPECT_EQ(back.groups, index.groups);
+
+  nlohmann::json doc = nlohmann::json::parse(nevr_maps::CacheIndexToJson(index));
+  doc.erase("groups");
+  ASSERT_TRUE(nevr_maps::CacheIndexFromJson(doc.dump(), &back));
+  EXPECT_TRUE(back.groups.empty());
+  EXPECT_EQ(back.maps.size(), 1u);
+
+  doc = nlohmann::json::parse(nevr_maps::CacheIndexToJson(index));
+  doc["groups"][0]["id"] = "../escape";
+  EXPECT_FALSE(nevr_maps::CacheIndexFromJson(doc.dump(), &back));
+  doc = nlohmann::json::parse(nevr_maps::CacheIndexToJson(index));
+  doc["groups"][1]["id"] = doc["groups"][0]["id"];
+  EXPECT_FALSE(nevr_maps::CacheIndexFromJson(doc.dump(), &back));
 }
 
 struct MapCacheIndexRead : ::testing::Test {

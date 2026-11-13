@@ -210,6 +210,35 @@ bool FloorsFromJson(const json& value, FloorBook* out) {
   return true;
 }
 
+json GroupsToJson(const std::vector<CachedGroup>& groups) {
+  json out = json::array();
+  for (const CachedGroup& g : groups) out.push_back(json{{"id", g.id}, {"bytes", g.bytes}, {"maps", g.maps}});
+  return out;
+}
+
+// An index written before groups were kept has none: its maps are kept until a group's fetch lists them again.
+bool GroupsFromJson(const json& doc, std::vector<CachedGroup>* out) {
+  const auto groups = doc.find("groups");
+  if (groups == doc.end()) return true;
+  if (!groups->is_array()) return false;
+  for (const json& g : *groups) {
+    CachedGroup group;
+    const auto maps = g.is_object() ? g.find("maps") : g.end();
+    if (!g.is_object() || !GetString(g, "id", &group.id) || !IsPathSafeGroupId(group.id) ||
+        !GetUnsigned(g, "bytes", &group.bytes) || maps == g.end() || !maps->is_array()) {
+      return false;
+    }
+    for (const json& key : *maps) {
+      if (!key.is_string()) return false;
+      group.maps.push_back(key.get<std::string>());
+    }
+    const bool repeated = std::any_of(out->begin(), out->end(), [&](const CachedGroup& o) { return o.id == group.id; });
+    if (repeated) return false;
+    out->push_back(std::move(group));
+  }
+  return true;
+}
+
 }  // namespace
 
 bool CachedMap::operator==(const CachedMap& o) const {
@@ -234,7 +263,8 @@ std::string CacheIndexToJson(const CacheIndex& index) {
   const json doc{{"schema", kCacheIndexSchema},
                  {"schema_version", kCacheIndexSchemaVersion},
                  {"floors", FloorsToJson(index.floors)},
-                 {"maps", std::move(maps)}};
+                 {"maps", std::move(maps)},
+                 {"groups", GroupsToJson(index.groups)}};
   return doc.dump();
 }
 
@@ -257,6 +287,7 @@ bool CacheIndexFromJson(std::string_view text, CacheIndex* out) {
     if (!MapFromJson(it.value(), &m) || it.key() != MapKey(m.id, m.platform)) return false;
     index.maps[it.key()] = std::move(m);
   }
+  if (!GroupsFromJson(doc, &index.groups)) return false;
   *out = std::move(index);
   return true;
 }

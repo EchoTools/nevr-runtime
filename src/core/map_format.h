@@ -54,6 +54,12 @@ inline constexpr unsigned kBase64TwoPadSpareMask = 0x0F;     // ... and its low 
 inline constexpr std::size_t kBase64OnePadLastChar = 2;    // with "=" it is the third ...
 inline constexpr unsigned kBase64OnePadSpareMask = 0x03;     // ... and its low two bits must be zero
 
+// ---- Where the channel's objects are under base_url. A group's manifest is guilds/<group id>/manifest; every other object (a
+// package index, a piece) is named by its sha256 in the blob namespace the texture cargo uses (ADR 0045 decision 5).
+inline constexpr const char* kGroupManifestUrlPrefix = "guilds/";
+inline constexpr const char* kGroupManifestUrlSuffix = "/manifest";
+inline constexpr const char* kBlobUrlPrefix = "blobs/sha256/";
+
 // ---- The signed object (<base_url>/guilds/<group_id>/manifest): the minisig text, a "--" line, then the manifest body.
 inline constexpr std::string_view kSignedSeparator = "\n--\n";
 inline constexpr std::size_t kMaxMinisigBytes = 4096;  // the signature part: four short lines, so a longer one is not a signature
@@ -134,7 +140,16 @@ inline constexpr std::uint64_t kRecipeResultMax = std::uint64_t{128} << 20;    /
 inline constexpr std::uint64_t kRecipeInsertDivisor = 4;   // a recipe's authored bytes are at most result_size / this (recipe_cap)
 inline constexpr int kRecipeFormatVersion = 2;             // 2: field edits dropped `from`
 
-// ---- The cache index, <MapsCacheDir>/index.json, and the stored manifest beside it.
+// ---- The cache index, <MapsCacheDir>/index.json, each group's stored manifest, and the version directories.
+// A group's verified manifest is kept as <MapsCacheDir>/guild-manifests/<group id>/manifest.signed. The directory's name has a
+// '-', which no map id has (IsValidMapId), so it never meets a map's directory.
+inline constexpr const char* kGroupManifestsDir = "guild-manifests";
+// A version directory is <MapsCacheDir>/<id>/<platform>/<index sha12>; it holds the package index as package.json and each member
+// at its path. While it is written it is the same name with kStagingSuffix, and resume/state.json in it records the pieces a
+// stopped transfer verified, so the next fetch resumes after them.
+inline constexpr const char* kPackageFile = "package.json";
+inline constexpr const char* kResumeDir = "resume";
+inline constexpr const char* kResumeFile = "state.json";
 inline constexpr const char* kCacheIndexSchema = "nevr-maps-index";
 inline constexpr std::uint64_t kCacheIndexSchemaVersion = 1;
 inline constexpr const char* kCacheIndexFile = "index.json";

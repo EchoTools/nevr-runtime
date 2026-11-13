@@ -47,6 +47,14 @@ set(_maps_derive_sources
 set_source_files_properties(${_maps_derive_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_derive_sources})
 
+# The fetch of one lobby group's maps and the mount of the cached maps (core/map_run.h; ADR 0047, ADR 0045 decisions 7 and 8),
+# and the queue of group requests the worker answers (core/map_fetch_queue.h). Platform-free: no PCH.
+set(_maps_run_sources
+  "${CMAKE_CURRENT_LIST_DIR}/map_run.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/map_fetch_queue.cpp")
+set_source_files_properties(${_maps_run_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE ${_maps_run_sources})
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
   find_package(zstd CONFIG QUIET)
@@ -104,4 +112,12 @@ if(BUILD_TESTING AND GTest_FOUND)
     nlohmann_json::nlohmann_json zstd::libzstd)
   gtest_discover_tests(test_map_derive DISCOVERY_MODE PRE_TEST)
 
+  # The fetch, the mount and the request queue over the shared fake Env and its MapFs, a scripted server, a recording Mounter and
+  # Deriver, and the real parsers fed group manifests the test signs with fixed-seed keys. No network, no Win32, no game file.
+  add_executable(test_map_run "${CMAKE_CURRENT_LIST_DIR}/tests/map_run_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_run_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_run PRIVATE "${CMAKE_SOURCE_DIR}/src" "${_maps_monocypher_dir}")
+  target_link_libraries(test_map_run PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
+    nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_run DISCOVERY_MODE PRE_TEST)
 endif()
