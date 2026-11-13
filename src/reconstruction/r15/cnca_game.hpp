@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct SActorGuid {
     std::uint64_t words[2];
@@ -33,4 +33,4 @@ struct LocalComponentHandle {
 void FindTagComponent(LocalComponentHandle* result, void* game_space,
                       std::uint64_t actor, std::uint64_t component_symbol);
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

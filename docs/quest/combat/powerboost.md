@@ -71,11 +71,28 @@ game's own radius check, as it does a radius that is not finite.
 
 ## Arena
 
-The q15t and combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
-loaded: the game tick asks `combat_level::Classify` once every 32 frames (and when the CR15Game changes) and keeps the answer in an atomic;
-before a tick has seen a level the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
-continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. When `combat_scope` (#2246) lands,
-`InScope()` reads it instead.
+The combat APKs also play Echo Arena, and the module is installed in both. It acts only while a combat map or the combat lobby is
+loaded and no Echo Arena level is: the game tick asks the combat level answer (`combat_scope.h`) once every 32 frames (and when the CR15Game
+changes), one `LastLook()` record judged by `InCombatOrLobby(look)`, and keeps the answer in an atomic. Before a tick has seen a look the answer is "not combat". Outside that scope every wrapper only calls the game's function, the entry's
+continuation returns ResolveBody's own body, and nothing is logged, held, swallowed, queued or sent. The module is one of the scope row's readers
+(`combat.powerboost_stage` 1 to 3 is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer
+cannot change. `combat_powerboost_scope` names the look's class as `kind` (`combat_scope.h` `LookClassName`: `combat_or_lobby`, `echo_arena`,
+`other`, `no_look`, `stale`) and its `level`. The scope's `Refresh` makes a look at most once every `kLookEveryMs` (250 ms). POWER BOOST asks the look once every
+`kScopeEveryFrames` (32) frames of one game (about 444 ms at 72 Hz), and at once when the game pointer is new. Each ask reads the scope's last
+look, which can be up to `kLookEveryMs` old, so a change of the game reaches POWER BOOST's answer after up to 250 ms (the look) plus up to 32
+frames (the ask).
+
+The freshness test (`kStaleAfterMs`, 1 s) is made at call time (`src/quest/combat/README.md` rule 9). Each wrapper tests the atomic the last ask
+stored (one load: the arena path), and every in-scope body (`NodeAct`, `HealAct`, `QueuedHealAct`, `LinkAct`) and the cone's continuation then start
+with `scope::LookIsFresh()`. The atomic is not re-judged while the game tick is stopped, so it can still say combat; the bodies' test passes every
+call on once the look is older than a second. The "stopped tick" block of `powerboost_test.cpp` pins this: 60 s on the scope's clock with no tick
+leaves the atomic in scope, and a marker through each wrapper reaches the game's Heal, nothing is swallowed, held, sent, counted or logged, and the
+cone returns ResolveBody's own body; the next frame after the tick is back acts again. POWER BOOST writes no line in that gap; the first look after
+the tick is back writes the scope's `combat_scope_stale` warning, when the last look was a combat class. In scope that test costs each call one clock
+read (CLOCK_MONOTONIC through the vDSO, no system call: 31 to 38 ns on the x86 host, three runs of a scratch loop of 10,000,000 `LookIsFresh()`
+calls on a machine with builds running, not committed). Each wrapper runs per damage-dealt message, per heal node or per bubble target and update,
+so the added time per frame is that rate times about 38 ns: ADR 0038's 10 us a hook is reached only above about 260 calls a frame (not measured on a
+headset). The arena path reads no clock: the arena block counts the scope's clock reads and wants zero.
 
 ## Lines
 
@@ -85,7 +102,7 @@ scope changes 64) are announced once by a `combat_powerboost_capped` line.
 
 ## Headset row (owed)
 
-On a q15t or combat APK, in a combat match on a server that runs EchoCombat's PowerBoost plugin, with someone using POWER BOOST:
+On a combat APK, in a combat match on a server that runs EchoCombat's PowerBoost plugin, with someone using POWER BOOST:
 `combat_powerboost_install` with `"stage":3`; `combat_powerboost_scope` with `"in_combat":1`; `combat_powerboost_use` (`"why":"queued node heal"`)
 for a use of ours; `combat_powerboost_swallow` for the server's relayed markers; `combat_powerboost_cone` lines with `LINK` / `no`; and
 `combat_powerboost_link_marker` with `"sent":1` after a use of ours. In an arena match on the same APK: `combat_powerboost_scope` with

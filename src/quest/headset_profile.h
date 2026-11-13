@@ -1,10 +1,9 @@
 /* The Quest headset identity and the settings each headset gets (ADR 0031): one function that names the headset from its
  * system properties, and one table of the settings each headset's row holds.
  *
- * Pure: no Android, no game header, no hook. The identity step (integration/headset_identity_step.cpp) and the combat modules
- * (combat/heaps.cpp, combat/refresh_rate.cpp) include it. The combat modules read ro.product.device themselves and call
- * IdentifyDevice, which is Identify with that one input, until the identity step's profile is handed to them (#2037). Identify
- * and IdentifyDevice agree on every rule (headset_profile_test.cpp). Each caller reads its own properties; this header never does.
+ * Pure: no Android, no game header, no hook. The identity step (integration/headset_identity_step.cpp) is the one caller of Identify:
+ * it reads the properties and stores the profile it names in quest/headset_active.h, where every consumer (the texture hook and menu,
+ * combat/heaps.cpp, combat/refresh_rate.cpp) reads it (ADR 0031 decision 4). This header reads no property.
  *
  * The rules are checked in order and the first match wins. A rule names its inputs and their exact values. A rule never
  * infers a headset from another quantity (an eye width, a refresh rate, a memory size; ADR 0031, R3). The last rule has an
@@ -96,13 +95,6 @@ inline Match Identify(const Inputs& in) noexcept {
     if (r.device.empty() || in.device == r.device) return {r.name, r.profile};
   }
   return {"generic", &kGeneric};  // not reached: the last rule matches every device
-}
-
-// The match for ro.product.device alone, the one input the rules read today. The combat modules read only that property (#2037).
-inline Match IdentifyDevice(std::string_view device) noexcept {
-  Inputs inputs;
-  inputs.device = device;
-  return Identify(inputs);
 }
 
 }  // namespace nevr_quest::headset_profile

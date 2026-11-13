@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// #2172, #2000: the refresh-rate rule and the game tick are the runtime's, and the q15t plugin installs on neither slot. The host tests
+// #2172, #2000: the refresh-rate rule and the game tick are the runtime's, and nothing else installs on either slot. The host tests
 // (refresh_rate_test, combat_tick_test, combat_level_test, render_config_hook_test) drive the behaviour; these pin what they cannot see.
 
 func root(t *testing.T) string {
@@ -37,43 +37,6 @@ func exists(t *testing.T, path string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(root(t), path))
 	return err == nil
-}
-
-// The q15t plugin and its host tests are deleted (#2189). A check that the plugin holds none of a module's code reads the plugin through
-// these: a deleted plugin holds nothing, so they answer empty; while it exists they read it as before, and a missing file is a failure.
-const pluginDir = "src/quest/plugins/q15t"
-
-func pluginGone(t *testing.T) bool {
-	t.Helper()
-	return !exists(t, pluginDir) && !exists(t, "src/quest/tests/q15t")
-}
-
-func pluginRead(t *testing.T, path string) string {
-	t.Helper()
-	if pluginGone(t) {
-		return ""
-	}
-	return read(t, path)
-}
-
-func pluginEntries(t *testing.T, dir string) []os.DirEntry {
-	t.Helper()
-	if pluginGone(t) {
-		return nil
-	}
-	entries, err := os.ReadDir(filepath.Join(root(t), dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return entries
-}
-
-func TestTheQ15tPluginAndItsTestsAreGone(t *testing.T) {
-	for _, p := range []string{pluginDir, "src/quest/tests/q15t", "docs/quest/q15t"} {
-		if exists(t, p) {
-			t.Errorf("%s exists: the q15t plugin is folded into the runtime (#2189)", p)
-		}
-	}
 }
 
 var blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
@@ -155,15 +118,41 @@ func TestTheTickIsAThunkInstalledThroughTheManagerWithNoExpectedOriginal(t *test
 	}
 }
 
-func TestTheDeviceIsReadOnlyBehindAKnownWrongMarker(t *testing.T) {
-	code := read(t, "src/quest/combat/refresh_rate.cpp")
-	for _, m := range regexp.MustCompile(`ro\.product\.device`).FindAllStringIndex(code, -1) {
-		lo := m[0] - 900
-		if lo < 0 {
-			lo = 0
+// #2037, ADR 0031 decision 4: the heap sizes and the refresh-rate rule take the headset from the identity step's profile
+// (src/quest/headset_active.h) and read no identity input themselves; the marker that said they did is gone with the read.
+func TestTheCombatModulesReadTheIdentityStepsProfile(t *testing.T) {
+	for _, p := range []string{"src/quest/combat/heaps.cpp", "src/quest/combat/refresh_rate.cpp"} {
+		code := stripComments(read(t, p))
+		for _, banned := range []string{"ro.product", "__system_property_get", "system_properties.h", "IdentifyDevice", "Identify("} {
+			if strings.Contains(code, banned) {
+				t.Errorf("%s contains %q: a combat module names the headset itself (ADR 0031 decision 4)", p, banned)
+			}
 		}
-		if !strings.Contains(code[lo:m[0]], "KNOWN-WRONG #2037") {
-			t.Error("ro.product.device is read without KNOWN-WRONG #2037 above it")
+		if !strings.Contains(code, "headset_active::ActiveOrGeneric()") {
+			t.Errorf("%s does not read the identity step's profile through headset_active::ActiveOrGeneric()", p)
+		}
+		if !strings.Contains(code, "_profile_missing") {
+			t.Errorf("%s says nothing when no profile was set", p)
+		}
+	}
+	marker := "KNOWN-WRONG #" + "2037"
+	for _, dir := range []string{"src/quest", "docs", "tools/internal"} {
+		err := filepath.WalkDir(filepath.Join(root(t), dir), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(b), marker) {
+				rel, _ := filepath.Rel(root(t), path)
+				t.Errorf("%s still carries %s, which #2037 closes", rel, marker)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -209,47 +198,12 @@ func TestEachKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestThePluginInstallsOnNeitherSlotAndTheDeletedModulesAreGone(t *testing.T) {
-	for _, n := range []string{"refresh_rate", "clock_levels", "plugin_args"} {
-		for _, e := range []string{"h", "cpp"} {
-			if exists(t, "src/quest/plugins/q15t/src/"+n+"."+e) {
-				t.Errorf("%s.%s still exists", n, e)
-			}
-		}
-	}
-	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
-	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
-			continue
-		}
-		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
-		for _, bad := range []string{"vrapi_SetClockLevels", "vrapi_SetDisplayRefreshRate", "Q15T_HZ_MATCH90", "SetClockRaise"} {
-			if strings.Contains(code, bad) {
-				t.Errorf("%s names %s", e.Name(), bad)
-			}
-		}
-	}
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt")
-	for _, bad := range []string{"Q15T_HZ_MATCH90", "Q15T_CPU_LEVEL", "Q15T_GPU_LEVEL", "clock_levels", "refresh_rate", "plugin_args"} {
-		if strings.Contains(cmake, bad) {
-			t.Errorf("the plugin's CMake still names %s", bad)
-		}
-	}
-	if !pluginGone(t) && !strings.Contains(cmake, "src/combat_map.cpp") {
-		t.Error("the detector aibots reads is not built")
-	}
-	if strings.Contains(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"), "hz_level") || strings.Contains(read(t, "justfile"), "hz_level") {
+func TestTheRecipesWriteNoHzLevelAndTheCombatADRsAreInPlace(t *testing.T) {
+	if strings.Contains(read(t, "justfile"), "hz_level") {
 		t.Error("the config marker still carries hz_level")
 	}
-	plugin := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp"))
-	for _, bad := range []string{"clock_candidate", "clock_arg", "hz_mode", "ArgString"} {
-		if strings.Contains(plugin, bad) {
-			t.Errorf("the init line still has %s", bad)
-		}
-	}
 	for _, n := range []string{"0001-match-refresh-rate.md", "0002-level-refresh-rate-default.md"} {
-		if !exists(t, "docs/quest/combat/adr/"+n) || exists(t, "docs/quest/q15t/adr/"+n) {
+		if !exists(t, "docs/quest/combat/adr/"+n) {
 			t.Errorf("%s is not where the combat ADRs live", n)
 		}
 	}

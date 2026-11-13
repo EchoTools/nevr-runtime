@@ -23,8 +23,49 @@ nevr_cargo::RunResult RunOnce(nevr_cargo::Env& env, const nevr_cargo::RunConfig&
                               const std::function<bool()>& keep_going) {
   // The publisher keeps the set for the life of the process: the engine may be filling a request from its shadow.
   const nevr_cargo::Publish give = [publish](std::unique_ptr<nevr_cargo::Mounted> set) { publish(set.release()); };
+  env.MakeDirs(config.dir);  // as Start does: the device's free space is asked of a directory that exists
   nevr_cargo::MountFromCache(env, config, give);
   return nevr_cargo::FetchAndMount(env, config, give, keep_going);
+}
+
+nevr_quest::data::AllAssetsResult FirstRun(nevr_cargo::Env& env, const nevr_cargo::RunConfig& config, PublishFn publish,
+                                           const std::function<bool()>& keep_going) {
+  nevr_cargo::RunConfig held = config;
+  held.first_run = true;
+  // Ok needs a shadow handed to the publisher, from the boot mount of what the store held or from the fetch: a store that is whole but
+  // mounts nothing (every served label off, every entry refused) leaves the engine with no asset source, which is the failure this worker is for.
+  std::size_t published = 0;
+  const nevr_cargo::Publish give = [publish, &published](std::unique_ptr<nevr_cargo::Mounted> set) {
+    ++published;
+    publish(set.release());  // the publisher keeps the set for the life of the process: the engine may be filling a request from its shadow
+  };
+  env.MakeDirs(held.dir);  // as Start does: the device's free space is asked of a directory that exists
+  nevr_cargo::MountFromCache(env, held, give);
+  const nevr_cargo::RunResult r = nevr_cargo::FetchAndMount(env, held, give, keep_going);
+  nevr_quest::data::AllAssetsResult out;
+  out.ok = r.manifest_loaded && r.failed == 0 && std::string(r.stopped).empty() && published != 0;
+  if (!out.ok) {
+    out.message = kFirstRunFailedMessage;
+    env.Event(nevr_cargo::EventLevel::kError, "cargo_first_run",
+              {{"result", "failed"},
+               {"manifest_loaded", r.manifest_loaded ? "true" : "false"},
+               {"failed", r.failed},
+               {"stopped", r.stopped},
+               {"published", published},
+               {"consequence", "the launch ends with a message: the engine cannot start on stub manifests with no asset source"}});
+  }
+  return out;
+}
+
+std::function<nevr_quest::data::AllAssetsResult(const std::string& root)> MakeFirstRunWorker(const AssetsChoice& assets,
+                                                                                            const std::string& cache_dir,
+                                                                                            nevr_quest::data::Transport* transport,
+                                                                                            PublishFn publish) {
+  return [assets, cache_dir, transport, publish](const std::string&) {
+    PosixEnv env(transport);
+    const nevr_cargo::RunConfig config = MakeRunConfig(assets, cache_dir);
+    return FirstRun(env, config, publish, [] { return true; });
+  };
 }
 
 }  // namespace nevr_quest::cargo

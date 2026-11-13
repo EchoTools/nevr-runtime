@@ -2,12 +2,15 @@
 // image built in memory, and called the way the game calls them: through the slot, against fake stock functions and fake game structures laid out
 // as the pinned build's code reads them (docs/quest/combat/bvh.md section 3). Synthetic meshes, no game-derived bytes.
 //
-// Moved from the q15t plugin's bvh_test: the assertions on the answers are the same (the nearest hit, the segment test, the hit's fields, the
+// The assertions on the answers are bvh_test's from the combat plugin imported in #1591 (the nearest hit, the segment test, the hit's fields, the
 // refusals of Initialize and their lines, the 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install, the
-// touch answer). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
+// touch answer, and a Shutdown freeing its CBVHTree's table entry). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
 // plugin's kill files are `combat:` switches) and three deliberate behaviours: every answer is scoped to a combat map (the arena path calls the
 // game's function), the arguments of a cast are read with plain loads (the unreadable-argument assertions went with the system call), and a
-// thunk with no original answers a miss without calling the handler. New here: the scope, the switches, the legacy switch files.
+// thunk with no original answers a miss without calling the handler. New here: the scope, the switches, the legacy switch files. The scope is the real
+// combat level answer (combat_scope.h, #2382): the tick is installed on an image of its own and the scope row has registered the refresh before each
+// test, each look runs that refresh against the fake game before the module's callback (as the tick does), and a scope that cannot change refuses the
+// install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/bvh.h"
@@ -18,6 +21,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,17 +32,21 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/safe_read.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/tests/bvh_build.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/key_hog.h"
 #include "quest/tests/test_check.h"
 
 namespace {
 
 namespace bvh = nevr_quest::combat::bvh;
+namespace scope = nevr_quest::combat::scope;
+namespace world = combat_test::scope_world;
 namespace pinned = sentinel::pinned;
 using combat_test::Image;
 using EchoVR::CSymbol64Hash;
@@ -62,6 +70,9 @@ constexpr int kInfo = static_cast<int>(sentinel::LogLevel::kInfo);
 constexpr int kWarn = static_cast<int>(sentinel::LogLevel::kWarn);
 constexpr int kError = static_cast<int>(sentinel::LogLevel::kError);
 std::string Event(const char* name) { return std::string("\"event\":\"") + name + "\""; }
+// The msg of the combat_bvh_scope edge line, whole, as bvh.cpp NoteScopeEdge writes it for each direction.
+const char* const kScopeInMsg = "a combat map or the combat lobby is loaded: casts are answered from its static BVH";
+const char* const kScopeOutMsg = "no combat map or combat lobby is loaded (or the combat level answer is stale): the game's own answers stand";
 
 // ---- fake stock functions (what the pinned build's stubs do) ----
 int g_stockInit, g_stockShut, g_stockInt, g_stockOcc, g_stockTouch, g_stockGate;
@@ -200,16 +211,25 @@ std::string LevelHex(const char* name) {
   return buf;
 }
 
-// The tick's clock: one second per look, so every Tick that asks for a look gets one.
+// The tick's clock: one second per look, so every Tick that asks for a look gets one. The combat level answer reads the same clock, in ms.
 double g_now = 100.0;
-int g_clockReads = 0;  // every read of the module's clock: the arena path reads none
+int g_clockReads = 0;  // every read of the module's clock or the combat level answer's: the arena path reads none
 double Clock() noexcept {
   ++g_clockReads;
   return g_now;
 }
+std::int64_t ScopeClock() noexcept {
+  ++g_clockReads;
+  return static_cast<std::int64_t>(std::llround(g_now * 1000.0));
+}
+// One frame of the game-thread tick: the scope row's refresh (registered first), then the module's callback.
+void Frame() {
+  scope::Refresh(GameAddress());
+  bvh::Tick(GameAddress());
+}
 void Look() {
   g_now += 1.0;
-  bvh::Tick(GameAddress());
+  Frame();
 }
 void EnterCombat() {
   LoadLevels({"mpl_combat_dyson"});
@@ -272,11 +292,27 @@ void Build(const char* buildId = nullptr) {
   bvh::SetPinsForTest(&g_pins);
 }
 
+// The game-thread tick on an image of its own (the tick's slot row), so the combat level answer can change as the shipped table leaves it before this
+// module's row: the tick installed and the scope row's refresh registered (one tick callback).
+Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(world::StartScope(&TickImageLookup) && nevr_quest::combat::tick::Count() == 1);
+}
+
 std::string g_dir;
 void Begin() {
   g_lines.clear();
   bvh::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
   g_stockInit = g_stockShut = g_stockInt = g_stockOcc = g_stockTouch = g_stockGate = 0;
   g_nested = g_spawn = false;
   g_spawnResult = -1;
@@ -286,12 +322,15 @@ void Begin() {
   nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   bvh::SetClockForTest(&Clock);
   sentinel::SetLogSink(&Capture);
+  StartTheScope();
 }
 void End() {
   bvh::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
   nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   g_image.Drop();
+  g_tickImage.Drop();
   sentinel::SetLogSink(nullptr);
 }
 
@@ -363,15 +402,15 @@ void TheInstallSwapsTheSlotsAndStatesItOnce() {
   std::uintptr_t before[6];
   for (int i = 0; i < 6; ++i) before[i] = SlotWord(slots[i]->slot);
   LoadLevels({"mpl_combat_dyson"});
-  bvh::Tick(GameAddress());  // a tick before the install looks at nothing: the scope stays shut
-  QCHECK(!bvh::InCombatOrLobby());
+  Frame();  // a frame before the install: the combat level answer says combat, and the module's callback, not installed yet, does nothing
+  QCHECK(bvh::InCombatOrLobby() && Count(Event("combat_bvh_scope")) == 0);
   QCHECK(Installed(On()));
   QCHECK(bvh::TreeInstalled());
   for (int i = 0; i < 6; ++i) QCHECK(SlotWord(slots[i]->slot) != before[i]);
   const std::string install = Event("combat_bvh_install");
   QCHECK(Count(install) == 1 && Count(install, kInfo) == 1);
   QCHECK(Count("\"result\":\"installed\",\"reason\":\"ok\",\"hooks\":6,\"gate\":1,\"touch\":1,\"allowed_casts\":0") == 1);
-  QCHECK(nevr_quest::combat::tick::Count() == 1);  // the scope's refresh rides the combat tick
+  QCHECK(nevr_quest::combat::tick::Count() == 2);  // the scope row's refresh, then this module's callback
   {  // the gate goes in first: until its hook is in no cast is marked, so a tree installed a moment later answers none
     std::size_t gateAt = 0, initAt = 0;
     for (std::size_t i = 0; i < g_lines.size(); ++i) {
@@ -398,7 +437,7 @@ void SwitchesDecideWhatIsInstalled() {
     sw.bvh = false;
     const nevr_quest::combat::ModuleResult r = bvh::Install(sw);
     QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && !bvh::TreeInstalled());
-    QCHECK(SlotWord(g_pins.intersect.slot) == before && nevr_quest::combat::tick::Count() == 0);
+    QCHECK(SlotWord(g_pins.intersect.slot) == before && nevr_quest::combat::tick::Count() == 1);  // the scope row's refresh alone
     QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
     QCHECK(Count(std::string("\"level\":\"error\"")) == 0);
     End();
@@ -442,7 +481,7 @@ void ARefusedTouchHookDoesNotStopTheTree() {
   QCHECK(Installed(On()));
   QCHECK(bvh::TreeInstalled() && SlotWord(g_pins.touch.slot) == 0x4242420);
   QCHECK(Count(Event("combat_bvh_touch"), kError) == 1 && Count("\"status\":\"original_mismatch\"") >= 1);
-  QCHECK(Count("\"hooks\":5,\"gate\":1,\"touch\":0") == 1 && Count("\"result\":\"installed\"", kInfo) == 1);
+  QCHECK(Count("\"hooks\":5,\"gate\":1,\"touch\":0") == 1 && Count(Event("combat_bvh_install") + ",\"result\":\"installed\"", kInfo) == 1);
   End();
 }
 
@@ -471,7 +510,8 @@ void ACombatMapGetsTheTreesAnswers() {
   QCHECK(Installed(Gateless()));
   EnterCombat();
   QCHECK(bvh::InCombatOrLobby());
-  QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 1 && Count("\"from\":0,\"to\":1") == 1);
+  QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 1 && Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1") == 1);
+  QCHECK(Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1,\"msg\":\"" + kScopeInMsg + "\"") == 1);  // the 0->1 line carries the combat text, whole
   Look();  // the same answer again: no second line
   QCHECK(Count(Event("combat_bvh_scope")) == 1);
 
@@ -632,6 +672,7 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
   allStock();
   LoadLevels({});
   Look();
+  QCHECK(Count(Event("combat_bvh_scope")) == 0);  // the tick's reading starts false: a first frame outside the scope changes nothing and says nothing
   allStock();
   EnterArena();
   QCHECK(!bvh::InCombatOrLobby());
@@ -650,7 +691,11 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
   QCHECK(bvh::InCombatOrLobby());
   QCHECK(!CallInt(&cbvh, kDown, hit) && bvh::GetCounters().gated == 1);  // the hook acts again: this direct cast is kept off the tree by the gate
   EnterArena();
-  QCHECK(Count(Event("combat_bvh_scope")) == 2 && Count("\"from\":0,\"to\":1") == 1 && Count("\"from\":1,\"to\":0") == 1);
+  QCHECK(Count(Event("combat_bvh_scope")) == 2 && Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1") == 1 &&
+         Count(Event("combat_bvh_scope") + ",\"from\":1,\"to\":0") == 1);
+  // each direction's line carries its own msg, whole: a swapped or blanked text fails here
+  QCHECK(Count(Event("combat_bvh_scope") + ",\"from\":0,\"to\":1,\"msg\":\"" + kScopeInMsg + "\"") == 1 &&
+         Count(Event("combat_bvh_scope") + ",\"from\":1,\"to\":0,\"msg\":\"" + kScopeOutMsg + "\"") == 1);
   End();
 }
 
@@ -660,14 +705,14 @@ void TheScopeIsLookedAtFourTimesASecond() {
   QCHECK(Installed(On()));
   LoadLevels({"mpl_combat_dyson"});
   g_now = 100.0;
-  bvh::Tick(GameAddress());  // the first look
+  Frame();  // the first look
   QCHECK(bvh::InCombatOrLobby());
   LoadLevels({"mpl_arena_a"});
   g_now = 100.1;
-  bvh::Tick(GameAddress());  // inside the quarter second: no look
+  Frame();  // inside the quarter second: no look
   QCHECK(bvh::InCombatOrLobby());
   g_now = 100.3;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(!bvh::InCombatOrLobby());
   End();
 }
@@ -714,17 +759,21 @@ void AStalledTickFailsClosed() {
   QCHECK(g_stockInt == int0 + 1 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1);  // the game's functions answered
   g_now += 5.0;
   QCHECK(!bvh::InCombatOrLobby());  // and it stays shut for as long as the tick is gone
-  QCHECK(Count(Event("combat_bvh_scope_stale")) == 0);  // nothing can say so while the tick is gone
-  Look();  // the tick comes back, 7.01 s after its last look, and says the scope was shut for that gap
+  QCHECK(Count(Event("combat_scope_stale")) == 0);  // nothing can say so while the tick is gone
+  // the module's own callback, with no refresh before it, reads the same stale answer: it says the scope closed
+  bvh::Tick(GameAddress());
+  QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 2 && Count(Event("combat_bvh_scope") + ",\"from\":1,\"to\":0") == 1);
+  Look();  // the tick comes back, 7.01 s after its last look: the combat level answer says the scope was shut for that gap
   QCHECK(bvh::InCombatOrLobby() && CallInt(&cbvh, kDown, hit));
-  QCHECK(Count(Event("combat_bvh_scope_stale"), kWarn) == 1);
-  QCHECK(Count(std::string("\"gap_s\":\"7.01\",\"stale_after_s\":\"1.00\",\"level\":\"") + LevelHex("mpl_combat_dyson") + "\"") == 1);
+  QCHECK(Count(Event("combat_scope_stale"), kWarn) == 1);
+  QCHECK(Count(std::string("\"gap_ms\":7010,\"stale_after_ms\":1000,\"level\":\"") + LevelHex("mpl_combat_dyson") + "\"") == 1);
+  QCHECK(Count(Event("combat_bvh_scope")) == 3);  // and the module's callback, which says the scope opened again
   Look();  // a look on time (one second): no line
-  QCHECK(Count(Event("combat_bvh_scope_stale")) == 1);
+  QCHECK(Count(Event("combat_scope_stale")) == 1);
   EnterArena();  // the scope is shut on purpose: a long gap after that closed nothing, so it is not a stall worth a line
   g_now += 10.0;
   Look();
-  QCHECK(Count(Event("combat_bvh_scope_stale")) == 1);
+  QCHECK(Count(Event("combat_scope_stale")) == 1);
   End();
 }
 
@@ -847,7 +896,30 @@ void AnInitializeThatIsRefusedLeavesNoTreeAndSaysWhy() {
   End();
 }
 
-void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
+// A Shutdown frees the entry its CBVHTree owns: more than 64 trees can be built and shut down in one process, one at a time (#2307).
+void AShutDownTreeFreesItsEntry() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true, 8);
+  std::uint64_t cb = 0;
+  bool built = true, freed = true;
+  for (int i = 0; i < 200; ++i) {  // 200 level loads: three times the table
+    cb = 0;
+    InitSlot()(&cb, res.bytes.data());
+    built &= cb != 0 && bvh::TreeCount() == 1;
+    ShutSlot()(&cb);
+    freed &= cb == 0 && bvh::TreeCount() == 0;
+  }
+  QCHECK(built && freed);
+  QCHECK(Count("\"why\":\"tree table full\"") == 0);
+  QCHECK(Count("\"result\":\"built\"", kInfo) == 200);
+  End();
+}
+
+// The table is full only while 64 CBVHTrees hold an entry; a shut-down tree's entry is the next one built.
+void TheTableHolds64LiveTreesAndAShutdownMakesRoom() {
   Begin();
   Build();
   QCHECK(Installed(Gateless()));
@@ -861,10 +933,25 @@ void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
   for (int i = 0; i < 64; ++i) all &= cb[i] != 0;
   QCHECK(all);
   InitSlot()(&cb[64], res[64].bytes.data());
-  QCHECK(cb[64] == 0 && Count("\"why\":\"tree table full\"", kError) == 1);
+  QCHECK(cb[64] == 0 && Count("\"why\":\"tree table full\"", kError) == 1 && bvh::TreeCount() == 64);
   std::uint64_t again = 0;
-  InitSlot()(&again, res[3].bytes.data());  // the same data: the same entry, even with the table full
-  QCHECK(again == cb[3] && bvh::TreeCount() == 64);
+  InitSlot()(&again, res[3].bytes.data());  // the same data under a CBVHTree that is not cb[3]: no room, whatever the data
+  QCHECK(again == 0 && Count("\"why\":\"tree table full\"", kError) == 2);
+  // a CBVHTree initialized again without a Shutdown gives back its own entry first, so it is built even with the table full
+  InitSlot()(&cb[3], res[3].bytes.data());
+  QCHECK(cb[3] != 0 && bvh::TreeCount() == 64 && Count("\"cause\":\"reinitialize\"", kInfo) == 1);
+  // a Shutdown makes room for exactly one more
+  ShutSlot()(&cb[10]);
+  QCHECK(cb[10] == 0 && bvh::TreeCount() == 63);
+  InitSlot()(&cb[64], res[64].bytes.data());
+  QCHECK(cb[64] != 0 && bvh::TreeCount() == 64);
+  InitSlot()(&cb[65], res[65].bytes.data());
+  QCHECK(cb[65] == 0 && bvh::TreeCount() == 64 && Count("\"why\":\"tree table full\"", kError) == 3);
+  // every live tree still answers
+  std::uint8_t hit[0x44] = {};
+  bool answers = true;
+  for (int i : {0, 3, 9, 11, 63, 64}) answers &= CallInt(&cb[i], kDown, hit);
+  QCHECK(answers);
   // a CBVHTree word that is the right distance from the table but past its last entry is not a tree
   const std::uint64_t stride = cb[63] - cb[62];
   std::uint64_t past = cb[63] + stride;
@@ -875,6 +962,133 @@ void TheTableHolds64TreesAndTheSameDataReusesItsEntry() {
   QCHECK(!CallInt(&below, kDown, hitP) && g_stockInt == stockBefore + 2);
   std::uint64_t last = cb[63];
   QCHECK(CallInt(&last, kDown, hitP) && g_stockInt == stockBefore + 2);
+  End();
+}
+
+// The one free entry may be the last the search reaches: with the table full, shutting down the tree built last leaves its entry just behind the cursor.
+void TheLastEntryOfTheSearchIsUsed() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true, 8);
+  std::vector<std::uint64_t> cb(65, 0);
+  for (int i = 0; i < 64; ++i) InitSlot()(&cb[i], res.bytes.data());
+  QCHECK(bvh::TreeCount() == 64);
+  ShutSlot()(&cb[63]);
+  InitSlot()(&cb[64], res.bytes.data());
+  QCHECK(cb[64] != 0 && bvh::TreeCount() == 64 && Count("\"why\":\"tree table full\"") == 0);
+  End();
+}
+
+// Two CBVHTrees built from the same data own an entry each; a Shutdown frees its own and leaves the other answering.
+void ASharedResourceKeepsTheOtherTreesEntry() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t a = 0, b = 0;
+  InitSlot()(&a, res.bytes.data());
+  InitSlot()(&b, res.bytes.data());
+  QCHECK(a != 0 && b != 0 && a != b && bvh::TreeCount() == 2);
+  char named[160];  // the line names the CBVHTree (its address) and the data it was built from
+  std::snprintf(named, sizeof(named), "\"event\":\"combat_bvh_tree_freed\",\"tree\":\"0x%016llx\",\"data\":\"0x%016llx\"",
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&a)),
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(res.bytes.data())));
+  ShutSlot()(&a);
+  QCHECK(a == 0 && bvh::TreeCount() == 1);
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&b, kDown, hit));
+  QCHECK(Count(Event("combat_bvh_tree_freed"), kInfo) == 1 && Count("\"cause\":\"shutdown\",\"in_use\":1") == 1);
+  QCHECK(Count(named) == 1 && bvh::GetCounters().treesFreed == 1);
+  End();
+}
+
+// A Shutdown of a CBVHTree that owns no entry (an arena level's, a refused one, one never initialized) frees nothing and writes nothing.
+void AShutdownOfATreeWithoutAnEntryFreesNothing() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t live = 0;
+  InitSlot()(&live, res.bytes.data());
+  QCHECK(bvh::TreeCount() == 1);
+  std::uint64_t garbage = live;  // a word that names the live tree's entry, in an object that never built one
+  ShutSlot()(&garbage);
+  QCHECK(garbage == 0 && bvh::TreeCount() == 1);
+  std::uint64_t never = 0x1234567;
+  ShutSlot()(&never);
+  QCHECK(never == 0 && bvh::TreeCount() == 1 && g_stockShut == 2);
+  QCHECK(Count(Event("combat_bvh_tree_freed")) == 0 && bvh::GetCounters().treesFreed == 0);
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&live, kDown, hit));  // the live tree still answers
+  ShutSlot()(nullptr);                 // a null object: the game's function ran, nothing else
+  QCHECK(g_stockShut == 3 && bvh::TreeCount() == 1);
+  End();
+}
+
+// A cast on a CBVHTree after its Shutdown: the word is cleared, so the game's function answers; a copy of the old word names a freed entry, so it does too;
+// and with free entries ahead of the cursor the next build takes one of those, not the freed entry, so the copy does not name the next tree's entry here either
+// (when the freed entry is the only free one it is reused at once: TheLastEntryOfTheSearchIsUsed).
+void ACastOnAShutDownTreeIsTheGamesOwn() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t a = 0;
+  InitSlot()(&a, res.bytes.data());
+  std::uint64_t stale = a;  // a copy of the word, as a caller that cached it would hold
+  std::uint8_t hit[0x44] = {};
+  QCHECK(CallInt(&stale, kDown, hit) && g_stockInt == 0);
+  ShutSlot()(&a);
+  QCHECK(a == 0);
+  QCHECK(!CallInt(&a, kDown, hit) && g_stockInt == 1);          // the cleared word
+  QCHECK(!CallInt(&stale, kDown, hit) && g_stockInt == 2);      // the freed entry
+  QCHECK(!OccludedSlot()(&stale, kDown, kDown + 3) && g_stockOcc == 1);
+  QCHECK(bvh::GetCounters().intersect == 1 && bvh::GetCounters().stock == 3);
+  std::uint64_t b = 0;
+  InitSlot()(&b, res.bytes.data());  // the next tree takes the next entry, not the freed one
+  QCHECK(b != 0 && b != stale);
+  QCHECK(!CallInt(&stale, kDown, hit) && g_stockInt == 3);
+  QCHECK(CallInt(&b, kDown, hit));
+  End();
+}
+
+// Casts on a live tree go on while other trees are built and shut down, entries being reused around it (the table's reads take no lock).
+void ALiveTreeAnswersWhileOthersAreBuiltAndShutDown() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource live = RoomResource(true);
+  bt::Resource churn = RoomResource(true, 8);
+  std::uint64_t a = 0;
+  InitSlot()(&a, live.bytes.data());
+  std::atomic<bool> stop{false};
+  std::atomic<int> wrong{0}, casts{0};
+  std::thread reader([&] {
+    std::uint8_t h[0x44];
+    while (!stop.load()) {
+      std::memset(h, 0, sizeof(h));
+      std::int32_t id0 = -1;
+      const bool got = CallInt(&a, kDown, h);
+      std::memcpy(&id0, h, 4);
+      if (!got || id0 != 102) wrong.fetch_add(1);
+      casts.fetch_add(1);
+    }
+  });
+  for (int i = 0; i < 300; ++i) {
+    std::uint64_t b = 0;
+    InitSlot()(&b, churn.bytes.data());
+    ShutSlot()(&b);
+  }
+  stop.store(true);
+  reader.join();
+  QCHECK(wrong.load() == 0 && casts.load() > 0);
+  QCHECK(bvh::TreeCount() == 1 && Count("\"why\":\"tree table full\"") == 0);
   End();
 }
 
@@ -1054,10 +1268,35 @@ void ARefusedStepTouchesNothingAndSaysWhy() {
     QCHECK(Count(Event("combat_bvh_install"), kError) == 1);
     End();
   }
-  {  // no room in the tick table: the scope would never turn on, so nothing is installed
+  {  // the combat level answer cannot change (the tick is not installed, or the scope row did not register its refresh): nothing is hooked, and the
+     // scope is asked before the image (no libr15 here either)
+    for (const bool tickUp : {false, true}) {
+      Begin();
+      Build();
+      nevr_quest::combat::tick::ResetForTest();
+      scope::ResetForTest();
+      scope::SetClockForTest(&ScopeClock);
+      if (tickUp) {
+        g_tickImage.Build({world::TickRow()});
+        world::PutTickSlot(g_tickImage);
+        QCHECK(nevr_quest::combat::tick::InstallAt(&TickImageLookup));
+      } else {
+        g_image.Drop();
+      }
+      std::uintptr_t before = tickUp ? SlotWord(g_pins.intersect.slot) : 0;
+      const nevr_quest::combat::ModuleResult r = bvh::Install(On());
+      QCHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && !bvh::TreeInstalled() && !scope::Live());
+      QCHECK(nevr_quest::combat::tick::Count() == 0);
+      if (tickUp) QCHECK(SlotWord(g_pins.intersect.slot) == before);
+      QCHECK(Count(Event("combat_bvh_install"), kError) == 1);
+      QCHECK(Count("\"result\":\"refused\",\"reason\":\"scope_not_live\",\"hook\":\"(none)\",\"status\":\"scope_not_live\",\"error\":0") == 1);
+      End();
+    }
+  }
+  {  // no room in the tick table: the module's callback could never run, so nothing is installed
     Begin();
     Build();
-    for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) {
+    while (nevr_quest::combat::tick::Count() < nevr_quest::combat::tick::kMaxCallbacks) {
       QCHECK(nevr_quest::combat::tick::Add(+[](std::uintptr_t) noexcept {}));
     }
     const std::uintptr_t before = SlotWord(g_pins.intersect.slot);
@@ -1080,31 +1319,67 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
   const float upOut[6] = {0, 20, 0, 0, 1, 0};
   CallInt(&cbvh, upOut, hit);  // a miss: two casts, one hit
   g_now = 105.0;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(Count(Event("combat_bvh_summary")) == 0);  // inside the window
   g_now = 112.0;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(Count(Event("combat_bvh_summary"), kInfo) == 1 && Count("\"intersect\":2,\"intersect_hit\":1") == 1);
+  QCHECK(Count("\"in_use\":1,") == 1);  // the one live tree holds one entry
   g_now = 125.0;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(Count(Event("combat_bvh_summary")) == 1);  // nothing moved: no line
   CallInt(&cbvh, kDown, hit);
   g_now = 130.0;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(Count(Event("combat_bvh_summary")) == 1);  // a second summary inside the 10 s window
   g_now = 140.0;
-  bvh::Tick(GameAddress());
+  Frame();
   QCHECK(Count(Event("combat_bvh_summary")) == 2);
   End();
 }
 
 }  // namespace
 
+// Every combat_bvh_install line names the gate and touch switches the step was handed (#2382), on every path: installed, already_ran, off and
+// refused. All four pairs of gate and touch run every path, so a line that drops either field, or fixes it at either value, shows on the pairs
+// that differ.
+void EveryInstallLineNamesTheSwitchesItWasHanded() {
+  for (const bool gate : {false, true}) {
+    for (const bool touch : {false, true}) {
+      const std::string named = std::string("\"bvh_gate\":") + (gate ? "1" : "0") + ",\"bvh_touch\":" + (touch ? "1" : "0");
+      bvh::Switches handed = Gateless();
+      handed.gate = gate;
+      handed.touch = touch;
+      {  // installed, then a second step refused already_ran
+        Begin();
+        Build();
+        QCHECK(Installed(handed));
+        QCHECK(Count(Event("combat_bvh_install") + ",\"result\":\"installed\"") == 1 && Count(named) == 1);
+        QCHECK(std::strcmp(bvh::Install(handed).status, "already_ran") == 0);
+        QCHECK(Count("\"reason\":\"already_ran\"," + named) == 1);
+        End();
+      }
+      {  // off by combat.bvh: the two others it was handed are named too
+        Begin();
+        Build();
+        bvh::Switches off = handed;
+        off.bvh = false;
+        QCHECK(bvh::Install(off).off);
+        QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"") == 1 && Count(named) == 1);
+        End();
+      }
+      {  // refused: no libr15
+        Begin();
+        QCHECK(std::strcmp(bvh::Install(handed).status, "module_not_loaded") == 0);
+        QCHECK(Count("\"reason\":\"module_not_loaded\"") == 1 && Count(named) == 1);
+        End();
+      }
+    }
+  }
+}
+
 int main() {
   QCHECK(!bvh::InCombatOrLobby());  // before anything: no combat map is known, so the hooks would call the game's functions
-  // the cached answer itself starts false (not only the guarded accessor, which the stale look also shuts): the first look in a level that is not
-  // combat then changes nothing and writes no `combat_bvh_scope` line
-  QCHECK(!bvh::detail::g_inCombatOrLobby.load());
   char tmpl[] = "/tmp/combat-bvh-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
@@ -1121,11 +1396,18 @@ int main() {
   AStalledTickFailsClosed();
   ALevelThatIsNotCombatGetsNoTree();
   AnInitializeThatIsRefusedLeavesNoTreeAndSaysWhy();
-  TheTableHolds64TreesAndTheSameDataReusesItsEntry();
+  AShutDownTreeFreesItsEntry();
+  TheTableHolds64LiveTreesAndAShutdownMakesRoom();
+  TheLastEntryOfTheSearchIsUsed();
+  ASharedResourceKeepsTheOtherTreesEntry();
+  AShutdownOfATreeWithoutAnEntryFreesNothing();
+  ACastOnAShutDownTreeIsTheGamesOwn();
+  ALiveTreeAnswersWhileOthersAreBuiltAndShutDown();
   TheCallersGateAnswersTheListedCastsOnly();
   ASlotThatDoesNotHoldItsPinnedFunctionRefusesAllOfIt();
   ARefusedStepTouchesNothingAndSaysWhy();
   TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved();
+  EveryInstallLineNamesTheSwitchesItWasHanded();
   rmdir(g_dir.c_str());
   if (quest_test::Failures() == 0) std::printf("bvh_test: all checks pass\n");
   return quest_test::Failures() == 0 ? 0 : 1;

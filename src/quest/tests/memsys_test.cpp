@@ -46,18 +46,25 @@ int g_initCalls = 0;
 std::uint32_t g_allocCapSeen = 0;
 void* g_initAppSeen = nullptr;
 // 0 the real layout; 1 count not 0; 2 no stack; 3 capacity read back wrong; 4 stack capacity short; 5 stack unreadable;
-// 6 the stack is in read-only memory
+// 6 the stack is in read-only memory; 7 the stack is not 4-aligned; 8 Alloc writes nothing (the test laid the pool out itself);
+// 9 the stack is writable for 512 entries only
 int g_mode = 0;
 std::uint32_t* g_readOnlyStack = nullptr;
+std::uint32_t* g_partialStack = nullptr;  // writable for 512 entries, then an unmapped page
 constexpr std::uint64_t kAllocResult = 0x5a5a;
 constexpr std::uint64_t kInitResult = 0xa11ce;
 
 extern "C" __attribute__((noinline)) std::uint64_t FakeAlloc(void* pool, std::uint32_t cap, void*) {
   ++g_allocCalls;
   g_allocCapSeen = cap;
+  if (pool == nullptr || g_mode == 8) return kAllocResult;
   auto* p = static_cast<std::uint8_t*>(pool);
-  const std::uint64_t stack = g_mode == 2 ? 0 : g_mode == 5 ? 0x1000 : g_mode == 6 ? reinterpret_cast<std::uint64_t>(g_readOnlyStack)
-                                                                                    : reinterpret_cast<std::uint64_t>(g_stack);
+  const std::uint64_t stack = g_mode == 2   ? 0
+                              : g_mode == 5 ? 0x1000
+                              : g_mode == 6 ? reinterpret_cast<std::uint64_t>(g_readOnlyStack)
+                              : g_mode == 7 ? reinterpret_cast<std::uint64_t>(g_stack) + 1
+                              : g_mode == 9 ? reinterpret_cast<std::uint64_t>(g_partialStack)
+                                            : reinterpret_cast<std::uint64_t>(g_stack);
   std::memcpy(p + 0x28, &stack, sizeof(stack));
   const std::uint64_t count = g_mode == 1 ? 7 : 0;
   std::memcpy(p + 0x30, &count, sizeof(count));
@@ -241,6 +248,8 @@ void BothSlotsTakeTheirThunkAndTheLinesSayWhich() {
   QCHECK(hooks.size() == 2U);
   for (const Line& l : hooks) QCHECK(l.level == sentinel::LogLevel::kInfo && Has(l.text, "\"status\":\"ok\""));
   QCHECK(hooks.size() == 2U && Has(hooks[0].text, "\"row\":\"R37\"") && Has(hooks[1].text, "\"row\":\"R38\""));
+  QCHECK(hooks.size() == 2U && Has(hooks[0].text, std::string("\"symbol\":\"") + memsys::kAllocSymbol + "\"") &&
+         Has(hooks[1].text, std::string("\"symbol\":\"") + memsys::kInitSymbol + "\""));
   const std::vector<Line> install = Lines("combat_memsys_install");
   QCHECK(install.size() == 1U);
   if (install.size() == 1U) {
@@ -272,6 +281,7 @@ void ThePoolIsRaisedOnlyAtTheSiteWithTheStockCapacity() {
   QCHECK(SiteA(alloc, g_pool, 0x200) == kAllocResult);  // the game's result goes back untouched
   QCHECK(g_allocCapSeen == 0x400 && g_allocCalls == 1);
   QCHECK(PoolCount() == 512);
+  QCHECK(g_stack[512] == 0xeeeeeeeeU);  // only 1023..512 go below the inline fill: nothing is written at 512 and above
   InlineFill(g_pool);
   QCHECK(PoolCount() == 1024);
   bool seen[1024] = {};
@@ -293,7 +303,7 @@ void ThePoolIsRaisedOnlyAtTheSiteWithTheStockCapacity() {
            "\"event\":\"combat_memsys_pool\",\"result\":\"raised\",\"slots\":1024,\"pre_pushed\":512,\"cap_read_back\":1024,"
            "\"consequence\":\"the layout pool holds 1024 render-target layouts once the inline fill has run\"}");
   }
-  QCHECK(memsys::CurrentStats().poolRaised == 1);
+  QCHECK(memsys::CurrentStats().poolRaised == 1 && memsys::CurrentStats().allocCalls == 4);  // Learn's two, the pass-through above, this one
 
   // The same call from another function: the game's own request.
   ResetPool();
@@ -303,6 +313,15 @@ void ThePoolIsRaisedOnlyAtTheSiteWithTheStockCapacity() {
   ResetPool();
   QCHECK(SiteA(alloc, g_pool, 0x100) == kAllocResult && g_allocCapSeen == 0x100);
   QCHECK(PoolCount() == 0 && g_stack[0] == 0xeeeeeeeeU);
+  // The site and the stock capacity but no pool: the game's own call, nothing counted as a pool the module could not raise.
+  g_lines.clear();
+  QCHECK(SiteA(alloc, nullptr, 0x200) == kAllocResult && g_allocCapSeen == 0x200);
+  QCHECK(memsys::CurrentStats().poolNotRaised == 0 && Lines("combat_memsys_pool").empty());
+  // A second pool made at the site is raised too, and its line is the first's only: the line is written once.
+  ResetPool();
+  QCHECK(SiteA(alloc, g_pool, 0x200) == kAllocResult && PoolCount() == 512);
+  QCHECK(memsys::CurrentStats().poolRaised == 2 && memsys::CurrentStats().allocCalls == 8);
+  QCHECK(Lines("combat_memsys_pool").size() == 0U);  // the line was written by the first, before g_lines was cleared
   End();
 }
 
@@ -310,7 +329,20 @@ void ThePoolIsRaisedOnlyAtTheSiteWithTheStockCapacity() {
 void ALayoutItDoesNotKnowIsLeftTheStock512() {
   g_readOnlyStack = static_cast<std::uint32_t*>(mmap(nullptr, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
   QCHECK(g_readOnlyStack != MAP_FAILED);
-  for (int mode = 1; mode <= 6; ++mode) {
+  struct Fields {
+    int mode;
+    const char* fragment;  // the words the Warning reads: stack, stack_cap, cap_read, count, readable
+  };
+  static const Fields kFields[] = {
+      {1, "\"stack_cap\":1024,\"cap_read\":1024,\"count\":7,\"readable\":1"},
+      {2, "\"stack\":\"0x0000000000000000\",\"stack_cap\":1024,\"cap_read\":1024,\"count\":0,\"readable\":1"},
+      {3, "\"stack_cap\":1024,\"cap_read\":512,\"count\":0,\"readable\":1"},
+      {4, "\"stack_cap\":256,\"cap_read\":1024,\"count\":0,\"readable\":1"},
+      {5, "\"stack\":\"0x0000000000001000\",\"stack_cap\":1024,"},
+      {6, "\"stack_cap\":1024,\"cap_read\":1024,\"count\":0,\"readable\":1"},
+      {7, "\"stack_cap\":1024,\"cap_read\":1024,\"count\":0,\"readable\":1"},
+  };
+  for (int mode = 1; mode <= 7; ++mode) {
     Begin();
     Build();
     QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
@@ -327,6 +359,7 @@ void ALayoutItDoesNotKnowIsLeftTheStock512() {
     if (pool.size() == 1U) {
       QCHECK(pool[0].level == sentinel::LogLevel::kWarn && Has(pool[0].text, "\"result\":\"not_raised\""));
       QCHECK(Has(pool[0].text, "the layout pool is the stock 512 slots"));
+      QCHECK(Has(pool[0].text, kFields[mode - 1].fragment));
     }
     QCHECK(memsys::CurrentStats().poolNotRaised == 1 && memsys::CurrentStats().poolRaised == 0);
     g_mode = mode;
@@ -403,6 +436,8 @@ void APinnedWordThatDiffersRefusesItsRowAlone() {
             Has(l.text, "\"have\":\"0x0000000091080129\",\"want\":\"0x0000000091080169\"");
   }
   QCHECK(found);
+  const std::vector<Line> mismatchInstall = Lines("combat_memsys_install");
+  QCHECK(mismatchInstall.size() == 1U && Has(mismatchInstall[0].text, "\"r37\":\"pinned_word_mismatch\",\"r38\":\"ok\""));
   End();
   Begin();
   Build();
@@ -468,6 +503,188 @@ void TheSwitchTheMissingImageAndASecondStepInstallNothing() {
   End();
 }
 
+// Takes a page of the libr15 image away (or gives it back): a word in it cannot be read, as a pinned address outside the mapping cannot.
+void Protect(std::uint64_t vaddr, int prot) {
+  QCHECK(mprotect(g_image.Slot(vaddr & ~0xfffULL), 0x1000, prot) == 0);
+}
+
+// A pool the module can read but not write (its count word is in read-only memory), and one it cannot read at all: not raised, one Warning, and
+// the Warning says whether the words were read.
+void APoolInMemoryThatCannotBeWrittenOrReadIsLeftTheStock512() {
+  for (const int prot : {PROT_READ, PROT_NONE}) {
+    Begin();
+    Build();
+    QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+    const Sites s = Learn();
+    memsys::SetSitesForTest(s.allocA, s.initA);
+    ResetPool();
+    g_lines.clear();
+    std::uint8_t* const page = static_cast<std::uint8_t*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    QCHECK(page != MAP_FAILED);
+    const std::uint64_t stack = reinterpret_cast<std::uint64_t>(g_stack);
+    const std::uint64_t stackCap = 0x400;
+    const std::uint32_t cap = 0x400;
+    std::memcpy(page + 0x28, &stack, sizeof(stack));
+    std::memcpy(page + 0x38, &stackCap, sizeof(stackCap));
+    std::memcpy(page + 0x84, &cap, sizeof(cap));  // the count at +0x30 stays 0
+    QCHECK(mprotect(page, 4096, prot) == 0);
+    g_mode = 8;
+    SiteA(AllocSlot(), page, 0x200);
+    QCHECK(g_stack[0] == 0xeeeeeeeeU);  // the free stack was not written
+    const std::vector<Line> pool = Lines("combat_memsys_pool");
+    QCHECK(pool.size() == 1U && memsys::CurrentStats().poolNotRaised == 1 && memsys::CurrentStats().poolRaised == 0);
+    if (pool.size() == 1U) {
+      QCHECK(pool[0].level == sentinel::LogLevel::kWarn && Has(pool[0].text, "\"result\":\"not_raised\""));
+      QCHECK(Has(pool[0].text, prot == PROT_READ ? "\"count\":0,\"readable\":1" : "\"stack\":\"0x0000000000000000\",\"stack_cap\":0,\"cap_read\":0,\"count\":0,\"readable\":0"));
+    }
+    QCHECK(munmap(page, 4096) == 0);
+    End();
+  }
+}
+
+// A free stack that is writable for the stock 512 entries but not for the 1024 the module would fill: not raised.
+void AStackWritableOnlyForTheStockEntriesIsLeftTheStock512() {
+  std::uint8_t* const two = static_cast<std::uint8_t*>(mmap(nullptr, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  QCHECK(two != MAP_FAILED);
+  QCHECK(mprotect(two + 4096, 4096, PROT_NONE) == 0);
+  g_partialStack = reinterpret_cast<std::uint32_t*>(two + 4096 - 512 * 4);
+  Begin();
+  Build();
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+  const Sites s = Learn();
+  memsys::SetSitesForTest(s.allocA, s.initA);
+  ResetPool();
+  g_lines.clear();
+  g_mode = 9;
+  SiteA(AllocSlot(), g_pool, 0x200);
+  QCHECK(PoolCount() == 0 && memsys::CurrentStats().poolNotRaised == 1 && Lines("combat_memsys_pool").size() == 1U);
+  End();
+  QCHECK(munmap(two, 8192) == 0);
+  g_partialStack = nullptr;
+}
+
+// With the test setting no sites, the wrappers act on base + the pinned return addresses, and the witness reads the System heap through the
+// pinned slot: the pins say a call from a test function is the site, and a slot at another address is the System heap's.
+void TheSitesAndTheSystemSlotAreTheImagesPinsWhenNoTestSetsThem() {
+  Begin();
+  Build();
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+  const Sites s = Learn();
+  End();
+
+  Begin();
+  Build();
+  g_pins.allocSite = s.allocA - g_image.Base();
+  g_pins.initSite = s.initA - g_image.Base();
+  g_pins.systemSlot = 0x371d028;  // not the default slot: that one points at a 400 MiB word
+  g_image.Put<std::uint64_t>(0x2b9ca98, 400ULL << 20);
+  g_image.Put<std::uintptr_t>(memsys::kPins.systemSlot, g_image.Base() + 0x2b9ca98);
+  g_image.Put<std::uintptr_t>(g_pins.systemSlot, g_image.Base() + 0x2b9ca90);  // 640 MiB
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+  ResetPool();
+  g_lines.clear();
+  QCHECK(SiteB(AllocSlot(), g_pool, 0x200) == kAllocResult && g_allocCapSeen == 0x200 && PoolCount() == 0);
+  QCHECK(SiteA(AllocSlot(), g_pool, 0x200) == kAllocResult && g_allocCapSeen == 0x400 && PoolCount() == 512);
+  QCHECK(InitSiteB(InitSlot(), nullptr) == kInitResult && Lines("combat_memsys_witness").empty());
+  QCHECK(InitSiteA(InitSlot(), nullptr) == kInitResult);
+  const std::vector<Line> witness = Lines("combat_memsys_witness");
+  QCHECK(witness.size() == 1U);
+  if (witness.size() == 1U) {
+    QCHECK(Has(witness[0].text, "\"system_heap_mib_next_read\":640,\"system_heap\":\"raised\",\"system_slot_vaddr\":\"0x000000000371d028\""));
+  }
+  End();
+}
+
+// A pinned word that cannot be read is named "unreadable"; the Warning says what the refusal leaves.
+void APinnedWordThatCannotBeReadIsNamedUnreadable() {
+  Begin();
+  Build();
+  Protect(0x18818b8, PROT_NONE);  // R37's pinned words in this page
+  const nevr_quest::combat::ModuleResult r = memsys::InstallAt(&Lookup, g_pins, true);
+  Protect(0x18818b8, PROT_READ | PROT_WRITE);
+  QCHECK(!r.installed && std::strcmp(r.status, "partial") == 0 && !AllocHooked() && InitHooked());
+  const std::vector<Line> hooks = Lines("combat_memsys_hook");
+  QCHECK(hooks.size() == 2U);
+  if (hooks.size() == 2U) {
+    QCHECK(hooks[0].level == sentinel::LogLevel::kWarn);
+    QCHECK(Golden(hooks[0].text) ==
+           std::string("\"event\":\"combat_memsys_hook\",\"row\":\"R37\",\"symbol\":\"") + memsys::kAllocSymbol +
+               "\",\"status\":\"pinned_word_mismatch\",\"vaddr\":\"0x00000000018818b8\",\"have\":\"unreadable\","
+               "\"want\":\"0x0000000052804001\",\"consequence\":\"the row is not installed: its pinned code is not the pinned build's\"}");
+  }
+  End();
+}
+
+// The install line for every way a step ends: what is left installed and what the game keeps.
+void TheInstallLineSaysWhatIsLeftForEveryOutcome() {
+  Begin();
+  Build();
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, false).status != nullptr);
+  std::vector<Line> install = Lines("combat_memsys_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
+  if (install.size() == 1U) {
+    QCHECK(Golden(install[0].text) ==
+           "\"event\":\"combat_memsys_install\",\"result\":\"off\",\"reason\":\"combat.memsys\",\"r37\":\"off\",\"r38\":\"off\","
+           "\"consequence\":\"combat.memsys is false: the layout pool is the stock 512 slots and the System heap is the game's\"}");
+  }
+  End();
+
+  Begin();
+  Build();
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+  g_lines.clear();
+  QCHECK(!memsys::InstallAt(&Lookup, g_pins, true).installed);
+  install = Lines("combat_memsys_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kWarn);
+  if (install.size() == 1U) {
+    QCHECK(Golden(install[0].text) ==
+           "\"event\":\"combat_memsys_install\",\"result\":\"refused\",\"reason\":\"already_ran\",\"consequence\":\"a second step installs nothing\"}");
+  }
+  End();
+
+  Begin();
+  QCHECK(!memsys::InstallAt(nullptr, g_pins, true).installed);
+  install = Lines("combat_memsys_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+  if (install.size() == 1U) {
+    QCHECK(Golden(install[0].text) ==
+           "\"event\":\"combat_memsys_install\",\"result\":\"refused\",\"reason\":\"module_not_loaded\",\"r37\":\"not_tried\",\"r38\":\"not_tried\","
+           "\"consequence\":\"the layout pool is the stock 512 slots and no witness line is written\"}");
+  }
+  End();
+
+  // Both slots held by another hook: "refused", with the manager's status for each row.
+  Begin();
+  Build(640, /*foreignAllocSlot=*/true);
+  *g_image.Slot(g_pins.initSlot) = reinterpret_cast<void*>(0x4242420);
+  const nevr_quest::combat::ModuleResult both = memsys::InstallAt(&Lookup, g_pins, true);
+  QCHECK(!both.installed && std::strcmp(both.status, "refused") == 0 && !AllocHooked() && !InitHooked());
+  install = Lines("combat_memsys_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+  if (install.size() == 1U) {
+    QCHECK(Golden(install[0].text) ==
+           "\"event\":\"combat_memsys_install\",\"result\":\"refused\",\"reason\":\"row_refused\",\"r37\":\"original_mismatch\","
+           "\"r38\":\"original_mismatch\",\"consequence\":\"the layout pool is the stock 512 slots and no witness line is written\"}");
+  }
+  End();
+
+  // Only the witness's slot is held: the pool is raised, the witness is not written.
+  Begin();
+  Build();
+  *g_image.Slot(g_pins.initSlot) = reinterpret_cast<void*>(0x4242420);
+  const nevr_quest::combat::ModuleResult poolOnly = memsys::InstallAt(&Lookup, g_pins, true);
+  QCHECK(!poolOnly.installed && std::strcmp(poolOnly.status, "partial") == 0 && AllocHooked() && !InitHooked());
+  QCHECK(*g_image.Slot(g_pins.initSlot) == reinterpret_cast<void*>(0x4242420));
+  install = Lines("combat_memsys_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+  if (install.size() == 1U) {
+    QCHECK(Golden(install[0].text) ==
+           "\"event\":\"combat_memsys_install\",\"result\":\"partial\",\"reason\":\"row_refused\",\"r37\":\"ok\",\"r38\":\"original_mismatch\","
+           "\"consequence\":\"the pool is raised but android_main's start is not witnessed\"}");
+  }
+  End();
+}
+
 }  // namespace
 
 int main() {
@@ -479,6 +696,11 @@ int main() {
   APinnedWordThatDiffersRefusesItsRowAlone();
   AForeignSlotIsRefusedAndLeftAlone();
   TheSwitchTheMissingImageAndASecondStepInstallNothing();
+  APoolInMemoryThatCannotBeWrittenOrReadIsLeftTheStock512();
+  AStackWritableOnlyForTheStockEntriesIsLeftTheStock512();
+  TheSitesAndTheSystemSlotAreTheImagesPinsWhenNoTestSetsThem();
+  APinnedWordThatCannotBeReadIsNamedUnreadable();
+  TheInstallLineSaysWhatIsLeftForEveryOutcome();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "memsys_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

@@ -1,6 +1,7 @@
 #include "quest/sentinel/crash_report_quest.h"
 
 #include "core/crash_report.h"
+#include "quest/sentinel/crash_summary_rules.h"
 #include "quest/sentinel/elf_build_id.h"
 #include "quest/sentinel/sentinel.h"
 #include "quest/sentinel/sentinel_log.h"
@@ -17,7 +18,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #define NEVR_TAG "NEVR-Sentinel"
 
@@ -210,6 +213,35 @@ void Describe(const nevr_crash::CrashInfo& info, nevr_crash::Report* report) {
 #endif
 }
 
+// The report beside the minidump names the provisional file in its summary (#2129). Rewrites that field to the final name:
+// read the whole report, change the summary line (crash_summary.h), write it under a sibling name and rename it over the
+// report. Best effort: on a failure the report stays whole under its final name, with the provisional path in its summary,
+// and the log says so.
+bool NameReportInSummary(const char* path, const char* provisional, const char* final) {
+  std::FILE* in = std::fopen(path, "rb");
+  if (in == nullptr) return false;
+  std::string text;
+  char chunk[4096];
+  std::size_t n = 0;
+  while ((n = std::fread(chunk, 1, sizeof(chunk), in)) > 0) text.append(chunk, n);
+  const bool readFailed = std::ferror(in) != 0;
+  std::fclose(in);
+  if (readFailed) return false;
+
+  const std::string named = nevr_quest::crash_summary::NameFinalReport(text, provisional, final);
+  if (named == text) return true;
+  const std::string tmp = std::string(path) + ".naming";
+  std::FILE* out = std::fopen(tmp.c_str(), "wb");
+  if (out == nullptr) return false;
+  const bool wrote = std::fwrite(named.data(), 1, named.size(), out) == named.size();
+  const bool closed = std::fclose(out) == 0;
+  if (!wrote || !closed || ::rename(tmp.c_str(), path) != 0) {
+    std::remove(tmp.c_str());
+    return false;
+  }
+  return true;
+}
+
 const nevr_crash::Platform kPlatform = {&ResolveAddress, &Describe,  &ReportPath,  &OpenFile,
                                         &WriteFile,      &CloseFile, &RenameFile, &LogSummary};
 
@@ -230,6 +262,10 @@ bool FinishCrashReport(const char* dump_path, char* report_path, unsigned long c
     if (std::strcmp(provisional, target) != 0 && ::rename(provisional, target) != 0) {
       nevr_crash::CopyText(report_path, capacity, provisional);  // still a whole report, under the provisional stem
       return true;
+    }
+    // The renamed report's summary names the file it is now (#2129); a failed rewrite leaves the provisional path in it.
+    if (std::strcmp(provisional, target) != 0 && !NameReportInSummary(target, provisional, target)) {
+      __android_log_print(ANDROID_LOG_WARN, NEVR_TAG, "crash: report summary still names the provisional file path=%s", target);
     }
     nevr_crash::CopyText(report_path, capacity, target);
     return true;

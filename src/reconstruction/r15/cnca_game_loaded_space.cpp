@@ -8,7 +8,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct GameSpaceEntry {
     std::int64_t symbol;
@@ -66,4 +66,4 @@ void* CncaGame::LoadedGameSpace(std::uint64_t symbol) const {
     return matched ? result : nullptr;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

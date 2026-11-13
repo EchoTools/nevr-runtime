@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ FILES = {
                                    'add_executable(thing_test t.cpp)\n'
                                    'target_compile_definitions(x PRIVATE GIT_COMMIT_HASH="a" NEVR_OK=1 NOMINMAX)\n'),
     "extern/old.h": "namespace OldThing {\n}\n",
+    "docs/prose.md": "The brand nEVR is spelled in prose.\nA bad spelling NeVR is still a finding.\n",
 }
 
 
@@ -41,16 +43,105 @@ class NamingInventoryTest(unittest.TestCase):
         out = self.inventory()
         self.assertIn("src/runtime/a.h:1  GameServer", out)
         self.assertIn("src/runtime/a.h:5  n" "EVR", out)  # spelled in two pieces: the sensor scans this file too
-        self.assertIn("src/runtime/b.cpp:1  Nevr::" "Lifecycle", out)  # two pieces: test_naming scans this file
+        self.assertIn("src/runtime/b.cpp:1  Nevr::" "Lifecycle", out)  # two pieces: this is Python text, and the lifecycle category reads code files only
         self.assertIn("src/runtime/b.cpp:3  [TELEMETRY.DIAG]", out)
         self.assertIn("src/runtime/CMakeLists.txt:1  platform_compat", out)
         self.assertIn("src/runtime/CMakeLists.txt:4  GIT_COMMIT_HASH", out)
+
+    def test_brand_spelling_in_prose_of_a_document_is_not_a_finding(self):
+        out = self.inventory("--category", "spellings")
+        self.assertNotIn("docs/prose.md:1  nEVR", out)  # naming.md: the brand spelling is allowed in document prose
+        self.assertIn("docs/prose.md:2  NeVR", out)  # any other spelling in a document is still a finding
+        self.assertIn("src/runtime/a.h:5  n" "EVR", out)  # a code file keeps its finding
 
     def test_compliant_and_excluded_names_are_not_findings(self):
         out = self.inventory()
         for fine in ("EchoVR", "nevr_cfg", "nevr::lifecycle", "[NEVR.WS]", "nevr_core", "thing_test", "NEVR_OK",
                      "NOMINMAX", "OldThing"):
             self.assertNotIn(fine + "  ", out, fine)
+
+    def test_a_reconstruction_namespace_is_a_finding_only_when_it_breaks_naming_md(self):
+        # docs/standards/naming.md: the game's namespaces in src/reconstruction keep the game's spelling, and a namespace
+        # the reconstruction wrote takes the rule on its last component, after the game's prefix. The literals are split:
+        # this file is scanned too, and a whole `namespace X {` line here would be a finding of the real tree.
+        path = "src/reconstruction/r15/a.cpp"
+        lines = [
+            "namespace NRadEngine::" "nevr_reconstruction {",                 # 1 allowed
+            "namespace NRadEngine::NRadGame::" "nevr_reconstruction {",       # 2 allowed
+            "namespace NRadEngine::" "NRadGame {",                            # 3 allowed: the game's spelling
+            "namespace NRadEngine::CMemory {",                                # 4 allowed: the game's spelling
+            "namespace NWriteLog {",                                          # 5 allowed: the game's spelling
+            "namespace NRadEngine::" "reconstruction {",                      # 6 finding: last component not nevr
+            "namespace xtool::r15::" "reconstruction {",                      # 7 finding: lower-case prefix
+            "namespace NRadEngine::" "nevr_reconstruction::" "extra {",       # 8 finding: nevr is not the last component
+            "namespace xtool::" "NRadGame {",                                 # 9 finding: lower-case prefix, game spelling after it
+            "namespace xtool::" "nevr_reconstruction {",                      # 10 finding: lower-case prefix
+            "namespace NRadEngine::" "nevr_Reconstruction {",                 # 11 finding: nevr_<area> is lower-case
+            "namespace " "nevrfoo {",                                         # 12 finding: nevr needs an underscore for an area
+            "namespace NRadEngine::" "nevr_ {",                               # 13 finding: an empty area
+            "namespace NRadEngine::" "NevrReconstruction {",                  # 14 finding: project spelling, not the game's
+            "namespace " "nevr_reconstruction {",                             # 15 allowed: bare nevr_<area>
+            "namespace " "nevr {",                                            # 16 allowed: bare nevr
+            "namespace NevrX::" "NRadGame {",                                 # 17 finding: project-spelled prefix, game spelling after it
+            "namespace NevrX::" "nevr_reconstruction {",                      # 18 finding: project-spelled prefix
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, {6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18}, out)
+
+    def test_a_namespace_outside_the_reconstruction_keeps_the_general_rule(self):
+        # The reconstruction's game spelling is not a licence anywhere else: a PascalCase namespace in the tree is a finding
+        # unless it is EchoVR or NRadEngine, and the four non-models naming.md names stay findings (see the next test).
+        target = self.tmp / "src/runtime/d.h"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("namespace NRadEngine::" "nevr_reconstruction {\n}\nnamespace NRadEngine::CMemory {\n}\n",
+                          encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        self.assertIn("src/runtime/d.h:1  NRadEngine::nevr_reconstruction", out)
+        self.assertIn("src/runtime/d.h:3  NRadEngine::CMemory", out)
+
+    def test_nrad_engine_outside_the_reconstruction_is_the_games_namespace(self):
+        # NRadEngine:: is the game's (naming.md, "Names in the tree that are not models"), and the exemption holds in the
+        # general rule too, not only in the reconstruction. The literal is split: this file is scanned too.
+        target = self.tmp / "src/runtime/e.h"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("namespace " "NRadEngine {\n}\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        self.assertNotIn("src/runtime/e.h:", out)
+
+    def test_a_multi_word_area_is_allowed_in_the_reconstruction(self):
+        # naming.md gives the form nevr_<area>; NEVR_COMPONENT takes `_` after the first letter of the area, so a
+        # multi-word area is allowed, and a pattern without that `_` reports both lines below.
+        path = "src/reconstruction/r15/b.cpp"
+        lines = [
+            "namespace NRadEngine::" "nevr_plugin_cfg {",                     # 1 allowed: a multi-word area
+            "namespace " "nevr_plugin_cfg {",                                 # 2 allowed: a bare multi-word area
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, set(), out)
+
+    def test_every_prefix_component_of_a_reconstruction_namespace_is_the_games(self):
+        # naming.md: the game's prefix keeps the game's spelling, so each component before the last is checked, not only
+        # the first. Line 1 has a lower-case second component, line 2 a project-spelled one; line 3 is allowed (the control).
+        path = "src/reconstruction/r15/c.cpp"
+        lines = [
+            "namespace NRadEngine::" "xtool::" "NRadGame {",                  # 1 finding: lower-case second component
+            "namespace NRadEngine::" "NevrX::" "nevr_reconstruction {",       # 2 finding: project-spelled second component
+            "namespace NRadEngine::" "NRadGame::" "nevr_reconstruction {",    # 3 allowed: the game's prefix
+        ]
+        target = self.tmp / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self.inventory("--category", "pascal-namespaces")
+        found = {int(line.split(":")[1].split()[0]) for line in out.splitlines() if line.startswith(path + ":")}
+        self.assertEqual(found, {1, 2}, out)
 
     def test_a_category_can_be_selected_and_summarised(self):
         out = self.inventory("--category", "pascal-namespaces")
@@ -59,6 +150,20 @@ class NamingInventoryTest(unittest.TestCase):
         summary = self.inventory("--summary")
         self.assertNotIn("src/runtime/a.h", summary)
         self.assertIn("pascal-namespaces", summary)
+
+
+class NamedPathsTest(unittest.TestCase):
+    # A path the inventory's text names (its docstring, SELF) must be a file of the tree, so a reference to a file that
+    # is not there fails here rather than in a reader's head.
+    PATH = re.compile(r"\b(?:docs|tools|src|sdk|installer)/[A-Za-z0-9_./-]+\.(?:md|py|json|h|cpp|txt|yaml|cmake)\b")
+
+    def test_every_path_the_inventory_names_is_in_the_tree(self):
+        tree = set(subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                                  check=True, capture_output=True, text=True).stdout.split("\0"))
+        named = sorted(set(self.PATH.findall(SCRIPT.read_text(encoding="utf-8"))))
+        self.assertTrue(named, "the check found no path in the inventory to read")
+        self.assertEqual([p for p in named if p not in tree], [],
+                         "tools/naming_inventory.py names a path that is not in the tree")
 
 
 if __name__ == "__main__":

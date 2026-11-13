@@ -1,7 +1,7 @@
 # Module `pfxtev` (the event-effect decision)
 
-Files: `src/quest/combat/pfxtev.{h,cpp}`, `src/quest/tests/pfxtev_test.cpp`, `src/quest/combat/legacy_switch.h`. A normal combat step, in the `q15t` and
-`combat` APKs only. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.pfxtev`, true unless the file says false.
+Files: `src/quest/combat/pfxtev.{h,cpp}`, `src/quest/tests/pfxtev_test.cpp`, `src/quest/combat/legacy_switch.h`. A normal combat step, in the combat
+APKs only. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.pfxtev`, true unless the file says false.
 
 Origin: the id list and the switch's place in the renderer come from the event tier of kotorvr's echoquest-combat repository (commit c5a67e8): `kTierIds` at
 native/afkxr/afk_pfx.cpp:1914 (the event row at :1915-1916) and the level gate at runtime/native/afkxr/afk_pfx.cpp:1943-1955, read as text; the kill switch there

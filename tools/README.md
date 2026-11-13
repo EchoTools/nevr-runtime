@@ -11,7 +11,7 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 | `verify_hook_invariants.py` | Static hook invariants: no address is both called through a live function pointer and detoured, hooked prologues match `hook_identity_manifest.json`, no detour that a plugin also installs. |
 | `verify_log_rules.py` | The mechanically checkable rules of `docs/standards/logging.md` (for example, no INFO line in a per-frame path). |
 | `verify_mode_patch_ground_truth.py` | Every plain byte rewrite in `mode_patches.cpp` has binary ground truth in `tests/system/mode_patches_test.go`. |
-| `verify_patch_source_inventory.py` | The `patch/*.cpp` entries of `PATCHES_SOURCES` match the expected inventory (update it deliberately when a patch is added or removed). |
+| `verify_patch_source_inventory.py` | The `patch/*.cpp` entries of `PATCHES_SOURCES` match the `patch/*.cpp` files on disk, one entry each. |
 | `verify_scenario_control_absent.py` | A release `BugSplat64.dll` and `nevr-runtime.dll` carry no scenario-test control endpoint. |
 | `check_fresh_test_programs.py` | The test programs `just test-scripting` runs are declared by the build it ran and on disk: a stale or undeclared program fails the run (run by `test-scripting` after each build). |
 
@@ -66,6 +66,7 @@ source-invariant tests over the C++ tree and the release contract
 | --- | --- |
 | `cmd/test-go-tools/` | Runs `go test -json` over this module, keeps the stream as `<stamp>-go.jsonl` beside the Python runner's log and names the failing tests; `just test-tools` and `just verify` run it. |
 | `cmd/levelpack/` | Turns a level export (a repacked manifest and its packages) into the resource set a level plugin embeds (`docs/reference/plugin-resources.md`): the records the game does not have, stock copies dropped, edited stock records listed and carried as overrides only when `-override` names them. The set is checked with the runtime's rules and read back before it is kept. Uses `github.com/klauspost/compress/zstd`: the standard library has no zstd. |
+| `cmd/cargo-extract/` | Turns a game data set (`rad15/<platform folder>/manifests` and `packages`, the game's own layout, read through `internal/radpack`) into the CDN's objects and manifest (`docs/adr/0045-cdn-texture-delivery.md`, `src/core/cargo_manifest.h`): each resource is one zstd frame of its own, named by the SHA-256 of the frame under `blobs/sha256/`, with one manifest entry. Zero-byte records are listed in the manifest's `empty`, and what the set breaks of the parser's rules is counted in the summary, never bent. `verify` decompresses every object and compares it with the stock bytes. Uses `github.com/klauspost/compress/zstd`: the standard library has no zstd. |
 | `internal/testkit/` | The kit every Go test of a tool uses: `Env` (a hermetic environment), `Main` and `Fake` (fake commands that are the test binary), `WaitFor` and `WaitLines` (waits with a deadline, no sleeping), `Fifo`. |
 | `internal/runlog/` | The durable log of a Go tool: one JSON line per event in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
 | `internal/policy/` | The checks of ADR 0044: `python_to_port.txt` (the Python files still to port; it only shrinks), the table of Python that stays, and the scan for `time.Sleep` used to wait. |

@@ -36,6 +36,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/compat/peer_message.h"  // Poll
 #include "runtime/compat/self_check.h"  // Flush
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
@@ -48,6 +49,8 @@
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/equipment_refire.h"
+#include "runtime/patch/new_unlocks_clear.h"
+#include "runtime/patch/peer_timeout_log.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
@@ -91,6 +94,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // #1200, ADR 0024 section 6: the swapped release is confirmed started once this dispatcher has run for 10 s. Here it is one atomic
     // compare; the confirmation itself runs on its own thread. Not new per-frame work of its own: no thread, dispatcher or Tick* site (N86).
     nevr_update::OnFrame(nowUs);
+    // #2365: nEVR's control messages on the game's broadcaster: the listener once the net game's broadcaster exists, and on
+    // a server the capabilities of each newly accepted peer (its match read every 250 ms). No dispatcher, thread or Tick* site (N86).
+    nevr_peer_message::Poll(nowUs);
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {
@@ -171,6 +177,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.flags = gctx.flags;
     TickModules(&mctx);
 
+    // Peer timeout log: a client silent to its host for the threshold logs one Warning (runtime/patch/peer_timeout_log_rules.h).
+    nevr_peer_timeout_log::CheckNoSend();
+
     // #2161: a resource-set mount deferred until the game's manifest exists (run on the game's own thread only), and
     // the sets' read summary.
     {
@@ -188,6 +197,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
         // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
+        // #2410: a held clear of the new unlocks is re-armed once its update's acknowledgement has arrived; one pointer test while nothing is held.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_new_unlocks_clear::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

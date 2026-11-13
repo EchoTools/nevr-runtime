@@ -171,6 +171,7 @@ ModuleResult Refuse(const char* reason, std::uintptr_t va, std::uint64_t have, s
   sentinel::LogFields(LogLevel::kError, "combat_impactsnd_refused",
                       {{"reason", reason}, {"vaddr", sentinel::HexString(a, va)}, {"read", sentinel::HexString(h, have)},
                        {"pinned", sentinel::HexString(w, want)}, {"written", 0},
+                       {"impactsnd_write", g_write ? 1 : 0},
                        {"msg", "impact sounds stay off: the table is not touched and the game keeps its own rows"}});
   return {false, reason};
 }
@@ -721,6 +722,7 @@ ModuleResult InstallHandlers(sentinel::ImageLookup lookup, std::uintptr_t base) 
                       {{"result", ok ? "installed" : "refused"}, {"status", status}, {"shutdown", sentinel::GotStatusName(shutdownStatus)},
                        {"load", sentinel::GotStatusName(loadStatus)}, {"row_writes", shutdownOk && g_write ? "enabled" : "disabled"},
                        {"rebuild", rebuild ? "reconstructed" : "stock"}, {"switch", "combat.impactsnd"},
+                       {"impactsnd_write", g_write ? 1 : 0},
                        {"msg", ok ? "bullet impact sounds are repaired in combat levels only; an arena match keeps the game's own table"
                                   : "a hook was refused: the part of the module that depends on it is off and the game keeps its own behaviour there"}});
   return {ok, status};
@@ -737,6 +739,7 @@ ModuleResult InstallAt(bool on, bool write, sentinel::ImageLookup lookup) noexce
   if (!on) {
     sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.impactsnd"},
+                         {"impactsnd_write", write ? 1 : 0},
                          {"msg", "combat.impactsnd is false: the game keeps its own impact table and sounds"}});
     return {false, "off_config", true};
   }
@@ -771,6 +774,7 @@ ModuleResult InstallAt(bool on, bool write, sentinel::ImageLookup lookup) noexce
   if (const int keyError = g_tShutdownDepth.Create(); keyError != 0) {
     sentinel::LogFields(LogLevel::kError, "combat_impactsnd_refused",
                         {{"reason", "no_thread_key"}, {"error", keyError}, {"written", 0},
+                         {"impactsnd_write", write ? 1 : 0},
                          {"msg", "the Shutdown handler's per-thread depth needs a pthread key and the process has none left; impact sounds stay off"}});
     return {false, "no_thread_key"};
   }

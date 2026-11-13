@@ -8,12 +8,12 @@ Files: `src/quest/combat/dronemuzzle.{h,cpp}`, `src/runtime/patch/dronemuzzle_ru
 with `src/quest/tests/dronemuzzle_qemu.cpp`, the pins in `src/quest/tests/got_pinned_test.cpp`; mutants `src/quest/combat/mutants.d/dronemuzzle.sh`.
 
 Origin: the reference build's `runtime/native/afkxr/afk_dronemuzzle.cpp` (its thunks at lines 145-182) and afk_dronemuzzle_core.h (kotorvr's
-echoquest-combat), which port EchoCombat `c14c3e0a` `plugin/dronefix.cpp` rule for rule (the muzzle transform df 916-941, FireBullet df 943-1019,
+echoquest-combat), which port EchoCombat's `plugin/dronefix.cpp` rule for rule (the muzzle transform df 916-941, FireBullet df 943-1019,
 the frame time df 132-147, MUZZLE df 51, BACK_MAX df 52).
 
 ## Switch and default
 
-`combat.dronemuzzle` in `config.yaml`, a boolean, default **true**: the reference build ships `dronemuzzle.on` and the q15t plugin built the module
+`combat.dronemuzzle` in `config.yaml`, a boolean, default **true**: the reference build ships `dronemuzzle.on` and the combat plugin imported in #1591 built the module
 on. `false` installs nothing. The step installs only when dronekill's FireBulletLocal hook is installed (`dronekill::ShotActive`); otherwise it
 refuses with `needs_dronekill_shot`. No switch file and no legacy file.
 

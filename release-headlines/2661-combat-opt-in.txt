@@ -1,0 +1,1 @@
+The Quest arena build no longer turns on the combat name tags, the equipment re-fire or the grey default lighting.

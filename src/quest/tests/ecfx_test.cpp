@@ -1,6 +1,6 @@
 // Host test of NEUTRON effects (src/quest/combat/ecfx.cpp, ecfx_core.h, and the drain rules they share with PC, src/runtime/patch/ecfx_rules.h;
 // #2187, #2349): the queue rules, and attach / tick / gate against a stand-in
-// wall library that is really loaded (soname libac4e9374a146d3a4.so, src/quest/tests/ecfx_wall_stub.cpp). Moved from the q15t plugin's ecfx_test:
+// wall library that is really loaded (soname libac4e9374a146d3a4.so, src/quest/tests/ecfx_wall_stub.cpp). From the combat plugin's ecfx_test (#1591):
 // the assertions are the same; the lines are sentinel records (`combat_ecfx_*`), and the switch is `combat.ecfx` (the plugin's neutronfx.on is
 // warned about and changes nothing), with the refusal when ec is not installed.
 // usage: ecfx_test full|missing <path to the stand-in lib>

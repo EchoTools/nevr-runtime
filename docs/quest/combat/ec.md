@@ -73,7 +73,7 @@ WriteLog-slot hook would see is missed, and the one further caller is the other 
 the 25 words (each library's own `bl`) and the stub's four words before it hooks; a word that differs refuses that library's hook
 (`writelog_body_not_known`, `writelogv_stub_not_known`) and leaves the net pair in.
 
-The q15t plugin hooked WriteLog itself and rebuilt the va_list in a C wrapper that called the owner's WriteLogV; an assembly entry that keeps
+The combat plugin imported in #1591 hooked WriteLog itself and rebuilt the va_list in a C wrapper that called the owner's WriteLogV; an assembly entry that keeps
 x0..x7, v0..v7 and the stack and `br`s on was the other choice. The WriteLogV thunk needs neither and the frame sensor checks it like any thunk.
 
 ### The platform libraries
@@ -119,14 +119,22 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
 ## Arena
 
 Arena and combat run on the same APK, so every hook above is installed while a player is in an arena match. The scope is `ec::InCombatScope()`:
-an atomic the ec thread refreshes at most every 250 ms from `combat_level` (`Classify(game, lobby=true)`) on the CR15Game the combat tick hands it,
-true only while a combat map (`mpl_combat_*`) or the combat lobby (`mpl_lobby_b_combat`) is loaded. An Echo Arena level is out, and so are the
+an atomic the ec thread refreshes at most every 250 ms from one record of the combat level answer (`combat_scope.h` `LastLook()`, read whole on
+that thread, judged by `InCombatOrLobby(look)`), true only while a combat map (`mpl_combat_*`) or the combat lobby (`mpl_lobby_b_combat`) is loaded
+and the answer is fresh. A combat answer older than 1 s (the game thread stopped refreshing it) is out: the client leaves the scope until the tick is
+back, and its line names the class `stale`. The bound: a stopped tick takes the client out of scope within 1 s plus 250 ms (plus one 5 ms step) of the
+tick's last look, because the freshness test is made at the client's own looks, at most 250 ms apart in scope (`ec.cpp` `kScopeEveryMs`, `kStepUs`). A torn read of the answer (no whole record in four tries) is named `no_look` and takes the client out of
+scope until the next read, 250 ms later (it fails closed). A level change reaches the client within about 500 ms: the game thread's look is made at most
+every 250 ms and this thread reads at most every 250 ms, plus up to one game frame. The module is one of the scope row's readers (`combat.ec` is in `ScopeNormal()` in `combat_install.cpp`),
+and its install refuses with `scope_not_live` when the answer cannot change. An Echo Arena level is out, and so are the
 lobbies arena players use (`mpl_lobby_b`, `_b2`, `_b2_lowspec`, `_b_arena`, `_b_social`), which are no Echo Arena level. Out of scope:
 
 - recvfrom and sendto call libc and return: no datagram is consumed, nothing is counted, no lock is taken, no net tick runs (so ecfx never drains
   and powerboost never sends there);
-- the thread sleeps 250 ms between looks and sends nothing (no hello, no use packet); leaving the scope clears the page's +0x40 word and the
-  game socket the net tick follows.
+- the thread sleeps 250 ms between looks and sends nothing (no hello, no use packet); leaving the scope clears the page's +0x40 word (and the
+  step's record of it, so the first step back writes it again on a server that states EchoCombat) and the game socket the net tick follows, and
+  forgets the server pick: out of scope the sendto hook does not watch the game's sends, so back in scope nothing is sent and no socket is
+  followed until the game sends, and its first send picks the server again, as after the install.
 
 Two parts act in every level, on purpose: the WriteLogV handler stores a selected tac mod into re33_ec_page (memory of ours; a selection made in a
 menu must reach the combat lobby) and writes its capped `combat_ec_sel` line, and the gear gate takes its mutex around ReloadEquipmentConfig /
@@ -137,7 +145,7 @@ kotorvr's echoquest-combat, which pauses its EC client only while an Echo Arena 
 `_b2_lowspec`, `_b_arena`, `_b_social`) the EC client does not run, so `hide` does not cut the tac-mod list (smoke, buff and point) there, as it does in the
 combat lobby and on a combat map (on a server without EC). Which lobby a Quest combat player chooses a loadout in is not established; the headset row below
 has a line for it.
-`combat_scope` (#2246) will replace the cache; `InCombatScope()` is the one place that changes. The cost per call is in the unit's arena notes and
+The cost per call is in the unit's arena notes and
 the PR body (ADR 0038).
 
 ## Config
@@ -148,8 +156,8 @@ the PR body (ADR 0038).
 | `combat.ec_words` | absent: `types=VPTO equip hide` | `types=<letters of VPTO>` (the types carried; none, empty or another letter: 'T' only), `equip` / `noequip`, `hide`, `loctoken=<s>` (TEST: a LOC token every s seconds, 1..600). |
 | `combat.ecfx` | true | NEUTRON effects on ec's net tick (needs ec). |
 
-The defaults are echoquest-combat's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the q15t
-plugin shipped them. The plugin's files `ec.on`, `ec.off`, `ec_preset1.on` .. `ec_preset3.on` and `neutronfx.on` are not read; one found in the
+The defaults are echoquest-combat's (the reference build's on-list ships `ecplayo.on` = `types=VPTO equip hide` and `neutronfx.on`), as the combat
+plugin imported in #1591 shipped them. The plugin's files `ec.on`, `ec.off`, `ec_preset1.on` .. `ec_preset3.on` and `neutronfx.on` are not read; one found in the
 plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_legacy_switch`) that names the key.
 
 ## Lines (sentinel log)
@@ -159,7 +167,7 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_lobby_settings","statement":"stated|not_stated|malformed","features":"..","dropped":<n>,"bytes":<n>,"changed":0|1,"msg":".."}
     {"event":"combat_ec_page","page":"0x..","global_lookup":"0x..","reopened_global":0|1,"state":"visible|invisible|other","msg":".."}
     {"event":"combat_ec_words","source":"default|config","types_mask":"0x..","hide_write":0|1,"equip_store":0|1,"loctoken_s":<n>}
-    {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_game","level":"0x..","msg":".."}
+    {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x..","msg":".."}   (combat_scope.h LookClassName; level: the look's)
     {"event":"combat_ec_platform","lib":"libpnsovr|libpnsrad","status":"..","msg":".."}
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
     combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
@@ -196,7 +204,7 @@ reference build's; the code refuses an implausible list and re-checks the three 
 
 ## Origin
 
-The q15t plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h`, ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
+The combat plugin's `ec.cpp`, `ec_core.h`, `ecfx.cpp`, `ecfx_core.h` (imported in #1591), ports of the reference build's runtime/native/afkxr/afk_ec.cpp,
 afk_ec_core.h, afk_ecfx.cpp, afk_ecfx_core.h (pinned `1357409` in docs/audits/2026-11-05-q15t-origin-citations.md rows 53-62, 188-211).
 The EC network rules are EchoCombat v2.0.0's VeilNet (plugin/veilnet.cpp), shared with PC in `src/runtime/patch/ec_rules.h`. The NEUTRON
-deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686), EchoCombat `c14c3e0a`.
+deferral is its DroneFix (plugin/dronefix.cpp L332-409, L682-689, L1683-1686).

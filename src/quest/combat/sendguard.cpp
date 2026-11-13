@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/legacy_switch.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/sentinel_log.h"
@@ -165,7 +166,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool enabled, const char* l
 
 ModuleResult Install(bool enabled) noexcept {
   char dir[320];
-  const int wrote = std::snprintf(dir, sizeof(dir), "%s/%s", sentinel::FilesDir(), kLegacySwitchSubdir);
+  const int wrote = std::snprintf(dir, sizeof(dir), "%s/%s", sentinel::FilesDir(), legacy::kDataSubdir);
   const bool fits = wrote >= 0 && static_cast<std::size_t>(wrote) < sizeof(dir);
   return InstallAt(&sentinel::FindLoadedImage, enabled, fits ? dir : nullptr);
 }

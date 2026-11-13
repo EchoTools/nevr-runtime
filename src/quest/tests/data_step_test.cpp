@@ -9,11 +9,13 @@
 #include <map>
 #include <set>
 #include <string>
+#include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
 
+#include "quest/data/boot_stub.h"
 #include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
@@ -142,9 +144,9 @@ TEST(DataInTheMediaRootIsUsedAndNotFetched) {
   CHECK(rig.shown.empty());
   CHECK(rig.order.empty());  // data that is there is not announced
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[0], "data_check action=use source=android_media"));
-  CHECK(Contains(rig.events[1], "data_packages "));  // a manifest outside the pinned table: said, not checked
-  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_check action=use source=android_media"));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages "));  // a manifest outside the pinned table: said, not checked
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "outcome=unpinned"));
   CHECK(rig.warns.empty());
 }
 
@@ -167,7 +169,7 @@ TEST(AnUnmarkedMediaRootIsFetchedInto) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(r.action, DataAction::kFetch);
   CHECK_EQ(net.calls, 1);
-  CHECK(Contains(rig.events[0], "action=fetch source=android_media_unmarked"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=android_media_unmarked"));
 }
 
 TEST(NoDataFetchesVerifiesAndPlacesIt) {
@@ -180,8 +182,8 @@ TEST(NoDataFetchesVerifiesAndPlacesIt) {
   CHECK(Exists(rig.Root() + "/" + kManifestRel));
   CHECK(rig.shown.empty());
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(1));  // the announcement only
-  CHECK_EQ(rig.order[0], std::string("announce"));
-  CHECK(Contains(rig.events[0], "action=fetch source=none"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("announce"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none"));
 }
 
 TEST(DataOfAnotherBuildIsReplacedAndTheOldOneKeptAside) {
@@ -202,14 +204,14 @@ TEST(NoNetworkShowsTheFloorMessageThenHoldsIt) {
   const StepResult r = RunDataStep(rig.config, net);
   CHECK_EQ(r.outcome, StepOutcome::kFailed);
   CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
-  CHECK_EQ(rig.shown[0], r.message);
+  CHECK(rig.shown.size() > 0 && rig.shown[0] == r.message);
   CHECK(Contains(r.message, rig.Root() + "/_data"));  // the path
   CHECK(Contains(r.message, kBuild));                 // the build
   CHECK(Contains(r.message, "Check the network connection and start the game again"));  // the action
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(3));
-  CHECK_EQ(rig.order[0], std::string("announce"));  // before the download
-  CHECK_EQ(rig.order[1], std::string("present"));
-  CHECK_EQ(rig.order[2], std::string("hold"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("announce"));  // before the download
+  CHECK(rig.order.size() > 1 && rig.order[1] == std::string("present"));
+  CHECK(rig.order.size() > 2 && rig.order[2] == std::string("hold"));
   CHECK(!Exists(rig.Root() + "/_data"));
 }
 
@@ -463,7 +465,7 @@ TEST(OnlyTheEngineRootCountsAsData) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(r.action, DataAction::kFetch);
   CHECK_EQ(r.root, Legacy());  // the fetch is for the root the engine reads
-  CHECK(Contains(rig.events[0], "action=fetch source=none root=" + Legacy()));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none root=" + Legacy()));
 }
 
 TEST(DataInTheEngineRootIsUsedWhateverElseIsThere) {
@@ -489,12 +491,12 @@ TEST(WithoutAllowFetchMissingDataIsPresentedHeldAndNotFetched) {
   CHECK_EQ(net.calls, 0);  // no network at all
   CHECK_EQ(r.message, std::string(kGameDataMissing));
   CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
-  CHECK_EQ(rig.shown[0], std::string(kGameDataMissing));
+  CHECK(rig.shown.size() > 0 && rig.shown[0] == std::string(kGameDataMissing));
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(2));  // present, hold: no download notice
-  CHECK_EQ(rig.order[0], std::string("present"));
-  CHECK_EQ(rig.order[1], std::string("hold"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("present"));
+  CHECK(rig.order.size() > 1 && rig.order[1] == std::string("hold"));
   CHECK(!Exists(rig.Root()));  // nothing was created
-  CHECK(Contains(rig.events[0], "action=fetch source=none"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none"));
   CHECK(Contains(kGameDataMissing, "Echo Launcher"));
 }
 
@@ -564,10 +566,31 @@ TEST(TheDataCheckNamesTheVersionFolderAndTheManifestHashOfTheDataItFound) {
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
   CHECK(!rig.events.empty());
-  CHECK(Contains(rig.events[0], "data_version=7777777777"));
-  CHECK(!Contains(rig.events[0], "data_version=5932408047"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=7777777777"));
+  CHECK(rig.events.size() > 0 && !Contains(rig.events[0], "data_version=5932408047"));
   const std::string bytes = "another build's manifest";
-  CHECK(Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+}
+
+// A folder name is judged by its characters and by the file system's own bound (NAME_MAX), not by a number of ours: a long plain name is named.
+TEST(TheDataCheckNamesAPlainFolderOfAnyLengthTheFileSystemAllows) {
+  Rig rig;
+  const std::string longName(NAME_MAX, '7');
+  const std::string tooLong(NAME_MAX + 1, '7');
+  const std::string path = "_data/" + longName + "/rad15/android/manifests/48037dc70b0ecab2";
+  rig.present = {Media(), Media("_data"), Media(path)};
+  rig.config.list_dir = [&](const std::string& dir) {
+    return dir == Media("_data") ? std::vector<std::string>{tooLong, longName} : std::vector<std::string>{};
+  };
+  rig.config.read_file = [&](const std::string&, std::string& bytes) {
+    bytes = "m";
+    return true;
+  };
+  rig.config.allow_fetch = false;
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "data_version=" + longName + " "));
+  CHECK(!rig.events.empty() && !Contains(rig.events[0], tooLong));  // a name the file system cannot have is never logged
 }
 
 TEST(TheDataCheckNamesThePinnedFolderAndItsManifestHashWhenThatIsWhatIsThere) {
@@ -583,15 +606,15 @@ TEST(TheDataCheckNamesThePinnedFolderAndItsManifestHashWhenThatIsWhatIsThere) {
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
   const std::string bytes = "pinned manifest";
-  CHECK(Contains(rig.events[0], "action=use"));
-  CHECK(Contains(rig.events[0], "data_version=5932408047 manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=use"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=5932408047 manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
 }
 
 TEST(TheDataCheckSaysNoneWhenThereIsNoDataAndHashesNothing) {
   Rig rig;
   OneShotTransport net(rig.zip, false);
   RunDataStep(rig.config, net);
-  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=none manifest_sha256=none"));
 }
 
 TEST(AFolderNameThatIsNotPlainIsNotLogged) {
@@ -601,8 +624,8 @@ TEST(AFolderNameThatIsNotPlainIsNotLogged) {
   rig.config.allow_fetch = false;
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
-  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
-  CHECK(!Contains(rig.events[0], "forged"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+  CHECK(rig.events.size() > 0 && !Contains(rig.events[0], "forged"));
 }
 
 TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
@@ -613,8 +636,8 @@ TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
   const std::string manifest = Pattern(20000);
-  CHECK(Contains(rig.events[1], "data_version root=" + rig.Root()));
-  CHECK(Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_version root=" + rig.Root()));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
 }
 
 // ---- the package files of a pinned data set (package_pins.h) ----
@@ -791,7 +814,7 @@ TEST(WholePackagesAreHashedOnceAndTheMarkerIsWritten) {
   CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].first, PinnedRig::MarkerPath());
   CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].second, rig.manifest_sha + " " + kBuild + "\n");
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 manifest_sha256=" +
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 manifest_sha256=" +
                                     rig.manifest_sha + " outcome=verified packages=2 sha=checked"));
 }
 
@@ -895,8 +918,8 @@ TEST(AManifestOutsideThePinnedTableIsNotCheckedAndIsUsedAsBefore) {
   CHECK(rig.writes.empty());
   CHECK(rig.warns.empty());
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[1], "data_packages "));
-  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages "));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "outcome=unpinned"));
 }
 
 TEST(TheDataIsNotCheckedWhenItIsFetchedOrReplaced) {
@@ -1041,6 +1064,616 @@ TEST(TheRealFileSeamsCheckSizesHashAndMarkerOnDisk) {
 
 TEST(TheMissingOutcomeHasAName) {
   CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kMissing)), std::string("missing"));
+  CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kStubbed)), std::string("stubbed"));
+}
+
+// ---- the decision table (docs/adr/0011, plan.h Decide, data_step.cpp RunDataStep) ----
+//
+// Decide: every resolution (what data_root::Resolve found) against whether the pinned manifest is under it.
+
+namespace {
+
+std::set<std::string>* g_decide_present = nullptr;
+bool DecideExists(const char* path) noexcept { return g_decide_present != nullptr && g_decide_present->count(path) != 0; }
+
+struct DecideRow {
+  const char* name;
+  nevr_quest::data_root::Resolution resolution;
+  bool manifest_present;
+  DataAction action;
+  const char* root;
+  const char* source;
+};
+
+}  // namespace
+
+TEST(DecideCoversEveryResolutionAgainstTheManifest) {
+  using nevr_quest::data_root::Resolution;
+  const char* const media = nevr_quest::data_root::kMediaRoot;
+  const char* const legacy = nevr_quest::data_root::kLegacyRoot;
+  const DecideRow rows[] = {
+      {"none, manifest absent", Resolution{legacy, "none", false}, false, DataAction::kFetch, media, "none"},
+      {"none, manifest present", Resolution{legacy, "none", false}, true, DataAction::kFetch, media, "none"},
+      {"unmarked media, manifest absent", Resolution{media, "android_media_unmarked", true}, false, DataAction::kFetch, media,
+       "android_media_unmarked"},
+      {"unmarked media, manifest present", Resolution{media, "android_media_unmarked", true}, true, DataAction::kFetch, media,
+       "android_media_unmarked"},
+      {"media, manifest absent", Resolution{media, "android_media", true}, false, DataAction::kReplace, media, "android_media"},
+      {"media, manifest present", Resolution{media, "android_media", true}, true, DataAction::kUse, media, "android_media"},
+      {"legacy, manifest absent", Resolution{legacy, "legacy", true}, false, DataAction::kReplace, legacy, "legacy"},
+      {"legacy, manifest present", Resolution{legacy, "legacy", true}, true, DataAction::kUse, legacy, "legacy"},
+      {"engine, manifest absent", Resolution{"/engine/root", "engine", true}, false, DataAction::kReplace, "/engine/root", "engine"},
+      {"engine, manifest present", Resolution{"/engine/root", "engine", true}, true, DataAction::kUse, "/engine/root", "engine"},
+  };
+  for (const DecideRow& row : rows) {
+    std::set<std::string> present;
+    if (row.manifest_present) present.insert(std::string(row.resolution.root) + "/" + kManifestPath);
+    g_decide_present = &present;
+    const Decision d = Decide(row.resolution, &DecideExists);
+    g_decide_present = nullptr;
+    if (d.action != row.action || std::string(d.root) != row.root || std::string(d.source) != row.source) {
+      std::fprintf(stderr, "  decide row failed: %s\n", row.name);
+    }
+    CHECK(d.action == row.action);
+    CHECK_EQ(std::string(d.root), std::string(row.root));
+    CHECK_EQ(std::string(d.source), std::string(row.source));
+  }
+}
+
+// RunDataStep: the setup (which root holds what, and whether the engine named one), allow_fetch and what the fetch does. `all_assets` false is the
+// stock step. Every resolution data_root::Resolve can make, and the engine root, goes through RunDataStep, not only through Decide.
+namespace {
+
+constexpr const char* kEngineRoot = "/engine/root";
+
+struct Setup {
+  const char* name;
+  std::set<std::string> present;  // what the fake filesystem holds
+  std::string engine_root;        // StepConfig::engine_root, empty for none
+  DataAction action;              // what Decide says
+  std::string root;               // the root it names (StepResult::root of the stock step)
+  const char* source;             // the resolution's source token, as `data_check` logs it
+};
+
+std::vector<Setup> Setups() {
+  const std::string e = kEngineRoot;
+  return {
+      {"none", {}, "", DataAction::kFetch, Media(), "none"},
+      {"unmarked_media", {Media()}, "", DataAction::kFetch, Media(), "android_media_unmarked"},
+      {"media_other_build", {Media(), Media("_data")}, "", DataAction::kReplace, Media(), "android_media"},
+      {"media_stock", {Media(), Media("_data"), Media(kManifestRel)}, "", DataAction::kUse, Media(), "android_media"},
+      {"legacy_other_build", {Legacy("_data")}, "", DataAction::kReplace, Legacy(), "legacy"},
+      {"legacy_stock", {Legacy("_data"), Legacy(kManifestRel)}, "", DataAction::kUse, Legacy(), "legacy"},
+      {"engine_absent", {}, e, DataAction::kFetch, e, "none"},
+      // Only the engine's root counts: data in the media root is not the engine's.
+      {"engine_absent_media_holds_stock", {Media(), Media("_data"), Media(kManifestRel)}, e, DataAction::kFetch, e, "none"},
+      {"engine_other_build", {e + "/_data"}, e, DataAction::kReplace, e, "engine"},
+      {"engine_stock", {e + "/_data", e + "/" + kManifestRel}, e, DataAction::kUse, e, "engine"},
+  };
+}
+
+const char* ActionText(DataAction a) {
+  switch (a) {
+    case DataAction::kUse: return "use";
+    case DataAction::kFetch: return "fetch";
+    case DataAction::kReplace: return "replace";
+  }
+  return "?";
+}
+
+enum class StubState { kAbsent, kCurrent, kNotOurs, kUnreadable };
+
+const char* StubStateName(StubState s) {
+  switch (s) {
+    case StubState::kAbsent: return "absent";
+    case StubState::kCurrent: return "current";
+    case StubState::kNotOurs: return "not_ours";
+    case StubState::kUnreadable: return "unreadable";
+  }
+  return "?";
+}
+
+struct RowOut {
+  StepResult result;
+  int calls = 0;
+  std::vector<std::string> shown, order, events, warns;
+  std::string root;
+  bool stub0 = false, stub1 = false;
+  std::string stub0_bytes, stub1_bytes;
+};
+
+// `behaviour` makes the fetch fail the way a status names (bad_root: the root below a regular file, which is the stubs' root in the whole-game
+// mode too); `stub` is what is already at the stub paths, standing for files through the fake filesystem and the read seam.
+RowOut RunRow(const Setup& setup, bool allow_fetch, const std::string& behaviour, bool all_assets, StubState stub = StubState::kAbsent) {
+  Rig rig(behaviour == "extract_failed" ? std::string("this is not a zip, but its digest is the pinned one") : GoodZip());
+  rig.config.allow_fetch = allow_fetch;
+  rig.config.all_assets = all_assets;
+  if (all_assets) rig.config.all_assets_ready = [](const std::string&) { return AllAssetsResult{}; };  // the table is about the stubs; no-worker has its own test
+  rig.config.engine_root = setup.engine_root;
+  rig.present = setup.present;
+  if (stub != StubState::kAbsent) {
+    for (const char* id : {"48037dc70b0ecab2", "2b47aab238f60515"}) rig.present.insert(rig.Root() + "/_data/5932408047/rad15/android/manifests/" + id);
+    if (stub == StubState::kCurrent) {
+      rig.config.read_file = [](const std::string&, std::string& bytes) {
+        bytes = nevr_quest::data::boot_stub::StubFileBytes();
+        return true;
+      };
+    } else if (stub == StubState::kNotOurs) {
+      rig.config.read_file = [](const std::string&, std::string& bytes) {
+        bytes = "another file";
+        return true;
+      };
+    } else {
+      rig.config.read_file = [](const std::string&, std::string&) { return false; };
+    }
+  }
+  bool network = true;
+  if (behaviour == "no_space") {
+    rig.config.fetch.available_bytes = [](const std::string&) { return std::uint64_t{0}; };
+  } else if (behaviour == "bad_root") {
+    WriteFile(rig.scratch.Path("afile"), "x");
+    rig.config.fetch_root_override = rig.scratch.Path("afile/sub");
+  } else if (behaviour == "retries_exhausted") {
+    network = false;
+  } else if (behaviour == "swap_failed") {
+    rig.PutOldData();
+    ::mkdir((rig.Root() + "/_data.replaced-20261022T000000Z").c_str(), 0755);
+    WriteFile(rig.Root() + "/_data.replaced-20261022T000000Z/occupied", "x");
+  } else if (behaviour == "cancelled") {
+    rig.config.fetch.keep_going = [] { return false; };
+  }
+  OneShotTransport net(rig.zip, network);
+  RowOut out;
+  out.result = RunDataStep(rig.config, net);
+  out.calls = net.calls;
+  out.shown = rig.shown;
+  out.order = rig.order;
+  out.events = rig.events;
+  out.warns = rig.warns;
+  out.root = rig.Root();
+  const std::string dir = rig.Root() + "/_data/5932408047/rad15/android/manifests/";
+  out.stub0 = Exists(dir + "48037dc70b0ecab2");
+  out.stub1 = Exists(dir + "2b47aab238f60515");
+  out.stub0_bytes = ReadFile(dir + "48037dc70b0ecab2");
+  out.stub1_bytes = ReadFile(dir + "2b47aab238f60515");
+  return out;
+}
+
+bool AnyStartsWith(const std::vector<std::string>& lines, const std::string& prefix) {
+  for (const std::string& l : lines) {
+    if (l.rfind(prefix, 0) == 0) return true;
+  }
+  return false;
+}
+
+bool HasEvent(const std::vector<std::string>& lines, const std::string& needle) {
+  for (const std::string& l : lines) {
+    if (Contains(l, needle)) return true;
+  }
+  return false;
+}
+
+const char* const kFetchBehaviours[] = {"ok", "no_space", "bad_root", "retries_exhausted", "extract_failed", "swap_failed", "cancelled"};
+
+FetchStatus StatusOf(const std::string& behaviour) {
+  if (behaviour == "ok") return FetchStatus::kOk;
+  if (behaviour == "no_space") return FetchStatus::kNoSpace;
+  if (behaviour == "bad_root") return FetchStatus::kBadRoot;
+  if (behaviour == "retries_exhausted") return FetchStatus::kRetriesExhausted;
+  if (behaviour == "extract_failed") return FetchStatus::kExtractFailed;
+  if (behaviour == "swap_failed") return FetchStatus::kSwapFailed;
+  return FetchStatus::kCancelled;
+}
+
+}  // namespace
+
+TEST(TheStockStepDecisionTableHoldsForEveryResolutionAllowFetchAndFetchStatus) {
+  int rows = 0;
+  for (const Setup& setup : Setups()) {
+    for (bool allow : {false, true}) {
+      for (const char* behaviour_name : kFetchBehaviours) {
+        const std::string behaviour = behaviour_name;
+        // A swap can only fail when there is an old tree to put aside; with any other action it simply succeeds.
+        if (behaviour == "swap_failed" && setup.action != DataAction::kReplace) continue;
+        // The fetch is never reached for data in use, or without allow_fetch: its behaviour cannot matter, so one row says it.
+        if ((setup.action == DataAction::kUse || !allow) && behaviour != "ok") continue;
+        ++rows;
+        const std::string row = std::string(setup.name) + " allow_fetch=" + (allow ? "1" : "0") + " fetch=" + behaviour;
+        const RowOut o = RunRow(setup, allow, behaviour, /*all_assets=*/false);
+        const int before = mini_test::Failures();
+        // The resolution, read through RunDataStep: the action, the root and the source `data_check` logs.
+        CHECK_EQ(o.result.action, setup.action);
+        CHECK_EQ(o.result.root, setup.root);
+        CHECK(HasEvent(o.events, std::string("data_check action=") + ActionText(setup.action) + " source=" + setup.source + " root=" + setup.root));
+        if (setup.action == DataAction::kUse) {
+          CHECK_EQ(o.result.outcome, StepOutcome::kUsed);
+          CHECK_EQ(o.calls, 0);
+          CHECK(o.shown.empty());
+        } else if (!allow) {
+          CHECK_EQ(o.result.outcome, StepOutcome::kMissing);
+          CHECK_EQ(o.result.message, std::string(kGameDataMissing));
+          CHECK_EQ(o.calls, 0);
+          CHECK_EQ(o.shown.size(), static_cast<std::size_t>(1));
+          CHECK(!o.stub0 && !o.stub1);
+        } else if (behaviour == "ok") {
+          CHECK_EQ(o.result.outcome, StepOutcome::kFetched);
+          CHECK_EQ(o.result.status, FetchStatus::kOk);
+          CHECK_EQ(o.calls, 1);
+          CHECK(o.shown.empty());  // a good fetch shows no floor message
+        } else {
+          CHECK_EQ(o.result.outcome, StepOutcome::kFailed);
+          CHECK(o.result.status == StatusOf(behaviour));
+          CHECK(!o.result.message.empty());
+          CHECK_EQ(o.shown.size(), static_cast<std::size_t>(1));
+          CHECK(!o.shown.empty() && o.shown[0] == o.result.message);
+          CHECK(o.order.size() >= 2 && o.order[o.order.size() - 2] == "present" && o.order.back() == "hold");
+          const bool reaches_network = behaviour == "retries_exhausted" || behaviour == "extract_failed" || behaviour == "swap_failed";
+          CHECK_EQ(o.calls > 0, reaches_network);
+        }
+        // The stock step never writes a stub manifest, and says nothing of the whole-game mode.
+        CHECK(!AnyStartsWith(o.events, "data_all_assets") && !AnyStartsWith(o.events, "data_stub"));
+        if (mini_test::Failures() != before) std::fprintf(stderr, "  decision row failed: %s\n", row.c_str());
+      }
+    }
+  }
+  // 4 fetch setups x 7 + 3 replace setups x 8 + 3 use setups x 2.
+  CHECK_EQ(rows, 4 * 7 + 3 * 8 + 3 * 2);
+}
+
+// ---- the whole-game mode: the stub manifests, never a fetch, never an end for missing data ----
+
+namespace {
+
+constexpr const char* kSet0 = "48037dc70b0ecab2";
+constexpr const char* kSet1 = "2b47aab238f60515";
+
+std::string StubDir(const std::string& root) { return root + "/_data/5932408047/rad15/android/manifests/"; }
+
+}  // namespace
+
+// The whole-game table: every resolution x allow_fetch x fetch status x what is already at the stub paths. The fetch status cannot reach any
+// fetch code in this mode (the step returns before it), so every status row is `stubbed` with no request, and that is what each row asserts; the
+// pairing test below shows that the same statuses do fail the stock step. `bad_root` makes the stubs' own root unwritable, so it is the row that
+// fails (with stubs already there it has nothing to write and is stubbed).
+TEST(TheWholeGameDecisionTableWritesStubsAndNeverFetchesForEveryResolutionAllowFetchStatusAndStubState) {
+  const StubState stub_states[] = {StubState::kAbsent, StubState::kCurrent, StubState::kNotOurs, StubState::kUnreadable};
+  int rows = 0;
+  for (const Setup& setup : Setups()) {
+    for (bool allow : {false, true}) {
+      for (const char* behaviour_name : kFetchBehaviours) {
+        const std::string behaviour = behaviour_name;
+        if (behaviour == "swap_failed" && setup.action != DataAction::kReplace) continue;
+        for (StubState stub : stub_states) {
+          // An unwritable root cannot hold stubs: only the absent state exists for it.
+          if (behaviour == "bad_root" && stub != StubState::kAbsent) continue;
+          ++rows;
+          const std::string row = std::string(setup.name) + " allow_fetch=" + (allow ? "1" : "0") + " fetch=" + behaviour + " stubs=" + StubStateName(stub);
+          const RowOut o = RunRow(setup, allow, behaviour, /*all_assets=*/true, stub);
+          const int before = mini_test::Failures();
+          CHECK_EQ(o.calls, 0);  // no request of any kind: the data zip is not the data of this mode
+          CHECK(!AnyStartsWith(o.events, "data_fetch") && !AnyStartsWith(o.events, "data_extract") && !AnyStartsWith(o.events, "data_swap"));
+          CHECK(!AnyStartsWith(o.events, "data_check"));     // the stock step's own lookup is not made
+          CHECK(o.result.outcome != StepOutcome::kMissing);  // never the release build's end for missing data
+          CHECK(HasEvent(o.events, std::string("data_all_assets root=") + o.root + " source=" + setup.source + " would_have=" + ActionText(setup.action) +
+                                       " allow_fetch=" + (allow ? "true" : "false")));
+          if (behaviour == "bad_root") {
+            // The one row the mode can fail on: the root cannot be written, so the engine could not start either.
+            CHECK_EQ(o.result.outcome, StepOutcome::kFailed);
+            CHECK(o.result.status == FetchStatus::kBadRoot);
+            CHECK(o.result.stub_write_failed);
+            CHECK_EQ(o.shown.size(), static_cast<std::size_t>(1));
+            CHECK(HasEvent(o.warns, "data_stub ") && HasEvent(o.warns, "result=write_failed"));
+            CHECK(!o.stub0 && !o.stub1);
+          } else {
+            CHECK_EQ(o.result.outcome, StepOutcome::kStubbed);
+            CHECK(!o.result.stub_write_failed);
+            CHECK_EQ(o.result.root, o.root);  // the stubs' root: the fetch-root seam here, the decision's root in production
+            CHECK(o.shown.empty() && o.order.empty());
+            const std::vector<std::string>& stub_lines = (stub == StubState::kNotOurs || stub == StubState::kUnreadable) ? o.warns : o.events;  // a Warning goes to the warning sink
+            for (const char* set : {"48037dc70b0ecab2", "2b47aab238f60515"}) CHECK(HasEvent(stub_lines, std::string("data_stub set=") + set));
+            if (stub == StubState::kAbsent) {
+              CHECK(o.stub0 && o.stub1);
+              CHECK(HasEvent(o.events, "result=written reason=manifest_absent"));
+              CHECK(o.warns.empty());
+            } else {
+              // Present stubs are never written over (they are not on disk here: the fake filesystem and the read seam stand for them).
+              CHECK(!o.stub0 && !o.stub1);
+              CHECK(!HasEvent(o.events, "result=written"));
+              if (stub == StubState::kCurrent) CHECK(HasEvent(o.events, "result=kept reason=stub_current") && o.warns.empty());
+              if (stub == StubState::kNotOurs) CHECK(HasEvent(o.warns, "result=kept reason=manifest_not_ours"));
+              if (stub == StubState::kUnreadable) CHECK(HasEvent(o.warns, "result=kept reason=manifest_unreadable"));
+            }
+          }
+          if (mini_test::Failures() != before) std::fprintf(stderr, "  whole-game row failed: %s\n", row.c_str());
+        }
+      }
+    }
+  }
+  // Per resolution and allow_fetch: the non-bad_root statuses x 4 stub states, plus bad_root once. Statuses: 6 for a replace setup (swap_failed
+  // included), 5 otherwise. 3 replace setups, 7 others.
+  CHECK_EQ(rows, 2 * (3 * (6 * 4 + 1) + 7 * (5 * 4 + 1)));
+}
+
+// The same inputs, in both modes: each fetch status that fails the stock step is not reached in the whole-game mode.
+TEST(AFetchStatusThatFailsTheStockStepIsNotReachedInTheWholeGameMode) {
+  const std::vector<Setup> setups = Setups();
+  const Setup& other_build = setups[2];  // media_other_build: a replace, so every status below can happen
+  CHECK(std::string(other_build.name) == "media_other_build");
+  for (const char* behaviour : {"no_space", "retries_exhausted", "extract_failed", "swap_failed", "cancelled"}) {
+    const RowOut stock = RunRow(other_build, /*allow_fetch=*/true, behaviour, /*all_assets=*/false);
+    const RowOut whole = RunRow(other_build, /*allow_fetch=*/true, behaviour, /*all_assets=*/true);
+    if (stock.result.outcome != StepOutcome::kFailed || whole.result.outcome != StepOutcome::kStubbed) {
+      std::fprintf(stderr, "  paired row failed: %s\n", behaviour);
+    }
+    CHECK_EQ(stock.result.outcome, StepOutcome::kFailed);
+    CHECK(stock.result.status == StatusOf(behaviour));
+    CHECK_EQ(whole.result.outcome, StepOutcome::kStubbed);
+    CHECK_EQ(whole.calls, 0);
+    CHECK(whole.stub0 && whole.stub1);
+  }
+}
+
+TEST(TheStubFilesAreTheEnginesZeroPackageManifestAtTheEnginesPath) {
+  const RowOut o = RunRow(Setups()[0], true, "ok", true);
+  CHECK_EQ(o.stub0_bytes, nevr_quest::data::boot_stub::StubFileBytes());
+  CHECK_EQ(o.stub1_bytes, nevr_quest::data::boot_stub::StubFileBytes());
+  CHECK(HasEvent(o.events, "result=written reason=manifest_absent"));
+  CHECK(HasEvent(o.events, "bytes=" + std::to_string(nevr_quest::data::boot_stub::StubFileBytes().size())));
+}
+
+TEST(AStubThatIsThereIsKeptAndNotWrittenAgain) {
+  Rig rig;
+  rig.config.all_assets = true;
+  rig.config.exists = [](const char* path) noexcept { return Exists(path); };  // the real filesystem: the first run's files are seen
+  rig.config.all_assets_ready = [](const std::string&) { return AllAssetsResult{}; };  // a worker, so a second run is silent
+  OneShotTransport net(rig.zip, true);
+  CHECK_EQ(RunDataStep(rig.config, net).outcome, StepOutcome::kStubbed);
+  rig.events.clear();
+  rig.warns.clear();
+  const StepResult second = RunDataStep(rig.config, net);
+  CHECK_EQ(second.outcome, StepOutcome::kStubbed);
+  CHECK(HasEvent(rig.events, "data_stub set=48037dc70b0ecab2") && HasEvent(rig.events, "result=kept reason=stub_current"));
+  CHECK(!HasEvent(rig.events, "result=written"));
+  CHECK(rig.warns.empty());
+  CHECK_EQ(net.calls, 0);
+}
+
+TEST(AManifestThatIsNotOursIsNeverOverwrittenAndIsWarnedAbout) {
+  Rig rig;
+  rig.config.all_assets = true;
+  rig.config.exists = [](const char* path) noexcept { return Exists(path); };
+  ::mkdir(rig.Root().c_str(), 0755);
+  ::mkdir((rig.Root() + "/_data").c_str(), 0755);
+  ::mkdir((rig.Root() + "/_data/5932408047").c_str(), 0755);
+  ::mkdir((rig.Root() + "/_data/5932408047/rad15").c_str(), 0755);
+  ::mkdir((rig.Root() + "/_data/5932408047/rad15/android").c_str(), 0755);
+  ::mkdir(StubDir(rig.Root()).substr(0, StubDir(rig.Root()).size() - 1).c_str(), 0755);
+  WriteFile(StubDir(rig.Root()) + kSet0, "a stock manifest, or a player's file");
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kStubbed);
+  CHECK_EQ(ReadFile(StubDir(rig.Root()) + kSet0), std::string("a stock manifest, or a player's file"));
+  CHECK_EQ(ReadFile(StubDir(rig.Root()) + kSet1), nevr_quest::data::boot_stub::StubFileBytes());
+  CHECK(HasEvent(rig.warns, "data_stub set=48037dc70b0ecab2") && HasEvent(rig.warns, "result=kept reason=manifest_not_ours"));
+  CHECK(HasEvent(rig.warns, "consequence="));
+}
+
+TEST(AManifestThatCannotBeReadIsKeptAndWarnedAbout) {
+  Rig rig;
+  rig.config.all_assets = true;
+  rig.present = {StubDir(rig.Root()) + kSet0};
+  rig.config.read_file = [](const std::string&, std::string&) { return false; };
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kStubbed);
+  CHECK(HasEvent(rig.warns, "data_stub set=48037dc70b0ecab2") && HasEvent(rig.warns, "result=kept reason=manifest_unreadable"));
+  CHECK(!Exists(StubDir(rig.Root()) + kSet0));  // not written over
+  CHECK(Exists(StubDir(rig.Root()) + kSet1));
+}
+
+TEST(AStubThatCannotBeWrittenFailsTheStepWithTheFloorMessageAndStopsBeforeTheWorker) {
+  Rig rig;
+  rig.config.all_assets = true;
+  int ready_calls = 0;
+  rig.config.all_assets_ready = [&ready_calls](const std::string&) {
+    ++ready_calls;
+    return AllAssetsResult{};
+  };
+  std::vector<std::string> attempted;
+  rig.config.write_file = [&attempted](const std::string& path, const std::string&) {
+    attempted.push_back(path);
+    return false;
+  };
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kFailed);
+  CHECK(r.status == FetchStatus::kBadRoot);
+  CHECK(Contains(r.message, StubDir(rig.Root()) + kSet0));  // the file that could not be written
+  CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.shown.empty() && rig.shown[0] == r.message);
+  CHECK_EQ(rig.order.size(), static_cast<std::size_t>(2));  // present, hold: the player reads why
+  CHECK_EQ(attempted.size(), static_cast<std::size_t>(1));  // the first failure ends it: the second file is not tried
+  CHECK_EQ(ready_calls, 0);
+  CHECK(HasEvent(rig.warns, "result=write_failed"));
+  CHECK_EQ(net.calls, 0);
+}
+
+TEST(TheWorkerSeamRunsOnceAfterBothStubsAndItsFailureEndsTheStep) {
+  {
+    Rig rig;
+    rig.config.all_assets = true;
+    std::vector<std::string> roots;
+    bool both_there = false;
+    rig.config.all_assets_ready = [&](const std::string& root) {
+      roots.push_back(root);
+      both_there = Exists(StubDir(root) + kSet0) && Exists(StubDir(root) + kSet1);
+      return AllAssetsResult{};
+    };
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    CHECK_EQ(r.outcome, StepOutcome::kStubbed);
+    CHECK_EQ(roots.size(), static_cast<std::size_t>(1));
+    CHECK(!roots.empty() && roots[0] == rig.Root());
+    CHECK(both_there);  // the engine reads the stubs, so they are there before anything else goes on
+    CHECK(HasEvent(rig.events, "data_all_assets_ready result=ok"));
+    CHECK(rig.shown.empty());
+  }
+  {
+    Rig rig;
+    rig.config.all_assets = true;
+    rig.config.all_assets_ready = [](const std::string&) { return AllAssetsResult{false, "The game files could not be downloaded."}; };
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    CHECK(r.status == FetchStatus::kWorkerRefused);
+    CHECK_EQ(r.outcome, StepOutcome::kFailed);
+    CHECK_EQ(r.message, std::string("The game files could not be downloaded."));
+    CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
+    CHECK(!rig.shown.empty() && rig.shown[0] == r.message);
+    CHECK(!rig.order.empty() && rig.order.back() == "hold");
+    CHECK(HasEvent(rig.warns, "data_all_assets_ready result=failed"));
+  }
+  {
+    Rig rig;  // no worker wired: the step says so and still stubs
+    rig.config.all_assets = true;
+    OneShotTransport net(rig.zip, true);
+    CHECK_EQ(RunDataStep(rig.config, net).outcome, StepOutcome::kStubbed);
+    CHECK(HasEvent(rig.warns, "data_all_assets_ready result=skipped reason=no_worker"));  // degraded: the engine boots with no asset source
+    CHECK(HasEvent(rig.warns, "consequence=") && !HasEvent(rig.events, "data_all_assets_ready result=skipped"));
+  }
+}
+
+TEST(TheWholeGameModeRestoresAndCleansNothingEvenWhenFetchingIsAllowed) {
+  // A marked staging directory of an interrupted download: the stock step (allow_fetch) deletes it; this mode touches nothing it did not make.
+  Rig rig;
+  rig.config.all_assets = true;
+  rig.config.allow_fetch = true;
+  ::mkdir(rig.Root().c_str(), 0755);
+  const std::string staging = rig.Root() + "/_data.staging-abcdef012345";
+  ::mkdir(staging.c_str(), 0755);
+  WriteFile(staging + "/x", "x");
+  CHECK(MarkOwned(staging));
+  OneShotTransport net(rig.zip, true);
+  CHECK_EQ(RunDataStep(rig.config, net).outcome, StepOutcome::kStubbed);
+  CHECK(Exists(staging) && Exists(OwnerMarkerPath(staging)));
+  CHECK(!HasEvent(rig.events, "data_recover"));
+}
+
+TEST(WithoutARootOverrideTheStubsGoToTheRootTheDecisionPicked) {
+  Rig rig;
+  rig.config.all_assets = true;
+  rig.config.fetch_root_override.clear();
+  rig.present = {Legacy("_data")};  // the legacy root alone holds a `_data`: it is the engine's root
+  std::vector<std::string> dirs, files;
+  rig.config.make_dirs = [&dirs](const std::string& dir) {
+    dirs.push_back(dir);
+    return true;
+  };
+  rig.config.write_file = [&files](const std::string& path, const std::string&) {
+    files.push_back(path);
+    return true;
+  };
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kStubbed);
+  CHECK_EQ(r.root, Legacy());
+  CHECK_EQ(files.size(), static_cast<std::size_t>(2));
+  CHECK(files.size() == 2 && files[0] == Legacy() + "/_data/5932408047/rad15/android/manifests/" + kSet0);
+  CHECK(files.size() == 2 && files[1] == Legacy() + "/_data/5932408047/rad15/android/manifests/" + kSet1);
+  CHECK(!dirs.empty() && dirs[0] == Legacy() + "/_data/5932408047/rad15/android/manifests");
+}
+
+// The size of a manifest the step will read is a share of the device's memory (the game itself reads a manifest whole, sized by the
+// file, and is bounded by its allocator: CSysCompression::DecompressAndReadFile libr15 0x2b9e0a0), one function every memory-based
+// limit goes through (core/device_memory.h).
+TEST(TheManifestReadLimitIsAShareOfTheDevicesMemory) {
+  CHECK_EQ(ManifestReadLimit(8000000), nevr_device::Share(8000000, kMemoryShareForLocalManifest));
+  CHECK(ManifestReadLimit(1000000) < ManifestReadLimit(2000000));
+  CHECK(ManifestReadLimit(2000000) < ManifestReadLimit(4000000000ull));
+  CHECK_EQ(ManifestReadLimit(0), static_cast<std::uint64_t>(0));
+}
+
+TEST(AManifestFileIsReadUpToTheDevicesLimitAndRefusedPastIt) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  const std::string bytes(100000, 'm');
+  WriteFile(path, bytes);
+  StepConfig big;
+  big.memory_available = [](std::uint64_t* m) { *m = 100000 * kMemoryShareForLocalManifest; return true; };  // the limit is exactly the file
+  std::string got;
+  CHECK(ReadBoundedFile(big, path, got));
+  CHECK_EQ(got, bytes);
+  StepConfig small;
+  small.memory_available = [](std::uint64_t* m) { *m = 100000 * kMemoryShareForLocalManifest - kMemoryShareForLocalManifest; return true; };  // one byte short
+  CHECK(!ReadBoundedFile(small, path, got));
+  StepConfig larger;  // a device with more memory reads what a smaller one refused
+  larger.memory_available = [](std::uint64_t* m) { *m = 1000 * 1000 * 1000; return true; };
+  CHECK(ReadBoundedFile(larger, path, got));
+}
+
+// A refusal says why: the reason is what the step logs in the manifest's place.
+TEST(AFileThatIsNotReadSaysWhy) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  WriteFile(path, std::string(1000, 'm'));
+  std::string got;
+  const char* why = "";
+  StepConfig small;
+  small.memory_available = [](std::uint64_t* m) { *m = 100 * kMemoryShareForLocalManifest; return true; };
+  CHECK(!ReadBoundedFile(small, path, got, &why));
+  CHECK_EQ(std::string(why), std::string("over_limit"));
+  StepConfig none;
+  none.memory_available = [](std::uint64_t*) { return false; };
+  CHECK(!ReadBoundedFile(none, path, got, &why));
+  CHECK_EQ(std::string(why), std::string("no_memory_fact"));
+  StepConfig big;
+  big.memory_available = [](std::uint64_t* m) { *m = 1000 * 1000 * 1000; return true; };
+  CHECK(!ReadBoundedFile(big, scratch.Path("absent"), got, &why));
+  CHECK_EQ(std::string(why), std::string("unreadable"));
+  CHECK(ReadBoundedFile(big, path, got, &why));
+  CHECK_EQ(std::string(why), std::string(""));
+}
+
+// The step's own log line names the reason where the manifest's hash would be (real files, as the seams test above).
+TEST(TheStepLogsWhyAManifestWasNotReadInPlaceOfItsHash) {
+  Rig rig;
+  const std::string root = rig.scratch.Path("real");
+  ::mkdir(root.c_str(), 0755);
+  const std::string manifest_bytes = "a real manifest on disk";
+  const std::string manifest_sha = Sha256Hex(manifest_bytes.data(), manifest_bytes.size());
+  MakeTree(root, kManifestRel, manifest_bytes);
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_0", "abc");
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_1", "abc");
+  const char* const abc_sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  const PinnedPackage packages[2] = {{0, 3, abc_sha, false}, {1, 3, abc_sha, true}};
+  const PinnedDataSet set = {manifest_sha.c_str(), packages, 2};
+  rig.config.pinned_sets = &set;
+  rig.config.pinned_set_count = 1;
+  rig.config.engine_root = root;
+  rig.config.exists = &MappedExists;
+  rig.config.memory_available = [](std::uint64_t*) { return false; };  // the device gives no memory fact
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "manifest_sha256=unreadable:no_memory_fact"));
+  rig.events.clear();
+  rig.config.memory_available = [](std::uint64_t* m) { *m = 8 * kMemoryShareForLocalManifest; return true; };  // a limit of 8 bytes
+  OneShotTransport net2(rig.zip, true);
+  RunDataStep(rig.config, net2);
+  CHECK(!rig.events.empty() && Contains(rig.events[0], "manifest_sha256=unreadable:over_limit"));
+}
+
+TEST(AManifestIsNotReadWhenTheDeviceGivesNoMemoryFact) {
+  Scratch scratch;
+  const std::string path = scratch.Path("manifest");
+  WriteFile(path, "tiny");
+  StepConfig none;
+  none.memory_available = [](std::uint64_t*) { return false; };
+  std::string got;
+  CHECK(!ReadBoundedFile(none, path, got));  // nothing is guessed in the number's place
+  StepConfig injected;
+  injected.read_file = [](const std::string&, std::string& bytes) { bytes = "from the seam"; return true; };
+  CHECK(ReadBoundedFile(injected, path, got) && got == "from the seam");  // the test seam still answers first
+  StepConfig real;  // the real memory fact of this machine reads a small file
+  CHECK(ReadBoundedFile(real, path, got) && got == "tiny");
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

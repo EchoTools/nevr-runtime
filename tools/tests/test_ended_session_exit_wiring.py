@@ -26,8 +26,10 @@ def callbacks() -> str:
 class EndedSessionExitWiring(unittest.TestCase):
     def test_the_receive_observer_arms_on_a_parsed_code_ended(self):
         body = extract_braced_function(callbacks(), "void GameServerLib::RegisterTcpCallbacks()")
-        self.assertIn("SetReceiveObserver", body)
-        observer = body[body.index("SetReceiveObserver"):]
+        # The observer is set through nevr_registration_answer::Attach (#2374), which calls the registration tracker and then
+        # this one on every frame.
+        self.assertIn("nevr_registration_answer::Attach(*m_wsClient", body)
+        observer = body[body.index("nevr_registration_answer::Attach("):]
         observer = observer[: observer.index("SetMessageHandler")]
         self.assertIn("if (!nevr_game_server::ParseServiceEndedSession(", observer)
         self.assertLess(observer.index("ParseServiceEndedSession("), observer.index("return;"))

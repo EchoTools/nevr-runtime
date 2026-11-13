@@ -1,4 +1,4 @@
-/* A script send to a game space that is not loaded is dropped, not faulted (#2179, #1603; the q15t plugin's sendguard, moved here).
+/* A script send to a game space that is not loaded is dropped, not faulted (#2179, #1603).
  *
  * What the game does (store libr15; addresses are the ELF vaddr, sendguard_targets.h; the disassembly lists each 0x100000 higher).
  * NRadEngine::CSendEventNode::Enter (0x2725a80, 476 bytes) is the script node that sends a component event to the game space it names
@@ -28,13 +28,12 @@
  * would have reported a missing actor is named in the log. (Letting the case through would mean evaluating the actor lookup, which is
  * game code with effects of its own.)
  *
- * The one slot. Enter is called through one JUMP_SLOT (0x36f7928). The q15t plugin also swapped a second "slot", 0x356a6b0, which is
- * an unwind record inside `.eh_frame` and no pointer (sendguard_targets.h); it was refused at every launch with a Warning, and is not
- * named here.
+ * The one slot. Enter is called through one JUMP_SLOT (0x36f7928). The address 0x356a6b0, which the combat plugin imported in #1591 also
+ * swapped as a second "slot", is an unwind record inside `.eh_frame` and no pointer (sendguard_targets.h); nothing here installs on it.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true (combat_active.h): the q15t and combat variants. Its switch
- * is `combat.sendguard` in config.yaml (default true). The plugin's `sendguard.off` file is no longer read; one found in the files
- * folder's q15t directory is a Warning that names the key.
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true (combat_active.h): the combat variants. Its switch
+ * is `combat.sendguard` in config.yaml (default true). The `sendguard.off` file is no longer read; one found in the data
+ * directory (legacy_switch.h) is a Warning that names the key.
  *
  * Install. The build ID, then the code pins (sendguard_targets.h), then the JUMP_SLOT, checked against base + Enter's address (a word
  * that holds anything else, such as a word another runtime replaced, is refused and logged by GotHook with its chain). A pin that
@@ -65,7 +64,7 @@
  *            (final 1, written by NoteEnd when the wrapper is installed), and Debug every kStatsEvery passes and every kStatsDropEvery drops
  *            (final 0), so a process that is killed still leaves the rate and the drops after the eighth leave a trace.
  *   legacy   {"event":"combat_sendguard_legacy_switch","key":"combat.sendguard","file":"sendguard.off","consequence":".."}, Warning,
- *            when the plugin's switch file is found; the file changes nothing.
+ *            when the switch file is found; the file changes nothing.
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -83,9 +82,6 @@ namespace nevr_quest::combat::sendguard {
 inline constexpr unsigned kDropLines = 8;        // `dropped` lines written per process, then counted only
 inline constexpr unsigned kStatsEvery = 16384;   // a Debug stats line every this many passes (a power of two)
 inline constexpr unsigned kStatsDropEvery = 1024;  // and every this many drops after the first kDropLines (a power of two)
-
-// The plugin's data directory below the sentinel's files folder (sentinel::FilesDir()), where its switch file `sendguard.off` was read from.
-inline constexpr const char* kLegacySwitchSubdir = "q15t";
 
 // Installs on the libr15 `lookup` finds. `enabled` is combat.sendguard; `legacySwitchDir` is where a `sendguard.off` of the old plugin
 // would sit (nullptr: not looked for). Logs one combat_sendguard_install line.

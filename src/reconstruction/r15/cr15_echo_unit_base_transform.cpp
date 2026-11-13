@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 void CR15EchoUnitCS_BaseTransform(float* result, const void* system,
                                   std::uint32_t handle) {
@@ -26,4 +26,4 @@ void CR15EchoUnitCS_BaseTransform(float* result, const void* system,
     }
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

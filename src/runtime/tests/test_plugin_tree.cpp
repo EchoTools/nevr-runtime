@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -210,6 +211,57 @@ TEST(PluginTreeNames, AnApiSetNameAndALoadedModuleAreNotSystem32Only) {
   EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("api-ms-win-core-synch-l1-2-0.dll"));
   EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("kernel32.dll"));  // loaded in every process
   EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("no-such-library-anywhere.dll"));
+}
+
+// A directory the test makes in the temp directory and removes when it ends. Given to SuppliedBySystem32OnlyIn, it
+// stands where System32 would be, so a file put in it is what the check sees (Wine's System32 holds no API-set file).
+class ScratchSystemDirectory {
+ public:
+  ScratchSystemDirectory() {
+    char temp[MAX_PATH] = {};
+    char made[MAX_PATH] = {};
+    if (GetTempPathA(MAX_PATH, temp) == 0 || GetTempFileNameA(temp, "nsd", 0, made) == 0) return;
+    DeleteFileA(made);
+    if (CreateDirectoryA(made, nullptr)) path_ = made;
+  }
+  ~ScratchSystemDirectory() {
+    for (const std::string& name : files_) DeleteFileA((path_ + "\\" + name).c_str());
+    if (!path_.empty()) RemoveDirectoryA(path_.c_str());
+  }
+  const std::string& path() const { return path_; }
+  void Plant(const std::string& name) {
+    HANDLE h = CreateFileA((path_ + "\\" + name).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    EXPECT_NE(h, INVALID_HANDLE_VALUE) << name << " error " << GetLastError();
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    files_.push_back(name);
+  }
+
+ private:
+  std::string path_;
+  std::vector<std::string> files_;
+};
+
+// #1193: an API-set or extension-set name is never a System32 file, even when a file of that name is in the System32
+// directory. Removing the prefix test makes the check see the file and answer yes.
+TEST(PluginTreeNames, AnApiSetNameIsNotSystem32OnlyEvenWithAFileOfThatNameInSystem32) {
+  ScratchSystemDirectory system;
+  ASSERT_FALSE(system.path().empty()) << "no scratch directory could be made";
+  system.Plant("api-ms-fixture-l1-1-0.dll");
+  system.Plant("ext-ms-fixture-l1-1-0.dll");
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32OnlyIn("api-ms-fixture-l1-1-0.dll", system.path()));
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32OnlyIn("EXT-MS-fixture-l1-1-0.dll", system.path()));
+}
+
+// The positive side of the same seam: an ordinary file in the System32 directory is System32-only, and a name with no
+// file there is not.
+TEST(PluginTreeNames, AnOrdinaryFileInSystem32IsSystem32Only) {
+  ScratchSystemDirectory system;
+  ASSERT_FALSE(system.path().empty()) << "no scratch directory could be made";
+  system.Plant("nevr-fixture-system.dll");
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedBySystem32OnlyIn("nevr-fixture-system.dll", system.path()));
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedBySystem32OnlyIn("NEVR-FIXTURE-SYSTEM.DLL", system.path()));
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32OnlyIn("nevr-fixture-absent.dll", system.path()));
 }
 
 TEST(PluginTreeNames, TheDefaultExtensionIsAppendedToANameWithNone) {

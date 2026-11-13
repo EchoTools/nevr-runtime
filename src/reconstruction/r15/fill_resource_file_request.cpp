@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 // Callees by ReVault name, each with its VA. libr15 reaches most of them through
 // adrp/ldr/br stubs; the stub address is given in parentheses where it differs.
@@ -145,4 +145,4 @@ std::uint64_t FillResourceFileRequest(std::byte* manager, std::uint64_t type, st
     return 0;
 }
 
-}  // namespace q15t::r15::reconstruction
+}  // namespace NRadEngine::nevr_reconstruction

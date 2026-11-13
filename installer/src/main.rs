@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// The step `pc find` logs under: the platform plan's step (lib.rs), since the search is the first thing a PC plan looks at.
+const FIND_STEP: u32 = 9;
+
 const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall] [--artifact-dir DIR]
@@ -16,6 +19,7 @@ const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   pc stage --root <nevr root> [--current-json JSON] [--version V]
   pc discard --root <nevr root> --version V --runtime-sha256 HEX --reason WORD   records a staged release the runtime refused; fetches nothing
   pc uninstall --dir <folder with echovr.exe> [--nevr-root DIR] [--dev-nevr-root]  restores the recorded original; fetches nothing, reads no stdin
+  pc find [--search-root DIR]...            the folders that hold echovr.exe on the fixed drives and under each DIR: one JSON array; fetches nothing
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 --artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
   as an unverified dev artifact; no installer a player runs passes it.
@@ -77,6 +81,10 @@ impl Args {
     fn val(&self, k: &str) -> Option<String> {
         self.opts.iter().find(|o| o.0 == k).and_then(|o| o.1.clone())
     }
+    /// Every value given for `k`, in order (`--search-root` may repeat).
+    fn vals(&self, k: &str) -> Vec<String> {
+        self.opts.iter().filter(|o| o.0 == k).filter_map(|o| o.1.clone()).collect()
+    }
     fn flag(&self, k: &str) -> bool {
         self.opts.iter().any(|o| o.0 == k)
     }
@@ -90,7 +98,21 @@ fn finish(sess: Option<&Session>, ended: Ended, plan: Option<Value>) -> ExitCode
     ExitCode::from(code as u8)
 }
 
-fn game_running() -> bool {
+/// Set to `0` or `1` to answer "is echovr.exe running" without asking the machine (the tests use it). Any other value is ignored.
+const GAME_RUNNING_ENV: &str = "NEVR_INSTALL_GAME_RUNNING";
+
+fn game_running_override() -> Option<bool> {
+    match std::env::var(GAME_RUNNING_ENV).ok().as_deref() {
+        Some("0") => Some(false),
+        Some("1") => Some(true),
+        _ => None,
+    }
+}
+
+fn game_running(cfg: &Config) -> bool {
+    if let Some(running) = cfg.game_running {
+        return running;
+    }
     if cfg!(windows) {
         return nevr_install::device::run_with_timeout("tasklist", &["/FI", "IMAGENAME eq echovr.exe", "/NH"], std::time::Duration::from_secs(20)).map(|o| o.text.to_lowercase().contains("echovr.exe")).unwrap_or(true);
     }
@@ -103,7 +125,7 @@ fn main() -> ExitCode {
     let (platform, cmd) = match words.as_slice() {
         ["manifest", "verify"] => ("pc", "manifest"),
         ["quest", c @ ("plan" | "install")] => ("quest", *c),
-        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "discard" | "uninstall")] => ("pc", *c),
+        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "discard" | "uninstall" | "find")] => ("pc", *c),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(1);
@@ -115,6 +137,7 @@ fn main() -> ExitCode {
     // the canonical one is refused where the PC plan uses it (`Session::check_nevr_root`), unless `--dev-nevr-root` is given.
     cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| cfg.canonical_nevr_root.clone());
     cfg.dev_nevr_root = args.flag("--dev-nevr-root");
+    cfg.game_running = game_running_override();
     // Echo VR Launcher's data folder (#1285): `--launcher-dir`, else %LOCALAPPDATA%\EchoVR_Launcher on Windows, else none.
     cfg.launcher_dir = args.val("--launcher-dir").map(PathBuf::from).or_else(|| {
         if cfg!(windows) {
@@ -239,6 +262,11 @@ fn main() -> ExitCode {
                 }
             }
             ("pc", "stage") => {
+                // The stage writes into `--root` (the nevr root), so it gets the same root rule as a PC install (#1383), before
+                // any manifest is fetched or any folder is made under the root.
+                if let Err(why) = sess.check_nevr_root(&root) {
+                    return Ok((sess.end("needs-user", &why.msg)?, None));
+                }
                 let cur = match args.val("--current-json") {
                     Some(t) => nevr_install::stage::Current::parse(&t)?,
                     None => nevr_install::stage::Current::default(),
@@ -256,10 +284,20 @@ fn main() -> ExitCode {
                 let (end, report) = sess.pc_discard(&root, &need("--version")?, &need("--runtime-sha256")?, &need("--reason")?)?;
                 Ok((end, Some(report)))
             }
+            // The search for an install (#1300): no manifest is fetched; the folders are the answer, the run is in the log.
+            ("pc", "find") => {
+                let roots: Vec<PathBuf> = args.vals("--search-root").into_iter().map(PathBuf::from).collect();
+                let names: Vec<String> = nevr_install::pc::find_installs(&nevr_install::pc::fixed_drive_roots(), &roots)
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                sess.log.info("find", FIND_STEP, json!({"found": names.len(), "folders": names, "search_roots": roots.len()}))?;
+                Ok((sess.end("unchanged", &format!("{} Echo VR folder(s) found", names.len()))?, Some(json!(names))))
+            }
             // No manifest is fetched and no stdin is read: the record and the files are the whole input (#1497).
             ("pc", "uninstall") => {
                 let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);
-                let (end, plan) = sess.pc_uninstall(&dir, game_running(), &package_sums())?;
+                let (end, plan) = sess.pc_uninstall(&dir, game_running(&sess.cfg), &package_sums())?;
                 Ok((end, Some(plan)))
             }
             ("pc", c) => {
@@ -269,13 +307,19 @@ fn main() -> ExitCode {
                 } else {
                     sess.manifest()?;
                 }
-                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running(), args.val("--package-dir").map(PathBuf::from).as_deref())?;
+                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running(&sess.cfg), args.val("--package-dir").map(PathBuf::from).as_deref())?;
                 Ok((end, Some(plan)))
             }
             _ => unreachable!("the command table above is exhaustive"),
         }
     })();
     match result {
+        // `pc find` prints the folders alone, one JSON array, which install.ps1 reads; the state goes to standard error.
+        Ok((end, plan)) if platform == "pc" && cmd == "find" => {
+            println!("{}", plan.unwrap_or_else(|| json!([])));
+            eprintln!("[{}] {}", end.state, end.reason);
+            ExitCode::from(end.exit_code() as u8)
+        }
         Ok((end, plan)) => finish(Some(&sess), end, plan),
         Err(e) => finish(Some(&sess), sess.fail(&e), None),
     }

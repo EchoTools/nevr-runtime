@@ -781,17 +781,17 @@ void AnotherPluginCannotUnregisterAHandle() {
   const std::string live = LiveNoteOf(so);
   TimesThunk::Arm(kTimesTwo);
   std::uint32_t handle = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
   QCHECK(m.callAdd(3, 4) == 14);  // the handler doubles the original: (3 + 4) * 2
   QCHECK(slot_hook::UnregisterSlotHook("autopilot", handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle belongs to another plugin\"") == 1);
   QCHECK(Count(LogLevel::kWarn, "\"plugin\":\"autopilot\"") == 1);
   QCHECK(m.callAdd(3, 4) == 14);  // still chained
-  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::HoldsHandleOf("fixture"));
   QCHECK(!slot_hook::HoldsHandleOf("autopilot"));
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
-  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(!slot_hook::HoldsHandleOf("fixture"));
   QCHECK(m.callAdd(3, 4) == 7);
   QCHECK(*r.slot == m.realAdd);
   QCHECK(Errors() == 0);
@@ -813,18 +813,18 @@ void ThirdConsumerThroughTheServiceJoinsTheChain() {
 
   // A third consumer, a plugin, through the service: it joins the sentinel's chain on the same slot.
   std::uint32_t handle = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) ==
          NEVR_SLOT_HOOK_OK);
   QCHECK(handle != 0);
-  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:q15t\",\"position\":2,\"chain_length\":2") == 1);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:fixture\",\"position\":2,\"chain_length\":2") == 1);
   QCHECK(m.callAdd(3, 4) == 214);
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_OK);
   QCHECK(m.callAdd(3, 4) == 107);
   QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
   QCHECK(m.callAdd(3, 4) == 7);
   QCHECK(*r.slot == m.realAdd);
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);  // no longer held
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);  // no longer held
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
   QCHECK(Errors() == 0);
   dlclose(m.handle);
@@ -845,35 +845,35 @@ void ServiceRefusesWhatItCannotHoldAndSaysWhy() {
   Captured().clear();
 
   // A target without a build ID is refused before anything is looked up.
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, nullptr,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, nullptr,
                                          TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the target names no build ID") == 1);
   // A relocation that is not one of NevrSlotReloc.
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", 7, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", 7, live.c_str(),
                                          TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the relocation is not a NevrSlotReloc\"") == 1);
   // A null handler.
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          nullptr, &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a required pointer is null\"") == 1);
   // A module that is not loaded, and a symbol the module does not import.
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", "libnope.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", "libnope.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                          live.c_str(), TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"module_not_loaded\"") == 1);
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_nope", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_nope", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"symbol_not_found\"") == 1);
   QCHECK(out == nullptr && handle == 0);
   // The same handler on the same slot: refused as already in the chain, and the chain is named.
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          AddThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_REFUSED);
   QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
   QCHECK(out == nullptr && handle == 0);
   // Unregister: a handle the service did not issue, and one it does not hold.
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", 0) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles + 1)) ==
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", 0) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles + 1)) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles)) ==
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles)) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not one the service issued\"") == 2);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
@@ -964,26 +964,26 @@ void ServiceRefusesBadNamesAndPointersAtTheBoundary() {
   void* out = nullptr;
   std::uint32_t handle = 0;
   Captured().clear();
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", tooLongModule.c_str(), "fx_add",
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", tooLongModule.c_str(), "fx_add",
                                          NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(), TimesThunk::EntryAddress(), &out,
                                          &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, tooLongSymbol.c_str(), NEVR_SLOT_RELOC_JUMP_SLOT,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, tooLongSymbol.c_str(), NEVR_SLOT_RELOC_JUMP_SLOT,
                                          live.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                          tooLongBuildId.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a name is longer than the service holds\"") == 3);
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", limitModule.c_str(), "fx_add",
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", limitModule.c_str(), "fx_add",
                                          NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(), TimesThunk::EntryAddress(), &out,
                                          &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"module_not_loaded\"") == 1);
   Captured().clear();
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, "",
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, "",
                                          TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the target names no build ID") == 1);
   Captured().clear();
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", nullptr, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", nullptr, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                          live.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a required pointer is null\"") == 1);
@@ -1054,7 +1054,7 @@ void ServiceHoldsEightHandlesThenRefuses() {
   void* outs[slot_hook::kSlotHookHandles] = {};
   std::uint32_t handles[slot_hook::kSlotHookHandles] = {};
   for (std::size_t i = 0; i < slot_hook::kSlotHookHandles; ++i) {
-    QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+    QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                            &marks[i], &outs[i], &handles[i]) == NEVR_SLOT_HOOK_OK);
   }
   QCHECK(outs[0] == m.realAdd);
@@ -1062,13 +1062,13 @@ void ServiceHoldsEightHandlesThenRefuses() {
     QCHECK(outs[i] == static_cast<void*>(&marks[i - 1]));
   }
   QCHECK(*r.slot == static_cast<void*>(&marks[slot_hook::kSlotHookHandles - 1]));
-  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:q15t\",\"position\":8,\"chain_length\":8") == 1);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:fixture\",\"position\":8,\"chain_length\":8") == 1);
 
   // The ninth is refused: every handle is in use. Nothing is written for it.
   Captured().clear();
   void* ninthOut = nullptr;
   std::uint32_t ninth = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          &marks[slot_hook::kSlotHookHandles], &ninthOut, &ninth) ==
          NEVR_SLOT_HOOK_NO_HANDLE);
   QCHECK(ninthOut == nullptr && ninth == 0);
@@ -1078,7 +1078,7 @@ void ServiceHoldsEightHandlesThenRefuses() {
 
   // Unregistering newest first gives each one's original back, down to the game's function.
   for (std::size_t i = slot_hook::kSlotHookHandles; i-- > 0;) {
-    QCHECK(slot_hook::UnregisterSlotHook("q15t", handles[i]) == NEVR_SLOT_HOOK_OK);
+    QCHECK(slot_hook::UnregisterSlotHook("fixture", handles[i]) == NEVR_SLOT_HOOK_OK);
   }
   QCHECK(*r.slot == m.realAdd);
   QCHECK(m.callAdd(2, 3) == 5);
@@ -2400,12 +2400,12 @@ void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
   // Through the plugin hook service itself: the refusal names the plugin by the owner the service gives it.
   std::uint32_t handle = 0;
   Captured().clear();
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                          LiveNoteOf(so).c_str(), TimesThunk::EntryAddress(), TimesThunk::OriginalOut(),
                                          &handle) == NEVR_SLOT_HOOK_REFUSED);
-  QCHECK(handle == 0 && !slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(handle == 0 && !slot_hook::HoldsHandleOf("fixture"));
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
-  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin:q15t\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin:fixture\"") == 1);
 
   // A second entry on the slot is refused too: neither would be the newest.
   GotHook second;
@@ -3022,7 +3022,7 @@ bool g_nestedArmed = false;
 void NestedUnregisterObserver(void**, void*, StorePhase phase) {
   if (phase != StorePhase::kBeforeStore || !g_nestedArmed) return;
   g_nestedArmed = false;
-  g_nestedRc = slot_hook::UnregisterSlotHook("q15t", g_nestedHandle);
+  g_nestedRc = slot_hook::UnregisterSlotHook("fixture", g_nestedHandle);
 }
 
 // Ends the process, with a message, when `done` is still false after `seconds`: a deadlock fails the run instead of hanging it.
@@ -3045,7 +3045,7 @@ void AnUnregisterOfAHandleBeingRemovedIsRefused() {
   const std::string live = LiveNoteOf(so);
   TimesThunk::Arm(kTimesTwo);
   std::uint32_t handle = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
   g_nestedHandle = handle;
   g_nestedRc = -1;
@@ -3053,14 +3053,14 @@ void AnUnregisterOfAHandleBeingRemovedIsRefused() {
   SetStoreObserver(&NestedUnregisterObserver);
   std::atomic<bool> done{false};
   std::thread watchdog([&done] { ExitIfNotDone(done, 5, "an unregister of a handle being removed"); });
-  const std::int32_t outer = slot_hook::UnregisterSlotHook("q15t", handle);
+  const std::int32_t outer = slot_hook::UnregisterSlotHook("fixture", handle);
   done.store(true);
   watchdog.join();
   SetStoreObserver(nullptr);
   QCHECK(outer == NEVR_SLOT_HOOK_OK);
   QCHECK(g_nestedRc == NEVR_SLOT_HOOK_REFUSED);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"another unregister of this handle is in progress\"") == 1);
-  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(!slot_hook::HoldsHandleOf("fixture"));
   QCHECK(m.callAdd(3, 4) == 7);
   QCHECK(Errors() == 0);
   dlclose(m.handle);
@@ -3074,13 +3074,13 @@ void HoldsHandleOfNamesItsOwner() {
   const std::string live = LiveNoteOf(so);
   TimesThunk::Arm(kTimesTwo);
   std::uint32_t handle = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
-  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::HoldsHandleOf("fixture"));
   QCHECK(!slot_hook::HoldsHandleOf("autopilot"));
   QCHECK(!slot_hook::HoldsHandleOf(nullptr));
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
-  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(!slot_hook::HoldsHandleOf("fixture"));
   QCHECK(m.callAdd(3, 4) == 7);
   QCHECK(Errors() == 0);
   dlclose(m.handle);
@@ -3096,15 +3096,15 @@ void AFailedUnregisterLeavesTheHandleOpenForItsOwner() {
   const std::string live = LiveNoteOf(so);
   TimesThunk::Arm(kTimesTwo);
   std::uint32_t handle = 0;
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
   ForceWrite(r.slot, m.realSub);  // another writer holds the slot: the removal refuses to write over it
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_REFUSED);
   QCHECK(Count(LogLevel::kError, "\"op\":\"remove\",\"status\":\"slot_changed\"") == 1);
-  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::HoldsHandleOf("fixture"));
   ForceWrite(r.slot, TimesThunk::EntryAddress());  // the handler is in the slot again
-  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);  // the owner's retry is not "in progress"
-  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::UnregisterSlotHook("fixture", handle) == NEVR_SLOT_HOOK_OK);  // the owner's retry is not "in progress"
+  QCHECK(!slot_hook::HoldsHandleOf("fixture"));
   QCHECK(*r.slot == m.realAdd);
   QCHECK(m.callAdd(3, 4) == 7);
   dlclose(m.handle);
@@ -3192,18 +3192,18 @@ void AKeptHandleStaysHeldAndItsUnregisterIsRefused() {
   const char* const kHeldReason = "a failed install left the handler reachable through its slot; the handle stays held";
   std::string reasonNeedle = std::string("\"reason\":\"") + kHeldReason + "\"";
   SetStoreObserver(&AfterStoreClobberObserver);
-  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "fixture", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
                                          TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_REFUSED);
   SetStoreObserver(nullptr);
   QCHECK(Count(LogLevel::kWarn, reasonNeedle) == 1);
-  QCHECK(slot_hook::HoldsHandleOf("q15t"));  // N05: the handle stays held
+  QCHECK(slot_hook::HoldsHandleOf("fixture"));  // N05: the handle stays held
   std::uint32_t kept = 0;
   for (std::uint32_t h = 1; h <= slot_hook::kSlotHookHandles; ++h) {
-    if (slot_hook::UnregisterSlotHook("q15t", h) == NEVR_SLOT_HOOK_REFUSED) kept = h;
+    if (slot_hook::UnregisterSlotHook("fixture", h) == NEVR_SLOT_HOOK_REFUSED) kept = h;
   }
   QCHECK(kept != 0);
   QCHECK(Count(LogLevel::kWarn, reasonNeedle) == 2);  // N06: the unregister is refused with the same reason
-  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(slot_hook::HoldsHandleOf("fixture"));
   const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
   void* const pageStart = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1));
   ForceWrite(r.slot, m.realAdd);

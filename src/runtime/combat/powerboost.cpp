@@ -81,6 +81,7 @@
 // diagnostic lines are built with ECHOCOMBAT_LOG. Settings: PowerBoost.ini next to the DLL.
 
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/bullet_spawn_hook.h"  // nEVR port: the bullet spawn has one detour, shared with DroneFix (#2336)
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -389,6 +390,7 @@ void AddSelfDamage(void *cs, uint32_t index, unsigned seconds);
 // on both while that hook is installed (when its prologue check fails, a decline after the last Warning is not flushed).
 std::atomic<unsigned> g_declined{0}, g_declined_written{0};
 std::atomic<ULONGLONG> g_declined_at{0}, g_declined_line_at{0};
+std::atomic<bool> g_declinedThreadLogged{false};  // the Log of the thread Hooked_Heal first runs on (#2348)
 
 // Writes the count of declined markers the last Warning did not cover, once no decline has come for 10 s.
 void FlushDeclined(ULONGLONG now) {
@@ -397,6 +399,14 @@ void FlushDeclined(ULONGLONG now) {
     if (n <= written || now - g_declined_at.load(std::memory_order_relaxed) < 10000) return;
     if (!g_declined_written.compare_exchange_strong(written, n, std::memory_order_relaxed)) return;
     LogWarning("declined markers: %u in all; the ones since the last line are counted, not logged, and none has come for 10 s", n);
+}
+
+// Raises the count the last line covered to n, never lower (#2348): the decline threads and FlushDeclined all write it, so a late
+// store of a smaller count cannot move it back and make a later line repeat a count.
+void RaiseDeclinedWritten(unsigned n) {
+    unsigned w = g_declined_written.load(std::memory_order_relaxed);
+    while (w < n && !g_declined_written.compare_exchange_weak(w, n, std::memory_order_relaxed)) {
+    }
 }
 
 // nEVR port: a marker's kind (use, link, unlink, or a real heal), rez and the encoded value are pbr::Decode
@@ -413,20 +423,22 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
         // The first 32 are each written. The 33rd writes one Warning that says the rest are counted, not logged; after it a Warning
         // with the count goes out on the first decline at least 10 s after the last Warning, and FlushDeclined (the heal bubble
         // update, both sides) writes the count once no decline has come for 10 s.
+        if (!g_declinedThreadLogged.exchange(true, std::memory_order_relaxed))
+            Log("declined marker hook first call thread=%lu", static_cast<unsigned long>(GetCurrentThreadId()));
         const ULONGLONG now = GetTickCount64();
+        g_declined_at.store(now, std::memory_order_relaxed);  // the time before the count: a flush that sees the count sees this decline's time (#2348)
         const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;
-        g_declined_at.store(now, std::memory_order_relaxed);
         if (n <= 32) {
-            g_declined_written.store(n, std::memory_order_relaxed);
+            RaiseDeclinedWritten(n);
             LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
         } else if (n == 33) {
             g_declined_line_at.store(now, std::memory_order_relaxed);
-            g_declined_written.store(n, std::memory_order_relaxed);
+            RaiseDeclinedWritten(n);
             LogWarning("declined markers: %u so far; later ones are counted, not logged, and the count follows at most every 10 s", n);
         } else {
             ULONGLONG last = g_declined_line_at.load(std::memory_order_relaxed);
             if (now - last >= 10000 && g_declined_line_at.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-                g_declined_written.store(n, std::memory_order_relaxed);
+                RaiseDeclinedWritten(n);
                 LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
             }
         }
@@ -2286,6 +2298,9 @@ void ActivateRemote(void *cs, ULONGLONG now) {
 
 void __fastcall Hooked_BubbleUpdate(void *cs) {
     g_bubble_cs = cs;
+    static std::atomic<bool> s_bubbleThreadLogged{false};
+    if (!s_bubbleThreadLogged.exchange(true, std::memory_order_relaxed))
+        Log("heal bubble update first call thread=%lu", static_cast<unsigned long>(GetCurrentThreadId()));
     ULONGLONG now = GetTickCount64();
     static ULONGLONG offset_read = 0;
     if (now - offset_read >= 1000) {
@@ -2341,7 +2356,7 @@ void __fastcall Hooked_GunFire(void *cs, uint32_t handle, float charge, void *a4
             g_party_pulse_at ? (unsigned long long)(now - g_party_pulse_at) : 0ull);
         g_party_shot_at = now;                             // its muzzle flash becomes the party effect
         g_party_bullet_until = now + 300;                  // and its bullet (spawned after the fire call) is dropped
-        t_party_fire = true;                               // ... with no bullet (Hooked_BulletSpawn)
+        t_party_fire = true;                               // ... with no bullet (DropBulletSpawn)
         Real_GunFire(cs, handle, charge, a4, a5, a6, a7, a8);
         t_party_fire = false;
         return;
@@ -2351,20 +2366,19 @@ void __fastcall Hooked_GunFire(void *cs, uint32_t handle, float charge, void *a4
 
 // The bullet system's spawn (+0xce2020, from FireBulletLocal; DroneFix hooks it too): none while a
 // party gun's shot is being fired on this thread.
-constexpr uintptr_t BULLET_SPAWN_RVA = 0xce2020;
-constexpr uint8_t BULLET_SPAWN_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55 };
-using bullet_spawn_fn = void(__fastcall *)(uint8_t *, uint64_t, void *, float, const void *, const float *, int, uint32_t);
-bullet_spawn_fn Real_BulletSpawn = nullptr;
-void __fastcall Hooked_BulletSpawn(uint8_t *sys, uint64_t a2, void *a3, float a4, const void *pose, const float *v, int a7, uint32_t a8) {
+// nEVR port (#2336): the spawn's one detour is bullet_spawn_hook.h's, shared with DroneFix; this rule is its drop filter,
+// which runs first, as his hook wrapped DroneFix's.
+bool g_spawn_filter_set = false;
+bool DropBulletSpawn(const nevr_combat::bullet_spawn::Call &) {
     // [party] drop_bullet (live, default 1). (Keeping the bullet did not stop the Pulsar firing by
     // itself, tested 2026-11-05.)
     if ((t_party_fire || (!g_server && GetTickCount64() < g_party_bullet_until)) &&
         GetPrivateProfileIntA("party", "drop_bullet", 1, g_ini_path)) {
         static volatile LONG logged = 0;
         if (InterlockedIncrement(&logged) <= 10) Log("PARTY GUN: bullet not spawned");
-        return;
+        return true;
     }
-    Real_BulletSpawn(sys, a2, a3, a4, pose, v, a7, a8);
+    return false;
 }
 
 using input_fn = int(__cdecl *)(void *session, unsigned type, void *state);
@@ -2522,11 +2536,9 @@ void InstallMedigun(uint8_t *base) {
     if (g_medigun_on && Check(base + GUN_FIRE_RVA, GUN_FIRE_BYTES, sizeof(GUN_FIRE_BYTES), "FireIntegratedGunLocal")) {  // nEVR port
         Real_GunFire = (fire_fn)(base + GUN_FIRE_RVA);
         AttachTracked(&(PVOID &)Real_GunFire, Hooked_GunFire);
-        if (base[BULLET_SPAWN_RVA] == 0xe9 ||               // DroneFix's hook already there: chain on it
-            Check(base + BULLET_SPAWN_RVA, BULLET_SPAWN_BYTES, sizeof(BULLET_SPAWN_BYTES), "bullet spawn")) {
-            Real_BulletSpawn = (bullet_spawn_fn)(base + BULLET_SPAWN_RVA);
-            AttachTracked(&(PVOID &)Real_BulletSpawn, Hooked_BulletSpawn);
-        }
+        // nEVR port (#2336): one detour, shared with DroneFix, which checks the bytes; this sets the filter on it (or
+        // installs it, when DroneFix has not). Unset again when this install's transaction fails, and at Uninstall.
+        g_spawn_filter_set = nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(base), DropBulletSpawn, kCatModule);
     }
     if (g_medigun_on) ReadMedigunIni(g_ini_path);  // nEVR port
     if (Check(base + SYSTEMS_FIND_RVA, SYSTEMS_FIND_BYTES, sizeof(SYSTEMS_FIND_BYTES), "systems by name") &&
@@ -2667,6 +2679,10 @@ bool Install(bool server) {
         g_player_symbol = (uint64_t *)(base + PLAYER_SYMBOL_RVA);
     }
     LONG rc = DetourTransactionCommit();
+    if (rc != NO_ERROR && g_spawn_filter_set) {             // nEVR port (#2336): the filter goes with the failed transaction
+        nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(base), nullptr, kCatModule);
+        g_spawn_filter_set = false;
+    }
     if (rc == NO_ERROR) Log("hooked HealServer and ProcessDamageServer (%s)", g_server ? "server" : "client");
     else LogError("hook failed (%ld)", rc);
     g_hooked = rc == NO_ERROR;
@@ -2683,6 +2699,8 @@ void Uninstall() {
         if (g_apply_hooked) DetourDetach(&(PVOID &)Real_Apply, Hooked_Apply);
         for (LONG i = 0; i < g_ntracked && i < 32; ++i) DetourDetach(g_tracked[i].real, g_tracked[i].hook);
         DetourTransactionCommit();
+        if (g_spawn_filter_set) nevr_combat::bullet_spawn::SetDrop(reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)), nullptr, kCatModule);  // nEVR port (#2336)
+        g_spawn_filter_set = false;
         g_hooked = g_send_hooked = g_apply_hooked = false;
         g_ntracked = 0;
     }

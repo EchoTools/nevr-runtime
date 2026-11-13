@@ -69,6 +69,8 @@ fn config_from_json(text: &str) -> Result<Config, String> {
     if let Some(n) = &nevr_root {
         (c.state_dir, c.log_path, c.work_dir) = crate::stage::paths(n);
     }
+    // The dev or test form of `--dev-nevr-root` (#1383): a root the host does not load from is staged only when this is true.
+    c.dev_nevr_root = v["dev_nevr_root"].as_bool().unwrap_or(false);
     if let Some(b) = get("base") {
         c.base = b;
     }
@@ -308,6 +310,8 @@ pub unsafe extern "C" fn NevrPcStage(s: *mut NevrSession, root_dir: *const c_cha
         _ => return NEVR_BAD_ARGUMENT,
     };
     with_session(s, |s| {
+        // The root gets the rule the CLI's `pc stage` applies (#1383): refused unless the config says `dev_nevr_root`.
+        s.check_nevr_root(std::path::Path::new(&root_dir))?;
         let cur = match current {
             Some(t) => crate::stage::Current::parse(&t)?,
             None => crate::stage::Current::default(),

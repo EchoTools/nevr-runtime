@@ -59,8 +59,10 @@ add_library(nevr_quest_integration STATIC
   headset_identity_step.cpp
   self_check_wiring.cpp
   dlopen_hook.cpp
-  social_shim.cpp)
-set_source_files_properties(dlopen_hook.cpp social_shim.cpp headset_identity_step.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  social_shim.cpp
+  peer_timeout_log.cpp)
+# peer_timeout_log.cpp includes callback_thunk.h, so it is built without exceptions (as dlopen_hook.cpp and social_shim.cpp are).
+set_source_files_properties(dlopen_hook.cpp social_shim.cpp headset_identity_step.cpp peer_timeout_log.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_integration PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_integration PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
 target_link_libraries(nevr_quest_integration PUBLIC
@@ -233,7 +235,7 @@ endforeach()
 #   loop          a call in a loop                              passthrough_last   the pass-through br placed last
 #   str_x30_only  only x30 saved                                sub_then_stp   sub sp, then stp with no writeback
 #   two_exits_remember   two returns under .cfi_remember_state
-# and the plugin's three entries (frames_asm_probe_real.cpp): real_naked as the plugin writes them (the sensor MUST fail them),
+# and the three probe entries (frames_asm_probe_real.cpp): real_naked, three __attribute__((naked)) functions with no CFI (the sensor MUST fail them),
 # real_moved as top-level asm() with CFI and ldar loads (it MUST pass them), real_moved_pbldr with powerboost's plain ldr (#2216;
 # it MUST fail that entry).
 set(NEVR_ASM_ENTRY_PROBES

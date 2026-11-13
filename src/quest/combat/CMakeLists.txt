@@ -8,6 +8,7 @@
 add_library(nevr_quest_combat STATIC
   aibots.cpp
   boosterpool.cpp
+  bullet_velocity_guard.cpp
   bvh.cpp
   combat_active.cpp
   combat_install.cpp
@@ -22,6 +23,7 @@ add_library(nevr_quest_combat STATIC
   ec.cpp
   ecfx.cpp
   equip_refire.cpp
+  frozen_frame_exit.cpp
   fxtrail.cpp
   gamespace.cpp
   gunconnect.cpp
@@ -35,6 +37,7 @@ add_library(nevr_quest_combat STATIC
   memsys.cpp
   meshstep.cpp
   music.cpp
+  new_unlocks_clear.cpp
   peerclamp.cpp
   pfx.cpp
   pfxtev.cpp
@@ -45,8 +48,11 @@ add_library(nevr_quest_combat STATIC
   sensorwd.cpp
   shaderstep.cpp
   shieldgamma.cpp
+  sound_symbol_guard.cpp
   table_step.cpp
   tablestep.cpp
+  texel_buffer_guard.cpp
+  texture_quest2.cpp
   voipdrop.cpp
   wallfire.cpp
   weapon_arm.cpp)

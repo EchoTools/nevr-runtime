@@ -32,7 +32,7 @@ modules built into the same `libvrapi.so` and for the script library sources tha
 through `NEVR_COMBAT_LIBSRC`. The asset patch loader's source repository is not one this repo names. Nothing here rebuilds
 those files and compares hashes.
 
-**Reconstructions.** The sentinel pins its addresses in `src/quest/sentinel/pinned_targets.h`, and q15t modules pin every
+**Reconstructions.** The sentinel pins its addresses in `src/quest/sentinel/pinned_targets.h`, and the combat plugin's modules pin every
 word they were derived from (`kWords` in `src/quest/combat/meshstep_targets.h`).
 `tools/quest_apk_patch_map.tsv` maps each change the community patch repo makes to the code of ours that replaces it
 (#1187); `tools/quest_apk_patch_map.py` checks that every done row names a path and symbol that exist here, and checks

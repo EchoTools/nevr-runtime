@@ -22,16 +22,19 @@ namespace {
 
 constexpr int kMaxTrees = 64;
 constexpr double kSummaryEverySeconds = 10.0;
-constexpr double kLookEverySeconds = 0.25;
 constexpr std::uintptr_t kMarkAllowed = 1;
 
 // ---- state: plain atomics and PODs, no constructors ----
+// An entry belongs to one CBVHTree: `owner` is that object's address (0 = free). Writers (build, free) hold g_treeMutex; a query reads `owner` alone, with an
+// acquire load, so the hot path takes no lock. A freed entry keeps its bytes until it is built again, and the next entry built is the one after the last built
+// (g_cursor) and takes the first free one, so a freed entry is reused after the free entries ahead of the cursor, and at once when it is the only free one.
 struct Entry {
+  std::uintptr_t owner;
   std::uint64_t data;  // the SBVHTreeData address this tree was built from
   Tree tree;
 };
 Entry g_trees[kMaxTrees];
-int g_treeCount = 0;
+int g_cursor = 0;  // where the next free-entry search starts (under g_treeMutex)
 pthread_mutex_t g_treeMutex = PTHREAD_MUTEX_INITIALIZER;  // a std::mutex would register a destructor at load time
 
 sentinel::GotHook g_hooks[6];
@@ -47,16 +50,14 @@ std::atomic<std::uintptr_t> g_lastGateReturn{0};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
-std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a test seam)
+std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a refusal names gate and touch from it; a test seam)
 
-std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
+std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_freed{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
 std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
 std::atomic<bool> g_firstHit{false}, g_firstBlock{false};
 // The tick's: game thread only.
 double g_nextSummary = 0;
-double g_nextLook = 0;
-std::atomic<std::uint64_t> g_scopeLevel{0};
-std::atomic<double> g_lookedAt{0.0};         // the clock of the last look (seconds)
+std::atomic<bool> g_wasInScope{false};       // the combat level answer as the tick last read it: only the tick writes it, to see the edge
 std::atomic<std::uintptr_t> g_game{0};       // the CR15Game the tick last called with: what Initialize asks about the level it is loading
 
 // One pointer-sized value per thread, for code that runs inside a hooked game call, in place of `thread_local` (the Quest build targets API 26,
@@ -136,6 +137,31 @@ void LogTree(sentinel::LogLevel level, const char* result, std::uint64_t data, c
 }
 
 // ---- Initialize / Shutdown ----
+// Frees the entry `self` (a CBVHTree's address) owns, if it owns one; `cause` is for the line. A CBVHTree that owns none (an arena level's, a refused one) frees nothing
+// and says nothing. The entry's bytes stay until it is built again.
+void ReleaseTree(const void* self, const char* cause) noexcept {
+  std::uint64_t data = 0;
+  int inUse = 0;
+  bool freed = false;
+  pthread_mutex_lock(&g_treeMutex);
+  for (int i = 0; i < kMaxTrees; ++i) {
+    if (!freed && g_trees[i].owner == reinterpret_cast<std::uintptr_t>(self)) {
+      data = g_trees[i].data;
+      __atomic_store_n(&g_trees[i].owner, std::uintptr_t{0}, __ATOMIC_RELEASE);
+      freed = true;
+    }
+    if (g_trees[i].owner != 0) ++inUse;
+  }
+  pthread_mutex_unlock(&g_treeMutex);
+  if (!freed) return;
+  g_freed.fetch_add(1, std::memory_order_relaxed);
+  char tr[19], dt[19];
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_tree_freed",
+                      {{"tree", sentinel::HexString(tr, reinterpret_cast<std::uintptr_t>(self))}, {"data", sentinel::HexString(dt, data)},
+                       {"cause", cause}, {"in_use", inUse},
+                       {"msg", "the CBVHTree's table entry is free for the next level's tree; a cast on this CBVHTree is the game's own from now on"}});
+}
+
 void BuildTree(void* self, const void* data, const LoadingLevel& loading) noexcept {
   const std::uint64_t d = reinterpret_cast<std::uintptr_t>(data);
   if (data == nullptr) {
@@ -166,13 +192,18 @@ void BuildTree(void* self, const void* data, const LoadingLevel& loading) noexce
   }
   int slot = -1;
   pthread_mutex_lock(&g_treeMutex);
-  for (int i = 0; i < g_treeCount; ++i) {
-    if (g_trees[i].data == d) slot = i;
+  for (int k = 0; k < kMaxTrees; ++k) {
+    const int i = (g_cursor + k) % kMaxTrees;
+    if (g_trees[i].owner == 0) {
+      slot = i;
+      break;
+    }
   }
-  if (slot < 0 && g_treeCount < kMaxTrees) slot = g_treeCount++;
   if (slot >= 0) {
     g_trees[slot].data = d;
     g_trees[slot].tree = t;
+    g_cursor = (slot + 1) % kMaxTrees;
+    __atomic_store_n(&g_trees[slot].owner, reinterpret_cast<std::uintptr_t>(self), __ATOMIC_RELEASE);  // last: a query that sees the owner sees the tree
   }
   pthread_mutex_unlock(&g_treeMutex);
   if (slot < 0) {
@@ -192,6 +223,7 @@ void OnInitialize(InitThunk::Fn original, void* self, const void* data) noexcept
   original(self, data);
   if (self == nullptr) return;
   *static_cast<const Tree**>(self) = nullptr;
+  ReleaseTree(self, "reinitialize");  // an Initialize on a CBVHTree that was never shut down replaces its tree: the old entry is not kept
   LoadingLevel loading;
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game != 0) {
@@ -206,18 +238,23 @@ void OnInitialize(InitThunk::Fn original, void* self, const void* data) noexcept
   BuildTree(self, data, loading);
 }
 
+// The game's Shutdown runs first (the game itself shuts the tree down before it unloads the resource the tree reads: CStaticRaycastCS::Shutdown calls CBVHTree::Shutdown,
+// then CResourceInstance::UnloadAndShutdown), then the word is cleared and the entry is freed.
 void OnShutdown(ShutThunk::Fn original, void* self) noexcept {
   original(self);
-  if (self != nullptr) *static_cast<const Tree**>(self) = nullptr;
+  if (self == nullptr) return;
+  *static_cast<const Tree**>(self) = nullptr;
+  ReleaseTree(self, "shutdown");
 }
 
-// The tree a CBVHTree points at: one of our table entries (a word that is not one is a doubt: the game's function answers). The CBVHTree is
-// the object the game's caller called a member of, so its first word is read with a plain load.
+// The tree a CBVHTree points at: one of our table entries that is in use (a word that is not one, or that names a freed entry, is a doubt: the game's function
+// answers). The CBVHTree is the object the game's caller called a member of, so its first word is read with a plain load.
 const Tree* TreeOf(const void* self) noexcept {
   const std::uintptr_t p = *static_cast<const std::uintptr_t*>(self);
   const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(&g_trees[0].tree);
   const std::uintptr_t off = p - lo;
   if (off >= sizeof(g_trees) || off % sizeof(Entry) != 0) return nullptr;  // (p below the table wraps `off` to a huge value)
+  if (__atomic_load_n(&g_trees[off / sizeof(Entry)].owner, __ATOMIC_ACQUIRE) == 0) return nullptr;  // freed
   return reinterpret_cast<const Tree*>(p);
 }
 
@@ -343,8 +380,10 @@ void WarnLegacySwitches() noexcept {
 }
 
 void Refused(const char* reason, const char* hook, const char* status, int error) noexcept {
+  const int handed = g_lastSwitches.load(std::memory_order_relaxed);  // InstallAt stores the switches it was handed before any refusal
   sentinel::LogFields(sentinel::LogLevel::kError, "combat_bvh_install",
                       {{"result", "refused"}, {"reason", reason}, {"hook", hook}, {"status", status}, {"error", error},
+                       {"bvh_gate", (handed & 2) != 0 ? 1 : 0}, {"bvh_touch", (handed & 4) != 0 ? 1 : 0},
                        {"msg", "the static BVH is not installed: nothing was changed, so no cast is answered from the level and the game keeps its stub"}});
 }
 
@@ -369,13 +408,21 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   if (!switches.bvh) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},
+                         {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
                          {"msg", "combat.bvh is false: the game keeps its stubbed static BVH and no cast is answered from the level"}});
     return {false, "off_config", true};  // off by its key: counted apart on the phase line, neither installed nor failed
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_install",
-                        {{"result", "refused"}, {"reason", "already_ran"}, {"msg", "a second step installs nothing"}});
+                        {{"result", "refused"}, {"reason", "already_ran"}, {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
+                         {"msg", "a second step installs nothing"}});
     return {false, "already_ran"};
+  }
+  // The query hooks act only while the combat level answer says a combat map or the combat lobby is loaded: when that answer cannot change (the tick
+  // or the scope row's refresh is not installed) the module would never act, so nothing is hooked (combat_scope.h `Live`).
+  if (!scope::Live()) {
+    Refused("scope_not_live", "(none)", "scope_not_live", 0);
+    return {false, "scope_not_live"};
   }
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
@@ -387,7 +434,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
     Refused("no_thread_key", "(none)", "no_thread_key", keyError);
     return {false, "no_thread_key"};
   }
-  // The scope is refreshed by the combat tick: with no tick callback it would never turn on and the module would do nothing.
+  // The tick callback keeps the CR15Game Initialize asks about, sees the scope's edge and writes the summary: with no room for it nothing is installed.
   if (!tick::Add(&Tick)) {
     Refused("tick_table_full", "(none)", "tick_table_full", 0);
     return {false, "tick_table_full"};
@@ -451,6 +498,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"hooks", hooks}, {"gate", switches.gate ? 1 : 0}, {"touch", touchOn ? 1 : 0},
                        {"allowed_casts", g_allowedCount.load(std::memory_order_relaxed)},
+                       {"bvh_gate", switches.gate ? 1 : 0}, {"bvh_touch", switches.touch ? 1 : 0},
                        {"msg", "CBVHTree answers from the game's own static BVH on a combat map or in the combat lobby; every other level, an Echo Arena "
                                "level included, keeps the game's own answers"}});
   return {true, "installed"};
@@ -466,12 +514,13 @@ bool TreeInstalled() noexcept { return g_installed.load(std::memory_order_acquir
 
 Counters GetCounters() noexcept {
   return {g_built.load(),  g_refused.load(), g_skipped.load(), g_int.load(), g_intHit.load(), g_occ.load(),
-          g_occHit.load(), g_gated.load(),   g_touch.load(),   g_stock.load()};
+          g_occHit.load(), g_gated.load(),   g_touch.load(),   g_stock.load(), g_freed.load()};
 }
 
 int TreeCount() noexcept {
+  int n = 0;
   pthread_mutex_lock(&g_treeMutex);
-  const int n = g_treeCount;
+  for (const Entry& e : g_trees) n += e.owner != 0 ? 1 : 0;
   pthread_mutex_unlock(&g_treeMutex);
   return n;
 }
@@ -488,48 +537,31 @@ void LogSummary() noexcept {
   std::snprintf(max, sizeof(max), "%.1f", static_cast<double>(mx) / 1000.0);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_summary",
                       {{"window_s", 10}, {"intersect", ni}, {"intersect_hit", nih}, {"occluded", no}, {"occluded_blocked", noh},
-                       {"touch_miss", nt}, {"gated_off", ng}, {"stock", ns}, {"us_per_cast_avg", avg}, {"us_per_cast_max", max},
-                       {"msg", "casts answered from the level's static BVH in this window; stock counts calls the game's function answered"}});
+                       {"touch_miss", nt}, {"gated_off", ng}, {"stock", ns}, {"us_per_cast_avg", avg}, {"us_per_cast_max", max}, {"in_use", TreeCount()},
+                       {"msg", "casts answered from the level's static BVH in this window; stock counts calls the game's function answered; in_use is the tree "
+                               "table's entries held by live CBVHTrees (of 64)"}});
 }
 
-void LookAtLevels(std::uintptr_t game, double now) noexcept {
-  std::uint64_t levelId = 0;
-  const bool in = level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
-  const bool before = detail::g_inCombatOrLobby.load(std::memory_order_relaxed);
-  const double last = g_lookedAt.load(std::memory_order_relaxed);
-  if (before && now - last > kStaleAfterSeconds) {
-    // The hooks read the look as stale for this gap and answered with the game's functions: the tick that closed the scope says so when it is back.
-    char gap[24], limit[24], lv[19];
-    std::snprintf(gap, sizeof(gap), "%.2f", now - last);
-    std::snprintf(limit, sizeof(limit), "%.2f", kStaleAfterSeconds);
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_bvh_scope_stale",
-                        {{"gap_s", gap}, {"stale_after_s", limit}, {"level", sentinel::HexString(lv, g_scopeLevel.load(std::memory_order_relaxed))},
-                         {"msg", "the combat tick stopped for longer than the scope is believed: the static BVH answered no cast in that gap, the game's "
-                                 "own functions did"}});
-  }
-  g_lookedAt.store(now, std::memory_order_relaxed);  // every look ages from here, whether or not the answer changed
+// The scope as this tick reads it. combat_scope has no change callback, so the tick keeps the answer it read last and says when it changes. The scope row
+// registers its refresh with the tick before this module's row does, so the answer read here is the one the refresh just made (or kept); the level
+// that decided it is on that row's `combat_scope_change` line, and a stalled tick on its `combat_scope_stale` line.
+void NoteScopeEdge() noexcept {
+  const bool in = InCombatOrLobby();
+  const bool before = g_wasInScope.exchange(in, std::memory_order_relaxed);
   if (in == before) return;
-  detail::g_inCombatOrLobby.store(in, std::memory_order_relaxed);
-  g_scopeLevel.store(levelId, std::memory_order_relaxed);
-  char lv[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_scope",
-                      {{"from", before ? 1 : 0}, {"to", in ? 1 : 0}, {"level", sentinel::HexString(lv, levelId)},
+                      {{"from", before ? 1 : 0}, {"to", in ? 1 : 0},
                        {"msg", in ? "a combat map or the combat lobby is loaded: casts are answered from its static BVH"
-                                  : "no combat map or combat lobby is loaded: the game's own answers stand"}});
+                                  : "no combat map or combat lobby is loaded (or the combat level answer is stale): the game's own answers stand"}});
 }
 
 }  // namespace
-
-bool LookIsFresh() noexcept { return NowSeconds() - g_lookedAt.load(std::memory_order_relaxed) <= kStaleAfterSeconds; }
 
 void Tick(std::uintptr_t game) noexcept {
   if (!g_installed.load(std::memory_order_acquire)) return;
   const double now = NowSeconds();
   g_game.store(game, std::memory_order_release);
-  if (now >= g_nextLook) {
-    g_nextLook = now + kLookEverySeconds;
-    LookAtLevels(game, now);
-  }
+  NoteScopeEdge();
   if (now < g_nextSummary) return;
   g_nextSummary = now + kSummaryEverySeconds;
   LogSummary();
@@ -558,7 +590,7 @@ void ResetForTest() noexcept {
   GateThunk::Reset();
   pthread_mutex_lock(&g_treeMutex);
   std::memset(g_trees, 0, sizeof(g_trees));
-  g_treeCount = 0;
+  g_cursor = 0;
   pthread_mutex_unlock(&g_treeMutex);
   g_ran.store(false);
   g_installed.store(false);
@@ -570,16 +602,13 @@ void ResetForTest() noexcept {
   g_lookup.store(nullptr);
   g_pinsOverride.store(nullptr);
   g_clock.store(nullptr);
-  g_built = g_refused = g_int = g_intHit = g_occ = g_occHit = g_gated = g_touch = g_stock = 0;
+  g_built = g_freed = g_refused = g_int = g_intHit = g_occ = g_occHit = g_gated = g_touch = g_stock = 0;
   g_ns = g_maxNs = 0;
   g_firstHit = g_firstBlock = false;
   g_nextSummary = 0;
-  g_nextLook = 0;
-  g_scopeLevel.store(0);
-  g_lookedAt.store(0.0);
+  g_wasInScope.store(false);
   g_game.store(0);
   g_skipped.store(0);
-  detail::g_inCombatOrLobby.store(false);
   g_mark.Set(0);
 }
 

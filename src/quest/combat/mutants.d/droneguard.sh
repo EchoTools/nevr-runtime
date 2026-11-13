@@ -74,6 +74,17 @@ runm dg_install_level     $D "s/sentinel::LogFields(installed ? sentinel::LogLev
 # the switch
 runm dg_off_ignored       $D "s/  if (!on) {/  if (!on \&\& false) {/"
 runm dg_off_not_off       $D "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
+# every combat_droneguard_install line names the stage-1 switch the step was handed (#2382): the record unset, then each line's field fixed at the default
+runm dg_stage1_asked_unset      $D 's/^  g_stage1Asked.store(stage1, std::memory_order_relaxed);$//'
+runm dg_pin_refusal_stage1_fixed $D 's/^                         {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},$/                         {"droneguard_stage1", 0},/'
+runm dg_refusal_stage1_fixed    $D 's/{"reason", token}, {"droneguard_stage1", g_stage1Asked.load(std::memory_order_relaxed) ? 1 : 0},/{"reason", token}, {"droneguard_stage1", 0},/'
+runm dg_off_stage1_fixed        $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 0},/'
+runm dg_installed_stage1_fixed  $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", 0},/'
+# the same fields fixed at the other value (off line on; installed line reads what ran, not what was handed) (#2382)
+runm dg_off_stage1_on           $D 's/{"reason", "off_config"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"reason", "off_config"}, {"droneguard_stage1", 1},/'
+runm dg_installed_and_stage1    $D 's/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", stage1 ? 1 : 0},/{"stage1", installed ? stageOne : "off"}, {"droneguard_stage1", installed \&\& stage1 ? 1 : 0},/'
+# the refusal path: the switch is stored only when an image lookup is given, so a step with no lookup (module_not_loaded) logs the value of the step before it
+runm dg_refused_store_lookup    $D 's/^  g_stage1Asked.store(stage1, std::memory_order_relaxed);$/  if (lookup != nullptr) g_stage1Asked.store(stage1, std::memory_order_relaxed);/'
 # the stats
 runm dg_stats_never       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  (void)calls;/"
 runm dg_stats_every       $D "s/  if ((calls \& (kStatsEvery - 1)) == 0) LogStats(false);/  if (calls != ~0ULL) LogStats(false);/"
@@ -104,7 +115,7 @@ runm dg_stage1_row_step    $CI "s/Module{\"droneguard_stage1\", nullptr, nullptr
 runm dg_row_member         $CI "s/\"combat.droneguard\", \&nevr_quest::CombatConfig::droneguard,/\"combat.droneguard\", \&nevr_quest::CombatConfig::voipdrop,/" quest-host-combat combat_install_test
 runm dg_row_key            $CI "s/\"combat.droneguard\", \&nevr_quest/\"combat.droneguards\", \&nevr_quest/" quest-host-combat combat_install_test
 # droneguard asks nothing of the scope: it is not a reader of the scope row
-runm dg_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.droneguard.on;/" quest-host-combat combat_install_test
+runm dg_reader_listed      $CI "s/ || g_config.custctx.on/ || g_config.custctx.on || g_config.droneguard.on/" quest-host-combat combat_install_test
 # (kOffTarget and kOffHandleIdx are tied to the pinned words by static_assert in droneguard_targets.h: a changed one fails the build)
 # the run of skips belongs to the component, and each kind of run line has a cap that says so (review F1)
 runm dg_run_shared          $D "s/  Began Begin(std::uintptr_t c) noexcept {/  Began Begin(std::uintptr_t c) noexcept {\n    if (c != 0) return Began::kNew;/"

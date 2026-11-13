@@ -18,10 +18,10 @@
  * When. The normal step (combat_install.h), after the plugin pass. A resource the game builds before the step is stock; the step cannot
  * correct it. Whether shader sets are built before the normal step has not been measured on a headset.
  *
- * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's function.
+ * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's function.
  *
- * Switch. `combat.shaderstep` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `shaderstep.off` is not read; one found in
- * the plugin's data directory is a Warning naming the key.
+ * Switch. `combat.shaderstep` (default true) in config.yaml (docs/adr/0046 rule 4). The `shaderstep.off` file is not read; one found in
+ * the data directory is a Warning naming the key.
  *
  * Frequency (ADR 0038). Once per shader set the game constructs through this slot; not on a per-frame path. The log is written after the work:
  * one line for the first object set, and a Warning for each of the first five objects whose step was not the game's 0x20.
@@ -32,7 +32,7 @@
  * Origin. The game's own code, read in the disassembly (docs/quest/combat/shaderstep.md), and the reference build's upstream patch: `tools/re3/res_heap_patch.py`
  * with `--table-step-1` (RE-10's padding finding, wave 8; commit 35bba9f of kotorvr/echoquest-combat) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
  * its 32 in the CGShaderSetResource, CGInstancedModelResource and CGMeshListResource constructors, at these addresses less 0x100000. This module does
- * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the q15t
+ * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the combat
  * plugin (#1594), whose host-test harness and checked-pin style it follows.
  *
  * Lines (sentinel log):

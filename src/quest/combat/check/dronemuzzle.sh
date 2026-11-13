@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # dronemuzzle's arm64 checks (docs/adr/0046 rule 2; src/quest/combat/dronemuzzle.h). Run by `just test-quest-combat dronemuzzle` after the host tests.
-# Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and Q15T_SKIP_QEMU=1 skips the run (and says so).
+# Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and NEVR_SKIP_QEMU=1 skips the run (and says so).
 #   1. the two entries (src/quest/combat/dronemuzzle_entry.inc) in dronemuzzle.cpp compiled for arm64 (-O2, as the sentinel is) are exactly the expected instructions, in this order: both words
 #      each entry reads are loaded with ldar (#2216), and the pass-through is a br through x16;
 #   2. each continuation, compiled for arm64 (-O2, as the sentinel is), calls (blr) or jumps (br) through registers that only an ldar or ldapr of the
@@ -111,9 +111,9 @@ done
 
 if command -v qemu-aarch64 >/dev/null 2>&1; then
   qemu-aarch64 "$program" || { echo "FAIL: dronemuzzle_qemu"; exit 1; }
-elif [ "${Q15T_SKIP_QEMU:-0}" = 1 ]; then
-  echo "SKIPPED (Q15T_SKIP_QEMU=1): qemu-aarch64 not found, the entries were not run"
+elif [ "${NEVR_SKIP_QEMU:-0}" = 1 ]; then
+  echo "SKIPPED (NEVR_SKIP_QEMU=1): qemu-aarch64 not found, the entries were not run"
 else
-  echo "FAIL: qemu-aarch64 not found (Q15T_SKIP_QEMU=1 to skip explicitly)"
+  echo "FAIL: qemu-aarch64 not found (NEVR_SKIP_QEMU=1 to skip explicitly)"
   exit 1
 fi

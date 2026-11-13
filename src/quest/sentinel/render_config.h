@@ -8,7 +8,9 @@
  *       vrapi_SetClockLevels         the CPU and GPU levels, and the answer
  *       vrapi_SetPropertyInt         foveation level (property 0xf) and dynamic foveation (property 0x1e)
  *       vrapi_GetSystemPropertyFloat the refresh rate the runtime reports (property 4)
- *       vrapi_SubmitFrame2           one call per rendered frame: the frame count
+ *       vrapi_SubmitFrame2           one call per rendered frame: the frame count, and before the original the frozen-frame
+ *                                    exit's stamp (combat/frozen_frame_exit.h `NoteSubmit`: one relaxed load and a branch
+ *                                    outside a combat level)
  *   - three game globals in libr15, read by the poller thread after the build id is proved and the address is shown to lie
  *     inside a PT_LOAD segment of the image: the eye-buffer size pair CVR::RefreshRTSize stores, the RT-size override pair
  *     CVR::SetRTSizeOverride stores, and CGRenderConfig's MSAA mode;
@@ -30,6 +32,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -111,6 +114,15 @@ bool PollOnce(const Source& source) noexcept;
 // constructor sequence resolved (the line says what set the size). Returns true when all five slots hold their thunks. One
 // line {"event":"render_config_install",...} says what happened, whatever the outcome.
 bool Install(texture_quality::Level textureLevel, bool fromConfig) noexcept;
+
+namespace detail {
+// Set by Install when the vrapi_SubmitFrame2 slot holds this hook's thunk; cleared by ResetForTest.
+inline std::atomic<bool> g_submitSlotHeld{false};
+}  // namespace detail
+// Whether the submit-frame slot holds this hook's thunk, so the submit handler runs on every frame. An input of that handler
+// (combat/frozen_frame_exit.h, ADR 0039: it observes submits through this owner) asks before it relies on being called; on the
+// service-only file nothing holds the slot. Inline: the asker links nothing of this file's.
+inline bool SubmitSlotHeld() noexcept { return detail::g_submitSlotHeld.load(std::memory_order_acquire); }
 
 // Test support. `InstallVia` is Install() with the GOT step replaced by `install` (the status GotHook would return for
 // the slot number 0..4 in the order refresh-rate, clock-levels, set-property-int, system-property-float, submit-frame). The

@@ -1505,6 +1505,28 @@ class RunToolTestsRecord(unittest.TestCase):
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME"):
             self.assertNotIn(key, seen)
 
+    CALLER_GIT_VARIABLES = ("GIT_CONFIG_PARAMETERS", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                            "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+    def test_the_child_pytest_gets_none_of_the_callers_git_config_parameters_or_authorship(self):
+        # git sets GIT_CONFIG_PARAMETERS for `git -c` and for aliases, so a run started from one carries it.
+        seen, start = self.env_dump_run(
+            GIT_CONFIG_PARAMETERS="'core.hooksPath=/x' 'gpg.program=/bin/false' 'user.signingkey=ABC'",
+            GIT_AUTHOR_NAME="leak", GIT_AUTHOR_EMAIL="leak@example.invalid",
+            GIT_COMMITTER_NAME="leak", GIT_COMMITTER_EMAIL="leak@example.invalid")
+        for key in self.CALLER_GIT_VARIABLES:
+            self.assertFalse(key in seen, f"{key} reached the child pytest")
+        for key in self.CALLER_GIT_VARIABLES:
+            self.assertIn(key, start["env_removed"])
+
+    def test_the_end_record_repeats_the_start_records_environment(self):
+        self.env_dump_run(DISPLAY=":9", GNUPGHOME="/nonexistent/gnupg", GIT_AUTHOR_NAME="leak")
+        start, end = self.records("start")[0], self.records("end")[0]
+        self.assertEqual(end["env_set"], start["env_set"])
+        self.assertEqual(end["env_removed"], start["env_removed"])
+        self.assertIn("GIT_AUTHOR_NAME", end["env_removed"])
+        self.assertIn("GNUPGHOME", end["env_removed"])
+
     def test_the_start_record_names_what_was_set_and_removed(self):
         _, start = self.env_dump_run(DISPLAY=":9", WAYLAND_DISPLAY="wayland-9", GNUPGHOME="/nonexistent/gnupg")
         self.assertEqual(start["env_set"], self.EXPECTED_GIT_ENV)
@@ -1545,12 +1567,14 @@ class RunToolTestsRecord(unittest.TestCase):
         module = load_script()
         line = next(ln for ln in JUSTFILE.read_text().splitlines() if "unittest discover" in ln)
         words = shlex.split(line)
-        self.assertEqual(words[words.index("env") + 1:words.index("env") + 7],
-                         ["-u", "DISPLAY", "-u", "WAYLAND_DISPLAY", "-u", "GNUPGHOME"])
-        assigned = dict(w.split("=", 1) for w in words if w.startswith("GIT_"))
+        unset = [words[i + 1] for i in range(words.index("env") + 1, len(words) - 1) if words[i] == "-u"]
+        self.assertEqual(unset, list(module.HERMETIC_UNSET))
+        assigned = dict(w.split("=", 1) for w in words if w.startswith("GIT_") and "=" in w)
         self.assertEqual(assigned, module.HERMETIC_SET)
-        self.assertEqual(module.HERMETIC_UNSET, ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME"))
-        self.assertLess(line.index("env"), line.index("python3 -m unittest"))
+        self.assertEqual(module.HERMETIC_UNSET, ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME", "GIT_CONFIG_PARAMETERS",
+                                                 "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                                                 "GIT_COMMITTER_EMAIL"))
+        self.assertLess(line.index("env"), line.index("-m unittest"))
 
     def test_the_hermetic_set_is_the_five_git_settings_and_the_two_isolation_variables(self):
         self.assertEqual(load_script().HERMETIC_SET, self.EXPECTED_GIT_ENV)

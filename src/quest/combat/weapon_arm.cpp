@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/gamespace.h"
 #include "quest/combat/gamespace_targets.h"
@@ -55,7 +55,7 @@ void* DlLookup(const char* symbol) noexcept {
   return lib != nullptr ? dlsym(lib, symbol) : nullptr;
 }
 
-// The player's data directory: /sdcard/Android/data/<package>/files/q15t (legacy_switch.h), made when absent. A directory a test names is used as it is.
+// The player's data directory (legacy_switch.h, legacy::Directory), made when absent. A directory a test names is used as it is.
 bool DataDir(char* out, std::size_t n) noexcept {
   if (!legacy::Directory(out, n)) return false;
   if (access(out, W_OK) != 0 && !legacy::g_dirSet.load(std::memory_order_acquire)) mkdir(out, 0770);
@@ -94,13 +94,6 @@ void WriteMarker(const char* outcome, std::uint32_t arm, long long profArm) noex
   g_done.store(true, std::memory_order_release);
 }
 
-// A combat map only: the combat lobby is not in scope, because the lobby script is shared with the arena lobby and it is not established that an arena player
-// never has mpl_lobby_b_combat loaded (docs/quest/combat/headset_gates.md). The hand is only meaningful in a match.
-bool InScope(std::uintptr_t game) noexcept {
-  std::uint64_t levelId = 0;
-  return level::Classify(game, /*lobby=*/false, &levelId) == level::Kind::kCombatOrLobby;
-}
-
 void Step(std::uintptr_t game, double now) noexcept {
   if (now < g_next) return;
   g_next = now + kEveryS;
@@ -137,8 +130,11 @@ void Step(std::uintptr_t game, double now) noexcept {
       return;
     }
   }
-  // Arena shares the APK: nothing below this line runs unless a combat level is loaded and no arena level is.
-  if (!InScope(game)) {
+  // Arena shares the APK: nothing below this line runs unless a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it
+  // (combat_scope.h `InCombatMap`: a load and a test on an arena pass, no read of the game; a look older than 1 s is not believed). A combat map only: the
+  // combat lobby is not in scope, because the lobby script is shared with the arena lobby and it is not established that an arena player never has
+  // mpl_lobby_b_combat loaded (docs/quest/combat/headset_gates.md). The hand is only meaningful in a match.
+  if (!scope::InCombatMap()) {
     g_scopedOut.fetch_add(1, std::memory_order_relaxed);
     g_hold = 0;
     return;
@@ -297,6 +293,9 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool 
                          {"msg", "combat.weapon_arm is false: the gun hand stays as the game gives it"}});
     return {false, "off_config", true};
   }
+  // The pass acts only while the combat level answer says a combat map is loaded: when that answer cannot change (the tick or the scope row's refresh is
+  // not installed) the module would never act, so it is not installed (combat_scope.h `Live`).
+  if (!scope::Live()) return Refused("scope_not_live", "");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded", "");
   char id[64] = {};

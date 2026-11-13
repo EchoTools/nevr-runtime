@@ -1,4 +1,4 @@
-/* The scanner-sphere watchdog (#2184, docs/adr/0046; moved from the q15t plugin's `sensorwd`).
+/* The scanner-sphere watchdog (#2184, docs/adr/0046).
  *
  * What the game does. The threat scanner's sensor sphere (model record `ac2d3f9f080ba45f`, one on every player actor that carries the combat
  * ability script `mp_combat_ability_sensor`) is enabled by the script's TriggeredPing and disabled again by FinishedPing 4.0 s later. On the Quest a sphere
@@ -10,40 +10,42 @@
  * libr15's JUMP_SLOT of CncaGameSpace::SendComponentEventGlobal (the event that carries TriggeredPing), each only while it holds the game's function. The
  * code words the wrappers' reads were derived from are checked first (sensorwd_targets.h).
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs.
  *
- * Switch. `combat.sensorwd` in config.yaml, true unless the file says false: the q15t plugin's `Q15T_SENSORWD` was on by default in v6.16.5
- * (`git show v6.16.5:src/quest/plugins/q15t/CMakeLists.txt`, line 50: `option(Q15T_SENSORWD "... default ON ..." ON)`). Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
+ * Switch. `combat.sensorwd` in config.yaml, true unless the file says false. Upstream the watchdog is opt-in, turned on by a `sensorwd.on` file (`afk_fx.cpp:7911-7916`),
  * and gated to combat maps (`afk_fx.cpp:127-137`). No headset session of ours has yet shown it acting (the reference build's
  * combat match counts no sphere enable, no TriggeredPing and no watchdog action), so its headset row requires `combat_sensorwd_first`
- * (docs/quest/combat/sensorwd.md). The plugin's kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).
+ * (docs/quest/combat/sensorwd.md). The kill file `sensorwd.off` is no longer read: one found is a Warning (`combat_sensorwd_legacy_switch`).
  *
  * Arena (same APK). The watchdog CAN act in arena: the three words are generic (every model component's enable and disable, and the game's one
  * event post), and the combat ability scripts are named for combat but are not level-specific, so the sphere can exist on an arena player's actor; kotorvr's
- * echoquest-combat found the plugin's sphere hooks live in every level, Echo Arena included, and gated them to combat maps (afk_fx.cpp:127-137, "ARENA-ISO1
+ * echoquest-combat found the sphere hooks live in every level, Echo Arena included, and gated them to combat maps (afk_fx.cpp:127-137, "ARENA-ISO1
  * T-143"). Here the hooks are installed on the same words, and each handler's first statement asks the scope: a combat map is loaded and no Echo Arena level
- * is, as of the last look (at most 250 ms old, and not older than 1 s, else shut). In any other state the handler calls the game's function with the same
- * arguments and does nothing else: no read of game memory, no lock, no counter of its own, no line. The tick leaves the table empty outside the scope.
- *
- * KNOWN-WRONG #2186: the scope's own look is a second level answer next to combat_scope (F19; PR #2246); see Look in sensorwd.cpp for what moves when it lands.
+ * is, as the combat level answer last saw it (combat_scope.h `InCombatMap`: a look four times a second from the game-thread tick, not believed once it is
+ * older than 1 s). In any other state the handler calls the game's function with the same arguments and does nothing else: no read of game memory, no lock,
+ * no counter of its own, no line. The tick reads the same answer, sees its edge (combat_scope has no change callback) and leaves the table empty outside
+ * the scope. The module is a reader of the scope row: `combat.sensorwd` is in combat_install.cpp `ScopeNormal()`'s list, and the install refuses
+ * (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). OnComponentEnabled and OnComponentDisabled run for every model component enable and disable of every level (not measured on a headset);
  * SendComponentEventGlobal runs for every component event of every level. The added work on those paths in arena is the thunk's counter and loads plus one
- * relaxed load of the scope. In a combat map the plugin's cost stays: a model enable or disable reads up to five words of game memory (process_vm_readv) to
- * ask whether the component is the sphere; the event path is two compares. The tick callback runs once per rendered frame: a clock read and a compare, and every
- * 250 ms a look at the loaded levels.
+ * relaxed load of the scope word and a test. In a combat map the cost stays: a model enable or disable reads up to five words of game memory
+ * (process_vm_readv) to ask whether the component is the sphere; the event path is two compares; the scope's freshness adds a clock read. The tick callback
+ * runs once per rendered frame: a clock read, the scope word's load and test, and an exchange; the look at the loaded levels is the scope row's, made once
+ * for every reader.
  *
  * Owner (ADR 0039). This file owns turning a stuck scanner sphere off. The arguments and the results of the three functions are not changed.
  *
  * Origin. kotorvr's echoquest-combat fxsensor / sensorwd: runtime/native/afkxr/afk_fx.cpp (commit c5a67e8): the constants at :6115-6121, the sphere test at
  * :6141-6152, the enable and disable hooks at :6162-6201, the tick at :6204-6243, the event hook from :6244, and the combat-map gate: the policy at :127-137
  * (`kIsoSns`, :136) and `SnsOpen` at :6137-6140, which applies it to the sensor hooks. The ring of 8 waiting pings, the sweep and the
- * log budgets are the plugin's.
+ * log budgets are this module's.
  *
  * Lines (sentinel log):
- *   install  {"event":"combat_sensorwd_install","state":"on|off|refused","reason":"default|off_config|<refusal>","switch":"combat.sensorwd","scope":"combat_map",
+ *   install  {"event":"combat_sensorwd_install","state":"on|off|refused","reason":"default|off_config|scope_not_live|<refusal>","switch":"combat.sensorwd","scope":"combat_map",
  *             "enabled":"<GotStatus>","disabled":"<GotStatus>","event_slot":"<GotStatus>","watchdog_ms":6000,"msg":".."}  Info on and off; Error refused
- *   scope    {"event":"combat_sensorwd_scope","from":<0|1>,"to":<0|1>,"level":"0x%016llx","msg":".."}  Info, one per change of the answer
+ *   scope    {"event":"combat_sensorwd_scope","from":<0|1>,"to":<0|1>,"msg":".."}  Info, one per change of the answer as the tick reads it (the level is on
+ *            the scope row's `combat_scope_change` line of the same frame)
  *   first    {"event":"combat_sensorwd_first","what":"sphere_enable|sphere_disable|ping","msg":".."}  Info, once per kind: the module saw the game's sphere
  *   thread   {"event":"combat_sensorwd_thread","role":"tick|enable|disable|event","tid":<n>,..}  Info, a role seen on a thread, the first kThreadLines
  *   off      {"event":"combat_sensorwd_off","cs":"0x..","handle":"0x..","age_ms":<n>,"n":<n>,"msg":".."}  Info, a stuck sphere turned off (the first kLogLines)
@@ -67,12 +69,11 @@
 namespace nevr_quest::combat::sensorwd {
 
 inline constexpr std::int64_t kWatchdogMs = 6000;   // still enabled this long after its enable = stuck (FinishedPing comes at 4.0 s)
-inline constexpr std::int64_t kLookEveryMs = 250;   // the tick looks at the loaded levels this often
-inline constexpr std::int64_t kStaleAfterMs = 1000; // an answer older than this is not believed: the handlers pass everything through
 inline constexpr std::size_t kSlots = 32;           // spheres tracked (players and bots of one match, with room)
 inline constexpr std::size_t kPings = 8;            // TriggeredPings waiting for the tick
 
-// The module's normal step: installs the three hooks and registers the tick when `configOn`, writes the install line.
+// The module's normal step: installs the three hooks and registers the tick when `configOn`, writes the install line. Refuses (`scope_not_live`) when the
+// combat level answer cannot change (combat_scope.h `Live`).
 ModuleResult Install(bool configOn) noexcept;
 // The same on the libr15 the lookup finds, with pinned addresses `pins` (the host test supplies an image built in memory).
 ModuleResult InstallAt(bool configOn, sentinel::ImageLookup lookup, const targets::Pins& pins) noexcept;
@@ -82,7 +83,7 @@ void Tick(std::uintptr_t game) noexcept;
 
 struct Stats {
   bool on = false;                  // the three hooks are installed
-  bool inScope = false;             // the last look found a combat map and no Echo Arena level
+  bool inScope = false;             // the tick last read a combat map and no Echo Arena level from the combat level answer
   std::uint32_t enables = 0;        // sphere enables seen (other models are not counted)
   std::uint32_t disables = 0;       // sphere disables seen
   std::uint32_t pings = 0;          // TriggeredPing events seen
@@ -109,7 +110,7 @@ void SetHookForTest(void (*hook)(int stage) noexcept) noexcept;
 bool LockHeldForTest() noexcept;
 // The directory the legacy kill file is looked for in (nullptr restores production).
 void SetLegacyDirForTest(const char* dir) noexcept;
-// Forgets the hooks, the thunks, the table, the scope, the counters and the log budgets.
+// Forgets the hooks, the thunks, the table, the tick's last reading of the scope, the counters and the log budgets (not the combat level answer itself).
 void ResetForTest() noexcept;
 
 }  // namespace nevr_quest::combat::sensorwd

@@ -3,7 +3,8 @@
 
 # ── data ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 nevr_ht_group(data)
-foreach(f sha256 zip staging fetch data_step pack)
+nevr_ht_obj(o_cargo_device_memory GROUP data NOEXC HOST SRC src/core/device_memory.cpp)
+foreach(f sha256 zip staging fetch data_step pack boot_stub)
   nevr_ht_obj(o_data_${f} GROUP data NOEXC HOST SRC src/quest/data/${f}.cpp)
 endforeach()
 # The tests' scratch directories are made in the build tree (the recipes run from different directories).
@@ -13,23 +14,44 @@ nevr_ht_test(data_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
 nevr_ht_test(fetch_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/fetch_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(data_step_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
-  SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step LIBS ${NEVR_ZLIB_LIB})
+  SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step o_data_boot_stub o_cargo_device_memory LIBS ${NEVR_ZLIB_LIB})
+# The zero-package stub manifests (src/quest/data/boot_stub.h), read back by the PC server's own manifest reader and by libzstd.
+nevr_ht_obj(o_data_installed_levels GROUP data HOST INCS sdk/include SRC src/runtime/server/installed_levels.cpp)
+nevr_ht_test(boot_stub_test GROUP data HOST INCS sdk/include TIMEOUT 300 ENV ${_data_env}
+  SRC src/quest/tests/boot_stub_test.cpp
+  OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step o_data_boot_stub o_cargo_device_memory o_data_installed_levels
+  LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
 # The CDN texture delivery (docs/adr/0045-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
 # it (no exceptions; nlohmann::json is used through its non-throwing calls only).
-foreach(f resource_shadow cargo_manifest cargo_plan cargo_store cargo_run cargo_resolver)
+foreach(f resource_shadow cargo_limits cargo_validate cargo_manifest cargo_plan cargo_store cargo_run cargo_resolver)
   nevr_ht_obj(o_cargo_${f} GROUP data NOEXC HOST SRC src/core/${f}.cpp)
 endforeach()
 nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC TIMEOUT 120
   SRC src/quest/tests/resource_shadow_test.cpp OBJS o_cargo_resource_shadow)
+# The first-run prefetch (docs/adr/0045-cdn-texture-delivery.md, the first-run hold): every object of a manifest, before the engine. cargo_run.cpp
+# drives it, so every target that links cargo_run links it.
+nevr_ht_obj(o_cargo_cargo_prefetch GROUP data NOEXC HOST SRC src/core/cargo_prefetch.cpp)
+set(_cargo_objs o_cargo_device_memory o_cargo_resource_shadow o_cargo_cargo_limits o_cargo_cargo_validate o_cargo_cargo_manifest o_cargo_cargo_plan o_cargo_cargo_store o_cargo_cargo_run o_cargo_cargo_prefetch o_data_sha256)
+nevr_ht_test(device_memory_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/device_memory_test.cpp OBJS o_cargo_device_memory)
+nevr_ht_test(cargo_limits_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_limits_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(cargo_validate_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_validate_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
 nevr_ht_test(cargo_manifest_test GROUP data HOST TIMEOUT 120
-  SRC src/quest/tests/cargo_manifest_test.cpp OBJS o_cargo_cargo_manifest o_cargo_cargo_plan)
-set(_cargo_objs o_cargo_resource_shadow o_cargo_cargo_manifest o_cargo_cargo_plan o_cargo_cargo_store o_cargo_cargo_run o_data_sha256)
+  SRC src/quest/tests/cargo_manifest_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(sha256_backend_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/sha256_backend_test.cpp OBJS o_data_sha256)
 nevr_ht_test(cargo_store_test GROUP data HOST TIMEOUT 120
-  SRC src/quest/tests/cargo_store_test.cpp OBJS ${_cargo_objs})
-nevr_ht_test(cargo_run_test GROUP data HOST TIMEOUT 120
-  SRC src/quest/tests/cargo_run_test.cpp OBJS ${_cargo_objs})
+  SRC src/quest/tests/cargo_store_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(cargo_run_test GROUP data HOST TIMEOUT 300
+  SRC src/quest/tests/cargo_run_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(cargo_scale_test GROUP data HOST TIMEOUT 600
+  SRC src/quest/tests/cargo_scale_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(cargo_prefetch_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_prefetch_test.cpp OBJS ${_cargo_objs} LIBS ${NEVR_ZSTD_LIB})
 # The Quest side: the POSIX env on real files, the settings, and the worker end to end over a scripted transport. quest_config.h is read
 # for the settings struct only (nothing of quest_config.cpp is linked).
 nevr_ht_obj(o_cargo_posix_env GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/quest/cargo/posix_env.cpp)
@@ -39,7 +61,12 @@ nevr_ht_obj(o_cargo_atomic_write GROUP data NOEXC HOST SRC src/quest/auth/atomic
 nevr_ht_test(cargo_service_test GROUP data HOST INCS src/quest/sentinel TIMEOUT 120 ENV ${_data_env}
   SRC src/quest/tests/cargo_service_test.cpp
   OBJS ${_cargo_objs} o_cargo_posix_env o_cargo_service o_cargo_hook_log o_cargo_atomic_write o_data_staging
-  LIBS ${NEVR_ZLIB_LIB})
+  LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
+# The whole-game launch (#2398): the data step in its all-assets mode, with the worker the sentinel sets, over a scripted transport.
+nevr_ht_test(whole_game_launch_test GROUP data HOST INCS src/quest/sentinel TIMEOUT 300 ENV ${_data_env}
+  SRC src/quest/tests/whole_game_launch_test.cpp
+  OBJS ${_cargo_objs} o_cargo_posix_env o_cargo_service o_cargo_hook_log o_cargo_atomic_write o_data_staging o_data_zip o_data_fetch o_data_data_step o_data_boot_stub
+  LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 nevr_ht_test(cargo_resolver_test GROUP data HOST PTHREAD TIMEOUT 120
   SRC src/quest/tests/cargo_resolver_test.cpp OBJS o_cargo_resource_shadow o_cargo_cargo_resolver)
 
@@ -59,5 +86,5 @@ nevr_ht_test(data_wiring_test GROUP data-net HOST CURL PTHREAD NOEXC DL NO_TEST 
       src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp
       src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp
-      src/quest/data/data_step.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
+      src/quest/data/data_step.cpp src/quest/data/boot_stub.cpp src/core/device_memory.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp
   LIBS ${NEVR_ZLIB_LIB} ssl crypto)

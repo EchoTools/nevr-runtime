@@ -34,7 +34,9 @@
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
 //
 // `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0045) change the CDN texture delivery's defaults
-// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default.
+// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default. `assets.whole_game` (a boolean, off when absent; ADR 0045
+// decision 11) says the manifest holds every asset of the game: the data step then writes the stub manifests instead of fetching the data zip.
+// It needs `assets.manifest`; without one it is off, with one Warning.
 //
 // `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
 // written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
@@ -49,7 +51,7 @@
 //
 // `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
 // pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
-// value. They only matter in the q15t and combat APKs, where the modules run.
+// value. They only matter in the combat APKs, where the modules run.
 //
 // `combat.levelname` (#2181) is a boolean, true when absent, read the same way: `false` leaves the game's cut global level (combat/levelname.h) and, with it,
 // the booster pool's companion (combat/boosterpool.h).
@@ -162,6 +164,7 @@ struct AssetsChoice {
   std::string manifest;
   bool requiredOnly = false;
   std::vector<std::pair<std::string, std::string>> labels;  // (label, "on" | "off" | "required"), in file order
+  bool wholeGame = false;  // `assets.whole_game`: the manifest named by `assets.manifest` holds every asset of the game, so the data step writes the stub manifests (data/boot_stub.h) and fetches no data zip. Needs `assets.manifest`.
   Source source = Source::kAbsent;                         // kFile: the file gave at least one accepted assets key
 };
 
@@ -234,13 +237,28 @@ struct CombatConfig {
   CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
   CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
   CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on by default upstream, afk_music.cpp:1
-  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the q15t plugin's Q15T_SENSORWD was in v6.16.5
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as the combat plugin's sensorwd option was in v6.16.5
   CombatSwitch ec;      // `combat.ec`: the EC network client and the writer of re33_ec_page (combat/ec.h)
   CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
   CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
   CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
   CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
+  CombatSwitch dronekillExplosion{true, Source::kAbsent};  // `combat.dronekill_explosion`: a dead drone's explosion; needs dronekill (docs/quest/combat/drone_explosion.md)
+  // `combat.dronekill_hold`: the drone's first-system off held back for its explosion (combat/dronekill.h "The hold"). Default OFF until the
+  // reconstruction of CEnableComponentNode::Enter shows the disable is its one effect; turning it on by default is this one constant.
+  static constexpr bool kDronekillHoldDefault = false;
+  CombatSwitch dronekillHold{kDronekillHoldDefault, Source::kAbsent};
   CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
+  CombatSwitch frozenFrameExit{true, Source::kAbsent};  // `combat.frozen_frame_exit`: a combat game whose frames stop in VR ends (combat/frozen_frame_exit.h)
+  CombatInt frozenFrameExitS{30, Source::kAbsent};       // `combat.frozen_frame_exit_s`: its limit in seconds, 10..900, default 30
+  CombatSwitch bulletVelocityGuard{true, Source::kAbsent};  // `combat.bullet_velocity_guard`: a FireBullet call with no usable velocity is not made (combat/bullet_velocity_guard.h)
+  // `combat.texture_quest2_step_down`: a Quest 2 whose player chose no texture level is sent Very Low in a settled combat level (combat/texture_quest2.h).
+  // Default OFF (opt-in): the deadlock a live Resize can meet is unobserved and a hang is worse than not stepping down (docs/quest/combat/texture_quest2.md).
+  CombatSwitch textureQuest2StepDown{false, Source::kAbsent};
+  // `combat.texture_quest2_lobby`: the combat lobby (`mpl_lobby_b_combat`, combat-only, combat_level.h) is a step-down place too.
+  CombatSwitch textureQuest2Lobby{true, Source::kAbsent};
+  CombatSwitch texelBufferGuard{true, Source::kAbsent};  // `combat.texel_buffer_guard`: a new descriptor set's uniform texel bindings hold a zeroed view (combat/texel_buffer_guard.h)
+  CombatSwitch soundSymbolGuard{false, Source::kAbsent};  // `combat.sound_symbol_guard`: in a combat level, a sound post that can only fail is not made (combat/sound_symbol_guard.h; default OFF, a performance guard)
   CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail, combat maps only (combat/fxtrail.h)
   CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
   CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)

@@ -10,31 +10,34 @@
  * and the combat APK; Android clears the app's external files directory on an uninstall, inferred, not measured), and the player switches it back.
  * SetWeaponArm is saved into the profile's `weaponarm` key by the game's SavePlayerEquipment, so a set is a change to the saved profile.
  *
- * Player state (ADR 0046 rule 4). The marker directory is `/sdcard/Android/data/<package>/files/q15t`, where the plugin's markers already are; it is
- * state, not a switch, and renaming it would make every profile look unhandled. A marker the plugin wrote stops this module from touching that
+ * Player state (ADR 0046 rule 4). The marker directory is the data directory (legacy_switch.h kDataSubdir), where players' markers already are; it is
+ * state, not a switch, and renaming it would make every profile look unhandled. A marker file (`t26arm.<id>`) already in the data directory for a profile stops this module from touching that
  * profile (weapon_arm_test). The marker file is the module's only write.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.weapon_arm` in config.yaml, on unless the file says false (the reference build's T-26 is on in its shipped build,
- * afk_gunconnect.cpp:58-64,587; the q15t plugin had it on). The headset runs that loaded the plugin's copy wrote the marker for a profile already on the
- * right hand and found the marker on later runs, and never a `set`, so its headset row requires `combat_weapon_arm_set`. The plugin's kill file
+ * afk_gunconnect.cpp:58-64,587; the default is on too). No headset run has yet logged a `set`, so its headset row requires `combat_weapon_arm_set`. The kill file
  * `t26arm.off` is no longer read; one found is a Warning (`combat_weapon_arm_legacy_switch`).
  *
- * Arena (same APK). The module reads the loaded levels and goes on only while a combat map is loaded and no Echo Arena level is (combat_level.h `Classify`,
- * without the lobby): in an arena match, in every lobby (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an
- * arena player never has mpl_lobby_b_combat loaded) and in a transition that still holds an arena level it neither looks for the equipment system nor sets the
- * hand nor writes the marker, and writes no line. A profile that has a marker never scans the levels: the marker check comes first and ends the module. A
- * profile with no marker that only ever plays arena is looked at once a second and never touched. KNOWN-WRONG #2168: the scope asks `combat_level` directly; it
- * moves to combat_scope (F19, #2246) when that lands.
+ * Arena (same APK). The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (combat_scope.h
+ * `InCombatMap`, a look four times a second from the game-thread tick; the module's callback runs in the same tick loop, right after the scope row's
+ * refresh, so it reads a look at most 250 ms old, and a stopped tick stops the callback with it; the freshness test in `InCombatMap` is defence in depth
+ * for an order the install table does not make): in an arena match, in every lobby
+ * (the combat lobby too: the lobby script is shared with the arena lobby, and it is not established that an arena player never has mpl_lobby_b_combat loaded)
+ * and in a transition that still holds an arena level it neither looks for the equipment system nor sets the hand nor writes the marker, and writes no line. A
+ * profile that has a marker never asks: the marker check comes first and ends the module. A profile with no marker that only ever plays arena is looked at
+ * once a second and never touched. The module is a reader of the scope row: `combat.weapon_arm` is in combat_install.cpp `ScopeNormal()`'s list, and the
+ * install refuses (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per frame:
  * once the module is done, one atomic load and a branch; before that, one clock read and one compare, and a pass at 1 Hz (the netgame, the profile
- * id, the marker check and, for a profile with no marker, the level scan; in a combat level also the equipment search and three engine calls).
- * Not measured on a headset; weapon_arm_test prints the host cost of the arena pass.
+ * id, the marker check and, for a profile with no marker, one relaxed load of the scope word and a test; in a combat level also a clock read (the
+ * answer's freshness), the equipment search and three engine calls). The level scan is the scope row's, made once for every reader. Not measured on a
+ * headset; weapon_arm_test prints the host cost of the arena pass.
  *
  * Origin. The reference build's T-26 in kotorvr's echoquest-combat repository (commit c5a67e8): runtime/native/afkxr/afk_gunconnect.cpp:58-64 (the
- * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the q15t plugin reconstructed (`weapon_arm.cpp`); this file moves that reconstruction into the runtime.
+ * header), :496-579 (the state and helpers) and `T26()` at :581-660, whose profile rule is the line at :641, which the combat plugin imported in #1591 reconstructed (`weapon_arm.cpp`); this file is that reconstruction.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_weapon_arm_install","result":"installed|off|refused","reason":"..","msg":".."}
@@ -76,8 +79,8 @@ using SymbolLookup = void* (*)(const char* symbol);
 // name that does not resolve is accepted at the pinned address.
 bool Resolve(std::uintptr_t base, SymbolLookup lookup, Fns* out, const char** why) noexcept;
 
-// The module's normal step. Off: one Info line, nothing registered. On: finds the loaded libr15, checks its build id, resolves the nine functions and
-// registers the tick callback.
+// The module's normal step. Off: one Info line, nothing registered. On: refuses (`scope_not_live`) when the combat level answer cannot change
+// (combat_scope.h `Live`), else finds the loaded libr15, checks its build id, resolves the nine functions and registers the tick callback.
 ModuleResult Install(bool on) noexcept;
 ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool on) noexcept;
 // The part after the resolution (a test calls it with fake functions).

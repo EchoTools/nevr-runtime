@@ -78,3 +78,22 @@ offset plus the previous compressed size.
 
 A manifest therefore cannot add a resource without a package file the engine can open, which is why plugin
 assets are served at the completion instead (`plugin-assets.md`).
+
+## A zero-package manifest
+
+Read in the Quest build's disassembly (libr15, virtual addresses as a disassembler shows them: `CPackageManifest::AddPackage` `0x2640904`, `ReadManifestFile`
+`0x2641404`, `SPackageManifestData::Inspect` `0x26461c0` and the table inspectors `0x26462ec`, `0x2646430`, `0x2646574`,
+`CSysCompression::Decompress` `0x2b9dbcc`); the engine on a headset has not run the files below.
+
+- The engine reads each boot set's manifest FILE directly (`r14netclient`, `r14netclient_en_US`; no resolver hook is in the path). An
+  absent file makes the add return non-zero and `InitGlobals` stops. A file with package count 0 (`0x2640a60`, `cbz`) skips the
+  block-size check, the chunk and resource merges and the package opens, and the add returns 0.
+- The body is the 0xc0-byte header with the counts at `+0x00` (packages), `+0x38`, `+0x78`, `+0xb8` (resources, files, chunks) all 0. The
+  block size at `+0x04` is not checked at count 0 and is `0x80000` as shipped; every other byte is read and ignored. A shorter body makes
+  the read at `+0xb8` fail.
+- The container is read by its first dword: `ZSTD` (then alignment, decompressed length, compressed length, one zstd frame), `NONE`
+  (payload copied from `+0x18`) or `LZ4 `; any other first dword is used as the body itself. A compressed length of 0 is an error.
+- The stub nEVR writes for a Quest with no game data (`src/quest/data/boot_stub.h`) is 45 bytes: `ZSTD`, alignment 0x10, decompressed
+  length 0xc0, compressed length 21, then a zstd frame (zstandard 0.25, level 3) of a zero body whose block size is `0x80000`. It sits at
+  `<root>/_data/5932408047/rad15/android/manifests/` under both set ids, `48037dc70b0ecab2` and `2b47aab238f60515`. Its decode is checked on
+  the host against libzstd and `ParseLevelRoots` (`src/quest/tests/boot_stub_test.cpp`).

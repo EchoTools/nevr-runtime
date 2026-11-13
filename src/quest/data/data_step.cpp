@@ -1,12 +1,15 @@
 #include "quest/data/data_step.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 
+#include "quest/data/boot_stub.h"
 #include "quest/data/package_pins.h"
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
@@ -39,33 +42,62 @@ std::vector<std::string> ListDirReal(const std::string& dir) {
   return names;
 }
 
-constexpr std::size_t kMaxManifestBytes = 16u * 1024u * 1024u;
+constexpr std::size_t kReadBufferBytes = 8192;  // the stack buffer of one read call, not a limit on the file
 
-bool ReadFileReal(const std::string& path, std::string& bytes) {
+enum class ReadResult { kOk, kUnreadable, kOverLimit };
+
+ReadResult ReadFileReal(const std::string& path, std::string& bytes, std::uint64_t max_bytes) {
   std::FILE* f = std::fopen(path.c_str(), "rb");
-  if (f == nullptr) return false;
+  if (f == nullptr) return ReadResult::kUnreadable;
   bytes.clear();
-  char buffer[8192];
-  bool ok = true;
+  char buffer[kReadBufferBytes];
+  ReadResult result = ReadResult::kOk;
   for (;;) {
     const std::size_t n = std::fread(buffer, 1, sizeof(buffer), f);
     if (n == 0) {
-      ok = std::feof(f) != 0;
+      if (std::feof(f) == 0) result = ReadResult::kUnreadable;
       break;
     }
     bytes.append(buffer, n);
-    if (bytes.size() > kMaxManifestBytes) {
-      ok = false;
+    if (bytes.size() > max_bytes) {
+      result = ReadResult::kOverLimit;
       break;
     }
   }
   std::fclose(f);
-  return ok;
+  return result;
 }
 
-// A folder name goes into the log only when it is plain: the data under a root is not ours.
+}  // namespace
+
+std::uint64_t ManifestReadLimit(std::uint64_t memory_available) noexcept {
+  return nevr_device::Share(memory_available, kMemoryShareForLocalManifest);
+}
+
+bool ReadBoundedFile(const StepConfig& config, const std::string& path, std::string& bytes, const char** why) {
+  if (why != nullptr) *why = "";
+  if (config.read_file) {
+    const bool read = config.read_file(path, bytes);
+    if (!read && why != nullptr) *why = "unreadable";
+    return read;
+  }
+  std::uint64_t memory = 0;
+  const bool known = config.memory_available ? config.memory_available(&memory) : nevr_device::MemoryAvailable(&memory);
+  if (!known) {
+    if (why != nullptr) *why = "no_memory_fact";
+    return false;
+  }
+  const ReadResult result = ReadFileReal(path, bytes, ManifestReadLimit(memory));
+  if (result != ReadResult::kOk && why != nullptr) *why = result == ReadResult::kOverLimit ? "over_limit" : "unreadable";
+  return result == ReadResult::kOk;
+}
+
+namespace {
+
+// A folder name goes into the log only when it is plain: the data under a root is not ours. Its length is the file system's own bound
+// (NAME_MAX, POSIX), not a number of ours.
 bool IsPlainName(const std::string& name) noexcept {
-  if (name.empty() || name.size() > 32) return false;
+  if (name.empty() || name.size() > NAME_MAX) return false;
   return std::all_of(name.begin(), name.end(), [](char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_' || c == '-';
   });
@@ -89,8 +121,12 @@ DataVersion FindDataVersion(const StepConfig& config, const std::string& root) {
     const std::string path = root + "/_data/" + name + "/rad15/android/manifests/" + manifest_id;
     if (!config.exists(path.c_str())) continue;
     std::string bytes;
-    const bool read = config.read_file ? config.read_file(path, bytes) : ReadFileReal(path, bytes);
-    return {name, read ? Sha256Hex(bytes.data(), bytes.size()) : std::string("unreadable")};
+    const char* why = "";
+    const bool read = ReadBoundedFile(config, path, bytes, &why);
+    if (read) return {name, Sha256Hex(bytes.data(), bytes.size())};
+    // The reason stands in the hash's place: a read the step refused is not the same as a file that is not there.
+    const std::string unreadable = "unreadable";
+    return {name, std::string(why) == unreadable ? unreadable : unreadable + ":" + why};
   }
   if (names.empty()) return {"none", "none"};
   std::string folders;
@@ -204,7 +240,7 @@ void CheckPackages(const StepConfig& config, const std::string& root, const Data
     const std::string marker_path = root + "/" + kPackagesMarkerName;
     const std::string marker = std::string(held.manifest_sha256) + " " + config.build_id + "\n";
     std::string held_marker;
-    const bool read = config.read_file ? config.read_file(marker_path, held_marker) : ReadFileReal(marker_path, held_marker);
+    const bool read = ReadBoundedFile(config, marker_path, held_marker);
     if (read && held_marker == marker) {
       sha = "skipped";
     } else {
@@ -246,6 +282,7 @@ const char* StepOutcomeName(StepOutcome outcome) noexcept {
     case StepOutcome::kFetched: return "fetched";
     case StepOutcome::kFailed: return "failed";
     case StepOutcome::kMissing: return "missing";
+    case StepOutcome::kStubbed: return "stubbed";
   }
   return "unknown";
 }
@@ -274,6 +311,9 @@ std::string BuildFloorMessage(const FloorInfo& info) {
       break;
     case FetchStatus::kCancelled:
       text += "The download was cancelled. Start the game again to retry.";
+      break;
+    case FetchStatus::kWorkerRefused:
+      text += "The setup before the game starts did not finish (" + info.detail + ").";
       break;
     case FetchStatus::kOk:
       text += "No failure was reported.";
@@ -337,13 +377,119 @@ std::vector<std::string> RecoveryRootsFor(const StepConfig& config) {
   return roots;
 }
 
+namespace {
+
+// `dir` and every parent of it, mode 0755; true when it is a directory afterwards.
+bool MakeDirsReal(const std::string& dir) {
+  for (std::size_t at = 1; at <= dir.size(); ++at) {
+    if (at != dir.size() && dir[at] != '/') continue;
+    const std::string part = dir.substr(0, at);
+    if (::mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
+  }
+  struct stat st;
+  return ::stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// What a stub that cannot be written tells the player: the file, and that the engine cannot start without it.
+std::string StubWriteMessage(const std::string& path) {
+  return "Echo VR could not write the start-up file " + path + ". Check the headset storage and start the game again.";
+}
+
+// The whole-game mode (StepConfig::all_assets): the two stub manifests the engine reads at boot, then the worker. Never a fetch, never
+// kMissing. `decision` is what the stock step would have done: it names the root and is logged, not acted on.
+StepResult RunAllAssets(const StepConfig& config, const Decision& decision, StepResult result) {
+  const std::string root = config.fetch_root_override.empty() ? std::string(decision.root) : config.fetch_root_override;
+  result.root = root;
+  EmitInfo(config, {"data_all_assets",
+                    {{"root", root},
+                     {"source", decision.source},
+                     {"would_have", ActionName(decision.action)},
+                     {"allow_fetch", config.allow_fetch ? "true" : "false"},
+                     {"reason", "assets_whole_game"},
+                     {"consequence", "no game data is fetched; the engine boots on zero-package manifests and every asset is served from the CDN cache"}}});
+  const std::string stub = boot_stub::StubFileBytes();
+  bool dirs_made = false;
+  for (const std::uint64_t id : boot_stub::kSetIds) {
+    const std::string path = boot_stub::ManifestPath(root, id);
+    const std::string set = boot_stub::SetFileName(id);
+    auto say = [&](const char* what, const char* why) {
+      return Event{"data_stub",
+                   {{"set", set}, {"path", path}, {"result", what}, {"reason", why}, {"bytes", std::to_string(stub.size())}}};
+    };
+    if (config.exists(path.c_str())) {
+      std::string held;
+      const char* why = "";  // the cap on what a manifest file may be read at is the cargo side's (ReadBoundedFile): a file over it is not read whole
+      const bool read = ReadBoundedFile(config, path, held, &why);
+      if (read && held == stub) {
+        EmitInfo(config, say("kept", "stub_current"));
+        continue;
+      }
+      // Never written over: it may be the stock manifest, or a player's file. The engine will read it as it is.
+      Event e = say("kept", read ? "manifest_not_ours" : "manifest_unreadable");
+      e.fields.emplace_back("consequence",
+                            "the engine reads the package files this manifest names; a missing one stops its start");
+      EmitWarn(config, e);
+      continue;
+    }
+    const std::string dir = boot_stub::ManifestsDir(root);
+    bool wrote = false;
+    const char* why = "mkdir_failed";
+    if (dirs_made || (config.make_dirs ? config.make_dirs(dir) : MakeDirsReal(dir))) {
+      dirs_made = true;
+      why = "write_failed";
+      wrote = config.write_file ? config.write_file(path, stub) : WriteFileReal(path, stub);
+    }
+    if (!wrote) {
+      Event e = say("write_failed", why);
+      e.fields.emplace_back("consequence", "the engine cannot read its package manifest and stops at init, so the launch ends here");
+      EmitWarn(config, e);
+      result.outcome = StepOutcome::kFailed;
+      result.status = FetchStatus::kBadRoot;
+      result.stub_write_failed = true;
+      result.message = StubWriteMessage(path);
+      if (config.present) config.present(result.message);
+      if (config.hold) config.hold();
+      return result;
+    }
+    EmitInfo(config, say("written", "manifest_absent"));
+  }
+
+  if (!config.all_assets_ready) {
+    EmitWarn(config, {"data_all_assets_ready",
+                      {{"result", "skipped"},
+                       {"reason", "no_worker"},
+                       {"root", root},
+                       {"consequence", "nothing downloads or mounts before the engine starts, so the engine boots on stub manifests with no asset source and its first archive load finds nothing"}}});
+  } else {
+    const AllAssetsResult ready = config.all_assets_ready(root);
+    if (!ready.ok) {
+      EmitWarn(config, {"data_all_assets_ready",
+                        {{"result", "failed"},
+                         {"reason", "worker_refused"},
+                         {"root", root},
+                         {"consequence", "the launch ends with the worker's message; the stubs stay in place"}}});
+      result.outcome = StepOutcome::kFailed;
+      result.status = FetchStatus::kWorkerRefused;
+      result.message = ready.message;
+      if (config.present) config.present(result.message);
+      if (config.hold) config.hold();
+      return result;
+    }
+    EmitInfo(config, {"data_all_assets_ready", {{"result", "ok"}, {"reason", "worker_done"}, {"root", root}}});
+  }
+  result.outcome = StepOutcome::kStubbed;
+  return result;
+}
+
+}  // namespace
+
 StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   StepResult result;
   const bool engine_root = !config.engine_root.empty();
   if (!engine_root && !config.legacy_root_readable && config.on_step) {
     config.on_step({"data_legacy_skipped", {{"root", data_root::kLegacyRoot}, {"reason", "no_storage_permission"}}});
   }
-  if (config.allow_fetch) PutLeftoversRight(config);
+  if (config.allow_fetch && !config.all_assets) PutLeftoversRight(config);  // the whole-game mode restores and cleans nothing
   data_root::Resolution resolution;
   if (engine_root) {
     resolution = data_root::HoldsData(config.engine_root.c_str(), config.exists)
@@ -356,6 +502,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   if (engine_root) decision.root = config.engine_root.c_str();
   result.action = decision.action;
   result.root = decision.root;
+  if (config.all_assets) return RunAllAssets(config, decision, std::move(result));
   DataVersion held{"none", "none"};
   if (config.on_step || decision.action == DataAction::kUse) held = FindDataVersion(config, decision.root);
   if (config.on_step) {

@@ -277,6 +277,25 @@ void AFailureEndIsBoundedWhenTheCallbackHangs() {
 
 }  // namespace
 
+// Ending says the process ends from here on: false until android_main returned or EndWithExitCode began (combat/frozen_frame_exit.h halts its
+// watch on it, #2377).
+void EndingSaysTheProcessIsEnding() {
+  Reset();
+  QCHECK(!pe::Ending());
+  pe::SetBeforeExit(&RecordingBeforeExit);
+  pe::ArmForTest(&RecordingEnder, 500);
+  QCHECK(!pe::Ending());
+  MainEntry()(reinterpret_cast<AndroidAppOpaque*>(0x42));
+  QCHECK(pe::Ending());
+  Reset();
+  QCHECK(!pe::Ending());
+  g_exitCode = -1;
+  pe::ArmForTest(&RecordingEnder, 500);
+  pe::SetExitForTest(&RecordingExit);
+  pe::EndWithExitCode(pe::kFailureExitCode, "data_step_failed");
+  QCHECK(pe::Ending());
+}
+
 int main(int argc, char** argv) {
   g_fixtureDir = argc > 1 ? argv[1] : ".";
   AnAndroidMainReturnWithoutTheHookEndsNothing();
@@ -286,6 +305,7 @@ int main(int argc, char** argv) {
   EveryReturnEndsAgain();
   AFailureEndsWithItsNonzeroCodeAfterTheBeforeExitCallback();
   AFailureEndIsBoundedWhenTheCallbackHangs();
+  EndingSaysTheProcessIsEnding();
   InstallAtPatchesTheSlotAndTheHandlerRunsForACallThroughIt();
   ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter();
   if (quest_test::Failures() != 0) {

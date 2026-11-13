@@ -206,3 +206,35 @@ func TestAManifestWhoseCountsWrapItsSizeIsRefused(t *testing.T) {
 		t.Error("a manifest whose resource and file counts wrap its size was read")
 	}
 }
+
+func TestChunksReadsAChunkAndTheHeadOfItsFrame(t *testing.T) {
+	t.Parallel()
+	_, s := stock(t)
+	c, err := NewChunks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// The stock set lists its chunks in package order, each package's by (type, name): "signed first", "stock one", then
+	// the second package's resource.
+	for i, want := range [][]byte{[]byte("signed first"), []byte("stock one"), bytes.Repeat([]byte("two"), 1000)} {
+		got, err := c.Plain(s, i)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("chunk %d = %q, %v", i, got, err)
+		}
+	}
+	head, err := c.FrameHead(s, 2, 4)
+	if err != nil || !bytes.Equal(head, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		t.Errorf("the frame head of chunk 2 = %x, %v", head, err)
+	}
+	if head, err := c.FrameHead(s, 0, 1<<20); err != nil || len(head) != int(s.Manifest.Chunks[0].Compressed) {
+		t.Errorf("a head longer than the frame is %d bytes (%v), want the frame's %d", len(head), err, s.Manifest.Chunks[0].Compressed)
+	}
+	if _, err := c.Plain(s, len(s.Manifest.Chunks)); err == nil || !strings.Contains(err.Error(), "the manifest has 5 chunks") {
+		t.Errorf("a chunk past the table: %v", err)
+	}
+	s.Manifest.Chunks[1].Decompressed++
+	if _, err := c.Plain(s, 1); err == nil || !strings.Contains(err.Error(), "does not decompress to the resource it holds") {
+		t.Errorf("a chunk whose frame holds other than its stated length: %v", err)
+	}
+}

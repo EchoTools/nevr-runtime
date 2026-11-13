@@ -3,7 +3,7 @@
 // the engine functions are fakes that record their arguments. The arm64 entry cannot run on this x86 host (src/quest/combat/check/powerboost.sh
 // runs it under qemu); its continuation (ConeAt) is tested directly here.
 //
-// Moved from the q15t plugin's powerboost_test: the assertions on the marker decode, the three stages, the hold, the cone and the link / unlink
+// From the combat plugin's powerboost_test (#1591): the assertions on the marker decode, the three stages, the hold, the cone and the link / unlink
 // markers are the same. What changed is the fixture (the plugin's fake slot pages are a libr15 image and the manager's install), the log form
 // (structured `combat_powerboost_*` records, matched by event and field, where the plugin's lines were matched by their text), the install's
 // statuses (GotStatus names and the module's tokens, `ok` for the plugin's `kOk` and `original_mismatch` for its `kUnexpectedOriginal`), and
@@ -27,10 +27,12 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/key_hog.h"
 #include "quest/tests/test_check.h"
 #include "runtime/patch/powerboost_rules.h"
@@ -192,6 +194,19 @@ extern "C" __attribute__((noinline)) PhTarget FakePrimary(const void* physics, u
 
 uint64_t g_now = 1000;
 uint64_t Clock() { return g_now; }
+// The combat level answer's own clock (combat_scope.h), in ms: each test frame moves it one look spacing, so each frame's refresh looks at the game.
+std::int64_t g_scopeMs = 1000;
+// Armed (g_armedReads >= 0): the first clock read is the record's own (LastLook's staleness test), every later read sees the look older than
+// kStaleAfterMs. A decision made from a second read of the record, or from a live read, sees the answer stale (the block headed "the one look" in main()).
+int g_armedReads = -1;
+// Every read of the scope's clock (LookIsFresh, LastLook, Refresh), so the arena block can show its path reads none: the freshness test is in the
+// in-scope bodies, after the handlers' test of the cached answer (README rule 9).
+int g_scopeClockReads = 0;
+std::int64_t ScopeClock() noexcept {
+  ++g_scopeClockReads;
+  if (g_armedReads >= 0 && g_armedReads++ >= 1) return g_scopeMs + nevr_quest::combat::scope::kStaleAfterMs + 1;
+  return g_scopeMs;
+}
 
 pb::Fns Fns() {
   pb::Fns f{};
@@ -270,12 +285,58 @@ void BuildWorld(bool with_dcs, const char* level = "mpl_combat_dyson") {
   g_dcs[0] = g_image.Base() + pb::kPins.damageableVptr;
   g_dcs[0x80 / 8] = gs;
 }
-// One game frame: a new game pointer always refreshes the scope; the same one does so once every kScopeEveryFrames frames.
-void Frame() { pb::GameTick(Game()); }
+// One game frame as the tick runs it: the combat level answer's refresh (the scope row registers it before this module's callback), then the module's
+// game tick, which asks the answer when the game pointer is new and once every kScopeEveryFrames frames of one game.
+void Frame() {
+  g_scopeMs += nevr_quest::combat::scope::kLookEveryMs;
+  nevr_quest::combat::scope::Refresh(Game());
+  pb::GameTick(Game());
+}
+// A libr15 image with the tick's slot row, on which the tick is installed and the scope row registers its refresh: the combat level answer can
+// change, as the shipped table leaves it before this module's row.
+Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  nevr_quest::combat::tick::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  nevr_quest::combat::scope::SetClockForTest(&ScopeClock);
+  g_scopeMs = 1000;
+  g_tickImage.Build({combat_test::scope_world::TickRow()});
+  combat_test::scope_world::PutTickSlot(g_tickImage);
+  QCHECK(combat_test::scope_world::StartScope(&TickImageLookup));
+}
 // Makes the module ask the level now (a frame with no game, then one with it).
 void Rescope() {
   pb::GameTick(0);
   Frame();
+}
+
+// The look seam (combat_scope.h SetLookReadSeamForTest), set only inside the block headed "the one look" in main(): the second LastLook of the armed tick runs it between
+// the record's classes and its level, and it writes the arena level's look there, so a caller that reads the record a second time sees another look.
+int g_lookReads = 0;
+void SecondLookWritesArena() {
+  if (++g_lookReads != 2) return;
+  BuildWorld(true, "mpl_arena_a");
+  nevr_quest::combat::scope::Refresh(Game());
+}
+// One raw line that holds every needle (the sentinel's JSON text, as the scope line writes it).
+bool HasRawLine(std::initializer_list<const char*> needles) {
+  for (const Line& l : g_lines) {
+    bool all = true;
+    for (const char* n : needles) all = all && l.text.find(n) != std::string::npos;
+    if (all) return true;
+  }
+  return false;
+}
+// The JSON fragment of a level field: `"level":"0x%016llx"` for the level's symbol hash, as the scope's records write it (combat_scope.h).
+std::string LevelField(const char* name) {
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "\"level\":\"0x%016llx\"", static_cast<unsigned long long>(CSymbol64Hash(name)));
+  return buf;
 }
 
 void Fresh(const char* level = "mpl_combat_dyson") {
@@ -290,7 +351,7 @@ void Fresh(const char* level = "mpl_combat_dyson") {
   g_registrar_ok = true;
   g_registered = 0;
   pb::ResetForTest();
-  nevr_quest::combat::tick::ResetForTest();
+  StartTheScope();
   Build();
   pb::SetImageLookupForTest(&Lookup);
   pb::SetPinsForTest(&g_pins);
@@ -383,7 +444,25 @@ int main() {
     CHECK(!r.installed && std::strcmp(r.status, "off") == 0, "off status %s", r.status);
     CHECK(Untouched({g_pins.nodeSlot, g_pins.healSlot, g_pins.healGlobDat, g_pins.linkSlot, g_pins.resolveSlot}), "off changed a slot");
     CHECK(EventsWith("install", "\"result\":\"off\"", kInfo) == 1 && pb::CurrentStats().stage == 0, "off not logged");
-    CHECK(nevr_quest::combat::tick::Count() == 0, "off registered a tick");
+    CHECK(nevr_quest::combat::tick::Count() == 1, "off registered a tick (the one callback is the scope row's refresh)");
+  }
+
+  // ---- the combat level answer cannot change (the tick is not installed, so the scope row registered no refresh): refused before the image,
+  // nothing hooked or registered; off by its key wins
+  Fresh();
+  {
+    nevr_quest::combat::tick::ResetForTest();
+    nevr_quest::combat::scope::ResetForTest();
+    const auto r = pb::InstallAt(&Lookup, g_pins, pb::kCone, &fns);
+    CHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && nevr_quest::combat::tick::Count() == 0, "a scope that cannot change: %s", r.status);
+    CHECK(Untouched({g_pins.nodeSlot, g_pins.healSlot, g_pins.healGlobDat, g_pins.linkSlot, g_pins.resolveSlot}), "a scope that cannot change: a slot was hooked");
+    CHECK(EventsWith("install", "\"reason\":\"scope_not_live\"", kError) == 1, "scope_not_live is not an Error line");
+    pb::ResetForTest();
+    const auto off = pb::InstallAt(&Lookup, g_pins, 0, &fns);
+    CHECK(!off.installed && std::strcmp(off.status, "off") == 0, "off with a dead scope: %s", off.status);
+    pb::ResetForTest();
+    const auto noImage = pb::InstallAt([](const char*, sentinel::ElfImage*) { return false; }, g_pins, pb::kCone, &fns);
+    CHECK(std::strcmp(noImage.status, "scope_not_live") == 0, "a dead scope is asked after the image: %s", noImage.status);
   }
 
   // ---- a full tick table: refused, nothing hooked (the scope comes from the tick)
@@ -407,7 +486,7 @@ int main() {
   CHECK(Untouched({g_pins.healGlobDat, g_pins.resolveSlot, g_pins.sendSlot}), "stage 1 touched GLOB_DAT / ResolveBody / sender slot");
   CHECK(Events("hook", kInfo) == 3 && EventsWith("install", "\"result\":\"installed\"", kInfo) == 1 && pb::CurrentStats().stage == 1, "stage 1 lines: %d",
         Events("hook", kInfo));
-  CHECK(nevr_quest::combat::tick::Count() == 1 && g_registered == 0, "stage 1: the scope tick is registered, the net tick is not");
+  CHECK(nevr_quest::combat::tick::Count() == 2 && g_registered == 0, "stage 1: the game tick is registered beside the scope row's refresh, the net tick is not");
 
   // node: arguments and result pass through; a marker amount logs one line AFTER the real call, other amounts none
   {
@@ -1014,6 +1093,7 @@ int main() {
     const pb::Stats before = pb::CurrentStats();
     StartReadCount();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
     StartScanCount();
+    g_scopeClockReads = 0;  // and no clock read: the freshness test is in the in-scope bodies only
     g_node_heals = true;
     NodeData d = Data(1250030.0f, 5);
     NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
@@ -1028,6 +1108,7 @@ int main() {
     const PhTarget ta{{1, 0, 0}};
     const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
     pb::NetTick();
+    CHECK(g_scopeClockReads == 0, "arena (%s): %d reads of the scope's clock on the arena path", level != nullptr ? level : "no game", g_scopeClockReads);
     CHECK(ReadCount() == 0 && ScanCount() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
           level != nullptr ? level : "no game", static_cast<unsigned long long>(ReadCount()),
           static_cast<unsigned long long>(ScanCount()));
@@ -1058,17 +1139,131 @@ int main() {
     Rescope();
     CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"echo_arena\"") == 1, "an arena level did not take the scope away");
   }
-  // the scope's cadence: the level is asked once every kScopeEveryFrames frames of one game, never per call
+  // the module's ask reads a look older than kStaleAfterMs (the game tick still runs; the stopped-tick case is the held block below): the answer
+  // is not combat, and its line names the class `stale`
+  {
+    Fresh();
+    Inst(pb::kRead, &fns);
+    CHECK(pb::InScope(), "a combat map is not in scope");
+    g_scopeMs += nevr_quest::combat::scope::kStaleAfterMs + 1;
+    for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) pb::GameTick(Game());  // the module's game tick alone
+    CHECK(!pb::InScope() && EventsWith("scope", "\"kind\":\"stale\"") == 1, "a stale combat answer kept the scope");
+    // the stale line names the class and the level the answer was held for (the record's level, not zero)
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"stale\"", LevelField("mpl_combat_dyson").c_str()}), "the stale line does not name the held level");
+  }
+  // a stopped tick (README rule 9, powerboost.md "Arena"): no Refresh and no GameTick, and the scope's clock moves on 60 s. Nothing asks again, so the
+  // tick's copy still says combat; every in-scope body judges the answer at its call (scope::LookIsFresh first), so each wrapper passes its call on
+  // unchanged: a marker reaches Heal, nothing is swallowed, held, sent, counted or logged, and the cone returns ResolveBody's own body. The tick back:
+  // the next frame looks again, and the module acts.
+  {
+    Fresh();
+    r = pb::InstallAt(&Lookup, g_pins, pb::kCone, &fns);
+    CHECK(r.installed, "stopped: stage 3 not installed: %s", r.status);
+    Frame();
+    CHECK(pb::InScope(), "stopped: a combat map is not in scope");
+    g_scopeMs += 60000;
+    CHECK(!nevr_quest::combat::scope::LookIsFresh(), "stopped: the scope still believes its look 60 s on");
+    CHECK(pb::InScope(), "stopped: the tick's copy changed with no tick");
+    g_lines.clear();
+    g_heals.clear();
+    g_sends.clear();
+    g_node_calls = g_link_calls = 0;
+    const pb::Stats before = pb::CurrentStats();
+    g_node_heals = true;
+    NodeData d = Data(1250030.0f, 5);
+    NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
+    g_node_heals = false;
+    HealSlot()(cs, 0x10001, 1250030.0f, 5);
+    QueuedSlot()(cs, 0x10003, 1250030.0f, 1);
+    alignas(16) uint8_t target[0x60] = {};
+    float pos[3] = {1, 2, 3};
+    LinkSlot()(cs, 0x50005, target, pos, 3);
+    SetPos(g_body_a, 110, 100, 100);  // g_frame holds the POWER BOOST bubble the cone tests built: in scope it would reject this target
+    const PhTarget ta{{1, 0, 0}};
+    const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
+    CHECK(g_heals.size() == 3 && g_heals[0].amount == 1250030.0f && g_heals[1].amount == 1250030.0f && g_heals[2].amount == 1250030.0f,
+          "stopped: a heal was swallowed or changed (%zu heals)", g_heals.size());
+    CHECK(g_node_calls == 1 && g_link_calls == 1 && body == g_body_a && g_sends.empty(), "stopped: a call was changed or something was sent");
+    const pb::Stats after = pb::CurrentStats();
+    CHECK(after.markers == before.markers && after.swallowed == before.swallowed && after.held == before.held && after.links == before.links &&
+              after.coneCalls == before.coneCalls && after.sent == before.sent,
+          "stopped: the module counted something");
+    CHECK(Events("marker") + Events("swallow") + Events("link") + Events("cone") + Events("use") == 0 && Events("scope") == 0,
+          "stopped: %zu lines logged", g_lines.size());
+    Frame();  // the tick is back: a fresh look, and the copy still says combat
+    g_heals.clear();
+    HealSlot()(cs, 0x10001, 1250030.0f, 5);
+    CHECK(g_heals.empty(), "the tick back: the relayed marker reached Heal");
+  }
+  // the scope's cadence, as literals: 64 frames of one game ask the level twice (the new game at the first frame, then the frame 32 later), so
+  // the cadence is 32 frames. The literal, not kScopeEveryFrames, so a changed constant fails here.
   {
     Fresh();
     Inst(pb::kRead, &fns);
     const uint32_t first = pb::CurrentStats().scopeChecks;
-    for (uint32_t i = 0; i < 2 * pb::kScopeEveryFrames; ++i) Frame();
+    for (uint32_t i = 0; i < 64; ++i) Frame();
     const uint32_t checks = pb::CurrentStats().scopeChecks - first;
-    CHECK(checks == 2, "%u level reads in %u frames, want 2", checks, 2 * pb::kScopeEveryFrames);
+    CHECK(checks == 2, "%u level reads in 64 frames, want 2 (one every 32 frames of one game)", checks);
     BuildWorld(true, "mpl_arena_a");  // the level changes under the same game: seen within kScopeEveryFrames frames
     for (uint32_t i = 0; i < pb::kScopeEveryFrames; ++i) Frame();
     CHECK(!pb::InScope(), "an arena level was not seen within %u frames", pb::kScopeEveryFrames);
+  }
+
+  // ---- the one look (the case dronekill_test.cpp's TestTheRecordDecidesNotTheLiveRead states): the decision, the logged class and the logged level come from the one
+  // record the tick reads. The clock is armed, so the record's own read is fresh and every later read sees it older than kStaleAfterMs; the second
+  // read of the record writes the arena level's look, so a second read names another look. The one record must decide all three.
+  {
+    Fresh("mpl_arena_a");
+    Inst(pb::kRead, &fns);  // the first line: echo_arena, out of scope
+    CHECK(!pb::InScope() && HasRawLine({"\"in_combat\":0,\"kind\":\"echo_arena\"", LevelField("mpl_arena_a").c_str()}), "the arena line");
+    BuildWorld(true, "mpl_combat_fission");
+    g_scopeMs += nevr_quest::combat::scope::kLookEveryMs;
+    nevr_quest::combat::scope::Refresh(Game());  // the look the tick decides from: a combat map
+    g_lookReads = 0;
+    g_armedReads = 0;
+    nevr_quest::combat::scope::SetLookReadSeamForTest(&SecondLookWritesArena);
+    const uint32_t checks0 = pb::CurrentStats().scopeChecks;
+    for (uint32_t i = 0; i <= pb::kScopeEveryFrames && pb::CurrentStats().scopeChecks == checks0; ++i) pb::GameTick(Game());
+    nevr_quest::combat::scope::SetLookReadSeamForTest(nullptr);
+    g_armedReads = -1;
+    CHECK(pb::CurrentStats().scopeChecks == checks0 + 1, "the tick did not ask the answer once in %u frames", pb::kScopeEveryFrames);
+    CHECK(pb::InScope(), "the record says a combat map, but the scope did not start: a live read decided it");
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_combat_fission").c_str()}),
+          "the change line does not name the record's class and level");
+  }
+
+  // ---- the scope line's fields, per class (combat_scope.h LookClassName): a combat map, the combat lobby, another lobby, no look yet
+  {
+    Fresh("mpl_combat_dyson");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_combat_dyson").c_str(),
+                      "\"msg\":\"a combat map or the combat lobby is loaded: POWER BOOST acts\""}),
+          "combat map: the scope line");
+  }
+  {
+    Fresh("mpl_lobby_b_combat");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":1,\"kind\":\"combat_or_lobby\"", LevelField("mpl_lobby_b_combat").c_str()}), "combat lobby: the scope line");
+  }
+  {
+    Fresh("mpl_lobby_b");
+    Inst(pb::kRead, &fns);
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"other\"", "\"msg\":\"no combat map or combat lobby is loaded: POWER BOOST only passes every call on\""}),
+          "another lobby: the scope line");
+  }
+  {
+    Fresh();  // no look yet: the first ask reads an answer that was never made
+    pb::GameTick(Game());
+    CHECK(HasRawLine({"\"in_combat\":0,\"kind\":\"no_look\"", "\"level\":\"0x0000000000000000\""}), "no look yet: the scope line");
+  }
+  // a class that changes while the scope stays out keeps its line: other (a lobby) to echo_arena, both out of scope
+  {
+    Fresh("mpl_lobby_b");
+    Inst(pb::kRead, &fns);
+    const int before = Events("scope");
+    BuildWorld(true, "mpl_arena_a");
+    Rescope();
+    CHECK(EventsWith("scope", "\"kind\":\"echo_arena\"") == 1 && Events("scope") == before + 1, "other -> echo arena, both out of scope: no change line");
   }
 
   // ---- the stage numbers: 1..3 install that stage, 0 and anything else nothing

@@ -26,9 +26,11 @@
 #include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/join_hold.h"
 #include "runtime/server/game_type_table.h"
 #include "runtime/server/lobby_settings_relay.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/registration_answer.h"
 #include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
@@ -155,6 +157,9 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       state.lobbySessionId = sessionCreate.lobby_session_id();
       self->GetContext().UpdateSessionState(state);
 
+      // #1737 (101f): arm the join hold for this session's level load; an earlier session's held accepts are dropped.
+      nevr_join_hold::OnSessionCreate(sessionCreate.lobby_session_id().c_str());
+
       if (!self->GetContext().StartSession()) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.GAMESERVER] Failed to start session (state=%d, expected Registered=%d)",
@@ -205,6 +210,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
             event.lobby_session_id().c_str(), currentSessionId.empty() ? "none" : currentSessionId.c_str(),
             idles ? "yes" : "no (it names another session than the one this server runs)");
         CallScheduleReturnToLobby();
+        // #1737 (101f): held accepts belong to the session that ended; they are dropped, not forwarded to the next.
+        nevr_join_hold::OnSessionEnd("service_ended", event.lobby_session_id().c_str());
         self->GetContext().EndSession();
         if (idles) {
           ApplyServerIdleTimestep(nevr_server_timestep::SessionEndCauseName(
@@ -253,6 +260,12 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       if (broadcaster) {
         auto encoded = EncodeLobbyEntrantsAccept(accept);
         if (encoded.size() > 0) {
+          // #1737 (101f): with network.join_hold_ms above 0 the accept waits for the session's levels; a held accept is
+          // forwarded later by nevr_join_hold::ReleaseDue (GameServerLib::Update), in arrival order.
+          if (nevr_join_hold::Admit(encoded.ptr(), encoded.size(), static_cast<std::size_t>(accept.entrant_ids_size()),
+                                    self->GetContext().GetSessionState().lobbySessionId.c_str())) {
+            break;
+          }
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
                                                "SNSLobbyAcceptPlayersSuccessv2", encoded.ptr(),
                                                encoded.size());
@@ -901,7 +914,12 @@ void GameServerLib::RegisterTcpCallbacks() {
   // #1756: the service ending the session is what makes this server leave. The game does that itself when its
   // return to lobby runs; this makes sure the process leaves when it does not. The observer runs on the WebSocket
   // receive thread, so it sees CODE_ENDED even when the game thread has stopped calling Update().
-  m_wsClient->SetReceiveObserver([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
+  // #2374: the registration's answer is read on the same thread, so a refusal, or a close with no answer, is logged even
+  // when the game thread never reaches Update() before the shutdown starts. The tracker outlives the socket's thread.
+  static nevr_registration_answer::Tracker registrationAnswer(
+      [](EchoVR::LogLevel level, const std::string& line) { Log(level, "%s", line.c_str()); });
+  nevr_registration_answer::Attach(*m_wsClient, registrationAnswer,
+                                   [this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     std::string endedSession;
     if (!nevr_game_server::ParseServiceEndedSession(msgId, data, static_cast<size_t>(size), &endedSession)) return;
     ArmEndedSessionWatchdog(endedSession);

@@ -90,6 +90,7 @@ tools/tests/test_check_pr_title.py	ported by its unit of #2132
 tools/tests/test_check_quest_static_init.py	ported by its unit of #2132
 tools/tests/test_cli_flag_names.py	ported by its unit of #2132
 tools/tests/test_cmake_source_properties.py	ported by its unit of #2132
+tools/tests/test_combat_bullet_spawn_wiring.py	ported by its unit of #2132
 tools/tests/test_combat_libs_cmake.py	ported by its unit of #2132
 tools/tests/test_combat_link_gate_libs.py	ported by its unit of #2132
 tools/tests/test_combat_script_redirect.py	ported by its unit of #2132
@@ -128,6 +129,7 @@ tools/tests/test_installers_use_core.py	ported by its unit of #2132
 tools/tests/test_invite_answer_wiring.py	ported by its unit of #2132
 tools/tests/test_invite_choice_hook_wiring.py	ported by its unit of #2132
 tools/tests/test_invite_service_wiring.py	ported by its unit of #2132
+tools/tests/test_join_hold_wiring.py	ported by its unit of #2132
 tools/tests/test_just_recipe.py	ported by its unit of #2132
 tools/tests/test_launch_client.py	ported by its unit of #2132
 tools/tests/test_loading_tips_wiring.py	ported by its unit of #2132

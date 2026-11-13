@@ -4,10 +4,10 @@ Files: `src/quest/combat/headset_gates.{h,cpp}`, `src/quest/combat/headset_gates
 arm64 entries), `src/quest/combat/combat_gates.h` (which gates a run installs), `src/quest/combat/check/headset_gates.sh` (the arm64 checks),
 `src/quest/tests/headset_gates_test.cpp`, `src/quest/tests/combat_gates_test.cpp`, `src/quest/tests/headset_gates_library_name_test.cpp`,
 `src/quest/tests/headset_gates_qemu.cpp`, `src/quest/tests/got_pinned_test.cpp`. The module is a step of the sentinel's normal combat step, registered last
-(`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no other. Switches (`config.yaml`, `combat:`): `gate_perm`,
+(`src/quest/combat/combat_install.cpp`): it runs in the combat APKs and in no other. Switches (`config.yaml`, `combat:`): `gate_perm`,
 `gate_bots`, `gate_link` (default true each) and `gate_link_libs` (default the 21 libraries below). No key names levelname: the bot gate asks the game (below).
 
-Origin: the q15t plugin's `headset_gates.cpp` and `combat_gates.h`, reconstructed on the hook manager. `docs/audits/2026-11-05-q15t-origin-citations.md`
+Origin: the combat plugin's `headset_gates.cpp` and `combat_gates.h` (imported in #1591), reconstructed on the hook manager. `docs/audits/2026-11-05-q15t-origin-citations.md`
 lists no reference-build file or EchoCombat line for the gates, so none is cited.
 
 ## What the game does, and what each gate answers

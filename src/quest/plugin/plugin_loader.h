@@ -63,10 +63,15 @@ class Platform {
   // The game's main level now (#1106, the PC's `main level` read from the game context). The default is none: a platform
   // with no source for it (a host test) says so, and the context carries level_symbol 0.
   virtual MainLevel CurrentMainLevel() { return {}; }
-  // The bytes of `file` in the native library directory; false when they cannot be read.
-  virtual bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) = 0;
-  // dlopen of `file`; null on failure.
-  virtual void* Open(const std::string& file) = 0;
+  // The bytes of `file` in the native library directory, read through one open, and that open's descriptor in `*fd` (-1
+  // when false). Every check the loader makes is on these bytes, and Open maps this descriptor, so the file that is
+  // checked is the file that is mapped (#1521). The loader closes `*fd` with CloseFile on every path.
+  virtual bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes, int* fd) = 0;
+  // Maps the object the descriptor `fd` names (a descriptor ReadFile returned for `file`); null on failure. Never a name
+  // lookup: `file` is only the object's identity for the platform.
+  virtual void* Open(int fd, const std::string& file) = 0;
+  // Closes a descriptor ReadFile returned, after Open or on a refusal.
+  virtual void CloseFile(int fd) = 0;
   // dlclose of a handle Open returned, for a plugin that is refused or fails after it was mapped.
   virtual void Close(void* handle) = 0;
   virtual void* Symbol(void* handle, const char* name) = 0;

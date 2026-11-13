@@ -231,7 +231,7 @@ const Region* ProtectedRegionAt(const std::vector<Region>& regions, std::uint64_
   return nullptr;
 }
 
-// ---- the input's own references to the slot area (#1737, row C8) ---------------------------------------------------
+// ---- the input's own references to the slot area (#1737) ---------------------------------------------------
 //
 // An input libr15 that another patch already touched can keep state words of its own in the page slack after the image
 // end, the bytes the slot area takes (the reference build's two, at 0x37d2540 and 0x37d2560, read and written by ADRP+ADD+LDR/STR
@@ -463,7 +463,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     return Failed(Refuse("layout_bss_section", "", "no NOBITS section ends at the image end " + Hex(imageEnd)), stockSha);
   }
 
-  // The input's own code must not use the bytes the patch is about to claim: its state words would be the slots (#1737, row C8).
+  // The input's own code must not use the bytes the patch is about to claim: its state words would be the slots (#1737).
   SlotAreaReference reference;
   if (FindSlotAreaReference(stock, elf, slotArea, newEnd, &reference)) {
     PatchResult refused = Failed(Refuse("slot_area_referenced", "",

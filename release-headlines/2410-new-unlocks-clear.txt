@@ -1,0 +1,1 @@
+Clearing your new unlocks right after another profile change now sticks instead of coming back.

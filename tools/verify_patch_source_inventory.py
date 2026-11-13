@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Pin the runtime patch implementation inventory to its CMake source list.
+"""Every ``patch/*.cpp`` on disk is in the CMake ``PATCHES_SOURCES`` list once, and every entry exists (#1350).
 
-The CMake ``PATCHES_SOURCES`` list is authoritative for compiled runtime
-sources.  This checker deliberately reads only that list, then narrows it to
-``patch/*.cpp`` implementation entries; it does not infer an inventory from a
-filesystem glob.
+The CMake list is the only list: a PR that adds a runtime patch edits it and adds the file, and nothing else.
 """
 
 import argparse
@@ -16,61 +13,6 @@ import sys
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_CMAKE = REPO / "src/runtime/CMakeLists.txt"
-
-# Updating this list is an intentional review point: adding or removing a
-# runtime patch must update the expected inventory in the same reviewed change.
-EXPECTED_PATCH_SOURCES = (
-    "patch/asset_cache.cpp",
-    "patch/asset_cdn.cpp",
-    "patch/asset_registry.cpp",
-    "patch/binary_bug_fixes.cpp",
-    "patch/broadcaster_allow_incoming.cpp",
-    "patch/broadcaster_guard.cpp",
-    "patch/coop_ai_trace.cpp",
-    "patch/credits_text.cpp",
-    "patch/deadlock_monitor.cpp",
-    "patch/early_quit_lockout.cpp",
-    "patch/equipment_refire.cpp",
-    "patch/evrp_package.cpp",
-    "patch/gpu_score.cpp",
-    "patch/headless_graphics.cpp",
-    "patch/invite_answer_apply.cpp",
-    "patch/invite_choice_hook.cpp",
-    "patch/invite_join_game.cpp",
-    "patch/invite_service.cpp",
-    "patch/invite_transport_curl.cpp",
-    "patch/invite_wizard_hook.cpp",
-    "patch/loading_tips.cpp",
-    "patch/lobby_full_backoff.cpp",
-    "patch/menu_cards.cpp",
-    "patch/menu_version_label.cpp",
-    "patch/mic_provider.cpp",
-    "patch/mode_patches.cpp",
-    "patch/netgun_bullets.cpp",
-    "patch/netgun_bullet_ids.cpp",
-    "patch/noovr_arglookup.cpp",
-    "patch/plugin_assets.cpp",
-    "patch/pnsrad_enabler.cpp",
-    "patch/provider_name_redirect.cpp",
-    "patch/queued_join_log.cpp",
-    "patch/lobby_settings_hook.cpp",
-    "patch/render_config.cpp",
-    "patch/render_config_hook.cpp",
-    "patch/resource_override.cpp",
-    "patch/resource_set_registry.cpp",  # #2161
-    "patch/resource_sets.cpp",  # #2161
-    "patch/server_bots.cpp",
-    "patch/server_frame_wait.cpp",  # #2109
-    "patch/server_team_size.cpp",
-    "patch/party_invite_gate.cpp",
-    "patch/social_facade.cpp",
-    "patch/social_facade_object.cpp",
-    "patch/splash_skip.cpp",
-    "patch/ui_text.cpp",
-    "patch/ui_texture_mips.cpp",
-    "patch/xpid_patch.cpp",
-)
-
 
 class InventoryError(Exception):
     """The authoritative CMake list could not be read as an inventory."""
@@ -115,18 +57,15 @@ def verify(cmake: Path) -> list[str]:
     errors = []
     actual = patch_sources(cmake)
     actual_counts = Counter(actual)
-    expected = set(EXPECTED_PATCH_SOURCES)
     actual_set = set(actual)
-
     for source in sorted(source for source, count in actual_counts.items() if count > 1):
         errors.append(f"duplicate PATCHES_SOURCES patch entry: {source}")
-    for source in sorted(actual_set - expected):
-        errors.append(f"unexpected PATCHES_SOURCES patch source: {source}")
-    for source in sorted(expected - actual_set):
-        errors.append(f"expected patch source absent from PATCHES_SOURCES: {source}")
     for source in sorted(actual_set):
         if not (cmake.parent / source).is_file():
             errors.append(f"PATCHES_SOURCES patch source is missing from disk: {source}")
+    on_disk = {f"patch/{path.name}" for path in (cmake.parent / "patch").glob("*.cpp")}
+    for source in sorted(on_disk - actual_set):
+        errors.append(f"patch source on disk is not in PATCHES_SOURCES: {source}")
     return errors
 
 
@@ -141,17 +80,10 @@ def main() -> int:
     if errors:
         for error in errors:
             print(f"patch-source-inventory: FAIL {error}", file=sys.stderr)
-        print(
-            "patch-source-inventory: review any runtime patch addition/removal and update "
-            "EXPECTED_PATCH_SOURCES deliberately.",
-            file=sys.stderr,
-        )
         return 1
 
-    names = ", ".join(EXPECTED_PATCH_SOURCES)
-    print(
-        f"patch-source-inventory: OK count={len(EXPECTED_PATCH_SOURCES)} names={names}"
-    )
+    sources = patch_sources(cmake)
+    print(f"patch-source-inventory: OK count={len(sources)} names={', '.join(sources)}")
     return 0
 
 

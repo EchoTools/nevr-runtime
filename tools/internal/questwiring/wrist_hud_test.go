@@ -1,14 +1,13 @@
 package questwiring
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// #2186: the wrist HUD heat meter and the shield colour are the runtime's, and the q15t plugin installs on neither slot. The host tests
+// #2186: the wrist HUD heat meter and the shield colour are the runtime's, and nothing else installs on either slot. The host tests
 // (hudmeter_test, shieldgamma_test, combat_scope_test) drive the behaviour; these pin what they cannot see: the order inside a handler and an
-// install function, the registration table's order, and what the plugin no longer holds.
+// install function, the registration table's order, and each module's files.
 
 func TestEachHandlerIsTheTestAndATailCallAndTheBodyChecksTheLookIsFresh(t *testing.T) {
 	for _, h := range []struct{ file, sig, body string }{
@@ -54,9 +53,16 @@ func TestEachModuleAsksTheScopeIsLiveBeforeItHooksAnything(t *testing.T) {
 			t.Errorf("%s: an off module does not say off_config", m.file)
 		}
 		before(t, b, "off_config", "scope::Live()") // a module that is off asks nothing of the scope
-		if strings.Contains(code, "scope::Enroll") {
-			t.Errorf("%s: a module registers the refresh itself; the scope row does", m.file)
+		for _, reg := range []string{"scope::Refresh", "scope::InstallNormal("} {
+			if strings.Contains(code, reg) {
+				t.Errorf("%s names %s: a module registers the refresh itself; the scope row does", m.file, reg)
+			}
 		}
+	}
+	// the one registration: the scope row's step returns scope::InstallNormal() (combat_install.cpp ScopeNormal), so a rename cannot leave the check above
+	// reading nothing
+	if !strings.Contains(stripComments(read(t, "src/quest/combat/combat_install.cpp")), "return scope::InstallNormal();") {
+		t.Error("combat_install.cpp's scope row does not call scope::InstallNormal(): the registration the modules must not make is not where this test expects it")
 	}
 }
 
@@ -142,41 +148,12 @@ func TestEachNewKeyIsReadKnownLoggedAndDocumentedAndDefaultsAsTheModuleNeeds(t *
 	}
 }
 
-func TestThePluginHoldsNeitherSlotAndNoLongerBuildsEitherModule(t *testing.T) {
+func TestEachWristModuleHasItsFiles(t *testing.T) {
 	for _, n := range []string{"hudmeter", "shieldgamma"} {
-		for _, e := range []string{"h", "cpp"} {
-			if exists(t, "src/quest/plugins/q15t/src/"+n+"."+e) {
-				t.Errorf("the plugin still has %s.%s", n, e)
-			}
-		}
-		for _, p := range []string{"src/quest/tests/q15t/" + n + "_test.cpp", "src/quest/tests/q15t/mod/" + n + ".cmake", "src/quest/tests/q15t/mutants.d/" + n + ".sh", "docs/quest/q15t/modules/" + n + ".md"} {
-			if exists(t, p) {
-				t.Errorf("%s is still the plugin's", p)
-			}
-		}
 		for _, p := range []string{"docs/quest/combat/" + n + ".md", "src/quest/combat/mutants.d/" + n + ".sh", "src/quest/tests/" + n + "_test.cpp"} {
 			if !exists(t, p) {
 				t.Errorf("%s is missing", p)
 			}
-		}
-	}
-	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
-	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
-			continue
-		}
-		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
-		for _, bad := range []string{"InstallHudmeter", "InstallShieldGamma", "Q15T_HUDMETER", "Q15T_SHIELDGAMMA", "0x36c6ce8", "0x36d2020"} {
-			if strings.Contains(code, bad) {
-				t.Errorf("%s names %s", e.Name(), bad)
-			}
-		}
-	}
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/tests/q15t/mod/wiring.cmake")
-	for _, bad := range []string{"HUDMETER", "SHIELDGAMMA", "src/hudmeter", "src/shieldgamma"} {
-		if strings.Contains(cmake, bad) {
-			t.Errorf("the plugin's CMake or its wiring test still names %s", bad)
 		}
 	}
 }

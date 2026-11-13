@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The headset gates' arm64 checks (docs/adr/0046 rule 2; src/quest/combat/headset_gates.h). Run by `just test-quest-combat headset_gates` after the host
-# tests. Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and Q15T_SKIP_QEMU=1 skips the run (and says so).
+# tests. Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and NEVR_SKIP_QEMU=1 skips the run (and says so).
 #   1. the two entries (src/quest/combat/headset_gates_entry.inc) compiled for arm64 are exactly the expected instructions, in this order;
 #   2. each continuation, compiled for arm64 (-O2, as the sentinel is), loads the word the manager publishes with ldar or ldapr (a relaxed load fails);
 #   3. the freestanding program src/quest/tests/headset_gates_qemu.cpp, which includes that very text, runs under qemu-aarch64.
@@ -75,9 +75,9 @@ done
 
 if command -v qemu-aarch64 >/dev/null 2>&1; then
   qemu-aarch64 "$program" || { echo "FAIL: headset_gates_qemu"; exit 1; }
-elif [ "${Q15T_SKIP_QEMU:-0}" = 1 ]; then
-  echo "SKIPPED (Q15T_SKIP_QEMU=1): qemu-aarch64 not found, the entries were not run"
+elif [ "${NEVR_SKIP_QEMU:-0}" = 1 ]; then
+  echo "SKIPPED (NEVR_SKIP_QEMU=1): qemu-aarch64 not found, the entries were not run"
 else
-  echo "FAIL: qemu-aarch64 not found (Q15T_SKIP_QEMU=1 to skip explicitly)"
+  echo "FAIL: qemu-aarch64 not found (NEVR_SKIP_QEMU=1 to skip explicitly)"
   exit 1
 fi

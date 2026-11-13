@@ -13,22 +13,22 @@
  *
  * Arena (same APK). The level is the game's global level, loaded once after login, before any lobby: nothing says yet whether the player is
  * going to an arena or a combat match, and the loaded-level answer (combat_level.h) is "none" at that moment, so this module cannot be scoped by
- * level. On a q15t or combat APK an arena match runs with the full-size global level too, when `combat.levelname` is on (the default). The
+ * level. On a combat APK an arena match runs with the full-size global level too, when `combat.levelname` is on (the default). The
  * handler does nothing for any other level, and a lowspec-clear game is not touched. See docs/quest/combat/levelname.md ("What an arena match
  * gets") for the cost and what is not measured. `combat.levelname: false` leaves the game's cut level (and, with it, boosterpool.h and the bot-body
  * gate, which needs the full level: headset_gates.h "The bot gate" reads this module's slot, the CR15Game word, and acts only where it is not the stock function).
  *
- * Which APKs. The q15t and combat variants (`combat::Active()`); every other APK keeps the game's own level name.
+ * Which APKs. The combat variants (`combat::Active()`); every other APK keeps the game's own level name.
  *
- * Switch (ADR 0046 rule 4): `combat.levelname` in config.yaml, default true. The plugin's kill file `levelname.off` is no longer read: one found in
- * the plugin's data directory is a Warning (`combat_levelname_legacy_switch`) naming the key.
+ * Switch (ADR 0046 rule 4): `combat.levelname` in config.yaml, default true. The kill file `levelname.off` is no longer read: one found in
+ * the data directory is a Warning (`combat_levelname_legacy_switch`) naming the key.
  *
  * Frequency (ADR 0038). The function runs once per level the game loads: the handler compares the level to one constant and reads the flags word
  * only for global_mp. Not measured on a headset.
  *
  * Origin. The reference build's G7 rule (its patch table `full_global_mp_patches`, tools/qcp_patches.py:389; docs/audits/2026-11-05-q15t-origin-citations.md,
  * rows for `levelname`), which rewrote the `tbnz` branch target into a code cave. This is our own implementation, reached through the vtable
- * words instead of a code write, imported with the q15t plugin from kotorvr's echoquest-combat and moved here from the plugin's levelname.cpp.
+ * words instead of a code write, imported with the combat plugin (#1591) from kotorvr's echoquest-combat, from that plugin's levelname.cpp.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_levelname_install","result":"installed|refused|off","reason":"ok|off_config|<GotStatus token>|<status token>","key":"combat.levelname",
@@ -57,8 +57,8 @@ namespace nevr_quest::combat::levelname {
 // "installed", "refused", "off", "already_ran", "module_not_loaded". A refused step leaves nothing installed and may be tried again.
 ModuleResult Install(bool on) noexcept;
 
-// The same on the image `lookup` finds. The plugin's old kill file is looked for through legacy::Present (legacy_switch.h), in the directory that
-// the test seam (legacy::SetDirectoryForTest) names, or the plugin's own data directory.
+// The same on the image `lookup` finds. The kill file is looked for through legacy::Present (legacy_switch.h), in the directory that
+// the test seam (legacy::SetDirectoryForTest) names, or the data directory.
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept;
 
 // True once Install put all four thunks in and until ResetForTest: the companion (boosterpool.h) installs only then.

@@ -25,8 +25,8 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "core/schannel_cred_guard.h"
-#include "core/system_info.h"
 #include "runtime/hook/patching.h"  // PatchDetour records each hook in HookGuard under its name
+#include "modules/platform-compat/src/nt_path_log.h"  // #1845: the level of the relative \\?\ path line
 
 // ---------------------------------------------------------------------------
 // Schannel TLS hook
@@ -95,14 +95,16 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       if (length > 0 && length < MAX_PATH) {
         fixedPath = std::wstring(currentDir) + L"\\" + (lpPathName + 4);
         pathToUse = fixedPath.c_str();
-        // This bug has no counterpart on native Windows —
-        // nevr_system_info::Get().IsWine() makes that explicit
-        // instead of leaving the branch looking like an unexplained ad hoc fix,
-        // and flags the anomaly loudly if it's ever hit off Wine.
-        static const bool s_isWine = nevr_system_info::Get().IsWine();
-        Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
-            s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, pathToUse);
+        // The game passes a relative path behind the \\?\ prefix on native Windows too (#1845), so the
+        // hook creates it under the current directory and says so at Debug on every platform.
+        const EchoVR::LogLevel relativeLevel =
+            nevr_platform_compat::RelativeNtPathLogLevel() == nevr_platform_compat::NtPathFixLevel::Debug
+                ? EchoVR::LogLevel::Debug
+                : EchoVR::LogLevel::Warning;
+        Log(relativeLevel,
+            "[NEVR.PATCH] game passed a relative path behind the \\\\?\\ prefix, created under the current directory: "
+            "'%ls' -> '%ls'",
+            lpPathName, pathToUse);
       } else {
         // The old fixed buffer truncated silently; falling through unfixed must not be silent either.
         Log(EchoVR::LogLevel::Warning,

@@ -2,7 +2,7 @@
 
 Files: `src/quest/combat/instmodel.{h,cpp}`, `instmodel_targets.h`, `src/quest/tests/instmodel_test.cpp`, `src/quest/combat/mutants.d/instmodel.sh`.
 Switch: `combat.instmodel` in `config.yaml` (default `true`). The plugin's `instmodel.off` is not read; one found in its data directory is a
-Warning (`combat_instmodel_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
+Warning (`combat_instmodel_legacy_switch`) that names the key. Runs in the combat APKs only (`combat::Active()`).
 
 ## What the stock code does (store libr15, build ID b243509c; disassembly VA = ELF vaddr + 0x100000)
 

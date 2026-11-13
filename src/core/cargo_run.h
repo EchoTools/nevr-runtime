@@ -1,9 +1,10 @@
-/* The cargo worker (docs/adr/0045-cdn-texture-delivery.md D3 and D4): mount what the cache holds, then fetch what the manifest
- * names, verify it, store it, write the index and mount what arrived. It runs on its own thread on a client, never in the game's
- * frame, and never blocks the boot: the mount at boot reads files only, and the fetch runs after.
+/* The cargo worker (docs/adr/0045-cdn-texture-delivery.md D3 and D4): mount what the store holds, then fetch what the manifest
+ * names, verify it, append it to the store and mount what arrived. It runs on its own thread, never in the game's frame. The
+ * mount at boot reads the saved manifest and the blob index and hashes nothing: an object is hashed once, when it is downloaded.
  *
- * Every outcome is an event (docs/adr/0045 "Log vocabulary"): cargo_start, cargo_manifest, cargo_plan, cargo_blob, cargo_index,
- * cargo_mounted, cargo_done. A failure leaves the cache and the mounted set as they were.
+ * Every outcome is an event: cargo_limits, cargo_store, cargo_start, cargo_manifest, cargo_refused, cargo_plan, cargo_blob,
+ * cargo_progress, cargo_mounted, cargo_done. A refusal names its rule (cargo_validate.h) and a failure its reason. A failure
+ * leaves the store and the mounted set as they were: the bytes of an object that failed are cut off again.
  */
 #pragma once
 
@@ -18,13 +19,28 @@
 
 namespace nevr_cargo {
 
+// Where a fetch stands, for the notice the first-run step shows. Called after the plan and after every object, on the worker's thread.
+struct FetchProgress {
+  std::uint64_t total_bytes = 0;  // stored bytes the plan asks for
+  std::uint64_t done_bytes = 0;
+  std::size_t total_blobs = 0;
+  std::size_t done_blobs = 0;
+  std::size_t failed_blobs = 0;
+};
+using ProgressFn = std::function<void(const FetchProgress&)>;
+
 struct RunConfig {
-  std::string dir;            // the cache directory (absolute)
+  std::string dir;            // the store directory (absolute)
   std::string base_url;       // e.g. "https://cargo.echo.taxi/", ending in '/'
   std::string manifest_path;  // relative to base_url, e.g. "v1/manifest.json"
   Platform platform = kAndroidArm64;
   Policy policy;
   std::string source = "default";  // "default" or "config": whether the policy or the URL came from config (logged, never the values)
+  ProgressFn progress;             // optional
+  // The first-run hold (docs/adr/0045 decision 11): the fetch stores every object of every served label through the first-run prefetch
+  // (core/cargo_prefetch.h), one after another, and ends at the first object that cannot be had, so a caller that waits for it knows the
+  // store is whole when RunResult::stopped is empty and `failed` is 0. Off: the background fetch, which counts a failed object and goes on.
+  bool first_run = false;
 };
 
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.
@@ -33,6 +49,8 @@ using Publish = std::function<void(std::unique_ptr<Mounted>)>;
 struct RunResult {
   std::size_t fetched = 0;   // blobs stored this run
   std::size_t cached = 0;    // blobs already held
+  std::size_t refused = 0;   // manifest entries the validator refused
+  const char* stopped = "";  // why the run did nothing or ended early: "limits", "manifest_failed", "manifest_refused", "storage", "cancelled", "" when it ran through
   std::size_t failed = 0;    // blobs that could not be stored
   std::uint64_t bytes = 0;   // bytes stored this run
   bool manifest_loaded = false;

@@ -24,6 +24,7 @@ std::atomic<AppFn> g_app{nullptr};
 std::atomic<unsigned long long> g_finished{0};
 std::atomic<unsigned long long> g_gameUi{0};
 std::atomic<unsigned long long> g_calls{0};
+std::atomic<bool> g_finishing{false};  // a finish of the activity has begun
 
 // The Horizon OS build of this headset, read on each QUIT (QUIT is rare): ro.build.display.id and
 // ro.build.version.incremental. A host build has no system properties and reads "unknown".
@@ -45,17 +46,29 @@ constexpr int kPinnedVrType = 1;
 // CVR::ShowSystemUI, reached only from the menu's QUIT. Finish the activity, so the game ends the way it ends when the
 // OS closes it; with no activity or nothing to finish it with, run the game's own call. Each QUIT writes one "quit"
 // line before anything else runs: the action, the pinned type, the OS build and the call count (#1276).
+// The function that finishes the activity and the activity it finishes (null when there is none), as the install armed them.
+struct Finisher {
+  FinishFn finish;
+  void* activity;
+};
+Finisher CurrentFinisher() noexcept {
+  const FinishFn finish = g_finish.load(std::memory_order_acquire);
+  const AppFn app = g_app.load(std::memory_order_acquire);
+  return {finish, sentinel::glue::ReadPointer(app != nullptr ? app() : nullptr, sentinel::glue::kAppActivity)};
+}
+
 void Handler(Thunk::Fn original) noexcept {
   const unsigned long long calls = g_calls.fetch_add(1, std::memory_order_acq_rel) + 1;
   char osBuild[64];
   char osIncremental[64];
   ReadProperty("ro.build.display.id", osBuild);
   ReadProperty("ro.build.version.incremental", osIncremental);
-  const FinishFn finish = g_finish.load(std::memory_order_acquire);
-  const AppFn app = g_app.load(std::memory_order_acquire);
-  void* const activity = sentinel::glue::ReadPointer(app != nullptr ? app() : nullptr, sentinel::glue::kAppActivity);
+  const Finisher current = CurrentFinisher();
+  const FinishFn finish = current.finish;
+  void* const activity = current.activity;
   if (finish != nullptr && activity != nullptr) {
     g_finished.fetch_add(1, std::memory_order_acq_rel);
+    g_finishing.store(true, std::memory_order_release);
     sentinel::LogFields(sentinel::LogLevel::kInfo, "quit",
                         {{"action", "finish_activity"},
                          {"os_build", osBuild},
@@ -89,6 +102,21 @@ void Arm(FinishFn finish, AppFn app) noexcept {
 }
 
 }  // namespace
+
+bool CanFinishActivity() noexcept {
+  const Finisher current = CurrentFinisher();
+  return current.finish != nullptr && current.activity != nullptr;
+}
+
+bool Finishing() noexcept { return g_finishing.load(std::memory_order_acquire); }
+
+bool FinishActivity() noexcept {
+  const Finisher current = CurrentFinisher();
+  if (current.finish == nullptr || current.activity == nullptr) return false;
+  g_finishing.store(true, std::memory_order_release);
+  current.finish(static_cast<ANativeActivity*>(current.activity));
+  return true;
+}
 
 Counts CurrentCounts() noexcept {
   return {g_finished.load(std::memory_order_acquire), g_gameUi.load(std::memory_order_acquire)};
@@ -128,6 +156,7 @@ void ResetForTest() noexcept {
   g_finished.store(0, std::memory_order_relaxed);
   g_gameUi.store(0, std::memory_order_relaxed);
   g_calls.store(0, std::memory_order_relaxed);
+  g_finishing.store(false, std::memory_order_relaxed);
 }
 
 }  // namespace nevr_quest::quit

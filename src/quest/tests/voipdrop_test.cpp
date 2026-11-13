@@ -2,7 +2,7 @@
 // libr15 image built in memory, and called the way the game calls it: through the slot. The game side is a model: a fake CR15NetVoipReceiverCS (free head,
 // page size, allocator block) and a fake allocator with a vtable (+0x10 alloc, +0x38 free) behind fake CMemoryContext functions.
 //
-// What it pins (the q15t plugin's voipdrop_test assertions, on the new fixture): a table with a free page reaches the game's function with no probe at all;
+// What it pins: a table with a free page reaches the game's function with no probe at all;
 // head -1 and an allocator that can give the page probes with the table's size and block, gives the block back, restores the context and calls the game's
 // function with the same arguments; an allocator out of memory (or none) drops the packet; every doubt runs the game's function; the drop lines are capped
 // at 16 with a running total at every 50th drop, at most 16; a slot that does not hold ReceiveVoip is refused and left alone with the pin named; a missing

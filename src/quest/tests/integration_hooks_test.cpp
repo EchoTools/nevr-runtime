@@ -143,9 +143,9 @@ void TestHandlerRedirectsARegisteredScriptLibrary() {
   namespace sr = nevr_quest::script_redirect;
   sr::ResetForTest();
   const char* const base = std::getenv("TMPDIR");
-  std::string dir = std::string(base != nullptr && base[0] != '\0' ? base : "/tmp") + "/q15t_dlopen_hook_XXXXXX";
+  std::string dir = std::string(base != nullptr && base[0] != '\0' ? base : "/tmp") + "/script_dlopen_hook_XXXXXX";
   QCHECK(mkdtemp(dir.data()) != nullptr);
-  const std::string file = dir + "/lib37f88adb0d8066f7_q15t.so";
+  const std::string file = dir + "/lib37f88adb0d8066f7_nevr.so";
   if (std::FILE* f = std::fopen(file.c_str(), "wb")) {
     std::fputs("aarch64", f);
     std::fclose(f);
@@ -163,7 +163,7 @@ void TestHandlerRedirectsARegisteredScriptLibrary() {
   void* const r = RunDlopenHandlerForTest(&FakeDlopenOk, "/data/app/x/lib/arm64/lib37f88adb0d8066f7.so", 2);
   QCHECK(r == &g_marker);
   QCHECK(g_originalCalls == 1 && g_lastFlags == 2);
-  QCHECK(g_lastName != nullptr && std::strcmp(g_lastName, "lib37f88adb0d8066f7_q15t.so") == 0);  // the loader got the combat name
+  QCHECK(g_lastName != nullptr && std::strcmp(g_lastName, "lib37f88adb0d8066f7_nevr.so") == 0);  // the loader got the combat name
   QCHECK(g_hookLines.find("\"event\":\"script_redirected\"") != std::string::npos);
   QCHECK(PostLoadStatsView().calls == 1);  // the post-load actions still ran after the redirected open
   QCHECK(g_observedName == "/data/app/x/lib/arm64/lib37f88adb0d8066f7.so");  // and the observer got the game's own name
@@ -273,6 +273,8 @@ struct RealCounterSteps final : Steps {
   bool InstallProcessEnd() override { return true; }
   bool InstallCrashFirst() override { return true; }
   bool InstallPermissionWait() override { return true; }
+  bool InstallMatchTags() override { return true; }
+  bool InstallEquipRefire() override { return true; }
   bool InstallVkExtWindow() override { return true; }
   bool InstallOsBuildGate() override { return true; }
   bool InstallResourceRequestLog(bool counted, bool) override { return counted; }

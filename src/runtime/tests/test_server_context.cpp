@@ -812,3 +812,28 @@ TEST_F(BroadcasterInternalIpLog, Ipv6SlotFallsBackAndLogsOneWarningNamingFamilyA
   EXPECT_NE(g_lines[0].second.find("family=23"), std::string::npos) << g_lines[0].second;
   EXPECT_NE(g_lines[0].second.find("address=2001:db8::1"), std::string::npos) << g_lines[0].second;
 }
+
+// #2365: the peers a nEVR control message may come from are the accepted slots' broadcaster peers, in slot order, inside
+// the same bound as every other slot read (the shorter of the two arrays).
+TEST(ServerContextAcceptedPeers, OnlyAcceptedSlotsInsideTheBound) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22), MakeEntrant(33)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeSlot(MakeGuid(2)), MakeSlot(MakeGuid(3)), MakeSlot(MakeGuid(4))};
+  sessions[0].peer = 100;
+  sessions[1].peer = 101;
+  sessions[2].peer = 102;
+  sessions[3].peer = 103;  // past entrants.count: never read
+  sessions[1].joinState = 3;  // state pending: not in the match yet
+  sessions[3].joinState = 4;
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+  EXPECT_EQ(context.AcceptedPeers(), (std::vector<uint64_t>{100, 102}));
+}
+
+TEST(ServerContextAcceptedPeers, NoLobbyNoPeers) {
+  nevr_game_server::ServerContext context;
+  EXPECT_TRUE(context.AcceptedPeers().empty());
+}

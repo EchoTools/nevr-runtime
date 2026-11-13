@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdint>
 #include <exception>
+#include <limits>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -155,7 +156,12 @@ size_t WebSocketClient::DiscardPendingMessages() {
 
 VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallback_ = callback; }
 
+// The game thread's receive queue takes this many messages; the rest of a frame is counted and named in the drop Warning.
+constexpr size_t kReceiveQueueLimit = 1024;
+
 VOID WebSocketClient::SetReceiveObserver(MessageCallback callback) { receiveObserver_ = callback; }
+
+VOID WebSocketClient::SetCloseObserver(CloseCallback callback) { closeObserver_ = std::move(callback); }
 
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
@@ -224,6 +230,8 @@ VOID WebSocketClient::RefreshBearerTokenAfterRejection() {
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Bearer token replaced after HTTP 401 refresh_count=%u", count);
 }
 
+uint32_t WebSocketClient::ReconnectCount() { return s_wsReconnectCount; }
+
 BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
@@ -231,6 +239,8 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
     case ix::WebSocketMessageType::Open:
       if (s_wsHasConnectedOnce) ++s_wsReconnectCount;
       s_wsHasConnectedOnce = true;
+      openedAt_ = std::chrono::steady_clock::now();
+      opened_ = true;
       Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Connected to ServerDB reconnect_count=%u", s_wsReconnectCount);
       connected_.store(true);
       FlushPendingMessages();
@@ -246,6 +256,13 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
         Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
       }
       connected_.store(false);
+      if (opened_) {
+        opened_ = false;
+        if (closeObserver_) {
+          const auto openFor = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - openedAt_);
+          closeObserver_(static_cast<int>(msg->closeInfo.code), static_cast<uint64_t>(openFor.count()));
+        }
+      }
       break;
 
     case ix::WebSocketMessageType::Error:
@@ -262,26 +279,23 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
     case ix::WebSocketMessageType::Message:
       if (msg->binary) {
         const std::string& payload = msg->str;
-        size_t queueCapacity = 0;
-        {
-          std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
-          if (receivedMessages_.size() < 1024) queueCapacity = 1024 - receivedMessages_.size();
-        }
-
-        auto parsed = nevr_game_server::ParseServerDbFrame(payload, queueCapacity);
+        // The whole frame is parsed, so the observer sees every message; the queue below takes what fits.
+        auto parsed = nevr_game_server::ParseServerDbFrame(payload, std::numeric_limits<size_t>::max());
         if (receiveObserver_) {
           for (auto& received : parsed.messages) {
             VOID* observed = received.payload.empty() ? nullptr : received.payload.data();
             receiveObserver_(received.msgId, observed, received.payload.size());
           }
         }
-        bool queueFull = false;
+        size_t dropped = 0;
+        EchoVR::SymbolId firstDroppedId = 0;
         {
           std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
           for (auto& received : parsed.messages) {
-            if (receivedMessages_.size() >= 1024) {
-              queueFull = true;
-              break;
+            if (receivedMessages_.size() >= kReceiveQueueLimit) {
+              if (dropped == 0) firstDroppedId = received.msgId;
+              ++dropped;
+              continue;
             }
 #ifdef NEVR_TEST_HOOKS
             if (testBeforeReceiveEnqueue_) testBeforeReceiveEnqueue_();
@@ -317,11 +331,13 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
                 parsed.errorMessageId, static_cast<unsigned long long>(parsed.declaredLength));
             break;
           case nevr_game_server::WebSocketFrameStatus::QueueLimit:
-            queueFull = true;
+            // Not reached: the frame is parsed with no limit, so the queue is bounded above, not by the parser.
             break;
         }
-        if (queueFull) {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Receive queue full (1024) — remaining frame messages dropped");
+        if (dropped != 0) {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.SERVERDB] Receive queue full (%zu): dropped %zu frame message(s), first msgId 0x%llX",
+              kReceiveQueueLimit, dropped, static_cast<unsigned long long>(firstDroppedId));
         }
         if (parsed.messages.size() > 1) {
           Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Parsed %zu messages from single frame (%zu bytes)",
@@ -342,7 +358,8 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
       break;
   }
 } catch (const std::exception&) {
-  Log(EchoVR::LogLevel::Error, "[NEVR.SERVERDB] callback threw and was CONTAINED at=WebSocketClient::OnMessage failure=1");
+  const std::string diagnostic = nevr_log_diagnostics::FormatCallbackFailureDiagnostic("WebSocketClient::OnMessage");
+  Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
 }
 
 VOID WebSocketClient::FlushPendingMessages() {

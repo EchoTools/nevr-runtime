@@ -837,7 +837,7 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     CHECK(none.config.assets.cdnUrl.empty() && none.config.assets.manifest.empty() && !none.config.assets.requiredOnly);
     CHECK(none.config.assets.labels.empty() && none.config.assets.source == Source::kAbsent);
-    CHECK(EventsContain(none, "config key=assets labels=0 required_only=0 cdn_url=default manifest=default source=default"));
+    CHECK(EventsContain(none, "config key=assets labels=0 required_only=0 cdn_url=default manifest=default whole_game=0 source=default"));
     for (const char* text : {"", "assets: {}\n", "assets:\n"}) {
       const LoadResult r = Load(Full(), text);
       CHECK(r.config.assets.source == Source::kAbsent && !HasLevel(r, LogLevel::kWarn));
@@ -852,7 +852,7 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     CHECK(r.config.assets.labels.size() == 3 && r.config.assets.labels[0].first == "lobby_posters" && r.config.assets.labels[0].second == "required");
     CHECK(r.config.assets.labels[1].second == "off" && r.config.assets.labels[2].second == "on");
     CHECK(r.config.assets.source == Source::kFile);
-    CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config source=config"));
+    CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config whole_game=0 source=config"));
     CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
     CHECK(!EventsContain(r, "cargo.example.test"));  // a configured value is never logged on the Quest
     CHECK(!EventsContain(r, "unknown_nested="));     // every assets key is on the schema
@@ -897,6 +897,25 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     const LoadResult r = Load(Full(), many);
     CHECK(r.config.assets.labels.size() == 32);
     CHECK(EventsContain(r, "reason=too_many_labels more=1"));
+  }
+  {  // assets.whole_game: the whole-game mode, which needs the manifest that holds the game
+    const LoadResult off = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n");
+    CHECK(!off.config.assets.wholeGame);  // not asked: off
+    const LoadResult on = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: true\n");
+    CHECK(on.config.assets.wholeGame && on.config.assets.source == Source::kFile);
+    CHECK(EventsContain(on, "manifest=config whole_game=1 source=config"));
+    CHECK(!HasLevel(on, LogLevel::kWarn));
+    const LoadResult explicitOff = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: false\n");
+    CHECK(!explicitOff.config.assets.wholeGame && !HasLevel(explicitOff, LogLevel::kWarn));
+    // Without a manifest there is nothing to serve the game from: off, with one Warning that names the key.
+    const LoadResult noManifest = Load(Full(), "assets:\n  whole_game: true\n");
+    CHECK(!noManifest.config.assets.wholeGame);
+    CHECK(EventsWithAreAtLevel(noManifest, "key=assets.whole_game rejected reason=no_manifest", LogLevel::kWarn));
+    const LoadResult notBool = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: maybe\n");
+    CHECK(!notBool.config.assets.wholeGame);
+    CHECK(EventsWithAreAtLevel(notBool, "key=assets.whole_game rejected reason=not_a_boolean", LogLevel::kWarn));
+    CHECK(!EventsContain(notBool, "maybe"));
+    CHECK(!EventsContain(on, "unknown_nested="));  // the key is on the schema
   }
   {  // beside the other sections: nothing else moves
     const LoadResult r = Load(Full(), "assets:\n  labels:\n    lobby_posters: off\ngraphics:\n  hand_flip: true\n");
@@ -1384,7 +1403,7 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"bvh_gate", &nevr_quest::CombatConfig::bvhGate, true},
                       {"bvh_touch", &nevr_quest::CombatConfig::bvhTouch, true},
                       {"wallfire", &nevr_quest::CombatConfig::wallfire, true},
-                      // Combat music and the scanner-sphere watchdog (#2184): on, as the q15t plugin's Q15T_MUSIC and Q15T_SENSORWD were in v6.16.5 (music is also on by default upstream, afk_music.cpp:1).
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as the combat plugin's music and sensorwd options were in v6.16.5 (music is also on by default upstream, afk_music.cpp:1).
                       {"music", &nevr_quest::CombatConfig::music, true},
                       {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true},
                       // The EC client and its NEUTRON effects (#2187): on unless the file says false.
@@ -1392,7 +1411,23 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"ecfx", &nevr_quest::CombatConfig::ecfx, true},
                       // The drone modules (#2187): on unless the file says false.
                       {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
-                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true}};
+                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true},
+                      // The drone explosion (#1737): on unless the file says false (the reference build ships dronefx.on).
+                      {"dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion, true},
+                      // Its hold (#1737): off unless the file says true (CEnableComponentNode::Enter's one effect is not established).
+                      {"dronekill_hold", &nevr_quest::CombatConfig::dronekillHold, false},
+                      // The bullet-velocity guard (#1737): on unless the file says false (upstream's recipe ships it off; its doc says why it is on).
+                      {"bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, true},
+                      // The frozen-frame exit (#2377): on unless the file says false (upstream's hangwd is on by default too; D8 (a), the combat APK only).
+                      {"frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit, true},
+                      // The sound-symbol guard (#1737): off unless the file says true (a performance guard, as upstream ships it).
+                      {"sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, false},
+                      // The texel-buffer guard (#1650): on unless the file says false (the reference build ships g40guard on).
+                      {"texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard, true},
+                      // The Quest 2 step-down (#1737): off unless the file says true (opt-in: the deadlock is unobserved; upstream ships it on), and its
+                      // lobby switch on (the combat lobby is combat-only).
+                      {"texture_quest2_step_down", &nevr_quest::CombatConfig::textureQuest2StepDown, false},
+                      {"texture_quest2_lobby", &nevr_quest::CombatConfig::textureQuest2Lobby, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
@@ -1515,6 +1550,10 @@ void CombatAibotsScenarioIsATextThatTheFileGivesWhole() {
 // file. A value that is not an integer, or one outside 0..3, keeps 3 with a Warning that names the key.
 void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
   const std::string key = "combat.powerboost_stage";
+  {  // no file at all: the default, 3, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(none.config.combat.powerboostStage.value == 3 && none.config.combat.powerboostStage.source != Source::kFile);
+  }
   for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
     const LoadResult r = Load(Full(), text);
     CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
@@ -1533,6 +1572,36 @@ void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
   for (const char* value : {"two", "2.5", "true", "[1, 2]", "{a: 1}"}) {
     const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
     CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
+  }
+}
+
+// combat.frozen_frame_exit_s (#2377): an integer 10..900. Absent: 30, not from the file. An integer in the range: that limit, from the file. A value
+// that is not an integer, or one outside 10..900, keeps 30 with a Warning that names the key.
+void CombatFrozenFrameExitSIsAnIntegerFromTenTo900() {
+  const std::string key = "combat.frozen_frame_exit_s";
+  {  // no file at all: the default, 30, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(none.config.combat.frozenFrameExitS.value == 30 && none.config.combat.frozenFrameExitS.source != Source::kFile);
+  }
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  frozen_frame_exit: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
+  }
+  for (int limit : {10, 45, 900}) {
+    const LoadResult r = Load(Full(), "combat:\n  frozen_frame_exit_s: " + std::to_string(limit) + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.frozenFrameExitS.value == limit && r.config.combat.frozenFrameExitS.source == Source::kFile);
+  }
+  for (const char* value : {"9", "901", "0", "-30"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  frozen_frame_exit_s: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=out_of_range", LogLevel::kWarn));
+  }
+  for (const char* value : {"thirty", "30.5", "true", "[30]"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  frozen_frame_exit_s: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.frozenFrameExitS.value == 30 && r.config.combat.frozenFrameExitS.source != Source::kFile);
     CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
   }
 }
@@ -1592,6 +1661,7 @@ void CombatCrashGuardKeysDefaultAsShippedAndTheFileDecides() {
 
 int main() {
   CombatPowerboostStageIsAnIntegerFromZeroToThree();
+  CombatFrozenFrameExitSIsAnIntegerFromTenTo900();
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();

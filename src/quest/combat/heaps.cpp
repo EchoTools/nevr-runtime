@@ -4,10 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
-#if defined(__ANDROID__)
-#include <sys/system_properties.h>
-#endif
-
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/mapping_perms.h"
@@ -25,8 +22,9 @@ alignas(8) std::uint64_t g_value[kRowCount];
 sentinel::GotDataSlot g_slots[kRowCount];
 
 std::atomic<bool> g_ran{false};
-std::atomic<const char*> g_deviceOverride{nullptr};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
+// combat.memsys as the step was handed it (InstallAt's `systemOn`), for every combat_heaps_install line: InstallAt stores it before any line.
+std::atomic<bool> g_systemOn{true};
 
 // A read of the game's memory (mapping_perms.h): the range must lie in readable mappings of /proc/self/maps, then it is copied.
 template <typename T>
@@ -34,19 +32,6 @@ bool ReadGame(std::uintptr_t address, T* out) noexcept {
   if (!sentinel::MappingsAllow(address, sizeof(T), /*write=*/false)) return false;
   std::memcpy(out, reinterpret_cast<const void*>(address), sizeof(T));
   return true;
-}
-
-void ReadDevice(char* out, std::size_t size) noexcept {
-  out[0] = '\0';
-  if (const char* const device = g_deviceOverride.load(std::memory_order_acquire)) {
-    std::snprintf(out, size, "%s", device);
-    return;
-  }
-#if defined(__ANDROID__)
-  char value[PROP_VALUE_MAX] = "";
-  __system_property_get("ro.product.device", value);
-  std::snprintf(out, size, "%s", value);
-#endif
 }
 
 // What the game reads through row `row`'s slot now: slot -> pointer -> u64, in MiB; 0 when either read fails.
@@ -58,24 +43,24 @@ std::uint64_t ObservedMiB(std::uintptr_t base, std::size_t row) noexcept {
 }
 
 void LogRow(sentinel::LogLevel level, const RowPin& row, const char* status, const char* why, std::uint64_t valueBytes,
-            std::uint64_t observedMiB, const char* device) noexcept {
+            std::uint64_t observedMiB, const char* profile) noexcept {
   char slot[19];
   sentinel::LogFields(level, "combat_heaps_row",
                       {{"row", row.id}, {"status", status}, {"why", why}, {"slot_vaddr", sentinel::HexString(slot, row.slot)},
-                       {"value_mib", valueBytes / kMiB}, {"observed_mib", observedMiB}, {"device", device}});
+                       {"value_mib", valueBytes / kMiB}, {"observed_mib", observedMiB}, {"profile", profile}});
 }
 
 // A refusal because a pinned word is not the stock one (logging.md Rule 6): the word read and the word wanted, `have` "unreadable" when the
 // read failed.
 void LogWordRefusal(const RowPin& row, const char* why, bool readable, std::uint64_t have, std::uint64_t want, std::uint64_t valueBytes,
-                    const char* device) noexcept {
+                    const char* profile) noexcept {
   char slot[19];
   char haveText[19];
   char wantText[19];
   sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_heaps_row",
                       {{"row", row.id}, {"status", "refused"}, {"why", why}, {"slot_vaddr", sentinel::HexString(slot, row.slot)},
                        {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
-                       {"want", sentinel::HexString(wantText, want)}, {"value_mib", valueBytes / kMiB}, {"device", device}});
+                       {"want", sentinel::HexString(wantText, want)}, {"value_mib", valueBytes / kMiB}, {"profile", profile}});
 }
 
 struct Counts {
@@ -87,63 +72,64 @@ struct Counts {
 // One row: the reader word and the .rodata size are the stock ones, then the slot is pointed at our u64. A row that fails any check is
 // refused alone and writes nothing.
 bool SwapRow(const sentinel::ElfImage& image, sentinel::ImageLookup lookup, std::size_t row, std::uint64_t valueBytes,
-             const char* device) noexcept {
+             const char* profile) noexcept {
   const RowPin& pin = kRows[row];
   std::uint32_t readerWord = 0;
   const bool readerRead = ReadGame(image.base + pin.reader, &readerWord);
   if (!readerRead || readerWord != pin.readerWord) {
-    LogWordRefusal(pin, "reader_word_not_stock", readerRead, readerWord, pin.readerWord, valueBytes, device);
+    LogWordRefusal(pin, "reader_word_not_stock", readerRead, readerWord, pin.readerWord, valueBytes, profile);
     return false;
   }
   std::uint64_t stockBytes = 0;
   const bool stockRead = ReadGame(image.base + pin.ro, &stockBytes);
   if (!stockRead || stockBytes != pin.stock) {
-    LogWordRefusal(pin, "rodata_not_stock", stockRead, stockBytes, pin.stock, valueBytes, device);
+    LogWordRefusal(pin, "rodata_not_stock", stockRead, stockBytes, pin.stock, valueBytes, profile);
     return false;
   }
   g_value[row] = valueBytes;  // published before the slot points at it
   const sentinel::GotStatus status = g_slots[row].Write(RowTarget(pin), reinterpret_cast<const void*>(image.base + pin.ro),
                                                         &g_value[row], lookup);
   if (status != sentinel::GotStatus::kOk) {
-    LogRow(sentinel::LogLevel::kError, pin, "refused", sentinel::GotStatusName(status), valueBytes, 0, device);
+    LogRow(sentinel::LogLevel::kError, pin, "refused", sentinel::GotStatusName(status), valueBytes, 0, profile);
     return false;
   }
-  LogRow(sentinel::LogLevel::kDebug, pin, "swapped", "slot_points_at_our_value", valueBytes, ObservedMiB(image.base, row), device);
+  LogRow(sentinel::LogLevel::kDebug, pin, "swapped", "slot_points_at_our_value", valueBytes, ObservedMiB(image.base, row), profile);
   return true;
 }
 
-void LogInstall(const char* result, const char* reason, const Counts& counts, std::uintptr_t base, const char* device, const char* consequence) noexcept {
+void LogInstall(const char* result, const char* reason, const Counts& counts, std::uintptr_t base, const char* profile, const char* consequence) noexcept {
   const bool ok = counts.refused == 0 && std::strcmp(result, "refused") != 0;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_heaps_install",
                       {{"result", result}, {"reason", reason}, {"swapped", counts.swapped}, {"refused", counts.refused}, {"left", counts.left},
+                       {"memsys", g_systemOn.load(std::memory_order_relaxed) ? 1 : 0},
                        {"resource_mib", base != 0 ? ObservedMiB(base, 0) : 0}, {"system_mib", base != 0 ? ObservedMiB(base, kSystemRow) : 0},
                        {"gpu_mib", base != 0 ? ObservedMiB(base, 2) : 0}, {"game_space_mib", base != 0 ? ObservedMiB(base, 3) : 0},
-                       {"device", device}, {"consequence", consequence}});
+                       {"profile", profile}, {"consequence", consequence}});
 }
 
 constexpr const char* kStockConsequence = "the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)";
 
-ModuleResult Refused(const char* token, const char* device) noexcept {
+ModuleResult Refused(const char* token, const char* profile) noexcept {
   const Counts none;
-  LogInstall("refused", token, none, 0, device, kStockConsequence);
+  LogInstall("refused", token, none, 0, profile, kStockConsequence);
   return {false, token};
 }
 
 }  // namespace
 
-// The System heap is the headset profile's (quest/headset_profile.h: 512 MiB on a Quest 2); a profile with none (0) keeps the row's own
-// target (640 MiB), as every headset no rule names does.
-std::uint64_t SystemBytesFor(const char* device) noexcept {
-  const headset_profile::Match match = headset_profile::IdentifyDevice(device != nullptr ? device : "");
-  if (match.profile->systemHeapMiB > 0) return static_cast<std::uint64_t>(match.profile->systemHeapMiB) * kMiB;
+// The System heap is the headset profile's value (quest/headset_profile.h: 512 MiB on a Quest 2); a profile with none (0) keeps the row's
+// own target (640 MiB), as every headset no rule names does.
+std::uint64_t SystemBytesFor(const headset_profile::Profile& profile) noexcept {
+  if (profile.systemHeapMiB > 0) return static_cast<std::uint64_t>(profile.systemHeapMiB) * kMiB;
   return kRows[kSystemRow].target;
 }
 
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const char* device, bool heapsOn, bool systemOn) noexcept {
-  if (device == nullptr) device = "";
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const headset_profile::Profile& headset, bool heapsOn, bool systemOn) noexcept {
+  g_systemOn.store(systemOn, std::memory_order_relaxed);
+  const char* const profile = headset.name;
   if (!heapsOn) {
     const Counts none;
-    LogInstall("off", "combat.heaps", none, 0, device, "combat.heaps is false: the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)");
+    LogInstall("off", "combat.heaps", none, 0, profile, "combat.heaps is false: the game keeps its stock heap sizes (206, 400, 160 and 40 MiB)");
     return {false, "off", true};
   }
   if (g_ran.exchange(true, std::memory_order_acq_rel)) {
@@ -152,40 +138,46 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const char* device, bool he
     return {false, "already_ran"};
   }
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded", device);
+  if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded", profile);
   char id[64] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id", device);
-  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", device);
+  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refused("no_build_id", profile);
+  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", profile);
 
   Counts counts;
   for (std::size_t row = 0; row < kRowCount; ++row) {
     if (row == kSystemRow && !systemOn) {
       ++counts.left;
-      LogRow(sentinel::LogLevel::kInfo, kRows[row], "left", "combat.memsys_is_false", kRows[row].stock, ObservedMiB(image.base, row), device);
+      LogRow(sentinel::LogLevel::kInfo, kRows[row], "left", "combat.memsys_is_false", kRows[row].stock, ObservedMiB(image.base, row), profile);
       continue;
     }
-    const std::uint64_t value = row == kSystemRow ? SystemBytesFor(device) : kRows[row].target;
-    if (SwapRow(image, lookup, row, value, device)) {
+    const std::uint64_t value = row == kSystemRow ? SystemBytesFor(headset) : kRows[row].target;
+    if (SwapRow(image, lookup, row, value, profile)) {
       ++counts.swapped;
     } else {
       ++counts.refused;
     }
   }
   const char* const result = counts.refused == 0 ? "installed" : (counts.swapped > 0 ? "partial" : "refused");
-  LogInstall(result, counts.refused == 0 ? "ok" : "row_refused", counts, image.base, device,
+  LogInstall(result, counts.refused == 0 ? "ok" : "row_refused", counts, image.base, profile,
              counts.refused == 0 ? "the game's heaps are the raised sizes when android_main reads them"
                                  : (counts.swapped > 0 ? "a refused row keeps the game's stock size; the others are raised" : kStockConsequence));
   return {counts.refused == 0, result};
 }
 
+// The headset is the identity step's (quest/headset_active.h, ADR 0031 decision 4); this file reads no system property. The step runs
+// before this one in the constructor sequence, so a missing profile is a sequence that skipped it: the generic profile, and one Warning.
 ModuleResult Install(bool heapsOn, bool systemOn) noexcept {
-  char device[96];
-  ReadDevice(device, sizeof(device));
+  const headset_profile::Profile* const headset = headset_active::Active();
+  if (headset == nullptr && heapsOn) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_heaps_profile_missing",
+                        {{"profile", headset_profile::kGeneric.name},
+                         {"system_mib", SystemBytesFor(headset_profile::kGeneric) / kMiB},
+                         {"consequence", "the identity step set no headset profile before this step, so the System heap takes the generic profile's size"}});
+  }
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
-  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, device, heapsOn, systemOn);
+  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, *headset_active::ActiveOrGeneric(), heapsOn, systemOn);
 }
 
-void SetDeviceForTest(const char* device) noexcept { g_deviceOverride.store(device, std::memory_order_release); }
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 
 void ResetForTest() noexcept {

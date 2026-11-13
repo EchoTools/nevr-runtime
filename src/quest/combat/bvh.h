@@ -4,7 +4,7 @@
  *
  * Six hooks (bvh_targets.h), each a CallbackThunk installed by the hook manager; no code page is written:
  *   Initialize  CBVHTree::Initialize(this, SBVHTreeData*)       the game's function runs, then the data is parsed and a Tree* kept in the 8-byte CBVHTree
- *   Shutdown    CBVHTree::Shutdown(this)                         the game's function runs, then the Tree* is cleared
+ *   Shutdown    CBVHTree::Shutdown(this)                         the game's function runs, then the Tree* is cleared and the CBVHTree's table entry is freed
  *   Intersect   CBVHTree::Intersect(this, CRay*, SBVHHit*)       nearest hit, for the casts the gate allows
  *   Occluded    CBVHTree::Occluded(this, C3Vector*, C3Vector*)   any hit on the segment
  *   Gate        CncaGameSpace::StaticRaycast(this, CRay*, SBVHHit*, CncaGameSpaceMT**)   the callers' gate: marks the thread while a cast the tree answers runs
@@ -14,23 +14,27 @@
  *
  * Switches (docs/adr/0046 C2): `combat.bvh` (default true, as the reference build has it: afk_bvh.cpp "ON BY DEFAULT"; the answers are scoped to combat maps and the combat lobby),
  * `combat.bvh_gate` (true: only the three listed callers' casts use the tree) and `combat.bvh_touch` (true: touch rays are answered with a miss).
- * The plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the plugin's data directory is a Warning
+ * The imported combat plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the data directory is a Warning
  * (`combat_bvh_legacy_switch`) that names the key that replaces it.
  *
- * Owner (ADR 0039). This file owns the six slots. The q15t plugin no longer installs any of them.
+ * The tree table has 64 entries, each owned by the CBVHTree that built it and freed by that CBVHTree's Shutdown (docs/quest/combat/bvh.md "Table lifetime").
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Owner (ADR 0039). This file owns the six slots.
+ *
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in. Every query hook answers
- * the game's own function while no combat map and no combat lobby is loaded, or while an Echo Arena level is (it wins): `InCombatOrLobby()` below is a
- * value the game-thread tick refreshes four times a second from combat_level.h (`Classify`, loaded levels), and it fails closed, a look older than
- * kStaleAfterSeconds is not believed, so a tick that stopped leaves every hook calling the game's function. The arena path of a query is one relaxed
- * load of a false value, a test and a tail call. The combat lobby is in scope because the plugin answered there; a lobby arena players use is not.
+ * the game's own function while no combat map and no combat lobby is loaded, or while an Echo Arena level is (it wins): `InCombatOrLobby()` below is the
+ * combat level answer (combat_scope.h `InCombatOrLobby`: a look at the loaded levels four times a second from the game-thread tick), and it fails
+ * closed, a look older than 1 s is not believed, so a tick that stopped leaves every hook calling the game's function. The arena path of a query is one
+ * relaxed load of the scope word, a test and a tail call. The combat lobby is in scope because the imported combat plugin answered there; a lobby arena players use is
+ * not. The module is a reader of the scope row: `combat.bvh` is in combat_install.cpp `ScopeNormal()`'s list, and the install refuses
+ * (`scope_not_live`) when the answer cannot change.
  * Initialize builds a tree only for a combat map or the combat lobby, loaded or still loading (`Classify(game, true, ..., inFlight)`), or when the tick has
  * not shown the module a game yet (then nothing is known about the level and it builds); any other level logs `combat_bvh_tree` `skipped` with the scope
- * it found and its level, and its CBVHTree keeps the word 0, so the game's function answers for it and the page probes of a build are not paid.
- * KNOWN-WRONG #2168: the scope here is this module's own cached answer. combat_scope.h (F19, #2186) is the shared one, and this module has not switched to it yet.
- * The tick's look scans the level tables in every level, arena included, four times a second (about 20 microseconds a second on the host).
+ * it found and its level, and its CBVHTree keeps the word 0, so the game's function answers for it and the page probes of a build are not paid. That one
+ * question is asked of combat_level.h directly, by decision: it is about the level being loaded (the init fibers included), once per level load, and the
+ * combat level answer describes the levels already loaded, as of its last look, so it would skip a combat map that is still building.
  *
  * Reads. Each plain load is backed by the game's own dereference of the same object on that path (disassembly of the stock libr15): the ray of
  * Intersect is read from the caller's CRay by CncaGame::StaticRaycast, which passes its own stack copy on (0x18f23c4, 0x18f2510); LocalStaticRaycast
@@ -52,44 +56,37 @@
  * Lines (sentinel log):
  *   switch    one {"event":"combat_config_switch","module":"bvh|bvh_gate|bvh_touch","key":"combat.bvh|..","on":0|1,"source":"default|config"} per key, generated from the
  *             registration table by the configuration step (combat_install.h); the module writes none
- *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,"msg":".."}
+ *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,
+ *             "bvh_gate":0|1,"bvh_touch":0|1,"msg":".."}
  *             Info for installed and off (`reason` `off_config`), Error for a refusal (`reason` is the cause, `hook` the one that stopped it).
+ *             `gate` and `touch` are what was installed (on an installed line); `bvh_gate` and `bvh_touch`, on every line (a refusal included), are
+ *             the `combat.bvh_gate` and `combat.bvh_touch` values the step was handed.
+ *   freed     {"event":"combat_bvh_tree_freed","tree":"0x..","data":"0x..","cause":"shutdown|reinitialize","in_use":<n>,"msg":".."}  Info: the CBVHTree's entry is free again
  *   tree      {"event":"combat_bvh_tree","result":"built|none|refused|skipped","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x..","level":"0x..","scope":"combat|arena|other|unknown"}
  *   hit       {"event":"combat_bvh_first_hit",...} and {"event":"combat_bvh_first_block",...}  once each: the first answered hit and blocked segment
- *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":".."}  every 10 s a counter moved
- *   scope     {"event":"combat_bvh_scope","from":0|1,"to":0|1,"level":"0x.."}  Info, one per change of the answer
- *   stale     {"event":"combat_bvh_scope_stale","gap_s":"..","stale_after_s":"1.00","level":"0x.."}  Warning: the tick came back after more than
- *             kStaleAfterSeconds with the scope open, so the hooks answered with the game's functions for that gap
+ *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":"..","in_use":<n>}  every 10 s a counter moved (`in_use`: table entries held by live CBVHTrees, of 64)
+ *   scope     {"event":"combat_bvh_scope","from":0|1,"to":0|1,"msg":".."}  Info, one per change of the answer as the module's tick reads it (the level is on
+ *             the scope row's `combat_scope_change` line of the same frame; a stalled tick is the scope row's `combat_scope_stale` Warning)
  *   legacy    {"event":"combat_bvh_legacy_switch","file":"..","replaced_by":".."}  Warning
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 #include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_install.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/sentinel/got_hook.h"
 
 namespace nevr_quest::combat::bvh {
 
-namespace detail {
-// Whether a combat map or the combat lobby is loaded and no Echo Arena level is, as of the last look. Written by the tick's callback, read by any thread.
-inline std::atomic<bool> g_inCombatOrLobby{false};
-}  // namespace detail
-
-// Whether the last look is recent enough to be believed (kStaleAfterSeconds). Out of line: it reads the clock.
-bool LookIsFresh() noexcept;
-
-// How old a look may be and still be believed: the tick looks four times a second, so a look older than this means the tick has stopped.
-inline constexpr double kStaleAfterSeconds = 1.0;
-
-// True while a combat map or the combat lobby is loaded and no Echo Arena level is, and the look that said so is at most kStaleAfterSeconds old. The
-// arena path (a value of false) is one relaxed load; only a true answer reads the clock.
-inline bool InCombatOrLobby() noexcept { return detail::g_inCombatOrLobby.load(std::memory_order_relaxed) && LookIsFresh(); }
+// True while a combat map or the combat lobby is loaded and no Echo Arena level is, and the look that said so is at most 1 s old: the combat level
+// answer (combat_scope.h). The arena path (no combat bit) is one relaxed load and a test; only a true answer reads the clock. The one place this module
+// and wallfire ask "is this combat?".
+inline bool InCombatOrLobby() noexcept { return scope::InCombatOrLobby(); }
 
 // The `combat:` keys the step reads.
 struct Switches {
@@ -98,8 +95,8 @@ struct Switches {
   bool touch = true;  // combat.bvh_touch
 };
 
-// The step on the loaded libr15. Fixed status tokens: "installed", "off_config", "already_ran", "module_not_loaded", "no_thread_key",
-// "tick_table_full", or the manager's status name of the hook that was refused (the tree is then not installed).
+// The step on the loaded libr15. Fixed status tokens: "installed", "off_config", "already_ran", "scope_not_live" (the combat level answer cannot
+// change, combat_scope.h `Live`), "module_not_loaded", "no_thread_key", "tick_table_full", or the manager's status name of the hook that was refused (the tree is then not installed).
 ModuleResult Install(const Switches& switches) noexcept;
 // The same on the image `lookup` finds, with `pins` (kPins in production).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Switches& switches) noexcept;
@@ -118,11 +115,13 @@ struct Counters {
   std::uint64_t gated;          // casts kept off the tree (the stock miss)
   std::uint64_t touch;          // touch rays answered with a miss
   std::uint64_t stock;          // calls that went to the game's function with a combat map or the combat lobby loaded (no tree for the object)
+  std::uint64_t treesFreed;     // table entries freed: a Shutdown (or a re-Initialize) of a CBVHTree that owned one
 };
 Counters GetCounters() noexcept;
-int TreeCount() noexcept;  // entries in use in the tree table (cap 64)
+int TreeCount() noexcept;  // entries in use in the tree table (cap 64 at once; an entry is freed when its CBVHTree is shut down)
 
-// The combat tick's callback (combat_tick.h): refreshes `InCombatOrLobby()` and writes the 10 s summary. One clock compare per frame otherwise.
+// The combat tick's callback (combat_tick.h): keeps the CR15Game for Initialize's level question, reads `InCombatOrLobby()` to see its edge (combat_scope
+// has no change callback) and writes the 10 s summary.
 void Tick(std::uintptr_t game) noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
@@ -131,13 +130,13 @@ void Tick(std::uintptr_t game) noexcept;
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 // The pins Install uses; nullptr restores kPins.
 void SetPinsForTest(const Pins* pins) noexcept;
-// The clock the tick reads, in seconds; nullptr restores CLOCK_MONOTONIC.
+// The clock the tick reads for the summary, in seconds; nullptr restores CLOCK_MONOTONIC.
 void SetClockForTest(double (*clock)() noexcept) noexcept;
 // The return address (an ELF vaddr) of the last StaticRaycast the gate saw while a combat map or the combat lobby was loaded.
 std::uintptr_t LastGateReturnForTest() noexcept;
 // The switches the last Install was given (the registration table's row reads them from the configuration).
 Switches LastSwitchesForTest() noexcept;
-// Forgets the hooks, the thunks, the trees, the flags and the counters.
+// Forgets the hooks, the thunks, the trees, the flags, the tick's last reading of the scope and the counters (not the combat level answer itself).
 void ResetForTest() noexcept;
 
 }  // namespace nevr_quest::combat::bvh

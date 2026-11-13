@@ -6,7 +6,7 @@
 //      when Init is reached and before the model reads the heaps, and it names the raised System heap. A step that runs after the model
 //      (the control) leaves every size stock and writes no witness, so the test can tell early from late;
 //   2. the step runs once: a second InstallEarly runs nothing and writes nothing;
-//   3. the step runs only where the gate allows: the q15t and combat variants, and a development build forced with combat.force; a plain
+//   3. the step runs only where the gate allows: the combat variants, and a development build forced with combat.force; a plain
 //      release, the measurement build and a release build asked to force install nothing and leave every slot as the loader wrote it;
 //   4. the shipped rows read their switch: combat.heaps false leaves the four sizes, combat.memsys false leaves the System heap and the pool.
 //
@@ -25,6 +25,8 @@
 #include "quest/combat/combat_install.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/headset_active.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -165,7 +167,7 @@ void SetUpGame() {
   memsys::SetPinsForTest(&g_pins);
   memsys::SetImageLookupForTest(&Lookup);
   heaps::SetImageLookupForTest(&Lookup);
-  heaps::SetDeviceForTest("eureka");
+  nevr_quest::headset_active::SetActive(&nevr_quest::headset_profile::kQuest3);
 }
 
 void Begin(bv::Variant variant, bool devBuild = false, bool forceAsked = false) {
@@ -186,7 +188,7 @@ void End() {
   memsys::SetPinsForTest(nullptr);
   memsys::SetImageLookupForTest(nullptr);
   heaps::SetImageLookupForTest(nullptr);
-  heaps::SetDeviceForTest(nullptr);
+  nevr_quest::headset_active::SetActive(nullptr);
   g_image.Drop();
   sentinel::SetLogSink(nullptr);
 }
@@ -213,7 +215,8 @@ void TeachSites() {
 void TheStepRunsBeforeAndroidMainReadsAnySize() {
   Begin(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
-  QCHECK(early.ran && early.modules == 2 && early.installed == 2 && early.failed == 0);
+  // heaps, memsys and the texel-buffer guard (#1650: its row is early too; it only registers requests with vk_ext_window)
+  QCHECK(early.ran && early.modules == 3 && early.installed == 3 && early.failed == 0);
   TeachSites();
   g_lines.clear();
   const Seen seen = ModelAndroidMain();
@@ -280,7 +283,7 @@ void TheStepRunsOnlyWhereTheGateAllows() {
     const combat::Outcome o = combat::InstallEarly();
     QCHECK(o.ran == c.runs);
     if (c.runs) {
-      QCHECK(!AllSlotsStock() && o.installed == 2);
+      QCHECK(!AllSlotsStock() && o.installed == 3);  // heaps, memsys and the texel-buffer guard
     } else {
       QCHECK(AllSlotsStock());  // every slot is as the loader wrote it
       QCHECK(CountOf("combat_heaps_row") == 0 && CountOf("combat_memsys_hook") == 0 && CountOf("combat_heaps_install") == 0);
@@ -297,7 +300,7 @@ void TheShippedRowsReadTheirSwitch() {
   Begin(bv::Variant::kCombat);
   combat::SetConfig(cfg);
   combat::Outcome o = combat::InstallEarly();
-  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 0 && o.off == 1);  // heaps is off (counted apart), memsys installs
+  QCHECK(o.ran && o.modules == 3 && o.installed == 2 && o.failed == 0 && o.off == 1);  // heaps is off (counted apart), memsys and the texel-buffer guard install
   for (const heaps::RowPin& row : heaps::kRows) QCHECK(g_image.Get<std::uintptr_t>(row.slot) == g_image.Base() + row.ro);
   QCHECK(*g_image.Slot(g_pins.initSlot) == memsys::InitThunk::EntryAddress());
   End();
@@ -307,7 +310,7 @@ void TheShippedRowsReadTheirSwitch() {
   Begin(bv::Variant::kCombat);
   combat::SetConfig(cfg);
   o = combat::InstallEarly();
-  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 0 && o.off == 1);  // memsys is off (counted apart), heaps installs without the System heap
+  QCHECK(o.ran && o.modules == 3 && o.installed == 2 && o.failed == 0 && o.off == 1);  // memsys is off (counted apart), heaps installs without the System heap, the texel-buffer guard installs
   QCHECK(g_image.Get<std::uintptr_t>(heaps::kRows[1].slot) == g_image.Base() + heaps::kRows[1].ro);
   QCHECK(g_image.Get<std::uintptr_t>(heaps::kRows[0].slot) != g_image.Base() + heaps::kRows[0].ro);
   QCHECK(*g_image.Slot(g_pins.initSlot) == reinterpret_cast<void*>(&FakeInit) && *g_image.Slot(g_pins.allocSlot) == reinterpret_cast<void*>(&FakeAlloc));

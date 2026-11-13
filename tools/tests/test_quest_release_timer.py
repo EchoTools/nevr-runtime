@@ -51,6 +51,7 @@ PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "p
 NDK_PROPERTIES = "Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"  # r26d
 APK_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"  # the variant word the repack stamps; the APK carries no plugin library
 HEAD = "c0ffee" + "0" * 34
+OLD_HEAD = "beef" + "0" * 36  # a checkout behind origin/main (#1945)
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
 ARENA_CLAIM = {"name": f"nevr-runtime-{TAG}-arena-quest.apk", "sha256": "cd" * 32, "size": 9}
@@ -83,6 +84,8 @@ class Fake:
         self.apk_entries = {APK_ENTRY: b"q15t"}  # what the APK the variant recipe writes holds: no plugin library
         self.signer_usage = ""  # what `put-quest-apk -h` prints on standard error: empty is a signer without `--kind` (#2298)
         self.arena_listed = True  # the live manifest lists the arena APK once the release is published
+        self.ancestor = False  # whether HEAD is an ancestor of origin/main: only then is a clean checkout fast-forwarded (#1945)
+        self.old_tag = False  # the tag predates docs/adr/0047: its justfile has no release-quest-reference-apk
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -90,6 +93,7 @@ class Fake:
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
             (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
+            (f"{repo} merge-base --is-ancestor", "checkout.ancestor"), (f"{repo} merge --ff-only", "checkout.ff"),
             ("put-quest-apk", "arena_gate"), ("release-quest-arena-apk", "arena_build"), (" --listed-variant ", "arena_publish"),
             ("curl", "manifest"),
             ("auth token", "token"), (" fetch origin main", "build_signer.fetch"),
@@ -97,7 +101,7 @@ class Fake:
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
             ("^{commit}", "worktree.rev"), ("worktree add", "worktree.add"), ("worktree-setup", "worktree.setup"),
             ("pgrep", "build_slot"), ("just configure-android", "variant_configure"), ("just configure", "configure"),
-            ("release-quest-apk", "build_apk"),
+            ("release-quest-reference-apk", "build_apk"), ("just release-quest-apk ", "build_apk"),
             ("release-quest-variant-apk", "variant_build"), (" --variant ", "variant_publish"),
             ("publish_quest_apk.py", "publish_apk"),
             ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
@@ -129,6 +133,11 @@ class Fake:
             return completed(argv, 0, self.head + "\n")
         if step == "checkout.main":
             return completed(argv, 0, self.main + "\n")
+        if step == "checkout.ancestor":
+            return completed(argv, 0 if self.ancestor else 1)
+        if step == "checkout.ff":
+            self.head = self.main
+            return completed(argv)
         if step == "tags.local":
             return completed(argv, 0, "".join(f"{n}\t{o}\t{c or ''}\n" for n, (o, c) in self.local_tags.items()))
         if step == "tags.remote":
@@ -150,6 +159,9 @@ class Fake:
             return completed(argv, 0, "3b775972" + "0" * 32 + "\n")
         if step == "worktree.add":
             pathlib.Path(argv[-2]).mkdir(parents=True, exist_ok=True)
+            # The tag's justfile: the reference recipe by its name (docs/adr/0047), or, at an older tag, release-quest-apk.
+            recipe = "release-quest-apk tag reference_apk" if self.old_tag else "release-quest-reference-apk tag reference_apk"
+            (pathlib.Path(argv[-2]) / "justfile").write_text(f'{recipe}=env("NEVR_QUEST_REFERENCE_APK"): (_x)\n')
         if step == "build_slot":
             lines = self.ninja.pop(0) if len(self.ninja) > 1 else self.ninja[0]
             return completed(argv, 0 if lines else 1, "1234\n" * lines)
@@ -255,6 +267,20 @@ class RunsInOrder(TimerCase):
         self.assertEqual(self.events()[-1]["tag"], TAG)
         build = next(c for c in fake.calls if c["step"] == "build_apk")
         self.assertEqual(build["argv"][-1], TAG)
+
+    def test_the_listed_apk_is_built_by_the_reference_recipe_and_an_older_tag_by_its_own_name(self) -> None:
+        """docs/adr/0047: `release-quest-apk` builds arena now, so the timer builds the APK the manifest lists as quest-apk with
+        `release-quest-reference-apk`; a tag from before that change has no such recipe, and its `release-quest-apk` is that build.
+        The tag's own justfile decides, and a `reference_recipe` record says which."""
+        for old, want in ((False, "release-quest-reference-apk"), (True, "release-quest-apk")):
+            with self.subTest(old_tag=old):
+                self.log.unlink(missing_ok=True)
+                fake = Fake(self.root)
+                fake.old_tag = old
+                self.assertEqual(self.run_timer(fake), 0)
+                build = next(c for c in fake.calls if c["step"] == "build_apk")
+                self.assertEqual(build["argv"][-2:], [want, TAG])
+                self.assertEqual([e["recipe"] for e in self.events() if e["event"] == "reference_recipe"], [want])
 
     def test_the_build_runs_in_the_slice_and_waits_for_a_free_slot(self) -> None:
         fake = Fake(self.root, ninja=[2, 2, 1])
@@ -653,6 +679,36 @@ class CheckoutGuard(TimerCase):
         self.assertEqual(fake.steps()[:4], ["checkout.fetch", "checkout.status", "checkout.head", "checkout.main"])
         checkout = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "checkout")
         self.assertEqual(checkout["head"], HEAD)
+
+    def test_a_clean_checkout_behind_origin_main_is_fast_forwarded_and_the_run_continues(self) -> None:
+        fake = Fake(self.root)
+        fake.head, fake.ancestor = OLD_HEAD, True
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(fake.steps()[:6], ["checkout.fetch", "checkout.status", "checkout.head", "checkout.main",
+                                            "checkout.ancestor", "checkout.ff"])
+        advanced = next(e for e in self.events() if e["event"] == "checkout_fast_forward")
+        self.assertEqual((advanced["from_sha"], advanced["to_sha"]), (OLD_HEAD, HEAD))
+        checkout = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "checkout")
+        self.assertEqual(checkout["head"], HEAD)
+
+    def test_a_dirty_checkout_behind_origin_main_is_refused_and_not_advanced(self) -> None:
+        fake = Fake(self.root)
+        fake.head, fake.ancestor, fake.dirty = OLD_HEAD, True, " M tools/quest_release_timer.py\n"
+        self.assertEqual(self.run_timer(fake), 1)
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("not clean", refused[0]["error"])
+        self.assertNotIn("checkout.ff", fake.steps())
+
+    def test_a_checkout_that_has_diverged_from_origin_main_is_refused_and_not_merged(self) -> None:
+        fake = Fake(self.root)
+        fake.head = OLD_HEAD  # ancestor stays False: HEAD is not behind origin/main
+        self.assertEqual(self.run_timer(fake), 1)
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("origin/main", refused[0]["error"])
+        self.assertNotIn("checkout.ff", fake.steps())
+        self.assertNotIn("token", fake.steps())
 
 
 class GameDataSurvives(TimerCase):

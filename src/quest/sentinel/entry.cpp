@@ -22,10 +22,12 @@
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
 #include "core/crash_report.h"
+#include "quest/cargo/cargo_service.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
+#include "quest/combat/new_unlocks_clear.h"
 #include "build_variant.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
@@ -168,6 +170,13 @@ bool InstallPermissionWaitHook() noexcept {
     options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
+    // `assets.whole_game` (quest_config.h): the CDN holds every asset of the game, so the data step writes the stub manifests and
+    // fetches no data zip, in any build. The configuration is resolved before this step runs (ctor_sequence.cpp).
+    // The download and the mount that must finish before the step returns (`all_assets_ready`, docs/adr/0045 decision 11): the first-run
+    // prefetch of every manifest object into the cargo store, then the mount of the shadow the engine's first archive load reads. It is set
+    // beside the mode and from the same configuration, so a launch with the mode on never reaches the step without it.
+    options.all_assets = sentinel::ActiveConfig().assets.wholeGame;
+    options.all_assets_ready = nevr_quest::cargo::MakeProductionFirstRunWorker(sentinel::ActiveConfig().assets);
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
@@ -182,19 +191,26 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
                                      handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
-    // Combat name tags on by default (#2090): CR15Game's two constructor slots, installed on every launch before the game builds its
-    // game object (the sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the
-    // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
-    // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
-    nevr_quest::combat::match_tags::Install();
-    // The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
-    // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
-    // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are.
-    nevr_quest::combat::equip_refire::Install();
+    // A clear of the new unlocks made while a profile update is unacknowledged is sent after the acknowledgement (#2410): the two words that
+    // hold CR15NetGame::RemoveAllNewlyUnlockedItems, a word that holds anything but the clear refused on its own, and a frame work on the game
+    // thread. Its combat_new_unlocks_clear_install line says which words went in; a refused install leaves the game's calls as they are.
+    nevr_quest::combat::new_unlocks_clear::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
 }
+
+// Combat name tags on by default (#2090): CR15Game's two constructor slots, installed before the game builds its game object (the
+// sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the stock default gets
+// bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its combat_match_tags_install line says whether
+// it went in; a refused install leaves the game's constructor as it is. The sequence asks only where combat runs (docs/adr/0047).
+bool InstallMatchTagsHook() noexcept { return nevr_quest::combat::match_tags::Install(); }
+
+// The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
+// setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
+// combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are. The sequence
+// asks only where combat runs (docs/adr/0047).
+bool InstallEquipRefireHook() noexcept { return nevr_quest::combat::equip_refire::Install(); }
 
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.

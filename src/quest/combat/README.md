@@ -2,8 +2,9 @@
 
 Combat behaviour that is part of the Quest runtime (docs/adr/0046-combat-is-part-of-the-quest-runtime.md). The code is compiled into every
 sentinel, built into `nevr_quest_combat` without exceptions and with hidden visibility, and hooked through the sentinel's hook manager
-(`nevr_quest_got_hook`). It runs in the `q15t` and `combat` APKs only (`combat_active.h`), except the two files that say on their header
-that they ship to every APK (`match_tags`, `equip_refire`).
+(`nevr_quest_got_hook`). It runs in the combat APKs only (`combat_active.h`); `match_tags` and `equip_refire` included, which install
+from constructor steps of their own that the sequence runs only where combat runs (docs/adr/0047). The one module here that is not
+combat behaviour, `new_unlocks_clear` (the Quest half of a profile fix, #2410), runs in every APK and says so on its header.
 
 ## Layout
 
@@ -17,7 +18,6 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | `mutants.sh`, `mutants.d/<module>.sh` | The module's mutation run: `src/quest/combat/mutants.sh <module>` applies each `runm <name> <file> <sed>` line of the module's list to the checkout, builds `<module>_test` and runs it; a mutant is killed when the test fails, a mutant that does not compile is not a kill, and the file is put back after each. Not part of `just test-quest-combat`. |
 | `table_step.{h,cpp}` | What the four resource table-step modules (`meshstep`, `instmodel`, `shaderstep`, `tablestep`) share: the scope they act in (`CurrentScope`: a combat map is loaded and no Echo Arena level is), the code-word pin check, the libr15 identity check, the correction of a shader-set step and the warning for a plugin kill file. |
 | `check/<module>.sh` | The module's arm64 checks (the NDK, and qemu where a thunk is run). `just test-quest-combat` runs them after the host tests. |
-| `mutants.sh`, `mutants.d/<module>.sh` | The module's mutation run: `src/quest/combat/mutants.sh <module>` applies each `runm <name> <file> <sed>` line of the module's list to the checkout, builds `<module>_test` and runs it; a mutant is killed when the test fails, a mutant that does not compile is not a kill, and the file is put back after each. Not part of `just test-quest-combat`. |
 
 ## When a module installs
 
@@ -32,8 +32,8 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
 
 ## The module rules
 
-1. A module registers one function per phase it has a step in, as one row of the table in `combat_install.cpp`, at the position the q15t
-   plugin installed it. The order is explicit; decals stays after impactsnd.
+1. A module registers one function per phase it has a step in, as one row of the table in `combat_install.cpp`, at the position the combat
+   plugin imported in #1591 installed it. The order is explicit; decals stays after impactsnd.
 2. Every hook goes through the hook manager (`InstallThunk` and its siblings). A module writes no code pointer and no data pointer of a
    game library any other way (ADR 0046 C1).
 3. A module's switch is a key under `combat:` in `config.yaml`, read by `quest_config` and reported by its own `combat_config_switch` record, generated from the module's row in the registration table (`Module::switchKey`, `Module::switchMember`; the modules that predate the record are on the `combat_config` line, or a `combat_config_<module>` line beside it when their keys do not fit its 768-byte buffer). No file under
@@ -54,7 +54,18 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    level, calls the game's function with the same arguments and does nothing else: no read of the game's data, no write, no counter, no line. The handler is
    that test and a tail call to the game's function or to a `[[gnu::noinline]]` body for the combat case, so it has no frame (check the arm64 object with
    `llvm-objdump -d`); the body starts with `scope::LookIsFresh()`, because a true answer older than `kStaleAfterMs` is not believed (the tick stopped).
+   A module that keeps its own copy of the answer, asked from its tick (`powerboost`, `dronekill`), tests that copy in the handler in place of
+   `SeenCombatOrLobby()` / `SeenCombatMap()`, and every body it hands a combat call to still starts with `scope::LookIsFresh()`: the copy is only as
+   fresh as the tick's last ask, and nothing re-judges it while the tick is stopped.
+   The EC client (`ec.cpp`) keeps its own copy too and is exempt from the call-time test: its scope thread judges the copy every `kScopeEveryMs`
+   (250 ms), in scope or out, from one record of the answer (`scope::LastLook()`, then `scope::InCombatOrLobby(look)`), and a look older than
+   `kStaleAfterMs` takes the client out of scope on that judgement. The thread does this whether or not the tick runs, so a stale answer leaves the
+   client at most 250 ms after it went stale, plus one pass of the thread's loop; its handlers test only the copy (`InCombatScope()`) in between.
    The refresh is registered by the `scope` row of the install table, after the `tick` row, and only while a reader is on (`ScopeNormal()` in `combat_install.cpp` lists the readers' switches: a module that reads the scope adds its switch there); a module does not register it, it asks `scope::Live()` from its
    install function, before it hooks anything, and refuses (`scope_not_live`) when the answer cannot change. The module's host test pins the arena path with data
    pointers nobody could read and by count (`SetReadCounterForTest`, `level::ScanCalls()`: zero reads and zero scans), and prints its cost. Arena and combat run on the same APK, so `combat::Active()` does not do this.
    The one exception is a crash-only guard: it stops a fault in code arena shares (a null dereference, a write through a null page, a double destroy), so a level answer that lags a level change would leave the crash in place. It may act in every level when its header says so and why, and it passes every path that does not crash through unchanged: the game's function is called with the same arguments and answers what it would have. `voipdrop`, `droneguard` and `custctx`'s destroy and Grow guards are such guards, and `custctx`'s destroy guard has one exception to the pass-through: the destroy of a context its table does not track (one whose load found the table full, or one made before the install, which custctx.md says is not expected) is dropped, not passed, so the game's destroy does not run for it and that context leaks (counted, `combat_custctx_dropped`); a guard that changes a value the game computes or writes the game's memory (`fxtrail`, `peerclamp`, `custctx`'s pool refusal) is not, and follows the rule above.
+   The second exception is a default for a value the API leaves undefined until it is written: a guard that writes a default into something the game has just created, where the API gives a read of the value before any write no defined result, and the game's own write replaces the default. It may act in every level when its header names that API rule and says why. The game may well read the value before it writes it (that is the fault such a guard exists for), so the exception does not rest on the write coming first. Its only effect is that a read of a value the game never wrote (or has not yet written) gets the default instead of whatever the driver left there, possibly a stale value from recycled memory; a read of a value the game wrote sees what the game wrote. In arena that is a behaviour change for such a read, from undefined to the default, which the API's rule makes acceptable. `texel_buffer_guard` is such a guard: Vulkan leaves a descriptor of a newly allocated set undefined until vkUpdateDescriptorSets writes it, and the guard writes a zeroed view into each new set's uniform texel bindings, which the game's own descriptor writes replace; a read of a binding before the game's write (the fault the guard exists for) or of one the game never writes now gets zeros.
+   The third exception is a module that is not combat behaviour: `new_unlocks_clear` (the clear of the new unlocks in the customization menu, #2410)
+   ships to every APK and acts in every level because it fixes a profile call; its slot is called once per click, its original runs first with the
+   same arguments, and its header says so.

@@ -1,6 +1,6 @@
 // CncaGameSpace::StaticRaycastOccluded
 // Quest libr15.so VA 0x19066f4 (RVA 0x18066f4); ReVault binary 576.
-// ReVault raw parent 100256014, reconstruction node 100600242; grade M: ARM64 body is a vtable tail-call and the bool result follows the q15t hook signature.
+// ReVault raw parent 100256014, reconstruction node 100600242; grade M: ARM64 body is a vtable tail-call and the bool result follows the signature wallfire's hook calls it with (src/quest/combat/wallfire.cpp).
 // @0x19066f4 — NRadEngine::CncaGameSpace::StaticRaycastOccluded
 /* @confidence: M */
 

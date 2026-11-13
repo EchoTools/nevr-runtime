@@ -6,7 +6,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 void* CncaGameSpace::GameSpace(std::uint64_t symbol) const {
     const auto* const self = reinterpret_cast<const std::uint8_t*>(this);
@@ -14,4 +14,4 @@ void* CncaGameSpace::GameSpace(std::uint64_t symbol) const {
     return game->GameSpace(symbol);
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

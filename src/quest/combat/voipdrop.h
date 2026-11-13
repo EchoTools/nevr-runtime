@@ -1,5 +1,4 @@
-/* A remote voice packet is dropped when the receiver's voice table needs a page and the page cannot be allocated (#2178; the q15t plugin's voipdrop,
- * moved here).
+/* A remote voice packet is dropped when the receiver's voice table needs a page and the page cannot be allocated (#2178).
  *
  * What the game does. CHashTable<uint,ull>::AllocPage asks the table's allocator for one page (table+0x64 bytes) and never checks the answer; a NULL page
  * is then written from its end backwards (SIGSEGV in CR15NetVoipReceiverCS::ReceiveVoip -> FindOrCreate -> AllocPage, tester dump c63511b8). The table
@@ -20,20 +19,18 @@
  * free on the allocator: `probed` against `packets` in `combat_voipdrop_stats` shows whether that is a steady state. The host cost of the common path is in docs/quest/combat/voipdrop.md; not measured on a
  * headset, and the packet rate is not known: `combat_voipdrop_stats` counts it.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.voipdrop` in config.yaml
- * (default true). The plugin's `voipdrop.off` file is no longer read; one found in the files folder's q15t directory is a Warning naming the key.
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switch is `combat.voipdrop` in config.yaml
+ * (default true). The `voipdrop.off` file is no longer read; one found in the data directory (legacy_switch.h) is a Warning naming the key.
  *
  * Install. The patched build ID, the code words (voipdrop_targets.h), the four engine exports (dlsym on the loaded libr15), then the JUMP_SLOT, which must hold
- * ReceiveVoip itself. A refused install leaves the game's calls as they are. It registers in combat::InstallNormal()'s table at the position the plugin
- * installed it (after fxtrail, before custctx).
+ * ReceiveVoip itself. A refused install leaves the game's calls as they are. It registers in combat::InstallNormal()'s table after fxtrail, before custctx.
  *
  * Frequency (ADR 0038). ReceiveVoip runs once per remote voice packet; the rate per frame is not known and is what `combat_voipdrop_stats` reports.
  *
  * Owner (ADR 0039). This file owns whether a voice packet whose table page cannot be allocated reaches ReceiveVoip.
  *
- * Origin. The q15t plugin's `voipdrop.cpp`, written here (imported in #1591) on the reference build's `afk_voipdrop.cpp` (Ducky's echoquest-combat;
- * docs/audits/2026-11-05-q15t-origin-citations.md rows 133-136 and 279-280: afk_voipdrop.cpp:1,42-43,51,55-64,82-94,96-112,114-130). The plugin's
- * probe-with-doubt rule and word pins are additions to the source's.
+ * Origin. Written here on the reference build's `afk_voipdrop.cpp` (Ducky's echoquest-combat;
+ * docs/audits/2026-11-05-q15t-origin-citations.md rows 133-136 and 279-280: afk_voipdrop.cpp:1,42-43,51,55-64,82-94,96-112,114-130). The probe-with-doubt rule and word pins are additions to the source's.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_voipdrop_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,"consequence":".."}
@@ -90,7 +87,7 @@ Fns ResolveFns() noexcept;
 // Installs on the libr15 `lookup` finds. `on` is combat.voipdrop; Logs one combat_voipdrop_install line. A module that is off by its switch answers `off` (status "off_config").
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns& fns, bool on) noexcept;
 
-// The table's row: InstallAt on the loaded libr15 with the production pins, the dlsym'd exports and the plugin's data directory.
+// The table's row: InstallAt on the loaded libr15 with the production pins, the dlsym'd exports and the data directory.
 ModuleResult Install(bool on) noexcept;
 
 struct Stats {

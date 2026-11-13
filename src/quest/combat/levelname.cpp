@@ -100,7 +100,7 @@ constexpr SlotOps kOps[kHookCount] = {{&ArmSlot<0>, &DisarmSlot<0>, &PutSlot<0>,
                                       {&ArmSlot<2>, &DisarmSlot<2>, &PutSlot<2>, &ResetSlot<2>},
                                       {&ArmSlot<3>, &DisarmSlot<3>, &PutSlot<3>, &ResetSlot<3>}};
 
-// The plugin's kill file `levelname.off` is not read: a file there turns nothing off (docs/adr/0046 rule 4). One found is a Warning that names the
+// The kill file `levelname.off` is not read: a file there turns nothing off (docs/adr/0046 rule 4). One found is a Warning that names the
 // `combat:` key that replaces it, so an operator who relied on it learns why the full level is loading.
 void WarnLegacyKillFile() noexcept {
   if (!legacy::Present("levelname.off")) return;

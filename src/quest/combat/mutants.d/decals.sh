@@ -84,6 +84,21 @@ runm dm_no_lookup_ok         $C 's/if (lookup == nullptr || !lookup(sentinel::pi
 runm dm_update_hook_not_armed $C 's/^  UpdateThunk::Arm(kUpdateRecord);$//'
 runm dm_shutdown_hook_not_armed $C 's/^  ShutdownThunk::Arm(kShutdownRecord);$//'
 runm dm_install_status       $C 's/return {false, sentinel::GotStatusName(updateStatus)};/return {true, "installed"};/'
+# each combat_decals_install line names the two flips the step was handed (#2382): on each line in turn, decals_flip_v named from the u switch
+runm dm_refused_flips_crossed    $C '/{{"result", level == LogLevel::kInfo ? "off" : "refused"}, {"status", reason}, {"reason", reason},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_off_flips_crossed        $C '/{{"result", "off"}, {"status", "off_config"}, {"reason", "off_config"}, {"switch", "combat.decals"},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_unreadable_flips_crossed $C '/{"reason", "table_unreadable"}, {"why", problem},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_no_table_flips_crossed   $C '/{{"result", "off"}, {"status", "no_table"}, {"reason", "no_table"}, {"why", why},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_bad_table_flips_crossed  $C '/{"reason", reason}, {"bytes", len},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_no_export_flips_crossed  $C '/{{"result", "refused"}, {"status", "engine_export_missing"}, {"reason", "engine_export_missing"},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+runm dm_installed_flips_crossed  $C '/{{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},$/{n;s/switches.flipV ? 1 : 0}/switches.flipU ? 1 : 0}/}'
+# the same line with both flips fixed (u on, v off), and the off line with both fixed: each is killed only by a pair that differs from the fixed one (#2382)
+runm dm_installed_flips_fixed    $C '/{{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},$/{n;s/{"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},/{"decals_flip_u", 1}, {"decals_flip_v", 0},/}'
+runm dm_off_flips_fixed          $C '/{{"result", "off"}, {"status", "off_config"}, {"reason", "off_config"}, {"switch", "combat.decals"},$/{n;s/{"decals_flip_u", switches.flipU ? 1 : 0}, {"decals_flip_v", switches.flipV ? 1 : 0},/{"decals_flip_u", 1}, {"decals_flip_v", 0},/}'
+# and each refusal that goes through Refused hands it the switches it was handed, not a default set
+runm dm_already_installed_flips_unset $C 's/return Refused(switches, "already_installed",/return Refused(Switches{}, "already_installed",/'
+runm dm_incomplete_engine_flips_unset $C 's/return Refused(switches, "engine_export_missing",/return Refused(Switches{}, "engine_export_missing",/'
+runm dm_no_libr15_flips_unset         $C 's/return Refused(switches, "module_not_loaded",/return Refused(Switches{}, "module_not_loaded",/'
 runm dm_update_original_late $C 's/^  original(sys);$/  if (g_on.load(std::memory_order_acquire)) { pthread_mutex_lock(\&g_mu); g_host.Tick(sys, NowMs()); pthread_mutex_unlock(\&g_mu); }\n  original(sys);/'
 # an arena match pays nothing, by count: a read before the scope test of the update handler is killed by the counters
 runm dm_arena_read_in_update  $C 's/^  original(sys);$/  original(sys); { std::uintptr_t probe = 0; SafeRead(sys, \&probe, sizeof probe); }/'

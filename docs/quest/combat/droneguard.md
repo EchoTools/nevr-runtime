@@ -2,12 +2,11 @@
 
 Files: `src/quest/combat/droneguard.{h,cpp}`, `src/quest/combat/droneguard_targets.h` (the pins), `src/quest/tests/droneguard_test.cpp`,
 `src/quest/combat/mutants.d/droneguard.sh`. The module is a normal-phase row of the combat install table (`src/quest/combat/combat_install.h`): it runs in the
-`q15t` and `combat` APKs and in no other. Switches in `config.yaml` (docs/adr/0046 rule 4): `combat.droneguard` (default true) and `combat.droneguard_stage1`
+combat APKs and in no other. Switches in `config.yaml` (docs/adr/0046 rule 4): `combat.droneguard` (default true) and `combat.droneguard_stage1`
 (default false; read only when the first is on). The plugin had no switch file; its build option for the second stage is gone.
 
 Origin: Ducky's echoquest-combat reference build, afk_droneguard.cpp (the rule at :1, the constants at :42-48, :66-80, `IdxSkip` :86-99, `StateLine` :108-124,
-`FollowHook` :126-146; docs/audits/2026-11-05-q15t-origin-citations.md rows 34-36 and 149-150), reconstructed in the q15t plugin (imported in #1591) and moved
-here. The reference build marks the module "TEST ONLY"; its wave19a on-list turns it on, and so does the default here. The word pins are the plugin's addition to
+`FollowHook` :126-146; docs/audits/2026-11-05-q15t-origin-citations.md rows 34-36 and 149-150), reconstructed in the combat plugin imported in #1591. The reference build marks the module "TEST ONLY"; its wave19a on-list turns it on, and so does the default here. The word pins are the plugin's addition to
 the source's.
 
 ## Row covered
@@ -33,7 +32,7 @@ The crash (reference build :1-14): the drone's actor carries a follow component 
 loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTransform` unchecked.
 
 - **Stage 0 (the null half).** The handler (a `CallbackThunk` on the slot, installed by the hook manager) reads the four fields it needs (`[cs+0x140]`, `+0x188`, `+0x190`, `+0x16c`) with plain loads: `Follow` loads `[cs+0xc8]` as its first data access (0x2149784,
-  disassembly), so the game dereferences the same object on every call and the loads are as safe as the stock call. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a component's run (a run belongs to the component: a run holds one of 16 slots from its first skip until its target arrives, or until a call with a target, or a later run that needs a slot, finds it older than 30 s; the game gives no signal that a component died, so such a run is dropped and counted as stale. That 30 s is longer than a drone waits for its orbit target at a level load is an inference, not a measurement; `runs_stale` against `runs` in the stats line on a headset confirms it (`runs_stale` near 0 means no live run reached the window). A table with all 16 slots held by fresh runs writes one Warning `combat_droneguard_run_table_full` and counts each refused run; a drone with no target
+  disassembly), so the game dereferences the same object on every call and the loads are as safe as the stock call. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a component's run (a run belongs to the component: a run holds one of 16 slots from its first skip until its target arrives, or until a call with a target, or a later run that needs a slot, finds it older than 30 s; the game gives no signal that a component died, so such a run is dropped and counted as stale. A wait longer than 30 s is one run or two, and the count depends on other components' scans (`droneguard.cpp:87-125`): a target that arrives while the slot is held gives `runs=1 runs_stale=1`, and a scan that releases the slot first can make it `runs=2`. That 30 s is longer than a drone waits for its orbit target at a level load is an inference, not a measurement; `runs_stale` against `runs` in the stats line on a headset confirms it (`runs_stale` near 0 means no live run reached the window). A table with all 16 slots held by fresh runs writes one Warning `combat_droneguard_run_table_full` and counts each refused run; a drone with no target
   beside a drone with one is one run and one line, not a line a frame; at most 8 such lines in a process, then a total every 600th skip, at most 8). Target set: if that component was in a run of skips, younger than 30 s, one `combat_droneguard_target_set` (at most 8 in a process; an older run is stale and writes none), then the game's function with the same two arguments. A call with a target asks the run table only while a run is open (an open-run count of 0 is one relaxed load and no scan; `droneguard_test` counts the scans). The count is above 0 while a component is skipped and for at most 30 s after a run whose component died, because the scan releases every stale slot it passes, so the arena's common path pays nothing for it. Every call also feeds the
   read-only `combat_droneguard_state` line: the first call and each change of (raw index word, flag byte at +0x16c, target null, handle system null), at most 16 lines. A
   null `cs` goes to the game's function (an unreadable non-null one faults in `Follow` itself, with or without the guard).
@@ -68,7 +67,8 @@ fingerprint.
 ## Lines (sentinel log)
 
 - `combat_droneguard_install`: `result` `installed|refused|off`, `reason` (`ok`, `off_config`, `module_not_loaded`, `no_build_id`, `build_id_mismatch`, `pinned_word_mismatch`, `slot_refused`), `hook`, `stage1`
-  (`off|on|null_half_only`), `consequence`. Info for installed and off, Error for refused. The table's status for an installed guard whose stage 1 was asked and is not available is `installed_null_half`.
+  (`off|on|null_half_only`), `droneguard_stage1` (the `combat.droneguard_stage1` value the step was handed, 0 or 1, on every line, a refusal and the off line
+  included), `consequence`. Info for installed and off, Error for refused. The table's status for an installed guard whose stage 1 was asked and is not available is `installed_null_half`.
 - `combat_droneguard_stage1`: `result` `on|null_half_only`, `reason`; Info for on, Error otherwise.
 - `combat_droneguard_state`, `combat_droneguard_skip`, `combat_droneguard_skips`, `combat_droneguard_target_set`, `combat_droneguard_idx_skip`, `combat_droneguard_idx_skips`, `combat_droneguard_idx_resolved`: Info, capped as above.
 - `combat_droneguard_run_table_full`: Warning, once per process, naming the table (`skip` or `idx_skip`) and `slots`; every refused run is counted in `run_table_full` of the stats line.

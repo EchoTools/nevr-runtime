@@ -50,6 +50,21 @@ class FakeEnv : public nevr_cargo::Env {
   int mutating_ops = 0;                    // counts temp writes, commits and atomic writes
   int stop_after = -1;                     // -1: never; otherwise the ops after this many fail
   std::uint64_t clock = 1000;
+  nevr_cargo::DeviceFacts device = DefaultDevice();  // what QueryDevice reports
+  int device_queries = 0;
+  std::size_t disk_bytes_left = std::string::npos;  // appends past this many bytes fail (a full disk)
+  std::uint64_t blob_bytes_read = 0;                 // bytes read through ReadBlob: a boot that hashes shows here
+  static nevr_cargo::DeviceFacts DefaultDevice() {
+    nevr_cargo::DeviceFacts d;
+    d.have_free = true;
+    d.free_bytes = std::uint64_t{8} << 30;
+    d.have_fds = true;
+    d.fd_soft_limit = 1024;
+    d.fds_open = 64;
+    d.have_memory = true;
+    d.memory_available = std::uint64_t{3} << 30;
+    return d;
+  }
   std::size_t open_blobs() const { return open_.size(); }
   std::vector<std::uint64_t> body_bytes_delivered;  // per GET
 
@@ -63,37 +78,42 @@ class FakeEnv : public nevr_cargo::Env {
   }
   bool MakeDirs(const std::string&) override { return true; }
 
-  class Temp : public nevr_cargo::TempFile {
+  class FakeAppend : public nevr_cargo::AppendFile {
    public:
-    Temp(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) { env_->fs_->files[path_] = std::string(); }
-    ~Temp() override {
-      if (!done_ && !env_->Dead()) env_->fs_->files.erase(path_);
+    FakeAppend(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) { env_->fs_->files[path_];  // created when absent
     }
-    bool Write(const void* data, std::size_t length) override {
+    std::uint64_t Size() const override { return env_->fs_->files[path_].size(); }
+    bool Append(const void* data, std::size_t length) override {
       if (!env_->Tick()) return false;
+      if (env_->disk_bytes_left != std::string::npos) {
+        if (length > env_->disk_bytes_left) return false;  // the disk is full
+        env_->disk_bytes_left -= length;
+      }
       env_->fs_->files[path_].append(static_cast<const char*>(data), length);
       return true;
     }
-    bool Commit(const std::string& final_path) override {
+    bool Truncate(std::uint64_t size) override {
       if (!env_->Tick()) return false;
-      env_->fs_->files[final_path] = env_->fs_->files[path_];
-      env_->fs_->files.erase(path_);
-      done_ = true;
+      std::string& f = env_->fs_->files[path_];
+      if (size > f.size()) return false;
+      f.resize(static_cast<std::size_t>(size));
       return true;
     }
-    void Abort() override {
-      if (!env_->Dead()) env_->fs_->files.erase(path_);
-      done_ = true;
-    }
+    bool Sync() override { return env_->Tick(); }
 
    private:
     FakeEnv* env_;
     std::string path_;
-    bool done_ = false;
   };
 
-  std::unique_ptr<nevr_cargo::TempFile> CreateTemp(const std::string& dir) override {
-    return std::unique_ptr<nevr_cargo::TempFile>(new Temp(this, dir + "/.tmp" + std::to_string(fs_->next_temp++)));
+  std::unique_ptr<nevr_cargo::AppendFile> OpenAppend(const std::string& path) override {
+    if (Dead()) return nullptr;
+    return std::unique_ptr<nevr_cargo::AppendFile>(new FakeAppend(this, path));
+  }
+  bool QueryDevice(const std::string&, nevr_cargo::DeviceFacts* out) override {
+    ++device_queries;
+    *out = device;
+    return true;
   }
   bool WriteFileAtomically(const std::string& path, const std::string& data) override {
     if (!Tick()) return false;
@@ -116,6 +136,7 @@ class FakeEnv : public nevr_cargo::Env {
     if (it == fs_->files.end() || offset > it->second.size()) return false;
     const std::size_t n = std::min<std::size_t>(length, it->second.size() - static_cast<std::size_t>(offset));
     std::memcpy(buffer, it->second.data() + offset, n);
+    blob_bytes_read += n;
     *got = n;
     return true;
   }
@@ -161,7 +182,7 @@ class FakeEnv : public nevr_cargo::Env {
   std::uint64_t NowMs() override { return clock += 3; }
 
   void Event(nevr_cargo::EventLevel level, const char* name, const std::vector<nevr_cargo::Field>& fields) override {
-    std::string line = std::string("{\"level\":\"") + (level == nevr_cargo::EventLevel::kInfo ? "info" : level == nevr_cargo::EventLevel::kWarn ? "warn" : "error") +
+    std::string line = std::string("{\"level\":\"") + (level == nevr_cargo::EventLevel::kDebug ? "debug" : level == nevr_cargo::EventLevel::kInfo ? "info" : level == nevr_cargo::EventLevel::kWarn ? "warn" : "error") +
                        "\",\"event\":\"" + name + "\"";
     for (const nevr_cargo::Field& f : fields) {
       line += ",\"" + f.key + "\":";
@@ -206,6 +227,30 @@ class FakeEnv : public nevr_cargo::Env {
   std::int64_t next_handle_ = 100;
   std::map<std::int64_t, std::string> open_;
 };
+
+// A stored frame that satisfies the validator: the zstd magic, a single-segment header that states `bytes` as its content size, then
+// filler up to `size` bytes (the host tests never decompress). `size` must be at least the header's length.
+inline std::string MakeFrame(std::uint64_t bytes, std::size_t size, char fill = 'z') {
+  std::string f;
+  f.push_back(static_cast<char>(0x28));
+  f.push_back(static_cast<char>(0xB5));
+  f.push_back(static_cast<char>(0x2F));
+  f.push_back(static_cast<char>(0xFD));
+  if (bytes <= 255) {
+    f.push_back(static_cast<char>(0x20));  // single segment, content size in 1 byte
+    f.push_back(static_cast<char>(bytes));
+  } else if (bytes <= 65791) {
+    f.push_back(static_cast<char>(0x60));  // single segment, 2 bytes (value - 256)
+    const std::uint64_t v = bytes - 256;
+    f.push_back(static_cast<char>(v & 0xff));
+    f.push_back(static_cast<char>(v >> 8));
+  } else {
+    f.push_back(static_cast<char>(0xA0));  // single segment, 4 bytes
+    for (int i = 0; i < 4; ++i) f.push_back(static_cast<char>((bytes >> (8 * i)) & 0xff));
+  }
+  if (f.size() < size) f.append(size - f.size(), fill);
+  return f;
+}
 
 inline std::string Sha256Of(const std::string& bytes) { return nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()); }
 

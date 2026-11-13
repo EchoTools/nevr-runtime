@@ -962,6 +962,63 @@ void AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing() {
   QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
 }
 
+// ---- the whole-game mode (`assets.whole_game`): the stub manifests, no fetch, no end for missing data ----
+
+std::string StubPath(const nevr_quest::data_wiring::Options& options, const char* set) {
+  return options.fetch_root_override + "/_data/5932408047/rad15/android/manifests/" + set;
+}
+
+void AWholeGameLaunchInADevBuildWritesTheStubsAndNeitherFetchesNorEnds() {
+  Rig rig;
+  rig.options.all_assets = true;  // allow_fetch is true here: the mode is what keeps the zip from being fetched
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0);
+  QCHECK(g_ends == 0 && g_requests == 1 && g_shown.empty());  // the game's own call ran: the engine goes on to read the stubs
+  QCHECK(Exists(StubPath(rig.options, "48037dc70b0ecab2")) && Exists(StubPath(rig.options, "2b47aab238f60515")));
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"stubbed\""));
+  QCHECK(Has(LineOf("data_all_assets"), "\"reason\":\"assets_whole_game\""));
+  QCHECK(Has(LineOf("data_all_assets_ready"), "\"reason\":\"no_worker\"") && Has(LineOf("data_all_assets_ready"), "\"level\":\"warn\""));  // no worker wired: degraded, said at Warning
+}
+
+void AWholeGameLaunchInAReleaseBuildWritesTheStubsAndDoesNotEndForMissingData() {
+  Rig rig;
+  rig.options.all_assets = true;
+  rig.options.allow_fetch = false;
+  rig.options.hold_ms = 0;
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_requests == 1 && g_shown.empty());
+  QCHECK(Exists(StubPath(rig.options, "48037dc70b0ecab2")) && Exists(StubPath(rig.options, "2b47aab238f60515")));
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"stubbed\""));
+  QCHECK(!Has(LineOf("data_step"), "game_data_missing"));
+}
+
+void AWholeGameStubThatCannotBeWrittenEndsWithTheStubCauseNotTheStorageAdvice() {
+  Rig rig;
+  rig.options.all_assets = true;
+  WriteFile(rig.scratch.Path("afile"), "x");
+  rig.options.fetch_root_override = rig.scratch.Path("afile/sub");  // below a regular file: no directory can be made there
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);       // the engine's root is the media root: it needs no Storage permission
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(rig.net.calls == 0);
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "data_step_failed");
+  QCHECK(!g_shown.empty() && Has(g_shown[0], "could not write the start-up file"));  // shown, held, shown again (hold_ms)
+  QCHECK(Has(LineOf("data_step"), "could not write the start-up file"));
+  QCHECK(!Has(LineOf("data_step"), "Storage permission"));  // the cause is the stub write, not the grant
+}
+
+void AWholeGameWorkerThatFailsEndsTheProcessWithItsMessage() {
+  Rig rig;
+  rig.options.all_assets = true;
+  rig.options.all_assets_ready = [](const std::string&) {
+    return nevr_quest::data::AllAssetsResult{false, "The game files could not be downloaded."};
+  };
+  rig.BootRequest();
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "data_step_failed");
+  QCHECK(!g_shown.empty() && g_shown[0] == "The game files could not be downloaded.");
+  QCHECK(Has(LineOf("data_step"), "\"status\":\"worker_refused\""));  // the refusal is named, not the default ok
+  QCHECK(Exists(StubPath(rig.options, "48037dc70b0ecab2")));  // the stubs are in place either way
+}
+
 // ---- the bundled content pack, after the data step (ADR 0029) ----
 
 const std::string kPackManifestBytes = "PACK-MANIFEST-" + Pattern(4000);
@@ -1379,6 +1436,10 @@ int main() {
   AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath();
   AReleaseBuildWithoutTheStorageGrantShowsTheStorageMessageHoldsNothingAndEndsNonzero();
   AReleaseBuildWithDataUsesItAndSaysNothing();
+  AWholeGameLaunchInADevBuildWritesTheStubsAndNeitherFetchesNorEnds();
+  AWholeGameLaunchInAReleaseBuildWritesTheStubsAndDoesNotEndForMissingData();
+  AWholeGameStubThatCannotBeWrittenEndsWithTheStubCauseNotTheStorageAdvice();
+  AWholeGameWorkerThatFailsEndsTheProcessWithItsMessage();
   AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing();
   ThePackIsPlacedAfterTheDataStepUsedTheDataAndTheGameContinues();
   ThePackIsPlacedOverDataTheDataStepFetched();

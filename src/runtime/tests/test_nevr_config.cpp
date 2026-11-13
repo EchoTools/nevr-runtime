@@ -147,6 +147,14 @@ TEST(NevrConfig, ParsesTypedScalars) {
   EXPECT_FALSE(cfg.Empty());
 }
 
+// #1737 (101f): network.join_hold_ms is read by NevrCfgJoinHoldMs (a direct getter, no flat key), so it must be a known
+// key: an unknown key under a known section is counted and warned about.
+TEST(NevrConfig, NetworkJoinHoldMsIsAKnownKey) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("network:\n  join_hold_ms: 5000\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.GetString("network.join_hold_ms").value_or(""), "5000");
+}
+
 TEST(NevrConfig, StringList) {
   SetEnv("NEVR_TEST_HTTP_KEY", "secretvalue");
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(kSampleYaml);
@@ -773,10 +781,10 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
       "combat.shaderstep", "combat.tablestep", "combat.pfx", "combat.pfxtev", "combat.gate_perm", "combat.gate_bots", "combat.gate_link",
       "combat.gate_link_libs", "combat.impactsnd", "combat.impactsnd_write", "combat.decals", "combat.decals_flip_u", "combat.decals_flip_v",
       "combat.bvh", "combat.bvh_gate", "combat.bvh_touch", "combat.wallfire", "combat.sendguard", "combat.music", "combat.sensorwd", "combat.ec",
-      "combat.ec_words", "combat.ecfx", "combat.powerboost_stage", "combat.dronekill", "combat.dronemuzzle", "combat.gunconnect", "combat.aibots", "combat.aibots_scenario", "combat.weapon_arm",
+      "combat.ec_words", "combat.ecfx", "combat.powerboost_stage", "combat.dronekill", "combat.dronekill_explosion", "combat.dronekill_hold", "combat.dronemuzzle", "combat.bullet_velocity_guard", "combat.sound_symbol_guard", "combat.texel_buffer_guard", "combat.texture_quest2_step_down", "combat.texture_quest2_lobby", "combat.gunconnect", "combat.aibots", "combat.aibots_scenario", "combat.weapon_arm",
       "combat.hudmeter", "combat.shieldgamma_gamma", "combat.shieldgamma_tube_mirror", "combat.fxtrail", "combat.voipdrop", "combat.custctx",
-      "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp", "assets.cdn_url",
-      "assets.manifest", "assets.required_only", "assets.labels"};
+      "combat.droneguard", "combat.droneguard_stage1", "combat.peerclamp", "combat.frozen_frame_exit", "combat.frozen_frame_exit_s", "assets.cdn_url",
+      "assets.manifest", "assets.required_only", "assets.labels", "network.invite_codes", "assets.whole_game"};
   for (const std::string& path : questReads) {
     EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
   }

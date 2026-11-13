@@ -791,7 +791,7 @@ LIBS_SUMS = "SHA256SUMS"
 LIBS_REPLACE = "REPLACE"  # in the libraries directory: the store libraries these replace, one name per line
 STAGED_REPLACE_LIST = "lib-replace.txt"  # in the stage directory: read back by verify_signed
 STAGED_SCRIPT_LIST = "script-libs.txt"  # in the stage directory: the script libraries stage_libs staged, by their staged names
-# The nine stock script libraries a combat unit redirects (#1737). Each is given to the APK as lib<hash16>_q15t.so, beside the
+# The nine stock script libraries a combat unit redirects (#1737). Each is given to the APK as lib<hash16>_nevr.so, beside the
 # stock lib<hash16>.so, which is never replaced: verify_signed checks every store library is byte-identical. The builder
 # names them lib<hash16>.so; the redirect name is given here, at staging. src/quest/combat/script_redirect_list.h holds
 # the same list (tools/tests/test_combat_script_redirect.py keeps them equal).
@@ -799,7 +799,7 @@ COMBAT_REDIRECT_HASHES = (
     "37f88adb0d8066f7", "3c11128c3bd783dd", "4b65d1b009973281", "6a0f689e5b91c666", "80461e04c6d82c21",
     "812075466da9e147", "954c89b6c61625f6", "a5c64faa725f2334", "ac4cd8e0a786d5c5",
 )
-REDIRECT_SUFFIX = "_q15t"
+REDIRECT_SUFFIX = "_nevr"
 
 
 def is_redirected(name: str) -> bool:
@@ -808,7 +808,7 @@ def is_redirected(name: str) -> bool:
 
 
 def staged_name(name: str) -> str:
-    """The name a script library is staged under: lib<hash16>_q15t.so for a redirected library, else its own name."""
+    """The name a script library is staged under: lib<hash16>_nevr.so for a redirected library, else its own name."""
     return f"{name[:-3]}{REDIRECT_SUFFIX}.so" if is_redirected(name) else name
 
 

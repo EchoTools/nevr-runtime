@@ -31,7 +31,7 @@ class ScriptRedirectListTest(unittest.TestCase):
         self.assertGreaterEqual(int(match.group(1)), len(libs.COMBAT_REDIRECT_HASHES))
 
     def test_the_repack_recipe_collects_the_redirected_names_as_well_as_the_plain_ones(self):
-        self.assertIn("lib????????????????_q15t.so", JUSTFILE.read_text(encoding="utf-8"))
+        self.assertIn("lib????????????????_nevr.so", JUSTFILE.read_text(encoding="utf-8"))
 
 
 def _code(path: pathlib.Path) -> str:

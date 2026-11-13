@@ -1,7 +1,7 @@
 # Module `gunconnect` (the local player's guns get `Connect(local user)`)
 
 Files: `src/quest/combat/gunconnect.{h,cpp}`, `gunconnect_targets.h`, `gamespace.{h,cpp}`, `netgame_targets.h`, `pinned_words.h`, `src/quest/tests/gunconnect_test.cpp`,
-`src/quest/combat/mutants.d/gunconnect.sh`. A normal combat step (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in
+`src/quest/combat/mutants.d/gunconnect.sh`. A normal combat step (`src/quest/combat/combat_install.h`): it runs in the combat APKs and in no other. Switch in
 `config.yaml` (docs/adr/0046 rule 4): `combat.gunconnect`, on unless the file says false.
 
 On Quest offline practice the local player's guns are never connected, so they do not fire. `CR15NetGunCS::Connect(cs, local user id)` connects every gun whose owner slot is that
@@ -11,8 +11,8 @@ user's; online the lobby-member event does it within a frame, offline nothing do
 
 kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_gunconnect.cpp`: the header :1-24, the constants :91-93, `FindCs` :186-218, `ReadLocal` :222-240,
 `HasCombatTag` :242-254, `CountGuns` :256-296, `FixPass` :312-358. The addresses are in that file at the same numbers as ours (`kFnConnect = 0x2153438, kFnHasTag = 0x1723760,
-kFnUserActor = 0x1251654, kTagCombat = 0x37af288`, `kGunCsVptr = 0x3696050`), which are ELF virtual addresses; the disassembly's are 0x100000 more. The q15t plugin reconstructed
-it (`gunconnect.cpp`); this module is that reconstruction moved into the runtime, so the commits that move it credit kotorvr. Not ported: the diagnostic and the tick-callback
+kFnUserActor = 0x1251654, kTagCombat = 0x37af288`, `kGunCsVptr = 0x3696050`), which are ELF virtual addresses; the disassembly's are 0x100000 more. The combat plugin imported in #1591 reconstructed
+it (`gunconnect.cpp`); this module is that reconstruction, so the commits that brought it here credit kotorvr. Not ported: the diagnostic and the tick-callback
 registry.
 
 ## Behaviour
@@ -28,14 +28,19 @@ tries start again. Any of (a) to (c) false restarts the 2 s hold; an unreadable 
 ## Arena
 
 Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in. The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena
-level is (`combat_level.h`, `Classify` with the lobby): in an arena match, in the lobbies arena players use, in a transition that still holds an arena level and when the game cannot be read,
-it finds nothing to do, calls nothing of the game's and writes no line. `gunconnect_test` shows it for eight such levels and a transition, and the module acting on the four combat maps and
-the combat lobby. Online it does nothing in any level because (a) is false. The plugin's copy was not scoped by level; the combat tag (c) was its only scope.
+level is, as the combat level answer last saw it (`combat_scope.h`, `InCombatOrLobby`: a look four times a second from the game-thread tick. The pass runs in
+the same tick loop, right after the scope row's refresh (`combat_tick.cpp` `RunCallbacks`, in the table's order), so it reads a look at most 250 ms old, and a
+stopped tick stops the pass with it: nothing runs, nothing is connected and no line is written until the tick is back. The freshness test in
+`InCombatOrLobby` is defence in depth for an order the install table does not make. The module is one of the scope row's readers and refuses its install with `scope_not_live` when the answer
+cannot change): in an arena match, in the lobbies arena players use, in a transition that still holds an arena level and when the game cannot be read,
+it finds nothing to do, reads and calls nothing of the game's and writes no line. `gunconnect_test` shows it for eight such levels, a transition and an answer
+its refresh stopped making while the module's callback runs on (the defence in depth above), and the module acting on the four combat maps and the combat lobby. Online it does nothing in any level because (a) is false. The plugin's copy was not scoped by level; the combat tag (c) was its only scope.
 
 ## Cost (ADR 0038)
 
 With the switch off nothing is registered, so no frame runs any of it. With it on, the tick callback runs once per rendered frame and does one clock read and one compare (about 7 ns on the
-x86 host that built this change). A pass runs at 1 Hz: in an arena level that is the level scan alone, about 3 us (x86 host), so about 3 us a second; in a combat level it adds the gun
+x86 host that built this change). A pass runs at 1 Hz: in an arena level that is one relaxed load of the scope word and a test (well under 1 us on the x86
+host); the level scan is the scope row's, shared by every reader. In a combat level a pass adds a clock read (the answer's freshness), the gun
 system search and the member read, a few more process_vm_readv reads, 4 Hz while a gun is unconnected. `gunconnect_test` prints both numbers. Not measured on a headset.
 
 ## Lines

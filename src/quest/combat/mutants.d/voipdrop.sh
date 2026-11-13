@@ -89,7 +89,7 @@ runm vd_plain_load_wrong_off $F "s/\*reinterpret_cast<const volatile std::int32_
 runm vd_row_member         $CI "s/\"combat.voipdrop\", \&nevr_quest::CombatConfig::voipdrop,/\"combat.voipdrop\", \&nevr_quest::CombatConfig::custctx,/" quest-host-combat combat_install_test
 runm vd_row_key            $CI "s/\"combat.voipdrop\", \&nevr_quest/\"combat.voipdrops\", \&nevr_quest/" quest-host-combat combat_install_test
 # voipdrop asks nothing of the scope: it is not a reader of the scope row
-runm vd_reader_listed      $CI "s/ || g_config.custctx.on;/ || g_config.custctx.on || g_config.voipdrop.on;/" quest-host-combat combat_install_test
+runm vd_reader_listed      $CI "s/ || g_config.custctx.on/ || g_config.custctx.on || g_config.voipdrop.on/" quest-host-combat combat_install_test
 # (kTable, kFreeHead, kPageBytes, kPageBlock and kVtAlloc are tied to the pinned words by static_assert in voipdrop_targets.h: a changed one fails the build)
 runm vd_vtfree_off        $T "s/kVtFree = 0x38;/kVtFree = 0x30;/"
 # every cap says when it stops (line_budget.h is judged here and by the other lists through the notice each test asserts)

@@ -3,7 +3,7 @@
 // LoadMeshData / DestroyContext / Grow / Resize functions, a fake draw table laid out as Grow reads it, and a fake render-target layout pool whose
 // pointer sits in the image at the pinned GOT word.
 //
-// The q15t plugin's custctx_test assertions, on the new fixture: the live-context table (a destroy of an unknown, finished, loading or destroying
+// The combat plugin's custctx_test assertions (#1591), on this fixture: the live-context table (a destroy of an unknown, finished, loading or destroying
 // context is dropped, a reload during a destroy makes it live again, finished contexts leave the table, the 256 limit, the capped drop lines), the layout
 // pool margin (64 free loads, 63 refuses and answers 1, an unreadable pool never refuses, the capped lines), Grow (the room path, the resize with
 // max(capacity, step), a failed resize or a torn-down table made empty with a spare element in no table, the round-robin install-time spares, the capped

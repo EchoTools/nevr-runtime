@@ -14,7 +14,7 @@ Depends on nothing. `wallfire` (`wallfire.md`) depends on this module.
 | Hook | What | JUMP_SLOT (ELF) | Stock function (ELF / disassembly) | Handler (`bvh.cpp`) |
 |---|---|---|---|---|
 | Initialize | `CBVHTree::Initialize(this, SBVHTreeData*)` | 0x36ec548 | 0x1a45a88 / 0x1b45a88, a bare `ret` (`c0035fd6`) | `OnInitialize`: the game's function, then parse and keep a `Tree*` in the 8-byte CBVHTree |
-| Shutdown | `CBVHTree::Shutdown(this)` | 0x36eb648 | 0x1a45a8c / 0x1b45a8c, a bare `ret` | `OnShutdown`: the game's function, then clear the word |
+| Shutdown | `CBVHTree::Shutdown(this)` | 0x36eb648 | 0x1a45a8c / 0x1b45a8c, a bare `ret` | `OnShutdown`: the game's function, then clear the word and free the CBVHTree's table entry |
 | Intersect | `CBVHTree::Intersect(this, CRay*, SBVHHit*)` | 0x36d38f0 | 0x1a45ae4 / 0x1b45ae4, logs NotImplemented once, returns 0 | `OnIntersect`: nearest hit |
 | Occluded | `CBVHTree::Occluded(this, C3Vector*, C3Vector*)` | 0x36e8430 | 0x1a45b38 / 0x1b45b38, the same stub | `OnOccluded`: any hit on the segment |
 | Gate | `CncaGameSpace::StaticRaycast` (the callers' gate) | 0x36c0288 | 0x18066e4 / 0x19066e4, a 4-word thunk | `OnGate` (a `kCaller` thunk): marks the casts the tree answers |
@@ -39,8 +39,8 @@ byte is written to a file, embedded or copied (the tree table keeps only the hea
 Per hook:
 - **Initialize** `OnInitialize(original, self, data)`: calls the game's function, zeroes the 8-byte word, then, when the level being loaded is a combat map or the combat lobby (see Scope below), `BuildTree`: `SafeRead` the 0x50-byte header;
   `Parse` (block sizes are multiples of 0xe0 / 0x40, bounded, non-zero, addresses do not wrap or sit in the null page; a block pointer of 0 means the block
-  follows the header, as in the resource file); probe that every page of both blocks reads (`Readable`); take an entry of a 64-entry static table (the same
-  data address reuses its entry; the 65th distinct tree is refused with an Error line) and store `&entry.tree` in the CBVHTree word. Refusals leave the word 0,
+  follows the header, as in the resource file); probe that every page of both blocks reads (`Readable`); take a free entry of a 64-entry static table (an entry belongs to the CBVHTree that built it; with 64
+  CBVHTrees holding an entry the 65th is refused with an Error line) and store `&entry.tree` in the CBVHTree word. Refusals leave the word 0,
   so the stock miss stands, and log why (`combat_bvh_tree` `none` for no geometry, `refused` for a layout or memory doubt). Every `combat_bvh_tree` record names the
   level the scan found (`level`) and its class (`scope`: `combat`, `arena`, `other`, or `unknown` before the tick has shown the module a game, when it builds). A
   level that is not a combat map or the combat lobby is `skipped` (Info): the build's page probes (about a millisecond for a level with geometry on the host)
@@ -56,11 +56,13 @@ Per hook:
   `CResourceInstance::LoadAndInit`). The gamespace is in the init-fiber table for the whole of LoadLevel (`combat_level_targets.h`: the done bit is set after
   LoadLevel returns). Not shown: that nothing else calls the callbacks at `+0x4a0` outside LoadLevel, and the other branch of LoadLevel, where the game's
   virtual `+0x360` replaces CreateComponentSystems (not followed; it too runs after the store). Headset row 3 checks the case that would show it wrong.
-- **Shutdown**: the game's function, then the word is cleared. A later cast finds no tree and takes the stock miss.
+- **Shutdown**: the game's function, then the word is cleared and the entry the CBVHTree owns is freed (`combat_bvh_tree_freed`, `cause` `shutdown`; see "Table lifetime"
+  below). A later cast finds no tree and takes the stock miss. An Initialize on a CBVHTree that still owns an entry (no Shutdown between) frees that entry first
+  (`cause` `reinitialize`), so a CBVHTree never holds two.
 - **Intersect**: while no combat map or combat lobby is loaded (section 4) the game's function answers. Else the gate (section 4); then `TreeOf(self)` reads the CBVHTree word
-  and accepts it only if it is one of the table's entries (aligned, inside the table); the ray (6 floats) is copied; `Trace`, nearest hit, `t in (0, inf)` in
+  and accepts it only if it is one of the table's entries (aligned, inside the table) and that entry is in use; the ray (6 floats) is copied; `Trace`, nearest hit, `t in (0, inf)` in
   units of the direction (Embree 1.0); on a hit, writes SBVHHit `id0 +0`, `id1 +4`, `u +8`, `v +0xc`, `t +0x10` and the unit normal at `+0x38` and nothing
-  else; a miss writes nothing. Any doubt (no tree, a word that is not a table entry) calls the game's function.
+  else; a miss writes nothing. Any doubt (no tree, a word that is not a table entry, a word that names a freed entry) calls the game's function.
 - **Occluded**: the segment a..b is the ray `a + t (b - a)`, `t in (0, 1)`, first hit found. Not gated.
 - **Gate**: section 4.
 - **Touch**: returns false and writes nothing, as the stock Quest's stub tree makes `RayQueryStatic` behave. Without it a hand's touch ray (origin + dir x
@@ -68,11 +70,40 @@ Per hook:
   Gate's stub (`0x21cf454 bl 0x00fd1740`, then `cbz w0, 0x021cf5c0`), so with the gate on its cast is already a miss (its return site is not in the allowed
   list); Touch matters when the gate is off.
 
+**Table lifetime.** The table has 64 entries; an entry is in use from the build of a CBVHTree's tree until that CBVHTree's Shutdown, so the limit is 64 live trees, not 64
+trees per process (a combat map load builds about 3). The key is the game's tree object: `Entry::owner` is the address of the CBVHTree that built the entry (0 = free), and
+`ReleaseTree(self)` frees the entry whose owner is `self`. It is not keyed by the SBVHTreeData address (two CBVHTrees on one resource each own an entry, so one's Shutdown
+cannot free the other's) and not by the word read from the object (a copy of a word, or garbage that names a live entry, frees nothing: `AShutdownOfATreeWithoutAnEntryFreesNothing`).
+A CBVHTree with no entry (an arena level's, a refused one) frees nothing and writes no line. The next free entry is searched from the one after the last built
+(`g_cursor`) and the first free one found is taken, so a freed entry is reused after the other free entries ahead of the cursor, and at once (by the very next build)
+when it is the only free one, or when every entry from the cursor up to it is in use (`TheLastEntryOfTheSearchIsUsed`); its bytes are not cleared until it is built again.
+The order is not a safety margin: the arguments below rest on the premise stated under "Threads" (no cast in flight across a Shutdown), not on a number of builds.
+- *A stale pointer.* After our Shutdown handler the CBVHTree's word is 0 and the game's function answers. A copy of the old word names a freed entry: `TreeOf` reads the
+  entry's `owner` with an acquire load and a free entry answers `nullptr`, so the game's function answers (`ACastOnAShutDownTreeIsTheGamesOwn`). Once that entry is built again
+  for another CBVHTree, a copy of the old word would answer from the new tree. That the game does not keep a copy of the word is **inferred, not established**:
+  section 6 item 4 shows how a cast's arguments are read (the CBVHTree object is the one the game found that frame; of the proven tree's `CStaticRaycastCS` and `CBVHTree` functions only `Shutdown` names `this + 0x148`, to call `CBVHTree::Shutdown`), not that no
+  function stores the word or the object. What would establish it: every function that reaches `CBVHTree::Intersect`/`Occluded` (the callers of their PLT stubs,
+  and of `CncaGame::StaticRaycast` and `StaticRaycastOccluded`) reconstructed or disassembled, each shown to compute `CStaticRaycastCS + 0x148` inside the same call and
+  keep it in no field, global or queue. If the game does keep a copy past a Shutdown, a cast on it answers from another tree's entry once that entry is built again, and the premise under "Threads" does not cover that case.
+- *Threads.* The hooks run on whatever thread the game calls from. The writers (build, free, count) hold `g_treeMutex`; a query takes no lock: it reads the word, the entry's
+  `owner` (acquire; a build stores `owner` last, with release, so a query that sees an owner sees the whole tree) and then the entry's five fields. Established (a proven
+  reconstruction, `CStaticRaycastCS::Shutdown`, 0x1812748): the game calls `CBVHTree::Shutdown` first and `CResourceInstance::UnloadAndShutdown`, which releases the resource
+  the tree reads, after it; so the entry is freed before the game unloads the blocks. Inferred, not established: that no cast on the CBVHTree is running on another thread while the
+  level's `CStaticRaycastCS::Shutdown` runs. It is the same premise the game's own tree needs (its traversal reads the blocks the unload releases), the Shutdown is the game's
+  own level teardown, and the three callers whose casts the tree answers (DualStaticRaycast, `SR15PatrolSM::Update`) are not shown to run on another thread at that moment
+  (the threads those callers and the level teardown run on are not reconstructed). Two windows remain if that premise is wrong. (1) A query that read the
+  word before Shutdown cleared it, and still traverses when the game frees the blocks, reads freed game memory; the same window the game's own tree would have, not one this
+  module adds, and not closed by a lock here. (2) A query reading an entry while it is built for another tree sees a mixed `Tree`; the entry's reuse can follow the free at once (see above), so
+  this window is closed only by the same premise as (1), that no cast is in flight across a Shutdown. The build's page probes (about a millisecond) lengthen the
+  free-to-reuse gap but do not bound it.
+
 Install (`InstallAt`): the legacy switch files are warned about; the three switches are reported by the configuration step, one generated `combat_config_switch` record each (the table rows `bvh`, `bvh_gate`, `bvh_touch`); off is one Info line
 (`combat_bvh_install` `off_config`) and nothing is touched. Otherwise **all or none**: the gate goes in first (until its hook is in, no cast is marked, so a tree
 installed a moment later answers none), then Initialize, Shutdown, Intersect, Occluded; the first the manager refuses (a slot that does not hold the pinned
 function, a different libr15, a slot outside the writable segments) removes the ones already hooked and is one Error line that names the hook and the
-manager's status. Touch goes in last, and its refusal is an Error line but not fatal. One `combat_bvh_install` line states the result and the hook count.
+manager's status. Touch goes in last, and its refusal is an Error line but not fatal. One `combat_bvh_install` line states the result and the hook count,
+and every `combat_bvh_install` line, a refusal and the off line included, names the `combat.bvh_gate` and `combat.bvh_touch` values the step was handed
+(`bvh_gate`, `bvh_touch`, 0 or 1).
 The scope's refresh rides the combat tick: with no room in the tick table the module refuses (`tick_table_full`) rather than install and never answer.
 
 Switches (config.yaml, `combat:`): `bvh` (default true, as upstream, afk_bvh.cpp:121 "ON BY DEFAULT", `:365-367` off only with `debug.echoquestcombat.bvh=0`),
@@ -172,21 +203,26 @@ cast inside an allowed one is gated and the outer one still answers afterwards; 
 `CBVHTree::Intersect` with no marked cast is gated; Occluded is not gated.
 The gate is installed first: until it is in no cast is marked, so a tree built a moment later answers none.
 
-**Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatOrLobby()` is false. The value is a relaxed atomic the combat tick refreshes
-four times a second from `combat_level.h` (`Classify` of the loaded levels with the combat lobby: a combat map or the combat lobby is loaded and no Echo Arena level
-is; an arena level that is loaded wins; a lobby arena players use is no class). The word starts false, so nothing is combat before the first look, and it fails
-closed: a look older than one second is not believed (`kStaleAfterSeconds`), so a tick that stopped leaves every hook calling the game's function; when the tick
-comes back after such a gap with the scope open, it writes one Warning `combat_bvh_scope_stale` (`gap_s`, `stale_after_s`, `level`). The arena path
-of a query is one relaxed load of a false value, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope
-because the q15t plugin answered in every level; the levels left out are the Echo Arena levels and the lobbies arena players use. KNOWN-WRONG #2168: this is the
-module's own cached answer; combat_scope (F19, #2186) is the shared one, and this module has not switched to it yet.
+**Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatOrLobby()` is false. It is the combat level answer
+(`combat_scope.h`, `InCombatOrLobby`): the scope row looks at the loaded levels four times a second from the game-thread tick (a combat map or the combat lobby
+is loaded and no Echo Arena level is; an arena level that is loaded wins; a lobby arena players use is no class). The answer starts false, so nothing is combat
+before the first look, and it fails closed: a look older than one second is not believed, so a tick that stopped leaves every hook calling the game's function;
+when the tick comes back after such a gap with the scope open, the scope row writes one Warning `combat_scope_stale` (`gap_ms`, `stale_after_ms`, `level`). The
+module is one of the scope row's readers (`combat.bvh` is in `ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the
+answer cannot change. The module's own tick reads the same answer, keeps the value it read last and writes `combat_bvh_scope` (`from`, `to`) when it changes
+(combat_scope has no change callback; the level is on the scope row's `combat_scope_change` line). The arena path of a query is one relaxed load of the scope
+word, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope because the combat plugin imported in #1591 answered in every
+level; the levels left out are the Echo Arena levels and the lobbies arena players use. Initialize's question (is the level being loaded a combat map or the
+combat lobby, the init fibers included) is asked of `combat_level.h` directly, by decision: the combat level answer describes the levels already loaded, as
+of its last look, and would skip a combat map that is still building.
 
 
 ## 5. Behaviour
 
 - Loading a level: `combat_bvh_tree` `built` (`data`, `triangle4`, `nodes`, `root_ref`) per CBVHResource (Info). A level without static geometry: `none`, `why`
-  `empty` (Info). A header or block that cannot be read, or has bad sizes: `refused` (Warning). The 65th tree: Error `tree table full`. In every refusal the
-  stock miss stands.
+  `empty` (Info). A header or block that cannot be read, or has bad sizes: `refused` (Warning). A tree with 64 CBVHTrees already holding an entry: Error `tree table full`. In every refusal the
+  stock miss stands. A CBVHTree's Shutdown: `combat_bvh_tree_freed` (Info: `tree`, `data`, `cause` `shutdown` or `reinitialize`, `in_use` after the free). The 10 s
+  `combat_bvh_summary` carries `in_use`, the entries held by live CBVHTrees.
 - In a combat match: bullets (DualStaticRaycast forward/backward) and the AI patrol cast hit walls; damage, heal-bubble and sound lines of sight (Occluded)
   are blocked by walls. Grab/touch is unchanged from the stock Quest (physics bodies only).
 - Arena, and every other level: no change. The hooks call the game's function.
@@ -205,7 +241,7 @@ module's own cached answer; combat_scope (F19, #2186) is the shared one, and thi
    stack. Occluded's two points are read by `CncaGame::StaticRaycastOccluded` (0x18f2660), which passes its own copies on (0x18f27b4); `LocalStaticRaycastOccluded`
    passes its caller's pointers through unread and has no static caller, so that path relies on the references being valid. The CBVHTree word is read from the
    object the game found that frame (the game does not read +0x148 itself). A system call per cast cost more than the traversal (section 10).
-5. **The CBVHTree word must be one of our 64 table entries**; any other value takes the game's function. A re-Initialize on the same data address reuses its entry.
+5. **The CBVHTree word must name one of our 64 table entries that is in use**; any other value takes the game's function. The reference build's table has no free: its 64th tree is the last of the process (`kMaxTrees = 64`); here a Shutdown frees the entry (issue #2307).
 6. **Switches are `combat:` keys** (no system properties, no kill files).
 7. **All-or-none install with rollback through the manager**, and the gate installed first.
 8. **Scope: combat maps and the combat lobby only, with a fresh look** (section 4); a tree only for those levels.
@@ -223,10 +259,11 @@ windows of the logged session, `touch_kept_off` 374 and 1176 per 10 s); the head
 On a combat APK built at a tag after this unit (or a development APK repacked with the `combat` variant word, or `combat.force: true`), in a combat match:
 1. `combat_bvh_install` `result` `installed`, `hooks` 6, `allowed_casts` 3.
 2. At level load one `combat_bvh_tree` `built` per CBVHResource with `triangle4` and `nodes` non-zero (the sizes seen in one logged session: 36864/24633, 4096/4097, 53815/31572; the log does not name their levels, so the first headset run reads `level` and `scope` in these records).
+   At each level's unload one `combat_bvh_tree_freed` per tree (`in_use` falls back). 30 combat-map loads in one session never write `tree table full`, and the summary's `in_use` stays at the trees of the loaded levels (a few, never near 64).
 3. `combat_bvh_scope` `to` 1 at the combat map (and the combat lobby) and `to` 0 on leaving it; no `built` record with `scope` other than `combat`, and `skipped` records for the arena levels and the other lobbies.
    A combat map entered from a lobby arena players use (`mpl_lobby_b`, `mpl_lobby_b2`) logs `combat_bvh_tree` `built` with `scope` `combat` and the combat map's
    `level`: a `skipped` with `scope` `other` there means the loading level was not yet at gamespace `+0x58` when Initialize ran (section 2).
-   `combat_bvh_scope_stale` is absent, or rare and tied to a hitch (a level load); a steady stream means the tick is starved and the answers are off.
+   `combat_scope_stale` is absent, or rare and tied to a hitch (a level load); a steady stream means the tick is starved and the answers are off.
 4. The acting lines: `combat_bvh_first_hit` (`mesh` >= 0, `tri` >= 0, `t` positive, a unit `normal`) and `combat_bvh_summary` with `intersect` > 0, `intersect_hit` > 0,
    `gated_off` > 0, `stock` 0 or tiny; shots at a wall do not pass (`occluded_blocked` > 0).
 
@@ -255,13 +292,15 @@ Measured on the development host (x86-64, g++ -O2, one thread), not on a headset
 | Intersect or Occluded, combat map, tree of 147,000 random triangles (the logged level had 36,864 Triangle4 records), with the clock reads and counters | about 2.9 us (Occluded), 2.8 us (Intersect) | 0 in all four logged windows (headset logs); upstream names the callers as bullets and the AI patrol |
 | the same two with the tree-less path (arena, or no combat map) | the game's function plus 1.0 ns (2.8 ns against 1.8 ns for the function alone) | whatever the game makes of them: not measured on a headset |
 | Touch, combat map | the scope test below, a counter and a return | 37 to 118 a second in the logged windows (374 and 1176 per 10 s) |
-| the scope test every hook makes first (`InCombatOrLobby()`): a false cached answer (arena) / a true one, which also reads CLOCK_MONOTONIC (`LookIsFresh`) | 0.24 ns / 27.6 ns (50M calls, best of 5) | once per hooked call; the 27.6 ns is paid only on a combat map or the combat lobby, and is part of the 2.8-2.9 us cast rows above |
+| the scope test every hook makes first (`InCombatOrLobby()`): a false cached answer (arena) / a true one, which also reads CLOCK_MONOTONIC (`LookIsFresh`) | 0.24 ns / 27.6 ns (50M calls, best of 5; the same load, test and clock read as combat_scope.h's `InCombatOrLobby`, not measured again through it) | once per hooked call; the 27.6 ns is paid only on a combat map or the combat lobby, and is part of the 2.8-2.9 us cast rows above |
 | one `process_vm_readv` of 24 bytes (what each argument read cost before) | 487 ns | the former code made 2 per Intersect and 3 per Occluded |
 
 Per-frame cost in an arena match: the sum over calls of about 1 ns (a relaxed load, a test and a tail call), so a thousand calls a frame at 90 Hz would be
-about 1 us a frame. Unmeasured: the real call rate in arena (the headset logs carry none). The tick adds a clock read per frame and, four times a second in every
-level, arena included, a scan of the game's level tables: 4 + 3 x N `process_vm_readv` calls for N gamespaces, about 5 us a scan with one gamespace on the host,
-so about 20 us a second of game-thread time. A level load that is not a combat level pays one scan and no page probes. For a combat level the page probes of the
+about 1 us a frame. Unmeasured: the real call rate in arena (the headset logs carry none). The module's tick adds a clock read, a load of the scope word and
+an exchange per frame. The scan of the game's level tables four times a second in every level, arena included (4 + 3 x N `process_vm_readv` calls for N
+gamespaces, about 5 us a scan with one gamespace on the host, about 20 us a second of game-thread time), is the scope row's, made once for every reader; the
+module keeps that row on while `combat.bvh` is on (the default), as the other default-on readers already do. A level load that is not a combat level pays one scan
+and no page probes. For a combat level the page probes of the
 build cost about 1.2 ms (the 36,864-record tree) to 1.7 ms (the 53,815-record tree) on the host.
 
 ## 11. Tests and mutants
@@ -269,10 +308,15 @@ build cost about 1.2 ms (the 36,864-record tree) to 1.7 ms (the 53,815-record tr
 `just test-quest-combat bvh` runs `bvh_core_test` (the pure core on synthetic meshes: header parse and limits, ray validity, hits and misses with exact
 `t`/`u`/`v`/normal, open range ends, a room at several leaf sizes, a random soup against two brute-force references, degenerate and malformed trees, the stack
 and cycle limits, empty children, a node reference past the block) and `bvh_test` (the real thunks through the real manager into an image built in memory; the
-hooks called through their slots; the gate from two call sites and two threads; refusals and rollback; the 64-entry table; unreadable and half-mapped blocks;
+hooks called through their slots; the gate from two call sites and two threads; refusals and rollback; the 64-entry table, its entries freed by a Shutdown, a stale word, a Shutdown racing casts on another tree; unreadable and half-mapped blocks;
 the switches; the legacy files; the scope: every hook calls the game's function with no combat map, with an arena level beside a combat map, with a lobby arena
-players use; the combat lobby is in scope; a stalled tick fails closed (the clock moves with no tick) and says so when it is back (`combat_bvh_scope_stale`, not
-for a look on time and not when the scope was shut); a level that is not a combat level gets no tree, a loading combat map does; the arena paths make no read,
-no scan and no clock read; the cached answer starts false; the 10 s summary; the pinned constants).
+players use; the combat lobby is in scope; a stalled tick fails closed (the clock moves with no tick) and the scope row says so when it is back (`combat_scope_stale`,
+not for a look on time and not when the scope was shut); the module's tick reading a stale answer says the scope closed; a scope that cannot change refuses the
+install; a level that is not a combat level gets no tree, a loading combat map does; the arena paths make no read, no scan and no clock read; the tick's reading
+starts false; the 10 s summary; the pinned constants). The scope in `bvh_test` and `wallfire_test` is the real combat level answer: each look runs the scope row's
+refresh against the fake game before the module's callback, as the tick does.
 Mutants: `src/quest/combat/mutants.d/bvh_core.sh` (rules of `bvh_core.h`, target `bvh_core_test`) and `src/quest/combat/mutants.d/bvh.sh` (rules of `bvh.cpp`,
 `bvh.h`, `bvh_targets.h`), run with `src/quest/combat/mutants.sh bvh` and `bvh_core`.
+Two mutants of `bvh.sh` survive `bvh_test`: `bvh_base_published` (the gate's image base stored as 0) and `bvh_gate_ret_base` (the base not subtracted from the caller's
+return address). `TheCallersGateAnswersTheListedCastsOnly` learns the allowed return from the gate's own record, so a wrong base is consistent with itself; the test that
+kills them is #2383.

@@ -19,8 +19,8 @@
  * The pins. A pinned code word is an instruction the module's reading of the game relies on; `FirstPinMismatch` reads each with
  * process_vm_readv (safe_read.h) and names the first that differs, so a build that moved one is refused whole with nothing hooked.
  *
- * The kill files. The plugin's `<module>.off` files are not read (docs/adr/0046 rule 3: a switch is a `combat:` key). `WarnLegacySwitch` looks
- * for one in the plugin's data directory and writes a Warning naming the key that replaces it.
+ * The kill files. The `<module>.off` files are not read (docs/adr/0046 rule 3: a switch is a `combat:` key). `WarnLegacySwitch` looks
+ * for one in the data directory and writes a Warning naming the key that replaces it.
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -83,7 +83,7 @@ enum class StepFix { kSet, kNotStock, kUnreadable };
 // read. Reads with process_vm_readv, so a bad pointer is kUnreadable and never a fault.
 StepFix ApplyShaderSetStep(void* obj, std::uint64_t* found = nullptr) noexcept;
 
-// A Warning (event `combat_<module>_legacy_switch`) when the plugin's kill file `file` exists in its data directory, naming `key`. Writes nothing
+// A Warning (event `combat_<module>_legacy_switch`) when the kill file `file` exists in the data directory, naming `key`. Writes nothing
 // when it does not, or when the directory cannot be named.
 void WarnLegacySwitch(const char* event, const char* file, const char* key) noexcept;
 
@@ -92,7 +92,7 @@ void WarnLegacySwitch(const char* event, const char* file, const char* key) noex
 // The CR15Game the scope reads (production: the object the combat tick verified). nullptr restores production.
 using GameFn = std::uintptr_t (*)() noexcept;
 void SetGameForTest(GameFn fn) noexcept;
-// The directory the kill files are looked for in (production: /sdcard/Android/data/<package>/files/q15t). nullptr or "" restores production.
+// The directory the kill files are looked for in (production: legacy_switch.h, legacy::Directory). nullptr or "" restores production.
 void SetLegacyDirForTest(const char* dir) noexcept;
 // How many times CurrentScope read the game's levels (a call that found no game made no read).
 std::uint32_t ScopeReadsForTest() noexcept;

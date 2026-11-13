@@ -2,8 +2,8 @@
 
 Files: `src/quest/combat/levelname.{h,cpp}`, `levelname_targets.h` (the pins), `boosterpool.{h,cpp}`, `boosterpool_targets.h`,
 `src/quest/tests/levelname_test.cpp`, `boosterpool_test.cpp`, `src/quest/tests/got_pinned_test.cpp` (the pins in the real libr15) and the mutant lists
-`src/quest/combat/mutants.d/levelname.sh` and `boosterpool.sh`. Both are normal combat steps (`src/quest/combat/combat_install.h`): they run in the `q15t`
-and `combat` APKs and in no other, after the tick and the refresh-rate rule, levelname first. One switch covers the pair, `combat.levelname` in
+`src/quest/combat/mutants.d/levelname.sh` and `boosterpool.sh`. Both are normal combat steps (`src/quest/combat/combat_install.h`): they run in the combat
+APKs and in no other, after the tick and the refresh-rate rule, levelname first. One switch covers the pair, `combat.levelname` in
 `config.yaml` (docs/adr/0046 rule 4, default true): the booster pool's substitution is right only while the full-size level is the loaded one, so it
 installs only when levelname did (`needs_levelname` otherwise). The plugin's kill file `levelname.off` is not read; one found is a Warning
 (`combat_levelname_legacy_switch`) naming the key. The module needs a full-size global_mp level in the pack.
@@ -142,7 +142,7 @@ Arena and combat run on the same APK, so every combat module is installed while 
 
 - **levelname cannot be scoped by level.** global_mp is the game's global level: it loads once after login (`docs/reference/game-level.md`: "loading
   global", the level field is none and only the menu and global levels are loaded), before any lobby, so nothing says yet whether the player goes to an
-  arena or a combat match and the loaded-level answer (`combat_level.h`) is "none". On a q15t or combat APK with `combat.levelname` on (the default), an
+  arena or a combat match and the loaded-level answer (`combat_level.h`) is "none". On a combat APK with `combat.levelname` on (the default), an
   arena match runs with the full-size global level too: the same global level and its combat content (the combat bot body and the booster pool
   actor) resident, where a plain release loads the cut one. The handler does nothing for any other level, and nothing for a game whose lowspec bit is clear
   (that game already loads the full level). What the full level costs a Quest in arena (memory, load time) was not measured; the headset row below measures

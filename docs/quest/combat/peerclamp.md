@@ -2,11 +2,11 @@
 
 Files: `src/quest/combat/peerclamp.{h,cpp}`, `src/quest/combat/peerclamp_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the combat level answer it is
 scoped by), `src/quest/tests/peerclamp_test.cpp`, `src/quest/combat/mutants.d/peerclamp.sh`. The module is a normal-phase row of the combat install table
-(`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
-`combat.peerclamp` (default true). The q15t plugin had no switch file for it.
+(`src/quest/combat/combat_install.h`): it runs in the combat APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
+`combat.peerclamp` (default true). There is no switch file for it.
 
 Origin: Ducky's echoquest-combat reference build, afk_peerclamp.cpp (the rule at :1, the constants at :39-44, the 26 pinned words at :50-62, the clamp at
-:83-116; docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242), reconstructed in the q15t plugin (imported in #1591) and moved here. Upstream
+:83-116; docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242), reconstructed in this tree (imported in #1591). Upstream
 it was test only; the plugin built it on (#1625). The scope is the runtime's (`combat_scope.h`, #2246).
 
 ## Row covered

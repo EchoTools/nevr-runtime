@@ -1,4 +1,4 @@
-/* The drone's follow update is skipped while its target is null, instead of crashing the game (#2178; the q15t plugin's droneguard, moved here).
+/* The drone's follow update is skipped while its target is null, instead of crashing the game (#2178).
  *
  * What the game does. CR15NetFollowPlayerCS::Update calls Follow(SCompactPoolHandle) once per enabled component, through its PLT stub (the one
  * caller). Follow loads [cs+0x140], the CR15PlayerNavCS system the component follows, and passes it as `this` to CR15PlayerNavCS::FinalTransform
@@ -17,14 +17,14 @@
  * where the stock call would dereference null; every other call reaches the game's Follow with the same two arguments. Whether the arena
  * has CR15NetFollowPlayerCS components at all is not established; `combat_droneguard_stats` gives the call count on a headset.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switches are `combat.droneguard` (default
- * true) and `combat.droneguard_stage1` (default false; read only when the first is on) in config.yaml. The plugin had no switch file, and its build option
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switches are `combat.droneguard` (default
+ * true) and `combat.droneguard_stage1` (default false; read only when the first is on) in config.yaml. The imported combat plugin had no switch file, and its build option
  * for the second stage is gone.
  *
  * Install. The patched build ID, then the stage-0 code words (droneguard_targets.h), then the JUMP_SLOT, which must hold Follow itself (a word something
  * else already replaced is refused, not chained over). Stage 1 is tried after that: its own code words and the two engine functions (resolved by dlsym on
  * the loaded game library, each at exactly its pinned address) must all hold, else the null half stays alone and one Error `combat_droneguard_stage1`
- * line names why. It registers in combat::InstallNormal()'s table at the position the plugin installed it (after custctx, before peerclamp).
+ * line names why. It registers in combat::InstallNormal()'s table at the position the imported combat plugin installed it (after custctx, before peerclamp).
  *
  * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, four plain loads from the component (Follow loads [cs+0xc8] as its first data access, so the
  * game dereferences the same object on every call; a null component goes to the game's function) a compare of the state key and, for a call with a target, one relaxed load of the open-run count (0 unless a run is open: the run tables are scanned only while it is above 0, which is while a component is skipped and for at most kRunStaleSeconds after a run whose component died, because the scan releases stale slots); stage 1 adds a RefreshCache call, a
@@ -33,12 +33,14 @@
  *
  * Owner (ADR 0039). This file owns whether Follow runs for a component whose target is null (stage 0) or whose cache is stale (stage 1).
  *
- * Origin. The q15t plugin's `droneguard.cpp` (imported in #1591), written on the reference build's `afk_droneguard.cpp` (Ducky's echoquest-combat;
+ * Origin. Imported in #1591, written on the reference build's `afk_droneguard.cpp` (Ducky's echoquest-combat;
  * docs/audits/2026-11-05-q15t-origin-citations.md rows 34-36 and 149-150: afk_droneguard.cpp:1,42-48,43-44,46-60,57-58,66-80,76-77,86-99,108-124,126-146).
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_droneguard_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,
- *              "stage1":"off|on|null_half_only","consequence":".."}  Info for installed and off, Error for refused (+ pinned_word_mismatch: "pin","found","expected")
+ *              "stage1":"off|on|null_half_only","droneguard_stage1":0|1,"consequence":".."}  Info for installed and off, Error for refused (+ pinned_word_mismatch:
+ *              "pin","found","expected"); `stage1` is what runs, `droneguard_stage1` (every line, a refusal included) the `combat.droneguard_stage1` value
+ *              the step was handed
  *   stage1    {"event":"combat_droneguard_stage1","result":"on|null_half_only","reason":"ok|pinned_word_mismatch|engine_functions_missing",...}  Info / Error
  *   state     {"event":"combat_droneguard_state","target":"set|0","handle_sys":"set|0","idx_unresolved":"yes|no","raw190":"%08x","flags16c":"%02x","cs":"0x.."}
  *             Info, on the first call and on every change of (index word, flags byte, target null, handle system null), at most kStateLines

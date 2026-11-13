@@ -1,7 +1,8 @@
-// The drone kill rules (patch/dronekill_rules.h, #2359): the symbols, the chase velocity, the gun table and the group table. The hooks
-// that feed them are runtime/combat/dronefix.cpp (PC) and quest/combat/dronekill.cpp (Quest); what they read from the game and how they
-// turn a component on or off need the game and are proven by a live run. The Quest host test (quest/tests/dronekill_test.cpp) compiles
-// this same header. "EC <n>" is plugin/dronefix.cpp of EchoCombat v2.0.0 (nevr-pack 4d1f0024), the line each case pins.
+// The drone kill rules (patch/dronekill_rules.h, #2359): the symbols, the chase velocity, the gun table, the group table and the
+// explosion queue (#1737). The hooks that feed them are runtime/combat/dronefix.cpp (PC) and quest/combat/dronekill.cpp (Quest); what
+// they read from the game and how they turn a component on or off need the game and are proven by a live run. The Quest host test
+// (quest/tests/dronekill_test.cpp) compiles this same header. "EC <n>" is plugin/dronefix.cpp of EchoCombat v2.0.0 (nevr-pack
+// 4d1f0024), the line each case pins.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -766,6 +767,92 @@ TEST(DroneKillRules, TheCallersPayloadsAreKept) {
   EXPECT_EQ(t.g[r.group].x.number, 7);
   t.Release(kDmg, 0x11, kA, 0, kT0 + 3);
   EXPECT_EQ(t.g[r.group].x.number, 0) << "a release starts the group's payload again";
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// the explosion (#1737): the queue, its hold and the expiry rule, which PC's dronefix.cpp and the Quest's dronekill.cpp both run. The
+// Quest host test (quest/tests/dronekill_test.cpp) drives the same vectors through the Quest module.
+
+TEST(DroneKillRules, TheExplosionConstantsAreEchoCombats) {
+  EXPECT_EQ(dk::kNcaPhysics, 0x5B8CC538E22AD937ull) << "CSymbol64(\"ncaPhysics\"), EC's DRONE_SOUND";
+  EXPECT_EQ(dk::kFxSlots, 8);
+  EXPECT_EQ(dk::kFxHeld, 8);
+  EXPECT_EQ(dk::kFxSoundHoldMs, 2500u);
+}
+
+using Fx = dk::FxQueue<int, int>;  // ctx: an explosion id; held: a component id
+
+TEST(DroneKillRules, FxAKillsExplosionIsSpawnedAtTheNextUpdateAndHoldsNothing) {
+  Fx q;
+  ASSERT_TRUE(q.Queue(7, nullptr, 0, kT0));
+  int spawn[dk::kFxSlots], off[dk::kFxSlots * dk::kFxHeld], noff = -1;
+  ASSERT_EQ(q.Due(kT0 + 16, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), 1);
+  EXPECT_EQ(spawn[0], 7);
+  EXPECT_EQ(noff, 0);
+  EXPECT_FALSE(q.Any()) << "nothing held: the slot is free once spawned";
+  EXPECT_EQ(q.Due(kT0 + 32, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), 0) << "spawned once";
+}
+
+TEST(DroneKillRules, FxTheHeldComponentGoesOff2500MsAfterTheSpawnNotBefore) {
+  Fx q;
+  const int held[1] = {42};
+  ASSERT_TRUE(q.Queue(7, held, 1, kT0));
+  int spawn[dk::kFxSlots], off[dk::kFxSlots * dk::kFxHeld], noff = -1;
+  ASSERT_EQ(q.Due(kT0 + 100, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), 1) << "spawned at the first update";
+  EXPECT_EQ(noff, 0);
+  EXPECT_EQ(q.Due(kT0 + 100 + 2499, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), 0);
+  EXPECT_EQ(noff, 0) << "2499 ms after the spawn: still held";
+  EXPECT_TRUE(q.Any());
+  EXPECT_EQ(q.Due(kT0 + 100 + 2500, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), 0);
+  ASSERT_EQ(noff, 1) << "2500 ms after the spawn (not after the queue): off";
+  EXPECT_EQ(off[0], 42);
+  EXPECT_FALSE(q.Any());
+}
+
+TEST(DroneKillRules, FxTheNinthExplosionIsRefusedAndAFreedSlotIsTakenAgain) {
+  Fx q;
+  for (int i = 0; i < dk::kFxSlots; ++i) ASSERT_TRUE(q.Queue(i + 1, nullptr, 0, kT0)) << i;
+  const int held[1] = {9};
+  EXPECT_FALSE(q.Queue(99, held, 1, kT0)) << "queue full: the caller turns the held component off now";
+  int spawn[dk::kFxSlots], off[dk::kFxSlots * dk::kFxHeld], noff = -1;
+  EXPECT_EQ(q.Due(kT0 + 1, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff), dk::kFxSlots);
+  for (int i = 0; i < dk::kFxSlots; ++i) EXPECT_EQ(spawn[i], i + 1) << "in slot order";
+  EXPECT_TRUE(q.Queue(99, held, 1, kT0 + 2)) << "the spawned slots are free again";
+}
+
+TEST(DroneKillRules, FxAtMost8HeldComponentsAreKept) {
+  Fx q;
+  int held[12];
+  for (int i = 0; i < 12; ++i) held[i] = 100 + i;
+  ASSERT_TRUE(q.Queue(7, held, 12, kT0));
+  int spawn[dk::kFxSlots], off[dk::kFxSlots * dk::kFxHeld], noff = -1;
+  q.Due(kT0, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff);
+  q.Due(kT0 + dk::kFxSoundHoldMs, spawn, dk::kFxSlots, off, dk::kFxSlots * dk::kFxHeld, &noff);
+  ASSERT_EQ(noff, dk::kFxHeld);
+  for (int i = 0; i < dk::kFxHeld; ++i) EXPECT_EQ(off[i], 100 + i);
+}
+
+TEST(DroneKillRules, FxClearFreesEverySlot) {
+  Fx q;
+  q.Queue(1, nullptr, 0, kT0);
+  q.Clear();
+  EXPECT_FALSE(q.Any());
+}
+
+TEST(DroneKillRules, ExpiryAnAliveDroneWithAContextQueuesItsExplosion) {
+  EXPECT_EQ(dk::OnDamageableOff(true, true, true), dk::ExpiryAction::kQueue);
+}
+
+TEST(DroneKillRules, ExpiryADeadDroneOrNoContextOrNoOpenExpiryHasItsHeldOffNow) {
+  EXPECT_EQ(dk::OnDamageableOff(false, true, true), dk::ExpiryAction::kOffNow) << "shot down: its explosion was then";
+  EXPECT_EQ(dk::OnDamageableOff(true, false, true), dk::ExpiryAction::kOffNow) << "no first-system off was seen";
+  EXPECT_EQ(dk::OnDamageableOff(true, true, false), dk::ExpiryAction::kOffNow) << "no explosion context";
+}
+
+TEST(DroneKillRules, ExpiryWithNoDamageableOffLetsGoAt2500Ms) {
+  EXPECT_FALSE(dk::ExpiryLetGo(true, kT0, kT0 + 2499));
+  EXPECT_TRUE(dk::ExpiryLetGo(true, kT0, kT0 + 2500));
+  EXPECT_FALSE(dk::ExpiryLetGo(false, kT0, kT0 + 9999)) << "nothing open, nothing to let go";
 }
 
 }  // namespace

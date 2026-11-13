@@ -30,7 +30,7 @@ using sentinel::SlotResolution;
 using sentinel::kAarch64Relocs;
 using sentinel::ResolveSlot;
 namespace combat_pinned = nevr_quest::combat::pinned;
-namespace sg = nevr_quest::combat::sound_symbol_guard;
+namespace sg = nevr_quest::combat::sound_symbol_guard::targets;
 
 struct LoadedElf {
   std::vector<char> bytes;  // the file, for the section and dynamic symbol tables
@@ -205,6 +205,15 @@ int main(int argc, char** argv) {
 
   CheckWords(r15, sg::kWordPins, "sound symbol");
   CheckDefaultSymbol(r15);
+
+  // What a dropped post leaves undone and where the invalid-id record is made and written: the words and .rodata quads, and each function
+  // those words call through a PLT stub, by its JUMP_SLOT and its definition.
+  CheckWords(r15, sg::kDropPins, "sound drop");
+  CheckWords(r15, sg::kMinusOnePins, "sound -1 path");
+  for (const sg::Called& called : sg::kCalled) {
+    CheckSlotPin(r15, called.symbol, RelocKind::kJumpSlot, called.slot, called.symbol);
+    CheckDefinedAt(r15, called.symbol, called.fn);
+  }
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "sound_symbol_guard_pinned_test: %d check(s) failed\n", quest_test::Failures());

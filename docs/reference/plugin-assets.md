@@ -94,5 +94,5 @@ The engine's package manifest format, which a plugin does not need, is in `packa
 - Multi-buffer resource types.
 - Texture mip streaming and archive loads of a plugin-carried name. A whole level, archive included, is a resource
   set (`plugin-resources.md`, API v9).
-- A package set, a resource read from a package file, and script DLLs: a plugin serves those itself
+- A package set, a resource read from a package file, and script DLLs: the runtime serves an installed content pack itself
   (`content-packs.md`).

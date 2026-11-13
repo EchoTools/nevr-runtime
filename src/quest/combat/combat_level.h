@@ -2,8 +2,8 @@
  * for itself. Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in; this does.
  *
  * What it reads. CR15Game's two gamespace tables ({sym, gs*} rows of 16 bytes; counts at 0x1f78 and 0x1fb8; offsets 0x1f48/0x1f88) and, in each
- * gamespace of the game (gs+0x8 is the game), its level CSymbol64 at gs+0x58. The pinned build's offsets; the q15t plugin's `refresh_rate.cpp`
- * carried them (got_pinned_test.cpp checks them against the store libr15, and combat_level_targets.h ties each offset to its pinned word at compile time). Reads use process_vm_readv (safe_read.h): an unreadable
+ * gamespace of the game (gs+0x8 is the game), its level CSymbol64 at gs+0x58. The pinned build's offsets; the combat plugin's `refresh_rate.cpp`
+ * (imported in #1591) carried them (got_pinned_test.cpp checks them against the store libr15, and combat_level_targets.h ties each offset to its pinned word at compile time). Reads use process_vm_readv (safe_read.h): an unreadable
  * game is no level (fail closed).
  *
  * The three classes. A combat map: `mpl_combat_dyson`, `_combustion`, `_fission`, `_gauss`. The combat lobby: `mpl_lobby_b_combat` only. The other

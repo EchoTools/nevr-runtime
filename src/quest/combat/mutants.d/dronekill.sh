@@ -2,7 +2,7 @@
 NOWARN='1i #pragma GCC diagnostic ignored "-Wunused-variable"\n#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n#pragma GCC diagnostic ignored "-Wunused-function"\n#pragma GCC diagnostic ignored "-Wunused-but-set-parameter"'
 # a per-thread word shared by every thread (the mutants of the per-thread state)
 SHARED_WORD='struct SharedWord { int Create() noexcept { return 0; } std::uintptr_t Get() const noexcept { return v; } void Set(std::uintptr_t x) noexcept { v = x; } std::uintptr_t v = 0; }'
-# dronekill (part 1 of 6): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
+# dronekill (part 1 of 8): each rule of src/quest/combat/dronekill.cpp / dronekill_core.h removed once; src/quest/tests/dronekill_test.cpp must fail on every one
 # a row that names a drone kill rule (the group table, the gun table, the symbols, the chase velocity, the sizes and windows) mutates src/runtime/patch/dronekill_rules.h (#2359); dronekill_test compiles it through dronekill_core.h
 runm dk_pin_actor src/quest/combat/dronekill_targets.h "s/{0x36e2080ULL, 0x2059714ULL,/{0x36e2088ULL, 0x2059714ULL,/"
 runm dk_pin_enter src/quest/combat/dronekill_targets.h "s/0x36cacf8ULL, 0x263b700ULL/0x36cacf0ULL, 0x263b700ULL/"
@@ -25,7 +25,7 @@ runm dk_swap_fail_cont src/quest/combat/dronekill.cpp "s/    if (got == sentinel
 runm dk_want_fire src/quest/combat/dronekill.cpp "s/  const bool want_fire = g_lockon || g_shot, want_attack = g_chase;/  const bool want_fire = g_lockon, want_attack = g_chase;/"
 runm dk_want_fire_all src/quest/combat/dronekill.cpp "s/  const bool want_fire = g_lockon || g_shot, want_attack = g_chase;/  const bool want_fire = true, want_attack = g_chase;/"
 runm dk_want_attack src/quest/combat/dronekill.cpp "s/  const bool want_fire = g_lockon || g_shot, want_attack = g_chase;/  const bool want_fire = g_lockon || g_shot, want_attack = true;/"
-runm dk_needs_tick src/quest/combat/dronekill.cpp "s/  out.needsTick = g_kill || g_lockon || g_chase;/  out.needsTick = g_kill || g_lockon;/"
+runm dk_needs_tick src/quest/combat/dronekill.cpp "s/  out.needsTick = g_kill || g_lockon || g_chase || g_explosion;/  out.needsTick = g_kill || g_lockon || g_explosion;/"
 runm dk_shot_swapped src/quest/combat/dronekill.cpp "s/  g_shot_swapped.store(want_fire, std::memory_order_release);/  g_shot_swapped.store(true, std::memory_order_release);/"
 runm dk_shot_never src/quest/combat/dronekill.cpp "s/  g_shot_swapped.store(want_fire, std::memory_order_release);/  g_shot_swapped.store(false, std::memory_order_release);/"
 runm dk_quiet_swap src/quest/combat/dronekill.cpp "s/  sentinel::LogFields(status == sentinel::GotStatus::kOk ? LogLevel::kInfo : LogLevel::kError, \"combat_dronekill_hook\",/  sentinel::LogFields(LogLevel::kInfo, \"combat_dronekill_hook\",/"
@@ -72,16 +72,34 @@ runm dk_key_error_unlogged src/quest/combat/dronekill.cpp "s/{\"reason\", \"no_t
 # the runtime's own lines (#2187): the scope (dronekill.h, "Arena"), the production step, the kill feed
 runm dk_enter_scope src/quest/combat/dronekill.cpp "s/  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);/  if (false) return real(node, data);/"
 runm dk_capturing_down src/quest/combat/dronekill.cpp "s/  g_capturing.fetch_sub(1, std::memory_order_relaxed);/  (void)0;/"
-runm dk_scope_every src/quest/combat/dronekill.cpp "s/  if (n % kScopeFrames == 0) RefreshScope(game);/  if (n == 0) RefreshScope(game);/"
+runm dk_scope_every src/quest/combat/dronekill.cpp "s/  if (n % kScopeFrames == 0) RefreshScope();/  if (n == 0) RefreshScope();/"
 runm dk_scope_frames src/quest/combat/dronekill.h "s/kScopeFrames = 32;/kScopeFrames = 33;/"
-runm dk_scope_lobby src/quest/combat/dronekill.cpp "s/level::Classify(game, \/\*lobby=\*\/false, \&level_id)/level::Classify(game, \/*lobby=*\/true, \&level_id)/"
-runm dk_scope_same src/quest/combat/dronekill.cpp "s/  if (in == g_inScope.load(std::memory_order_relaxed)) return;/  (void)0;/"
+runm dk_scope_lobby src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatOrLobby();/"
+runm dk_scope_stale_believed src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = (look.bits \& (scope::kBitCombatMap | scope::kBitEchoArena)) == scope::kBitCombatMap;/"
+# the scope decides from the one record the tick reads (LastLook), and the change line names that record's level (combat_scope.h, Look)
+runm dk_scope_live_only src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap();/"
+runm dk_scope_one_look src/quest/combat/dronekill.cpp "s/  const bool in = scope::InCombatMap(look);/  const bool in = scope::InCombatMap(look) \&\& scope::InCombatMap();/"
+# README rule 9: each in-scope body and OnKilled judge the answer at the call (TestAStoppedTickPassesEveryCallThrough); no handler reads the clock (ExpectInert)
+runm dk_enter_stale_believed src/quest/combat/dronekill.cpp "s/^  if (!scope::LookIsFresh()) return real(node, data);.*\$//"
+runm dk_fire_stale_believed src/quest/combat/dronekill.cpp "s/^  if (!scope::LookIsFresh()) return real(cs, handle, velocity, remote);.*\$//"
+runm dk_attack_stale_believed src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void AttackInScope(/,/^}/s/^  if (!scope::LookIsFresh()) return;.*\$//"
+runm dk_k_stale_believed src/quest/combat/dronekill.cpp "s/ || !g_inScope.load(std::memory_order_relaxed) || !scope::LookIsFresh()) return;/ || !g_inScope.load(std::memory_order_relaxed)) return;/"
+runm dk_enter_clock_in_handler src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);\$/  if (!scope::LookIsFresh() || !g_inScope.load(std::memory_order_relaxed)) return real(node, data);/"
+runm dk_scope_level src/quest/combat/dronekill.cpp "s/  const std::uint64_t level_id = look.level;/  const std::uint64_t level_id = 0;/"
+runm dk_scope_same src/quest/combat/dronekill.cpp "s/^  if (in == was) return;\$/  (void)0;/"
 runm dk_scope_clear src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void RefreshScope/,/^}/s/^    g_table = Table();\$/    (void)0;/"
 runm dk_scope_clear_due src/quest/combat/dronekill.cpp "/^__attribute__((noinline)) void RefreshScope/,/^}/s/^    g_any_due.store(false, std::memory_order_release);\$/    (void)0;/"
 runm dk_scope_store src/quest/combat/dronekill.cpp "s/  g_inScope.store(in, std::memory_order_relaxed);/  (void)0;/"
 runm dk_scope_counts src/quest/combat/dronekill.cpp "s/{\"enter_calls\", calls\[1\] - g_scopeSince\[1\]}/{\"enter_calls\", calls[1]}/"
 runm dk_scope_since src/quest/combat/dronekill.cpp "s/  for (int i = 0; i < kHookCount; ++i) g_scopeSince\[i\] = calls\[i\];/  (void)0;/"
-runm dk_k_scope src/quest/combat/dronekill.cpp "/^void OnKilled/,/^}/s/  if (!g_installed.load(std::memory_order_acquire) || !g_inScope.load(std::memory_order_relaxed)) return;/  if (!g_installed.load(std::memory_order_acquire)) return;/"
+# the step refuses before the image when the combat level answer cannot change (combat_scope.h Live); off by its key wins
+runm dk_scope_live_unchecked src/quest/combat/dronekill.cpp "/^  if (!scope::Live()) return {false, Refuse(Result{}, \"scope_not_live\"/d"
+runm dk_scope_live_token src/quest/combat/dronekill.cpp "s/Refuse(Result{}, \"scope_not_live\"/Refuse(Result{}, \"module_not_loaded\"/"
+runm dk_scope_live_after_image src/quest/combat/dronekill.cpp "/^  if (!scope::Live()) return {false, Refuse(Result{}, \"scope_not_live\"/d; s/^  if (!tick::Add(\&Tick)) return/  if (!scope::Live()) return {false, Refuse(Result{}, \"scope_not_live\", \"\").status};\n&/"
+runm dk_scope_live_over_off src/quest/combat/dronekill.cpp "/^  if (!scope::Live()) return {false, Refuse(Result{}, \"scope_not_live\"/d; s/^ModuleResult Install(bool on, const Words\& words) noexcept {\$/&\n  if (!scope::Live()) return {false, Refuse(Result{}, \"scope_not_live\", \"\").status};/"
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): dronekill keeps the row on alone.
+runm dkrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.dronekill\.on/\1false/' quest-host-combat combat_install_test
+runm dk_k_scope src/quest/combat/dronekill.cpp "/^void OnKilled/,/^}/s/  if (!g_installed.load(std::memory_order_acquire) || !g_inScope.load(std::memory_order_relaxed) || !scope::LookIsFresh()) return;/  if (!g_installed.load(std::memory_order_acquire) || !scope::LookIsFresh()) return;/"
 runm dk_install_off src/quest/combat/dronekill.cpp "/^ModuleResult Install/,/^}/s/  if (!on) {/  if (false) {/;$NOWARN"
 runm dk_install_twice src/quest/combat/dronekill.cpp "/^ModuleResult Install/,/^}/s/  if (g_installed.load(std::memory_order_acquire)) return/  if (false) return/"
 runm dk_install_fns src/quest/combat/dronekill.cpp "s/    if (!ResolveFns(image.base, \&fns)) return/    if (false) return/"
@@ -102,10 +120,10 @@ runm dk_actor_capture_call src/quest/combat/dronekill.cpp "s/  ActorCapture(r, a
 runm dk_enter_inscope src/quest/combat/dronekill.cpp "s/^  EnterInScope(real, node, data);\$/  (void)0;/;$NOWARN"
 runm dk_fire_inscope src/quest/combat/dronekill.cpp "s/^  FireInScope(real, cs, handle, velocity, remote);\$/  (void)0;/;$NOWARN"
 runm dk_atk_inscope src/quest/combat/dronekill.cpp "s/^  AttackInScope(cs, handle);\$/  (void)0;/;$NOWARN"
-runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load()};/          1, g_expired.load()};/"
+runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<std::uint32_t>(g_capturing.load()), g_expired.load(), /          1, g_expired.load(), /"
 # "Prove arena pays nothing, by count": a read or a scan before the scope test must be seen by the arena test
 runm dk_arena_reads_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);\$/  { std::uint64_t probe = 0; SafeRead(reinterpret_cast<std::uintptr_t>(data), \&probe, sizeof probe); }\n&/"
-runm dk_arena_scans_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(cs, handle, velocity, remote);\$/  { std::uint64_t lv = 0; (void)level::Classify(0, false, \&lv); }\n&/"
-runm dk_arena_tick_scans src/quest/combat/dronekill.cpp "s/^  if (n % kScopeFrames == 0) RefreshScope(game);\$/  if (n % kScopeFrames == 0 || n % 7 == 0) RefreshScope(game);/"
+runm dk_arena_scans_before_scope src/quest/combat/dronekill.cpp "s/^#include \"quest\/combat\/combat_scope.h\"\$/&\n#include \"quest\/combat\/combat_level.h\"/; s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(cs, handle, velocity, remote);\$/  { std::uint64_t lv = 0; (void)level::Classify(0, false, \&lv); }\n&/"
+runm dk_arena_tick_scans src/quest/combat/dronekill.cpp "s/^#include \"quest\/combat\/combat_scope.h\"\$/&\n#include \"quest\/combat\/combat_level.h\"/; s/^  if (n % kScopeFrames == 0) RefreshScope();\$/&\n  (void)level::Scan(0, false);/"
 # off by its key is counted off on the phase line (combat_install_test)
 runm dk_off_not_counted src/quest/combat/dronekill.cpp "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test

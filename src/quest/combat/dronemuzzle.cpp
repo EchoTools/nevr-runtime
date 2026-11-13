@@ -16,6 +16,7 @@
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/combat/bullet_velocity_guard_rules.h"
 #include "runtime/patch/dronemuzzle_rules.h"
 
 extern "C" {
@@ -117,8 +118,8 @@ __attribute__((always_inline)) inline std::uint64_t Fire(std::uint8_t* bcs, std:
   const std::uint64_t r = next(bcs, handle, gun, damage, quat, vel, remote, flag);
   int rem = 0;
   const float* v = dronekill::ShotVelocity(&rem);
-  const float v2 = v != nullptr ? v[0] * v[0] + v[1] * v[1] + v[2] * v[2] : 0.0f;
-  if (v == nullptr || !(v2 > 1e-6f) || !std::isfinite(v2)) return r;  // not a drone shot / F46-6, DM-2: v ~ 0 or not finite (= fireguard)
+  // not a drone shot / F46-6, DM-2: v ~ 0 or not finite; the bullet-velocity guard's rule, one definition (runtime/combat/bullet_velocity_guard_rules.h)
+  if (::nevr_combat::bullet_velocity_guard::Skips(v)) return r;
   // FireBullet's own lookup of the record it has just filled (r15+0x210c9e4 .. 0x210ca04), every read through SafeRead
   const auto b = reinterpret_cast<std::uintptr_t>(bcs);
   std::uintptr_t index = 0, records = 0;

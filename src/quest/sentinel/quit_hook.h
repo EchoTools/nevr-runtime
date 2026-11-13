@@ -55,6 +55,15 @@ bool Install() noexcept;
 // The install on any target, with `finish` and `app` (the host test installs it in a fixture library).
 bool InstallAt(const sentinel::GotTarget& target, FinishFn finish, AppFn app) noexcept;
 
+// The QUIT's end without a QUIT, for another owner that must end the game (combat/frozen_frame_exit.h): finishes the game's activity with the
+// function and app the install armed, from any thread (ANativeActivity_finish's contract above). True when it did; false, and nothing called, when
+// there is no activity or no ANativeActivity_finish (the hook was not installed). It writes no line and counts no QUIT: the caller logs.
+// CanFinishActivity answers the same question without finishing.
+bool CanFinishActivity() noexcept;
+bool FinishActivity() noexcept;
+// True once a QUIT or FinishActivity has begun to finish the activity: the process is ending from here on (combat/frozen_frame_exit.h reads it).
+bool Finishing() noexcept;
+
 // Test support: arms the handler without touching a GOT slot. ResetForTest clears the counts.
 void ArmForTest(FinishFn finish, AppFn app) noexcept;
 void ResetForTest() noexcept;

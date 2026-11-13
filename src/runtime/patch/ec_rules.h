@@ -10,7 +10,7 @@
 //
 // Origin. EchoCombat's `plugin/veilnet.cpp` (he_is_the_cat, heisthecat31/EchoCombat), as released in v2.0.0 (nevr-pack 4d1f0024, whose
 // veilnet.cpp is c3ff4b54's; "EC" lines below are that file). PC ports c3ff4b54 (runtime/combat/veilnet.cpp); the Quest ported c14c3e0a
-// through the reference build's `runtime/native/afkxr/afk_ec_core.h` (kotorvr's q15t-upstream). Rule for rule: the packet EC 92-93 and
+// through the reference build's `runtime/native/afkxr/afk_ec_core.h` (kotorvr's echoquest-combat). Rule for rule: the packet EC 92-93 and
 // 119-125, AddToken EC 207-212, FirstTime EC 236-245, SawSend and PickServer EC 262-298, the client branch EC 913-928, the receive hook's
 // test EC 959-963, OursAtEnd and OurSelected EC 980-990, the tac-mod decision EC 1829-1846, the use watcher EC 2284-2290, the parse
 // EC 2389-2403 and 2418-2429.

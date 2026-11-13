@@ -1,43 +1,42 @@
 #!/usr/bin/env python3
-"""Regression tests for the runtime patch-source inventory verifier."""
+"""Regression tests for the runtime patch-source inventory verifier (#1350).
 
-import contextlib
-import io
+The verifier holds no list of its own: every ``patch/*.cpp`` on disk must be in ``PATCHES_SOURCES`` once, and every
+``patch/*.cpp`` entry must exist. A PR that adds a patch edits CMake and nothing else.
+"""
+
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
-import verify_patch_source_inventory as verifier  # noqa: E402
 import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 
-
-def accepted_fixture_sources() -> tuple[str, ...]:
-    return verifier.EXPECTED_PATCH_SOURCES
+BASE = ("patch/a_patch.cpp", "patch/b_patch.cpp")
 
 
 class VerifyPatchSourceInventoryTest(unittest.TestCase):
     def make_fixture(
         self,
         root: pathlib.Path,
-        sources: tuple[str, ...],
-        absent_files: tuple[str, ...] = (),
+        listed: tuple[str, ...],
+        on_disk: tuple[str, ...] | None = None,
     ) -> pathlib.Path:
+        """CMake lists `listed`; the files on disk are `on_disk` (default: the listed ones)."""
         runtime = root / "src" / "runtime"
         runtime.mkdir(parents=True)
-        for source in set(sources) - set(absent_files):
+        for source in set(listed if on_disk is None else on_disk):
             path = runtime / source
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
 
         cmake = runtime / "CMakeLists.txt"
-        entries = "\n".join(f'    "{source}"' for source in sources)
+        entries = "\n".join(f'    "{source}"' for source in listed)
         cmake.write_text(f"set(PATCHES_SOURCES\n{entries}\n)\n", encoding="utf-8")
         return cmake
 
@@ -49,98 +48,43 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             text=True,
         )
 
-    def test_the_real_runtime_cmake_list_matches_the_pin(self):
-        # The pin is what `just verify` checks; running it here puts it in `pytest tools/tests`, which every PR
-        # runs (#884 added two patch sources and the pin stayed at 16 until the release build failed on it).
+    def check(self, listed, on_disk=None) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
+        ) as temp_dir:
+            return self.run_verifier(self.make_fixture(pathlib.Path(temp_dir), listed, on_disk))
+
+    def test_the_real_runtime_cmake_list_matches_the_tree(self):
+        # The check `just verify` runs, also in `pytest tools/tests`, which every PR runs (#884 added two patch
+        # sources and the pin stayed at 16 until the release build failed on it).
         result = subprocess.run([sys.executable, VERIFIER], capture_output=True, check=False, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_accepts_complete_authoritative_fixture(self):
-        with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir=work_root.test_scratch()
-        ) as temp_dir:
-            result = self.run_verifier(
-                self.make_fixture(pathlib.Path(temp_dir), accepted_fixture_sources())
-            )
-
+    def test_accepts_a_list_that_matches_the_disk(self):
+        result = self.check(BASE)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"patch-source-inventory: OK count={len(accepted_fixture_sources())}", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=2", result.stdout)
 
-    def test_the_acceptance_fixture_takes_the_checkers_list(self):
-        # A PR that adds a source edits the checker's list and PATCHES_SOURCES, and nothing else. The fixture the
-        # acceptance tests build must follow the checker's list: a copy of the list here is a third place to edit.
-        added = "patch/added_by_one_pr.cpp"
-        with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", verifier.EXPECTED_PATCH_SOURCES + (added,)):
-            self.assertIn(added, accepted_fixture_sources())
+    def test_a_source_added_in_cmake_and_on_disk_passes_with_no_other_edit(self):
+        # Two PRs that each add one source edit CMake and add a file. No second list or count to collide (#2207, #1350).
+        result = self.check(BASE + ("patch/added_by_one_pr.cpp",))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_a_source_added_to_both_lists_passes_with_no_count_to_edit(self):
-        # Two PRs that each add one source each add it to the checker's EXPECTED_PATCH_SOURCES and to PATCHES_SOURCES. A count
-        # typed beside the list made their two identical count edits merge into one, and main failed (#2207).
-        sources = accepted_fixture_sources() + ("patch/added_by_one_pr.cpp",)
-        self.assertEqual(len(sources), len(accepted_fixture_sources()) + 1)
-        with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir=work_root.test_scratch()
-        ) as temp_dir:
-            cmake = self.make_fixture(pathlib.Path(temp_dir), sources)
-            with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", sources):
-                errors = verifier.verify(cmake)
+    def test_a_patch_file_planted_on_disk_but_not_in_cmake_fails(self):
+        # The planted case of #1350: a patch source that CMake does not compile.
+        result = self.check(BASE, on_disk=BASE + ("patch/planted.cpp",))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("patch source on disk is not in PATCHES_SOURCES: patch/planted.cpp", result.stderr)
 
-        self.assertEqual(errors, [])
+    def test_a_cmake_entry_with_no_file_fails(self):
+        result = self.check(BASE, on_disk=BASE[:1])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("PATCHES_SOURCES patch source is missing from disk: patch/b_patch.cpp", result.stderr)
 
-    def test_the_ok_line_counts_the_list_it_checked(self):
-        sources = accepted_fixture_sources() + ("patch/added_by_one_pr.cpp",)
-        self.assertEqual(len(sources), len(accepted_fixture_sources()) + 1)
-        stdout = io.StringIO()
-        with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir=work_root.test_scratch()
-        ) as temp_dir:
-            cmake = self.make_fixture(pathlib.Path(temp_dir), sources)
-            with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", sources), mock.patch.object(
-                sys, "argv", ["verify_patch_source_inventory.py", "--cmake", str(cmake)]
-            ), contextlib.redirect_stdout(stdout):
-                status = verifier.main()
-
-        self.assertEqual(status, 0)
-        self.assertIn(f"patch-source-inventory: OK count={len(sources)}", stdout.getvalue())
-
-    def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
-        scenarios = (
-            (
-                "missing",
-                tuple(source for source in accepted_fixture_sources() if source != "patch/xpid_patch.cpp"),
-                (),
-                "expected patch source absent from PATCHES_SOURCES: patch/xpid_patch.cpp",
-            ),
-            (
-                "duplicate",
-                accepted_fixture_sources() + ("patch/asset_cdn.cpp",),
-                (),
-                "duplicate PATCHES_SOURCES patch entry: patch/asset_cdn.cpp",
-            ),
-            (
-                "unexpected",
-                accepted_fixture_sources() + ("patch/new_runtime_patch.cpp",),
-                (),
-                "unexpected PATCHES_SOURCES patch source: patch/new_runtime_patch.cpp",
-            ),
-            (
-                "missing-on-disk",
-                accepted_fixture_sources(),
-                ("patch/pnsrad_enabler.cpp",),
-                "PATCHES_SOURCES patch source is missing from disk: patch/pnsrad_enabler.cpp",
-            ),
-        )
-
-        for name, sources, absent_files, expected_error in scenarios:
-            with self.subTest(name=name), tempfile.TemporaryDirectory(
-                prefix="patch-source-inventory-", dir=work_root.test_scratch()
-            ) as temp_dir:
-                result = self.run_verifier(
-                    self.make_fixture(pathlib.Path(temp_dir), sources, absent_files)
-                )
-
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn(expected_error, result.stderr)
+    def test_a_duplicate_entry_fails(self):
+        result = self.check(BASE + ("patch/a_patch.cpp",))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("duplicate PATCHES_SOURCES patch entry: patch/a_patch.cpp", result.stderr)
 
     def test_rejects_missing_authoritative_list(self):
         with tempfile.TemporaryDirectory(

@@ -6,7 +6,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 std::uint64_t ResolveActorAlias(CncaGame* game, SActorGuid* actor) {
     if (game == nullptr) {
@@ -25,4 +25,4 @@ std::uint64_t ResolveActorAlias(CncaGame* game, SActorGuid* actor) {
     return 1;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

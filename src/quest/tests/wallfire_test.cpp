@@ -3,13 +3,14 @@
 // distinct call sites; the engine's stub is a fake that follows CncaGameSpace -> CncaGame -> vtable +0x278 into a fake
 // CncaGame::StaticRaycastOccluded, which calls CBVHTree::Occluded through bvh's own hook on a synthetic room mesh.
 //
-// Moved from the q15t plugin's wallfire_test: the assertions on the shots are the same (a stock hit passes through, a clear segment is not
+// From the combat plugin's wallfire_test (#1591): the assertions on the shots are the same (a stock hit passes through, a clear segment is not
 // blocked, a segment through each wall is, another call site gets the stock answer, a null gamespace, a non-finite segment and every wrong game
 // structure get the stock answer, the log volume, the refusals and what they leave alone). What changed is the fixture (the manager's install on an
 // image, not a slot swap; the plugin's kill file is the `combat.wallfire` switch) and three deliberate behaviours: the check acts only on a combat map
 // or in the combat lobby, the request and the game chain are read with plain loads (the assertions that gave an unreadable pointer went with the
 // system call; a null pointer in the chain still gets the stock answer), and the counters of the dropped cases. New here: the scope, the switch and
-// its lines, the legacy file.
+// its lines, the legacy file. The scope is bvh's, which is the real combat level answer (combat_scope.h, #2382): the tick is installed on an image of
+// its own and the scope row has registered the refresh, and each look runs that refresh before bvh's callback, as the tick does.
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/wallfire.h"
@@ -29,11 +30,13 @@
 #include "nevr/symbol_hash.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
 #include "quest/tests/bvh_build.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -41,6 +44,8 @@ namespace {
 namespace bvh = nevr_quest::combat::bvh;
 namespace wf = nevr_quest::combat::wallfire;
 namespace pinned = sentinel::pinned;
+namespace scope = nevr_quest::combat::scope;
+namespace world = combat_test::scope_world;
 using combat_test::Image;
 using EchoVR::CSymbol64Hash;
 
@@ -156,13 +161,19 @@ void LoadLevels(std::initializer_list<const char*> names) {
 std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
 void CountScan() { g_scans.fetch_add(1); }
 double g_now = 100.0;
-int g_clockReads = 0;  // every read of the bvh module's clock: the arena path reads none
+int g_clockReads = 0;  // every read of the bvh module's clock or the combat level answer's: the arena path reads none
 double Clock() noexcept {
   ++g_clockReads;
   return g_now;
 }
+std::int64_t ScopeClock() noexcept {
+  ++g_clockReads;
+  return static_cast<std::int64_t>(std::llround(g_now * 1000.0));
+}
+// One frame of the game-thread tick a second later: the scope row's refresh (registered first), then bvh's callback.
 void Look() {
   g_now += 1.0;
+  scope::Refresh(LevelsAddress());
   bvh::Tick(LevelsAddress());
 }
 void EnterCombat() {
@@ -221,11 +232,24 @@ void Build(std::uint32_t siteWord, std::uintptr_t site) {
   wf::SetPinsForTest(&g_pins);
 }
 
+// The game-thread tick on an image of its own, with the scope row's refresh registered: the combat level answer bvh reads can change.
+Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+
 void Begin() {
   g_lines.clear();
   bvh::ResetForTest();
   wf::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&ScopeClock);
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(world::StartScope(&TickImageLookup));
   nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   g_stockQuery = g_stubCalls = g_gameCalls = 0;
   g_queryResult = false;
@@ -239,8 +263,10 @@ void End() {
   bvh::ResetForTest();
   wf::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
+  scope::ResetForTest();
   nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   g_image.Drop();
+  g_tickImage.Drop();
   sentinel::SetLogSink(nullptr);
 }
 

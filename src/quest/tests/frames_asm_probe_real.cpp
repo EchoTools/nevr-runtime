@@ -1,8 +1,8 @@
-// Built -fno-exceptions. Three assembly entries in the shapes the q15t plugin wrote them (dronemuzzle's two thunks, powerboost's resolve thunk), kept
-// as the frame sensor's regression probes (tests/quest frames_sensor_test.go). Never run. The runtime's entries are the ones checked on the sentinel itself:
+// Built -fno-exceptions. Three assembly entries in the shape dronemuzzle's two thunks and powerboost's resolve thunk had when they were written as
+// __attribute__((naked)) functions with no CFI, kept as the frame sensor's regression probes (tests/quest frames_sensor_test.go). Never run. The runtime's entries are the ones checked on the sentinel itself:
 // src/quest/combat/headset_gates_entry.inc, dronemuzzle_entry.inc and powerboost_thunk.inc.
 //
-//   frames_asm_probe_real_naked        the entries as the plugin writes them: three __attribute__((naked)) functions, none with CFI:
+//   frames_asm_probe_real_naked        the entries as first written: three __attribute__((naked)) functions, none with CFI:
 //                                      the sensor MUST fail them
 //   frames_asm_probe_real_moved        the same three as top-level asm() blocks with CFI, every published word read with ldar:
 //                                      the sensor MUST pass them
@@ -18,20 +18,20 @@ int LiveHelper(int value) noexcept;
 }  // namespace probe
 
 extern "C" {
-void* q15t_dm_tp_ret = nullptr;
-void* q15t_dm_tp_next = nullptr;
-void* q15t_dm_fire_ret = nullptr;
-void* q15t_dm_fire_next = nullptr;
-void* q15t_pb_cone_ret = nullptr;
-void* q15t_pb_resolve_real = nullptr;
+void* probe_dm_tp_ret = nullptr;
+void* probe_dm_tp_next = nullptr;
+void* probe_dm_fire_ret = nullptr;
+void* probe_dm_fire_next = nullptr;
+void* probe_pb_cone_ret = nullptr;
+void* probe_pb_resolve_real = nullptr;
 
-std::uint64_t q15t_dm_teleport(std::uint64_t a) noexcept { return static_cast<std::uint64_t>(probe::LiveHelper(static_cast<int>(a))); }
-std::uint64_t q15t_dm_fire(std::uint64_t a) noexcept { return static_cast<std::uint64_t>(probe::LiveHelper(static_cast<int>(a))); }
-const std::uint8_t* q15t_pb_cone_at(const void*, const std::uint8_t* f, std::uintptr_t) noexcept { return f + probe::LiveHelper(0); }
+std::uint64_t probe_dm_teleport(std::uint64_t a) noexcept { return static_cast<std::uint64_t>(probe::LiveHelper(static_cast<int>(a))); }
+std::uint64_t probe_dm_fire(std::uint64_t a) noexcept { return static_cast<std::uint64_t>(probe::LiveHelper(static_cast<int>(a))); }
+const std::uint8_t* probe_pb_cone_at(const void*, const std::uint8_t* f, std::uintptr_t) noexcept { return f + probe::LiveHelper(0); }
 
-void q15t_dm_tp_thunk();
-void q15t_dm_fire_thunk();
-void q15t_pb_resolve_thunk();
+void probe_dm_tp_thunk();
+void probe_dm_fire_thunk();
+void probe_pb_resolve_thunk();
 }
 
 #if defined(PROBE_REAL_NAKED)
@@ -64,25 +64,25 @@ void q15t_pb_resolve_thunk();
           PROBE_CFI(".cfi_endproc") ".size " #name ", .-" #name "\n");
 #endif
 
-PROBE_THUNK(q15t_dm_tp_thunk,
-            PROBE_THUNK_BODY(PROBE_LOAD_ACQUIRE, "q15t_dm_tp_ret", "q15t_dm_tp_next", "", "q15t_dm_teleport"))
-PROBE_THUNK(q15t_dm_fire_thunk,
-            PROBE_THUNK_BODY(PROBE_LOAD_ACQUIRE, "q15t_dm_fire_ret", "q15t_dm_fire_next", "", "q15t_dm_fire"))
-PROBE_THUNK(q15t_pb_resolve_thunk,
-            PROBE_THUNK_BODY(PROBE_LOAD_PB, "q15t_pb_cone_ret", "q15t_pb_resolve_real", "add x1, sp, #16\nmov x2, x24\n",
-                             "q15t_pb_cone_at"))
+PROBE_THUNK(probe_dm_tp_thunk,
+            PROBE_THUNK_BODY(PROBE_LOAD_ACQUIRE, "probe_dm_tp_ret", "probe_dm_tp_next", "", "probe_dm_teleport"))
+PROBE_THUNK(probe_dm_fire_thunk,
+            PROBE_THUNK_BODY(PROBE_LOAD_ACQUIRE, "probe_dm_fire_ret", "probe_dm_fire_next", "", "probe_dm_fire"))
+PROBE_THUNK(probe_pb_resolve_thunk,
+            PROBE_THUNK_BODY(PROBE_LOAD_PB, "probe_pb_cone_ret", "probe_pb_resolve_real", "add x1, sp, #16\nmov x2, x24\n",
+                             "probe_pb_cone_at"))
 
 namespace {
-NEVR_ASM_ENTRY_RECORD(kTp, q15t_dm_tp_thunk, q15t_dm_teleport);
-NEVR_ASM_ENTRY_RECORD(kFire, q15t_dm_fire_thunk, q15t_dm_fire);
-NEVR_ASM_ENTRY_RECORD(kPb, q15t_pb_resolve_thunk, q15t_pb_cone_at);
+NEVR_ASM_ENTRY_RECORD(kTp, probe_dm_tp_thunk, probe_dm_teleport);
+NEVR_ASM_ENTRY_RECORD(kFire, probe_dm_fire_thunk, probe_dm_fire);
+NEVR_ASM_ENTRY_RECORD(kPb, probe_pb_resolve_thunk, probe_pb_cone_at);
 }  // namespace
 
 int main() {
   sentinel::GotHook tp, fire, pb;
   const sentinel::GotTarget target{"libprobe.so", "probe", sentinel::RelocKind::kJumpSlot};
-  bool ok = sentinel::InstallAsmEntry(tp, target, kTp, &q15t_dm_tp_next) == sentinel::GotStatus::kOk;
-  ok = ok && sentinel::InstallAsmEntry(fire, target, kFire, &q15t_dm_fire_next) == sentinel::GotStatus::kOk;
-  ok = ok && sentinel::InstallAsmEntry(pb, target, kPb, &q15t_pb_resolve_real) == sentinel::GotStatus::kOk;
+  bool ok = sentinel::InstallAsmEntry(tp, target, kTp, &probe_dm_tp_next) == sentinel::GotStatus::kOk;
+  ok = ok && sentinel::InstallAsmEntry(fire, target, kFire, &probe_dm_fire_next) == sentinel::GotStatus::kOk;
+  ok = ok && sentinel::InstallAsmEntry(pb, target, kPb, &probe_pb_resolve_real) == sentinel::GotStatus::kOk;
   return ok ? 0 : 1;
 }

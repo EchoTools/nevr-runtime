@@ -1,4 +1,4 @@
-// Host test for the grey default irradiance texture (#2091, #1737 unit U25): the real handlers
+// Host test for the grey default irradiance texture (#2091, #1737): the real handlers
 // (src/quest/sentinel/irradiance_default_hook.cpp), built without exceptions as the sentinel builds it, driven through the two
 // thunks' entries with a model of CGEngineResources::Initialize and of the image upload helper FUN_019daf90 as stand-ins. No GOT
 // slot and no row is touched: got_pinned_test.cpp and the patcher's pinned test check both against the real library, and

@@ -9,7 +9,7 @@
  * same stores and the same four helper calls in the stock order, with the two vtable words read from the game's data pages at install time
  * the way the stock code reads them on each call. In every other scope (an Echo Arena level, a lobby, no game verified yet) it calls the
  * game's own constructor and the object is stock. The reconstruction never calls the game's constructor, so a hook older on the slot is not
- * reached from a combat build; nothing is older than this one (the q15t plugin's copy is gone).
+ * reached from a combat build; nothing is older than this one.
  *
  * Arena (docs/adr/0046). Arena and combat run on the same APK. What changes for an arena match: nothing the player sees or the game
  * computes; the constructor is the game's own. What it costs there: each construction of a mesh list asks the loaded levels once
@@ -20,10 +20,10 @@
  * When. The normal step (combat_install.h), after the plugin pass. The JUMP_SLOT of a BIND_NOW image is filled before any constructor runs and
  * must hold base + the constructor; a slot another hook took first joins the manager's chain (got_hook.h).
  *
- * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's constructor.
+ * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's constructor.
  *
- * Switch. `combat.meshstep` (default true, as upstream's shipped build turns `--resource-table-step-1` on; this replacement of the constructor has not run on a headset, the plugin's copy having always refused) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
- * plugin's data directory is a Warning naming the key.
+ * Switch. `combat.meshstep` (default true, as upstream's shipped build turns `--resource-table-step-1` on; this replacement of the constructor has not run on a headset) in config.yaml (docs/adr/0046 rule 4). The `meshstep.off` file is not read; one found in the
+ * data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the 33 code words of meshstep_targets.h are read and compared; a difference refuses the module with
  * nothing hooked.
@@ -38,7 +38,7 @@
  * Origin. The game's own code, read in the disassembly (docs/quest/combat/meshstep.md), and the reference build's upstream patch: `tools/re3/res_heap_patch.py`
  * with `--table-step-1` (RE-10's padding finding, wave 8; commit 35bba9f of kotorvr/echoquest-combat) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
  * its 32 in the CGShaderSetResource, CGInstancedModelResource and CGMeshListResource constructors, at these addresses less 0x100000. This module does
- * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the q15t
+ * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the combat
  * plugin (#1595), whose host-test harness and checked-pin style it follows.
  *
  * Lines (sentinel log):

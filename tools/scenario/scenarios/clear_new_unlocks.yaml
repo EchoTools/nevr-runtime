@@ -1,0 +1,21 @@
+# The game's "clear all new unlocks" (CR15NetGame, echovr.exe 0x1401a06c0): empties the local list, sets the profile's
+# "newunlocks" key, queues it into the CNSUser's pending changes and sets the CNSUser dirty bit; the next
+# SaveClientProfileChanges (0x1406131f0) then sends the update and the game logs it as
+# "[NSUSER] sent profile update: <json>" (format string at 0x141c3d1e8). Diagnostic for the "new unlocks never clear"
+# report: the pass is that the clear ran and the game sent an update whose JSON names newunlocks; what the service stores
+# is read back from its storage by hand. "seed" writes a count when the game holds none, so the clear path runs.
+name: clear_new_unlocks
+description: fire the game's clear-all-new-unlocks and see whether the profile update that goes out carries the cleared list
+steps:
+  - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: clear all new unlocks
+    fire: {action: clear_new_unlocks, seed: 1}
+  - name: the clear ran and reports the count and the dirty flag before and after
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] clear_new_unlocks count_before=\d+ count_after=0 user=present dirty_flags_before=0x[0-9a-f]+ dirty_flags_after=0x[0-9a-f]+', timeout: 10}
+  - name: the game sent a profile update
+    expect_log: {pattern: '\[NSUSER\] sent profile update: ', timeout: 60}
+  - name: the update names newunlocks
+    expect_log: {pattern: '\[NSUSER\] sent profile update: .*newunlocks', timeout: 5}

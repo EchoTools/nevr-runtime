@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "core/device_memory.h"
 #include "quest/data/fetch.h"
 #include "quest/data/package_pins.h"
 #include "quest/sentinel/data_root.h"
@@ -28,6 +29,7 @@ enum class StepOutcome {
   kFetched,  // the data was fetched and is in place
   kFailed,   // the data could not be had; the floor message was presented
   kMissing,  // the data is not there and this build does not fetch (allow_fetch false); kGameDataMissing was presented
+  kStubbed,  // the whole-game mode (StepConfig::all_assets): both stub manifests are in place; no data was fetched
 };
 
 const char* StepOutcomeName(StepOutcome outcome) noexcept;
@@ -60,8 +62,28 @@ inline constexpr const char* kNeedsStoragePermission =
 inline constexpr const char* kGameDataMissing =
     "Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again.";
 
+// What the whole-game mode's worker (StepConfig::all_assets_ready) answers: ok, or the message the player reads before the process ends.
+struct AllAssetsResult {
+  bool ok = true;
+  std::string message;
+};
+
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
+  // The whole-game mode (`assets.whole_game`, quest_config.h): the CDN holds every asset of the game, so the data zip is not the data
+  // of this launch. The step decides nothing about fetching and fetches nothing, whatever `allow_fetch` says and whatever is or is not
+  // under the data root: it writes the two zero-package stub manifests the engine reads at boot (boot_stub.h) where they are absent,
+  // keeps any manifest that is there, then asks `all_assets_ready` to finish the launch's setup (the download and the mount) and
+  // returns kStubbed. It never ends the process for a missing `_data`. A stub that cannot be written is kFailed (status kBadRoot): the
+  // engine could not start without it either. The stubs go to `fetch_root_override` when it is set, else to the root the decision picked.
+  bool all_assets = false;
+  // Called once, after both stubs are in place, with the root they are in. Null: nothing follows, and one `data_all_assets_ready` Warning says
+  // the launch is degraded (the engine boots on stubs with no asset source).
+  // A result that is not ok ends the step as kFailed with its message, presented and held like any floor message.
+  std::function<AllAssetsResult(const std::string& root)> all_assets_ready;
+  // Test seams for the stub files. `make_dirs` creates a directory and its parents (null: the real filesystem); `write_file` (below)
+  // writes a stub.
+  std::function<bool(const std::string& dir)> make_dirs;
   // The legacy root (/storage/emulated/0/readyatdawn) is read only with the storage permission; the media root
   // (Android/media/<package>, the app's own directory) needs none. False: the legacy root is neither recovered nor
   // looked at, the decision is made on the media root alone, and one `data_legacy_skipped` event says so.
@@ -92,9 +114,12 @@ struct StepConfig {
   std::function<void(const Event&)> on_step_warn;
   // Read-only seams for the data version the step logs (`data_version`, `manifest_sha256`). Null: the real filesystem.
   // `list_dir` gives the names in a directory (none when it cannot be read); `read_file` fills `bytes` with a whole
-  // file of at most 16 MiB and says whether it could.
+  // file and says whether it could. The real read is bounded by ManifestReadLimit.
   std::function<std::vector<std::string>(const std::string& dir)> list_dir;
   std::function<bool(const std::string& path, std::string& bytes)> read_file;
+  // Test seam: the memory the device can still give (core/device_memory.h). Null: read from /proc/meminfo. A false return is a missing
+  // fact, and a manifest is then not read.
+  std::function<bool(std::uint64_t* bytes)> memory_available;
   // Seams for the package check (package_pins.h). Null: the real filesystem.
   // `file_size` gives the length of a regular file and says whether it is there. `hash_file` streams a file through
   // sha256 and gives the 64 lowercase hex characters; false when it cannot be read to its end (a test injects results
@@ -108,6 +133,20 @@ struct StepConfig {
   std::size_t pinned_set_count = 0;
 };
 
+// A manifest file the step reads whole may take at most 1/N of the memory the device can still give. N is the share the cargo manifest
+// takes (kMemoryShareForManifest in core/cargo_limits.h, 8): both read one manifest whole while the engine is not yet running. The game reads a manifest whole,
+// sized by the file, and is bounded only by its allocator (CSysCompression::DecompressAndReadFile, libr15 0x2b9e0a0); here the bound
+// is a share of the device's memory, through the one function every memory-based limit uses (core/device_memory.h).
+inline constexpr std::uint64_t kMemoryShareForLocalManifest = 8;
+
+// The most bytes of manifest file the step reads on a device with `memory_available` bytes free.
+std::uint64_t ManifestReadLimit(std::uint64_t memory_available) noexcept;
+
+// Reads a file the step needs whole (the game's manifest, the verified marker): through `config.read_file` when a test set it,
+// otherwise from disk, refusing a file over ManifestReadLimit(memory the device can give). False when it cannot be read, is over the
+// limit or the device gave no memory fact; `*why` then names which: "unreadable", "over_limit" or "no_memory_fact" (empty when it read).
+bool ReadBoundedFile(const StepConfig& config, const std::string& path, std::string& bytes, const char** why = nullptr);
+
 // The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy
 // root when the config may not read it.
 std::vector<std::string> RecoveryRootsFor(const StepConfig& config);
@@ -118,6 +157,7 @@ struct StepResult {
   DataAction action = DataAction::kUse;
   std::string root;
   std::string message;  // set when the outcome is kFailed
+  bool stub_write_failed = false;  // kFailed in the whole-game mode because a stub manifest could not be written (status is kBadRoot)
 };
 
 StepResult RunDataStep(const StepConfig& config, Transport& transport);

@@ -8,15 +8,20 @@ Files: `src/quest/combat/dronekill.{h,cpp}`, `dronekill_core.h` (the platform-fr
 (the per-thread words); tests `src/quest/tests/dronekill_test.cpp` (`just test-quest-combat dronekill`), the pins in `src/quest/tests/got_pinned_test.cpp`
 (`just test-quest-hooks-pinned`); mutants `src/quest/combat/mutants.d/dronekill{,_b,_c,_d,_e,_f}.sh`.
 
-Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and afk_dronekill_core.h (kotorvr's echoquest-combat), which port EchoCombat
-`c14c3e0a` `plugin/dronefix.cpp` (LockedOn df 805-827, ChaseTarget df 1059-1095; the groups df 434-560, TouchLive df 778-793, the touch rule
+Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and afk_dronekill_core.h (kotorvr's echoquest-combat), which port EchoCombat's
+`plugin/dronefix.cpp` (LockedOn df 805-827, ChaseTarget df 1059-1095; the groups df 434-560, TouchLive df 778-793, the touch rule
 df 731-835, the gun table df 700-729, the chase table df 1037-1095).
 
 ## Switch and default
 
 `combat.dronekill` in `config.yaml`, a boolean, default **true**: the reference build ships `dronekill2.on` (all five words: kill, lockon, gun,
-chase, shot) and the q15t plugin built the module on. `false` installs nothing. The five words are not keys: all five are on (`dronekill::Words{}`).
-There is no switch file and no legacy file: the q15t plugin had none for this module.
+chase, shot) and the combat plugin imported in #1591 built the module on. `false` installs nothing. The five words are not keys: all five are on (`dronekill::Words{}`).
+There is no switch file and no legacy file for this module.
+
+`combat.dronekill_explosion` and `combat.dronemuzzle` default **true** too (`src/quest/sentinel/quest_config.h`, `dronekillExplosion` and
+`dronemuzzle`), and `combat.dronekill_hold` defaults **false** (the same file, `dronekillHold`). The two true ones depend on the scope:
+`combat.dronemuzzle` reads it through `dronekill::InCombatScope()` (`src/quest/combat/dronemuzzle.cpp`), and the explosion runs in the tick. So
+the leave window below is the default behaviour of the combat APK, not an effect of the hold alone.
 
 ## What it hooks
 
@@ -66,21 +71,76 @@ Warning, an Error when one cannot be removed). Last, the kill feed: `ec::OnDrone
   system's game space is inside the invoke-immediate window (`[[system+0x80]+0x368] != 0`), and the drone is locally controlled
   (`IsLocallyControlled`; fails closed: any unreadable or unknown thing is "not local" and writes nothing).
 - **Tick**: `dronekill::Tick(game)` runs the reference build's net tick body (its EC module called it at the end of each recvfrom on the game's socket)
-  once per frame on the game thread (combat_tick.h), and asks combat_level for the scope every 32 frames. A disable/enable that would have to be queued (invoke-immediate word 0) is **not** done by the
+  once per frame on the game thread (combat_tick.h), and asks the combat level answer (combat_scope.h) for the scope every 32 frames. A disable/enable that would have to be queued (invoke-immediate word 0) is **not** done by the
   module (the queue push races its drain): it waits (due bits expire after 2 s).
 
 ## Arena (same APK)
 
-Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module acts only while a
-combat map is loaded: `dronekill::Tick` asks `combat_level::Classify(game, lobby=false)` every 32 frames (`kScopeFrames`) and keeps the answer in
+Arena and combat run on the same APK, and Actor and Enter are script-node functions every level's scripts call, so the module acts only while its
+scope is on. The scope is on while a combat map is loaded and no Echo Arena level is, and for the leave window after the first no-combat-map answer (below, which bounds it against the map's end):
+`dronekill::Tick` asks the combat level answer every 32 frames (`kScopeFrames`), one `combat_scope.h`
+`LastLook()` record judged by `InCombatMap(look)` (a combat map, no Echo Arena level, fresh), whose level the change line names, and keeps the answer in
 one atomic, read by `InCombatScope()` (false before the first tick: fail closed). The combat lobby is not the scope (no drone is in it as far as
-this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). The scope moves to `combat_scope`'s `InCombatMap` (F19, PR
-#2246) when that file is on main; `InCombatScope` is the one place that changes.
+this module knows; `dronekill_test` checks `mpl_lobby_b_combat` is out of scope). The module is one of the scope row's readers (`combat.dronekill` is in
+`ScopeNormal()` in `combat_install.cpp`), and its step refuses with `scope_not_live` when the answer cannot change.
 
 Out of scope: Enter and FireBulletLocal call the game's function and return before anything else (no shot frame, so dronemuzzle passes too);
 AttackTarget returns after its call; Actor returns after its call when no drone Enter is in flight on any thread (always, out of scope); a
-'K' is dropped; the tick does nothing after its level ask; leaving the scope empties the group, touch, gun and chase tables, so nothing from a
-combat map is acted on later. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
+'K' is dropped; once the scope has ended the tick does nothing. The scope ends on `kLeaveAsks` = 3 no-combat-map answers in a row (a look
+cannot tell an unreadable game from one with no combat map; entering takes one), and then it empties the group, touch, gun and chase tables, so
+nothing from a combat map is acted on after that. Until then the scope is still on (see "The leave window").
+
+### The leave window
+
+From the first no-combat-map answer until the third, which is two 32-frame asks later, the scope stays on for up to 64 frames. In that window:
+
+- the tick runs its due work every frame: the due components are taken and turned off one at a time (`OffOne`, through `Revalidate`), and the
+  touch, chase and explosion ticks run under their own words (`TickBody` in `src/quest/combat/dronekill.cpp`). `dronekill_test`
+  (`TestScopeEndsAtTheLevelChange`) pins the due work running in the window and not after the scope ends;
+- the in-scope bodies of the four hooks and `OnKilled` run for each call that passes `scope::LookIsFresh()`, which the scope row's own look keeps fresh (its `Refresh`, not this module's asks). No
+  test pins them in the window; this follows from the code (`g_inScope` is set until the scope ends).
+
+Each kind of due work has its own guard (`dronekill.cpp`), and none of them reads whether the level is still loaded (from the code read; that an
+unloaded game space cannot keep a matching owner word is not established):
+
+- a component turned off or on (`OffOne` and `OnOne`: the due components, the held components an explosion releases, and the touch's off and on)
+  goes through `Revalidate`. It passes only when the system's owner word (read with `SafeRead`) still equals the recorded owner, the system is
+  found again in that space, its `Component()` has the read shape and returns the recorded handle. Then `DisableComponent`'s (or
+  `EnableComponent`'s) shape is checked, and an invoke-immediate word that is 0 makes the component wait.
+- a chase velocity (`ChaseTick`) goes through `ChaseStillOk` first. That reads the attack-target system's owner word (the recorded
+  `atOwner`), the attack handle, the record's physics handle and the attack system's physics pointer, which must be the recorded
+  physics system, and then the physics handle. `ChaseTick` then reads the physics system's owner word once: it must equal the
+  recorded owner, and that owner's invoke-immediate flag must be nonzero, before `set_vel`. `Revalidate` is not called.
+- an explosion (`FxTick`, then `RunExplosion`) goes through `EntryOk` for both drone entries (each must be the expected entry of the drone
+  library, by its module and offset) and a `SafeRead` of the context's state word. `Revalidate` is not called; the components it releases go off
+  through `OffOne`, as above.
+- a touch's off (`TouchTick`) first checks that the component or its actor is still in the table (`LiveComp`, `LiveActor`), then calls `OffOne`.
+
+So on an arena level, for up to 64 frames after the first no-combat-map answer, the due work and the in-scope bodies run on the combat map's
+recorded components. That path is the arena's cost in this window; the out-of-scope path counted under "Arena cost" below is the cost once the
+scope is off. The window is counted from that answer, not from the map's end. The asks are 32 frames apart (`n % kScopeFrames`, `Tick`), and the
+first look that reads the map's end comes at most 250 ms after the end while the game tick runs (`kLookEveryMs`, the scope row's look). The
+first no-combat-map ask comes at most 31 frames after that look, and the scope ends 64 frames after that ask. So the due work's last frame is at
+most 94 frames after the first frame whose look reads the end. The 31 holds because the scope row's refresh runs before dronekill's
+tick in the same frame: `combat_install.cpp` lists the `scope` module before the `dronekill` module, and `combat_tick.cpp` calls the
+tick callbacks in registration order, so a look on frame L is already stored when the ask on frame L reads it. With the refresh after
+the tick, the bound would be 95. The bound also assumes one `Tick` call per frame (`dronekill.h` describes the game's frame tick that
+way; the rate is not measured here).
+
+Lines in the window: one `combat_dronekill_scope_wait` (Debug) per no-combat-map answer that does not yet end the scope.
+
+The freshness test is made at call time (`src/quest/combat/README.md` rule 9). `InCombatScope()` reads the atomic that the tick's last ask stored, and
+only an ask writes it, so while the game tick is stopped it still says combat. Every in-scope body (`EnterInScope`, `FireInScope`, `AttackInScope`) and
+`OnKilled` therefore start with `scope::LookIsFresh()`: once the look is older than a second each hook calls the game's function as it was called and
+does nothing else, and a 'K' is dropped. The tick's own work needs no such test: it runs right after the scope's refresh in the same loop, and it runs for as long as the scope is on
+(the leave window above). A stale or missing look counts as no combat map at an ask that runs (`scope::InCombatMap` on the record), and leaving takes `kLeaveAsks` such asks
+in a row; so when the tick runs again, a combat map that is still loaded keeps the tables, and a stale look has to be asked three times before the
+scope ends. `dronekill_test` (`TestAStoppedTickPassesEveryCallThrough`) pins the stopped case: 60 s on the scope's clock with no tick leaves
+`InCombatScope()` true, and an Enter, a shot, an attack and a 'K' each pass through with no look-up, counter, shot frame or line; the next frame after
+the tick is back acts again. In a combat map the test costs each hooked call one clock read (31 to 38 ns on the x86 host, the scratch loop
+`powerboost.md` "Arena" names); Enter runs once per enable/disable-component node, AttackTarget once per frame per targeting drone, so the added time
+per frame is that rate times about 38 ns, and ADR 0038's 10 us a hook is reached only above about 260 calls a frame (not measured on a headset). The arena path reads no clock: `ExpectInert` counts the scope's clock reads and
+wants zero. One `combat_dronekill_scope` line per change of scope, with each hook's call count over the scope that ended (the
 measurement a headset run gives). `dronekill_test` (`TestArenaLevelsAreLeftAlone`, `TestScopeEndsAtTheLevelChange`) drives a drone's Enter,
 an Actor, a shot, an attack, a 'K' and 65 ticks on `mpl_arena_a`, `mpl_lobby_b2`, `mpl_lobby_b_combat` and no level, and checks that each hook
 called the game's function as it was called and nothing else happened: no look-up, no table entry, no disable, no velocity, no line.
@@ -96,9 +156,9 @@ on top of the game's own function; the thunk entry is `CallbackThunk::Entry`, sh
 | `SComponentNodeUtils::Actor` | 35 + the counter | 24: a frame, the game's call, one relaxed `ldr` of the in-flight count, `cbz`, the return | 59 + the counter | once per node that looks an actor up (Enter's among them) |
 | `CR15NetAutoTargetCS::FireBulletLocal` | 37 + the counter | 8: as Enter's, a tail call | 45 + the counter | once per auto-target shot (drones; none in arena as far as read) |
 | `CR15NetAutoTargetCS::AttackTarget` | 23 + the counter | 15: a frame, the game's call, `ldrb`, `tbnz`, the return | 38 + the counter | once per frame per auto-target with a target |
-| the frame tick (`combat_tick.h`) | | 23 instructions + the counter's `__aarch64_ldadd8_relax` on 31 frames of 32; on the 32nd also `RefreshScope` (combat_level `Classify`: reads by `process_vm_readv`) | | once per frame |
+| the frame tick (`combat_tick.h`) | | 23 instructions + the counter's `__aarch64_ldadd8_relax` on 31 frames of 32; on the 32nd also `RefreshScope` (one `LastLook()` of the combat level answer: a sequence-count read and a clock read, no read of the game; the level scan is the scope row's, four times a second while a reader is on) | | once per frame |
 
-No system call, lock, allocation or log line on any hook path out of scope. Not measured on a headset: how often arena's scripts run Enter and
+No system call, lock, allocation or log line on any hook path out of scope (in the leave window the paths run as in scope: see "The leave window"). Not measured on a headset: how often arena's scripts run Enter and
 Actor (the `combat_dronekill_scope` line carries the counts of each scope when it ends).
 
 
@@ -176,11 +236,13 @@ values; the host test pins them as literals (`TestPinnedConstants`) so a change 
 ## Lines (sentinel log)
 
 - `combat_dronekill_hook` `{"hook":"<name>","status":"installed|<GotStatus>"}`: Info when installed, Error otherwise. Plus the manager's own `got_hook` line.
-- `combat_dronekill_install`: `"result":"installed"` with the five words, `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
+- `combat_dronekill_install`: `"result":"installed"` with the five words, `explosion` (`combat.dronekill_explosion`), `hold` (`combat.dronekill_hold`), `fire_bullet_local`, `attack_target` (`hooked|not_hooked`) and
   `component_lookups`; `"result":"off"` (`off_config`); `"result":"refused"` with `reason` (the status token), `why` and the consequence (Error).
 - `combat_dronekill_link`: the kill feed is registered with ec. `combat_dronekill_tick_first`: the frame tick runs.
-- `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change.
-- `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`).
+- `combat_dronekill_scope` `{"in_combat":0|1,"level":"0x..","actor_calls":n,"enter_calls":n,"fire_calls":n,"attack_calls":n,"over_ms":n}`: one per change. `level` is
+  the level of the look that decided it (`combat_scope.h` `Look::level`: the Echo Arena level, else the combat map, else the combat lobby; 0 none).
+- `combat_dronekill_scope_wait` `{"no_level_asks":n,"needed":3}`: Debug, one per no-combat-map answer that does not yet end the scope (the leave window).
+- `combat_dronekill_stats` `{"enter_drone":n,"enter_other":n,"fires":n,"attacks":n,"ticks":n,"due_runs":n,"capturing":n,"expired":n,"explosions":n,"held":n,"final":0|1}`: Debug every 16384 drone Enters; Info once at the end of the process when the module is installed (zero counts when no combat map was seen). `expired` counts the drone ends that found their group live (`combat_dronekill_expired`); `explosions` and `held` are the drone explosion's (docs/quest/combat/drone_explosion.md, with its own lines).
 - `combat_dronekill_expired` `{"index":n,"group":n,"tid":n}`: Info, the drone's end: its damageable went off while its group was live. A drone that K killed and then ends writes none and is not counted. The first 16 of a run.
 - `combat_dronekill_log_cap` `{"lines":"expired","cap":16}`: Warning, once, written by the drone end past the cap; the stats record goes on counting.
 - `combat_dronekill_function` (Error: a function missing or not at its pin), `combat_dronekill_comparator` (Warning), `combat_dronekill_chase_off` (Error).
@@ -205,7 +267,7 @@ Not shown on this machine: any of it (no headset run in this unit).
 
 `dronekill_test` (the `combat` host-test group) runs the real module and its four thunks, installed by the real GotHook into four JUMP_SLOTs of a
 libr15 image built in memory, against a fake game laid out as the module reads it (component systems with the real read-shape words, a fake
-auto-target system, real `SafeRead`). Its file header says which checks carry the q15t plugin's test's assertions and which are new; the fixture, the log form and the
+auto-target system, real `SafeRead`). Its file header says which checks carry the combat plugin's test's assertions (#1591) and which are new; the fixture, the log form and the
 API names are the runtime's. Mutants: the six lists, run with
 `src/quest/combat/mutants.sh dronekill` (and `dronekill_b` .. `dronekill_f`, each naming `dronekill_test`); the results are in the PR.
 Not mutated: equivalent mutants (a `!ptr` test in front of a `SafeRead(ptr + n)`, the `g_fns.find` guard after

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "hook_install.h"
+#include "quest/headset_active.h"
 #include "hook_log.h"
 #include "hook_report.h"
 
@@ -27,8 +28,8 @@ std::atomic<int> g_requested{kUnset};
 std::atomic<int> g_requestSource{static_cast<int>(RequestSource::kMenu)};
 std::atomic<StartResolver> g_resolver{nullptr};
 std::atomic<bool> g_startAsked{false};
-// The headset's profile (ADR 0031): set once by the identity step at start; null until then, and a null profile serves no size.
-std::atomic<const headset_profile::Profile*> g_profile{nullptr};
+// Whether the player chose a level in this process (NotePlayerChose).
+std::atomic<bool> g_playerChose{false};
 
 std::atomic<std::uint64_t> g_nativeWidth{0};
 std::atomic<std::uint64_t> g_nativeHeight{0};
@@ -75,7 +76,7 @@ int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int 
   AskStartResolverOnce();
   g_sizeQueries.fetch_add(1, std::memory_order_relaxed);
   const int latched = g_latched.load(std::memory_order_acquire);
-  const headset_profile::Profile* profile = g_profile.load(std::memory_order_acquire);
+  const headset_profile::Profile* profile = headset_active::Active();
   if (id == kEyeWidthPropertyId) {
     g_nativeWidth.store(NonNegative(native), std::memory_order_relaxed);
     if (latched != kUnset && profile != nullptr) {
@@ -354,6 +355,8 @@ bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept {
                          {"why", "level_already_latched"}, {"latched", LevelName(LatchedLevel())}});
     return false;
   }
+  // A configuration word other than `stock` is the player's choice (the menu writes only very_low..ultra, texture_quality.h).
+  if (fromConfig && level != Level::kStock) NotePlayerChose();
   // The level is latched before the thunk can be entered, so its first call already sees it.
   SystemPropertyIntThunk::Arm(kHook);
   const sentinel::GotStatus status = install();
@@ -405,6 +408,7 @@ bool ArmForTest(Level level) noexcept {
 void ResetForTest() noexcept {
   Unlatch();
   g_requested.store(kUnset, std::memory_order_release);
+  g_playerChose.store(false, std::memory_order_release);
   g_requestSource.store(static_cast<int>(RequestSource::kMenu), std::memory_order_relaxed);
   g_resolver.store(nullptr, std::memory_order_release);
   g_startAsked.store(false, std::memory_order_release);
@@ -427,11 +431,11 @@ void ResetForTest() noexcept {
 
 bool IsLatched() noexcept { return g_latched.load(std::memory_order_acquire) != kUnset; }
 
-void SetHeadsetProfile(const headset_profile::Profile* profile) noexcept {
-  g_profile.store(profile, std::memory_order_release);
-}
+// The headset's profile (ADR 0031) is the identity step's, held in quest/headset_active.h: null until the step runs, and a null profile serves
+// no size.
+void SetHeadsetProfile(const headset_profile::Profile* profile) noexcept { headset_active::SetActive(profile); }
 
-const headset_profile::Profile* ActiveHeadsetProfile() noexcept { return g_profile.load(std::memory_order_acquire); }
+const headset_profile::Profile* ActiveHeadsetProfile() noexcept { return headset_active::Active(); }
 
 Level LatchedLevel() noexcept {
   const int value = g_latched.load(std::memory_order_acquire);
@@ -489,6 +493,9 @@ RequestSource LastRequestSource() noexcept {
 }
 
 void CommitApplied(Level level) noexcept { g_latched.store(static_cast<int>(level), std::memory_order_release); }
+
+void NotePlayerChose() noexcept { g_playerChose.store(true, std::memory_order_release); }
+bool PlayerChose() noexcept { return g_playerChose.load(std::memory_order_acquire); }
 
 unsigned long long SizeQueries() noexcept { return g_sizeQueries.load(std::memory_order_relaxed); }
 

@@ -5,7 +5,7 @@
 // spelled in this file, not taken from the module, so a wrong constant there fails here).
 //
 // The image holds, as the store file does, the one JUMP_SLOT of Enter at ELF 0x36f7928, and the eight bytes of Enter's unwind record at
-// ELF 0x356a6b0 (`d0b31bff dc010000`, inside `.eh_frame`), which the q15t plugin took for a second slot. The test shows that the install
+// ELF 0x356a6b0 (`d0b31bff dc010000`, inside `.eh_frame`), which the combat plugin imported in #1591 took for a second slot. The test shows that the install
 // changes the one word and no other byte of the image, and says nothing about the unwind record.
 //
 // What this test does not do: run Enter, or the lookup, in the game. got_pinned_test.cpp resolves the relocation and the ten code pins in
@@ -627,7 +627,8 @@ void TheShippedProcessEndWritesTheFinalLineOnce() {
   Finish();
 }
 
-// The table's row finds the old switch file where the plugin kept it: below the sentinel's files folder, in q15t.
+// The table's row finds the old switch file in the data directory below the sentinel's files folder; the directory's name is
+// pinned here as players' devices hold it (legacy_switch.h kDataSubdir).
 void TheProductionPathLooksWhereThePluginKeptItsSwitchFile() {
   char tmpl[] = "/tmp/nevr-sendguard-files-XXXXXX";
   QCHECK(mkdtemp(tmpl) != nullptr);

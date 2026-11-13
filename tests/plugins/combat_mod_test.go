@@ -71,13 +71,13 @@ func TestCombat2dDLLExists(t *testing.T) {
 // ── Override file tests ──
 
 type combatManifest struct {
-	Version           int                `json:"version"`
-	Sublevel          string             `json:"sublevel"`
-	SublevelHash      string             `json:"sublevel_hash"`
-	OriginalCombat    string             `json:"original_combat_hash"`
-	ArenaLevel        string             `json:"arena_level"`
-	ArenaHash         string             `json:"arena_hash"`
-	Resources         []combatResource   `json:"resources"`
+	Version        int              `json:"version"`
+	Sublevel       string           `json:"sublevel"`
+	SublevelHash   string           `json:"sublevel_hash"`
+	OriginalCombat string           `json:"original_combat_hash"`
+	ArenaLevel     string           `json:"arena_level"`
+	ArenaHash      string           `json:"arena_hash"`
+	Resources      []combatResource `json:"resources"`
 }
 
 type combatResource struct {

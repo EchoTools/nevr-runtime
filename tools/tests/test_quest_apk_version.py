@@ -97,6 +97,19 @@ class NumberingTest(unittest.TestCase):
     def test_same_distance_different_sha_gives_the_same_code(self):
         self.assertEqual(qv.version_code_for("5.6.1-dev.37+aaaaaaa"), qv.version_code_for("5.6.1-dev.37+bbbbbbb"))
 
+    def test_a_base_suffix_stamps_the_same_code_as_the_unsuffixed_version(self):
+        plain = qv.version_code_for("6.16.5-dev.58+aa977701")
+        for base in ("store", "combat"):
+            with self.subTest(base=base):
+                self.assertEqual(qv.version_code_for(f"6.16.5-dev.58-{base}+aa977701"), plain)
+
+    def test_a_suffix_other_than_the_two_bases_is_refused(self):
+        for bad in ("6.16.5-dev.58-foo+aa977701", "6.16.5-dev.58-store-combat+aa977701", "6.16.5-dev.58-+aa977701",
+                    "6.16.5-store+aa977701"):
+            with self.subTest(version=bad):
+                with self.assertRaises(qv.VersionError):
+                    qv.version_code_for(bad)
+
     def test_refusals(self):
         for bad in ("", "5.6", "5.6.0.1", "v5.6.0", "5.6.0-rc.1", "5.6.0-dev.1", "5.6.0-dev.+abcdef0", "05.6.0",
                     "5.6.0-dev.01+abcdef0", "5.6.0-dev.1+XYZ", "-1.0.0", "5.6.0 ", "5.6.1-dev.1+abcdef0\n"):

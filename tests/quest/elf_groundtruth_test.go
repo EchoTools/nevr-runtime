@@ -485,7 +485,7 @@ func TestAsmEntryInstallerPinNamesWhoMayCallIt(t *testing.T) {
 		}
 	}
 	for _, rel := range []string{
-		"quest/plugins/q15t/src/dronemuzzle.cpp", // the plugin is not combat code
+		"quest/plugins/example/src/dronemuzzle.cpp", // a plugin's file is not combat code
 		"quest/sentinel/entry.cpp",
 		"quest/combat_libs/x.cpp", // a prefix test on "quest/combat" would let this through
 		"quest/plugin/slot_hook.cpp",

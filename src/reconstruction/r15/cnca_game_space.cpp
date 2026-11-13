@@ -7,7 +7,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 void* CncaGame::GameSpace(std::uint64_t symbol) const {
     if (void* const loaded = LoadedGameSpace(symbol)) {
@@ -28,4 +28,4 @@ void* CncaGame::GameSpace(std::uint64_t symbol) const {
     return nullptr;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

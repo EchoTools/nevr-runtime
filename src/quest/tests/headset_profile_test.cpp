@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/integration/headset_identity_step.h"
 #include "quest/sentinel/hook_log.h"
@@ -30,7 +31,9 @@ namespace tq = nevr_quest::texture_quality;
 // ---- the rules ----------------------------------------------------------------------------------------------------------
 
 void ExpectRule(const char* device, const char* rule, headset_profile::Id id) {
-  const headset_profile::Match match = headset_profile::IdentifyDevice(device);
+  headset_profile::Inputs in;
+  in.device = device;
+  const headset_profile::Match match = headset_profile::Identify(in);
   QCHECK(std::strcmp(match.rule, rule) == 0);
   QCHECK(match.profile->id == id);
 }
@@ -60,25 +63,6 @@ void OnlyTheDeviceDecides() {
   in.model = "Quest 2";
   in.device = "eureka";
   QCHECK(headset_profile::Identify(in).profile->id == headset_profile::Id::kQuest3);
-}
-
-// Identify and IdentifyDevice answer the same rule for the same device, whatever the other properties are. The combat modules call
-// IdentifyDevice with the one property they read; the identity step calls Identify with all three (ADR 0031, R2).
-void IdentifyDeviceAgreesWithIdentifyForEveryRule() {
-  const std::string_view devices[] = {"hollywood", "eureka", "panther", "", "Hollywood", "hollywood2"};
-  for (const std::string_view device : devices) {
-    headset_profile::Inputs in;
-    in.manufacturer = "Acme";
-    in.model = "Unlisted 1";
-    in.device = device;
-    const headset_profile::Match full = headset_profile::Identify(in);
-    const headset_profile::Match one = headset_profile::IdentifyDevice(device);
-    QCHECK(std::strcmp(full.rule, one.rule) == 0);
-    QCHECK(full.profile == one.profile);
-  }
-  for (const headset_profile::Rule& rule : headset_profile::kRules) {
-    if (!rule.device.empty()) QCHECK(std::strcmp(headset_profile::IdentifyDevice(rule.device).rule, rule.name) == 0);
-  }
 }
 
 // ---- the settings -------------------------------------------------------------------------------------------------------
@@ -190,7 +174,7 @@ std::string TheOneLine() {
 // this run set.
 std::string IdentifyWith(const PropertySet& set) {
   g_set = set;
-  tq::SetHeadsetProfile(nullptr);
+  nevr_quest::headset_active::SetActive(nullptr);
   g_lines.clear();
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
   const bool ok = nevr_quest::integration::IdentifyHeadsetWith(&ReadFromSet);
@@ -219,25 +203,28 @@ void ExpectTheLine(const PropertySet& set, const char* rule, const char* profile
 // 512 MiB heap and the 72 Hz rate; the step sets the Quest 2 profile for the texture hook.
 void TheQuest2LineNamesItsInputsAndWhatFollows() {
   ExpectTheLine(kHollywood, "quest2_device", "quest2", "eye_high=2016x2224 system_heap_mib=512 level_hz=72");
+  QCHECK(nevr_quest::headset_active::Active() == &headset_profile::kQuest2);  // the heap sizes and the refresh-rate rule read it here (#2037)
   QCHECK(tq::ActiveHeadsetProfile() == &headset_profile::kQuest2);
 }
 
 // A Quest 3 by its device: the Quest 3 rule, the Quest 3 high pair, the row's heap and 90 Hz.
 void TheQuest3LineNamesItsInputsAndWhatFollows() {
   ExpectTheLine(kEureka, "quest3_device", "quest3", "eye_high=3072x3380 system_heap_mib=row_target level_hz=90");
+  QCHECK(nevr_quest::headset_active::Active() == &headset_profile::kQuest3);
   QCHECK(tq::ActiveHeadsetProfile() == &headset_profile::kQuest3);
 }
 
 // A device no rule names: the generic rule and profile, with the generic eye table (the Quest 2 high pair), the row's heap and 90 Hz.
 void AnUnlistedDeviceTakesTheGenericProfile() {
   ExpectTheLine(kUnlisted, "generic", "generic", "eye_high=2016x2224 system_heap_mib=row_target level_hz=90");
+  QCHECK(nevr_quest::headset_active::Active() == &headset_profile::kGeneric);
   QCHECK(tq::ActiveHeadsetProfile() == &headset_profile::kGeneric);
 }
 
 // On a host the property service is absent, so the default reader gives every property empty and the step names the generic
 // headset.
 void TheHostDefaultReadsNothingAndNamesTheGenericHeadset() {
-  tq::SetHeadsetProfile(nullptr);
+  nevr_quest::headset_active::SetActive(nullptr);
   g_lines.clear();
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
   QCHECK(nevr_quest::integration::IdentifyHeadset());
@@ -257,7 +244,6 @@ int main() {
   TheDeviceNamesTheRule();
   TheDeviceMatchesExactly();
   OnlyTheDeviceDecides();
-  IdentifyDeviceAgreesWithIdentifyForEveryRule();
   TheEyeTablesAreTodaysTables();
   GenericIsNoLargerThanQuest3AtEveryLevel();
   EachLevelIsTodaysPair();

@@ -2,7 +2,7 @@
  * switch words, the gear gate, and the reads of game memory the shared tac-mod hide makes (through SafeRead). The EC network rules (the
  * packet and its types, the receive test and its cap, the tokens, the dedupe ring, the server pick, the client branch, the use watcher, the
  * tac-mod parse and the list hide) are runtime/patch/ec_rules.h, which PC's runtime/combat/veilnet.cpp compiles too (#2358). The words and
- * the gate are the reference build's `afk_ec_core.h` (kotorvr's q15t-upstream). Deliberate differences from it:
+ * the gate are the reference build's `afk_ec_core.h` (kotorvr's echoquest-combat). Deliberate differences from it:
  *   - no MD5 / libr15 file identity: the install checks the pinned build ID;
  *   - every read of game memory goes through SafeRead (combat/safe_read.h);
  *   - the gear gate is a pthread recursive mutex with a static initializer (std::recursive_mutex has a non-constexpr constructor in libc++,
@@ -36,8 +36,8 @@ constexpr std::uint32_t kQuestEcServer = 0x040;
 // libsrc/221a0a3a2e56d247) writes. Each comment gives the store measured in our build of that library (build-quest-combat-libs; llvm-objdump
 // of the NDK) and the PC constant of the same word, by symbol name in src/runtime/combat/dronefix.cpp. The arm64 check
 // src/quest/combat/check/drone_explosion_page.sh asserts these stores and the two entry symbols against this header.
-// The drone's sound key, 0x5b8cc538e22ad937, is CSymbol64("ncaPhysics") (sdk/include/nevr/symbol_hash.h). The upstream and PC's
-// DRONE_SOUND both call it the drone's sound key. Not established: which script is the drone script, the symbol the sound entry uses
+// The drone's sound key, 0x5b8cc538e22ad937, is CSymbol64("ncaPhysics") (sdk/include/nevr/symbol_hash.h; the shared constant is
+// nevr_dronekill::kNcaPhysics in runtime/patch/dronekill_rules.h). The upstream and EC's DRONE_SOUND both call it the drone's sound key. Not established: which script is the drone script, the symbol the sound entry uses
 // (0xc8c33e48297612b6 in the lifted source), and the PC kDamageable branch. See docs/quest/combat/drone_explosion.md.
 constexpr std::uint32_t kDroneBlock = 0xd60;
 // +0x18 (page+0xd78): the counter of node steps the prelude saw. Store: 8b84 `add x8, x0, #0xd78`, then 8bb4 `ldaxr w9, [x8]`,
@@ -52,6 +52,12 @@ constexpr std::uint32_t kDroneSpawn = 0x28;
 // +0x30 (page+0xd90): the sound entry, re33_ecent_221a0a_13920 (0xbb14). Store: 8cb8 `str x19, [x0]` through `add x1, x9, #0x30`
 // (8c7c), x19 = 0xbb14. PC: slot 1 of the DEATH_TOKEN_RVA + 0x28 table in SpawnDeathFx (its loop runs over two slots).
 constexpr std::uint32_t kDroneSoundFn = 0x30;
+// The two entries the drone explosion calls are local symbols of the library (llvm-nm: `t`), absent from its dynamic symbol table, so
+// dladdr cannot name them: dronekill checks that an entry word points into kDroneLib at exactly these offsets from the library's base
+// (dladdr's dli_fbase). The check script asserts both offsets are the symbols' addresses and that neither name is in .dynsym.
+inline constexpr char kDroneLib[] = "lib221a0a3a2e56d247.so";
+constexpr std::uint64_t kDroneSpawnEntry = 0xb8d0;  // re33_ecent_221a0a_13720
+constexpr std::uint64_t kDroneSoundEntry = 0xbb14;  // re33_ecent_221a0a_13920
 // the EQUIP block's +10 u32 = guarded nodes skipped (+14 is the server flag, never set by a client)
 constexpr std::uint32_t kEquipSkips = 0xe90;
 

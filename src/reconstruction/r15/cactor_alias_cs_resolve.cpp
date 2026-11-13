@@ -7,7 +7,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 int CompareActorIds(const std::uint8_t* left, const std::uint8_t* right) {
@@ -101,4 +101,4 @@ bool CActorAliasCS::Resolve(void** game_space, std::uint64_t* actor) {
     return true;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

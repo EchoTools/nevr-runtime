@@ -76,6 +76,47 @@ fn without_a_canonical_folder_every_root_is_refused_outside_a_dev_run() {
     assert!(err.msg.contains("--dev-nevr-root"), "{}", err.msg);
 }
 
+/// The C ABI's stage (`NevrPcStage`) gets the root rule of the CLI's `pc stage` (#1383): refused on a root the host does not load
+/// from, unless the config says `dev_nevr_root`. Both calls stop before the manifest is needed, so the dev call's log is the proof
+/// that the check passed.
+#[test]
+fn the_c_stage_refuses_another_root_unless_the_config_says_dev() {
+    use nevr_install::ffi::{NevrClose, NevrInstallOpen, NevrLastError, NevrPcStage, NevrSession, NEVR_OK};
+    use std::ffi::{c_char, CStr, CString};
+    let d = tempfile::tempdir().unwrap();
+    let other = d.path().join("elsewhere");
+    let root = CString::new(other.to_str().unwrap()).unwrap();
+    let stage_log = other.join("logs/nevr-update.jsonl");
+    let open = |dev: bool| {
+        let cfg = CString::new(serde_json::json!({"platform": "pc", "nevr_root": other, "dev_nevr_root": dev}).to_string()).unwrap();
+        let mut sess: *mut NevrSession = std::ptr::null_mut();
+        assert_eq!(unsafe { NevrInstallOpen(cfg.as_ptr(), &mut sess) }, NEVR_OK);
+        sess
+    };
+    let stage = |sess: *mut NevrSession| {
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { NevrPcStage(sess, root.as_ptr(), std::ptr::null(), &mut out) };
+        let msg = unsafe { CStr::from_ptr(NevrLastError(sess)) }.to_string_lossy().into_owned();
+        (code, msg)
+    };
+
+    let refused = open(false);
+    let (code, msg) = stage(refused);
+    unsafe { NevrClose(refused) };
+    assert_ne!(code, NEVR_OK, "{msg}");
+    assert!(msg.contains("--dev-nevr-root"), "{msg}");
+    assert!(!other.join("update").exists(), "a refused stage makes no folder under the root");
+    let refusal: Value = std::fs::read_to_string(&stage_log).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).rfind(|r| r["event"] == "nevr_root").expect("the refusal is logged");
+    assert_eq!((refusal["level"].as_str(), refusal["ok"].as_bool()), (Some("ERROR"), Some(false)), "{refusal}");
+
+    let dev = open(true);
+    let (_, msg) = stage(dev);
+    unsafe { NevrClose(dev) };
+    assert!(!msg.contains("--dev-nevr-root"), "a dev config passes the root check: {msg}");
+    let passed: Value = std::fs::read_to_string(&stage_log).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).rfind(|r| r["event"] == "nevr_root").expect("the dev run is logged");
+    assert_eq!((passed["level"].as_str(), passed["ok"].as_bool(), passed["dev"].as_bool()), (Some("WARN"), Some(true), Some(true)), "{passed}");
+}
+
 #[test]
 fn a_root_that_differs_only_in_case_is_the_canonical_one_only_where_the_platform_ignores_case() {
     let d = tempfile::tempdir().unwrap();

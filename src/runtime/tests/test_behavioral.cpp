@@ -955,6 +955,28 @@ TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
   EXPECT_EQ(viaHook, expected);
 }
 
+// #788: a unix symbolic link to the plugins directory, made outside it (Proton reaches a game path through a symlinked
+// Steam library). Wine's final-path query does not resolve that link, so the name is matched by identity. The unsigned
+// file it names is refused like any other late load. The link is made before the filter is installed and removed after
+// the query; a Windows directory link is removed with RemoveDirectoryW and a unix one falls back to DeleteFileW.
+TEST_F(PluginDependencyGateTest, ALateLoadThroughALinkToThePluginsDirectoryIsRefused) {
+  Plan("late_via_link.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  std::wstring wideDir(pluginsDir_.begin(), pluginsDir_.end());
+  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size());
+  const std::wstring link = root + L"nevr_dir_link";
+  const std::wstring target = wideDir.substr(0, wideDir.size() - 1);  // the plugins directory, no trailing backslash
+  DeleteFileW(link.c_str());
+  ASSERT_TRUE(CreateSymbolicLinkW(link.c_str(), target.c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY)) << GetLastError();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring viaLink = link + L"\\late_via_link.dll";
+  for (wchar_t& c : viaLink) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  const bool blocked = nevr_dll_load_hook::IsLoadBlocked(viaLink.c_str(), nullptr);
+  if (!RemoveDirectoryW(link.c_str())) DeleteFileW(link.c_str());
+  EXPECT_TRUE(blocked) << "an unsigned file loaded through a link to the plugins directory was let through";
+  EXPECT_TRUE(TestLogContains("refused a later load of late_via_link.dll: unsigned"));
+}
+
 // A plugin's own DllMain loading another file runs inside the loader's own load of that plugin, with the loader
 // lock held. The file it loads is not the one the loader checked.
 TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
@@ -1107,6 +1129,56 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoa
   ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
   copies_.push_back(g_decoyTo);
   EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
+}
+
+// #1193: the System32 pins (#768) load each name from the System32 directory by its full path, with
+// LOAD_LIBRARY_SEARCH_SYSTEM32. The test points the pins at the fixture tree's own directory, which stands in for
+// System32, so a name that is only in that directory loads only when the pin names it by path.
+class PinnedSystemLibraryTest : public PluginSignatureGateTest {
+ protected:
+  void SetUp() override {
+    PluginSignatureGateTest::SetUp();
+    dir_ = fixtures_ + "/" + manifest_["trees"]["import_ok"]["dir"].get<std::string>();
+    ASSERT_NE(GetFileAttributesA((dir_ + "\\dep.dll").c_str()), INVALID_FILE_ATTRIBUTES) << dir_;
+    ASSERT_NE(GetFileAttributesA((dir_ + "\\importer.dll").c_str()), INVALID_FILE_ATTRIBUTES) << dir_;
+    ASSERT_EQ(GetModuleHandleA("dep.dll"), nullptr) << "dep.dll is already loaded: nothing to tell apart";
+    ASSERT_EQ(GetModuleHandleA("importer.dll"), nullptr) << "importer.dll is already loaded: nothing to tell apart";
+    char cwd[MAX_PATH] = {};
+    ASSERT_GT(GetCurrentDirectoryA(MAX_PATH, cwd), 0u);
+    cwd_ = cwd;
+  }
+
+  void TearDown() override {
+    TestHook_SetPinDirectory(nullptr);
+    SetCurrentDirectoryA(cwd_.c_str());
+    PluginSignatureGateTest::TearDown();
+  }
+
+  std::string dir_;
+  std::string cwd_;
+};
+
+// dep.dll has no file in System32, so the only way this pin loads it is by the path the pin gives. Loading by the bare
+// name finds nothing, because the flag searches System32 alone.
+TEST_F(PinnedSystemLibraryTest, APinLoadsTheNamedFileFromItsPathNotByItsBareName) {
+  TestHook_SetPinDirectory(dir_.c_str());
+  ASSERT_TRUE(SetCurrentDirectoryA(cwd_.c_str()));
+  std::string failed;
+  DWORD error = 0;
+  EXPECT_TRUE(TestHook_PinSystemLibraries({"dep.dll"}, &failed, &error)) << failed << " error " << error;
+}
+
+// importer.dll needs dep.dll. The current directory is the fixture directory, which the default search order reaches,
+// so dep.dll is found there unless the pin's flag keeps the search to System32. The pin must refuse.
+TEST_F(PinnedSystemLibraryTest, APinnedLibrarysDependenciesResolveFromSystem32Only) {
+  TestHook_SetPinDirectory(dir_.c_str());
+  ASSERT_TRUE(SetCurrentDirectoryA(dir_.c_str()));
+  std::string failed;
+  DWORD error = 0;
+  EXPECT_FALSE(TestHook_PinSystemLibraries({"importer.dll"}, &failed, &error))
+      << "the pin found dep.dll outside System32";
+  EXPECT_EQ(failed, "importer.dll");
+  EXPECT_EQ(error, static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
 }
 
 // #769: the loader's own load of a staged plugin is not checked twice, because the loader checked the file first. That
@@ -7908,6 +7980,11 @@ TEST(CliOptionValue, AnOptionAfterAValueOptionIsNotItsValue) {
     EXPECT_EQ(nevr_cli::OptionValue(3, argvPlus, 1), nullptr);
     wchar_t* argvDash[] = {exe, flag, dash};
     EXPECT_EQ(nevr_cli::OptionValue(3, argvDash, 1), nullptr);
+    // #685: the game's tokenizer also takes 0x96 (the ANSI en dash) as an option prefix; after
+    // CommandLineToArgvW that byte arrives as U+2013.
+    wchar_t enDashFlag[] = L"–noconsole";
+    wchar_t* argvEnDash[] = {exe, flag, enDashFlag};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvEnDash, 1), nullptr) << "-timestep then an en-dash token must leave the token to the parse";
 }
 
 TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {

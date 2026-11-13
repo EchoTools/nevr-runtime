@@ -21,6 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import axml_fixtures as fx  # noqa: E402
 import quest_apk_label as ql  # noqa: E402
 import quest_release_base as qb  # noqa: E402
+import quest_runtime_pin as pin  # noqa: E402
 import test_quest_apk_rename_package as rename_fixture  # noqa: E402
 
 REFERENCE = ("AndroidManifest.xml", "assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so",
@@ -153,12 +154,14 @@ class CheckArena(unittest.TestCase):
     STORE = ("AndroidManifest.xml", "lib/arm64-v8a/libr15.so", "lib/arm64-v8a/libovrplatformloader.so",
              "lib/arm64-v8a/libovrplatformloader_orig.so", "lib/arm64-v8a/lib0123456789abcdef.so")
 
-    def make(self, extra=(), stamp=b"arena"):
+    def make(self, extra=(), stamp=b"arena", extra_bytes=None):
         path = pathlib.Path(tempfile.mkdtemp()) / "arena.apk"
         self.addCleanup(shutil.rmtree, path.parent)
         with zipfile.ZipFile(path, "w") as z:
             for n in (*self.STORE, *extra):
                 z.writestr(n, f"bytes of {n}")
+            for n, data in (extra_bytes or {}).items():
+                z.writestr(n, data)
             if stamp is not None:
                 z.writestr(qb.ARENA_STAMP_ENTRY, stamp)
         return path
@@ -177,6 +180,16 @@ class CheckArena(unittest.TestCase):
                 refusal = self.refused(self.make(extra=(entry,)))
                 self.assertEqual(refusal.event, "arena_has_combat_entries")
                 self.assertEqual(refusal.fields["entries"], [entry])
+
+    def test_the_reference_runtime_is_refused_and_the_stores_own_libvrapi_passes(self):
+        """docs/adr/0047: the default Quest build carries no libvrapi.so from the reference build. The reference runtime is known by
+        its libr15 checksum table (twelve copies of one md5 text, quest_runtime_pin.carries_table); the store's own library has none."""
+        table = (pin.STOCK_ENTRY_MD5.encode() + b"\0") * pin.SITES
+        refusal = self.refused(self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF reference runtime\0" + table}))
+        self.assertEqual(refusal.event, "arena_has_combat_entries")
+        self.assertEqual(refusal.fields["entries"], [qb.RUNTIME_ENTRY])
+        store = self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF the store's VrApi\0" + pin.STOCK_ENTRY_MD5.encode() + b"\0"})
+        self.assertEqual(qb.check_arena(store)["event"], "arena_has_no_combat")
 
     def test_a_stamp_other_than_arena_or_none_is_refused(self):
         for stamp in (None, b"", b"combat", b"q15t", b"Arena", b"arena\n"):

@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <pthread.h>
 
 #include "core/cargo_resolver.h"
 #include "cargo_read_keys.h"
@@ -103,6 +102,13 @@ std::uint64_t Touch(std::uint64_t key) noexcept {
   return 0;
 }
 
+// Counts one request the key table or the line cap dropped. The count is written at 1, 2, 4, 8 ... so a session's log states
+// its own loss with a line per power of two, never a line per drop (docs/standards/logging.md Rule 16 shape).
+void CountUnlogged() noexcept {
+  const std::uint64_t count = g_unlogged.fetch_add(1, std::memory_order_relaxed) + 1;
+  if ((count & (count - 1)) == 0) sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_unlogged", {{"count", count}});
+}
+
 // The same as Touch for the cargo keys: how many times this key has been served, or 0 when it found no slot.
 std::uint64_t TouchCargo(std::uint64_t key) noexcept {
   const std::size_t home = static_cast<std::size_t>(key % kCargoSlots);
@@ -117,9 +123,6 @@ std::uint64_t TouchCargo(std::uint64_t key) noexcept {
 }
 
 long long ThreadId() noexcept { return static_cast<long long>(::syscall(SYS_gettid)); }
-
-// A cheap per-thread key for the pins: the pthread handle, an integer type on glibc and bionic (no system call, no allocation).
-std::uint64_t PinKey() noexcept { return static_cast<std::uint64_t>(::pthread_self()); }  // an integer on glibc and on bionic
 
 std::int64_t ReadI64(const unsigned char* request, std::size_t at) noexcept {
   std::int64_t v = 0;
@@ -199,7 +202,7 @@ void NoteReleaseFailure(std::uint64_t type, std::uint64_t name, std::uint64_t in
   const std::uint64_t seen = Touch(KeyOf(type, name, index));
   if (seen == 0) {
     // No slot for this key: its repeats cannot be told apart, so each is a candidate for the window.
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_tableFullSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_table_full",
                           {{"slots", kKeySlots}, {"probe_limit", kProbeLimit}});
@@ -222,7 +225,7 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
           std::uint64_t ret, const void* caller, const unsigned char* request) noexcept {
   const std::uint64_t seen = Touch(KeyOf(type, name, index));
   if (seen == 0) {
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_tableFullSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_table_full",
                           {{"slots", kKeySlots}, {"probe_limit", kProbeLimit}});
@@ -231,7 +234,7 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
   }
   if ((seen & (seen - 1)) != 0) return;
   if (g_lineTicket.fetch_add(1, std::memory_order_relaxed) >= kMaxLines) {
-    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    CountUnlogged();
     if (!g_capSaid.exchange(true, std::memory_order_relaxed)) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_cap", {{"max_lines", kMaxLines}});
     }
@@ -468,7 +471,7 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
                       unsigned char* request) noexcept {
   // Cargo first: a key the published shadow holds is filled by the game's own function from the shadow, and cargo replaces stock.
   // Select also pins the shadow of a texture's index 0 for its index 1, so it runs for every request.
-  const nevr_shadow::Shadow* const cargo = g_cargo.Select(PinKey(), name, index);
+  const nevr_shadow::Shadow* const cargo = g_cargo.Select(name, index);
   nevr_shadow::Found found;
   std::uint32_t user = 0;
   const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);

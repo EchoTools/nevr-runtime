@@ -19,10 +19,10 @@
  * When. The normal step (combat_install.h), after the plugin pass. A resource the game creates before the step is stock; the step cannot
  * correct it. Whether shader sets are created before the normal step has not been measured on a headset.
  *
- * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's function.
+ * Which APKs. The combat variants (combat::Active()); every other APK keeps the game's function.
  *
- * Switch. `combat.tablestep` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `tablestep.off` is not read; one found in the
- * plugin's data directory is a Warning naming the key.
+ * Switch. `combat.tablestep` (default true) in config.yaml (docs/adr/0046 rule 4). The `tablestep.off` file is not read; one found in the
+ * data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the step constant (tablestep_targets.h) is read and compared; a difference refuses the module with
  * nothing hooked.
@@ -35,7 +35,7 @@
  * Origin. The game's own code, read in the disassembly (docs/quest/combat/tablestep.md), and the reference build's upstream patch: `tools/re3/res_heap_patch.py`
  * with `--table-step-1` (RE-10's padding finding, wave 8; commit 35bba9f of kotorvr/echoquest-combat) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
  * its 32 in the CGShaderSetResource, CGInstancedModelResource and CGMeshListResource constructors, at these addresses less 0x100000. This module does
- * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the q15t
+ * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the combat
  * plugin (#1593), whose host-test harness and checked-pin style it follows.
  *
  * Lines (sentinel log):

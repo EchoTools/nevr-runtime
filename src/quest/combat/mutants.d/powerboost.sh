@@ -1,7 +1,7 @@
 # powerboost: each rule of src/quest/combat/powerboost.cpp, src/runtime/patch/powerboost_rules.h and powerboost_core.h removed or bent once;
 # src/quest/tests/powerboost_test.cpp must
 # fail on every one. Sourced by ../mutants.sh, which defines `runm <name> <file> <sed>`. The entry's text (powerboost_thunk.inc) is judged by
-# check/powerboost.sh, not by the host test: its mutants are listed at the end of docs/quest/combat/powerboost.md.
+# check/powerboost.sh, not by the host test; this list does not cover it.
 P=src/quest/combat/powerboost.cpp
 C=src/quest/combat/powerboost_core.h
 # the shared rules (#2339), also killed by the PC GTest, runtime/tests/test_powerboost_rules.cpp
@@ -29,14 +29,25 @@ runm pb_build_id_ignored   $P 's/if (std::strcmp(id, pinned::LibR15PatchedBuildI
 runm pb_no_tick            $P 's/if (!tick::Add(\&GameTick)) return Refused/if (false) return Refused/'
 # the arena scope
 runm pb_scope_always       $P 's/^inline bool Scoped() noexcept { return g_inScope.load(std::memory_order_acquire); }$/inline bool Scoped() noexcept { return true; }/'
-runm pb_scope_lobby_off    $P 's/level::Classify(game, \/\*lobby=\*\/true, \&levelId)/level::Classify(game, \/*lobby=*\/false, \&levelId)/'
+runm pb_scope_lobby_off    $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::InCombatMap(look);/'
+runm pb_scope_stale_believed $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::SeenCombatOrLobby();/'
+runm pb_scope_class_dropped $P 's/^  const scope::LookClass cls = scope::ClassOf(look);$/  const scope::LookClass cls = scope::LookClass::kOther;/'
+runm pb_scope_live_unchecked $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d'
+runm pb_scope_live_token   $P 's/return Refused("scope_not_live", stage,/return Refused("module_not_loaded", stage,/'
+runm pb_scope_live_after_image $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d; s/^  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused("build_id_mismatch", stage, kNothing);$/&\n  if (!scope::Live()) return Refused("scope_not_live", stage, kNothing);/'
+runm pb_scope_live_over_off $P '/^  if (!scope::Live()) return Refused("scope_not_live"/d; s/^ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins\& pins, int stage, const Fns\* fns) noexcept {$/&\n  if (!scope::Live()) return Refused("scope_not_live", stage, kNothing);/'
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): POWER BOOST at stages 1 to 3 keeps the row
+# on alone; stage 0 and stage 4 do not (they install nothing).
+runm pbrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)(g_config\.powerboostStage\.value >= powerboost::kRead \&\& g_config\.powerboostStage\.value <= powerboost::kCone)/\1false/' quest-host-combat combat_install_test
+runm pbrow_stage_low    src/quest/combat/combat_install.cpp 's/(g_config\.powerboostStage\.value >= powerboost::kRead \&\& /(g_config.powerboostStage.value >= powerboost::kOff \&\& /' quest-host-combat combat_install_test
+runm pbrow_stage_high   src/quest/combat/combat_install.cpp 's/ \&\& g_config\.powerboostStage\.value <= powerboost::kCone)/ \&\& g_config.powerboostStage.value <= powerboost::kCone + 1)/' quest-host-combat combat_install_test
 runm pb_scope_per_frame    $P 's/if (was == game \&\& frame % kScopeEveryFrames != 0) return;/if (was == game \&\& frame % 1 != 0) return;/'
 runm pb_scope_never_again  $P 's/if (was == game \&\& frame % kScopeEveryFrames != 0) return;/if (was == game \&\& frame + 1 != 0) return;/'
 runm pb_node_unscoped      $P '/^void NodeHandler/,/^}/ s/if (!Scoped()) return original(node, data);/if (false) return original(node, data);/'
 runm pb_heal_unscoped      $P '/^void HealHandler/,/^}/ s/if (!Scoped()) return original/if (false) return original/'
 runm pb_queued_unscoped    $P '/^void QueuedHealHandler/,/^}/ s/if (!Scoped()) return original/if (false) return original/'
 runm pb_link_unscoped      $P 's/^  if (Scoped()) LinkAct(/  if (true) LinkAct(/'
-runm pb_cone_unscoped      $P 's/if (!Scoped() || !g_cone.load(std::memory_order_acquire)) return body;/if (!g_cone.load(std::memory_order_acquire)) return body;/'
+runm pb_cone_unscoped      $P 's/if (!Scoped() || !g_cone.load(std::memory_order_acquire) || !scope::LookIsFresh()) return body;/if (!g_cone.load(std::memory_order_acquire) || !scope::LookIsFresh()) return body;/'
 runm pb_scope_line_quiet   $P 's/"combat_powerboost_scope",/"combat_powerboost_scope_x",/'
 # stage 1: read-only, no per-call logging, capped lines
 runm pb_stage1_swallows    $P 's/if (g_swallow.load(std::memory_order_acquire) \&\& amount >= kMarkerMin) {/if (amount >= kMarkerMin) {/'
@@ -136,6 +147,28 @@ runm pb_cfg_range          $Q 's/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0
 runm pb_cfg_quiet          $Q 's/" rejected reason=out_of_range (default stays)");/" ok");/' quest-host-shared quest_config_test
 # arena pays nothing, by count (the arena path of the node handler reads game memory / the heal handlers scan the levels before the scope test)
 runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, data);/  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(data) + 0x20, \&ok_); }\n  if (!Scoped()) return original(node, data);/'
-runm pb_arena_scans_before_scope $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
+runm pb_arena_scans_before_scope $P 's/^#include "quest\/combat\/combat_scope.h"$/&\n#include "quest\/combat\/combat_level.h"/; s/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'
 # off by its key (stage 0) is counted off on the phase line (combat_install_test)
 runm pb_off_not_counted $P "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
+# the one look and the scope line's fields: the decision, the logged class and the logged level come from one record (combat_scope.h LastLook)
+runm pb_one_look_in        $P 's/^  const bool in = scope::InCombatOrLobby(look);$/  const bool in = scope::InCombatOrLobby(scope::LastLook());/'
+runm pb_one_look_kind      $P 's/^  const scope::LookClass cls = scope::ClassOf(look);$/  const scope::LookClass cls = scope::ClassOf(scope::LastLook());/'
+runm pb_one_look_level     $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, scope::LastLook().level)}/'
+runm pb_kind_other_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kOther ? "combat_or_lobby" : scope::LookClassName(cls)}/'
+runm pb_kind_lobby_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kCombatOrLobby ? "combat_lobby" : scope::LookClassName(cls)}/'
+runm pb_kind_nolook_renamed $P 's/{"kind", scope::LookClassName(cls)}/{"kind", cls == scope::LookClass::kNoLook ? "stale" : scope::LookClassName(cls)}/'
+runm pb_level_zero         $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, 0)}/'
+runm pb_msg_swapped        $P 's/{"msg", in ? "a combat map/{"msg", !in ? "a combat map/'
+runm pb_kind_gate_in_only  $P 's/if (g_scopeKind.exchange(static_cast<int>(cls), std::memory_order_acq_rel) != static_cast<int>(cls) \&\&/if (g_scopeKind.exchange(in ? 1 : 0, std::memory_order_acq_rel) != (in ? 1 : 0) \&\&/'
+runm pb_level_zero_stale   $P 's/{"level", sentinel::HexString(lv, look.level)}/{"level", sentinel::HexString(lv, cls == scope::LookClass::kStale ? 0 : look.level)}/'
+# the scope's cadence (powerboost.md, "Arena"): the constant is changed in the header; the test pins the cadence as a literal (64 frames, 2 asks)
+runm pb_cadence_16 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 16;/'
+runm pb_cadence_64 src/quest/combat/powerboost.h 's/^inline constexpr std::uint32_t kScopeEveryFrames = 32;$/inline constexpr std::uint32_t kScopeEveryFrames = 64;/'
+# the held answer (powerboost.md, "Arena"): the wrappers' scope test re-judges the atomic at call time, so a stopped tick drops the answer
+# README rule 9: each in-scope body judges the answer at its call (the stopped-tick block), and no handler reads the clock (the arena block counts)
+runm pb_node_stale_believed   $P '/^__attribute__((noinline)) void NodeAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(node, data);.*$//'
+runm pb_heal_stale_believed   $P '/^__attribute__((noinline)) void HealAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);.*$//'
+runm pb_queued_stale_believed $P '/^__attribute__((noinline)) void QueuedHealAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return original(cs, handle, amount, user);.*$//'
+runm pb_link_stale_believed   $P '/^__attribute__((noinline)) void LinkAct(/,/^}/ s/^  if (!scope::LookIsFresh()) return;.*$//'
+runm pb_cone_stale_believed   $P 's/ || !scope::LookIsFresh()) return body;/) return body;/'
+runm pb_heal_clock_in_handler $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);$/  if (!scope::LookIsFresh() || !Scoped()) return original(cs, handle, amount, user);/'

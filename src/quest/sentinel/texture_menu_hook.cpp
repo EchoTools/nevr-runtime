@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <string_view>
 
 #if defined(__ANDROID__)
@@ -22,7 +23,12 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "outside_game_call.h"
+#include "quest/combat/pinned_words.h"
+#include "quest/headset_profile.h"
 #include "texture_menu.h"
+#include "texture_quality_input.h"
+#include "texture_quality_rules.h"
+#include "texture_quality_targets.h"
 
 namespace nevr_quest::texture_menu {
 
@@ -30,6 +36,8 @@ namespace {
 
 namespace tq = nevr_quest::texture_quality;
 namespace pin = sentinel::pinned;
+namespace rules = nevr_quest::texture_quality::rules;
+namespace input = nevr_quest::texture_quality::input;
 using tq::Level;
 
 constexpr int kUnset = tq::kLevelUnset;
@@ -87,6 +95,93 @@ std::atomic<int> g_lastRc{0};
 std::atomic<int> g_lastFrom{kUnset};
 std::atomic<int> g_lastTo{kUnset};
 
+// ---- the Quest 2 step-down (#1737, texture_quality_rules.h) -------------------------------------------------------------------
+
+// The game's upload count and lock (texture_quality_targets.h), published by Install after their pinned words hold; null: not pinned.
+std::atomic<const std::uint64_t*> g_uploadCount{nullptr};
+std::atomic<const std::uint32_t*> g_uploadLock{nullptr};
+std::atomic<std::int64_t (*)() noexcept> g_clock{nullptr};
+// The look's gate, as the poller last stepped it: read by the render thread.
+std::atomic<bool> g_lookOn{false};
+std::atomic<int> g_gateReason{static_cast<int>(rules::RuleReason::kNotInCombat)};
+std::atomic<std::int64_t> g_quietSinceMs{0};
+// The step-down is off for the run, and why (a word; the poller logs it once).
+std::atomic<bool> g_lookOff{false};
+std::atomic<const char*> g_lookOffWhy{"none"};
+// The applied level is the one the look asked for (a later change back is the look's too).
+std::atomic<bool> g_lookApplied{false};
+std::atomic<std::uint64_t> g_lookApplies{0};
+// The hold in progress: whether one is, how many began, and what the last one waited on (the poller writes one line per hold).
+std::atomic<bool> g_holding{false};
+std::atomic<std::uint64_t> g_lookHolds{0};
+std::atomic<int> g_holdReason{0};
+std::atomic<int> g_holdFrom{kUnset};
+std::atomic<int> g_holdTo{kUnset};
+std::atomic<std::uint64_t> g_holdUploads{0};
+std::atomic<std::uint32_t> g_holdLock{0};
+std::atomic<std::int64_t> g_holdQuietMs{0};
+
+std::int64_t NowMs() noexcept {
+  if (const auto clock = g_clock.load(std::memory_order_acquire)) return clock();
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// The level the apply works towards: the player's (`requested`), or Very Low on a Quest 2 in a settled combat level (texture_quality_rules.h).
+// With no look registered it is `requested` and nothing else is read.
+rules::Effective Decide(Level requested) noexcept {
+  rules::StepDownInputs in;
+  in.requested = requested;
+  in.registered = input::Registered() != nullptr;
+  if (!in.registered) return {requested, rules::RuleReason::kOff};
+  const nevr_quest::headset_profile::Profile* const profile = tq::ActiveHeadsetProfile();
+  in.quest2 = profile != nullptr && profile->id == nevr_quest::headset_profile::Id::kQuest2;
+  in.playerChose = tq::PlayerChose();
+  in.lookOffForRun = g_lookOff.load(std::memory_order_acquire);
+  in.gate.on = g_lookOn.load(std::memory_order_acquire);
+  in.gate.reason = static_cast<rules::RuleReason>(g_gateReason.load(std::memory_order_acquire));
+  return rules::EffectiveLevel(in);
+}
+
+void LookOff(const char* why) noexcept {
+  if (g_lookOff.exchange(true, std::memory_order_acq_rel)) return;
+  g_lookOffWhy.store(why, std::memory_order_release);
+}
+
+// Why a look-driven Resize may not be made now (texture_quality_rules.h ResizeHold): the look made now, the gate's quiet stretch, the upload words.
+// Unpinned words read as an upload in flight (the look is off for the run then, so this is a second line of defence).
+rules::Hold LookHold(std::uint64_t* uploads, std::uint32_t* lock) noexcept {
+  const input::LookFn look = input::Registered();
+  rules::ResizeInputs in;
+  in.look = look != nullptr ? look() : rules::Look{};
+  in.nowMs = NowMs();
+  in.quietSinceMs = g_quietSinceMs.load(std::memory_order_acquire);
+  const std::uint64_t* const count = g_uploadCount.load(std::memory_order_acquire);
+  const std::uint32_t* const word = g_uploadLock.load(std::memory_order_acquire);
+  in.uploads = count != nullptr ? __atomic_load_n(count, __ATOMIC_ACQUIRE) : 1U;
+  in.lock = word != nullptr ? __atomic_load_n(word, __ATOMIC_ACQUIRE) : 1U;
+  *uploads = in.uploads;
+  *lock = in.lock;
+  const rules::Hold hold = rules::ResizeHold(in);
+  if (hold != rules::Hold::kNone) {
+    // The quiet time the hold read: the poller's stretch, or the time since the input's own last load when that is shorter.
+    std::int64_t quiet = in.quietSinceMs == 0 ? 0 : in.nowMs - in.quietSinceMs;
+    if (in.look.lastLoadMs != 0 && in.nowMs - in.look.lastLoadMs < quiet) quiet = in.nowMs - in.look.lastLoadMs;
+    g_holdQuietMs.store(quiet, std::memory_order_relaxed);
+  }
+  return hold;
+}
+
+void NoteHold(rules::Hold hold, Level from, Level to, std::uint64_t uploads, std::uint32_t lock) noexcept {
+  g_holdReason.store(static_cast<int>(hold), std::memory_order_relaxed);
+  g_holdFrom.store(static_cast<int>(from), std::memory_order_relaxed);
+  g_holdTo.store(static_cast<int>(to), std::memory_order_relaxed);
+  g_holdUploads.store(uploads, std::memory_order_relaxed);
+  g_holdLock.store(lock, std::memory_order_relaxed);
+  if (!g_holding.exchange(true, std::memory_order_acq_rel)) g_lookHolds.fetch_add(1, std::memory_order_release);
+}
+
 // Per document: what the last rewrite did (0 none, else texture_menu::Status + 1) and its counts.
 enum Document : int { kNone = 0, kMenuSettings = 1, kGameSettings = 2 };
 constexpr int kDocuments = 3;
@@ -95,6 +190,11 @@ std::atomic<int> g_jsonRows[kDocuments];
 std::atomic<int> g_jsonPages[kDocuments];
 // KNOWN-WRONG #2043 Controller Hand Flip rows each document's rewrite added or removed (hand_flip.h).
 std::atomic<int> g_jsonHandFlip[kDocuments];
+// #1823: the walk that found no row, and the top-level keys, of each document's last rewrite of another shape (texture_menu.h). The
+// file-read path writes them and the poller copies them into the log line, under g_shapeMutex.
+pthread_mutex_t g_shapeMutex = PTHREAD_MUTEX_INITIALIZER;
+std::string g_shapeSite[kDocuments];
+std::string g_topKeys[kDocuments];
 
 // The document each thread is inside the file read of (kNone: none). Not a thread_local: the .so would get emulated TLS on the hook
 // path (TestNoEmulatedTLSInHookPath). The slots are keyed by pthread_t under a pthread mutex, the sentinel's own lock convention.
@@ -235,6 +335,10 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   g_jsonPages[document].store(r.pages, std::memory_order_relaxed);
   g_jsonHandFlip[document].store(r.handFlipRows, std::memory_order_relaxed);  // KNOWN-WRONG #2043 the interim toggle's rows
   g_jsonStatus[document].store(static_cast<int>(r.status) + 1, std::memory_order_release);
+  pthread_mutex_lock(&g_shapeMutex);
+  g_shapeSite[document] = r.shapeSite;
+  g_topKeys[document] = r.topKeys;
+  pthread_mutex_unlock(&g_shapeMutex);
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
   pthread_mutex_lock(&g_keptMutex);
@@ -286,6 +390,7 @@ int ResolveReference(const char* directory) noexcept {
   }
   const Level level = tq::LevelForReferenceIndex(index);
   g_playerSaved.store(true, std::memory_order_release);
+  tq::NotePlayerChose();  // the reference rule named a level: the player's (#1737 step-down)
   g_startSource.store(kStartReferenceRule, std::memory_order_release);
   g_startLevel.store(static_cast<int>(level), std::memory_order_release);
   g_appliedLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
@@ -419,7 +524,10 @@ void HandleApply(ApplyThunk::Fn original, const unsigned char* settings, void* g
     }
     // Every later delivery with another index is the player's choice in the menu: it is written to config.yaml for the next launch.
     const int previous = g_lastIndex.exchange(index, std::memory_order_acq_rel);
-    if (previous != kUnset && previous != index) g_pendingSave.store(index, std::memory_order_release);
+    if (previous != kUnset && previous != index) {
+      g_pendingSave.store(index, std::memory_order_release);
+      tq::NotePlayerChose();  // a change in the menu: the player's level stands in combat too (#1737 step-down)
+    }
     const Level level = tq::LevelForMenuIndex(index);
     g_menuLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
     tq::RequestLevel(level, tq::RequestSource::kMenu);
@@ -439,9 +547,18 @@ void RefuseForGood(const char* why) noexcept {
 void ApplyPending(void* engine) noexcept {
   const int wanted = tq::RequestedLevelValue();
   if (wanted == kUnset || !tq::IsLatched() || g_disabled.load(std::memory_order_acquire)) return;
-  const Level want = static_cast<Level>(wanted);
   const Level have = tq::LatchedLevel();
-  if (want == have) return;
+  // The player's level, or the Quest 2 step-down's (Decide); with no look registered, the player's.
+  const rules::Effective effective = Decide(static_cast<Level>(wanted));
+  const Level want = effective.level;
+  if (want == have) {
+    if (effective.reason == rules::RuleReason::kPlayerChoice) g_lookApplied.store(false, std::memory_order_release);
+    g_holding.store(false, std::memory_order_release);
+    return;
+  }
+  // A change the look causes: stepping down, or back from its level while the player has not chosen. It waits for a quiet window.
+  const bool lookDriven = effective.reason == rules::RuleReason::kQuest2Combat ||
+                          (g_lookApplied.load(std::memory_order_acquire) && effective.reason != rules::RuleReason::kPlayerChoice);
 
   // Two levels that give the same eye size need no rebuild (`stock` and Low on one headset).
   const tq::Counts counts = tq::CurrentCounts();
@@ -450,6 +567,7 @@ void ApplyPending(void* engine) noexcept {
     const tq::EyeSize from = tq::EffectiveSize(have, native, tq::ActiveHeadsetProfile());
     const tq::EyeSize to = tq::EffectiveSize(want, native, tq::ActiveHeadsetProfile());
     if (from.width == to.width && from.height == to.height) {
+      g_lookApplied.store(effective.reason == rules::RuleReason::kQuest2Combat, std::memory_order_release);
       tq::CommitApplied(want);
       g_appliedLevel.store(static_cast<std::uint64_t>(want), std::memory_order_relaxed);
       g_equalCommits.fetch_add(1, std::memory_order_relaxed);
@@ -489,6 +607,19 @@ void ApplyPending(void* engine) noexcept {
   const std::uint32_t displayHeight = LoadAt<std::uint32_t>(engine, pin::engine_layout::kDisplayHeight);
   const std::int32_t displayMode = LoadAt<std::int32_t>(engine, pin::engine_layout::kDisplayMode);
 
+  // The step-down's guard: no look-driven Resize while a gamespace loads, within 10 s of one, or while the upload count or lock is taken
+  // (docs/quest/combat/texture_quest2.md). Held: looked at again next frame.
+  if (lookDriven) {
+    std::uint64_t uploads = 0;
+    std::uint32_t lock = 0;
+    const rules::Hold hold = LookHold(&uploads, &lock);
+    if (hold != rules::Hold::kNone) {
+      NoteHold(hold, have, want, uploads, lock);
+      return;
+    }
+  }
+  g_holding.store(false, std::memory_order_release);
+
   // CCanvas::Resize resizes the render-target manager before CVR::Resize refreshes the eye size, so the manager would be built
   // for the previous level. The eye size is refreshed first (it only writes CVR's size, and the eye-size hook answers it with the
   // level committed here).
@@ -509,11 +640,14 @@ void ApplyPending(void* engine) noexcept {
   g_lastRc.store(rc, std::memory_order_relaxed);
   if (rc == 0) {
     g_applies.fetch_add(1, std::memory_order_relaxed);
+    g_lookApplied.store(effective.reason == rules::RuleReason::kQuest2Combat, std::memory_order_release);
+    if (lookDriven) g_lookApplies.fetch_add(1, std::memory_order_relaxed);
     return;
   }
   // The engine could not rebuild at the new level: back to the level its buffers were built for, and the failed one is not
   // asked for again.
   g_failed.fetch_add(1, std::memory_order_relaxed);
+  if (lookDriven) LookOff("resize_failed");  // the step-down is not tried again in this run
   tq::CommitApplied(have);
   g_appliedLevel.store(static_cast<std::uint64_t>(have), std::memory_order_relaxed);
   tq::RequestLevel(have, tq::RequestSource::kMenu);
@@ -548,8 +682,105 @@ struct Logged {
   int eyeSource = -1;
   int eyeW = -1;
   int eyeH = -1;
+  // The step-down's lines: the last rule written (level and reason), how many, the holds written and the look-off line.
+  int ruleLevel = -1;
+  int ruleReason = -1;
+  int ruleLines = 0;
+  unsigned long long ruleUnlogged = 0;
+  unsigned long long ruleCounted = 0;       // the value of ruleUnlogged the last count line named
+  std::int64_t ruleCountAtMs = 0;           // when it was written (0: none yet)
+  unsigned long long holds = 0;
+  bool lookOff = false;
 };
 Logged g_logged;
+// The look's gate (texture_quality_rules.h), stepped by the poller only (under g_pollMutex).
+rules::LookGate g_gate;
+constexpr int kRuleLines = 32;
+// After the cap, the count of changes not written is logged at most this often, and only while it grew.
+constexpr std::int64_t kRuleCountEveryMs = 60000;
+
+// Steps the look's gate and publishes it, then writes the step-down's lines: one per change of the level sent or its reason (at most kRuleLines,
+// then one notice and a count), one per hold, one when the step-down is turned off for the run. Writes nothing with no look registered.
+int PollLook() noexcept {
+  const input::LookFn look = input::Registered();
+  if (look == nullptr) return 0;
+  int lines = 0;
+  if (g_uploadCount.load(std::memory_order_acquire) == nullptr || g_uploadLock.load(std::memory_order_acquire) == nullptr) {
+    LookOff("upload_words_unavailable");
+  }
+  const std::int64_t now = NowMs();
+  const rules::Look seen = look();
+  g_gate = rules::LookStep(g_gate, seen, input::Switches(), now);
+  g_quietSinceMs.store(g_gate.quietSinceMs, std::memory_order_release);
+  g_gateReason.store(static_cast<int>(g_gate.reason), std::memory_order_release);
+  g_lookOn.store(g_gate.on, std::memory_order_release);
+
+  const int requested = tq::RequestedLevelValue();
+  const Level asked = requested == kUnset ? tq::LatchedLevel() : static_cast<Level>(requested);
+  const rules::Effective effective = Decide(asked);
+  if (static_cast<int>(effective.level) != g_logged.ruleLevel || static_cast<int>(effective.reason) != g_logged.ruleReason) {
+    g_logged.ruleLevel = static_cast<int>(effective.level);
+    g_logged.ruleReason = static_cast<int>(effective.reason);
+    if (g_logged.ruleLines < kRuleLines) {
+      ++g_logged.ruleLines;
+      const nevr_quest::headset_profile::Profile* const profile = tq::ActiveHeadsetProfile();
+      const bool quest2 = profile != nullptr && profile->id == nevr_quest::headset_profile::Id::kQuest2;
+      const bool stepped = effective.reason == rules::RuleReason::kQuest2Combat;
+      const sentinel::LogField fields[] = {
+          {"level_asked", tq::LevelName(asked)},
+          {"level_sent", tq::LevelName(effective.level)},
+          {"reason", rules::RuleReasonName(effective.reason)},
+          {"where", rules::WhereName(seen.where)},
+          {"quest2", quest2 ? 1 : 0},
+          {"player_chose", tq::PlayerChose() ? 1 : 0},
+          {"unlogged", static_cast<long long>(g_logged.ruleUnlogged)},
+          {"msg", stepped ? "a Quest 2 in a settled combat level is sent Very Low; the Resize waits for a window with no level loading"
+                          : "the player's level is sent"}};
+      sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_level_rule", fields, 8U);
+      ++lines;
+      if (g_logged.ruleLines == kRuleLines) {
+        sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_level_rule",
+                            {{"capped", kRuleLines}, {"msg", "later changes of the level sent are counted, not logged; texture_quality_level_rule_count names how many, at most once a minute while it grows"}});
+        ++lines;
+      }
+    } else {
+      ++g_logged.ruleUnlogged;
+    }
+  }
+  if (g_logged.ruleLines >= kRuleLines && g_logged.ruleUnlogged != g_logged.ruleCounted &&
+      (g_logged.ruleCountAtMs == 0 || now - g_logged.ruleCountAtMs >= kRuleCountEveryMs)) {
+    g_logged.ruleCounted = g_logged.ruleUnlogged;
+    g_logged.ruleCountAtMs = now;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_level_rule_count",
+                        {{"unlogged", static_cast<long long>(g_logged.ruleUnlogged)},
+                         {"level_sent", tq::LevelName(static_cast<Level>(g_logged.ruleLevel))},
+                         {"reason", rules::RuleReasonName(static_cast<rules::RuleReason>(g_logged.ruleReason))},
+                         {"msg", "changes of the level sent past the 32 written lines; the level and reason here are the latest"}});
+    ++lines;
+  }
+  const unsigned long long holds = g_lookHolds.load(std::memory_order_acquire);
+  if (holds != g_logged.holds) {
+    g_logged.holds = holds;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_level_held",
+                        {{"level_from", tq::LevelName(static_cast<Level>(g_holdFrom.load(std::memory_order_relaxed)))},
+                         {"level_to", tq::LevelName(static_cast<Level>(g_holdTo.load(std::memory_order_relaxed)))},
+                         {"hold", rules::HoldName(static_cast<rules::Hold>(g_holdReason.load(std::memory_order_relaxed)))},
+                         {"uploads", static_cast<long long>(g_holdUploads.load(std::memory_order_relaxed))},
+                         {"lock", static_cast<long long>(g_holdLock.load(std::memory_order_relaxed))},
+                         {"quiet_ms", static_cast<long long>(g_holdQuietMs.load(std::memory_order_relaxed))},
+                         {"holds", static_cast<long long>(holds)},
+                         {"msg", "the step-down's Resize waits: it is made only with no level loading for 10 s and no upload in flight"}});
+    ++lines;
+  }
+  if (!g_logged.lookOff && g_lookOff.load(std::memory_order_acquire)) {
+    g_logged.lookOff = true;
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "texture_quality_level_rule_off",
+                        {{"why", g_lookOffWhy.load(std::memory_order_acquire)},
+                         {"msg", "the Quest 2 step-down is off for this run: the player's level is sent in combat too"}});
+    ++lines;
+  }
+  return lines;
+}
 std::atomic<int> g_propertyLast{kUnset};
 
 const char* DocumentName(int document) noexcept {
@@ -617,6 +848,7 @@ int PollLocked() noexcept {
       Level level = Level::kStock;
       if (ParsePropertyLevel(value, &level) && static_cast<int>(level) != g_propertyLast.load(std::memory_order_relaxed)) {
         g_propertyLast.store(static_cast<int>(level), std::memory_order_relaxed);
+        tq::NotePlayerChose();  // a level set by hand stands in combat too (#1737 step-down)
         tq::RequestLevel(level, tq::RequestSource::kProperty);
       }
     }
@@ -657,16 +889,29 @@ int PollLocked() noexcept {
     if (status == 0 || g_logged.json[document]) continue;
     g_logged.json[document] = true;
     const bool ok = status - 1 == static_cast<int>(texture_menu::Status::kRewritten);
-    sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "texture_menu_json",
-                        {{"document", DocumentName(document)},
-                         {"result", texture_menu::StatusName(static_cast<texture_menu::Status>(status - 1))},
-                         {"rows", g_jsonRows[document].load(std::memory_order_relaxed)},
-                         {"pages", g_jsonPages[document].load(std::memory_order_relaxed)},
-                         // KNOWN-WRONG #2043 the Controller Hand Flip rows the rewrite wrote or removed (hand_flip.h).
-                         {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}});
+    pthread_mutex_lock(&g_shapeMutex);
+    const std::string shapeSite = g_shapeSite[document];
+    const std::string topKeys = g_topKeys[document];
+    pthread_mutex_unlock(&g_shapeMutex);
+    std::vector<sentinel::LogField> fields = {
+        {"document", DocumentName(document)},
+        {"result", texture_menu::StatusName(static_cast<texture_menu::Status>(status - 1))},
+        {"rows", g_jsonRows[document].load(std::memory_order_relaxed)},
+        {"pages", g_jsonPages[document].load(std::memory_order_relaxed)},
+        // KNOWN-WRONG #2043 the Controller Hand Flip rows the rewrite wrote or removed (hand_flip.h).
+        {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}};
+    // #1823: a document of another shape also says which walk found no row and its top-level keys (texture_menu.h); a rewritten
+    // document's line is unchanged.
+    if (!shapeSite.empty()) {
+      fields.emplace_back("shape_site", shapeSite.c_str());
+      fields.emplace_back("top_keys", topKeys.c_str());
+    }
+    sentinel::LogFieldList(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "texture_menu_json", fields.data(),
+                           fields.size());
     ++lines;
   }
   lines += SaveChoice();
+  lines += PollLook();
   const int requested = tq::RequestedLevelValue();
   if (requested != kUnset && requested != g_logged.request) {
     const int from = g_logged.request == kUnset ? static_cast<int>(tq::LatchedLevel()) : g_logged.request;
@@ -900,6 +1145,26 @@ bool Install(tq::Level level, bool fromConfig) noexcept {
 #else
   const PropertyReader property = nullptr;
 #endif
+  // The upload count and lock a look-driven Resize reads first: their addresses are the pinned build's when the words that form them hold.
+  {
+    namespace upl = nevr_quest::texture_quality::targets;
+    static constexpr nevr_quest::combat::pinned::Word kUploadWords[] = {upl::kLockPage, upl::kLockAdd, upl::kCountPage, upl::kCountLoad};
+    const nevr_quest::combat::pinned::Pins pins{kUploadWords, 4, nullptr, 0};
+    nevr_quest::combat::pinned::Failure failure;
+    if (!nevr_quest::combat::pinned::FirstFailure(image.base, &pins, 1, &failure)) {
+      game.uploadCount = reinterpret_cast<const std::uint64_t*>(image.base + upl::kUploadCountVaddr);
+      game.uploadLock = reinterpret_cast<const std::uint32_t*>(image.base + upl::kUploadLockVaddr);
+    } else {
+      char va[19];
+      char expected[19];
+      char actual[19];
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "texture_menu_upload_words",
+                          {{"result", "mismatch"}, {"what", failure.what}, {"va", sentinel::HexString(va, failure.vaddr)},
+                           {"expected", sentinel::HexString(expected, failure.want)},
+                           {"actual", sentinel::HexString(actual, failure.have)},
+                           {"consequence", "the upload words are not pinned in this libr15, so a Quest 2 step-down, if this build registers one, is off for this run; the player's texture level is unaffected"}});
+    }
+  }
   ArmForTest(game, level, fromConfig, property);
 
   // The three hooks that make the control work first; the documents that offer it only when they hold.
@@ -945,6 +1210,8 @@ void ArmForTest(const Game& game, tq::Level configLevel, bool fromConfig, Proper
   g_vrDisplayLost.store(game.vrDisplayLost, std::memory_order_release);
   g_localAppData.store(game.localAppDataDirectory, std::memory_order_release);
   g_engineResize.store(game.engineResize, std::memory_order_release);
+  g_uploadCount.store(game.uploadCount, std::memory_order_release);
+  g_uploadLock.store(game.uploadLock, std::memory_order_release);
   g_property.store(property, std::memory_order_release);
   g_defaultIndex.store(tq::MenuIndexForLevel(configLevel), std::memory_order_release);
   tq::SetStartResolver(&ResolveStart);
@@ -998,8 +1265,31 @@ void ResetForTest() noexcept {
     g_jsonRows[i].store(0);
     g_jsonPages[i].store(0);
     g_jsonHandFlip[i].store(0);  // KNOWN-WRONG #2043
+    pthread_mutex_lock(&g_shapeMutex);
+    g_shapeSite[i].clear();
+    g_topKeys[i].clear();
+    pthread_mutex_unlock(&g_shapeMutex);
   }
   g_logged = Logged();
+  g_gate = rules::LookGate();
+  g_uploadCount.store(nullptr);
+  g_uploadLock.store(nullptr);
+  g_clock.store(nullptr);
+  g_lookOn.store(false);
+  g_gateReason.store(static_cast<int>(rules::RuleReason::kNotInCombat));
+  g_quietSinceMs.store(0);
+  g_lookOff.store(false);
+  g_lookOffWhy.store("none");
+  g_lookApplied.store(false);
+  g_lookApplies.store(0);
+  g_holding.store(false);
+  g_lookHolds.store(0);
+  g_holdReason.store(0);
+  g_holdFrom.store(kUnset);
+  g_holdTo.store(kUnset);
+  g_holdUploads.store(0);
+  g_holdLock.store(0);
+  g_holdQuietMs.store(0);
   g_propertyLast.store(kUnset);
   SetArmed(kNone);
   pthread_mutex_lock(&g_keptMutex);
@@ -1009,10 +1299,12 @@ void ResetForTest() noexcept {
 
 int PollOnceForTest() noexcept { return PollOnce(); }
 
+void SetClockForTest(std::int64_t (*clockMs)() noexcept) noexcept { g_clock.store(clockMs, std::memory_order_release); }
+
 Totals CurrentTotals() noexcept {
   return {g_deliveries.load(), g_jsonRewrites.load(), g_applies.load(),       g_equalCommits.load(),
           g_refused.load(),    g_failed.load(),       g_configOverrides.load(), g_saveWrites.load(),
-          g_saveFailures.load(), g_disabled.load(), g_disabledWhy.load()};
+          g_saveFailures.load(), g_disabled.load(), g_disabledWhy.load(), g_lookApplies.load(), g_lookHolds.load(), g_lookOff.load()};
 }
 
 }  // namespace nevr_quest::texture_menu

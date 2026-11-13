@@ -100,20 +100,16 @@ function Get-LibraryRoots {
 }
 
 if ($Dir -eq '') {
-  $libraryRoots = @('C:\Program Files\Meta Horizon', 'C:\Program Files\Oculus', 'C:\Program Files (x86)\Oculus',
-             'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon') + @(Get-LibraryRoots)
-  $suffixes = @('Software\Software\ready-at-dawn-echo-arena\bin\win10', 'Software\ready-at-dawn-echo-arena\bin\win10',
-                'ready-at-dawn-echo-arena\bin\win10')
-  $found = @()
-  foreach ($libraryRoot in $libraryRoots) {
-    foreach ($suffix in $suffixes) {
-      $location = $libraryRoot.TrimEnd('\', '/') + '\' + $suffix
-      if ((Test-Echo $location) -and ($found -inotcontains $location)) { $found += $location }
-    }
-  }
+  # The core searches every fixed drive and the Oculus / Meta Horizon libraries this user has recorded (#1300). Its answer is
+  # one JSON array of the folders that hold echovr.exe, each once.
+  $searchArgs = @()
+  foreach ($library in @(Get-LibraryRoots)) { $searchArgs += @('--search-root', $library) }
+  $listing = & $core pc find @searchArgs
+  if ($LASTEXITCODE -ne 0) { throw "install-nevr-runtime.exe could not search for Echo VR (exit $LASTEXITCODE)" }
+  $found = @(ConvertFrom-Json -InputObject ($listing -join ''))
   if ($found.Count -gt 1) { throw ('more than one Echo VR install found; pass -Dir with one of: ' + ($found -join '; ')) }
   if ($found.Count -eq 1) {
-    $Dir = $found[0]
+    $Dir = [string]$found[0]
   } else {
     $answer = Read-Host 'Echo VR was not found in the usual places. Type the folder that holds echovr.exe (...\ready-at-dawn-echo-arena\bin\win10)'
     if ($null -ne $answer) { $answer = $answer.Trim().Trim('"') }

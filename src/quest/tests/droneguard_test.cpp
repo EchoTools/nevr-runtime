@@ -3,7 +3,7 @@
 // CR15NetFollowPlayerCS (target at +0x140, the player handle's cache at +0x148 / +0x16c / +0x188 / +0x190), a stand-in for Follow, and fake
 // RefreshCache / IsComponentValid.
 //
-// What it pins (the q15t plugin's droneguard_test assertions, on the new fixture): a set target reaches the game's Follow with the same arguments, a null
+// What it pins: a set target reaches the game's Follow with the same arguments, a null
 // target never does (one first-skip line, a total every 600th skip at most 8 times, a target-set line when it arrives), the state line on a change of the
 // cache (at most 16, read-only), an unreadable system goes to Follow, stage 1 refreshes first and then skips on idx ffff, handle-sys 0 or a refused index
 // (reading the cache the refresh just wrote), the missing or misplaced engine functions and a changed stage-1 word leave the null half only with one Error
@@ -185,7 +185,7 @@ void TheThunkTakesTheSlotAndTheLineSaysSo() {
   if (install.size() == 1U) {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(combat_test::Golden(install[0].text) ==
-           "\"event\":\"combat_droneguard_install\",\"result\":\"installed\",\"reason\":\"ok\",\"hook\":\"ok\",\"stage1\":\"off\","
+           "\"event\":\"combat_droneguard_install\",\"result\":\"installed\",\"reason\":\"ok\",\"hook\":\"ok\",\"stage1\":\"off\",\"droneguard_stage1\":0,"
            "\"consequence\":\"the drone's follow update is skipped while its target is null instead of crashing the game, in every level\"}");
   }
   End();
@@ -714,7 +714,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
   if (install.size() == 1U) {
     QCHECK(combat_test::Golden(install[0].text) ==
-           "\"event\":\"combat_droneguard_install\",\"result\":\"off\",\"reason\":\"off_config\",\"consequence\":\"combat.droneguard is false: the "
+           "\"event\":\"combat_droneguard_install\",\"result\":\"off\",\"reason\":\"off_config\",\"droneguard_stage1\":1,\"consequence\":\"combat.droneguard is false: the "
            "game's own Follow runs for every component, and a drone with no orbit target faults it\"}");
   }
   End();
@@ -809,6 +809,45 @@ void TheFinalStatsCountBothKindsOfSkip() {
 
 }  // namespace
 
+// Every combat_droneguard_install line names the stage-1 switch the step was handed (#2382), with both values, on every path: installed, refused for
+// want of libr15, refused for a pinned word that differs, refused for a slot that holds something else, and off. A line that fixes the field at
+// either value shows on the paths that differ from it. The slot-refused line is the one whose installed flag is false while the switch was handed on.
+void EveryInstallLineNamesTheStageOneSwitchItWasHanded() {
+  for (const bool s1 : {false, true}) {
+    const std::string named = std::string("\"droneguard_stage1\":") + (s1 ? "1" : "0");
+    Installed(s1);
+    std::vector<Line> install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, named));
+    End();
+    // The refused step follows an installed step that left !s1 in the switch, so a refusal that stores nothing logs !s1 and fails here.
+    Installed(!s1);
+    End();
+    Begin();
+    const dg::EngineFns f = Fns();
+    QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, s1, &f).status, "module_not_loaded") == 0);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"module_not_loaded\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    g_image.Put<std::uint32_t>(dg::kWords[0].vaddr, dg::kWords[0].word ^ 0x00010000U);
+    QCHECK(std::strcmp(Install(true, s1, &f).status, "pinned_word_mismatch") == 0);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"pinned_word_mismatch\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    Build(0x4242420);  // a slot that holds something other than Follow: the install is refused with its installed flag false
+    QCHECK(!Install(true, s1, nullptr).installed);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"reason\":\"slot_refused\"") && Has(install[0].text, named));
+    End();
+    Begin();
+    QCHECK(Install(false, s1, &f).off);
+    install = Lines("combat_droneguard_install");
+    QCHECK(install.size() == 1U && Has(install[0].text, "\"result\":\"off\"") && Has(install[0].text, named));
+    End();
+  }
+}
+
 int main() {
   ThePinsAreTheReadelfAndDisassemblyPins();
   TheThunkTakesTheSlotAndTheLineSaysSo();
@@ -840,6 +879,7 @@ int main() {
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();
+  EveryInstallLineNamesTheStageOneSwitchItWasHanded();
   ASecondInstallDoesNothing();
   TheGuardHasNoLevelScope();
   TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd();

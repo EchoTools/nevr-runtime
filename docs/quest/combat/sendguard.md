@@ -1,8 +1,8 @@
 # sendguard: a script send to a game space that is not loaded is dropped, not faulted
 
 Source: `src/quest/combat/sendguard.{h,cpp}`, targets `sendguard_targets.h`. Namespace `nevr_quest::combat::sendguard`, log events
-`combat_sendguard_*`. Switch: `combat.sendguard` in `config.yaml` (default `true`). Runs where `combat::Active()` is true (the q15t and
-combat APK variants; `src/quest/combat/combat_active.h`). Host test: `src/quest/tests/sendguard_test.cpp` (`just test-quest-combat
+`combat_sendguard_*`. Switch: `combat.sendguard` in `config.yaml` (default `true`). Runs where `combat::Active()` is true (the combat
+variants; `src/quest/combat/combat_active.h`). Host test: `src/quest/tests/sendguard_test.cpp` (`just test-quest-combat
 sendguard`); mutants: `src/quest/combat/mutants.d/sendguard.sh`.
 
 Origin: written for this project (#1604) from the game's code (below). The reference build and EchoCombat have no counterpart, and
@@ -47,8 +47,8 @@ Disassembly, libr15 (ELF vaddr = disassembly VA - 0x100000), build b243509c08ce6
   stock function "would fault, or report a missing actor, which is now not reported". Passing that case on would mean evaluating the actor
   lookup, which is game code with effects of its own.
 - With `combat.sendguard: false` it installs nothing and says so at Info (`reason: off_config`); the phase line counts it as `off`, neither
-  installed nor failed. The old plugin's `sendguard.off` file is not read; one found in `q15t` below the sentinel's files folder
-  (`sentinel::FilesDir()`, the same folder the sentinel's config and log use) is a Warning that names the key.
+  installed nor failed. The old plugin's `sendguard.off` file is not read; one found in the data directory below the sentinel's files folder
+  (`legacy_switch.h` `kDataSubdir` below `sentinel::FilesDir()`, the same folder the sentinel's config and log use) is a Warning that names the key.
 - Counts: `passed` (sends that reached the game's function) and `dropped` are kept. A Debug `combat_sendguard_stats` line is written every
   16384 passes and every 1024 drops after the eighth, and one Info line at the end of the process (`final: 1`, when the wrapper is installed),
   so a headset run gives the call rate and the drops after the eighth leave a trace.

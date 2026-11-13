@@ -1,4 +1,4 @@
-// Host test of the scanner-sphere watchdog (src/quest/combat/sensorwd.cpp, #2184; moved from the q15t plugin's sensorwd_test): the real handlers through the
+// Host test of the scanner-sphere watchdog (src/quest/combat/sensorwd.cpp, #2184): the real handlers through the
 // real thunks, installed by the real GotHook into the two vtable words (ABS64) and the JUMP_SLOT of a libr15 image built in memory, and called the way the game
 // calls them: through the word. The game side is a model of OnComponentEnabled, OnComponentDisabled and SendComponentEventGlobal that records every call, and
 // models of CModelCS components laid out where the handlers read them (the offsets are spelled here, not taken from the module).
@@ -10,6 +10,9 @@
 // changed is the fixture (a libr15 image and the manager's install) and the scope: the handlers act only while a combat map is loaded and no Echo Arena level
 // is. New here: an arena level, a lobby, no level, a stale answer and a missing frame leave every handler a pass-through that reads nothing, takes no lock and
 // counts nothing; leaving the scope empties the table; the switch and its reasons; the legacy `sensorwd.off` file warned about; the cost on an arena path.
+// The scope is the real combat level answer (combat_scope.h, #2382): the tick is installed on an image of its own and the scope row has registered the
+// refresh before each test, each frame runs that refresh against the fake game before the module's callback (as the tick does), and a scope that cannot
+// change refuses the install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
 
@@ -31,10 +34,12 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_scope_world.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -46,6 +51,8 @@ std::uint64_t SafeReadCalls() { return g_safeReads.load(std::memory_order_relaxe
 namespace sw = nevr_quest::combat::sensorwd;
 namespace tgt = nevr_quest::combat::sensorwd::targets;
 namespace tick = nevr_quest::combat::tick;
+namespace scope = nevr_quest::combat::scope;
+namespace world = combat_test::scope_world;
 namespace pinned = sentinel::pinned;
 using combat_test::Image;
 using EchoVR::CSymbol64Hash;
@@ -207,6 +214,20 @@ bool AllStock() {
   return EnabledWord() == &FakeEnabled && DisabledWord() == &FakeDisabled && EventWord() == &FakeEvent;
 }
 
+// The game-thread tick on an image of its own (the tick's slot row), so the combat level answer can change as the shipped table leaves it before this
+// module's row: the tick installed and the scope row's refresh registered (one tick callback).
+Image g_tickImage;
+bool TickImageLookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_tickImage.Present() || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_tickImage.Elf();
+  return true;
+}
+void StartTheScope() {
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(world::StartScope(&TickImageLookup) && tick::Count() == 1U);
+}
+
 void Begin() {
   g_lines.clear();
   g_calls.clear();
@@ -214,21 +235,29 @@ void Begin() {
   g_lockHeldStages = 0;
   sw::ResetForTest();
   tick::ResetForTest();
+  scope::ResetForTest();
   sw::SetClockForTest(&Clock);
+  scope::SetClockForTest(&Clock);  // the combat level answer reads the same clock
   sw::SetLegacyDirForTest(nullptr);
   LoadLevels({});
   sentinel::SetLogSink(&Capture);
+  StartTheScope();
 }
 void End() {
   sw::ResetForTest();
   tick::ResetForTest();
+  scope::ResetForTest();
   sw::SetLegacyDirForTest(nullptr);
   g_image.Drop();
+  g_tickImage.Drop();
   sentinel::SetLogSink(nullptr);
 }
 nevr_quest::combat::ModuleResult InstallOn() { return sw::InstallAt(true, &Lookup, g_pins); }
-// The frame tick: the combat tick runs the module's callback once per frame.
-void Frame() { sw::Tick(GameAddress()); }
+// The frame tick: the combat tick runs the scope row's refresh (registered first) and then the module's callback, once per frame.
+void Frame() {
+  scope::Refresh(GameAddress());
+  sw::Tick(GameAddress());
+}
 // A combat match: the combat map is loaded, one frame has looked at it.
 void Combat() {
   LoadLevels({"mpl_combat_dyson"});
@@ -307,7 +336,7 @@ void TheInstallTakesTheThreeWordsAndWritesOneLine() {
   const nevr_quest::combat::ModuleResult r = InstallOn();
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
   QCHECK(EnabledWord() != &FakeEnabled && DisabledWord() != &FakeDisabled && EventWord() != &FakeEvent);
-  QCHECK(tick::Count() == 1U && sw::CurrentStats().on);
+  QCHECK(tick::Count() == 2U && sw::CurrentStats().on);  // the scope's refresh, then the watchdog's tick
   const std::vector<Line> lines = Lines("combat_sensorwd_install");
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
@@ -602,7 +631,13 @@ void OutsideACombatMapEveryHandlerIsAPassThrough() {
     QCHECK(InstallOn().installed);
     sw::SetHookForTest(&StageHook);
     LoadLevels(c.levels);
+    g_lines.clear();
     Frame();
+    // the tick's first frame outside the scope does nothing either: it writes no line of the watchdog's (not even the tick's thread line)
+    for (const Line& l : g_lines) {
+      if (Has(l.text, "\"event\":\"combat_sensorwd_")) std::fprintf(stderr, "  %s: the tick wrote %s\n", c.what, l.text.c_str());
+      QCHECK(!Has(l.text, "\"event\":\"combat_sensorwd_"));
+    }
     g_lines.clear();
     g_calls.clear();
     const std::uint64_t h = Make(0, true);
@@ -655,10 +690,10 @@ void AStaleOrMissingAnswerPassesEverythingThrough() {
   Frame();
   EnabledWord()(Cs(0), h);
   QCHECK(sw::CurrentStats().enables == 1);
-  g_nowMs += sw::kStaleAfterMs - 1;  // the look is still believed
+  g_nowMs += scope::kStaleAfterMs;  // the look is still believed (combat_scope.h: at most kStaleAfterMs old)
   EnabledWord()(Cs(0), h);
   QCHECK(sw::CurrentStats().enables == 2);
-  g_nowMs += 1;  // the tick has not looked for a second: not believed
+  g_nowMs += 1;  // the tick has not looked for more than a second: not believed
   EnabledWord()(Cs(0), h);
   Ping(1, 2);
   QCHECK(sw::CurrentStats().enables == 2 && sw::CurrentStats().pings == 0);
@@ -683,6 +718,14 @@ void LeavingTheScopeEmptiesTheTable() {
   Frame();
   QCHECK(sw::CurrentStats().tracked == 0 && !sw::CurrentStats().inScope);
   QCHECK(Lines("combat_sensorwd_scope").size() == 2U && Has(Lines("combat_sensorwd_scope")[1].text, "\"from\":1,\"to\":0"));
+  if (Lines("combat_sensorwd_scope").size() == 2U) {
+    QCHECK(Golden(Lines("combat_sensorwd_scope")[0].text) ==
+           "\"event\":\"combat_sensorwd_scope\",\"from\":0,\"to\":1,\"msg\":\"a combat map is loaded: the watchdog is watching the scanner spheres\"}");
+    QCHECK(Golden(Lines("combat_sensorwd_scope")[1].text) ==
+           "\"event\":\"combat_sensorwd_scope\",\"from\":1,\"to\":0,\"msg\":\"no combat map (or an Echo Arena level, or the combat level answer is stale): "
+           "every handler passes through and the table is emptied\"}");
+    QCHECK(Lines("combat_sensorwd_scope")[0].level == sentinel::LogLevel::kInfo);
+  }
   g_calls.clear();
   Combat();
   g_nowMs += 300;
@@ -690,6 +733,61 @@ void LeavingTheScopeEmptiesTheTable() {
   g_nowMs += 6000;
   Frame();
   QCHECK(Count(kDisabled) == 0);  // nothing from the last match is due
+  End();
+}
+
+// The tick reads the same answer the handlers do, freshness included: a combat map seen once and then never looked at again (the scope row's refresh does
+// not run, while this module's callback still does) is not believed after a second, so the tick leaves the scope, empties the table and turns nothing off.
+void TheTickDoesNotBelieveAStaleAnswer() {
+  Begin();
+  Build();
+  QCHECK(InstallOn().installed);
+  Combat();  // one look: a combat map
+  const std::uint64_t h = Make(0, true);
+  EnabledWord()(Cs(0), h);
+  QCHECK(sw::CurrentStats().tracked == 1 && sw::CurrentStats().inScope);
+  g_calls.clear();
+  for (int i = 0; i < 40; ++i) {  // 8 s of the module's callback alone
+    g_nowMs += 200;
+    sw::Tick(GameAddress());
+  }
+  QCHECK(Count(kDisabled) == 0 && sw::CurrentStats().wdOff == 0);
+  QCHECK(sw::CurrentStats().tracked == 0 && !sw::CurrentStats().inScope);
+  QCHECK(Lines("combat_sensorwd_scope").size() == 2U && Has(Lines("combat_sensorwd_scope").back().text, "\"from\":1,\"to\":0"));
+  End();
+}
+
+// The combat level answer cannot change (the tick is not installed, or the scope row did not register its refresh): the handlers would never act, so the
+// module is not installed, says why at Error, takes no word and registers nothing. Off by the key wins: nothing is asked of the scope.
+void AScopeThatCannotChangeRefusesTheInstall() {
+  Begin();
+  Build();
+  tick::ResetForTest();
+  scope::ResetForTest();
+  scope::SetClockForTest(&Clock);
+  nevr_quest::combat::ModuleResult r = InstallOn();
+  QCHECK(!r.installed && !r.off && std::strcmp(r.status, "scope_not_live") == 0 && AllStock() && tick::Count() == 0U && !sw::CurrentStats().on);
+  const std::vector<Line> lines = Lines("combat_sensorwd_install");
+  QCHECK(lines.size() == 1U);
+  if (lines.size() == 1U) {
+    QCHECK(lines[0].level == sentinel::LogLevel::kError);
+    QCHECK(Golden(lines[0].text) ==
+           "\"event\":\"combat_sensorwd_install\",\"state\":\"refused\",\"reason\":\"scope_not_live\",\"switch\":\"combat.sensorwd\",\"scope\":\"combat_map\","
+           "\"enabled\":\"none\",\"disabled\":\"none\",\"event_slot\":\"none\",\"watchdog_ms\":6000,\"msg\":\"a scanner sphere stuck on is not turned off\"}");
+  }
+  // no libr15 either: the scope is asked first, so the reason is the scope's
+  r = sw::InstallAt(true, [](const char*, sentinel::ElfImage*) { return false; }, g_pins);
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0);
+  // the tick is installed but no row registered the refresh
+  g_lines.clear();
+  g_tickImage.Build({world::TickRow()});
+  world::PutTickSlot(g_tickImage);
+  QCHECK(tick::InstallAt(&TickImageLookup));
+  r = InstallOn();
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !scope::Live() && AllStock() && tick::Count() == 0U);
+  // off by the key: off_config, whatever the scope
+  r = sw::InstallAt(false, &Lookup, g_pins);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && AllStock());
   End();
 }
 
@@ -708,7 +806,7 @@ void ARefusedInstallChangesNothing() {
     if (which != 0) QCHECK(EnabledWord() == &FakeEnabled);
     if (which != 1) QCHECK(DisabledWord() == &FakeDisabled);
     if (which != 2) QCHECK(EventWord() == &FakeEvent);
-    QCHECK(tick::Count() == 0U && !sw::CurrentStats().on);
+    QCHECK(tick::Count() == 1U && !sw::CurrentStats().on);  // the scope's refresh alone
     QCHECK(Lines("combat_sensorwd_install")[0].level == sentinel::LogLevel::kError);
     End();
   }
@@ -717,7 +815,7 @@ void ARefusedInstallChangesNothing() {
     Build();
     g_image.Put<std::uint32_t>(tgt::kWords[i].vaddr, tgt::kWords[i].word ^ 1U);
     const auto r = InstallOn();
-    QCHECK(!r.installed && std::strcmp(r.status, "pin_mismatch") == 0 && AllStock() && tick::Count() == 0U);
+    QCHECK(!r.installed && std::strcmp(r.status, "pin_mismatch") == 0 && AllStock() && tick::Count() == 1U);
     End();
   }
   {
@@ -736,7 +834,7 @@ void ARefusedInstallChangesNothing() {
   {  // the combat tick has no room: all three words are put back
     Begin();
     Build();
-    for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
+    while (tick::Count() < tick::kMaxCallbacks) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
     const auto r = InstallOn();
     QCHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0 && AllStock() && !sw::CurrentStats().on);
     End();
@@ -747,7 +845,7 @@ void TheSwitchAndTheLegacyKillFile() {
   Begin();
   Build();
   const auto off = sw::InstallAt(false, &Lookup, g_pins);
-  QCHECK(!off.installed && off.off && std::strcmp(off.status, "off_config") == 0 && AllStock() && tick::Count() == 0U);  // off is its own answer
+  QCHECK(!off.installed && off.off && std::strcmp(off.status, "off_config") == 0 && AllStock() && tick::Count() == 1U);  // off is its own answer
   const std::vector<Line> lines = Lines("combat_sensorwd_install");
   QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo && Has(lines[0].text, "\"state\":\"off\"") && Has(lines[0].text, "\"reason\":\"off_config\""));
   End();
@@ -853,7 +951,7 @@ void TheCostOnAnArenaPath() {
   const double modelHooked = best([&] { return hooked(Cs(0), h); });
   const double eventDirect = best([&] { return FakeEvent(nullptr, kTriggered, 1, 2, 0); });
   const double eventHooked = best([&] { return hookedEvent(nullptr, kTriggered, 1, 2, 0); });
-  // the per-frame callback in arena, with the clock fixed (the compare alone), with a real clock read added, and a look at the levels (the clock moved past kLookEveryMs)
+  // a frame in arena (the scope row's refresh, then the module's callback), with the clock fixed, with a real clock read added, and a frame whose refresh looks at the levels (the clock moved past kLookEveryMs)
   const double frame = best([&] {
     Frame();
     return std::uint64_t{1};
@@ -868,16 +966,16 @@ void TheCostOnAnArenaPath() {
   for (int rep = 0; rep < 7; ++rep) {
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < kLooks; ++i) {
-      g_nowMs += sw::kLookEveryMs;
+      g_nowMs += scope::kLookEveryMs;
       Frame();
     }
     const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kLooks;
     if (ns < look) look = ns;
   }
   std::printf("sensorwd_test: arena path, host: OnComponentEnabled direct %.1f ns, hooked %.1f ns (+%.1f ns); SendComponentEventGlobal direct %.1f ns, hooked %.1f ns (+%.1f ns); "
-              "the tick callback %.1f ns a frame between looks (a real clock read %.1f ns more), %.0f ns for a frame that looks at the levels (one gamespace, every %lld ms)\n",
+              "a frame (the scope's refresh, then the module's callback) %.1f ns between looks (a real clock read %.1f ns more), %.0f ns for a frame whose refresh looks at the levels (one gamespace, every %lld ms)\n",
               modelDirect, modelHooked, modelHooked - modelDirect, eventDirect, eventHooked, eventHooked - eventDirect, frame, clockRead, look,
-              static_cast<long long>(sw::kLookEveryMs));
+              static_cast<long long>(scope::kLookEveryMs));
   g_record = true;
   End();
 }
@@ -902,6 +1000,8 @@ int main() {
   InACombatMapTheSphereCheckReads();
   AStaleOrMissingAnswerPassesEverythingThrough();
   LeavingTheScopeEmptiesTheTable();
+  TheTickDoesNotBelieveAStaleAnswer();
+  AScopeThatCannotChangeRefusesTheInstall();
   ARefusedInstallChangesNothing();
   TheSwitchAndTheLegacyKillFile();
   TheFirstSightingsAreSaidOnce();

@@ -1,18 +1,18 @@
 # Module `weapon_arm` (a profile whose `weaponarm` is not 1 gets the gun in the right hand, once per marker)
 
 Files: `src/quest/combat/weapon_arm.{h,cpp}`, `weapon_arm_targets.h`, `gamespace.{h,cpp}`, `netgame_targets.h`, `src/quest/tests/weapon_arm_test.cpp`,
-`src/quest/combat/mutants.d/weapon_arm.sh`. A normal combat step: the `q15t` and `combat` APKs only. Switch in `config.yaml`: `combat.weapon_arm`, on unless the file says false. The decision
+`src/quest/combat/mutants.d/weapon_arm.sh`. A normal combat step: the combat APKs only. Switch in `config.yaml`: `combat.weapon_arm`, on unless the file says false. The decision
 record is `docs/quest/combat/adr/0003-weapon-arm-new-profile.md`.
 
 ## Origin
 
 kotorvr's echoquest-combat repository (commit c5a67e8), `runtime/native/afkxr/afk_gunconnect.cpp`: the T-26 header :58-64, the state and helpers :496-579 and `T26()` at :581-660, whose profile rule is the line at :641 (the equipment system key 0xca14940c84b03f6e
-and vptr `0x3698200` are at :497-498). The q15t plugin reconstructed it (`weapon_arm.cpp`); this module is that reconstruction moved into the runtime, so the commits that move it credit kotorvr.
+and vptr `0x3698200` are at :497-498). The combat plugin imported in #1591 reconstructed it (`weapon_arm.cpp`); this module is that reconstruction, so the commits that brought it here credit kotorvr.
 
 ## Behaviour
 
 A pass runs at 1 Hz on the game tick until the module is done. The profile id is `CR15NetGame::ClientProfile()`'s `xplatformid`. A marker file `t26arm.<id>` (the id's characters other than
-letters, digits, `-` and `_` become `_`) in `/sdcard/Android/data/<package>/files/q15t` means the profile was handled before: nothing is done and the levels are never scanned. Otherwise, in a
+letters, digits, `-` and `_` become `_`) in `/sdcard/Android/data/<package>/files/q15t` means the profile was handled before: nothing is done and the combat level answer is never asked. Otherwise, in a
 combat map (below), the local equipment component system is found in the gamespace tables and held for 3 passes. Then:
 
 - `GetWeaponArm == 1`: the gun is on the right already; the marker is written and nothing is set.
@@ -42,16 +42,21 @@ is a Warning.
 
 ## Arena
 
-The module goes on only while a combat map is loaded and no Echo Arena level is (`combat_level.h`, `Classify` without the lobby), and only for a profile with no marker. The combat lobby is not in scope: its script is shared with the arena
+The module goes on only while a combat map is loaded and no Echo Arena level is, as the combat level answer last saw it (`combat_scope.h` `InCombatMap`: a look four times a second from the
+game-thread tick; the module's callback runs in the same tick loop, right after the scope row's refresh, so it reads a look at most 250 ms old, and a stopped
+tick stops the callback with it: nothing runs and nothing is set until the tick is back; the freshness test in `InCombatMap` is defence in depth for an order the
+install table does not make), and only for a profile with no marker. The module is one of the scope row's readers (`combat.weapon_arm` is in
+`ScopeNormal()` in `combat_install.cpp`), and its install refuses with `scope_not_live` when the answer cannot change. The combat lobby is not in scope: its script is shared with the arena
 lobby (`headset_gates.md`), and it is not established that an arena player never has `mpl_lobby_b_combat` loaded. In an arena match, in every lobby and in a transition that still holds an arena level the module does not look for the equipment
 system, does not set the hand, does not write the marker and writes no line. So it cannot change what an arena player sees or the game computes, and it never touches the profile of a player who only plays arena. Where it differs from the
 plugin: the plugin set the hand wherever it first found the equipment system and for any profile without a marker; the module waits for the first combat map. A profile that only ever plays arena is looked at
-once a second (the profile and the level scan) and is never touched.
+once a second (the profile and the scope word) and is never touched.
 
 ## Cost (ADR 0038)
 
 With the switch off nothing is registered. With it on, a done module costs one atomic load and a branch per frame (about 10 ns on the x86 host that built this change). Before it is done: a clock
-read and a compare per frame, and a pass at 1 Hz. In an arena level a pass is the profile read and the level scan, about 3 us (x86 host). `weapon_arm_test` prints the numbers. Not measured on a headset.
+read and a compare per frame, and a pass at 1 Hz. In an arena level a pass is the profile read and one relaxed load of the scope word and a test (`weapon_arm_test` prints the host cost); the level
+scan is the scope row's, made once for every reader, and it runs while `combat.weapon_arm` is on (the module keeps the scope row on). Not measured on a headset.
 
 ## Lines
 

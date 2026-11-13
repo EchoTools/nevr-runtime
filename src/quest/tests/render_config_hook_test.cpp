@@ -28,8 +28,11 @@
 #include "pinned_targets.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/frozen_frame_exit.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/headset_active.h"
 #include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "render_config.h"
@@ -88,8 +91,10 @@ float FakeGetSystemPropertyFloat(const OvrJavaOpaque*, int property) {
   ++g_calls;
   return property == 4 ? g_reportedHertz : 12345.0f;
 }
+std::int64_t g_stampAtSubmit = -1;  // the frozen-frame exit's stamp when the original ran
 int FakeSubmitFrame(OvrMobileOpaque*, const OvrSubmitFrameDescriptionOpaque*) {
   ++g_calls;
+  g_stampAtSubmit = nevr_quest::combat::frozen_frame_exit::LastSubmitMs();
   return 0;
 }
 int FakeSysPropInt(const OvrJavaOpaque*, int id) {
@@ -329,7 +334,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   ResetAll();
   combat::SetVariant(nevr_quest::build_variant::Variant::kCombat);
   combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
-  rr::SetQuest2ForTest(0);
+  nevr_quest::headset_active::SetActive(&nevr_quest::headset_profile::kQuest3);  // the identity step's profile: not a Quest 2
   PutLibr15();
   rr::SetClockForTest(&FakeClock);
   g_fakeGame = FakeGame{};
@@ -367,7 +372,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   rr::Tick(g_fakeGame.Address());
   QCHECK(g_refreshCalls == 4 && g_refreshSeen == 120.0f);
   DropLibr15();
-  rr::SetQuest2ForTest(-1);
+  nevr_quest::headset_active::SetActive(nullptr);
   rr::SetClockForTest(nullptr);
   combat::tick::ResetForTest();
 }
@@ -800,6 +805,47 @@ void AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk() {
   QCHECK(Field(Lines("render_config_install")[0], "result") == "not_installed");
 }
 
+// The submit handler is the frozen-frame exit's input (ADR 0039): in a combat level, with the module armed, it stamps the submit before the
+// original runs (a submit that blocks inside VrApi counts as frozen); outside one it stamps nothing and reads no clock. And the install says
+// whether the submit slot holds the thunk, which the module asks before it installs.
+std::atomic<int> g_ffeClockReads{0};
+std::int64_t FfeClock() noexcept {
+  g_ffeClockReads.fetch_add(1);
+  return 7000;
+}
+void TheSubmitStampsTheFrozenFrameWatchBeforeTheOriginal() {
+  namespace ffe = nevr_quest::combat::frozen_frame_exit;
+  namespace scope = nevr_quest::combat::scope;
+  Capture capture;
+  ResetAll();
+  ffe::ResetForTest();
+  ffe::SetClockForTest(&FfeClock);
+  ffe::ArmForTest();
+  g_ffeClockReads = 0;
+  scope::detail::g_bits.store(scope::kBitEchoArena | scope::kBitCombatMap);  // an arena level beside a combat map: arena wins
+  g_stampAtSubmit = -1;
+  QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
+  QCHECK(g_stampAtSubmit == 0 && ffe::LastSubmitMs() == 0 && g_ffeClockReads.load() == 0);
+  scope::detail::g_bits.store(scope::kBitCombatMap);
+  QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
+  QCHECK(g_stampAtSubmit == 7000 && ffe::Submits() == 1 && g_ffeClockReads.load() == 1);  // stamped before the original
+  QCHECK(g_lines.empty());  // the handler still writes no line
+  scope::detail::g_bits.store(0);
+  ffe::ResetForTest();
+
+  ResetAll();
+  QCHECK(!rc::SubmitSlotHeld());
+  g_failSlot = 4;  // vrapi_SubmitFrame2
+  QCHECK(!rc::InstallVia(tq::Level::kStock, false, &InstallAllButOne));
+  g_failSlot = -1;
+  QCHECK(!rc::SubmitSlotHeld());
+  ResetAll();
+  QCHECK(rc::InstallVia(tq::Level::kStock, false, &InstallAllOk));
+  QCHECK(rc::SubmitSlotHeld());
+  ResetAll();
+  QCHECK(!rc::SubmitSlotHeld());
+}
+
 }  // namespace
 
 int main() {
@@ -826,6 +872,7 @@ int main() {
   AHostWithoutLibr15ReportsNoGlobalsAndNoCrash();
   TheThreadWritesTheLineAfterTheFirstFrameAndAgainAfterAChange();
   AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk();
+  TheSubmitStampsTheFrozenFrameWatchBeforeTheOriginal();
   rc::ResetForTest();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "render_config_hook_test: %d check(s) failed\n", quest_test::Failures());

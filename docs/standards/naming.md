@@ -24,9 +24,7 @@ One family, three cases:
 | `nevr` | files, directories, CMake targets, namespaces, flat config keys the runtime owns | `src/core/nevr_config.h`, `nevr_core`, `namespace nevr`, `nevr_socket_uri` |
 
 - Those three are the only spellings of the project name in an identifier. `Nvr` (no `e`) and every
-  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier; the one
-  place `Nvr` remains is the deprecated alias of the plugin and module C ABI (below). In prose the
-  project brand is spelled `nEVR`.
+  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier.
 - A name states the project once. Inside `namespace nevr`, a type is `Config`, not `NevrConfig`.
 - A log tag is `[NEVR.<AREA>]` with an upper-case area. The areas in use are the `[NEVR.` tags in
   `src/` (`[NEVR.WS]`, `[NEVR.AUTH]`, `[NEVR.GAMESERVER]`, ...); `docs/standards/logging.md` says what
@@ -119,7 +117,7 @@ events and its config key, so a grep for the name finds all of it.
   `<name>_rules_test.cpp` for the shared rules header).
 - A component's name states the area once: inside `src/quest/combat/` it is `music`, not `combat_music`. The area's own
   infrastructure, which is no component (`combat_install`, `combat_tick`, `combat_level`), carries the area's name.
-- The name a component had upstream (a q15t-upstream module, an EchoCombat plugin file, a reference-build `afk_*` file)
+- The name a component had upstream (an echoquest-combat module, an EchoCombat plugin file, a reference-build `afk_*` file)
   MUST NOT be a stem, namespace, event, key or doc name. It survives in one place: the origin note ADR 0046 rule 9
   requires at the top of the component's header, which cites the upstream file and line at its commit. A string the
   game's content or another binary resolves by name (an export such as `re33_ec_page`, a config key a released build
@@ -185,7 +183,7 @@ the name and has to make sense as one.
 
 ### What checks it
 
-The review checks (no automated check reads these):
+The review checks (no automated check reads these). KNOWN-WRONG #2393: no file in the tree defines the lists these rules name (`KNOWN_COLLISIONS`, `KNOWN_ROLE_BREAKS`, `COMBAT_NAMES`, `KNOWN_COMBAT_BREAKS`, `RULES_HOME_SHARED_HOOK`, `KNOWN_DIRECTORY_BREAKS`), so each rule that names one is unchecked until its list exists:
 
 - **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
   removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
@@ -227,9 +225,6 @@ compile against. Its prefix is `Nevr`: `NevrPluginInfo`, `NevrGameContext`, `Nev
 - Both plugin loaders (`src/runtime/ext/plugin_loader.cpp`, `src/quest/plugin/plugin_loader.cpp`) resolve each entry
   point's `Nevr*` export first and the `Nvr*` export when the plugin has no other, and log one Info line per plugin that
   loaded through a deprecated export (`loaded with deprecated Nvr exports`).
-- Nothing else in the tree is spelled `Nvr`. It is allowed in the two alias headers
-  and in (the fixtures that prove an old plugin loads, and the loaders'
-  messages), and nowhere else.
 
 The aliases and the fallback go when no plugin that ships still exports `Nvr*`: when the Info line above has not been logged
 for a plugin the project distributes or knows of. `docs/adr/0043-nevr-is-the-plugin-abi-prefix.md` records the decision and
@@ -259,11 +254,11 @@ the alternatives.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-The review enforces these rules: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
-no non-canonical spelling of the project name in a file (or token) that does not already carry one
-(`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
-`nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the
-prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every namespace
-`nevr` or `nevr_<area>` (the exceptions above and the game's namespaces, listed in the test), and the old names of renamed
-namespaces (`tools/tests/renamed_namespaces/*.json`). `python3 tools/naming_inventory.py` lists what the tree
-still holds that breaks a rule, by category, with `file:line`. The other rules above are checked in review.
+What is checked: `tools/internal/questwiring/reconstruction_namespace_test.go`
+(`TestEachReconstructionFileOpensAndClosesTheOneNamespaceOnce`) fails when a named reconstruction file does not open and
+close `NRadEngine::nevr_reconstruction` once; and `RuntimeLifecycleInvariantTest.test_dllmain_does_not_run_plugin_shutdown_or_unload`
+in `tools/tests/test_runtime_lifecycle_invariants.py` fails when the deprecated `NvrPluginShutdown` spelling appears in
+`DllMain`'s body. `python3 tools/naming_inventory.py` lists breaks in its seven categories (`spellings`, `lifecycle-namespaces`,
+`pascal-namespaces`, `log-tags`, `cmake-targets`, `macros`, `exports`) with `file:line`; `--summary` gives the counts. It
+exits 0 whatever it finds. A rule of this standard that no category and no test above reads is guidance for review, not a
+gate; a check is written for a rule when breaking it has caused a failure.

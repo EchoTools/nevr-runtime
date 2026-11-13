@@ -1,6 +1,6 @@
 // Host test for LibraryName's dladdr refusal (src/quest/combat/headset_gates.cpp, the menu gate's caller). The Bind frame that feeds LibraryName
 // is absent on the host (the host entry passes a zero bind sp), so headset_gates_test never reaches the dladdr branch; this test calls
-// LibraryName directly. Moved from the q15t plugin's library_name_test, which included the plugin's .cpp to reach an anonymous-namespace
+// LibraryName directly. From the combat plugin's library_name_test (#1591), which included the plugin's .cpp to reach an anonymous-namespace
 // function; LibraryName is a member of the module's header here, and the assertions are the same.
 //
 // Built and run by `just test-quest-combat`.
@@ -17,13 +17,17 @@
 namespace hg = nevr_quest::combat::headset_gates;
 
 // dladdr, as LibraryName asks it. g_dladdrMode 0 is libc's answer. 1 returns 0 and names a file, so only the return code refuses it. 2 returns 1
-// and names no file. This definition takes the place of libc's for the calls this executable makes.
+// and names no file. 3 returns 1 and names an empty file. This definition takes the place of libc's for the calls this executable makes.
 static int g_dladdrMode = 0;
 extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
   using RealDladdr = int (*)(const void*, Dl_info*);
   static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
   if (g_dladdrMode == 0) return real(address, info);
-  info->dli_fname = g_dladdrMode == 1 ? "/nonexistent/libq15t_script.so" : nullptr;
+  if (g_dladdrMode == 3) {  // knows the address, names an empty file
+    info->dli_fname = "";
+    return 1;
+  }
+  info->dli_fname = g_dladdrMode == 1 ? "/nonexistent/libscript.so" : nullptr;
   return g_dladdrMode == 1 ? 0 : 1;
 }
 
@@ -44,6 +48,22 @@ int main() {
     const bool known = hg::LibraryName(reinterpret_cast<std::uintptr_t>(&hg::LibraryName), out, sizeof out);
     QCHECK(known && out[0] != '\0');
     QCHECK(std::strchr(out, '/') == nullptr);  // the file name, not the path
+  }
+  // dladdr knows the address but the file name is empty: that is no library, and the caller is told so
+  {
+    char out[64] = "untouched";
+    g_dladdrMode = 3;
+    const bool known = hg::LibraryName(0x1234, out, sizeof out);
+    g_dladdrMode = 0;
+    QCHECK(!known);
+  }
+  // a name longer than the buffer is cut to it, the NUL included: no byte past the `n` given is written
+  {
+    char out[16];
+    std::memset(out, 'G', sizeof out);
+    const bool known = hg::LibraryName(reinterpret_cast<std::uintptr_t>(&hg::LibraryName), out, 8);
+    QCHECK(known && out[7] == '\0' && std::strlen(out) == 7);
+    QCHECK(out[8] == 'G');
   }
   // a null address is never named
   {

@@ -6,9 +6,10 @@
     python3 tools/naming_inventory.py --category lifecycle-namespaces
 
 It is the work list for the rename pass and the way to see what is left: a category that prints nothing is
-done. It reads tracked and untracked-but-not-ignored files, and skips what test_naming.py skips
-(extern, gen, docs/audits). The deprecated `Nvr*` aliases of the plugin/module ABI are not a finding (they are
-ALIAS_HEADERS and DEPRECATED_NVR_USES in tools/tests/test_naming.py). A name that is public (a config key, a log line, a DLL export,
+done. It reads tracked and untracked-but-not-ignored files, and skips the paths under extern/, gen/, docs/audits/ and
+build/, and the files in SELF (the naming standard and this script). It has no category for the deprecated `Nvr*`
+aliases of the plugin/module ABI.
+A name that is public (a config key, a log line, a DLL export,
 a file name users touch) is listed here too, tagged `public`: it is not renamed without a decision, and the
 rename PRs list each one as a deliberate exception.
 """
@@ -23,11 +24,14 @@ import sys
 
 REPO = pathlib.Path(os.environ.get("NEVR_NAMING_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/", "build/")
-SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py", "tools/naming_inventory.py"})
+SELF = frozenset({"docs/standards/naming.md", "tools/naming_inventory.py"})
 
 CODE_EXT = (".h", ".hpp", ".cpp", ".cc", ".inc")
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
 CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+# docs/standards/naming.md: the brand spelling is allowed in the prose of documents; a Markdown file is a document.
+DOCUMENT_SUFFIX = (".md",)
+BRAND_SPELLING = "nEVR"
 PASCAL_NAMESPACE = re.compile(r"^\s*namespace\s+([A-Z][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
 LIFECYCLE_NAMESPACE = re.compile(r"\bnamespace\s+((?:[Nn]evr(?:_runtime)?)::[Ll]ifecycle(?:::\w+)*)")
 LOG_TAG = re.compile(r'"[^"\n]*\[([A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\]')
@@ -55,8 +59,11 @@ def lines_of(text):
 
 def noncanonical_spellings(files):
     for path, text in files:
+        prose = path.endswith(DOCUMENT_SUFFIX)
         for n, line in lines_of(text):
             for m in ANY_CASE.finditer(line):
+                if prose and m.group() == BRAND_SPELLING:
+                    continue
                 if not CANONICAL.match(m.group()):
                     yield path, n, m.group(), "a non-canonical spelling of the project name"
 
@@ -71,14 +78,38 @@ def lifecycle_namespaces(files):
                 yield path, n, m.group(1), "one lifecycle namespace spelled three ways; canonical nevr::lifecycle"
 
 
+# docs/standards/naming.md ("Names in the tree that are not models"): the game's namespaces that src/reconstruction takes
+# from the binary keep the game's spelling, and a namespace the reconstruction wrote takes the rule on its last component,
+# after the game's prefix (NRadEngine::nevr_reconstruction, NRadEngine::NRadGame::nevr_reconstruction). Outside that
+# directory the general rule holds: a namespace is nevr or nevr_<area>, or EchoVR or NRadEngine.
+RECONSTRUCTION_PREFIX = "src/reconstruction/"
+ANY_NAMESPACE_OPEN = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
+NEVR_COMPONENT = re.compile(r"^nevr(?:_[a-z][a-z0-9_]*)?$")
+# The project's spelling is not the game's: a component that starts with nevr in any case is a project name, not a game one.
+PROJECT_SPELLED = re.compile(r"^nevr", re.IGNORECASE)
+
+
+def reconstruction_namespace_is_allowed(name):
+    parts = name.split("::")
+    *prefix, last = parts
+    game_prefix = all(part[0].isupper() and not PROJECT_SPELLED.match(part) for part in prefix)
+    game_last = last[0].isupper() and not PROJECT_SPELLED.match(last)
+    return game_prefix and (game_last or bool(NEVR_COMPONENT.match(last)))
+
+
 def pascal_namespaces(files):
     for path, text in files:
         if not path.endswith(CODE_EXT) or path.startswith("plugins/"):
             continue
+        reconstruction = path.startswith(RECONSTRUCTION_PREFIX)
+        pattern = ANY_NAMESPACE_OPEN if reconstruction else PASCAL_NAMESPACE
         for n, line in lines_of(text):
-            m = PASCAL_NAMESPACE.match(line)
-            if m and not LIFECYCLE_NAMESPACE.search(line) and m.group(1) not in {"EchoVR", "NRadEngine"}:
-                yield path, n, m.group(1), "namespace is nevr or nevr_<area> (EchoVR:: and NRadEngine:: are the game's)"
+            m = pattern.match(line)
+            if not m or LIFECYCLE_NAMESPACE.search(line) or m.group(1) in {"EchoVR", "NRadEngine"}:
+                continue
+            if reconstruction and reconstruction_namespace_is_allowed(m.group(1)):
+                continue
+            yield path, n, m.group(1), "namespace is nevr or nevr_<area> (EchoVR:: and NRadEngine:: are the game's)"
 
 
 # Files that name the GAME's own log tags (to filter or match them), help text, and tests: not the project's tags.

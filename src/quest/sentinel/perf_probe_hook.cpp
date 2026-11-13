@@ -39,7 +39,7 @@ constexpr SlotRow kSlots[kSlotCount] = {
     {"bot_actor_id", "_ZNK10NRadEngine8NRadGame11CR15NetGame10BotActorIdENS_9CSymbol64E", 0x36c1878ULL},
 };
 
-// The two callers of CVR::HeadsetType the q15t gates tell apart (ELF vaddr and .dynsym size in the pinned file).
+// The two callers of CVR::HeadsetType the headset gates tell apart (ELF vaddr and .dynsym size in the pinned file).
 constexpr std::uint64_t kBindRva = 0x202ba74ULL, kBindSize = 184;    // BindExpression<CR15HeadsetTypeExpression>
 constexpr std::uint64_t kBotRva = 0x124dd38ULL, kBotSize = 716;      // CR15NetGame::BotActorId(CSymbol64) const
 constexpr std::uint64_t kHeadsetTypeRva = 0x1a6f164ULL;              // CVR::HeadsetType(), to find the load base

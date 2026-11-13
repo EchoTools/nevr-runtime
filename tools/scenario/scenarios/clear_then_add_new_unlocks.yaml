@@ -1,0 +1,22 @@
+# What one add does after a clear: the game's clear zeroes the count of new unlocks at netGame+0x51c50 (echovr.exe 0x1401a06c0), and
+# AddNewUnlocks (0x140152c30) appends after that count, so one add after a clear leaves 1 entry, not the N the client held. Sequence: (b) the
+# clear (count_before is N, the count the client loaded at login), (c) ONE add; read the array count after (c) in the console log: 1. The
+# account must hold N > 0 stored entries (a clear leaves it at 0; an add puts entries back). The item is not one the account holds after a
+# clear (0x87d5d9ecb92bdbee).
+name: clear_then_add_new_unlocks
+description: clear all new unlocks, then add one item, and see how many entries the array and the sent update hold
+steps:
+  - name: client is logged in (the clear needs the NetGame and the loaded profile, not a lobby)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: (b) clear all new unlocks
+    fire: {action: clear_new_unlocks}
+  - name: (b) the clear ran, count_before is N
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] clear_new_unlocks count_before=[1-9]\d* count_after=0 user=present dirty_flags_before=0x[0-9a-f]+ dirty_flags_after=0x[0-9a-f]+', timeout: 10}
+  - name: (c) add one item
+    fire: {action: add_new_unlocks, item: '0x87d5d9ecb92bdbee'}
+  - name: (c) the add ran
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] add_new_unlocks item=0x87d5d9ecb92bdbee count_before=\d+ count_after=\d+', timeout: 10}
+  - name: (c) the game sent the update after the add
+    expect_log: {pattern: '\[NSUSER\] sent profile update: .*newunlocks', timeout: 30}

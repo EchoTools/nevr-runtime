@@ -2,13 +2,13 @@
 
 Files: `src/quest/combat/shieldgamma.{h,cpp}`, `src/quest/combat/shieldgamma_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the level answer the handler
 reads), `src/quest/tests/shieldgamma_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/shieldgamma.sh`. The module is a normal combat step,
-registered after `hudmeter` (`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no other. Switches in `config.yaml`:
+registered after `hudmeter` (`src/quest/combat/combat_install.cpp`): it runs in the combat APKs and in no other. Switches in `config.yaml`:
 `combat.shieldgamma_tube_mirror` (default true) and `combat.shieldgamma_gamma` (default false, a test switch in the reference build). Both false installs nothing and logs
 `combat_shieldgamma_install` with `reason: off_config`. No file in the app's files directory turns either part on or off.
 
 Origins: our implementation of the reference build's `runtime/native/afkxr/afk_shieldgamma.cpp` (the decode and the material :1-12, the layout :15-19, the slot and function
-:57, the two switches' defaults :243-244; pinned in `docs/audits/2026-11-05-q15t-origin-citations.md`, rows 129-132). The module was imported into the q15t plugin from
-kotorvr's echoquest-combat work (#1591) and moved here.
+:57, the two switches' defaults :243-244; pinned in `docs/audits/2026-11-05-q15t-origin-citations.md`, rows 129-132). The module came into this tree with the combat plugin imported from
+kotorvr's echoquest-combat work (#1591).
 
 ## Row covered
 

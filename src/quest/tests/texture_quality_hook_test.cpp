@@ -512,6 +512,24 @@ void ASecondLevelIsRefusedAndTheFirstKeepsAnswering() {
   QCHECK(Entry()(kJava, 5) == 3072 && Entry()(kJava, 6) == 3380);
 }
 
+// A configuration word other than `stock` is the player's choice (#1737, the Quest 2 step-down leaves it); `stock` or the default is not.
+void AConfiguredLevelIsThePlayersChoiceAndStockOrTheDefaultIsNot() {
+  Reset();
+  QCHECK(!tq::PlayerChose());
+  QCHECK(tq::InstallVia(tq::Level::kHigh, true, &GotAccepts));
+  QCHECK(tq::PlayerChose());
+  Reset();
+  QCHECK(tq::InstallVia(tq::Level::kStock, true, &GotAccepts));
+  QCHECK(!tq::PlayerChose());
+  Reset();
+  QCHECK(tq::InstallVia(tq::Level::kLow, false, &GotAccepts));
+  QCHECK(!tq::PlayerChose());
+  tq::NotePlayerChose();
+  QCHECK(tq::PlayerChose());
+  tq::ResetForTest();
+  QCHECK(!tq::PlayerChose());
+}
+
 void WithoutItsCountersTheHookIsNotInstalledAndSaysWhy() {
   Reset();
   Capture log;
@@ -875,6 +893,7 @@ void AVrapiRefusalAfterTheRouteRollsItBack() {
 }  // namespace
 
 int main() {
+  AConfiguredLevelIsThePlayersChoiceAndStockOrTheDefaultIsNot();
   TheTableIsTheInstallersTable();
   TheProfileNamesTheHeadsetNotTheStockSize();
   OnlySevenWordsParse();

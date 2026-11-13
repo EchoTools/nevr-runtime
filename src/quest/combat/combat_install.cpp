@@ -7,6 +7,7 @@
 
 #include "quest/combat/aibots.h"
 #include "quest/combat/boosterpool.h"
+#include "quest/combat/bullet_velocity_guard.h"
 #include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_scope.h"
@@ -18,6 +19,7 @@
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/frozen_frame_exit.h"
 #include "quest/combat/fxtrail.h"
 #include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
@@ -36,6 +38,9 @@
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/script_redirect.h"
 #include "quest/combat/shieldgamma.h"
+#include "quest/combat/sound_symbol_guard.h"
+#include "quest/combat/texel_buffer_guard.h"
+#include "quest/combat/texture_quest2.h"
 #include "quest/combat/sendguard.h"
 #include "quest/combat/sensorwd.h"
 #include "quest/combat/shaderstep.h"
@@ -58,6 +63,8 @@ nevr_quest::CombatConfig g_config;
 ModuleResult ScriptRedirectNormal() noexcept { return script_redirect::Install(); }
 ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
 ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+// The texel-buffer guard (#1650): its two requests go to vk_ext_window before the game's first Vulkan lookup, so its row is early.
+ModuleResult TexelBufferGuardEarly() noexcept { return texel_buffer_guard::Early(g_config.texelBufferGuard.on); }
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
@@ -65,9 +72,21 @@ ModuleResult RefreshRateNormal() noexcept {
 // reads it is on: with every reader's key off, the row is off and arena pays nothing for it. A module that moves in and reads the scope adds its switch here.
 ModuleResult ScopeNormal() noexcept {
   const bool anyReader = g_config.hudmeter.on || g_config.shieldgammaGamma.on || g_config.shieldgammaTubeMirror.on || g_config.fxtrail.on ||
-                         g_config.peerclamp.on || g_config.custctx.on;
+                         g_config.peerclamp.on || g_config.custctx.on || g_config.frozenFrameExit.on || g_config.soundSymbolGuard.on ||
+                         g_config.gunconnect.on || g_config.sensorwd.on || g_config.aibots.on || g_config.bvh.on || g_config.weaponArm.on ||
+                         g_config.dronekill.on || g_config.ec.on ||
+                         (g_config.powerboostStage.value >= powerboost::kRead && g_config.powerboostStage.value <= powerboost::kCone);
   if (!anyReader) return {false, "off_config", /*off=*/true};
   return scope::InstallNormal();
+}
+// The frozen-frame exit (#2377, D8 (a): the combat APK only, this table's row): its key, and the limit with whether the file gave it.
+ModuleResult FrozenFrameExitNormal() noexcept {
+  return frozen_frame_exit::Install(g_config.frozenFrameExit.on, g_config.frozenFrameExitS.value,
+                                    g_config.frozenFrameExitS.source == nevr_quest::Source::kFile);
+}
+// The Quest 2 step-down (#1737): combat's look handed to the texture-quality owner; its lobby switch rides on it.
+ModuleResult TextureQuest2Normal() noexcept {
+  return texture_quest2::Install(g_config.textureQuest2StepDown.on, g_config.textureQuest2Lobby.on);
 }
 ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
 ModuleResult ShieldgammaNormal() noexcept {
@@ -111,7 +130,14 @@ ModuleResult EcNormal() noexcept {
 }
 ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
 ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
-ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronekillNormal() noexcept {
+  dronekill::Words words;
+  words.explosion = g_config.dronekillExplosion.on;  // #1737: the drone explosion rides on dronekill (docs/quest/combat/drone_explosion.md)
+  words.hold = g_config.dronekillHold.on;            // #1737: its first-system off held back (off by default: dronekill.h "The hold")
+  return dronekill::Install(g_config.dronekill.on, words);
+}
+ModuleResult BulletVelocityGuardNormal() noexcept { return bullet_velocity_guard::Install(g_config.bulletVelocityGuard.on); }
+ModuleResult SoundSymbolGuardNormal() noexcept { return sound_symbol_guard::Install(g_config.soundSymbolGuard.on); }
 ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 
 ModuleResult GatesNormal() noexcept {
@@ -144,14 +170,19 @@ ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx
 ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
 ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
 
-// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
-// plugin installed it, and nowhere else; the count is deduced.
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the combat
+// plugin imported in #1591 installed it, and nowhere else; the count is deduced.
 //   sendguard is installed where the plugin installed it: in the normal phase after the modules that hook the tick, before the two decisions.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
 //   before android_main reads the sizes.
 constexpr std::array kModules{
     Module{"heaps", &HeapsEarly, nullptr},
     Module{"memsys", &MemsysEarly, nullptr},
+    // texel_buffer_guard (#1650): registers two device-function requests with vk_ext_window (no hook of its own); early, because the requests must
+    // be in before install_vk_ext_window and the game's first lookup. It touches no slot a plugin could hook (README rule 8). Acts in every level
+    // (README rule 9, its second exception: a default for a value the API leaves undefined until it is written).
+    Module{"texel_buffer_guard", &TexelBufferGuardEarly, nullptr, "combat.texel_buffer_guard", &nevr_quest::CombatConfig::texelBufferGuard,
+           &texel_buffer_guard::End},
     // script_redirect (#2189): first of the normal rows (script_redirect.h), so a script load the later rows' installs cause is already redirected.
     Module{"script_redirect", nullptr, &ScriptRedirectNormal},
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
@@ -160,7 +191,15 @@ constexpr std::array kModules{
     // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
     // module that reads it.
     Module{"scope", nullptr, &ScopeNormal},
+    // frozen_frame_exit (#2377): reads the combat level answer, so right after the scope's row; the render-configuration hook it observes is
+    // installed by the constructor sequence, long before this step.
+    Module{"frozen_frame_exit", nullptr, &FrozenFrameExitNormal, "combat.frozen_frame_exit", &nevr_quest::CombatConfig::frozenFrameExit,
+           &frozen_frame_exit::NoteEnd},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // texture_quest2 (#1737): a tick callback of its own (it reads the init-fiber count, which the scope does not), so after the tick's row; not
+    // a reader of the scope's answer. texture_quest2_lobby is its switch with no step of its own.
+    Module{"texture_quest2_step_down", nullptr, &TextureQuest2Normal, "combat.texture_quest2_step_down", &nevr_quest::CombatConfig::textureQuest2StepDown},
+    Module{"texture_quest2_lobby", nullptr, nullptr, "combat.texture_quest2_lobby", &nevr_quest::CombatConfig::textureQuest2Lobby},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
     Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
@@ -177,23 +216,37 @@ constexpr std::array kModules{
     Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals},
     Module{"decals_flip_u", nullptr, nullptr, "combat.decals_flip_u", &nevr_quest::CombatConfig::decalsFlipU},
     Module{"decals_flip_v", nullptr, nullptr, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
-    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
+    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order. ec reads the combat level answer (#2382),
+    // so it comes after the `scope` row, and its switch is one of ScopeNormal()'s readers.
     Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
     // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    // dronekill reads the combat level answer (#2382), so it comes after the `scope` row, and its switch is one of ScopeNormal()'s readers.
     Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill, &dronekill::NoteEnd},
+    // dronekill_explosion (#1737): a switch of dronekill's with no step of its own (as impactsnd_write), read by DronekillNormal.
+    Module{"dronekill_explosion", nullptr, nullptr, "combat.dronekill_explosion", &nevr_quest::CombatConfig::dronekillExplosion},
+    // dronekill_hold (#1737): the same, the explosion's hold (default off), read by DronekillNormal.
+    Module{"dronekill_hold", nullptr, nullptr, "combat.dronekill_hold", &nevr_quest::CombatConfig::dronekillHold},
+    // bullet_velocity_guard (#1737): a thunk on FireBullet's slot, immediately above dronemuzzle's row: dronemuzzle's assembly entry on
+    // that slot must stay the newest hook there (a later install is refused slot_held_by_entry), so the guard installs first and the entry calls it.
+    Module{"bullet_velocity_guard", nullptr, &BulletVelocityGuardNormal, "combat.bullet_velocity_guard", &nevr_quest::CombatConfig::bulletVelocityGuard, &bullet_velocity_guard::NoteEnd},
+    // sound_symbol_guard (#1737): a caller-aware thunk on Play3DSound's slot (no other hook there); it reads the combat level answer, so after `scope`,
+    // and its switch is one of ScopeNormal()'s readers.
+    Module{"sound_symbol_guard", nullptr, &SoundSymbolGuardNormal, "combat.sound_symbol_guard", &nevr_quest::CombatConfig::soundSymbolGuard, &sound_symbol_guard::NoteEnd},
     Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
-    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick. It reads the combat level answer (#2382), so it comes after the
+    // `scope` row, and its stage (1 to 3: installed) is one of ScopeNormal()'s readers.
     Module{"powerboost", nullptr, &PowerboostNormal},
     // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
-    // callbacks, so they come after the tick's row; before the gates, which the plugin installed after all its modules.
+    // callbacks, so they come after the tick's row; all three read the combat level answer (#2382), so they also come after the `scope` row, and their
+    // switches are three of ScopeNormal()'s readers; before the gates, which the plugin installed after all its modules.
     Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
     Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
     Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
-    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
-    // the scope the tick refreshes.
+    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks. bvh reads the combat level
+    // answer (#2382), so it comes after the `scope` row, and its switch is one of ScopeNormal()'s readers; wallfire asks bvh's InCombatOrLobby().
     // bvh_gate and bvh_touch are switches of bvh's with no step of their own: their rows exist so each switch is one generated `combat_config_switch` record.
     Module{"bvh", nullptr, &BvhNormal, "combat.bvh", &nevr_quest::CombatConfig::bvh},
     Module{"bvh_gate", nullptr, nullptr, "combat.bvh_gate", &nevr_quest::CombatConfig::bvhGate},
@@ -226,7 +279,8 @@ constexpr std::array kModules{
     Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname, &levelname::NoteEnd},
     Module{"boosterpool", nullptr, &BoosterPoolNormal, nullptr, nullptr, &boosterpool::NoteEnd},
     // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
-    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    // move before them. sensorwd reads the combat level answer (combat_scope.h: its handlers and its tick), so it comes after the scope's row; music asks
+    // combat_level itself. Each registers a tick callback, which the tick row (above) lets them do before or after its install.
     Module{"sensorwd", nullptr, &SensorwdNormal, "combat.sensorwd", &nevr_quest::CombatConfig::sensorwd},
     Module{"music", nullptr, &MusicNormal, "combat.music", &nevr_quest::CombatConfig::music},
 };

@@ -8,7 +8,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 struct CR15NetGame {
     CncaGame* game;
@@ -24,4 +24,4 @@ SActorGuid CR15NetGame::UserActor(std::uint16_t member_index) const {
     return actor;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

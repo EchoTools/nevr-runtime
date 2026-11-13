@@ -95,6 +95,10 @@ nevr_ht_test(lobby_full_hooks_test GROUP hooks ${_af} NOEXC DL TIMEOUT 60 INCS s
 nevr_ht_test(credits_text_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 INCS src/quest/tests
   OBJS ${_attach_objs} o_hooks_attach_sentinel
   SRC src/quest/tests/credits_text_test.cpp src/quest/sentinel/credits_text.cpp)
+# The Quest peer timeout log (integration/peer_timeout_log.cpp, #peer-timeout-log): the table's thunk decodes to its slot and body, a
+# refused install without libr15 installs nothing, and the removal level is the shared rule (src/runtime/patch/peer_timeout_log_rules.h).
+nevr_ht_test(peer_timeout_log_test GROUP hooks ${_hf} TIMEOUT 120 INCS src/quest/tests OBJS ${_core} ${_ident}
+  SRC src/quest/tests/peer_timeout_log_test.cpp src/quest/integration/peer_timeout_log.cpp)
 
 # The variant build (docs/adr/0021 section 11): the sentinel compiled with NEVR_LIBR15_EXTRA_ROWS and the source configure
 # generates for the example fixture. The rows it reads back are the parser's, the patched ID it expects is the patcher's for them
@@ -235,7 +239,7 @@ nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_
 # a missing file, an unknown or padded word, a file too long, a link and a directory, read from a temporary directory.
 nevr_ht_test(build_variant_test GROUP hooks ${_hf} TIMEOUT 120
   SRC src/quest/tests/build_variant_test.cpp src/quest/sentinel/build_variant.cpp)
-# The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
+# The grey default irradiance texture (#2091, #1737): the real handlers through the two thunk entries against models of
 # CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
 # Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the
 # call site in the real libr15; row_hooks_install_test activates the row.
@@ -273,6 +277,9 @@ nevr_ht_test(headset_profile_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} $
 # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
 # parse, the index-to-level map and the float truncation. No game, no hook.
 nevr_ht_test(refresh_eye_size_test GROUP hooks NOEXC INCS ${_sent} TIMEOUT 120 SRC src/quest/tests/refresh_eye_size_test.cpp)
+# The Quest 2 step-down's rules (#1737, texture_quality_rules.h): the look's gate (settle, load window, gap, Echo Arena), the level sent and when a
+# look-driven Resize may be made. Pure: no game, no hook, no clock.
+nevr_ht_test(texture_quality_rules_test GROUP hooks NOEXC INCS ${_sent} TIMEOUT 120 SRC src/quest/tests/texture_quality_rules_test.cpp)
 # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back, the
 # level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
 nevr_ht_test(texture_menu_test GROUP hooks HOST INCS ${_sent} TIMEOUT 120
@@ -306,8 +313,11 @@ nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core
       src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp src/quest/combat/impactsnd.cpp src/quest/combat/decals.cpp
       src/quest/combat/powerboost.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp
       src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp
-      src/quest/integration/module_observers.cpp src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp
-      src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp src/quest/combat/peerclamp.cpp)
+      src/quest/integration/module_observers.cpp src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/bullet_velocity_guard.cpp
+      src/quest/combat/sound_symbol_guard.cpp src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp
+      src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp src/quest/combat/peerclamp.cpp
+      src/quest/combat/frozen_frame_exit.cpp src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp
+      src/quest/combat/texture_quest2.cpp)
 # The shared core of the CDN texture delivery that resource_request_hook.cpp links (docs/adr/0045-cdn-texture-delivery.md).
 nevr_ht_obj(o_hooks_cargo_shadow GROUP hooks NOEXC INCS ${_sent} SRC src/core/resource_shadow.cpp)
 nevr_ht_obj(o_hooks_cargo_resolver GROUP hooks NOEXC INCS ${_sent} SRC src/core/cargo_resolver.cpp)

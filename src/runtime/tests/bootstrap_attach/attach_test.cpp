@@ -922,6 +922,15 @@ void RequireRecordFromEachPid(const std::vector<nlohmann::json>& records, const 
   std::fprintf(stderr, "bootstrap attach test: step %s has no record from pid(s):", step);
   for (const unsigned long long pid : missing) std::fprintf(stderr, " %llu", pid);
   std::fprintf(stderr, " (of %zu children)\n", pids.size());
+  // What each missing child did leave, so the failure shows how far its journal got (#1375).
+  for (const unsigned long long pid : missing) {
+    std::fprintf(stderr, "bootstrap attach test: pid %llu left host_attach records:", pid);
+    for (const nlohmann::json& record : records) {
+      if (record.value("event", "") != "host_attach" || record.value("pid", 0ull) != pid) continue;
+      std::fprintf(stderr, " %s#%llu", record.value("step", "").c_str(), record.value("seq", 0ull));
+    }
+    std::fprintf(stderr, "\n");
+  }
   Fail(message);
 }
 
@@ -963,7 +972,7 @@ void RunChild(const std::wstring& command_line, const char* label) {
   }
 }
 
-int RunSuite() {
+int RunSuite(bool held_lock_round) {
   const std::wstring root = ExecutableDirectory();
   wchar_t self[MAX_PATH] = {};
   const DWORD length = GetModuleFileNameW(nullptr, self, MAX_PATH);
@@ -992,16 +1001,41 @@ int RunSuite() {
   wchar_t temp_base[MAX_PATH] = {};
   const DWORD temp_len = GetTempPathW(MAX_PATH, temp_base);
   Require(temp_len != 0 && temp_len < MAX_PATH, "no temp directory available");
+  static LONG counter = 0;
+  const LONG sequence = InterlockedIncrement(&counter);
   const std::wstring base = std::wstring(temp_base, temp_len) + L"nevr-attach-" +
                             std::to_wstring(GetCurrentProcessId()) + L"-" +
-                            std::to_wstring(GetTickCount64());
-  CreateDirectoryW(base.c_str(), nullptr);
+                            std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(sequence);
+  Require(CreateDirectoryW(base.c_str(), nullptr) != FALSE, "could not create the scenario base directory");
   const auto use_scenario_directory = [&base](const std::wstring& name) {
     const std::wstring directory = base + L"\\" + name;
     CreateDirectoryW(directory.c_str(), nullptr);
     SetEnvironmentVariableW(L"LOCALAPPDATA", directory.c_str());
     SetEnvironmentVariableW(L"TEMP", directory.c_str());
   };
+  if (held_lock_round) {
+    // The exit wait's timeout, forced on demand (`test_bootstrap_attach.exe --held-lock-round`; the default suite does
+    // not run it, so it stays green until the fix is chosen, #1152). This process holds the named log mutex for the
+    // whole round, so each child's last flush waits its bound (kBootstrapExitLogLockWaitMs) and then writes nothing.
+    // Every child must leave both records. The round fails and names each pid that left none.
+    constexpr int kHeldLockRuns = 12;
+    StageRuntimeFixture(root, L"good");
+    use_scenario_directory(L"exit-at-once-held-lock");
+    HANDLE held = CreateMutexW(nullptr, FALSE, nevr_run_log::kMutexName);
+    Require(held != nullptr, "could not create the log mutex for the held-lock round");
+    Require(WaitForSingleObject(held, 0) == WAIT_OBJECT_0, "could not take the log mutex for the held-lock round");
+    const std::vector<DWORD> pids =
+        RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kHeldLockRuns,
+                          "exit-at-once-held-lock");
+    ReleaseMutex(held);
+    CloseHandle(held);
+    const std::vector<nlohmann::json> records = ReadHostRecords();
+    RequireRecordFromEachPid(records, pids, "prologue_check",
+                             "a child whose exit flush timed out on the held log mutex left no prologue record");
+    RequireRecordFromEachPid(records, pids, "image_check",
+                             "a child whose exit flush timed out on the held log mutex left no image check record");
+    return 0;
+  }
   for (const Scenario& scenario : scenarios) {
     StageRuntimeFixture(root, scenario.fixture);
     std::wstring mode(scenario.mode, scenario.mode + std::strlen(scenario.mode));
@@ -1063,8 +1097,9 @@ int RunSuite() {
 
 int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return RunChildScenario(argv[2]);
-  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario>]");
-  return RunSuite();
+  if (argc == 2 && std::strcmp(argv[1], "--held-lock-round") == 0) return RunSuite(true);
+  if (argc != 1) Fail("usage: test_bootstrap_attach.exe [--child <scenario> | --held-lock-round]");
+  return RunSuite(false);
 }
 
 #endif

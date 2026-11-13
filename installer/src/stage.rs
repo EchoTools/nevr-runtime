@@ -6,7 +6,7 @@ use crate::artifact;
 use crate::error::{Error, Result};
 use crate::manifest::{self, Artifact, Content};
 use crate::session::{Ended, Session};
-use crate::util::semver_ok;
+use crate::util::semver_cmp;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,21 +43,14 @@ pub fn staged_member(path: &str) -> bool {
     })
 }
 
-fn triple(v: &str) -> Option<(u64, u64, u64)> {
-    if !semver_ok(v) {
-        return None;
-    }
-    let mut it = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
-    Some((it.next()?, it.next()?, it.next()?))
-}
-
-/// How the target relates to what runs now.
+/// How the target relates to what runs now. A version that `semver_cmp` cannot read (not `X.Y.Z`, or a component past
+/// u64::MAX) gives `install`: it is never compared as a smaller number (#2062).
 pub fn direction(current: &str, target: &str) -> &'static str {
-    match (triple(current), triple(target)) {
-        (Some(c), Some(t)) if t > c => "upgrade",
-        (Some(c), Some(t)) if t < c => "downgrade",
-        (Some(_), Some(_)) => "replace",
-        _ => "install",
+    match semver_cmp(target, current) {
+        Some(std::cmp::Ordering::Greater) => "upgrade",
+        Some(std::cmp::Ordering::Less) => "downgrade",
+        Some(std::cmp::Ordering::Equal) => "replace",
+        None => "install",
     }
 }
 

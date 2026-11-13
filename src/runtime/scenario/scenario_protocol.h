@@ -16,7 +16,7 @@ namespace nevr_scenario_protocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
                 kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kInjectRecentlyMet, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
-                kFireAction, kInviteAnswers };
+                kFireAction, kInviteAnswers, kAbilityActivate };
 
 struct Command {
   Op op = Op::kState;
@@ -40,6 +40,7 @@ struct Command {
   std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
+  bool active = true;  // ability_activate: the use's active flag
   std::vector<nevr_social_roster::Entry> people;  // inject RecentlyMetListResponse
 };
 
@@ -147,6 +148,17 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     if (!ok && error->empty()) *error = "fire " + action + " needs a non-empty \"key\"";
   } else if (action == "refresh_friends" || action == "find_arena") {
     ok = true;
+  } else if (action == "add_new_unlocks") {
+    // The game's AddNewUnlocks (CR15NetGame, echovr.exe 0x140152c30) with one item: a 64-bit symbol as a "0x..." hex string.
+    std::string hex;
+    ok = text("item", true, &hex) && hex.size() > 2 && hex.size() <= 18 && hex.rfind("0x", 0) == 0 &&
+         hex.find_first_not_of("0123456789abcdefABCDEF", 2) == std::string::npos;
+    if (ok) cmd.number = std::stoull(hex.substr(2), nullptr, 16);
+    if (!ok && error->empty()) *error = "fire add_new_unlocks needs \"item\": a \"0x...\" hex symbol of up to 16 digits";
+  } else if (action == "clear_new_unlocks") {
+    // The game's "clear all new unlocks" (CR15NetGame, echovr.exe 0x1401a06c0). Optional "seed": when the game holds no
+    // new unlocks the call returns at once, so a seed count is written first so the clear path runs.
+    ok = !j.contains("seed") || u64("seed", 1000, &cmd.number);
   } else if (action == "party_join_failed_callback") {
     ok = u64("code", 0xFFFF, &cmd.number);
   } else if (action == "refresh_recently_met") {
@@ -194,7 +206,7 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
-             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, "
+             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, clear_new_unlocks, add_new_unlocks, "
              "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning, early_quit_feature_flags, dispatch_event, ui_text, "
              "invite_resolve and invite_create";
     return false;
@@ -223,6 +235,14 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     cmd.op = Op::kState;
   } else if (op == "invite_answers") {
     cmd.op = Op::kInviteAnswers;
+  } else if (op == "ability_activate") {
+    // #2365: the client sends one stock SR15NetAbilityActivate to the authority peer (runtime/scenario/ability_probe.h).
+    cmd.op = Op::kAbilityActivate;
+    if (j.contains("active") && !j["active"].is_boolean()) {
+      *error = "ability_activate takes an optional boolean \"active\" (default true)";
+      return false;
+    }
+    cmd.active = !j.contains("active") || j["active"].get<bool>();
   } else if (op == "inject") {
     const std::string msg = j.contains("msg") && j["msg"].is_string() ? j["msg"].get<std::string>() : "";
     if (msg == "PartyInviteNotify") {

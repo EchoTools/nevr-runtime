@@ -2,8 +2,8 @@
 
 equip_refire_test.cpp drives the real wrappers through the six installed words and got_pinned_test.cpp checks the six relocations
 and the code pins in the real libr15. This file pins what neither can see: that the rule is the shared header's and is not copied
-into the Quest file, the combat target, the sentinel's install and budget row, the host test's registration, that the module
-changes no code page, and that nothing of it is left in the q15t plugin.
+into the Quest file, the combat target, the sentinel's install and budget row, the host test's registration, and that the module
+changes no code page.
 
 It also holds the wiring of the combat area's two install steps (#2171): combat_install_test.cpp drives the steps over an injected
 table and integration_sequence_test.cpp drives the sequence and the post-load policy over fakes; the classes at the end pin what neither
@@ -87,14 +87,20 @@ class TheModuleIsWired(unittest.TestCase):
         self.assertRegex(code, r"constexpr std::size_t kHookCount = 6;\s*sentinel::GotHook g_hooks\[kHookCount\];")
         self.assertEqual(len(re.findall(r"InstallThunk<", code)), 1)  # one call site, run once per word
 
-    def test_every_launch_installs_it_after_the_name_tags(self):
-        body = extract_braced_function(
-            strip_comments(read("src/quest/sentinel/entry.cpp")), "bool InstallPermissionWaitHook() noexcept {"
-        )
-        self.assertEqual(body.count("nevr_quest::combat::equip_refire::Install();"), 1)
-        self.assertLess(
-            body.index("nevr_quest::combat::match_tags::Install();"), body.index("nevr_quest::combat::equip_refire::Install();")
-        )
+    def test_only_a_run_with_combat_installs_it_after_the_name_tags(self):
+        """docs/adr/0047: its own constructor step, run only where combat runs, right after the name tags' step."""
+        entry = strip_comments(read("src/quest/sentinel/entry.cpp"))
+        body = extract_braced_function(entry, "bool InstallEquipRefireHook() noexcept {")
+        self.assertIn("return nevr_quest::combat::equip_refire::Install();", body)
+        self.assertNotIn("equip_refire::Install", extract_braced_function(entry, "bool InstallPermissionWaitHook() noexcept {"))
+        steps = strip_comments(read("src/quest/integration/production_steps.cpp"))
+        step = extract_braced_function(steps, "bool InstallEquipRefire() override {")
+        self.assertIn("const bool ok = nevr_quest::integration::InstallEquipRefireHook();", step)
+        self.assertIn("return ok;", step)
+        sequence = strip_comments(read("src/quest/integration/ctor_sequence.cpp"))
+        gate = sequence.index("if (combatNormal) {\n      r.Run(StepId::kInstallMatchTags")
+        self.assertLess(gate, sequence.index("r.Run(StepId::kInstallEquipRefire, [&] { return steps.InstallEquipRefire(); });"))
+        self.assertIn('r.Skip(StepId::kInstallEquipRefire, "combat_inactive");', sequence)
 
     def test_the_host_test_is_a_target_of_the_combat_group(self):
         cmake = read("src/quest/host_tests/groups/combat.cmake")
@@ -131,13 +137,6 @@ class TheModuleChangesNoCodePage(unittest.TestCase):
         code = strip_comments(read("src/quest/combat/equip_refire.cpp"))
         for token in ("try {", "catch (", "throw "):
             self.assertNotIn(token, code)
-
-
-class NothingOfItIsLeftInTheQ15tPlugin(unittest.TestCase):
-    def test_the_plugin_and_its_tests_are_gone(self):
-        # The q15t plugin and its host tests are deleted (#2189): no second copy of the re-fire can come back through them.
-        for path in ("src/quest/plugins/q15t", "src/quest/tests/q15t", "docs/quest/q15t"):
-            self.assertFalse((ROOT / path).exists(), path)
 
 
 class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
@@ -215,11 +214,10 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
             r"\s+src/quest/combat/combat_install\.cpp",
         )
 
-    def test_verify_runs_the_combat_recipe_and_names_no_q15t_one(self):
+    def test_verify_runs_the_combat_recipe(self):
         justfile = read("justfile")
         verify = justfile.split("\nverify:", 1)[1]
         self.assertRegex(verify, r"\n\s+test-quest-combat \\\n")
-        self.assertNotIn("test-quest-q15t", justfile)
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):

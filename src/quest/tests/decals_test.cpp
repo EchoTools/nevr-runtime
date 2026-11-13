@@ -1,4 +1,4 @@
-// Host test of the level-decals module (src/quest/combat/decals.{h,cpp}, decals_core.h, #2183; moved from the q15t plugin's decals, #1619). Three layers:
+// Host test of the level-decals module (src/quest/combat/decals.{h,cpp}, decals_core.h, #2183, #1619). Three layers:
 //   1. the table file: the parser's refusals, the uv flips, the blend, the level gate, the index and vertex fill;
 //   2. the per-system state machine (decals::Host) over stand-in operations: gating, retries, level changes, shutdown, the war room, and the scope (a game
 //      space in a level that is not a combat map or the war room draws and creates nothing, and its level is read once a second, not on every update);
@@ -997,6 +997,48 @@ void TestInstall(const std::string& dir) {
   dc::ResetForTest();
 }
 
+// Every combat_decals_install line names the two flips the step was handed (#2382), on every path: installed, a second install, off, and each
+// refusal. All four pairs of the flips run every path, so a line that drops one flip, or fixes one at either value, shows on the pairs that differ.
+static void TestEveryInstallLineNamesTheFlips(const std::string& dir) {
+  const dc::Api api = MakeApi();
+  std::vector<GroupIn> in(1);
+  in[0] = {kDyson, 0x1111, 0, {MakeQuad(1)}};
+  const std::string table = WriteFile(dir, "flips.bin", Bytes(in));
+  std::vector<uint8_t> broken = Bytes(in);
+  broken[0] = 'X';
+  const std::string bad = WriteFile(dir, "flips-bad.bin", broken);
+  const std::string big = WriteFile(dir, "flips-big.bin", Bytes(in));
+  CHECK(truncate(big.c_str(), static_cast<off_t>(dc::kMaxFileBytes) + 1) == 0, "a table one byte over the limit");
+  dc::Api incomplete = api;
+  incomplete.init = nullptr;
+  for (const bool fu : {false, true}) {
+    for (const bool fv : {false, true}) {
+      const dc::Switches sw{true, fu, fv};
+      const std::string want = std::string("\"decals_flip_u\":") + (fu ? "1" : "0") + ",\"decals_flip_v\":" + (fv ? "1" : "0");
+      const auto named = [&want, fu, fv](const char* what, const combat::ModuleResult& r, const char* status) {
+        CHECK(std::strcmp(r.status, status) == 0 && CountLines("\"event\":\"combat_decals_install\"") == 1 && CountLines(want.c_str()) == 1,
+              "%s (u=%d v=%d): the install line does not name the flips it was handed (%s)", what, static_cast<int>(fu), static_cast<int>(fv), r.status);
+        g_lines.clear();
+      };
+      Fresh();
+      named("installed", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "installed");
+      named("a second install", dc::InstallAt(sw, &Lookup, table.c_str(), &api), "already_installed");
+      Fresh();
+      named("off", dc::InstallAt(dc::Switches{false, fu, fv}, &Lookup, table.c_str(), &api), "off_config");
+      named("no table", dc::InstallAt(sw, &Lookup, (dir + "/flips-none.bin").c_str(), &api), "no_table");
+      named("a table too big to read", dc::InstallAt(sw, &Lookup, big.c_str(), &api), "table_unreadable");
+      named("a bad table", dc::InstallAt(sw, &Lookup, bad.c_str(), &api), "bad_table");
+      named("no engine export", dc::InstallAt(sw, &Lookup, table.c_str(), nullptr), "engine_export_missing");
+      named("an incomplete engine", dc::InstallAt(sw, &Lookup, table.c_str(), &incomplete), "engine_export_missing");
+      named("no libr15", dc::InstallAt(sw, nullptr, table.c_str(), &api), "module_not_loaded");
+    }
+  }
+  std::remove(table.c_str());
+  std::remove(bad.c_str());
+  std::remove(big.c_str());
+  dc::ResetForTest();
+}
+
 // A game space whose level is not stored yet (the constructor leaves 0 or -1) has no record; its updates are throttled the same way: no read on each frame.
 static void TestNoLevelYetIsThrottled(const std::string& dir) {
   const dc::Api api = MakeApi();
@@ -1011,7 +1053,7 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   const uint64_t reads0 = ReadCount();
   for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
   CHECK(ReadCount() == reads0 && dc::CountersForTest().tick_calls == 1, "no level yet: %llu reads and %llu calls in 49 updates",
-        (unsigned long long)(ReadCount() - reads0), (unsigned long long)dc::CountersForTest().tick_calls);
+        static_cast<unsigned long long>(ReadCount() - reads0), static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
   // after the skip the space is looked at again, and a space that has become a combat map is found
   s.gs[0x58 / 8] = kDyson;
   for (int i = 0; i < 70; ++i) UpdateSlot()(s.addr());
@@ -1033,7 +1075,7 @@ static void TestNoLevelYetIsThrottled(const std::string& dir) {
   Sys c;
   MakeSys(&c, kDyson);
   for (int i = 0; i < 10; ++i) UpdateSlot()(c.addr());
-  CHECK(dc::CountersForTest().tick_calls == 10, "a combat space ran the state machine %llu times in 10 updates", (unsigned long long)dc::CountersForTest().tick_calls);
+  CHECK(dc::CountersForTest().tick_calls == 10, "a combat space ran the state machine %llu times in 10 updates", static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
 }
 
 // ---- the scope: arena shares the APK, so a game space in an arena level creates and draws nothing ----
@@ -1054,13 +1096,13 @@ void TestArenaScope(const std::string& dir) {
     for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
     CHECK(E.real_updates == 50, "%s: the game's update ran %d times", name, E.real_updates);
     CHECK(ReadCount() == reads0 && ScanCount() == scans0,
-          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, (unsigned long long)(ReadCount() - reads0),
-          (unsigned long long)(ScanCount() - scans0));
+          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, static_cast<unsigned long long>(ReadCount() - reads0),
+          static_cast<unsigned long long>(ScanCount() - scans0));
     CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
     CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
     // the module's lock, its clock and its state machine are reached by the first update and not by the 49 quiet ones (a few relaxed loads each)
     CHECK(dc::CountersForTest().tick_calls == 1, "%s: the state machine ran %llu times in 50 arena updates", name,
-          (unsigned long long)dc::CountersForTest().tick_calls);
+          static_cast<unsigned long long>(dc::CountersForTest().tick_calls));
     CHECK(dc::CountersForTest().nodes_made == 0 && dc::CountersForTest().drawn_quads == 0, "%s: counters", name);
     // Shutdown still passes through, and finds no node
     CHECK(ShutSlot()(s.addr()) == s.addr() + 1 && Index("free") < 0, "%s: Shutdown", name);
@@ -1084,6 +1126,7 @@ int main() {
   TestInstall(dir);
   TestArenaScope(dir);
   TestNoLevelYetIsThrottled(dir);
+  TestEveryInstallLineNamesTheFlips(dir);
 
   std::string cmd = "rm -rf " + dir;
   if (std::system(cmd.c_str()) != 0) std::printf("note: could not remove %s\n", dir.c_str());

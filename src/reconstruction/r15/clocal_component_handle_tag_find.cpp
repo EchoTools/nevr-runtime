@@ -8,7 +8,7 @@
 
 #include "cnca_game.hpp"
 
-namespace q15t::r15::reconstruction {
+namespace NRadEngine::nevr_reconstruction {
 
 void FindTagComponent(LocalComponentHandle* result, void* game_space,
                       std::uint64_t actor, std::uint64_t component_symbol) {
@@ -89,4 +89,4 @@ resolve_alias:
     result->component = nullptr;
 }
 
-} // namespace q15t::r15::reconstruction
+} // namespace NRadEngine::nevr_reconstruction

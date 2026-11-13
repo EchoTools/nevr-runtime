@@ -112,7 +112,8 @@ ModuleResult Done(const char* result, const char* reason, const char* status, co
   sentinel::LogFields(refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "combat_meshstep_install",
                       {{"result", result}, {"reason", reason}, {"status", status},
                        {"slot_vaddr", sentinel::HexString(slot, pins.slot)}, {"consequence", consequence}});
-  return {ok, status};
+  // "off" is the switch off by its key: nothing installed and nothing wrong, counted apart on the phase line (#2308).
+  return {ok, status, std::strcmp(result, "off") == 0};
 }
 
 constexpr const char* kStockConsequence = "mesh lists are built by the game's constructor, growth step 32";

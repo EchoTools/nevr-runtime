@@ -327,6 +327,39 @@ func TestEnvAtTakesPathAndTheCachesFromTheGetenvItIsGivenNotFromTheProcess(t *te
 	}
 }
 
+// Not parallel: it sets HOME and the Go cache variables of the test process, which t.Setenv forbids with t.Parallel. The
+// answer for a process's caches is the answer its go gives under that process's HOME, so a second HOME must get its own answer
+// and not the first one's from the kit's cache of go's answers.
+func TestGoDefaultsFollowTheHomeTheGoRunsIn(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	cacheFromKit := func(home string) string {
+		t.Setenv("HOME", home)
+		env, err := EnvAt(t.TempDir(), func(string) string { return "" }, goBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := lookup(env, "GOCACHE")
+		return got
+	}
+	homeA, homeB := t.TempDir(), t.TempDir()
+	gotA := cacheFromKit(homeA)
+	wantA := goEnv(t, "GOCACHE")
+	gotB := cacheFromKit(homeB)
+	wantB := goEnv(t, "GOCACHE")
+	if gotA != wantA {
+		t.Errorf("GOCACHE under HOME %q = %q, want go env's %q", homeA, gotA, wantA)
+	}
+	if gotB != wantB {
+		t.Errorf("GOCACHE under HOME %q = %q (the answer for the first HOME was kept), want go env's %q", homeB, gotB, wantB)
+	}
+}
+
 func TestEnvAtAsksTheGoItIsGivenForCachesTheCallerDoesNotSet(t *testing.T) {
 	t.Parallel()
 	goBin, err := exec.LookPath("go")
@@ -351,5 +384,38 @@ func TestEnvSetsGOFLAGSSoGoTestNeverServesACachedResult(t *testing.T) {
 	env := Env(t)
 	if got, _ := lookup(env, "GOFLAGS"); got != "-count=1" {
 		t.Errorf("GOFLAGS = %q, want -count=1", got)
+	}
+}
+
+// Not parallel: it sets GOENV and GOPATH once, and HOME once per iteration, in the test process, which t.Setenv forbids
+// with t.Parallel. Only HOME differs between the two iterations: GOENV=off and an empty GOPATH hold the rest of go env's
+// answer still, and with an empty GOPATH GOMODCACHE is $HOME/go/pkg/mod, so the second call must ask go again rather
+// than reuse the first answer. (TestEnvDropsTheCallersEnvironmentAndKeepsOnlyPATH also changes HOME, in its own process
+// state, and this test does not depend on it.)
+func TestEnvAsksGoAgainWhenTheCallersEnvironmentChanges(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ambient caches are cleared for this test, whatever the caller's environment holds: a set GOMODCACHE or GOCACHE
+	// is an answer go env gives for every HOME, and the test would then pass with the memo keyed on the binary alone.
+	// An empty value is unset to go, so the answers below come from HOME.
+	t.Setenv("GOENV", "off")
+	t.Setenv("GOPATH", "")
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("GOCACHE", "")
+	noCaches := func(string) string { return "" }
+	for _, home := range []string{t.TempDir(), t.TempDir()} {
+		t.Setenv("HOME", home)
+		env, err := EnvAt(t.TempDir(), noCaches, goBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
+			want := goEnv(t, key)
+			if got, _ := lookup(env, key); got != want {
+				t.Errorf("with HOME=%q: %s = %q, want go env's %q for that HOME", home, key, got, want)
+			}
+		}
 	}
 }

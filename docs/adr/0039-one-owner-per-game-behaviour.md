@@ -17,12 +17,12 @@ behaviour within one process.
 
 The sentinel already has the pattern for one behaviour. `src/quest/sentinel/clock_levels_hook.h`: "This module owns the
 decision, not the slot." The render configuration hook (`src/quest/sentinel/render_config_hook.cpp`) holds the
-`vrapi_SetClockLevels` slot and asks the clock-level module which levels to call the original with. But the q15t plugin
+`vrapi_SetClockLevels` slot and asks the clock-level module which levels to call the original with. But the combat plugin
 changed the clock levels too from its own module (CPU 4 / GPU 4), outside that decision; the clock levels now have the one owner,
 `clock_levels` (ADR 0046 rule 3).
 
 The display refresh rate was a different case: the render configuration hook only observed `vrapi_SetDisplayRefreshRate`,
-and the q15t plugin's rate rule was the one module in this tree that changed it. Its clash with the sentinel was two hook
+and the combat plugin's rate rule was the one module in this tree that changed it. Its clash with the sentinel was two hook
 mechanisms on one slot (ADR 0034, #2000), not two owners. The rule now lives in `src/quest/combat/refresh_rate.h`, which the render
 configuration handler asks, as it asks `clock_levels` (ADR 0046 rule 3).
 
@@ -50,7 +50,7 @@ Scope: `src/quest`, its plugins, `src/runtime`, `src/modules`.
 
 ## Consequences
 
-- Clock levels get one decision: q15t's request becomes an input to the clock-level module.
+- Clock levels get one decision: the combat plugin's request becomes an input to the clock-level module.
 - A config switch and a plugin can no longer fight over a value without either saying so.
 
 ## Not claimed

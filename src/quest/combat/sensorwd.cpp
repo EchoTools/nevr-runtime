@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
@@ -55,10 +55,8 @@ struct Ping {
 // only with g_mu held. g_mu is held for short loops over plain fields only: never across a read of game memory, a call into the game or a log line; never nested.
 std::atomic<bool> g_on{false};
 std::atomic<bool> g_tickRegistered{false};
-// The scope: the last look's answer, and when it was made.
-std::atomic<bool> g_scope{false};
-std::atomic<std::int64_t> g_lookedAtMs{0};
-std::atomic<std::int64_t> g_nextLookMs{0};
+// The combat level answer as the tick last read it (combat_scope.h `InCombatMap`): only the tick writes it, to see the edge of the scope.
+std::atomic<bool> g_wasInScope{false};
 std::atomic<std::int64_t> g_nextSweepMs{0};
 std::atomic<unsigned> g_logLines{0}, g_noteLines{0}, g_threadLines{0};
 std::atomic<long> g_tid[4] = {{0}, {0}, {0}, {0}};  // the last thread seen in each role (tick, enable, disable, event)
@@ -93,12 +91,10 @@ void Hook(int stage) noexcept {
   if (hook != nullptr) hook(stage);
 }
 
-// The scope as a handler reads it: the last look found a combat map (no Echo Arena level) and is not stale. The first test is one relaxed load, which is
-// all the path of an arena match pays; the clock is read only on the path of a combat one.
-bool InScope() noexcept {
-  if (!g_scope.load(std::memory_order_relaxed)) return false;
-  return Now() - g_lookedAtMs.load(std::memory_order_relaxed) < kStaleAfterMs;
-}
+// The scope as a handler and the tick read it: the combat level answer (combat_scope.h `InCombatMap`) says a combat map is loaded and no Echo Arena
+// level is, and its last look is at most scope::kStaleAfterMs (1 s) old. The first test is one relaxed load of the scope word, which is all the path of an arena match
+// pays; the clock is read only on the path of a combat one.
+bool InScope() noexcept { return scope::InCombatMap(); }
 
 void ClearTable() noexcept {
   Lock();
@@ -263,7 +259,7 @@ void ReportEvent(const Seen& seen, std::uint64_t a, std::uint64_t b) noexcept {
   }
 }
 
-// ---- the three handlers: the scope first, then the plugin's work ----------------------------------------------------------------------
+// ---- the three handlers: the scope first, then the module's work ----------------------------------------------------------------------
 
 std::uint64_t OnEnabled(tgt::EnabledThunk::Fn original, void* component, std::uint64_t handle) noexcept {
   if (!InScope()) return original(component, handle);
@@ -344,33 +340,23 @@ void Sweep() noexcept {
                        {"msg", "tracked spheres whose component no longer reads as the sphere were dropped"}});
 }
 
-// KNOWN-WRONG #2186: this look is a second level answer next to combat_scope (F19, #2186; PR #2246), which asks the same question every 250 ms with the same
-// staleness rule. When combat_scope is on main, InScope() reads combat_scope::InCombatMap() and this look, g_scope and g_lookedAtMs go. combat_scope has no
-// change callback, so the ClearTable on the 1 to 0 edge below moves into this tick: it keeps the previous answer and detects the edge itself.
-// One look at the loaded levels: the scope is a combat map with no Echo Arena level. Leaving the scope empties the table, so nothing stale survives into
-// the next match.
-void Look(std::uintptr_t game, std::int64_t now) noexcept {
-  std::uint64_t levelId = 0;
-  const bool in = level::Classify(game, /*lobby=*/false, &levelId) == level::Kind::kCombatOrLobby;
-  const bool was = g_scope.load(std::memory_order_relaxed);
-  g_lookedAtMs.store(now, std::memory_order_relaxed);
-  g_scope.store(in, std::memory_order_relaxed);
-  if (in == was) return;
-  if (was) ClearTable();
-  char lv[19];
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_sensorwd_scope",
-                      {{"from", was ? 1 : 0}, {"to", in ? 1 : 0}, {"level", sentinel::HexString(lv, levelId)},
-                       {"msg", in ? "a combat map is loaded: the watchdog is watching the scanner spheres"
-                                  : "no combat map (or an Echo Arena level): every handler passes through and the table is emptied"}});
-}
-
-void OnTick(std::uintptr_t game) noexcept {
+// The scope as this tick reads it. combat_scope has no change callback, so the tick keeps the answer it read last and sees the edge itself: leaving the
+// scope empties the table, so nothing stale survives into the next match. The scope row registers its refresh with the tick before this module's row
+// does, so on every frame the answer read here is the one the refresh just made (or kept, between its looks); the level that decided it is on that
+// row's `combat_scope_change` line.
+void OnTick(std::uintptr_t) noexcept {
   const std::int64_t now = Now();
-  if (now >= g_nextLookMs.load(std::memory_order_relaxed)) {
-    g_nextLookMs.store(now + kLookEveryMs, std::memory_order_relaxed);
-    Look(game, now);
+  const bool in = InScope();
+  const bool was = g_wasInScope.exchange(in, std::memory_order_relaxed);
+  if (in != was) {
+    if (was) ClearTable();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_sensorwd_scope",
+                        {{"from", was ? 1 : 0}, {"to", in ? 1 : 0},
+                         {"msg", in ? "a combat map is loaded: the watchdog is watching the scanner spheres"
+                                    : "no combat map (or an Echo Arena level, or the combat level answer is stale): every handler passes through and the "
+                                      "table is emptied"}});
   }
-  if (!g_scope.load(std::memory_order_relaxed)) return;
+  if (!in) return;
   NoteThread(kRoleTick);
   Act act[kSlots];
   std::size_t n = 0;
@@ -472,6 +458,9 @@ ModuleResult InstallAt(bool configOn, sentinel::ImageLookup lookup, const target
     LogInstall(sentinel::LogLevel::kError, "refused", reason, enabled, disabled, event, kRefusedMsg);
     return {false, reason};
   };
+  // The handlers act only while the combat level answer says a combat map is loaded: when that answer cannot change (the tick or the scope row's refresh
+  // is not installed) the watchdog would never act, so nothing is hooked (combat_scope.h `Live`).
+  if (!scope::Live()) return refuse("scope_not_live", "none", "none", "none");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return refuse("module_not_loaded", "none", "none", "none");
   char id[64] = {};
@@ -524,7 +513,7 @@ void Tick(std::uintptr_t game) noexcept { OnTick(game); }
 Stats CurrentStats() noexcept {
   Stats s;
   s.on = g_on.load();
-  s.inScope = g_scope.load();
+  s.inScope = g_wasInScope.load();
   s.enables = g_enables.load();
   s.disables = g_disables.load();
   s.pings = g_pings.load();
@@ -559,9 +548,7 @@ void ResetForTest() noexcept {
   ForgetHooks();
   g_on.store(false);
   g_tickRegistered.store(false);
-  g_scope.store(false);
-  g_lookedAtMs.store(0);
-  g_nextLookMs.store(0);
+  g_wasInScope.store(false);
   g_nextSweepMs.store(0);
   g_logLines.store(0);
   g_noteLines.store(0);

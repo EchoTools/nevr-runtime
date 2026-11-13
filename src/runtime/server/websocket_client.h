@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -88,6 +89,15 @@ class WebSocketClient {
   /// must not touch game memory. Set it before Connect().
   VOID SetReceiveObserver(MessageCallback callback);
 
+  /// Sets a callback invoked on the WebSocket thread when an open socket closes: the close code the peer sent
+  /// (1005 when it sent none) and how long the socket had been open, in milliseconds (#2374). Set before Connect().
+  using CloseCallback = std::function<VOID(int closeCode, uint64_t openMs)>;
+  VOID SetCloseObserver(CloseCallback callback);
+
+  /// How many times the socket has opened again after its first open: the `reconnect_count` the Connected and
+  /// Disconnected lines carry (#2374). Written and read on the WebSocket thread.
+  static uint32_t ReconnectCount();
+
   /// <summary>
   /// Callback function type for connection state changes.
   /// Parameter: TRUE if connected, FALSE if disconnected
@@ -128,6 +138,11 @@ class WebSocketClient {
 
   // Connection state change callback
   ConnectionCallback connectionCallback_;
+
+  // Close observer (SetCloseObserver) and when the socket last opened (ixwebsocket's thread only)
+  CloseCallback closeObserver_;
+  std::chrono::steady_clock::time_point openedAt_{};
+  bool opened_ = false;
 
   // Connection state (written from ixwebsocket callback thread, read from main thread)
   std::atomic<bool> connected_{false};

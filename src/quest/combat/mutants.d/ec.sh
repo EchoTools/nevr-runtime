@@ -17,9 +17,13 @@ runm ec_known_r         $R "s# || t == 'R'##"
 runm ec_known_g         $R "s# || t == 'G'##"
 runm ec_recv_flood      $R "s#kMaxConsumePerCall = 256;#kMaxConsumePerCall = 1000;#"
 runm ec_consume_cap     $R "s# || consumed >= kMaxConsumePerCall) return false;# || consumed < 0) return false;#"
-runm ec_recv_len        $R "s# || bufLen < sizeof(Packet)# || bufLen < 1#"
-runm ec_recv_peek       $R "s#if (peek || #if ((peek \&\& false) || #"
-runm ec_recv_fromlen    $R "s#if (peek || !haveFromLen || #if (peek || (!haveFromLen \&\& false) || #"
+# The receive precondition (ec_rules.h TakeOut, the first line of its test; Capped repeats it). Only TakeOut is mutated: RecvInScope reaches
+# Capped only after TakeOut refused with consumed >= kMaxConsumePerCall, and every earlier iteration of that loop passed the same peek, fromlen
+# and buffer tests (the flags, fromlen and len are the same in each iteration), so a change to Capped's copy of a test cannot change the
+# capped count there. The three Capped twins were run and survived for that reason (equivalent in the shipped path), and were removed.
+runm ec_recv_len        $R "/^inline bool TakeOut(/,/^}/s# || bufLen < sizeof(Packet)# || bufLen < 1#"
+runm ec_recv_peek       $R "/^inline bool TakeOut(/,/^}/s#if (peek || #if ((peek \&\& false) || #"
+runm ec_recv_fromlen    $R "/^inline bool TakeOut(/,/^}/s#if (peek || !haveFromLen || #if (peek || (!haveFromLen \&\& false) || #"
 runm ec_token_restart   $R "s#if (now100 >= __atomic_load_n(expiry, __ATOMIC_SEQ_CST)) __atomic_store_n(count, 0u, __ATOMIC_SEQ_CST);#;#"
 runm ec_a_counted       $R "s#            ++answers;#            ;#"
 runm ec_m_dedupe        $R "/if (p.type == 'M') {/,/++medi;/ s#if (!FirstTime(p.id)) return#if (false) return#"
@@ -48,7 +52,7 @@ runm ec_hide_newlist    $R "s#    if (entries != st.entries) {  // a new list#  
 runm ec_types_empty     $C "s#return m ? m : step1;#return m;#"
 runm ec_equip_word      $C "s#return !WholeWord(words, \"noequip\");#return !WholeWord(words, \"noequip\") || true;#"
 runm ec_gate_gen        $C "s#gen.fetch_add(1, std::memory_order_relaxed);##"
-# the handlers (ec.cpp): the scope first, then the plugin's rules
+# the handlers (ec.cpp): the scope first, then the module's rules
 runm ec_recv_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  if (false) return real(fd, buf, len, flags, from, fromlen);#"
 runm ec_send_scope      $E "s#  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  if (false) return real(fd, buf, len, flags, to, tolen);#"
 runm ec_send_v4         $E "s# \&\& to->sa_family == AF_INET##"
@@ -72,14 +76,23 @@ runm ec_loc_arm         $E "s#^    if (!first) {#    if (!first || true) {#"
 runm ec_pow2            $E "s#(Pow2(steps) || steps < L.seenSteps)#(Pow2(steps) || true)#"
 # the scope
 runm ec_scope_cadence   $E "s#  if (g_nextScopeMs != 0 \&\& nowMs < g_nextScopeMs) return InCombatScope();##"
-runm ec_scope_lobby     $E "s#kind = level::Classify(game, /\*lobby=\*/true, \&levelId);#kind = level::Classify(game, /*lobby=*/false, \&levelId);#"
-runm ec_scope_kind      $E "s#  const bool in = kind == level::Kind::kCombatOrLobby;#  const bool in = kind != level::Kind::kNone;#"
+runm ec_scope_lobby     $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatMap(look);#"
+runm ec_scope_kind      $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::ClassOf(look) != scope::LookClass::kOther;#"
+runm ec_scope_stale_believed $E "s#  const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);#  const bool in = forced >= 0 ? forced != 0 : scope::SeenCombatOrLobby();#"
+runm ec_scope_class_unlogged $E "s#  if (in != was || cls != g_lastClass || !g_scopeLogged) {#  if (in != was || !g_scopeLogged) {#"
+runm ec_scope_class_dropped $E "s#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::LookClass::kOther;#"
 runm ec_scope_leave     $E "s#      Store32(sentinel::EcPage() + kQuestEcServer, 0);##"
 runm ec_scope_every     $E "s#kScopeEveryMs = 250;#kScopeEveryMs = 100;#"
 # the install
 runm ec_net_both        $E "s#^    g_recvHook.Remove();#    (void)0;#"
 runm ec_gear_both       $E "s#^      g_reloadHook.Remove();#      (void)0;#"
-runm ec_tick_needed     $E "s#  if (!tick::Add(\&Tick)) return Refused(\"tick_table_full\");#  tick::Add(\&Tick);#"
+runm ec_scope_live_unchecked $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d"
+runm ec_scope_live_token $E "s#return Refused(\"scope_not_live\");#return Refused(\"module_not_loaded\");#"
+runm ec_scope_live_after_image $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) return Refused(\"build_id_mismatch\");\$#&\n  if (!scope::Live()) return Refused(\"scope_not_live\");#"
+runm ec_scope_live_before_words $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (g_ran.exchange(true, std::memory_order_acq_rel)) return Refused(\"already_ran\");\$#&\n  if (!scope::Live()) return Refused(\"scope_not_live\");#" quest-host-combat combat_install_test
+runm ec_scope_live_over_off $E "/^  if (!scope::Live()) return Refused(\"scope_not_live\");\$/d; s#^  if (!switches.on) {\$#  if (!scope::Live()) return Refused(\"scope_not_live\");\n&#"
+# The scope row's list of readers (combat_install.cpp, a shared file: run while holding the shared lock): the EC client keeps the row on alone.
+runm ecrow_scope_reader src/quest/combat/combat_install.cpp 's/\(|| \|^ *\)g_config\.ec\.on/\1false/' quest-host-combat combat_install_test
 runm ec_off_switch      $E "s#  if (!switches.on) {#  if (false) {#"
 # the server's statement (#2333)
 runm ec_gate_source     $E "s#  ans = nevr_server_features::Client().Current().echoCombat;#  ans = false;#"
@@ -111,7 +124,7 @@ runm ec_page_alias      $P "s#visibility(\"default\"), alias#visibility(\"hidden
 runm ec_page_publish    $P "s#RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL#RTLD_NOW | RTLD_NOLOAD#" quest-host-combat ec_page_test
 # arena pays nothing, by count (the send / receive handler reads game memory, or scans the levels, before the scope test)
 runm ec_arena_reads_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(buf), \&ok_); }\n  if (!InCombatScope()) return real(fd, buf, len, flags, to, tolen);#'
-runm ec_arena_scans_before_scope $E 's#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
+runm ec_arena_scans_before_scope_multi $E 's#^\#include "quest/combat/combat_scope.h"$#&\n\#include "quest/combat/combat_level.h"#; s#^  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#  (void)level::Scan(0, false);\n  if (!InCombatScope()) return real(fd, buf, len, flags, from, fromlen);#'
 # off by its key is counted off on the phase line (combat_install_test)
 runm ec_off_not_counted $E "s#    return {false, \"off\", true};  // off by its key#    return {false, \"off\", false};  // off by its key#" quest-host-combat combat_install_test
 # the arena APK and a plain release run no normal step, so no #2187 module writes a line (combat_install_test, TheRealStepsConsultTheGate)
@@ -120,3 +133,28 @@ runm ec_arena_normal_runs src/quest/combat/combat_install.cpp "s#  if (!Active()
 runm ec_capped_pred     $R 's#|| consumed < kMaxConsumePerCall) return false;#|| consumed <= kMaxConsumePerCall) return false;#'
 runm ec_capped_count    $E 's#g_capped.fetch_add(1, std::memory_order_relaxed);#(void)0;#'
 runm ec_capped_summary  $E 's#{"capped", g_capped.load()}, ##'
+# one look per decision (#2382, F1): RefreshScope's `in`, class and level are of the one look it read (ec.cpp ~:534-535, ~:550)
+runm ec_one_look_in     $E "s#scope::InCombatOrLobby(look);#scope::InCombatOrLobby(scope::LastLook());#"
+runm ec_one_look_class  $E "s#: scope::ClassOf(look);#: scope::ClassOf(scope::LastLook());#"
+runm ec_one_look_level  $E "s#sentinel::HexString(levelText, look.level)#sentinel::HexString(levelText, scope::LastLook().level)#"
+# the scope line's tokens and level (#2382, F2): the class of a look and its level, as the line names them
+runm ec_other_forced    $E "s#: scope::ClassOf(look);#: (in ? scope::LookClass::kOther : scope::ClassOf(look));#"
+runm ec_other_token     $E "s#scope::LookClassName(cls)},#cls == scope::LookClass::kOther ? \"combat_or_lobby\" : scope::LookClassName(cls)},#"
+runm ec_level_zero      $E "s#sentinel::HexString(levelText, look.level)#sentinel::HexString(levelText, look.level * 0)#"
+runm ec_forced_class_swap $E "s#(in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);#(in ? scope::LookClass::kOther : scope::LookClass::kCombatOrLobby) : scope::ClassOf(look);#"
+# the stale leave clears the server and the answer word (#2382, F3)
+runm ec_stale_leave_keeps $E "s#^    if (!in) {  // leaving#    if (false) {  // leaving#"
+# the leave's two other clears, one at a time (#2386): the game socket (a datagram back in scope before the step ticks) and the step's copy of
+# the answer word (the first step back leaves the word at 0)
+runm ec_leave_fd        $E "s#^      g_gameFd.store(-1, std::memory_order_relaxed);#      (void)0;#"
+runm ec_leave_ans       $E "s#^      g_loop.pageAns = false;#      (void)0;#"
+# the leave forgets the server pick, one line at a time (#2390): without either clear, the first step back sends the hello through the last
+# scope's socket to its server; and the leave's scope line says the pick is forgotten
+runm ec_leave_pick_dests $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        (void)0;#"
+runm ec_leave_pick_best  $E "s#^        g_st.best = -1;#        (void)0;#"
+runm ec_leave_pick_line  $E "s#\"forgets the server (back in scope, the game's first send picks it)\"#\"\"#"
+# the leave resets the whole state where it clears the pick (#2390): the two clears become g_st = State(). The pick is the same either way, so only
+# the kept counters and the carried types (LeavePickTests, KeptCounters) tell the two apart
+runm ec_leave_keeps_counters_multi $E "s#^        for (Dest& d : g_st.dests) d = Dest{};#        g_st = State();#; s#^        g_st.best = -1;#        (void)0;#"
+# the leave also clears the dropped count (#2390): one line after the pick's clear, so the uncarried-type count of LeavePickTests (KeptCounters) is checked
+runm ec_leave_keeps_dropped $E "s#^        g_st.best = -1;#        g_st.best = -1;\n        g_st.dropped = 0;#"

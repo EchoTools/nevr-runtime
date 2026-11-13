@@ -4,26 +4,28 @@
  * (inst+0xd8 != 0), (b) the connect ring is empty and (c) the local member's actor carries the combat tag, and (a)-(c) held for 2 s,
  * Connect(cs, userId) once; re-check after 1 s and retry while (a) holds, up to 10 times, then log and stop for that gun CS.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switch. `combat.gunconnect` in config.yaml, on unless the file says false (UPSTREAM-DEFAULTS: the reference build's `gunconnect` is on in its shipped
- * build, afk_gunconnect.cpp:9,747; the q15t plugin had it on). No headset log shows the module acting yet (the headset runs that loaded the plugin's
- * copy hold its start line and never a Connect), so its headset row requires `combat_gunconnect_connect`.
- * The plugin's kill file `gunconnect.off` is no longer read; one found in the plugin's data directory is a Warning (`combat_gunconnect_legacy_switch`).
+ * build, afk_gunconnect.cpp:9,747; the default is on too). No headset log shows the module acting yet, so its headset row requires `combat_gunconnect_connect`.
+ * The kill file `gunconnect.off` is no longer read; one found in the data directory is a Warning (`combat_gunconnect_legacy_switch`).
  *
- * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is (combat_level.h `Classify`);
- * in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds nothing to
- * do, calls nothing of the game's and writes no line. Online it does nothing in any level: the lobby-member event connects the guns first, so
- * (a) is false. KNOWN-WRONG #2168: the scope asks `combat_level` directly, once a pass; it moves to combat_scope (F19, #2246) when that lands.
+ * Arena (same APK). The pass acts only while a combat map or the combat lobby is loaded and no Echo Arena level is, as the combat level answer
+ * last saw it (combat_scope.h `InCombatOrLobby`, a look four times a second from the game-thread tick; the pass runs in the same tick loop, right
+ * after the scope row's refresh, so it reads a look at most 250 ms old, and a stopped tick stops the pass with it; the freshness test in
+ * `InCombatOrLobby` is defence in depth for an order the install table does not make); in an Echo Arena level, in the lobbies arena players use, and in every transition that still holds an arena level, the pass finds
+ * nothing to do, reads nothing of the game's, calls nothing and writes no line. The module is a reader of the scope row: `combat.gunconnect` is in
+ * combat_install.cpp `ScopeNormal()`'s list, and the install refuses (`scope_not_live`) when the answer cannot change. Online it does nothing in
+ * any level: the lobby-member event connects the guns first, so (a) is false.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
- * frame and does one clock read and one compare; a pass runs at 1 Hz (4 Hz while a local gun is unconnected). A pass is the level scan (a few
- * process_vm_readv reads, about 3 us on the machine that built this: gunconnect_test prints it) and, in a combat level, the gun CS search. In an
- * arena level a pass is the level scan alone, 1 Hz. Not measured on a headset.
+ * frame and does one clock read and one compare; a pass runs at 1 Hz (4 Hz while a local gun is unconnected). In an arena level a pass is one
+ * relaxed load of the scope word and a test (gunconnect_test prints the host cost); in a combat level it adds a clock read (the answer's
+ * freshness) and the gun CS search. The level scan is the scope row's, made once for every reader. Not measured on a headset.
  *
  * Origin. The reference build's Fix in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_gunconnect.cpp:1-24,
- * the constants :91-93, FindCs :186-218, ReadLocal :222-240, HasCombatTag :242-254, CountGuns :256-296 and FixPass :312-358. The q15t plugin
- * reconstructed it (`gunconnect.cpp`); this file moves that reconstruction into the runtime. Not ported: the diagnostic and the tick-callback registry.
+ * the constants :91-93, FindCs :186-218, ReadLocal :222-240, HasCombatTag :242-254, CountGuns :256-296 and FixPass :312-358. The combat plugin imported in #1591
+ * reconstructed it (`gunconnect.cpp`); this file is that reconstruction. Not ported: the diagnostic and the tick-callback registry.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_gunconnect_install","result":"installed|off|refused","reason":"..","named":<0-4>,"msg":".."}   Info; Error when refused
@@ -66,8 +68,9 @@ using SymbolLookup = void* (*)(const char* symbol);
 // anything but its fixed address is a refusal (false, `why` is the name).
 bool Resolve(std::uintptr_t base, SymbolLookup lookup, Fns* out, const char** why) noexcept;
 
-// The module's normal step. Off (`on` false): one Info line, nothing registered. On: finds the loaded libr15, checks its build id and the pinned
-// words, resolves the four addresses (by name where the game exports it) and registers the tick callback.
+// The module's normal step. Off (`on` false): one Info line, nothing registered. On: refuses (`scope_not_live`) when the combat level answer
+// cannot change (combat_scope.h `Live`), else finds the loaded libr15, checks its build id and the pinned words, resolves the four addresses (by
+// name where the game exports it) and registers the tick callback.
 ModuleResult Install(bool on) noexcept;
 // The same on the libr15 `lookup` finds, with `symbols` for the name check (the host test supplies an image built in memory).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, bool on) noexcept;

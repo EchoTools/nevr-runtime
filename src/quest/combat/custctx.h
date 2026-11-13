@@ -1,4 +1,4 @@
-/* Three guards on the lobby cosmetics renderer (CR15NetCustomizationRenderer), installed all or none (#2178; the q15t plugin's custctx, moved here).
+/* Three guards on the lobby cosmetics renderer (CR15NetCustomizationRenderer), installed all or none (#2178).
  *
  * What the game does and what each guard does (store libr15; custctx_targets.h has the addresses).
  *  R31 LoadMeshData: loads one player's cosmetics into a context. The guard marks the context live and "load in flight" (under one mutex) before the
@@ -24,8 +24,8 @@
  * All or none. The three hooks go in one after the other; when one is refused (the manager has already rolled its own failed install back) the hooks
  * before it are removed with the manager's Remove and every thunk is disarmed, so no slot stays swapped. The install line says which hook was refused.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.custctx` in config.yaml
- * (default true). The plugin's `custctx.off` file is no longer read; one found in the files folder's q15t directory is a Warning that names the key.
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switch is `combat.custctx` in config.yaml
+ * (default true). The `custctx.off` file is no longer read; one found in the data directory (legacy_switch.h) is a Warning that names the key.
  *
  * Arena (same APK). The destroy and Grow guards act in EVERY level, on purpose: they guard code arena shares (the lobby, where cosmetics load) and act
  * only where the game would otherwise crash or destroy a context it is not tracking (a destroy racing a load, a draw table written through NULL); a
@@ -38,13 +38,12 @@
  *
  * Install. The patched build ID, then the code words (custctx_targets.h), then the Resize export (looked up with dlsym on the loaded libr15 and accepted
  * only at exactly base + its pinned address), then the install-time spares, then the three JUMP_SLOTs, each of which must hold its function itself.
- * It registers in combat::InstallNormal()'s table at the position the plugin installed it (after voipdrop).
+ * It registers in combat::InstallNormal()'s table after voipdrop.
  *
  * Owner (ADR 0039). This file owns whether a destroy, a load and a draw-table growth of the cosmetics renderer reach the game's function.
  *
- * Origin. The q15t plugin's `custctx.cpp`, written here (imported in #1591) on the reference build's `afk_custctx.cpp` (Ducky's echoquest-combat;
- * docs/audits/2026-11-05-q15t-origin-citations.md rows 29-33 and 148: afk_custctx.cpp:1,63-65,73-95,100-101,168-285 and afk_tap.cpp:174). The plugin's
- * v4 layout-pool refusal and its 34 code-word pins are additions to the source's.
+ * Origin. Written here on the reference build's `afk_custctx.cpp` (Ducky's echoquest-combat;
+ * docs/audits/2026-11-05-q15t-origin-citations.md rows 29-33 and 148: afk_custctx.cpp:1,63-65,73-95,100-101,168-285 and afk_tap.cpp:174). The layout-pool refusal and the 34 code-word pins are additions to the source's.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_custctx_install","result":"installed|refused|off","reason":"ok|off_config|<token>","load":..,"destroy":..,"grow":..,
@@ -94,7 +93,7 @@ bool ResizeMatches(std::uintptr_t base, const Pins& pins, const void* resize, Fn
 // combat_custctx_install line. A module that is off by its switch answers `off` (status "off_config").
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns* fns, bool on) noexcept;
 
-// The table's row: InstallAt on the loaded libr15 with the production pins, the production Resize lookup and the plugin's data directory.
+// The table's row: InstallAt on the loaded libr15 with the production pins, the production Resize lookup and the data directory.
 ModuleResult Install(bool on) noexcept;
 
 struct Stats {

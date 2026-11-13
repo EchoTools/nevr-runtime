@@ -47,6 +47,7 @@ constexpr const char* kHandFlipName = "hand_flip";               // the other ke
 constexpr const char* kAssetsCdnUrlKey = "assets.cdn_url";
 constexpr const char* kAssetsManifestKey = "assets.manifest";
 constexpr const char* kAssetsRequiredOnlyKey = "assets.required_only";
+constexpr const char* kAssetsWholeGameKey = "assets.whole_game";
 constexpr const char* kAssetsLabelsPath = "assets.labels";
 constexpr std::size_t kMaxAssetLabels = 32;
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
@@ -90,7 +91,16 @@ constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only
 constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
 constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
 constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
+constexpr const char* kCombatDronekillExplosionKey = "combat.dronekill_explosion";  // Quest only (default true, #1737)
+constexpr const char* kCombatDronekillHoldKey = "combat.dronekill_hold";  // Quest only (default false, CombatConfig::kDronekillHoldDefault, #1737)
 constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
+constexpr const char* kCombatBulletVelocityGuardKey = "combat.bullet_velocity_guard";  // Quest only (default true; the switch the bullet-velocity guard reads, src/quest/combat/bullet_velocity_guard.h, #1737)
+constexpr const char* kCombatTextureQuest2StepDownKey = "combat.texture_quest2_step_down";  // Quest only (default false, #1737)
+constexpr const char* kCombatTextureQuest2LobbyKey = "combat.texture_quest2_lobby";  // Quest only (default true, #1737)
+constexpr const char* kCombatTexelBufferGuardKey = "combat.texel_buffer_guard";  // Quest only (default true, #1650)
+constexpr const char* kCombatSoundSymbolGuardKey = "combat.sound_symbol_guard";  // Quest only (default FALSE, #1737)
+constexpr const char* kCombatFrozenFrameExitKey = "combat.frozen_frame_exit";      // Quest only (default true, #2377)
+constexpr const char* kCombatFrozenFrameExitSKey = "combat.frozen_frame_exit_s";   // Quest only (an integer 10..900, default 30, #2377)
 constexpr const char* kCombatFxtrailKey = "combat.fxtrail";                      // Quest only (default true, #2178)
 constexpr const char* kCombatVoipdropKey = "combat.voipdrop";                    // Quest only (default true, #2178)
 constexpr const char* kCombatCustctxKey = "combat.custctx";                      // Quest only (default true, #2178)
@@ -396,6 +406,19 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
       Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsRequiredOnlyKey + " rejected reason=not_a_boolean (default stays)");
     }
   }
+  if (cfg.Kind(kAssetsWholeGameKey) != nevr::NodeKind::kAbsent) {
+    if (cfg.GetBool(kAssetsWholeGameKey).has_value()) {
+      a.wholeGame = ReadBool(cfg, kAssetsWholeGameKey, false, r);
+      given = true;
+    } else {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsWholeGameKey + " rejected reason=not_a_boolean (default stays)");
+    }
+  }
+  if (a.wholeGame && a.manifest.empty()) {
+    // The mode serves the game from the manifest `assets.manifest` names; with none there is nothing to serve it from.
+    a.wholeGame = false;
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsWholeGameKey + " rejected reason=no_manifest (the game's own data stays in use; name assets.manifest)");
+  }
   const nevr::NodeKind labelsKind = cfg.Kind(kAssetsLabelsPath);
   if (labelsKind == nevr::NodeKind::kMapping) {
     std::size_t seen = 0;
@@ -576,7 +599,16 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);
   r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
   r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
+  r.config.combat.dronekillExplosion = ReadCombatSwitch(cfg, kCombatDronekillExplosionKey, r);
+  r.config.combat.dronekillHold = ReadCombatSwitch(cfg, kCombatDronekillHoldKey, r, CombatConfig::kDronekillHoldDefault);
   r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
+  r.config.combat.bulletVelocityGuard = ReadCombatSwitch(cfg, kCombatBulletVelocityGuardKey, r);
+  r.config.combat.texelBufferGuard = ReadCombatSwitch(cfg, kCombatTexelBufferGuardKey, r);
+  r.config.combat.textureQuest2StepDown = ReadCombatSwitch(cfg, kCombatTextureQuest2StepDownKey, r, false);
+  r.config.combat.textureQuest2Lobby = ReadCombatSwitch(cfg, kCombatTextureQuest2LobbyKey, r);
+  r.config.combat.soundSymbolGuard = ReadCombatSwitch(cfg, kCombatSoundSymbolGuardKey, r, false);
+  r.config.combat.frozenFrameExit = ReadCombatSwitch(cfg, kCombatFrozenFrameExitKey, r);
+  r.config.combat.frozenFrameExitS = ReadCombatInt(cfg, kCombatFrozenFrameExitSKey, 10, 900, 30, r);
   r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);
   r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);
   r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);
@@ -691,6 +723,7 @@ void ReportState(LoadResult& r) {
       std::string("config key=assets labels=") + std::to_string(r.config.assets.labels.size()) +
           " required_only=" + (r.config.assets.requiredOnly ? "1" : "0") + " cdn_url=" + (r.config.assets.cdnUrl.empty() ? "default" : "config") +
           " manifest=" + (r.config.assets.manifest.empty() ? "default" : "config") +
+          " whole_game=" + (r.config.assets.wholeGame ? "1" : "0") +
           " source=" + (r.config.assets.source == Source::kFile ? "config" : "default"));
   // The `combat:` keys are reported once, as the structured `combat_config` line (combat/combat_install.h LogConfig), not here.
   for (const FeatureSpec& f : kFeatures) {

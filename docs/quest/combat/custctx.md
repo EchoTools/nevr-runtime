@@ -2,12 +2,12 @@
 
 Files: `src/quest/combat/custctx.{h,cpp}`, `src/quest/combat/custctx_targets.h` (the pins), `src/quest/tests/custctx_test.cpp`,
 `src/quest/combat/mutants.d/custctx.sh`. The module is a normal-phase row of the combat install table (`src/quest/combat/combat_install.h`): it
-runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.custctx` (default true). The q15t
-plugin's `custctx.off` file is no longer read; one found in the files folder's `q15t` directory is a Warning (`combat_custctx_legacy_switch`) that names
+runs in the combat APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.custctx` (default true). A
+`custctx.off` file is not read; one found in the data directory (`legacy_switch.h`) is a Warning (`combat_custctx_legacy_switch`) that names
 the key.
 
 Origin: Ducky's echoquest-combat reference build, afk_custctx.cpp (docs/audits/2026-11-05-q15t-origin-citations.md rows 29-33 and 148:
-afk_custctx.cpp:1,63-65,73-95,100-101,168-285; afk_tap.cpp:174), reconstructed in the q15t plugin (imported in #1591) and moved here. The plugin's
+afk_custctx.cpp:1,63-65,73-95,100-101,168-285; afk_tap.cpp:174), reconstructed in this tree (imported in #1591). The plugin's
 v4 layout-pool refusal and its 34 code-word pins were additions to the source's.
 
 ## Rows covered

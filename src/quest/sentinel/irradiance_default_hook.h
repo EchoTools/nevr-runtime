@@ -1,4 +1,4 @@
-/* The default irradiance texture is grey, not black (#2091, #1737 unit U25).
+/* The default irradiance texture is grey, not black (#2091, #1737).
  *
  * Why. Converted combat maps have areas outside every irradiance volume, and they come out black with the stock engine. The
  * reference combat build uploads the "Default 3D Texture" with the texel 0xff6b6b6b (R, G and B 0x6b, A 0xff; grey, about 0.42)
@@ -20,6 +20,11 @@
  *      texture is `this + 0x1458`, the format is 9 and the texel is not null. Every other call of the helper (it has 25 `bl`
  *      sites, in Initialize and in the Create* helpers) is passed to the original untouched. No return-address test, one
  *      trampoline, initialization only.
+ *
+ * Which APKs (docs/adr/0047). The constructor sequence installs it only where combat::Active() is true (step
+ * `install_irradiance_default`, skipped with `combat_inactive` otherwise). Skipped, neither hook is installed: the GOT slot keeps the
+ * game's Initialize and the row stays pass-through (docs/adr/0021: a hook that is not wanted stays pass-through), so the engine
+ * uploads its own black texel.
  *
  * Owner (docs/adr/0039). This file owns the default 3D texture's texel. Its input is nothing: the texel is a constant, not a
  * setting. The substitution is one atomic load and a compare on the other 24 call sites.

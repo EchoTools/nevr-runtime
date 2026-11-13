@@ -1,4 +1,4 @@
-/* A bullet whose trail effect has no instance ends its trail, so the bullet can be freed (#2178, #1737; the q15t plugin's fxtrail, moved here).
+/* A bullet whose trail effect has no instance ends its trail, so the bullet can be freed (#2178, #1737).
  *
  * What the game does. A bullet is freed only once every effect slot of it reports done; a trail slot is done when
  * CParticleEffectCS::EffectTime(handle) is above the trail's time after impact (FXUpdateTrail, the function's one caller in libr15). The Quest
@@ -20,14 +20,14 @@
  * of bullets, which only combat has; that is why it is scoped and the crash-only guards are not.
  * The answer lags a level change by up to scope::kLookEveryMs (a quarter of a second): the leak it guards is one of a match, not of its first quarter second.
  *
- * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.fxtrail` in
- * config.yaml (default true). The plugin's `fxtrail.off` file is no longer read; one found in the files folder's q15t directory is a Warning
+ * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the combat variants. Its switch is `combat.fxtrail` in
+ * config.yaml (default true). The `fxtrail.off` file is no longer read; one found in the data directory (legacy_switch.h) is a Warning
  * that names the key.
  *
  * Install. The scope must be live (`scope::Live()`: the `scope` row of the install table registered the refresh and the tick is installed; else `scope_not_live`
  * and nothing is hooked, because the guard would never see a combat map), the patched build ID, the code words (fxtrail_targets.h), then the JUMP_SLOT, which
  * must hold EffectTime itself (a word something else already replaced is refused, not chained over). A refused install leaves the game's calls as they
- * are. It registers in combat::InstallNormal()'s table at the position the plugin installed it (first of the guards).
+ * are. It registers in combat::InstallNormal()'s table first of the crash and timing guards (combat_install.cpp, kModules).
  *
  * Frequency (ADR 0038). EffectTime runs once per effect handle per query; how many per frame is not known (the module counts them:
  * `combat_fxtrail_stats`). Every call pays the thunk's counter and one relaxed atomic load of the scope word. A call in a combat map also reads the clock
@@ -36,9 +36,8 @@
  *
  * Owner (ADR 0039). This file owns the value EffectTime answers for an effect with no instance, in a combat map.
  *
- * Origin. The q15t plugin's `fxtrail.cpp`, written here (imported in #1591) on the reference build's `afk_fxtrail.cpp` (Ducky's echoquest-combat;
- * docs/audits/2026-11-05-q15t-origin-citations.md rows 63-68 and 212-213: afk_fxtrail.cpp:1,41,60-77 and the rule at :1-24). The plugin's
- * word pins are an addition to it; the scope is the runtime's (combat_scope.h, #2246).
+ * Origin. Written here on the reference build's `afk_fxtrail.cpp` (Ducky's echoquest-combat;
+ * docs/audits/2026-11-05-q15t-origin-citations.md rows 63-68 and 212-213: afk_fxtrail.cpp:1,41,60-77 and the rule at :1-24). The word pins are an addition to it; the scope is the runtime's (combat_scope.h, #2246).
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_fxtrail_install","result":"installed|refused|off","reason":"ok|off_config|<token>","hook":<GotStatus>,
@@ -74,7 +73,7 @@ inline constexpr Pins kPins = {kEffectTimeSlotVaddr, kEffectTimeVaddr};
 // and nothing was done.
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) noexcept;
 
-// The table's row: InstallAt on the loaded libr15 with the production pins and the plugin's data directory.
+// The table's row: InstallAt on the loaded libr15 with the production pins and the data directory.
 ModuleResult Install(bool on) noexcept;
 
 struct Stats {

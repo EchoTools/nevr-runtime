@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
@@ -67,10 +68,17 @@ def build_aarch64(out: pathlib.Path, source: str, *, build_id: str | None = None
     return out
 
 
+# A fixed entry time: writestr(name, ...) would stamp the clock's time, so two zips of the same entries
+# would differ across a 2-second boundary (#2309). The DOS epoch is the earliest time a zip can hold.
+FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+
+
 def make_zip(path: pathlib.Path, entries: dict[str, bytes]) -> pathlib.Path:
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+    with zipfile.ZipFile(path, "w") as z:
         for name, data in entries.items():
-            z.writestr(name, data)
+            info = zipfile.ZipInfo(name, date_time=FIXED_ZIP_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
     return path
 
 
@@ -1325,7 +1333,7 @@ class StageLibsTest(unittest.TestCase):
 
 
 class StageRedirectedLibsTest(unittest.TestCase):
-    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_q15t.so name; its stock name never is.
+    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_nevr.so name; its stock name never is.
 
     The nine redirected libraries are all or nothing (the runtime registers all nine or none): a staged set holds all of
     them, or none of them.
@@ -1333,7 +1341,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
 
     HASH = "37f88adb0d8066f7"  # the first of the nine libs.COMBAT_REDIRECT_HASHES
     STOCK = f"lib{HASH}.so"
-    REDIRECTED = f"lib{HASH}_q15t.so"
+    REDIRECTED = f"lib{HASH}_nevr.so"
     NINE = [f"lib{h}.so" for h in libs.COMBAT_REDIRECT_HASHES]
 
     def setUp(self):
@@ -1364,7 +1372,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
         lines = [f"{SHA(p.read_bytes())}  {p.name}\n" for p in sorted(self.libs.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
         (self.libs / "SHA256SUMS").write_text("".join(lines))
 
-    def test_the_nine_redirected_libraries_are_staged_under_their_q15t_names_and_no_stock_name_is(self):
+    def test_the_nine_redirected_libraries_are_staged_under_their_redirect_names_and_no_stock_name_is(self):
         self.assertEqual(libs.stage_libs(self.libs, self.stage, self.store), [])
         staged = self.stage / "lib/arm64-v8a"
         for name in self.NINE:
@@ -1372,7 +1380,7 @@ class StageRedirectedLibsTest(unittest.TestCase):
             self.assertFalse((staged / name).exists(), name)
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
-        # The record the plugin-manifest check reads holds the names as staged, _q15t and all (#2092).
+        # The record the plugin-manifest check reads holds the names as staged, _nevr and all (#2092).
         self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(libs.staged_name(n) for n in self.NINE))
 
     def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
@@ -1437,6 +1445,24 @@ class StageRedirectedLibsTest(unittest.TestCase):
 
 
 SHA = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+
+
+class MakeZipIsStableTest(unittest.TestCase):
+    """make_zip writes the same bytes for the same entries whatever the clock says (#2309)."""
+
+    # Fixed clock values, in seconds: two calls three seconds apart fall on different zip timestamps (2-second resolution).
+    FIRST_CALL_AT = 1_700_000_000.0
+    LATER_CALL_AT = FIRST_CALL_AT + 3.0
+
+    def test_the_same_entries_make_the_same_bytes_across_a_two_second_boundary(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="make-zip-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        clock = [self.FIRST_CALL_AT]
+        with mock.patch("time.time", side_effect=lambda: clock[0]):
+            first = make_zip(tmp / "first.zip", {"lib/arm64-v8a/libr15.so": b"x"}).read_bytes()
+            clock[0] = self.LATER_CALL_AT
+            second = make_zip(tmp / "second.zip", {"lib/arm64-v8a/libr15.so": b"x"}).read_bytes()
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

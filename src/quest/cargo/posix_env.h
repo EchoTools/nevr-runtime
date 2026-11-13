@@ -1,7 +1,7 @@
 /* The Quest's nevr_cargo::Env (docs/adr/0045-cdn-texture-delivery.md): POSIX files, the data fetch's Transport (libcurl in the app) for
  * the network, SHA-256 from quest/data, and the sentinel log for events.
  *
- * A blob is opened with open(2) read-only and its handle is the descriptor: CSysFile::Open (pinned_targets.h, flags 1 is O_RDONLY)
+ * A store file is opened with open(2) read-only and its handle is the descriptor: CSysFile::Open (pinned_targets.h, flags 1 is O_RDONLY)
  * gives the engine the same kind of value, and the engine reads a package with the handle it finds in the request. A blob that is
  * mounted stays open for the life of the process, so the file the engine reads is the file that was hashed.
  *
@@ -21,8 +21,9 @@ class PosixEnv : public nevr_cargo::Env {
 
   bool ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) override;
   bool MakeDirs(const std::string& dir) override;
-  std::unique_ptr<nevr_cargo::TempFile> CreateTemp(const std::string& dir) override;
   bool WriteFileAtomically(const std::string& path, const std::string& data) override;
+  std::unique_ptr<nevr_cargo::AppendFile> OpenAppend(const std::string& path) override;
+  bool QueryDevice(const std::string& dir, nevr_cargo::DeviceFacts* out) override;
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override;
   bool ReadBlob(std::int64_t handle, std::uint64_t offset, void* buffer, std::size_t length, std::size_t* got) override;
   void CloseBlob(std::int64_t handle) override;

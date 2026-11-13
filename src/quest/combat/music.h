@@ -1,4 +1,4 @@
-/* Combat music: one instance at a time (#2184, docs/adr/0046; moved from the q15t plugin's `music`).
+/* Combat music: one instance at a time (#2184, docs/adr/0046).
  *
  * What the game does. Two Wwise music trees of the combat bank start with a script Play (capture maps `2f22c384`, payload maps `b1b06cfb`); the only
  * Stop of either is posted from the script's return-to-lobby listener. A way out of a match that does not raise that event leaves the old instance
@@ -9,11 +9,11 @@
  * the game's own function, then lets the Play through unchanged. With nothing playing a Stop is a no-op, so a normal lobby, match, lobby round is
  * unchanged. A tick callback (combat_tick.h) posts the two Stops once when no combat map is loaded any more after a Play. No code word is written.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false the step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only: with `combat::Active()` false the step never runs.
  *
  * Switch. `combat.music` in config.yaml, true unless the file says false (kotorvr's build has it on by default, `afk_music.cpp:1`, with `music.off` as its off
- * switch, `afk_music.cpp:31`; the q15t plugin's `Q15T_MUSIC` was on). No headset session of ours has yet shown it acting (the q15t sessions reach no combat map), so its headset row requires
- * `combat_music_first` and `combat_music_play` (docs/quest/combat/music.md). The plugin's kill file `music.off` is no longer read: one found in the plugin's data
+ * switch, `afk_music.cpp:31`; the default is on too). No headset session of ours has yet shown it acting, so its headset row requires
+ * `combat_music_first` and `combat_music_play` (docs/quest/combat/music.md). The kill file `music.off` is no longer read: one found in the data
  * directory is a Warning (`combat_music_legacy_switch`).
  *
  * Arena (same APK). Arena has its own music (`mp_arena_music`), which must stay as stock. PostSoundEvent is the game's one post for every sound

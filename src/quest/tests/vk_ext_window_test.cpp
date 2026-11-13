@@ -12,6 +12,7 @@
 // Built and run by `just test-quest-hooks`.
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -164,7 +165,23 @@ std::int32_t FakeEnumerate(void*, const char*, std::uint32_t* count, void* props
 
 void FakeCreateDevice() {}
 
+// A driver's device-level lookup: two device functions, nothing else.
+void FakeAllocateDescriptorSets() {}
+void FakeCreateBuffer() {}
+int g_gdpaCalls = 0;
+void* g_gdpaDeviceSeen = nullptr;
+VoidFn FakeGetDeviceProcAddr(void* device, const char* name) {
+  ++g_gdpaCalls;
+  g_gdpaDeviceSeen = device;
+  if (std::strcmp(name, "vkAllocateDescriptorSets") == 0) return reinterpret_cast<VoidFn>(&FakeAllocateDescriptorSets);
+  if (std::strcmp(name, "vkCreateBuffer") == 0) return reinterpret_cast<VoidFn>(&FakeCreateBuffer);
+  // A driver function whose name begins with a requested one: still the driver's.
+  if (std::strcmp(name, "vkAllocateDescriptorSets2") == 0) return reinterpret_cast<VoidFn>(&FakeCreateBuffer);
+  return nullptr;
+}
+
 int g_gipaCalls = 0;
+bool g_noDeviceLookup = false;  // the loader does not find vkGetDeviceProcAddr
 VoidFn FakeGetInstanceProcAddr(void* instance, const char* name) {
   ++g_gipaCalls;
   // Like a real loader: an instance-level function asked for with no instance is not found.
@@ -172,6 +189,7 @@ VoidFn FakeGetInstanceProcAddr(void* instance, const char* name) {
     return instance == nullptr ? nullptr : reinterpret_cast<VoidFn>(&FakeEnumerate);
   }
   if (std::strcmp(name, "vkCreateDevice") == 0) return reinterpret_cast<VoidFn>(&FakeCreateDevice);
+  if (std::strcmp(name, "vkGetDeviceProcAddr") == 0) return g_noDeviceLookup ? nullptr : reinterpret_cast<VoidFn>(&FakeGetDeviceProcAddr);
   return nullptr;
 }
 
@@ -224,7 +242,9 @@ void Reset() {
   g_bufferCalls = 0;
   g_vrapiWritesOnFailure = false;
   g_driverHook = nullptr;
-  g_enumCalls = g_gipaCalls = g_findMethodCalls = g_vrapiCalls = 0;
+  g_enumCalls = g_gipaCalls = g_findMethodCalls = g_vrapiCalls = g_gdpaCalls = 0;
+  g_gdpaDeviceSeen = nullptr;
+  g_noDeviceLookup = false;
   g_vrapiCapacitySeen = 0;
   g_vrapiDevice = kQ3Vrapi;
   g_vrapiResult = 0;
@@ -772,6 +792,117 @@ void ADriverThatFailsTheDecisionsCountQueryLeavesTheGamesAnswerAlone() {
   if (lines.size() == 1) QCHECK(Field(lines[0], "reason") == "total_query_failed");
 }
 
+// ---- device functions another component wraps (RequestDeviceFunction) -------------------------------------------------
+
+using GdpaFn = VoidFn (*)(void*, const char*);
+int g_wrapperCalls = 0;
+void RequesterWrapper() { ++g_wrapperCalls; }
+void OtherRequesterWrapper() {}
+std::atomic<void*> g_realSeen{nullptr};
+std::atomic<void*> g_otherRealSeen{nullptr};
+
+// The game: vkGetInstanceProcAddr through FindMethod, then vkGetDeviceProcAddr through that, with an instance.
+GdpaFn GameResolvesDeviceLookup() {
+  void* gipa = FindMethodEntry()(7, "vkGetInstanceProcAddr");
+  if (gipa == nullptr) return nullptr;
+  return reinterpret_cast<GdpaFn>(reinterpret_cast<GipaFn>(gipa)(reinterpret_cast<void*>(0x10), "vkGetDeviceProcAddr"));
+}
+
+void VkWindowNoRequestReturnsReal() {
+  Reset();
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  const GdpaFn gdpa = GameResolvesDeviceLookup();
+  sentinel::SetLogSink(previous);
+  QCHECK(gdpa == &FakeGetDeviceProcAddr);  // the driver's own: nothing changes without a request
+  QCHECK(vk::RealDeviceProcAddr() == reinterpret_cast<VoidFn>(&FakeGetDeviceProcAddr));
+  QCHECK(vk::RealInstanceProcAddr() == reinterpret_cast<VoidFn>(&FakeGetInstanceProcAddr));
+  QCHECK(vk::LookupInstance() == reinterpret_cast<void*>(0x10));
+  const std::vector<std::string> lines = LinesFor("vk_ext_window_device_lookup");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) QCHECK(Field(lines[0], "result") == "real" && Field(lines[0], "requests") == "0");
+  // The table is closed once the game has asked: a request now could never be served.
+  QCHECK(vk::RequestDeviceFunction("vkAllocateDescriptorSets", &RequesterWrapper, &g_realSeen, "test") == vk::RequestStatus::kSealed);
+}
+
+void VkWindowRequestReturnsWrapperRealPublishedFirst() {
+  Reset();
+  g_realSeen.store(nullptr);
+  g_wrapperCalls = 0;
+  QCHECK(vk::RequestDeviceFunction("vkAllocateDescriptorSets", &RequesterWrapper, &g_realSeen, "texel_buffer_guard") ==
+         vk::RequestStatus::kOk);
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  const GdpaFn gdpa = GameResolvesDeviceLookup();
+  QCHECK(gdpa != nullptr && gdpa != &FakeGetDeviceProcAddr);  // the window's wrapper
+  if (gdpa == nullptr) { sentinel::SetLogSink(previous); return; }
+  QCHECK(g_realSeen.load() == nullptr);  // nothing published before the name is asked for
+  const VoidFn got = gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSets");
+  const VoidFn again = gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSets");
+  sentinel::SetLogSink(previous);
+  QCHECK(got == &RequesterWrapper && again == &RequesterWrapper);
+  QCHECK(g_realSeen.load() == reinterpret_cast<void*>(&FakeAllocateDescriptorSets));  // the driver's, published before the hand-out
+  QCHECK(g_gdpaDeviceSeen == reinterpret_cast<void*>(0x30));  // the game's device reached the driver
+  QCHECK(g_wrapperCalls == 0);  // handed out, not called
+  QCHECK(vk::RealDeviceProcAddr() == reinterpret_cast<VoidFn>(&FakeGetDeviceProcAddr));
+  QCHECK(vk::LookupInstance() == reinterpret_cast<void*>(0x10));
+  const std::vector<std::string> lookup = LinesFor("vk_ext_window_device_lookup");
+  QCHECK(lookup.size() == 1);
+  if (lookup.size() == 1) QCHECK(Field(lookup[0], "result") == "wrapped" && Field(lookup[0], "requests") == "1");
+  const std::vector<std::string> handed = LinesFor("vk_ext_window_device_function");
+  QCHECK(handed.size() == 1);  // once per name, however often the name is asked for
+  if (handed.size() == 1) {
+    QCHECK(Field(handed[0], "name") == "vkAllocateDescriptorSets" && Field(handed[0], "requester") == "texel_buffer_guard");
+    QCHECK(handed[0].find("\"level\":\"info\"") != std::string::npos);
+  }
+}
+
+void VkWindowOtherNamesReal() {
+  Reset();
+  g_realSeen.store(nullptr);
+  g_otherRealSeen.store(nullptr);
+  QCHECK(vk::RequestDeviceFunction("vkAllocateDescriptorSets", &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kOk);
+  QCHECK(vk::RequestDeviceFunction("vkNotADriverFunction", &OtherRequesterWrapper, &g_otherRealSeen, "b") == vk::RequestStatus::kOk);
+  const GdpaFn gdpa = GameResolvesDeviceLookup();
+  QCHECK(gdpa != nullptr);
+  if (gdpa == nullptr) return;
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkCreateBuffer") == &FakeCreateBuffer);  // not requested: the driver's
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSetsX") == nullptr);   // whole names only
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSet") == nullptr);
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSets2") == &FakeCreateBuffer);  // a longer name the driver has: its own
+  // A requested name the driver does not have: the game gets its null, not a wrapper with nothing behind it.
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkNotADriverFunction") == nullptr);
+  QCHECK(g_otherRealSeen.load() == nullptr);
+  QCHECK(gdpa(reinterpret_cast<void*>(0x30), "vkAllocateDescriptorSets") == &RequesterWrapper);
+  // The instance-level lookups are unchanged.
+  void* gipa = FindMethodEntry()(7, "vkGetInstanceProcAddr");
+  QCHECK(reinterpret_cast<GipaFn>(gipa)(nullptr, "vkCreateDevice") == reinterpret_cast<VoidFn>(&FakeCreateDevice));
+}
+
+void VkWindowRequestRefusals() {
+  Reset();
+  QCHECK(vk::RequestDeviceFunction(nullptr, &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kNull);
+  QCHECK(vk::RequestDeviceFunction("vkA", nullptr, &g_realSeen, "a") == vk::RequestStatus::kNull);
+  QCHECK(vk::RequestDeviceFunction("vkA", &RequesterWrapper, nullptr, "a") == vk::RequestStatus::kNull);
+  QCHECK(vk::RequestDeviceFunction("vkA", &RequesterWrapper, &g_realSeen, nullptr) == vk::RequestStatus::kNull);
+  QCHECK(vk::RequestDeviceFunction("vkA", &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kOk);
+  QCHECK(vk::RequestDeviceFunction("vkA", &OtherRequesterWrapper, &g_otherRealSeen, "b") == vk::RequestStatus::kDuplicate);
+  QCHECK(vk::RequestDeviceFunction("vkA", &OtherRequesterWrapper, &g_realSeen, "b") == vk::RequestStatus::kDuplicate);
+  QCHECK(vk::RequestDeviceFunction("vkA", &RequesterWrapper, &g_otherRealSeen, "b") == vk::RequestStatus::kDuplicate);
+  QCHECK(vk::RequestDeviceFunction("vkA", &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kOk);  // the same request again: one entry
+  static const char* const kNames[] = {"vkB", "vkC", "vkD", "vkE", "vkF", "vkG", "vkH", "vkI"};
+  for (std::size_t i = 0; i + 1 < vk::kMaxDeviceRequests; ++i) {
+    QCHECK(vk::RequestDeviceFunction(kNames[i], &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kOk);
+  }
+  QCHECK(vk::RequestDeviceFunction(kNames[vk::kMaxDeviceRequests - 1], &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kFull);
+  QCHECK(std::strcmp(vk::RequestStatusName(vk::RequestStatus::kSealed), "sealed") == 0);
+  QCHECK(std::strcmp(vk::RequestStatusName(vk::RequestStatus::kFull), "full") == 0);
+  // The loader has no vkGetDeviceProcAddr: the game gets that null (no wrapper with nothing behind it), and nothing is published.
+  Reset();
+  g_noDeviceLookup = true;
+  QCHECK(vk::RequestDeviceFunction("vkAllocateDescriptorSets", &RequesterWrapper, &g_realSeen, "a") == vk::RequestStatus::kOk);
+  QCHECK(GameResolvesDeviceLookup() == nullptr);
+  QCHECK(vk::RealDeviceProcAddr() == nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -798,6 +929,10 @@ int main() {
   AFailedVrapiCallContributesNoNames();
   ADriverThatFailsTheDecisionsListQueryLeavesTheGamesAnswerAlone();
   ADriverThatFailsTheDecisionsCountQueryLeavesTheGamesAnswerAlone();
+  VkWindowNoRequestReturnsReal();
+  VkWindowRequestReturnsWrapperRealPublishedFirst();
+  VkWindowOtherNamesReal();
+  VkWindowRequestRefusals();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "vk_ext_window_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

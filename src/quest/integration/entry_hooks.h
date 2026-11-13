@@ -60,6 +60,14 @@ bool InstallCrashFirstHook() noexcept;  // true when both slots hold their thunk
 // waits for the storage permission it just asked for. No counters.
 bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions slot holds the thunk
 
+// The #2090 combat name tags (combat/match_tags.h), through this seam for the same reason: CR15Game's two constructor slots.
+// Combat-area code: the sequence asks for it only where combat runs (docs/adr/0047). No counters.
+bool InstallMatchTagsHook() noexcept;  // true when both constructor slots hold their thunks
+
+// The #2121 equipment re-fire (combat/equip_refire.h), through this seam for the same reason: six setter words and a frame work.
+// Combat-area code: the sequence asks for it only where combat runs (docs/adr/0047). No counters.
+bool InstallEquipRefireHook() noexcept;  // true when every setter word holds its thunk
+
 // The #868 Vulkan extension window (sentinel/vk_ext_window.h), through this seam for the same reason: the device extensions
 // libr15 requires stay inside the 128 entries it reads. No counters.
 bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi slots hold their thunks

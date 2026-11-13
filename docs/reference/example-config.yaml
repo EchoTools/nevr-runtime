@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, assets.cdn_url, assets.manifest, assets.required_only, assets.labels, assets.whole_game, network.invite_codes, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.impactsnd, combat.impactsnd_write, the three combat.decals keys (decals, decals_flip_u, decals_flip_v), the three combat.bvh keys (bvh, bvh_gate, bvh_touch), combat.wallfire, combat.music, combat.sensorwd, combat.ec, combat.ec_words, combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronekill_explosion, combat.dronekill_hold, combat.dronemuzzle, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, the two combat.texture_quest2 keys, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -178,7 +178,7 @@ graphics:
 # ---------------------------------------------------------------------------
 
 combat:
-  # Quest only. A boolean. The combat modules built into the runtime run in the q15t and combat APKs (the variant the APK's build
+  # Quest only. A boolean. The combat modules built into the runtime run in the combat APKs (the variant the APK's build
   # names in the first line of the sentinel log, `variant`) and in no other. `true` asks for them to run whatever the APK's variant,
   # which a development build honours and a release build does not: a release build logs one warning that says the key is ignored.
   # A value that is not a boolean (a word such as `maybe`, a number, a mapping or a list, a key with no value, an unset ${VAR}) asks for
@@ -189,20 +189,20 @@ combat:
   #
   # sendguard: Quest only. A boolean. A script send to a game space that is not loaded is dropped, not faulted (the game reads a null space
   # and crashes without it; src/quest/combat/sendguard.h). Applies where the combat modules run, as `force` says. `false` leaves the game's own
-  # send alone. A value that is not a boolean asks for nothing, with a warning in the sentinel log that names the key. The q15t plugin's
-  # `sendguard.off` file is no longer read; one found in the files folder's q15t directory is a warning that names this key. Read once at
+  # send alone. A value that is not a boolean asks for nothing, with a warning in the sentinel log that names the key. A
+  # `sendguard.off` file is not read; one found in `files/q15t` of the app's external files directory is a warning that names this key. Read once at
   # launch; the sentinel log record `combat_config_switch` (module `sendguard`) shows the value and where it came from.
   # Default (absent): true.
   # sendguard: false
 
   # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
-  # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
+  # in the combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
   # boolean is ignored with a warning in the sentinel log that names the key. Read once at launch; the sentinel log line `combat_heaps_install` says
   # what the game reads after the step. Default (absent): true.
   # heaps: false
 
   # Quest only. A boolean. The render-target layout pool is made with 1024 slots instead of 512 and a log line says whether android_main started after
-  # the sizes were set, in the q15t and combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
+  # the sizes were set, in the combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
   # has it, because the heap and the pool are one memory change. A value that is not a boolean is ignored with a warning that names the key. Read once at
   # launch; the sentinel log lines `combat_memsys_install` and `combat_memsys_witness` report it. Default (absent): true.
   # memsys: false
@@ -220,7 +220,7 @@ combat:
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
 
-  # Quest only. A boolean. The game's global level, global_mp, loads at full size in the q15t and combat APKs instead of the cut
+  # Quest only. A boolean. The game's global level, global_mp, loads at full size in the combat APKs instead of the cut
   # `global_mp_lowspec` a Quest gets (src/quest/combat/levelname.h), together with the booster pool's companion (boosterpool.h): the combat bot body
   # exists only in the full level. The global level loads once after login, before any lobby, so it cannot be limited to combat: an arena match on
   # such an APK runs with the full global level too. `false` leaves the game's cut level, and the bot-body gate (`gate_bots`, below), which needs the full
@@ -244,7 +244,7 @@ combat:
   # a test switch in the reference build. Default (absent): false.
   # shieldgamma_gamma: true
   # Quest only. Booleans. The resource table-step modules (src/quest/combat/meshstep.h, instmodel.h, shaderstep.h, tablestep.h): the tables of the
-  # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the q15t and combat APKs;
+  # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the combat APKs;
   # in an Echo Arena level, in the lobbies arena players use and before the game is known the resources are the game's own. `false` leaves the game's
   # step of 32 for that resource class even in a combat match. A value that is not a boolean is ignored with a warning in the sentinel log that names
   # the key. Read once at launch; the sentinel log records `combat_config_switch`, `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install`
@@ -281,7 +281,7 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
-  # Quest only. Booleans. Three small combat modules that act on the game, each on unless the file says `false` (the q15t build of the combat mod has all three on).
+  # Quest only. Booleans. Three small combat modules that act on the game, each on unless the file says `false` (the reference build has all three on).
   # They run where the combat modules run (see `force`), read once at launch; a value that is not a boolean keeps the default, with a warning in the sentinel
   # log that names the key. The sentinel log lines `combat_gunconnect_install`, `combat_aibots_install` and `combat_weapon_arm_install` say what was read, and
   # each module's acting lines (`combat_gunconnect_connect`, `combat_aibots_enable`, `combat_weapon_arm_set`) say what it did. None of them acts in an Echo
@@ -377,15 +377,78 @@ combat:
   # warning that names the key. Read once at launch. Default (absent): true.
   # dronekill: false
 
+  # Quest only. A boolean. A combat drone that dies explodes on this client (docs/quest/combat/drone_explosion.md): one the server says died at
+  # once, one whose time ran out when its damageable goes off. It needs dronekill (above) and acts only in a combat map. The sentinel log
+  # lines `combat_dronekill_explosion` and `combat_dronekill_hold` say what it did. `false` leaves the drone's end to the game. A value that is
+  # not a boolean keeps the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # dronekill_explosion: false
+
+  # Quest only. A boolean. A drone whose time ran out keeps the first system its script turns off on until 2.5 s after its explosion: the
+  # game's own node for that off is skipped and the module turns the component off later (docs/quest/combat/drone_explosion.md, "The hold").
+  # It needs dronekill_explosion (above). Off by default: skipping that node is safe only if turning the component off is all the node does,
+  # which is not established yet (a reconstruction of CEnableComponentNode::Enter is pending). A value that is not a boolean keeps the
+  # default, with a warning that names the key. Read once at launch. Default (absent): false.
+  # dronekill_hold: true
+
   # Quest only. A boolean. A combat drone's bullets leave its gun, not its root (src/quest/combat/dronemuzzle.h). It needs dronekill (above):
   # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
   # the default, with a warning that names the key. Read once at launch. Default (absent): true.
   # dronemuzzle: false
 
+  # Quest only. A boolean. A FireBullet call whose velocity is null, at most about 1e-3 m/s or not finite is not made: FireBullet would divide by
+  # zero and store a NaN direction (src/quest/combat/bullet_velocity_guard.h). Every other shot reaches the game's function unchanged; it acts
+  # in every level. The sentinel log line `combat_bullet_velocity_guard_install` says what was installed, `combat_bullet_velocity_guard_skip`
+  # names each skipped shot (the first 10, then a count) and `combat_bullet_velocity_guard_total` counts them at the end. `false` installs
+  # nothing. A value that is not a boolean keeps the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # bullet_velocity_guard: false
+
+  # Quest only. A boolean. In a combat map or the combat lobby, a sound post from CSoundCS::PlaySound or from the bullet site whose symbol is 0 or
+  # one no stock sound bank defines is not made: the game would fail it in Wwise and write an error record for it (src/quest/combat/sound_symbol_guard.h).
+  # Every other post reaches the game's function unchanged, and arena levels are not touched. Off by default: it saves work, it fixes no shown crash.
+  # The sentinel log line `combat_sound_symbol_guard_install` says what was installed, `combat_sound_symbol_guard_drop` (Debug) names the first 16
+  # drops, and `combat_sound_symbol_guard_total` counts them at the end. A value that is not a boolean keeps the default, with a warning that names
+  # the key. Read once at launch. Default (absent): false.
+  # sound_symbol_guard: true
+
+  # Quest only. A boolean. A new Vulkan descriptor set's uniform texel buffer bindings hold a zeroed view until the game writes its own, so a
+  # binding the game has not written yet reads zeros, not an unmapped address (src/quest/combat/texel_buffer_guard.h). It hooks no game code: the
+  # game's lookups of vkCreateDescriptorSetLayout and vkAllocateDescriptorSets get its two wrappers through vk_ext_window; it acts in every level.
+  # The sentinel log line `combat_texel_buffer_guard_install` says what was requested, `combat_texel_buffer_guard_zero_view` whether the zeroed view
+  # was made and `combat_texel_buffer_guard_end` what was written. `false` requests nothing. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch. Default (absent): true.
+  # texel_buffer_guard: false
+
+  # Quest only. A boolean. On a Quest 2 whose player chose no texture level, the eye buffer is Very Low (1152 x 1264 per eye) in a settled combat
+  # map, and the player's level everywhere else (src/quest/combat/texture_quest2.h, docs/quest/combat/texture_quest2.md). "Chose no level" means
+  # graphics.texture_quality is absent or `stock`, the player changed nothing in the game's graphics menu, the reference input's start rule named
+  # no level, and the development property debug.nevr.texture_level is unset; any of those four keeps the player's level in combat too. With
+  # texture_quest2_lobby true the combat lobby counts as a combat map. The change is a live Resize, made only when no level has been loading for
+  # 10 s and the game's upload count and lock read 0: a Resize while a level load uploads can hang the game (inferred, not observed). Off by
+  # default for that reason (upstream ships it on); the headset row decides. The sentinel log lines `combat_texture_quest2_install`,
+  # `texture_quality_level_rule`, `texture_quality_level_held` and `texture_quality_level_rule_off` say what it did. A value that is not a boolean
+  # keeps the default, with a warning that names the key. Read once at launch. Default (absent): false.
+  # texture_quest2_step_down: true
+
+  # Quest only. A boolean. With texture_quest2_step_down, the combat lobby (mpl_lobby_b_combat, combat-only) is stepped down too, so a lobby -> map
+  # -> lobby round trip makes no Resize in its load windows. Default (absent): true.
+  # texture_quest2_lobby: false
+
+  # Quest only. A boolean. A combat game whose frames stop for frozen_frame_exit_s seconds while the headset is in VR, in a combat map or the
+  # combat lobby, is ended: its activity is finished, and after a 5 s grace the process ends with exit code 1, so the player lands in Home
+  # instead of a frozen view (src/quest/combat/frozen_frame_exit.h). It hooks nothing: it reads each frame submit and the game's in-VR word.
+  # The sentinel log line `combat_frozen_frame_exit_install` says what was installed, `combat_frozen_frame_exit` and
+  # `combat_frozen_frame_exit_end` say it fired and `combat_frozen_frame_exit_counts` counts at the end. `false` installs nothing. A value that
+  # is not a boolean keeps the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # frozen_frame_exit: false
+
+  # Quest only. An integer, seconds, 10 to 900: how long the frames may stop before frozen_frame_exit ends the game. A value that is not an
+  # integer, or one outside the range, keeps the default, with a warning that names the key. Read once at launch. Default (absent): 30.
+  # frozen_frame_exit_s: 30
+
   # The crash and timing guards of the combat modules (src/quest/combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h). Quest only;
   # each runs where the combat modules run (see `force`), and each is on unless it says `false`. Booleans, read once at launch; a value that is not a
   # boolean keeps the default, with a warning in the sentinel log that names the key. The plugin's `fxtrail.off`, `voipdrop.off` and `custctx.off`
-  # files are no longer read; one found in the files folder's q15t directory is a warning that names the key. The sentinel log lines
+  # files are not read; one found in `files/q15t` of the app's external files directory is a warning that names the key. The sentinel log lines
   # `combat_<module>_install` and `combat_<module>_stats` say what was installed and what each guard caught.
   # fxtrail: a bullet whose trail effect has no instance ends its trail, so the bullet can be freed. Acts only while a combat map is loaded.
   # fxtrail: false
@@ -571,6 +634,12 @@ network:
   # Absent: 0 (no bots).
   # Not a secret.
   # bots_per_session: 0
+  # A dedicated server's join hold: how long, in milliseconds, the service's accept of a joining player waits for the
+  # session's levels to finish loading and be enabled before it is forwarded to the game (docs/reference/join-hold.md).
+  # 0 (the default) is off: no hook is installed and every accept is forwarded at once. Valid: 500-15000; 1-499 is
+  # raised to 500 and above 15000 lowered to it, a value that is not a whole number is off, each with a warning in the
+  # log. When the time runs out the accepts are forwarded anyway. Ignored by a client. Not a secret.
+  # join_hold_ms: 0
   # A dedicated server's match team size: how many players the game's own team assignment puts on one team before
   # it moves the next to the other team or to spectators. A team holds the smaller of this and half its lobby's
   # player limit, in every mode but the AI and social modes (the AI modes keep the game's 3). Valid: 1-8. 1 to 4
@@ -758,6 +827,18 @@ arena:
 # asset_cdn_url: "https://cdn.echovrce.com/assets"
 
 # ---------------------------------------------------------------------------
+# assets.whole_game — the manifest holds every asset of the game (Quest only)
+#
+# Needs assets.manifest. The first-run data step does not fetch the data zip
+# and never ends the process for a missing _data (docs/adr/0045-cdn-texture-delivery.md, decision 11).
+# Absent: false.
+# Not a secret.
+# Reader: src/quest/sentinel/quest_config.cpp
+# ---------------------------------------------------------------------------
+# assets:
+#   whole_game: false
+
+# ---------------------------------------------------------------------------
 # exitonerror — exit the process on fatal errors
 # KNOWN-WRONG #1279: the key does nothing.
 #
@@ -835,8 +916,8 @@ arena:
 #   early     — if true, the plugin loads at the game's first command-line pass,
 #               before the game reads its data (manifests, packages); the rest
 #               load after the graphics device (client) or that pass (server).
-#               For a plugin that must be in place by then, e.g. one that serves
-#               game data from elsewhere; it must stay off the graphics path.
+#               For a plugin that must be in place before that read; it must
+#               stay off the graphics path.
 #               A repeat of an earlier entry for the same file is skipped as
 #               usual, so the first entry decides the pass.
 #

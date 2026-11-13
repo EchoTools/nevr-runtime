@@ -15,20 +15,26 @@
  * Switch. `combat.powerboost_stage` in config.yaml, an integer 0..3, default 3: what kotorvr's echoquest-combat ships (its wave-2
  * recipe qa-1104-aj4-w2z22.json lists an empty powerboost.on, whose words are `swallow cone`, afk_powerboost.cpp:89). 0 installs nothing.
  *
- * Arena (same APK). Every install happens on the q15t and combat APKs, which also play Echo Arena. The module acts only while a combat map
- * or the combat lobby is loaded (InScope(): the game tick asks combat_level once every kScopeEveryFrames frames and keeps the answer in an
- * atomic; with no tick seen yet the answer is "not combat"). Anywhere else every wrapper only calls the game's function, the entry passes
- * every call on, and nothing is logged, held, swallowed or sent. When the combat_scope answer (F19, #2246) lands, InScope() reads it instead.
+ * Arena (same APK). Every install happens on the combat APKs, which also play Echo Arena. The module acts only while a combat map
+ * or the combat lobby is loaded and no Echo Arena level is (InScope(): the game tick asks the combat level answer, combat_scope.h, once every
+ * kScopeEveryFrames frames, one `LastLook()` record judged by `InCombatOrLobby`, and keeps the answer in an atomic; with no tick seen yet, the answer
+ * is "not combat"). Each wrapper tests that atomic; every in-scope body (and the cone's continuation) then starts with `scope::LookIsFresh()`
+ * (src/quest/combat/README.md rule 9), so while the tick is stopped a combat answer older than a second (kStaleAfterMs) passes every call on, though
+ * the atomic still says combat. Anywhere else every
+ * wrapper only calls the game's function, the entry passes every call on, and nothing is logged, held, swallowed or sent. The module is a reader
+ * of the scope row (`combat.powerboost_stage` 1 to 3 is in combat_install.cpp
+ * `ScopeNormal()`'s list), and the install refuses (`scope_not_live`) when the answer cannot change.
  *
  * Frequency (ADR 0038). ResolveBody has 771 callers and runs many times per frame: the entry's path for every call but the cone's is 10
  * instructions (bti, two adrp/add/ldar pairs, cmp, b.eq, br). Heal is called per damage-dealt message and per heal node; HealNode::Enter
  * per heal node a script runs; SetTargetInsideBubble once per bubble target per update of a heal bubble. Their thunks' arena path is the
- * thunk's counter, two acquire loads, one acquire load of the scope and the game's call.
+ * thunk's counter, two acquire loads, one acquire load of the scope and the game's call. In scope each call adds one clock read
+ * (`LookIsFresh`, CLOCK_MONOTONIC through the vDSO, no system call) before its work; docs/quest/combat/powerboost.md "Arena" gives the host cost.
  *
- * Owner (ADR 0039). This file owns the five words. The q15t plugin no longer installs any of them.
+ * Owner (ADR 0039). This file owns the five words.
  *
  * Origin. The reference build's runtime/native/afkxr/afk_powerboost.cpp (1357409; docs/audits/2026-11-05-q15t-origin-citations.md rows
- * 244-254, 273), and the EchoCombat c14c3e0a plugin/powerboost.cpp rules it ports: the cone filter :574-623, the link state :487-505, the
+ * 244-254, 273), and the EchoCombat plugin/powerboost.cpp rules it ports: the cone filter :574-623, the link state :487-505, the
  * owner's 0.3 m :585, the +z axis :224, the diagnostic rate :610-620, the 30 s use window :500-504. runtime/patch/powerboost_rules.h names the rest.
  *
  * Lines (sentinel log), each a `combat_powerboost_*` event:
@@ -41,7 +47,7 @@
  *   cone       {"target":..,"dist_m":"..","max_m":"..","off_deg":"..","max_deg":..,"verdict":"LINK|no"}   at most twice a second
  *   link_marker {"direction":"link to|unlink from","index":..,"marker":".."} sent, or {"why":".."} not sent
  *   capped     {"kind":"..","cap":<n>}   once per kind, when its cap is reached
- *   scope      {"in_combat":0|1,"kind":"combat_or_lobby|echo_arena|none","level":"0x.."}   each change, the first 64
+ *   scope      {"in_combat":0|1,"kind":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x.."}   each change of the class, the first 64
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -68,7 +74,7 @@ struct Fns {
 
 enum Stage : int { kOff = 0, kRead = 1, kSwallow = 2, kCone = 3 };
 inline constexpr int kDefaultStage = kCone;
-// The scope is asked again once every this many game frames (about 2.5 times a second at 72 Hz).
+// The scope is asked again once every this many game frames (about 2.25 times a second at 72 Hz: 32 frames is about 444 ms).
 inline constexpr std::uint32_t kScopeEveryFrames = 32;
 
 // The three engine functions by exported name (dlsym on the loaded libr15.so), each required to be at base + its pin. False when one is
@@ -76,7 +82,7 @@ inline constexpr std::uint32_t kScopeEveryFrames = 32;
 bool ResolveFns(std::uintptr_t base, const Pins& pins, Fns* out) noexcept;
 
 // The step on the loaded libr15 with `stage` (combat.powerboost_stage). Fixed status tokens: "installed", "partial", "refused", "off",
-// "already_ran", "module_not_loaded", "no_build_id", "build_id_mismatch", "no_thread_key", "tick_table_full", "hook_failed".
+// "already_ran", "scope_not_live", "module_not_loaded", "no_build_id", "build_id_mismatch", "no_thread_key", "tick_table_full", "hook_failed".
 ModuleResult Install(int stage) noexcept;
 // The same on the image `lookup` finds, with `pins`, and `fns` (null: ResolveFns).
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, int stage, const Fns* fns) noexcept;

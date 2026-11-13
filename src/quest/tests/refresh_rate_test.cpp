@@ -1,5 +1,5 @@
 // Host test for the combat refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3, docs/adr/0039): src/quest/combat/refresh_rate.cpp,
-// built without exceptions as the sentinel builds it. The rule moved here from the q15t plugin (refresh_rate.cpp), whose host test cases
+// built without exceptions as the sentinel builds it. The rule is the combat plugin's (refresh_rate.cpp, #1591), whose host test cases
 // are these: the level rate (90, 72 on a Quest 2), a combat or lobby level asks for it, an Echo Arena level keeps the session rate, a
 // request above the level rate while a level is loaded is kept at it, the tick re-asks on a change of level only, and the three keys
 // switch the parts. What is new is the owner's shape: with `combat::Active()` false the answer is the game's own rate and nothing is
@@ -29,6 +29,8 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/headset_active.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 
 // sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
@@ -141,13 +143,14 @@ void World(bv::Variant variant, const nevr_quest::CombatConfig& config = nevr_qu
   combat::SetConfig(config);
   g_cfg = config;
   rr::SetAskForTest(&FakeAsk);
-  rr::SetQuest2ForTest(quest2);
+  // The headset is the identity step's profile (quest/headset_active.h): a Quest 2, or a Quest 3 for every other case here.
+  nevr_quest::headset_active::SetActive(quest2 != 0 ? &nevr_quest::headset_profile::kQuest2 : &nevr_quest::headset_profile::kQuest3);
   rr::SetClockForTest(&Clock);
   g_lines.clear();  // the combat_active line is combat_active_test's
 }
 void Done() {
   rr::SetAskForTest(nullptr);
-  rr::SetQuest2ForTest(-1);
+  nevr_quest::headset_active::SetActive(nullptr);
   rr::SetClockForTest(nullptr);
   combat::tick::ResetForTest();
   sentinel::SetLogSink(nullptr);
@@ -204,16 +207,77 @@ void TheRuleFollowsItsThreeKeysAndTheHeadset() {
   QCHECK(rr::kLevelHz == 90.0f && rr::kQuest2LevelHz == 72.0f);
 }
 
-// The headset is named by the headset profile's rules (quest/headset_profile.h): "hollywood" is a Quest 2; the Quest 3 ("eureka"), a
-// device no rule names ("panther"), an empty name, a near miss and no name at all are not, so they ask the match rate.
-void TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo() {
-  QCHECK(rr::IsQuest2Device("hollywood"));
-  QCHECK(!rr::IsQuest2Device("eureka"));
-  QCHECK(!rr::IsQuest2Device("panther"));
-  QCHECK(!rr::IsQuest2Device(""));
-  QCHECK(!rr::IsQuest2Device("hollywood2"));
-  QCHECK(!rr::IsQuest2Device("Hollywood"));
-  QCHECK(!rr::IsQuest2Device(nullptr));
+// The headset is the identity step's profile (quest/headset_active.h, ADR 0031 decision 4, #2037): the Quest 2 profile asks 72, the Quest 3
+// and the generic profile ask the match rate. The rule reads no system property of its own. With no profile set (a sequence that did not
+// run the step), the generic profile's answer, never the Quest 2's, and one Warning that says so.
+void TheHeadsetIsTheIdentityStepsProfile() {
+  struct Row {
+    const nevr_quest::headset_profile::Profile* profile;
+    const char* quest2;
+    const char* hz;
+  };
+  const Row rows[] = {{&nevr_quest::headset_profile::kQuest2, "\"quest2\":1", "\"level_hz\":\"72\""},
+                      {&nevr_quest::headset_profile::kQuest3, "\"quest2\":0", "\"level_hz\":\"90\""},
+                      {&nevr_quest::headset_profile::kGeneric, "\"quest2\":0", "\"level_hz\":\"90\""},
+                      {nullptr, "\"quest2\":0", "\"level_hz\":\"90\""}};
+  for (const Row& r : rows) {
+    World(bv::Variant::kCombat, Keys(true, true, true));
+    nevr_quest::headset_active::SetActive(r.profile);
+    QCHECK(InstallRule().installed);
+    const std::vector<Line> l = Lines("combat_refresh_rate_install");
+    QCHECK(l.size() == 1U && Has(l[0].text, r.quest2) && Has(l[0].text, r.hz));
+    const std::vector<Line> missing = Lines("combat_refresh_rate_profile_missing");
+    if (r.profile != nullptr) {
+      QCHECK(missing.empty());
+    } else {
+      QCHECK(missing.size() == 1U);
+      if (missing.size() == 1U) {
+        QCHECK(missing[0].level == sentinel::LogLevel::kWarn);
+        const std::size_t at = missing[0].text.find("\"event\"");
+        QCHECK(at != std::string::npos &&
+               missing[0].text.substr(at) ==
+                   "\"event\":\"combat_refresh_rate_profile_missing\",\"profile\":\"generic\",\"level_hz\":\"90\","
+                   "\"consequence\":\"the identity step set no headset profile before this step, so the rule asks the generic profile's level rate\"}");
+      }
+    }
+    Done();
+  }
+  // The rule off (witness) and no profile: still one Warning, but its consequence is the true one for that mode, which asks no level rate
+  // (no tick is registered, so no switch line is written); the `quest2` field of the install line and of every request line, which the
+  // witness still writes, reads the generic profile's 0. The Warning carries no `level_hz` either.
+  World(bv::Variant::kCombat, Keys(false, true, true));
+  nevr_quest::headset_active::SetActive(nullptr);
+  QCHECK(InstallRule().installed);
+  const std::vector<Line> witnessInstall = Lines("combat_refresh_rate_install");
+  QCHECK(witnessInstall.size() == 1U && Has(witnessInstall[0].text, "\"mode\":\"witness\"") && Has(witnessInstall[0].text, "\"quest2\":0"));
+  const std::vector<Line> witnessMissing = Lines("combat_refresh_rate_profile_missing");
+  QCHECK(witnessMissing.size() == 1U);
+  if (witnessMissing.size() == 1U) {
+    QCHECK(witnessMissing[0].level == sentinel::LogLevel::kWarn);
+    const std::size_t at = witnessMissing[0].text.find("\"event\"");
+    QCHECK(at != std::string::npos &&
+           witnessMissing[0].text.substr(at) ==
+               "\"event\":\"combat_refresh_rate_profile_missing\",\"profile\":\"generic\","
+               "\"consequence\":\"the identity step set no headset profile before this step; refresh_rate is off, so the rule asks no level "
+               "rate; the quest2 field of the install line and of each request line reads the generic profile's 0\"}");
+  }
+  // The game asks above the level rate and a combat level is loaded: with the rule on, the next frame would re-ask 90 and write a switch
+  // line. With it off the request is logged as the game made it, and the frame re-asks nothing and writes no switch line: this is what pins
+  // the tick's `g_on` gate (a session rate at or below the level rate, or no level, would stop the tick before the gate mattered).
+  QCHECK(GameAsks(120.0f) == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.empty());
+  const std::vector<Line> witnessRequest = Lines("combat_refresh_rate_request");
+  QCHECK(witnessRequest.size() == 1U && Has(witnessRequest[0].text, "\"mode\":\"witness\"") && Has(witnessRequest[0].text, "\"quest2\":0"));
+  QCHECK(Lines("combat_refresh_rate_switch").empty());
+  Done();
+  // In a release APK the rule does not run, so it reads no profile and says nothing about one.
+  World(bv::Variant::kNone);
+  nevr_quest::headset_active::SetActive(nullptr);
+  QCHECK(!InstallRule().installed);
+  QCHECK(Lines("combat_refresh_rate_profile_missing").empty());
+  Done();
 }
 
 void ARequestAboveTheLevelRateInALevelIsKept() {
@@ -262,8 +326,8 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
   }
 }
 
-// On a q15t or combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
-void AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined() {
+// On a combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
+void ACombatVariantApkOwnsTheRuleAndSaysWhatItCombined() {
   for (const bv::Variant variant : {bv::Variant::kQ15t, bv::Variant::kCombat}) {
     World(variant);
     const combat::ModuleResult r = InstallRule();
@@ -398,6 +462,7 @@ void AComSessionFromArenaToCombatAndBack() {
   QCHECK(g_asks.size() == 4U && g_asks[3].hz == 120.0f);
   sw = Lines("combat_refresh_rate_switch");
   QCHECK(sw.size() == 4U && Has(sw[3].text, "no combat or lobby level: session rate"));
+  QCHECK(Has(sw[3].text, "\"level\":\"0000000000000000\""));  // no level: zero, written in full
   QCHECK(rr::CurrentStats().switches == 4);
   Done();
 }
@@ -531,7 +596,7 @@ void ALegacyKillFileIsWarnedAboutAndChangesNothing() {
     const char* file;
     const char* replacement;
   };
-  for (const Legacy& legacy : {Legacy{"hzlevel.off", "combat.refresh_rate: false"}, Legacy{"hzlobby90.off", "combat.refresh_rate_lobby: false"},
+  for (const Legacy& legacy : {Legacy{"hzlevel.off", "combat.refresh_rate: false"}, Legacy{"hzlobby90.off", "combat.refresh_rate_lobby: false (the default)"},
                                Legacy{"hz72q2.off", "combat.refresh_rate_quest2_72: false"}}) {
     const std::string path = base + "/" + legacy.file;
     std::FILE* f = std::fopen(path.c_str(), "w");
@@ -546,7 +611,7 @@ void ALegacyKillFileIsWarnedAboutAndChangesNothing() {
     if (w.size() == 1U) {
       QCHECK(w[0].level == sentinel::LogLevel::kWarn);
       QCHECK(Has(w[0].text, std::string("\"file\":\"") + legacy.file + "\""));
-      QCHECK(Has(w[0].text, std::string("\"replaced_by\":\"") + legacy.replacement));
+      QCHECK(Has(w[0].text, std::string("\"replaced_by\":\"") + legacy.replacement + "\""));
       QCHECK(Has(w[0].text, "\"msg\":"));
     }
     QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"lobby\""));
@@ -650,19 +715,128 @@ void TheProductionReaskCallsTheWordNowInTheSlot() {
   ClearGame();
   Frame();
   QCHECK(g_slotCalls.size() == 2U && Lines("combat_refresh_rate_switch").size() == 4U);
+  QCHECK(Has(Lines("combat_refresh_rate_switch")[3].text, "\"rc\":-1"));  // no image: the answer is -1 here too, not a call's result
   rr::SetImageLookupForTest(nullptr);
   Done();
   munmap(block, size);
+}
+
+// What the module reports about the last request and the last send, and the request line's level and result code.
+void TheStatsAndTheRequestLineReportWhatWasAskedAndSent() {
+  World(bv::Variant::kCombat, Keys(true, true, true), 0);
+  InstallRule();
+  g_lines.clear();
+  rr::Note(100.0f, 80.0f, 5);  // a request the game made: 100 asked, 80 sent, the call answered 5
+  rr::Stats stats = rr::CurrentStats();
+  QCHECK(stats.requests == 1 && stats.lastAsked == 100.0f && stats.lastSent == 80.0f);
+  const std::vector<Line> req = Lines("combat_refresh_rate_request");
+  QCHECK(req.size() == 1U);
+  if (req.size() == 1U) {
+    QCHECK(req[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(req[0].text, "\"rc\":5") && Has(req[0].text, "\"asked_hz\":\"100.0\"") && Has(req[0].text, "\"sent_hz\":\"80.0\""));
+  }
+  QCHECK(GameAsks(120.0f) == 120.0f);
+  stats = rr::CurrentStats();
+  QCHECK(stats.requests == 2 && stats.lastAsked == 120.0f && stats.lastSent == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  Frame();
+  stats = rr::CurrentStats();  // the tick's re-ask sets what was sent, not what the game asked
+  QCHECK(stats.switches == 1 && stats.lastAsked == 120.0f && stats.lastSent == 90.0f && stats.inLevel);
+  ClearGame();
+  Frame();
+  stats = rr::CurrentStats();
+  QCHECK(stats.switches == 2 && stats.lastAsked == 120.0f && stats.lastSent == 120.0f && !stats.inLevel);
+  Done();
+}
+
+// The headset reaches the request and the switch lines too, and the Quest 2's level rate is what the tick sends.
+void ATickOnAQuest2SaysSoOnEveryLine() {
+  World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);
+  InstallRule();
+  GameAsks(90.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  Frame();
+  const std::vector<Line> req = Lines("combat_refresh_rate_request");
+  const std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(req.size() == 1U && Has(req[0].text, "\"quest2\":1"));
+  QCHECK(sw.size() == 1U);
+  if (sw.size() == 1U) {
+    QCHECK(Has(sw[0].text, "\"quest2\":1") && Has(sw[0].text, "\"asked_hz\":\"90.0\"") && Has(sw[0].text, "\"sent_hz\":\"72.0\""));
+  }
+  Done();
+}
+
+// The install line's message says which of the three things the rule is doing.
+void TheInstallMessageSaysWhatTheRuleDoes() {
+  World(bv::Variant::kCombat, Keys(false, true, true), 0);
+  InstallRule();
+  std::vector<Line> l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "refresh_rate is off: the game's own rate always, every request logged"));
+  Done();
+  World(bv::Variant::kCombat, Keys(true, true, true), 0);
+  InstallRule();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "combat maps (and, in lobby mode, the combat lobby) ask for the level rate; an Echo Arena level keeps the game's rate"));
+  Done();
+  World(bv::Variant::kCombat);
+  for (std::size_t i = 0; i < combat::tick::kMaxCallbacks; ++i) combat::tick::Add([](std::uintptr_t) noexcept {});
+  InstallRule();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "the game-thread tick table is full, so the rule only lowers requests the game makes; it never re-asks on a level change"));
+  Done();
+}
+
+// The tick looks when 0.5 s have passed, not before: exactly 0.5 s after a look is a look, a hair before is not.
+void TheTickLooksAtExactlyHalfASecond() {
+  World(bv::Variant::kCombat);
+  InstallRule();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  g_now = 101.0;
+  rr::Tick(GameAddress());  // the look: schedules the next at 101.5
+  QCHECK(g_asks.size() == 1U);
+  ClearGame();
+  g_now = 101.49;
+  rr::Tick(GameAddress());
+  QCHECK(g_asks.size() == 1U);  // 0.49 s: no look
+  g_now = 101.5;
+  rr::Tick(GameAddress());
+  QCHECK(g_asks.size() == 2U && g_asks[1].hz == 120.0f);  // 0.5 s: the look
+  Done();
+}
+
+// A request that came with no ovr pointer leaves the tick nothing to ask through.
+void ATickWithoutTheGamesOvrAsksNothing() {
+  World(bv::Variant::kCombat);
+  InstallRule();
+  QCHECK(rr::Choose(nullptr, 120.0f) == 120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.empty() && !rr::CurrentStats().inLevel);
+  Done();
+}
+
+// With no lookup of the test's own, the re-ask finds libr15 through the loader's lookup: on a host there is none, and the answer is -1.
+void TheProductionReaskWithoutALookupFindsNoImage() {
+  World(bv::Variant::kCombat);
+  rr::SetAskForTest(nullptr);  // the production ask
+  InstallRule();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  const std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 1U && Has(sw[0].text, "\"rc\":-1"));
+  Done();
 }
 
 }  // namespace
 
 int main() {
   TheRuleFollowsItsThreeKeysAndTheHeadset();
-  TheHeadsetIsAQuest2OnlyWhenTheProfileRulesSaySo();
+  TheHeadsetIsTheIdentityStepsProfile();
   ARequestAboveTheLevelRateInALevelIsKept();
   ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
-  AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();
+  ACombatVariantApkOwnsTheRuleAndSaysWhatItCombined();
   TheInstallLineFollowsTheKeysAndTheHeadset();
   AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall();
   AComSessionFromArenaToCombatAndBack();
@@ -675,6 +849,12 @@ int main() {
   AnArenaMatchOnTheCombatApkKeepsTheGamesRate();
   TheLobbiesArenaPlayersUseKeepTheGamesRate();
   ALegacyKillFileIsWarnedAboutAndChangesNothing();
+  TheStatsAndTheRequestLineReportWhatWasAskedAndSent();
+  ATickOnAQuest2SaysSoOnEveryLine();
+  TheInstallMessageSaysWhatTheRuleDoes();
+  TheTickLooksAtExactlyHalfASecond();
+  ATickWithoutTheGamesOvrAsksNothing();
+  TheProductionReaskWithoutALookupFindsNoImage();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

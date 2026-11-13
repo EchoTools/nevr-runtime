@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
   CheckJumpSlot(r15, ct::SwapTarget(), ct::kPins.swapFn, "BeginModelSwap JUMP_SLOT");
   CheckAbs64Word(r15, ct::SwapVtableTarget(), ct::kPins.swapFn, "BeginModelSwap vtable word");
   CheckJumpSlot(r15, ct::LookupTarget(), ct::kPins.lookupFn, "LookupResourcePath JUMP_SLOT");
-  for (const ct::Word& w : ct::kSwapPrologue) {
+  for (const nevr_quest::combat::pinned::Word& w : ct::kSwapPrologue) {
     std::uint32_t got = 0;
     QCHECK(FileWord(r15, w.vaddr, &got));
     if (got != w.word) {

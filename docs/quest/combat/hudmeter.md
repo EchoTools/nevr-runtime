@@ -2,13 +2,13 @@
 
 Files: `src/quest/combat/hudmeter.{h,cpp}`, `src/quest/combat/hudmeter_targets.h` (the pins), `src/quest/combat/combat_scope.{h,cpp}` (the level
 answer the handler reads), `src/quest/tests/hudmeter_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/hudmeter.sh`. The module
-is a normal combat step, registered after `refresh_rate` (`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no
+is a normal combat step, registered after `refresh_rate` (`src/quest/combat/combat_install.cpp`): it runs in the combat APKs and in no
 other. Switch: `combat.hudmeter` (default true) in `config.yaml`; false installs nothing and logs `combat_hudmeter_install` with `reason: off_config`.
 No file in the app's files directory turns it on or off.
 
 Origins: our implementation of the reference build's `runtime/native/afkxr/afk_hudmeter.cpp` (the zero-seed trap :1-9, the offsets and the buffer
 :43-48, the switch :49, the slot and function :76, the eleven pinned code words :83; pinned in `docs/audits/2026-11-05-q15t-origin-citations.md`, rows
-75-84). The module was imported into the q15t plugin from kotorvr's echoquest-combat work (#1591) and moved here. The reference build's rev 4 "old bar"
+75-84). The module came into this tree with the combat plugin imported from kotorvr's echoquest-combat work (#1591). The reference build's rev 4 "old bar"
 part (its `oldbar.on` and `oldbarfix.on` TEST switches, which mirror another element's writes across actors) is not built.
 
 ## Row covered

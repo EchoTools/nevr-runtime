@@ -43,9 +43,10 @@ func Env(t T, extra ...string) []string {
 	return env
 }
 
-// EnvAt is Env for a caller that has no test (cmd/test-go-tools, which runs a test suite for people), and it reads
-// nothing from the process's environment: PATH and the Go caches come from getenv, and when getenv has no GOCACHE or
-// GOMODCACHE they come from `goBin env` (goBin "" means there is none to ask, and the variable is left out). The
+// EnvAt is Env for a caller that has no test (cmd/test-go-tools, which runs a test suite for people). It takes every
+// value from getenv: PATH and the Go caches come from getenv, and when getenv has no GOCACHE or GOMODCACHE they come
+// from `goBin env`, which inherits the process's environment, not getenv (goBin "" means there is none to ask, and the
+// variable is left out). The
 // directories are made below root, which the caller removes. It also sets GOFLAGS=-count=1: go test's result cache
 // lives in the shared GOCACHE and cannot see the files a child process reads, so a kit-started go test never takes a
 // cached pass.
@@ -97,14 +98,17 @@ var (
 )
 
 // goDefaults is what `goBin env GOCACHE GOMODCACHE` prints (it knows the defaults and the user's `go env -w`
-// settings), looked up once per go binary. Empty when goBin is "" or the command fails.
+// settings). The command inherits this process's environment, and the answer depends on it (HOME and GOPATH decide
+// the module cache), so the answer is kept per go binary AND per environment: a test that changes HOME for itself
+// must not leave its answer for the tests that run after it. Empty when goBin is "" or the command fails.
 func goDefaults(goBin string) map[string]string {
 	if goBin == "" {
 		return nil
 	}
+	key := goBin + "\x00" + strings.Join(os.Environ(), "\x00")
 	goDefaultsMu.Lock()
 	defer goDefaultsMu.Unlock()
-	if got, ok := goDefaultsCache[goBin]; ok {
+	if got, ok := goDefaultsCache[key]; ok {
 		return got
 	}
 	got := map[string]string{}
@@ -115,7 +119,7 @@ func goDefaults(goBin string) map[string]string {
 			got[keys[i]] = lines[i]
 		}
 	}
-	goDefaultsCache[goBin] = got
+	goDefaultsCache[key] = got
 	return got
 }
 

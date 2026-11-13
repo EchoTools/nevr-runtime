@@ -277,6 +277,7 @@ void TheHandlerRunsTheGamesFunctionThenTheCallbacksInOrder() {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(install[0].text, "\"result\":\"installed\"") && Has(install[0].text, "\"status\":\"ok\"") && Has(install[0].text, "\"callbacks\":2"));
     QCHECK(Has(install[0].text, "\"msg\":"));
+    QCHECK(Has(install[0].text, "tick is installed") && !Has(install[0].text, "was not installed"));  // the installed message, not the refused one
   }
   Done();
 }
@@ -333,6 +334,7 @@ void AnObjectThatIsNotTheGameRunsNoCallbackAndSaysSoOnce() {
   if (object.size() == 1U) {
     QCHECK(object[0].level == sentinel::LogLevel::kError);
     QCHECK(Has(object[0].text, "\"readable\":1"));
+    QCHECK(Has(object[0].text, "is not the CR15Game"));  // what the line says is wrong: the object is not the game
   }
   g_order.clear();
   CallSlot(Game(0x778));
@@ -363,13 +365,15 @@ void ARefusedInstallLeavesTheSlotAloneAndSaysWhy() {
   if (install.size() == 1U) {
     QCHECK(install[0].level == sentinel::LogLevel::kError);
     QCHECK(Has(install[0].text, "\"result\":\"refused\"") && Has(install[0].text, "\"status\":\"module_not_loaded\""));
+    QCHECK(Has(install[0].text, "was not installed") && !Has(install[0].text, "tick is installed"));  // the refused message, not the installed one
+    QCHECK(Has(install[0].text, "\"callbacks\":0"));
   }
   Done();
 }
 
-// The q15t variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
+// A combat variant: no plugin wraps the slot, so the runner's normal step installs this module alone, as on
 // the combat variant: the game's function runs once, then combat's callbacks, and nothing logs `unexpected_original`.
-void OnAQ15tApkTheRunnersStepInstallsTheTickAlone() {
+void OnACombatVariantApkTheRunnersStepInstallsTheTickAlone() {
   World(bv::Variant::kQ15t);
   static const combat::Module kTable[] = {{"tick", nullptr, [](void) noexcept -> combat::ModuleResult {
                                              const bool ok = tick::InstallAt(&Lookup);
@@ -425,6 +429,87 @@ void OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone() {
   Done();
 }
 
+// The check is made again every 256 frames, exactly: frames 1 to 256 read the vptr once (the first), frame 257 reads it again, and the next read is at
+// frame 513. A count that is 255 or 257, or a compare that is off by one, moves one of these reads.
+void TheRecheckIsEvery256FramesExactly() {
+  World(bv::Variant::kCombat);
+  QCHECK(tick::Add(&CombatCallback<1>));
+  QCHECK(tick::InstallAt(&Lookup));
+  void* const game = Game(VptrValue());
+  for (int frame = 1; frame <= 256; ++frame) CallSlot(game);
+  QCHECK(tick::VptrReads() == 1);
+  CallSlot(game);  // frame 257
+  QCHECK(tick::VptrReads() == 2);
+  for (int frame = 258; frame <= 512; ++frame) CallSlot(game);
+  QCHECK(tick::VptrReads() == 2);
+  CallSlot(game);  // frame 513
+  QCHECK(tick::VptrReads() == 3);
+  Done();
+}
+
+// Game() is the last object that passed the check: 0 until one has, kept across a refused frame, replaced by the next object that passes.
+void GameIsTheLastObjectThatPassedTheCheck() {
+  World(bv::Variant::kCombat);
+  QCHECK(tick::Game() == 0);
+  QCHECK(tick::Add(&CombatCallback<1>));
+  QCHECK(tick::InstallAt(&Lookup));
+  QCHECK(tick::Game() == 0);  // installed, no frame yet
+  CallSlot(Game(0x777));
+  QCHECK(tick::Game() == 0);  // a refused object is not the game
+  void* const first = Game(VptrValue());
+  CallSlot(first);
+  QCHECK(tick::Game() == reinterpret_cast<std::uintptr_t>(first));
+  static std::uintptr_t wrong[8] = {};
+  wrong[0] = 0x778;
+  CallSlot(wrong);  // another object, refused: the verified one is forgotten, the game the tick last verified is not
+  QCHECK(tick::Game() == reinterpret_cast<std::uintptr_t>(first));  // never cleared once set
+  static std::uintptr_t second[8] = {};
+  second[0] = VptrValue();
+  CallSlot(second);
+  QCHECK(tick::Game() == reinterpret_cast<std::uintptr_t>(second));
+  Done();
+}
+
+// Installed() says whether the thunk is on the slot: false before, false after a refused install, true after the install.
+void InstalledFollowsTheInstall() {
+  World(bv::Variant::kCombat);
+  QCHECK(!tick::Installed());
+  QCHECK(!tick::InstallAt([](const char*, sentinel::ElfImage*) { return false; }));
+  QCHECK(!tick::Installed());
+  QCHECK(tick::InstallAt(&Lookup));
+  QCHECK(tick::Installed());
+  tick::ResetForTest();
+  QCHECK(!tick::Installed());
+  Done();
+}
+
+// No lookup at all (a null function) is a refusal, not a fault.
+void ANullLookupIsRefusedNotCalled() {
+  World(bv::Variant::kCombat);
+  QCHECK(!tick::InstallAt(nullptr));
+  QCHECK(*Slot() == reinterpret_cast<void*>(&GameExclusiveUpdate));
+  const std::vector<Line> install = Lines("combat_tick_install");
+  QCHECK(install.size() == 1U);
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kError);
+    QCHECK(Has(install[0].text, "\"status\":\"module_not_loaded\""));
+  }
+  QCHECK(!tick::Installed());
+  Done();
+}
+
+// The runner's own step finds libr15 through the loader, which on the host holds none: refused with the manager's token, one Error line, Installed() false.
+void TheNormalStepRefusesWhereNoLibr15IsLoaded() {
+  World(bv::Variant::kCombat);
+  const combat::ModuleResult r = tick::InstallNormal();
+  QCHECK(!r.installed);
+  QCHECK(r.status != nullptr && std::strcmp(r.status, "module_not_loaded") == 0);
+  QCHECK(!tick::Installed());
+  const std::vector<Line> install = Lines("combat_tick_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError);
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -435,8 +520,13 @@ int main() {
   TheVptrIsReadOncePerObjectNotOncePerFrame();
   ARefusedInstallLeavesTheSlotAloneAndSaysWhy();
   OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone();
-  OnAQ15tApkTheRunnersStepInstallsTheTickAlone();
+  OnACombatVariantApkTheRunnersStepInstallsTheTickAlone();
   AWrapperAlreadyInTheSlotIsTheFunctionTheThunkCalls();
+  TheRecheckIsEvery256FramesExactly();
+  GameIsTheLastObjectThatPassedTheCheck();
+  InstalledFollowsTheInstall();
+  ANullLookupIsRefusedNotCalled();
+  TheNormalStepRefusesWhereNoLibr15IsLoaded();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_tick_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

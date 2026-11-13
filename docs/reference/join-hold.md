@@ -2,14 +2,49 @@
 
 The join hold holds a dedicated server's lobby accepts while a session's level set is loading. It reads three
 functions of `echovr.exe`. This page records them, the server chain that reaches them, what was read and what was
-inferred, and the live-run evidence still owed. The three are pinned in `src/runtime/hook/addresses.h` (section
-"Level-load state the join hold reads") and in `tools/hook_identity_manifest.json`. Nothing hooks them yet.
+inferred, and the live run that tested its prediction. The three are pinned in `src/runtime/hook/addresses.h` (section
+"Level-load state the join hold reads") and in `tools/hook_identity_manifest.json`. With `network.join_hold_ms` above 0 on a dedicated server, `src/runtime/server/join_hold.cpp`
+detours two of them (`LoadLevel` and `EnableGameSpaces`); `Enable` is validated and never hooked. With the key at 0, the default, nothing is hooked.
 
 The binary is `echovr.exe`, sha256 `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043`, 35397120
 bytes, image base 0x140000000. The ReVault `echovr` project holds the same file. Addresses here are VAs. `addresses.h`
 stores RVAs, the form of its neighbours; the manifest stores VAs.
 
 Tags on the chain: **[R]** read in ReVault decompilation or bytes; **[I]** inferred, with the basis given; **[N]** not read.
+
+## The hold
+
+`network.join_hold_ms` (config.yaml, section `network`) is the longest wait, in milliseconds. 0, the default, is off: no hook is
+installed and every accept is forwarded at once. A value from 1 to 499 is raised to 500 and one above 15000 is lowered to it, each with a
+Warning; text that is not a whole number is off with a Warning. A client never installs it.
+
+What is held is the server's forward of the service's accept (`LobbyAcceptPlayersSuccessV2`, `kLobbyEntrantsAccept` in
+`src/runtime/server/gameserver_callbacks.cpp`): a copy of the encoded bytes is queued with its arrival time and no game function is
+patched. The failure message is not held. Accepts go to the game in arrival order, and once one is queued every later one queues behind it.
+
+The gate (`src/runtime/server/join_hold_rules.h`, `Gate`):
+
+- A session create arms it, expecting a load. A `LoadLevel` entry counts a load in flight and closes it; a `LoadLevel` exit counts it done.
+- An `EnableGameSpaces` return opens it only when no load is in flight and a load was seen since the arm, so a return left over from the
+  lobby cannot open it during the session's own load. It then stays closed for 200 ms after the last activity (`kSettleMs`).
+- At `join_hold_ms` after the front accept arrived, everything is released anyway (Warning `reason=timeout`) and the gate disarms: it fails
+  open, and it also ends a load count stuck by a `LoadLevel` that never returned.
+- The service's `CODE_ENDED`, `EndServerSession` and the next session create drop what is held (Warning `dropped=<n>`). A reconnect's
+  `EndSession` does not.
+
+A session whose levels are already loaded calls no `LoadLevel`; its accepts wait for the timeout.
+
+Both prologues are checked before either detour goes in. A mismatch on either logs `join hold not armed ... reason=prologue_mismatch`
+(Warning, expected and actual bytes), attaches nothing and leaves the game untouched. If a detour then fails to attach after its prologue
+matched (`reason=detour_failed`), the detour that did go in is removed again (`PatchRetire`: the record in HookGuard first, then
+`MH_RemoveHook`, which writes the game's bytes back) and logs `join hold hook removed` (Info). If that removal fails, the Warning
+`join hold hook NOT removed` says the detour stays installed: it only forwards to the game's own function and feeds a gate no one
+uses (`g_active` is false), so the game behaves as stock, but its bytes are hooked. Either way the hold is not armed and accepts
+are forwarded at once. This is not `ServerFatal`: the hold is optional.
+
+Per accept, the `EnableGameSpaces` return and each release, `[NEVR.GAMESERVER] join hold ...` lines carry counts and the session id.
+A release logs `released accept` only when the accept was handed to the game. With no broadcaster or no send function it logs the
+Warning `dropped accept` instead, with the entrant count, and nothing was delivered.
 
 ## The three functions
 
@@ -51,7 +86,7 @@ The name in row 3 rests on structure, not on a PC symbol. The offsets (NetGame+0
 
 - **[I] Game+0x1F10 counts the in-flight load fibers, and reaches zero only after the last Finished loading level line.** The basis is the gate in `CR15NetGame::Update` (step 4) and the insert at step 6. The code that removes fibers from the array is [N]. `addresses.h` (`GAME_DEFER_COUNT_OFFSET`) says the entries' identity is not established; step 6 reads them as init fibers. This inference governs where the Finished lines fall.
 - **[I] The state-9 switch line comes after the last Finished line, and the Enabling lines come after the switch.** The Enabling lines come from `Enable`, which `EnableGameSpace` calls from `EnableGameSpaces` in the queue after the switch (steps 9 to 11).
-- **[I] The key lookup and bit 7.** Only an entry whose key matches the gamespace's value at +0x58, and whose object has bit 7 set at +0xC40, is enabled. The live run below may test this; the other causes are listed under Prediction.
+- **[I] The key lookup and bit 7.** Only an entry whose key matches the gamespace's value at +0x58, and whose object has bit 7 set at +0xC40, is enabled. The live run below does not test this: it checks the order of the server's log lines (see Prediction), not which `Enable` call took each level.
 - **[I] The names.** Row 3's name is the Quest symbol carried over by the structural match. Row 2's name is a reconstruction at confidence M. Row 1's name is ReVault's imported record, which the engine notes in `docs/engine/asset-system.md` also use.
 
 ## Not read
@@ -71,6 +106,10 @@ The name in row 3 rests on structure, not on a PC symbol. The offsets (NetGame+0
 - How the matchmaker or ServerDB session start reaches `LobbyJoinAcceptedCB`. `src/runtime/server` was not traced past `BeginMultiplayerLobby`.
 - Whether a dedicated server reaches `WaitOnLevelLoads` (0x140128B90) with game flag bit 1 set, through vslot 43 (0x140128590).
 - The patch code that `PatchEnableServer` uses to write the flag bits (step 2).
+- Whether a `longjmp` out of `LoadLevel` (the game's crash recovery) can leave the gate's load count above zero. The detour counts the exit
+  after the original returns, so such a load is never counted done. The count stays up, and a later session's accepts wait for the
+  timeout (`join_hold_ms`) before they are released, one timeout late; the timeout resets the count and disarms the gate, and the next
+  session create arms it again. No live run has produced this case [I].
 
 ## Candidates not used
 
@@ -83,23 +122,41 @@ Two other functions were considered for the level-set marker and rejected:
 
 The dynamic-level loader at 0x1404FD650 logs "[LEVELLOAD] Loading dynamic level" and is outside this join hold.
 
-## Live-run row owed
+## Live-run row
 
-Not run. One dedicated-server run log, from a copy of the install, must show these lines in this order:
+One dedicated-server run of a build without the join hold, so its order is the game's own. The server log is not kept in the tree; the lines below are quoted as the run wrote them, in order.
 
-1. one or more `[LEVELLOAD] Finished loading level '<level>' in <n> ms` lines;
-2. `[NETGAME] NetGame switching state (from loading level, to in game)`;
-3. one or more `[LEVELLOAD] Enabling level '<level>'` lines.
+**Build.** A clone of a commit with no `src/runtime/server/join_hold.cpp`, with a local tag `v6.17.0` and the forced release environment (`GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v6.17.0`), preset `mingw-plugin-dev`. The runtime's build literal carries the forced version `6.17.0`; the host carries `NEVR-HOST-BUILD dev`.
 
-The full run is expected to show, before these, `[NETGAME] LobbyJoinAcceptedCB`, `[NETGAME] Loading map '<level>'`, a switch to loading level, and a `Loading level` line before each `Finished` line.
+**Route.** The server ran from a game copy, not from the install, headless (`DISPLAY` and `WAYLAND_DISPLAY` unset), with the stored server sign-in. Its `config.yaml` set `network.regions` to a dev region (not `default`, so public matchmaking never offers it) and put the `novalidation` tag in the query of `services.serverdb_uri`. The token route keeps that query and appends `regions=`, so the server logged `Connecting to ServerDB at <socket host>/nevr?tags=novalidation&regions=<dev region>`; the tag makes the service skip its reachability probe. `registration successful` followed. A session came from the service's allocate RPC (`echo_arena_private`, level `mpl_arena_a`, the dev region), and it started only when a client joined it: a second game copy ran `echovr.exe -windowed -mp -lobbyid <lobby id>` on a headless display. The allocation alone started nothing; the client's join started the session. The pattern is in AGENTS.md ("System test for runtime and auth changes").
 
-Prediction, by what each deviation tests:
+**The tag notifies people outside the run.** A registration that carries `novalidation` skips the reachability probe, and the game service's registration path then does two things it does not do otherwise, in the nakama server's `server/evr_pipeline_gameserver.go`: it sends an audit message to each guild group the registering account belongs to, and it sends a direct message to that account's Discord user, which says the registration was for testing and that the server was not checked for connectivity. A dev run of the pattern above therefore notifies those accounts and the guilds, each time the server registers.
 
-- Line 2 follows the last line 1 and comes before line 3. This is the expected order.
-- A Finished line after line 2 means the Game+0x1F10 inference is wrong. That inference governs where the Finished lines fall.
-- An Enabling line before line 2 is not explained by the chain as written. Either a caller of `EnableGameSpace` other than `EnableGameSpaces` ran `Enable` before the switch, or `BeginMultiplayer` ran its call with flag bit 2 clear (the step-2 reading [I]; the object its branch reads was not identified [N]). Neither is excluded by this run.
-- A run with fewer Enabling lines than Finished lines has several possible causes: the key lookup missed for some levels, bit 7 was clear, a call after `Enable` did not return (the path of `OutputError` for a result other than 0 or -1 was not read, nor were fcn.14011F5F0, fcn.1404FA170, the vslot 0x378 target and fcn.1404E8AC0), which stops the walk before the gamespaces after it, the log was taken mid-walk, or a Finished line came from a load whose gamespace is not in the NetGame+0x2B10 chain (that mapping is not established [I]). The log alone does not separate them.
-- A run with no Enabling line after line 2 means either the queued `EnableGameSpaces` did not run before the log was taken, or it ran and logged nothing. The log cannot tell those apart, since `EnableGameSpaces` writes no line of its own. This tests the queue ordering [I].
+**The server log, in order.** The lines marked 1, 2 and 3 are the three the prediction below is about: line 1 is a `[LEVELLOAD] Finished loading level` line, line 2 the `NetGame switching state (from loading level, to in game)` line, and line 3 a `[LEVELLOAD] Enabling level` line.
+
+| Text | Note |
+| --- | --- |
+| `[LEVELLOAD] Finished loading level 'r14_glb_global_mp' in 2155 ms` | at boot |
+| `[NEVR.GAMESERVER] session starting session_id=<id>` | |
+| `[NETGAME] Session Started`, `[NETGAME] Loading map 'mpl_arena_a'`, `[NETGAME] NetGame switching state (from lobby, to loading level)` | |
+| `[LEVELLOAD] Loading level 'mnu_master_mp_ingame'` | |
+| `[LEVELLOAD] Finished loading level 'mnu_master_mp_ingame' in 57 ms` | line 1 |
+| `[LEVELLOAD] Loading level 'mpl_arena_a'` | |
+| `[NSLOBBY] pending connection from <client address>`, `[NETGAME] Entrant <xpid> added to slot 0` | |
+| `[LEVELLOAD] Finished loading level 'mpl_arena_a' in 710 ms` | line 1 |
+| `[NETGAME] NetGame switching state (from loading level, to in game)` | line 2 |
+| `[LEVELLOAD] Disabling level 'mnu_master'` | |
+| `[LEVELLOAD] Enabling level 'mpl_arena_a'`, `[LEVELLOAD] Enabling level 'r14_glb_global_mp'` | line 3 |
+
+The session ended with `Destroy Peer 0 <client address> (communication timeout)`. The client took 67759 ms to load `mpl_arena_a` under Wine, and the server dropped it for the communication timeout 15 s after the client reached in game (the client's `NetGame switching state (from ready for game, to in game)` line).
+
+**Prediction.** For a session that loads its levels, every line 1 comes before line 2, and line 2 comes before every line 3. A Finished line after line 2, or an Enabling line before it, contradicts it. This is consistent with the Game+0x1F10 inference and the queue ordering. It says nothing about a session whose levels are already loaded. The run above holds it: line 2 follows the last line 1 and comes before line 3, no Finished line follows line 2, and no Enabling line precedes it.
+
+**Observed, and not established.**
+
+- `LobbyJoinAcceptedCB` and the switch to loading level from it are in the client's log, not the server's. The client logged `[NETGAME] LobbyJoinAcceptedCB`, `NetGame switching state (from lobby, to server loading)`, `Loading map 'mpl_arena_a'` and `NetGame switching state (from server loading, to loading level)`. The server's log has no `LobbyJoinAcceptedCB` line, and it reaches loading level from `Session Started`. So step 3 of the chain is the client's path; the server's route to `LoadMap` from a session start is not read [N].
+- The client's own sequence is `Finished`, then `(from loading level, to ready for game)`, `(from ready for game, to in game)`, then `Enabling`. Its state before in game is `ready for game`, not `loading level`.
+- The two `Finished` lines and the two `Enabling` lines name different levels. `mnu_master_mp_ingame` finished and was not enabled in this session; `r14_glb_global_mp` was enabled after it finished at boot. Equal counts did not mean each finished level was enabled. Which `Enable` call took each level, and why `mnu_master_mp_ingame` was not enabled (the key lookup, bit 7, or `Disabling level 'mnu_master'`), is not established [I].
 
 ## Verification
 

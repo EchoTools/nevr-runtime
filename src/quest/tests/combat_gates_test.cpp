@@ -1,5 +1,5 @@
 // Host test of combat_gates.h (#2180): which of the three headset gates (permissions, bot body, menu) a run installs, from the `combat:` keys
-// gate_perm, gate_bots and gate_link. Moved from the q15t plugin's combat_gates_test: a key set to false replaces the build option and
+// gate_perm, gate_bots and gate_link. The assertions are the combat plugin's combat_gates_test (#1591): a key set to false replaces the build option and
 // the kill file as the thing that turns a gate off, so a fixture's "not built" and "off file" are one input here (the reason token is off_config);
 // and no gate depends on another key. The plugin's assertion that levelname off turns the bot gate off is in headset_gates_test (TheBotGateNeedsLevelnameInstalledInTheGame), where it is the game's state that decides.
 //

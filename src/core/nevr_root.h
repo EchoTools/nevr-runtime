@@ -97,7 +97,8 @@ std::basic_string<C> PluginsDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kPlugins);
 }
 
-// Content packs (docs/reference/content-packs.md): <root>\content\<id>\ is one pack's folder, and the serving plugin's own.
+// Content packs (docs/reference/content-packs.md): <root>\content\<id>\ is one pack's folder,
+// which the runtime serves itself.
 template <typename C>
 std::basic_string<C> ContentDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kContent);

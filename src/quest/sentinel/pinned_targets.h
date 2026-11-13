@@ -1238,7 +1238,7 @@ inline GotTarget LibR15VkAllocate() {
 inline constexpr PinnedFunction kVkAllocate = {
     "_ZN10NRadEngine16CGRawInterfaceVK8AllocateE20VkMemoryRequirementsjjjjRNS_15SGAllocatedBaseE", 0x188813c,
     {0xd10383ff, 0xa9086ffc, 0xa90967fa, 0xa90a5ff8}, 4};
-// NRadEngine::CErrMsg::CreateAndAddError(const char* file, unsigned line, CSymbol64 code, CSymbol64 message, ...), exported at
+// NRadEngine::CErrMsg::CreateAndAddError(const char* file, unsigned line, CSymbol64 code, const char* format, ...), exported at
 // 0x11ce4dc: the error a failed Allocate returns (0x18884a8: x0 the source file, w1 the line, x2 the 64-bit word at 0x2b2f1f0,
 // x3 the message text, then `bl` to its PLT stub). Called at its link address plus the image base, never written.
 inline constexpr PinnedFunction kErrMsgCreateAndAddError = {"_ZN10NRadEngine7CErrMsg17CreateAndAddErrorEPKcjNS_9CSymbol64ES2_z",
@@ -1380,6 +1380,47 @@ inline constexpr PinnedCode kEquipmentRefireCode[] = {
     {"CR15NetGame::UserId: entry and actor key", 0x125a9b8ULL, {0xd10103ff, 0xa90253f5, 0xa9037bf3, 0xa9000be1, 0x7941b808, 0}, 5},
 };
 inline constexpr std::size_t kEquipmentRefireCodeCount = sizeof(kEquipmentRefireCode) / sizeof(kEquipmentRefireCode[0]);
+
+// The new-unlocks clear that must survive an update in flight (#2410, combat/new_unlocks_clear.h; the rules are
+// runtime/patch/new_unlocks_clear_rules.h, whose kQuestAddresses holds the same two vaddrs). CR15NetGame::RemoveAllNewlyUnlockedItems is
+// the game's "clear all new unlocks" (ELF vaddr 0x1297114, the disassembly lists it 0x100000 higher), void(net game x0): it returns at once when
+// the count at net game + 0x51c50 is 0 (its first words build that offset: mov w8,#0x1c50; movk w8,#5,lsl #16), else it zeroes the count, clears the
+// client profile's "newunlocks" key and sets the user's dirty bit (CNSUser::SetDirty). `readelf -rW` on the store file names it in exactly two
+// relocations, the JUMP_SLOT a direct call goes through (0x36ccac0) and the GLOB_DAT word the script nodes load (0x3709e08); the other data
+// references ReVault lists for it are not slots (instruction bytes at disassembly 0x2432f00, eh_frame words at 0x33544b4 and 0x3436a50), and both
+// slots are hooked. CJson::Empty (0xfa82f8, `_ZNK10NRadEngine5CJson5EmptyEv`) is not hooked: the module calls it by base + address as the game's
+// own test for "an update was sent and is not yet acknowledged" (the buffer at user + 0x28 is not empty), the test SaveClientProfileChanges makes;
+// it returns nonzero when the json has nothing in it.
+using NewUnlocksClearSig = void(void* net_game);
+template <int Word>
+struct LibR15NewUnlocksClearTag {};
+// Word 0 JUMP_SLOT, 1 GLOB_DAT. One thunk per hooked word (callback_thunk.h).
+template <int Word>
+using LibR15NewUnlocksClearThunk = CallbackThunk<LibR15NewUnlocksClearTag<Word>, NewUnlocksClearSig>;
+using JsonEmptySig = int(void* json);
+
+struct NewUnlocksClearPin {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::uint64_t jumpSlot;
+  std::uint64_t globDatSlot;
+};
+inline constexpr NewUnlocksClearPin kNewUnlocksClear = {"_ZN10NRadEngine8NRadGame11CR15NetGame27RemoveAllNewlyUnlockedItemsEv", 0x1297114ULL,
+                                                         0x36ccac0ULL, 0x3709e08ULL};
+inline constexpr std::uint64_t kJsonEmptyVaddr = 0xfa82f8ULL;
+
+// The clear through its JUMP_SLOT or its GLOB_DAT word.
+inline GotTarget LibR15NewUnlocksClear(RelocKind kind) {
+  return {kLibR15, kNewUnlocksClear.symbol, kind, LibR15PatchedBuildId(),
+          kind == RelocKind::kJumpSlot ? kNewUnlocksClear.jumpSlot : kNewUnlocksClear.globDatSlot};
+}
+
+// The words the wrapper and the call were derived from, read from the store file before any slot is touched.
+inline constexpr PinnedCode kNewUnlocksClearCode[] = {
+    {"RemoveAllNewlyUnlockedItems: prologue and count test", 0x1297114ULL, {0xa9bf7bf3, 0x52838a08, 0x72a000a8, 0x8b080008, 0xf9400109, 0xb4000329}, 6},
+    {"CJson::Empty: prologue and size test", 0xfa82f8ULL, {0xf81f0ffe, 0xb000dcc1, 0x9126b421, 0x97fdb343, 0xf100001f, 0x1a9f17e0}, 6},
+};
+inline constexpr std::size_t kNewUnlocksClearCodeCount = sizeof(kNewUnlocksClearCode) / sizeof(kNewUnlocksClearCode[0]);
 
 
 }  // namespace sentinel::pinned

@@ -7,29 +7,31 @@
  * count changes later; re-armed when the net game leaves "in game". Bots exist only in Practice AI, so "bot count non-zero in a combat match" is the
  * offline-practice condition: arena, lobby and online matches have no agents and nothing happens.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only; with `combat::Active()` false the install step never runs.
+ * Which APKs (ADR 0046 rule 5). The combat variants only; with `combat::Active()` false the install step never runs.
  *
  * Switches. `combat.aibots` in config.yaml, on unless the file says false (the reference build's aibots is on in its shipped build, afk_aibots.cpp:19,145;
- * the q15t plugin had it on). No headset log shows the module calling EnableScenario yet (the headset runs that loaded the plugin's copy hold its start
- * line and one `idle` line, never an enable), so its headset row requires `combat_aibots_enable`. `combat.aibots_scenario` is the scenario it enables: a number 0-6 or one of patrol, randomattack (the default), weaponattack,
+ * the default is on too). No headset log shows the module calling EnableScenario yet, so its headset row requires `combat_aibots_enable`. `combat.aibots_scenario` is the scenario it enables: a number 0-6 or one of patrol, randomattack (the default), weaponattack,
  * spike, aithrowtest, aionevone, aibdebugarena; `off` is the module off. It is read once, at install. A word that is none of these keeps the default
- * with a Warning (`combat_aibots_scenario`) that does not name the word. In a development build the plugin's request file `<data dir>/aibots.req`
+ * with a Warning (`combat_aibots_scenario`) that does not name the word. In a development build the request file `<data dir>/aibots.req`
  * (`scenario=<0-6|name|off> delay=<seconds>`) is also polled at 1 Hz and overrides both; in a release build it is not read, and one found is a
  * Warning (`combat_aibots_legacy_switch`) naming the key.
  *
- * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle line, no scan); and the call itself is refused while an Echo Arena level is
- * loaded (combat_level.h `Scan`: `echoArena`), whatever the game's flags say, with one Info line per match (`combat_aibots_scoped_out`). The
- * combat-map flag the plugin logged beside the call (`combat_map`) is now `combat_level.h`'s detector, not a copy of its level list.
- * KNOWN-WRONG #2168: the scope asks `combat_level` directly, once per call; it moves to combat_scope (F19, #2246) when that lands.
+ * Arena (same APK). The game's combat flag is 0 in an arena match, so the look ends after its four reads whatever the length of the match (no scenarios read, no idle
+ * line, no read of the level); and the call itself is refused while the combat level answer does not rule out an Echo Arena level (combat_scope.h `SeenEchoArena`:
+ * its last look saw one, or the record is not fresh: it fails closed; the module's tick runs in the same loop right after the scope row's refresh, so its
+ * record is at most 250 ms old, and a stopped tick runs neither), whatever the game's flags say, with one Info line per
+ * match (`combat_aibots_scoped_out`, `reason` echo_arena or no_fresh_look). The module is one of the scope row's readers and refuses its install with
+ * `scope_not_live` when the answer cannot change (a scenario that is off in a release build is the module off and wins). The combat-map flag logged
+ * beside the call (`combat_map`) is the combat-map bit of the same look record (fresh: a stale record refuses the call), not a copy of its level list.
  *
  * Frequency (ADR 0038). With the switch off nothing is registered: no frame runs any of this. With it on, the tick callback runs once per rendered
  * frame and does one clock read and one compare; the look runs at 4 Hz and is four process_vm_readv reads (the net game, its back pointer and
- * state, the matchiscombat byte) in an arena match, where it stops there; with bots in a combat match it is six. The level scan runs only at the
- * moment of a call. Not measured on a headset; aibots_test prints the host cost of a look.
+ * state, the matchiscombat byte) in an arena match, where it stops there; with bots in a combat match it is six. The module reads no level itself: at the
+ * moment of a call it reads the combat level answer (a sequence-count read and a clock read). Not measured on a headset; aibots_test prints the host cost of a look.
  *
  * Origin. The reference build's aibots in kotorvr's echoquest-combat repository (commit c5a67e8): the header runtime/native/afkxr/afk_aibots.cpp:1-27,
- * the constants :52-62, the request protocol (ParseScenario :158, ReadRequest :167) and afk_aibots_tick :306-346. The q15t plugin reconstructed it
- * (`aibots.cpp`); this file moves that reconstruction into the runtime. Not ported: the watcher thread and its vptr scan for the CR15Game (the game
+ * the constants :52-62, the request protocol (ParseScenario :158, ReadRequest :167) and afk_aibots_tick :306-346. The combat plugin imported in #1591
+ * reconstructed it (`aibots.cpp`); this file is that reconstruction. Not ported: the watcher thread and its vptr scan for the CR15Game (the game
  * tick passes it), the debug dump and aibots.done.
  *
  * Lines (sentinel log):
@@ -40,7 +42,7 @@
  *   agents    {"event":"combat_aibots_agents","bots":<n>,"msg":".."}   Warning: near the table size
  *   enable    {"event":"combat_aibots_enable","scenario_name":"..","scenario":<n>,"bots":<n>,"case":"first call|bot count changed|replacing one already set",
  *              "scenario_object":"set|not_set","host":"yes|no|unknown","combat_map":<0|1>,"delay_ms":<n>}
- *   scoped    {"event":"combat_aibots_scoped_out","bots":<n>,"msg":".."}   an Echo Arena level is loaded; EnableScenario was not called
+ *   scoped    {"event":"combat_aibots_scoped_out","bots":<n>,"reason":"echo_arena|no_fresh_look","msg":".."}   an Echo Arena level is not ruled out; EnableScenario was not called
  *   rearmed   {"event":"combat_aibots_rearmed","msg":".."}   left the match
  *   idle      {"event":"combat_aibots_idle","matchiscombat":<n>,"scenarios_object":"yes|no","scenario":<n>,"bots":<n>,"read_failed":<0|1>}   10 s in a combat match (the game's combat flag set), no call; never in an arena match
  *   legacy    {"event":"combat_aibots_legacy_switch","file":"aibots.req","replaced_by":"combat.aibots_scenario","msg":".."}   Warning

@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "activation.h"
+#include "quest/integration/peer_timeout_log.h"
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -389,6 +390,17 @@ ActionResult LoginTitleAction() noexcept {
   return Staged("login_title_hook_installed", {Settle::kGiveUp, sentinel::GotStatusName(status)});
 }
 
+// The peer timeout log (integration/peer_timeout_log.h): libr15's DestroyPeer slot, once libr15 is loaded. A slot that does not
+// match its pins is refused for good; a module that is not loaded yet is retried at the next dlopen.
+ActionResult PeerTimeoutLogAction() noexcept {
+  switch (nevr_quest::integration::peer_timeout_log::Install()) {
+    case sentinel::GotStatus::kOk: return Staged("peer_timeout_log_installed", {Settle::kDone, "installed"});
+    case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
+    default: break;
+  }
+  return Staged("peer_timeout_log_installed", {Settle::kGiveUp, "refused"});
+}
+
 // The normal plugin pass (#438): the first post-load call is its moment. The loader records every outcome itself and
 // never throws; the pass settles whatever it did.
 ActionResult PluginsAction() noexcept {
@@ -453,7 +465,7 @@ class ProductionSteps final : public Steps {
                          {"server_key", nevr_quest::SourceName(cfg.serverKey.source)}});
     R().socialWanted = cfg.effective.social;
     // The combat section is reported once, as read (#2171), then the gate (#2170) makes its answer: the folded combat modules run in the
-    // q15t and combat variants only; `combat.force` is read here.
+    // combat variants only; `combat.force` is read here.
     nevr_quest::integration::LogCombatConfig(cfg.combat);
     nevr_quest::integration::ResolveCombatActive(cfg.combat.force.on);
     return cfg;
@@ -596,6 +608,18 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallMatchTags() override {
+    const bool ok = nevr_quest::integration::InstallMatchTagsHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallEquipRefire() override {
+    const bool ok = nevr_quest::integration::InstallEquipRefireHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallVkExtWindow() override {
     const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -612,7 +636,10 @@ class ProductionSteps final : public Steps {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
-    if (ok) nevr_quest::cargo::Start(sentinel::ActiveConfig().assets);
+    // Not in the whole-game mode: the data step's first-run worker (cargo::FirstRun, #2398) is then the one writer of the store, and a second
+    // fetch from here would append to the same store files with no lock between the two.
+    const nevr_quest::AssetsChoice& assets = sentinel::ActiveConfig().assets;
+    if (ok && !assets.wholeGame) nevr_quest::cargo::Start(assets);
     return ok;
   }
 
@@ -791,6 +818,7 @@ class ProductionSteps final : public Steps {
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
     if (login) actions.loginTitle = &LoginTitleAction;  // the title is the prompt's second half: wanted with the login
+    actions.peerTimeoutLog = &PeerTimeoutLogAction;  // non-combat: every build logs peer removals
     if (plugins) actions.plugins = &PluginsAction;
     if (combat) actions.combat = &CombatAction;  // after the plugin pass has returned, on the thread that ran it (post_load.h)
     SetPostLoadActions(actions);

@@ -123,6 +123,7 @@ using EnumFn = std::int32_t (*)(void* physical_device, const char* layer, std::u
 
 constexpr const char* kGetInstanceProcAddr = "vkGetInstanceProcAddr";
 constexpr const char* kEnumerateDeviceExtensions = "vkEnumerateDeviceExtensionProperties";
+constexpr const char* kGetDeviceProcAddr = "vkGetDeviceProcAddr";
 constexpr std::size_t kMovedChars = 300;
 
 // The driver's functions as the game's FindMethod and vkGetInstanceProcAddr calls returned them.
@@ -251,15 +252,73 @@ std::int32_t WrappedEnumerate(void* physical_device, const char* layer, std::uin
   return result;
 }
 
-// vkGetInstanceProcAddr as the game calls it: only the one name is replaced.
+// ---- device functions another component wraps ---------------------------------------------------------------------------
+
+struct DeviceRequest {
+  const char* name;
+  ProcFn wrapper;
+  std::atomic<void*>* realOut;
+  const char* requester;
+  std::atomic<bool> said;  // its vk_ext_window_device_function line is written
+};
+DeviceRequest g_requests[kMaxDeviceRequests];
+std::atomic<std::size_t> g_requestCount{0};
+std::atomic<bool> g_sealed{false};  // the game has asked for vkGetDeviceProcAddr
+std::atomic<void*> g_realGdpa{nullptr};
+std::atomic<void*> g_lookupInstance{nullptr};
+
+// vkGetDeviceProcAddr as the game calls it, handed out only when a request is registered: a requested name gets the requester's
+// wrapper, after the driver's function is published where the request said; every other name gets the driver's function.
+VoidFn WrappedGetDeviceProcAddr(void* device, const char* name) {
+  const GipaFn real = reinterpret_cast<GipaFn>(g_realGdpa.load(std::memory_order_acquire));
+  if (real == nullptr) return nullptr;  // unreachable: the wrapper is handed out after the store
+  const VoidFn found = real(device, name);
+  if (found == nullptr || name == nullptr) return found;
+  const std::size_t count = g_requestCount.load(std::memory_order_acquire);
+  for (std::size_t i = 0; i < count; ++i) {
+    DeviceRequest& r = g_requests[i];
+    if (std::strcmp(name, r.name) != 0) continue;
+    r.realOut->store(reinterpret_cast<void*>(found), std::memory_order_release);
+    if (!r.said.exchange(true, std::memory_order_acq_rel)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "vk_ext_window_device_function",
+                          {{"name", r.name},
+                           {"requester", r.requester},
+                           {"msg", "the game's lookup of this device function gets the requester's wrapper, which calls the driver's"}});
+    }
+    return r.wrapper;
+  }
+  return found;
+}
+
+// The game asked for vkGetDeviceProcAddr: the driver's, or the wrapper when a request is registered. Closes the request table.
+VoidFn DeviceLookup(void* instance, VoidFn found) {
+  g_lookupInstance.store(instance, std::memory_order_release);
+  g_realGdpa.store(reinterpret_cast<void*>(found), std::memory_order_release);
+  const bool first = !g_sealed.exchange(true, std::memory_order_acq_rel);
+  const std::size_t requests = g_requestCount.load(std::memory_order_acquire);
+  if (first) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "vk_ext_window_device_lookup",
+                        {{"result", requests != 0 ? "wrapped" : "real"},
+                         {"requests", requests},
+                         {"msg", requests != 0 ? "the game's vkGetDeviceProcAddr is the window's wrapper: the requested device functions "
+                                                 "are the requesters' wrappers, every other name is the driver's"
+                                               : "no device function is requested: the game gets the driver's vkGetDeviceProcAddr"}});
+  }
+  return requests != 0 ? reinterpret_cast<VoidFn>(&WrappedGetDeviceProcAddr) : found;
+}
+
+// vkGetInstanceProcAddr as the game calls it: vkEnumerateDeviceExtensionProperties is replaced, and vkGetDeviceProcAddr when a device
+// function is requested.
 VoidFn WrappedGetInstanceProcAddr(void* instance, const char* name) {
   const GipaFn real = reinterpret_cast<GipaFn>(g_realGipa.load(std::memory_order_acquire));
   if (real == nullptr) return nullptr;
   const VoidFn found = real(instance, name);
-  if (found != nullptr && name != nullptr && std::strcmp(name, kEnumerateDeviceExtensions) == 0) {
+  if (found == nullptr || name == nullptr) return found;
+  if (std::strcmp(name, kEnumerateDeviceExtensions) == 0) {
     g_realEnumerate.store(reinterpret_cast<void*>(found), std::memory_order_release);
     return reinterpret_cast<VoidFn>(&WrappedEnumerate);
   }
+  if (std::strcmp(name, kGetDeviceProcAddr) == 0) return DeviceLookup(instance, found);
   return found;
 }
 
@@ -303,6 +362,42 @@ bool Install() noexcept {
   return ok;
 }
 
+const char* RequestStatusName(RequestStatus status) noexcept {
+  switch (status) {
+    case RequestStatus::kOk: return "ok";
+    case RequestStatus::kNull: return "null";
+    case RequestStatus::kFull: return "full";
+    case RequestStatus::kDuplicate: return "duplicate";
+    case RequestStatus::kSealed: return "sealed";
+  }
+  return "unknown";
+}
+
+RequestStatus RequestDeviceFunction(const char* name, ProcFn wrapper, std::atomic<void*>* realOut, const char* requester) noexcept {
+  if (name == nullptr || wrapper == nullptr || realOut == nullptr || requester == nullptr) return RequestStatus::kNull;
+  if (g_sealed.load(std::memory_order_acquire)) return RequestStatus::kSealed;
+  const std::size_t count = g_requestCount.load(std::memory_order_acquire);
+  for (std::size_t i = 0; i < count; ++i) {
+    const DeviceRequest& r = g_requests[i];
+    if (std::strcmp(r.name, name) != 0) continue;
+    // The same request again (an install step run twice) is that request; another wrapper for the name is not.
+    return r.wrapper == wrapper && r.realOut == realOut ? RequestStatus::kOk : RequestStatus::kDuplicate;
+  }
+  if (count == kMaxDeviceRequests) return RequestStatus::kFull;
+  DeviceRequest& r = g_requests[count];
+  r.name = name;
+  r.wrapper = wrapper;
+  r.realOut = realOut;
+  r.requester = requester;
+  r.said.store(false, std::memory_order_relaxed);
+  g_requestCount.store(count + 1, std::memory_order_release);
+  return RequestStatus::kOk;
+}
+
+ProcFn RealInstanceProcAddr() noexcept { return reinterpret_cast<ProcFn>(g_realGipa.load(std::memory_order_acquire)); }
+ProcFn RealDeviceProcAddr() noexcept { return reinterpret_cast<ProcFn>(g_realGdpa.load(std::memory_order_acquire)); }
+void* LookupInstance() noexcept { return g_lookupInstance.load(std::memory_order_acquire); }
+
 void ArmForTest() noexcept { ArmAll(); }
 
 void ResetForTest() noexcept {
@@ -310,6 +405,10 @@ void ResetForTest() noexcept {
   g_realEnumerate.store(nullptr, std::memory_order_relaxed);
   g_calls.store(0, std::memory_order_relaxed);
   g_busy.clear(std::memory_order_relaxed);
+  g_requestCount.store(0, std::memory_order_relaxed);
+  g_sealed.store(false, std::memory_order_relaxed);
+  g_realGdpa.store(nullptr, std::memory_order_relaxed);
+  g_lookupInstance.store(nullptr, std::memory_order_relaxed);
 }
 
 }  // namespace nevr_quest::vk_window

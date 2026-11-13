@@ -110,6 +110,8 @@ add_library(ovrplatformloader SHARED
   ../../core/crash_report.cpp
   ../../core/resource_shadow.cpp
   ../../core/cargo_resolver.cpp
+  ../../core/cargo_limits.cpp
+  ../../core/cargo_validate.cpp
   ../../core/cargo_manifest.cpp
   ../../core/cargo_plan.cpp
   ../../core/cargo_store.cpp
@@ -135,7 +137,7 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cargo nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cargo nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache breakpad_client log dl)
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see
@@ -143,7 +145,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
 # ec_page.cpp is on the hook path (the EC client's handlers reach the page through it): built without exceptions, as the combat code is.
-set_source_files_properties(entry.cpp ec_page.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp ../../core/resource_shadow.cpp ../../core/cargo_resolver.cpp ../../core/cargo_manifest.cpp ../../core/cargo_plan.cpp ../../core/cargo_store.cpp ../../core/cargo_run.cpp ../cargo/posix_env.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp irradiance_default_hook.cpp irradiance_default_install.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp vk_alloc_check.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp ec_page.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp ../../core/resource_shadow.cpp ../../core/cargo_resolver.cpp ../../core/cargo_limits.cpp ../../core/cargo_validate.cpp ../../core/cargo_manifest.cpp ../../core/cargo_plan.cpp ../../core/cargo_store.cpp ../../core/cargo_run.cpp ../cargo/posix_env.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp irradiance_default_hook.cpp irradiance_default_install.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp vk_alloc_check.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object
@@ -166,14 +168,14 @@ target_link_libraries(nevr_quest_invite_join PUBLIC nevr_quest_got_hook nlohmann
 # (tests/quest TestExportAllowlist). In an archive, --exclude-libs (above) keeps it out of the export set, the same as
 # nevr_quest_data_wiring and nevr_quest_invite_join. The sources stay in the -fno-exceptions list above (a directory-scoped
 # source property, so it applies here), and the flags match their siblings.
-add_library(nevr_quest_cargo STATIC ../../core/cargo_run.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp)
+add_library(nevr_quest_cargo STATIC ../../core/cargo_run.cpp ../../core/cargo_prefetch.cpp ../cargo/cargo_service.cpp ../cargo/cargo_start.cpp)
 target_include_directories(nevr_quest_cargo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..
   ${CMAKE_BINARY_DIR})
 target_compile_options(nevr_quest_cargo PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
-target_link_libraries(nevr_quest_cargo PUBLIC nevr_quest_got_hook nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_quest_cargo PUBLIC nevr_quest_got_hook nlohmann_json::nlohmann_json zstd::libzstd)  # the manifest is one zstd frame (core/cargo_manifest.cpp)
 
 # The CSymbol64 name table the UI texture hook reads to tell a UI texture from a world texture: the merged PC and Quest
 # symbol sets, sorted by hash (src/runtime/log/symcache_data.cpp, generated by tools/symcache). It is data only; its

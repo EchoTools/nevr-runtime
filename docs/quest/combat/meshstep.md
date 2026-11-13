@@ -2,7 +2,7 @@
 
 Files: `src/quest/combat/meshstep.{h,cpp}`, `meshstep_targets.h`, `src/quest/tests/meshstep_test.cpp`, `src/quest/combat/mutants.d/meshstep.sh`.
 Switch: `combat.meshstep` in `config.yaml` (default `true`, as upstream's shipped build turns `--resource-table-step-1` on; the reconstruction below has not run on a headset, the plugin's copy having always refused). The plugin's `meshstep.off` is not read; one found in its data directory is a Warning
-(`combat_meshstep_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
+(`combat_meshstep_legacy_switch`) that names the key. Runs in the combat APKs only (`combat::Active()`).
 
 ## What the stock code does (store libr15, build ID b243509c; ELF vaddr = disassembly VA - 0x100000)
 

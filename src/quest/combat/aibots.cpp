@@ -13,7 +13,7 @@
 #include <cstring>
 
 #include "quest/combat/aibots_targets.h"
-#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
@@ -150,14 +150,20 @@ void Look(std::uintptr_t game, double now) noexcept {
     return;
   }
   if ((now - g_countSince) * 1000 < g_delayMs) return;
-  // An Echo Arena level that is loaded keeps the game's own scenario handling, whatever the net game's flags say (same APK as arena).
-  const level::Loaded loaded = level::Scan(game);
-  if (loaded.echoArena) {
+  // An Echo Arena level that may be loaded keeps the game's own scenario handling, whatever the net game's flags say (same APK as arena): the combat
+  // level answer (combat_scope.h `SeenEchoArena`), which also refuses when its last look is older than kStaleAfterMs or there is none (fails closed).
+  // One record of the last look decides, explains the refusal and gives the line's combat-map flag, so the three agree.
+  const scope::Look look = scope::LastLook();
+  if (scope::SeenEchoArena(look)) {
     g_scopedOut.fetch_add(1, std::memory_order_relaxed);
     if (!g_scopedSaid) {
       g_scopedSaid = true;
+      const bool sawFreshLook = look.fresh;  // fresh, so the refusal is an Echo Arena level the look saw
       sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_aibots_scoped_out",
-                          {{"bots", count}, {"msg", "an Echo Arena level is loaded, so EnableScenario was not called; the game keeps its own bots"}});
+                          {{"bots", count}, {"reason", sawFreshLook ? "echo_arena" : "no_fresh_look"},
+                           {"msg", sawFreshLook ? "an Echo Arena level is loaded, so EnableScenario was not called; the game keeps its own bots"
+                                         : "the combat level answer has no look younger than a second, so an Echo Arena level is not ruled out and "
+                                           "EnableScenario was not called; the game keeps its own bots"}});
     }
     return;
   }
@@ -175,7 +181,7 @@ void Look(std::uintptr_t game, double now) noexcept {
                        {"case", g_called ? "bot count changed" : had ? "replacing one already set" : "first call"},
                        {"scenario_object", has ? "set" : "not_set"},
                        {"host", !ok2 ? "unknown" : ((flags & 2) != 0 || (flags & 0x44) == 0x40) ? "yes" : "no"},
-                       {"combat_map", loaded.combatMap ? 1 : 0}, {"delay_ms", g_delayMs},
+                       {"combat_map", (look.bits & scope::kBitCombatMap) != 0 ? 1 : 0}, {"delay_ms", g_delayMs},
                        {"msg", "EnableScenario was called: the bots of this practice match get their behaviours"}});
   g_called = true;
   g_calledCount = count;
@@ -279,6 +285,11 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, SymbolLookup symbols, const
                          {"msg", "combat.aibots is false: practice AI bots stand still as the game has them"}});
     return {false, "off_config", true};
   }
+  // The call is made only when the combat level answer rules out an Echo Arena level: when that answer cannot change (the tick or the scope row's refresh
+  // is not installed) every call would be refused, so the module is not installed (combat_scope.h `Live`). A scenario that is off in a release build is
+  // the module off, decided in InstallResolved, and wins.
+  const bool scenarioOff = !switches.devBuild && switches.scenario != nullptr && ParseScenario(switches.scenario) == -1;
+  if (!scenarioOff && !scope::Live()) return Refused("scope_not_live", "");
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return Refused("module_not_loaded", "");
   char id[64] = {};

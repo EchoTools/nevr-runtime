@@ -5,7 +5,7 @@
 use crate::error::{Error, Result};
 use crate::util::{
     data_path_ok, hex, is_sha256_hex, pack_id_ok, pack_member_path_ok, pack_path_ok, pack_version_ok, path_ok, plugin_name_ok,
-    rel_path_ok, semver_ok, sha256_hex, stock_data_version_ok, utc_ok, write_atomic,
+    rel_path_ok, semver_cmp, semver_ok, sha256_hex, stock_data_version_ok, utc_ok, write_atomic,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use minisign_verify::{PublicKey, Signature};
@@ -343,9 +343,13 @@ pub fn find_content_pack(m: &Value, version: &str, id: &str, platform: &str) -> 
 /// The `game-data` artifact of the newest release that lists one, with that release's version. Used to decide whether
 /// the data on a device is complete when the chosen release lists none (one copy of the data serves every release).
 pub fn latest_game_data(m: &Value) -> Option<(String, Artifact)> {
-    let key = |v: &str| -> Vec<u64> { v.split('.').filter_map(|p| p.parse().ok()).collect() };
     let mut versions: Vec<&String> = m["releases"].as_object()?.keys().filter(|v| semver_ok(v)).collect();
-    versions.sort_by_key(|v| key(v));
+    // A listed version with a component past u64::MAX cannot be ordered: the lookup is refused, not run over the rest
+    // (#2062). The sort below then compares only readable versions.
+    if versions.iter().any(|v| semver_cmp(v, v).is_none()) {
+        return None;
+    }
+    versions.sort_by(|a, b| semver_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal));
     versions.into_iter().rev().find_map(|v| find(m, v, "game-data", Some("android-arm64")).ok().map(|a| (v.clone(), a)))
 }
 

@@ -1,35 +1,33 @@
 package questwiring
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and the q15t plugin installs on
-// none of their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
-// behaviour; these pin what they cannot see: who owns each slot, the table's order, the scope each guard has in arena, the keys.
+// #2178: the crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's, and nothing else installs on
+// their slots. The host tests (fxtrail_test, voipdrop_test, custctx_test, droneguard_test, peerclamp_test) drive the
+// behaviour; these pin what they cannot see: the registration table's order, which guards read the combat level answer
+// and which act in every level, the files each guard ships, its key in the config reader, schema, line and example, and its
+// hook budget row. The slot addresses are not checked here.
 
 type guard struct {
 	name    string
-	symbols []string // the dynsym names the module hooks
-	slots   []string // the JUMP_SLOT vaddrs, spelled as the plugin spelled them
-	scope   string   // the combat_scope answer the handler tests first, or "" when it acts in every level on purpose
-	handles int      // the GotHook handles the module declares (hook_budget.h)
-	row     string   // the registration table row, up to the end step
+	scope   string // the combat_scope answer the handler tests first, or "" when it acts in every level on purpose
+	handles int    // the GotHook handles the module declares (hook_budget.h)
+	row     string // the registration table row, up to the end step
 }
 
 var guards = []guard{
-	{"fxtrail", []string{"CParticleEffectCS10EffectTime"}, []string{"0x36e7b98"}, "scope::SeenCombatMap()", 1,
+	{"fxtrail", "scope::SeenCombatMap()", 1,
 		`Module{"fxtrail", nullptr, &FxtrailNormal, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail, &fxtrail::NoteEnd}`},
-	{"voipdrop", []string{"CR15NetVoipReceiverCS11ReceiveVoip"}, []string{"0x36c5d80"}, "", 1,
+	{"voipdrop", "", 1,
 		`Module{"voipdrop", nullptr, &VoipdropNormal, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop, &voipdrop::NoteEnd}`},
-	{"custctx", []string{"CR15NetCustomizationRenderer12LoadMeshData", "CR15NetCustomizationRenderer14DestroyContext", "SR15NetCustomDrawDataEE4GrowEv"},
-		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "scope::SeenCombatOrLobby()", 3,
+	{"custctx", "scope::SeenCombatOrLobby()", 3,
 		`Module{"custctx", nullptr, &CustctxNormal, "combat.custctx", &nevr_quest::CombatConfig::custctx, &custctx::NoteEnd}`},
-	{"droneguard", []string{"CR15NetFollowPlayerCS6Follow"}, []string{"0x36f1218"}, "", 1,
+	{"droneguard", "", 1,
 		`Module{"droneguard", nullptr, &DroneguardNormal, "combat.droneguard", &nevr_quest::CombatConfig::droneguard, &droneguard::NoteEnd}`},
-	{"peerclamp", []string{"SBroadcasterData12CleanupPeers"}, []string{"0x36efad8"}, "scope::SeenCombatOrLobby()", 1,
+	{"peerclamp", "scope::SeenCombatOrLobby()", 1,
 		`Module{"peerclamp", nullptr, &PeerclampNormal, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp, &peerclamp::NoteEnd}`},
 }
 
@@ -69,44 +67,13 @@ func TestTheGuardsAreNormalPhaseRowsInThePluginsOrderAfterTheScopeRowAndSendguar
 	}
 }
 
-func TestThePluginInstallsOnNoSlotOfTheGuardsAndTheirFilesAreGone(t *testing.T) {
+func TestEachGuardHasItsFiles(t *testing.T) {
 	for _, g := range guards {
-		for _, f := range []string{
-			"src/quest/plugins/q15t/src/" + g.name + ".h", "src/quest/plugins/q15t/src/" + g.name + ".cpp",
-			"src/quest/tests/q15t/" + g.name + "_test.cpp", "src/quest/tests/q15t/mod/" + g.name + ".cmake",
-			"src/quest/tests/q15t/mutants.d/" + g.name + ".sh", "docs/quest/q15t/modules/" + g.name + ".md",
-		} {
-			if exists(t, f) {
-				t.Errorf("%s still exists", f)
-			}
-		}
 		for _, f := range []string{"src/quest/combat/" + g.name + ".h", "src/quest/combat/" + g.name + ".cpp", "src/quest/combat/" + g.name + "_targets.h",
 			"src/quest/tests/" + g.name + "_test.cpp", "src/quest/combat/mutants.d/" + g.name + ".sh", "docs/quest/combat/" + g.name + ".md"} {
 			if !exists(t, f) {
 				t.Errorf("%s is missing", f)
 			}
-		}
-	}
-	entries := pluginEntries(t, "src/quest/plugins/q15t/src")
-	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".cpp" && ext != ".h" && ext != ".inc" {
-			continue
-		}
-		code := stripComments(pluginRead(t, "src/quest/plugins/q15t/src/"+e.Name()))
-		for _, g := range guards {
-			for _, bad := range append(append([]string{}, g.symbols...), g.slots...) {
-				if strings.Contains(code, bad) {
-					t.Errorf("%s names %s, which is the runtime's %s", e.Name(), bad, g.name)
-				}
-			}
-		}
-	}
-	cmake := pluginRead(t, "src/quest/plugins/q15t/CMakeLists.txt") + pluginRead(t, "src/quest/plugins/q15t/src/plugin.cpp")
-	for _, bad := range []string{"Q15T_FXTRAIL", "Q15T_VOIPDROP", "Q15T_CUSTCTX", "Q15T_DRONEGUARD", "Q15T_PEERCLAMP", "InstallFxTrail", "InstallVoipDrop",
-		"InstallCustCtx", "InstallDroneGuard", "InstallPeerClamp"} {
-		if strings.Contains(cmake, bad) {
-			t.Errorf("the plugin still names %s", bad)
 		}
 	}
 }

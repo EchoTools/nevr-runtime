@@ -14,8 +14,8 @@
  * and HeadsetType's JUMP_SLOTs) hold assembly entries (callback_thunk.h rule 7, headset_gates.cpp): a CallbackThunk's handler would see its own
  * thunk's return address, not the game's. HeadsetType's one entry serves both gates on its slot; a gate that is off has an empty range.
  *
- * Owner (ADR 0039). This file owns both slots. The q15t plugin no longer installs either, and its kill files `gate_perm.off`, `gate_bots.off` and
- * the data file `gate_libs.txt` are no longer read: one found in the plugin's data directory is a Warning (`combat_gates_legacy_switch`) that
+ * Owner (ADR 0039). This file owns both slots. The kill files `gate_perm.off`, `gate_bots.off` and
+ * the data file `gate_libs.txt` are no longer read: one found in the data directory is a Warning (`combat_gates_legacy_switch`) that
  * names the key that replaces it.
  *
  * Another handler on a slot. A gate acts on the game's own call site, so its entry stays the newest hook on its slot: the manager refuses a hook
@@ -25,21 +25,22 @@
  * The bot gate. The combat bot (body 1) exists only in the full-size global_mp, which loads only where levelname's hook is on the game's
  * LoadLevelName slot (CR15Game's vtable word at +0x260, kPins.levelNameSlot: the stock function is `base + kPins.levelNameStock`, and a word that
  * is anything else, a hook, means levelname is on). The gate reads that word at each bot call (a data read with process_vm_readv, which never faults;
- * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). So it depends on no levelname switch, in
- * the plugin or the runtime, and holds when levelname moves. Not the loaded level: the level table holds the name the game was asked for
+ * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). Its only input for this answer is the
+ * game's slot word, compared with the stock function at each call; it reads no levelname switch, neither the levelname module's nor a config
+ * key, so it answers right when levelname's hook changes. Not the loaded level: the level table holds the name the game was asked for
  * (`global_mp`) before LoadLevelName appends `_lowspec`, so the table cannot tell the two apart (CncaGameSpace::LoadLevel stores its argument at gs+0x58
  * and then calls the virtual).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in:
  *   - gate_bots acts only while a combat map or the combat lobby is loaded (combat_level.h); in an Echo Arena level, and in every other level, it
  *     answers the real value, because BotActorId chooses a bot body at random for a symbol it does not list, and body 1 does not exist in an arena
- *     level. This is where the plugin differed: it answered "not a Quest" to every BotActorId call. The game's frame tick supplies the CR15Game
+ *     level. The game's frame tick supplies the CR15Game
  *     (`Tick`); with no game seen yet the gate answers the real value.
  *   - gate_perm acts wherever the permissions expression runs: the flag it affects is the combat permission of a party member who bought combat.
  *   - gate_link acts for the script libraries of the policy, in the menus and the lobby script wherever they run. The lobby script is shared by
  *     the arena and combat lobbies (it loads the lobby's combat wing); its answer is the same in both.
  *
- * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
+ * Which APKs (ADR 0046 rule 5). The combat variants only (the normal step of combat_install.h).
  *
  * Frequency (ADR 0038). An entry runs once per call of its function by anyone: PartyMemberHeadsetType once per party member each time the
  * expression is evaluated; HeadsetType once per Bind of the expression (a menu script's node) and once per BotActorId. None is a per-frame call
@@ -47,7 +48,7 @@
  * an acquire load, the real call, two relaxed counters and a range compare; a call in the link range also names the Bind's library (dladdr) and takes
  * a mutex once per bind; a bot call also reads the loaded levels (process_vm_readv, never faults).
  *
- * Origin. The q15t plugin's `headset_gates.cpp` (return-address-gated wrappers; its trampoline reads the caller's sp and x30) and `combat_gates.h`,
+ * Origin. The combat plugin's `headset_gates.cpp` (imported in #1591) (return-address-gated wrappers; its trampoline reads the caller's sp and x30) and `combat_gates.h`,
  * reconstructed on the manager. docs/audits/2026-11-05-q15t-origin-citations.md lists no reference-build file or EchoCombat line for them.
  *
  * Lines (sentinel log):
@@ -142,6 +143,9 @@ Ranges RangesForTest() noexcept;
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 // The pins Install uses; nullptr restores kPins.
 void SetPinsForTest(const Pins* pins) noexcept;
+// The row after the last name row of the link gate's policy (SetLinkGateLibs never stores there): 48 bytes the host test fills with a canary and
+// checks after a store that could overrun the last row.
+char* FragmentGuardRowForTest() noexcept;
 // Forgets the hooks, the ranges, the policy, the game and the counters.
 void ResetForTest() noexcept;
 
