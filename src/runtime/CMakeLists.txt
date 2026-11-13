@@ -139,7 +139,7 @@ set(PATCHES_SOURCES
     "patch/plugin_assets.cpp"
     # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
     "patch/resource_sets.cpp"
-    "patch/resource_set_registry.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
     "compat/ws_bridge.cpp"
     # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
@@ -1916,13 +1916,13 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
     # #2161: plugin resource sets: the format (nevr/resource_set.h), the registry and its mount checks
-    # (patch/resource_set_registry.cpp), the shadow it builds (core/resource_shadow.cpp) and the PE image mapping
+    # (core/resource_set_registry.cpp), the shadow it builds (core/resource_shadow.cpp) and the PE image mapping
     # (patch/image_file_range.h). std, zstd and the SDK only.
     add_executable(test_resource_sets
       tests/test_resource_sets.cpp
-      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
-    set_source_files_properties(tests/test_resource_sets.cpp patch/resource_set_registry.cpp
+    set_source_files_properties(tests/test_resource_sets.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_resource_sets PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -2393,7 +2393,7 @@ if(BUILD_TESTING)
       patch/plugin_assets.cpp
       # #2161: the resource sets plugin_loader.cpp opens to a plugin's init and plugin_assets.cpp asks the resolver about.
       patch/resource_sets.cpp
-      patch/resource_set_registry.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
       # #2161: a mounted set's levels reach installed_levels through the production key list and merge.
       server/registered_levels.cpp
