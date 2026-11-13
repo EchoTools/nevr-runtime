@@ -17,7 +17,7 @@ builds while staying out of combat, and had none on a build without it. Two thin
 
 - **The default Quest recipe.** `just release-quest-apk <tag>` repacked the pinned reference combat build (#1994,
   `tools/quest_release_base.py` `REFERENCE_APK_SHA256`): its `libvrapi.so` runtime, its script libraries and its switch file
-  ride along, and the repack re-pins that runtime to our libr15 (`tools/quest_runtime_pin.py`). The arena APK (#2298) existed,
+  ride along, and the repack re-pins that runtime to our libr15 (`tools/internal/questruntimepin`). The arena APK (#2298) existed,
   but only under its own recipe name.
 - **Three Quest hooks on every launch.** The combat name tags (`src/quest/combat/match_tags.h`), the equipment re-fire
   (`src/quest/combat/equip_refire.h`) and the grey irradiance default (`src/quest/sentinel/irradiance_default_hook.h`) came from
@@ -29,7 +29,7 @@ builds while staying out of combat, and had none on a build without it. Two thin
    (`$NEVR_STORE_APK`) with the release's loader asset and stamps it `arena`: the same body and output as
    `release-quest-arena-apk` (`build/quest-release/<tag>/arena/`). `tools/quest_release_base.py check-arena` refuses the APK before
    it is written if it holds any entry of the reference build, the combat plugin's library, a plugin manifest, or a `libvrapi.so` that carries
-   the reference runtime's libr15 checksum table (`quest_runtime_pin.carries_table`; the store's own `libvrapi.so` has none).
+   the reference runtime's libr15 checksum table (`questruntimepin.CarriesTable`; the store's own `libvrapi.so` has none).
 2. **A combat Quest build exists only when it is asked for by name.** `release-quest-combat-apk` and `release-quest-variant-apk`
    (the store APK, stamped with a combat variant word, ADR 0040) and `release-quest-reference-apk` (the reference combat build, #1994). The release
    timer's `build_apk` step names `release-quest-reference-apk`, so the APK the manifest lists as `quest-apk` is the one it was;

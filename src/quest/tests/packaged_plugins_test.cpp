@@ -136,8 +136,8 @@ TEST(ManifestParseIgnoresUnknownKeys) {
   CHECK_EQ(out.size(), std::size_t{1});
 }
 
-// The bytes the repack's writer (tools/quest_repack_libs.py write_plugin_manifest) wrote for two plugins, kept as a golden file:
-// tools/tests/test_quest_repack_libs.py proves the writer still writes exactly these bytes, and this proves the parser reads
+// The bytes the repack's writer (tools/cmd/quest-repack-libs write_plugin_manifest) wrote for two plugins, kept as a golden file:
+// tools/internal/questrepack proves the writer still writes exactly these bytes, and this proves the parser reads
 // them. A key renamed on one side fails one of the two tests, so the two cannot drift apart.
 std::string FixtureDir;
 

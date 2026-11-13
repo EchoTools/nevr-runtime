@@ -1,5 +1,5 @@
 """The script redirect's nine stock hashes are one list: the combat area's (combat/script_redirect_list.h) and the repack's staging
-(quest_repack_libs.COMBAT_REDIRECT_HASHES). The host's registry must also hold all nine (#1737)."""
+(tools/internal/questrepack/consts.go combatRedirectHashes, the repack's staging list). The host's registry must also hold all nine (#1737)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,16 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
-import quest_repack_libs as libs  # noqa: E402
-
 COMBAT_LIST = REPO / "src/quest/combat/script_redirect_list.h"
 HOST_HEADER = REPO / "src/quest/plugin/script_redirect.h"
 JUSTFILE = REPO / "justfile"
+REPACK_CONSTS = REPO / "tools/internal/questrepack/consts.go"
+
+
+def repack_hashes() -> list[str]:
+    """The repack's nine redirected hashes, read from the Go list (combatRedirectHashes in consts.go)."""
+    block = re.search(r"combatRedirectHashes = \[\]string\{(.*?)\}", REPACK_CONSTS.read_text(encoding="utf-8"), re.S)
+    return re.findall(r'"([0-9a-f]{16})"', block.group(1))
 
 
 class ScriptRedirectListTest(unittest.TestCase):
@@ -22,13 +27,13 @@ class ScriptRedirectListTest(unittest.TestCase):
         block = re.search(r"kHashes\[\]\s*=\s*\{(.*?)\};", COMBAT_LIST.read_text(encoding="utf-8"), re.S)
         self.assertIsNotNone(block, "kHashes not found in the combat area's script_redirect_list.h")
         found = re.findall(r"0x([0-9a-f]{16})ULL", block.group(1))
-        self.assertEqual(found, list(libs.COMBAT_REDIRECT_HASHES))
+        self.assertEqual(found, repack_hashes())
         self.assertEqual(len(found), 9)
 
     def test_the_host_registry_holds_all_nine(self):
         match = re.search(r"kMaxEntries\s*=\s*(\d+)", HOST_HEADER.read_text(encoding="utf-8"))
         self.assertIsNotNone(match, "kMaxEntries not found in the host header")
-        self.assertGreaterEqual(int(match.group(1)), len(libs.COMBAT_REDIRECT_HASHES))
+        self.assertGreaterEqual(int(match.group(1)), len(repack_hashes()))
 
     def test_the_repack_recipe_collects_the_redirected_names_as_well_as_the_plain_ones(self):
         self.assertIn("lib????????????????_nevr.so", JUSTFILE.read_text(encoding="utf-8"))

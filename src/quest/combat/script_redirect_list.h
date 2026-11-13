@@ -1,6 +1,6 @@
 // The nine stock script libraries the combat APK carries its own build of (#1737): the 16 hex digits of each lib<hash>.so, in the
 // order the packaging lists them. The combat area registers this list with the host's script redirect (combat/script_redirect.h); the
-// repack stages the same nine (tools/quest_repack_libs.py, COMBAT_REDIRECT_HASHES); tools/tests/test_combat_script_redirect.py holds the
+// repack stages the same nine (tools/cmd/quest-repack-libs, COMBAT_REDIRECT_HASHES); tools/tests/test_combat_script_redirect.py holds the
 // two equal.
 #pragma once
 

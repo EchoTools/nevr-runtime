@@ -1,6 +1,6 @@
 // Host test for the variant stamp the sentinel reads before its first log line (#2170, docs/adr/0040 rule 1, docs/adr/0046 rule 5):
 // `libnevr_build_variant.so` beside the sentinel's own library holds the variant word as its exact bytes, written by
-// tools/quest_repack_libs.py write-build-variant (empty for a plain release). What it pins: each of the three words reads as its
+// tools/cmd/quest-repack-libs write-build-variant (empty for a plain release). What it pins: each of the three words reads as its
 // variant, an empty file reads as no variant (a plain release, from the stamp), a missing file reads as absent, and everything else
 // (a differently cased or padded word, an unknown word, a file too long, a link, a directory) reads as no variant with the reason
 // that says why, never as a variant. The stamp's file name equals the repack's.
@@ -28,7 +28,7 @@ bool Is(const bv::Stamp& stamp, bv::Variant variant, bv::StampSource source, con
 }
 
 void TheStampFileIsNamedAsTheRepackNamesIt() {
-  QCHECK(std::strcmp(bv::kStampFile, "libnevr_build_variant.so") == 0);  // tools/quest_repack_libs.py VARIANT_STAMP_NAME
+  QCHECK(std::strcmp(bv::kStampFile, "libnevr_build_variant.so") == 0);  // tools/internal/questrepack/consts.go variantStamp
 }
 
 void TheThreeWordsReadAsTheirVariants() {

@@ -42,7 +42,11 @@ class PackagedPluginWiringTest(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_the_generic_repack_tool_names_no_project_plugin(self):
-        self.assertNotIn("autopilot", self.read("tools/quest_repack_libs.py").lower())
+        # The repack tool is Go (ADR 0044): its command and its library, not the tests beside them.
+        for path in sorted((REPO / "tools" / "cmd" / "quest-repack-libs").glob("*.go")) + sorted(
+                (REPO / "tools" / "internal" / "questrepack").glob("*.go")):
+            if not path.name.endswith("_test.go"):
+                self.assertNotIn("autopilot", path.read_text(encoding="utf-8").lower(), path.name)
 
 
 if __name__ == "__main__":

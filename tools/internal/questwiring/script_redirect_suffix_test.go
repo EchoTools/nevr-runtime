@@ -10,7 +10,7 @@ import (
 
 // #2189: the redirected script library's name is built in one language and parsed in another, and its suffix is spelled in three
 // places that no compiler compares: the C++ that builds the name (kTail in src/quest/plugin/script_redirect.cpp), the Python that
-// stages the library under that name (REDIRECT_SUFFIX in tools/quest_repack_libs.py), and the justfile glob that collects the
+// stages the library under that name (redirectSuffix in tools/internal/questrepack/consts.go), and the justfile glob that collects the
 // staged name into the APK (the android-repack-apk recipe). A rename in one place alone passes every test on its own side and
 // breaks the redirect on a device, because the producer and the consumer no longer agree on the name. This test requires the three
 // equal, and requires the name the C++ builds to be the length the host test pins (src/quest/tests/script_redirect_test.cpp), so a
@@ -18,18 +18,18 @@ import (
 // file and the pattern.
 
 const (
-	redirectCppFile  = "src/quest/plugin/script_redirect.cpp"
-	redirectPyFile   = "tools/quest_repack_libs.py"
-	redirectJustfile = "justfile"
-	redirectHostTest = "src/quest/tests/script_redirect_test.cpp"
+	redirectCppFile    = "src/quest/plugin/script_redirect.cpp"
+	redirectSuffixFile = "tools/internal/questrepack/consts.go"
+	redirectJustfile   = "justfile"
+	redirectHostTest   = "src/quest/tests/script_redirect_test.cpp"
 )
 
 var (
-	redirectTailRE     = regexp.MustCompile(`static constexpr char kTail\[\] = "([^"]*)";`)
-	redirectHashRE     = regexp.MustCompile(`constexpr std::size_t kHashDigits = (\d+);`)
-	redirectPySuffixRE = regexp.MustCompile(`(?m)^REDIRECT_SUFFIX = "([^"]*)"$`)
-	redirectGlobRE     = regexp.MustCompile(`lib\?{16}(_[A-Za-z0-9]+\.so)`)
-	redirectPinnedRE   = regexp.MustCompile(`RedirectName\(kA, buf, (\d+)\)\)\s*;\s*//\s*(\d+) characters and no room for the NUL`)
+	redirectTailRE   = regexp.MustCompile(`static constexpr char kTail\[\] = "([^"]*)";`)
+	redirectHashRE   = regexp.MustCompile(`constexpr std::size_t kHashDigits = (\d+);`)
+	redirectSuffixRE = regexp.MustCompile(`(?m)^\s*redirectSuffix\s+= "([^"]*)"$`)
+	redirectGlobRE   = regexp.MustCompile(`lib\?{16}(_[A-Za-z0-9]+\.so)`)
+	redirectPinnedRE = regexp.MustCompile(`RedirectName\(kA, buf, (\d+)\)\)\s*;\s*//\s*(\d+) characters and no room for the NUL`)
 )
 
 // redirectHit is the one match of a pattern: its file, its line and its capture groups (groups[0] is the whole match).
@@ -63,13 +63,13 @@ func findRedirectOne(t *testing.T, path, text string, re *regexp.Regexp, what st
 func TestTheRedirectedLibraryNameSuffixIsTheSameInEveryPlace(t *testing.T) {
 	t.Parallel()
 	cpp := read(t, redirectCppFile)
-	py := read(t, redirectPyFile)
+	py := read(t, redirectSuffixFile)
 	just := read(t, redirectJustfile)
 	host := read(t, redirectHostTest)
 
 	tail := findRedirectOne(t, redirectCppFile, cpp, redirectTailRE, "kTail, the C++ tail of a redirected name")
 	hashDigits := findRedirectOne(t, redirectCppFile, cpp, redirectHashRE, "kHashDigits, the hex digits of the stock hash")
-	pySuffix := findRedirectOne(t, redirectPyFile, py, redirectPySuffixRE, "REDIRECT_SUFFIX, the producer's suffix")
+	pySuffix := findRedirectOne(t, redirectSuffixFile, py, redirectSuffixRE, "redirectSuffix, the producer's suffix")
 	glob := findRedirectOne(t, redirectJustfile, just, redirectGlobRE, "the staged-name glob's literal tail")
 	pinned := findRedirectOne(t, redirectHostTest, host, redirectPinnedRE, "the host test's pinned name length")
 
@@ -85,11 +85,11 @@ func TestTheRedirectedLibraryNameSuffixIsTheSameInEveryPlace(t *testing.T) {
 	pyName := pySuffix.groups[1]
 
 	if cppSuffix != pyName {
-		t.Errorf("the consumer and the producer name different suffixes: kTail at %s is %q, REDIRECT_SUFFIX at %s is %q; "+
+		t.Errorf("the consumer and the producer name different suffixes: kTail at %s is %q, redirectSuffix at %s is %q; "+
 			"the staged library is then not the one the device opens", tail.at(), cppSuffix, pySuffix.at(), pyName)
 	}
 	if globSuffix != pyName {
-		t.Errorf("the staged-name glob and the producer name different suffixes: the glob at %s collects %q, REDIRECT_SUFFIX at %s is %q; "+
+		t.Errorf("the staged-name glob and the producer name different suffixes: the glob at %s collects %q, redirectSuffix at %s is %q; "+
 			"the APK then carries no redirected library", glob.at(), globSuffix, pySuffix.at(), pyName)
 	}
 

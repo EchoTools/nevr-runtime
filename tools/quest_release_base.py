@@ -17,7 +17,7 @@ WHAT.
     quest_release_base.py check-arena --apk ARENA.apk
         Refuses unless ARENA.apk (the store APK repacked with the release's loader, #2298) holds none of REFERENCE_ENTRIES, no
         q15t library, no plugin manifest and no reference runtime (a libvrapi.so that carries the reference runtime's libr15
-        checksum table, quest_runtime_pin.carries_table; the store's own libvrapi.so carries none), and its variant stamp is
+        checksum table, build/go-tools/quest-runtime-pin detect; the store's own libvrapi.so carries none), and its variant stamp is
         exactly `arena`.
 
     quest_release_base.py check-release --apk RELEASE.apk --base BASE.apk
@@ -33,13 +33,29 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quest_apk_rename_package as qr  # noqa: E402
-import quest_runtime_pin as runtime_pin  # noqa: E402
+
+# The reference runtime's checksum-table check is the Go tool's `detect` (ADR 0044 rule 7; `just go-tools` builds it):
+# exit 0 when the library carries the table, 3 when it does not, 1 when it is not an AArch64 ELF.
+RUNTIME_PIN_TOOL = Path(__file__).resolve().parents[1] / "build" / "go-tools" / "quest-runtime-pin"
+DETECT_CARRIES_TABLE = 0
+DETECT_ABSENT = 3
+
+
+def runtime_carries_table(data: bytes) -> bool:
+    """True when `data` is a reference runtime that carries the libr15 checksum table (quest-runtime-pin detect)."""
+    with tempfile.TemporaryDirectory(prefix="quest-release-base-") as tmp:
+        library = Path(tmp) / "libvrapi.so"
+        library.write_bytes(data)
+        done = subprocess.run([str(RUNTIME_PIN_TOOL), "detect", "--libvrapi", str(library)], capture_output=True, text=True)
+    return done.returncode == DETECT_CARRIES_TABLE
 
 TAG = "NEVR.QUEST.BASE"
 
@@ -134,7 +150,7 @@ def check_arena(apk: Path) -> dict:
         with zipfile.ZipFile(apk) as z:
             names = {n for n in z.namelist() if not n.endswith("/")}
             stamp = z.read(ARENA_STAMP_ENTRY) if ARENA_STAMP_ENTRY in names else None
-            reference_runtime = RUNTIME_ENTRY in names and runtime_pin.carries_table(z.read(RUNTIME_ENTRY))
+            reference_runtime = RUNTIME_ENTRY in names and runtime_carries_table(z.read(RUNTIME_ENTRY))
     except (OSError, zipfile.BadZipFile) as error:
         raise Refused("unreadable_apk", apk=str(apk), error=type(error).__name__) from error
     combat = sorted(n for n in names if n in REFERENCE_ENTRIES or n in ARENA_FORBIDDEN_ENTRIES or

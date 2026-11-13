@@ -1,6 +1,6 @@
 // The variant of the APK this process runs (docs/adr/0040-every-build-names-its-variant.md rule 1, docs/adr/0046 rule 5).
 //
-// Where it comes from. The repack (`just android-repack-apk`, tools/quest_repack_libs.py write-build-variant) writes
+// Where it comes from. The repack (`just android-repack-apk`, tools/cmd/quest-repack-libs write-build-variant) writes
 // `lib/arm64-v8a/libnevr_build_variant.so` into every APK it makes: the variant word as the file's exact bytes, empty for a plain
 // release or a development build of the tree. Its name is a lib*.so name so the installer extracts it beside the sentinel, as it
 // does the plugin manifest (ADR 0019 section 2). The sentinel reads it from the directory its own library was loaded from, before
@@ -28,7 +28,7 @@
 
 namespace nevr_quest::build_variant {
 
-// The stamp's file name in the library directory; tools/quest_repack_libs.py VARIANT_STAMP_NAME is the same string.
+// The stamp's file name in the library directory; tools/internal/questrepack/consts.go variantStamp is the same string.
 inline constexpr const char* kStampFile = "libnevr_build_variant.so";
 // The longest word is `perf-probe` (10 bytes); a file past this is not a stamp.
 inline constexpr std::size_t kMaxStampBytes = 32;

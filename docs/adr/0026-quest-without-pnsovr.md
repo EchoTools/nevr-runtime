@@ -184,7 +184,7 @@ Each step is its own PR, tests first, and the build stays shippable after each:
    `libpnsovr.so.yaml`, 71 from `license_patch.yaml`) are covered by "not loaded (ADR 0026)", and the checker accepts
    that as their cover only while the repack recipe ships no `libpnsovr.so`.
 4. **Stop shipping** (#1223) `libpnsovr.so` and `libovrplatformloader_orig.so`: the repack recipe drops both, the sentinel's
-   added `DT_NEEDED` goes, and `tools/quest_repack_libs.py` and its tests follow.
+   added `DT_NEEDED` goes, and `tools/cmd/quest-repack-libs` and its tests follow.
 
 ## Prediction
 

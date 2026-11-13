@@ -41,7 +41,7 @@ A file's `path` is relative to `_data/<stock_data_version>/rad15/android/` and i
 (the id of `kManifestPath`, exactly one) or `packages/<name>` for any other file: one plain file name (`[A-Za-z0-9._-]`, at most 64,
 not starting with a dot, not ending in `.nevr-pack.tmp`, `.stock` or `.nevr-owned`), sizes 1 byte to 2 GiB less one, no two paths equal
 in any letter case. The pack describes itself: the runtime holds no hash of any pack. The rules are `ParsePackJson`
-(`src/quest/data/pack.cpp`) and, for the repack, `pack_problems` (`tools/quest_repack_libs.py`); the two are the same rules.
+(`src/quest/data/pack.cpp`) and, for the repack, `pack_problems` (`tools/cmd/quest-repack-libs`); the two are the same rules.
 
 The APK stays under the 4 GiB a zip without zip64 addresses (the sentinel's zip reader refuses zip64), less 8 MiB for the central
 directory, the signing block and alignment.
@@ -50,7 +50,7 @@ directory, the signing block and alignment.
 
 `just android-repack-apk ... pack=<zip> pack_meta=<file>` (both empty for every release and `package-dev` APK; empty, the recipe runs
 no line of this). `pack_meta` is a JSON file with `id`, `version`, `requires_stock_manifest_sha256` and `zip_prefix`
-(`_data/<version>/rad15/android/`, where the zip's entries sit). `tools/quest_repack_libs.py stage-pack` reads the pack zip and
+(`_data/<version>/rad15/android/`, where the zip's entries sit). `tools/cmd/quest-repack-libs stage-pack` reads the pack zip and
 checks every entry before it writes one byte: names safe by the sentinel's own reader rule, no link or other special file, not
 encrypted, no two names equal in any case, every file under the prefix and in `manifests/` or `packages/`, the sizes the zip records
 equal to the bytes read, the sha-256 taken from those bytes, the version folder and manifest id equal to the data step's pins in
@@ -142,5 +142,5 @@ value) and is not this repository's.
 - Host, `just test-quest-data-net`: `src/quest/tests/data_wiring_test.cpp`, the real `AfterStorage` over a scratch root with a synthetic
   APK: placed after `kUsed` and after `kFetched`, in a release build, none, stock mismatch, a failure that ends the process with
   `pack_failed`, a kill between the writes finished by the next launch, and no pack step after a failed or missing data step.
-- Python, `just test-tools`: `tools/tests/test_quest_repack_pack.py` (`stage-pack`, `pack-problems`, `verify-signed` over the pack, and the
+- Python, `just test-tools`: `tools/internal/questrepack/pack_test.go` (`stage-pack`, `pack-problems`, `verify-signed` over the pack, and the
   recipe end to end with and without a pack).

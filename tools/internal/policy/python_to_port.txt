@@ -39,8 +39,6 @@ tools/quest_patcher_sites.py	ported by its unit of #2132
 tools/quest_release_base.py	ported by its unit of #2132
 tools/quest_release_loader.py	ported by its unit of #2132
 tools/quest_release_timer.py	ported by its unit of #2132
-tools/quest_repack_libs.py	ported by its unit of #2132
-tools/quest_runtime_pin.py	ported by its unit of #2132
 tools/quest_store_build.py	ported by its unit of #2132
 tools/quest_store_install.py	ported by its unit of #2132
 tools/reap_merged.py	ported by its unit of #2132
@@ -198,11 +196,8 @@ tools/tests/test_quest_quit_path.py	ported by its unit of #2132
 tools/tests/test_quest_release_base.py	ported by its unit of #2132
 tools/tests/test_quest_release_loader.py	ported by its unit of #2132
 tools/tests/test_quest_release_timer.py	ported by its unit of #2132
-tools/tests/test_quest_repack_libs.py	ported by its unit of #2132
-tools/tests/test_quest_repack_pack.py	ported by its unit of #2132
 tools/tests/test_quest_repack_version.py	ported by its unit of #2132
 tools/tests/test_quest_resource_request_wiring.py	ported by its unit of #2132
-tools/tests/test_quest_runtime_pin.py	ported by its unit of #2132
 tools/tests/test_quest_sentinel_link.py	ported by its unit of #2132
 tools/tests/test_quest_sentinel_no_namespace_mutex.py	ported by its unit of #2132
 tools/tests/test_quest_shared_redirect_sources.py	ported by its unit of #2132

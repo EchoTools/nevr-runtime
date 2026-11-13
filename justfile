@@ -218,19 +218,19 @@ quest-reference-base apk out label="Echo VR":
 # packages CI's loader (release-quest-apk). The versionCode comes from it, and the shim must carry the same string.
 # `pack` (docs/adr/0029-quest-bundled-content-pack.md) is a game-data pack zip to carry as APK assets under assets/nevr-pack/ (STORED), which
 # the sentinel places over the stock data at the first run after its data step; `pack_meta` is the file that describes it (its id, version, the stock
-# manifest digests it replaces and the zip's prefix; tools/quest_repack_libs.py stage-pack --help). Both are empty for every release and package-dev APK,
+# manifest digests it replaces and the zip's prefix; build/go-tools/quest-repack-libs stage-pack --help). Both are empty for every release and package-dev APK,
 # and then the recipe does nothing of it: the APK is the one the recipe made before the parameters existed.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key, a keystore file named by
 # NEVR_QUEST_KEYSTORE with its passphrase in NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh): it is copied into a
 # private tmpfs file for the signing command only and is never generated here.
-# `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (tools/quest_repack_libs.py stage-libs):
+# `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (build/go-tools/quest-repack-libs stage-libs):
 # `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # `variant` (the last parameter; docs/adr/0040-every-build-names-its-variant.md rule 1) is the word that names the APK's variant: `q15t`,
 # `combat` or `perf-probe`, or empty for a plain release or a development build of the tree. The repack stamps it as
-# lib/arm64-v8a/libnevr_build_variant.so (tools/quest_repack_libs.py write-build-variant), which the sentinel reads before its first log
+# lib/arm64-v8a/libnevr_build_variant.so (build/go-tools/quest-repack-libs write-build-variant), which the sentinel reads before its first log
 # line; the folded combat modules run only for `q15t` and `combat` (docs/adr/0046 rule 5). Any other word is refused before anything is
 # staged. Every recipe that repacks an APK passes it, the empty word included, as its last argument.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="": go-tools
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
@@ -245,7 +245,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     # The variant word is checked first of all: an unknown word stops the recipe before the patcher or any staging runs.
-    python3 -I tools/quest_repack_libs.py check-build-variant --variant "$variant"
+    build/go-tools/quest-repack-libs check-build-variant --variant "$variant"
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
     if [ -n "$pack" ]; then
@@ -263,8 +263,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # both get it. The public recipes (package-dev, release-quest-apk) pass none.
     [ -z "$extra_rows" ] || [ -f "$extra_rows" ] || { echo "extra rows file not found: $extra_rows" >&2; exit 1; }
     # The shim must be the build for those rows: the patched libr15's ID depends on them, and a shim built for others refuses
-    # the library while its stubs still branch through slots only an attached shim fills (tools/quest_repack_libs.py).
-    python3 -I tools/quest_repack_libs.py check-shim-rows --shim "$shim" ${extra_rows:+--extra-rows "$extra_rows"}
+    # the library while its stubs still branch through slots only an attached shim fills (build/go-tools/quest-repack-libs).
+    build/go-tools/quest-repack-libs check-shim-rows --shim "$shim" ${extra_rows:+--extra-rows "$extra_rows"}
     if [ -z "$patcher" ]; then
         inc=""
         json_trees=("build/{{ preset }}/vcpkg_installed/x64-mingw-static/include" build/mingw-dev/vcpkg_installed/x64-mingw-static/include build/android-dev/vcpkg_installed/arm64-android/include build/android-arm64/vcpkg_installed/arm64-android/include build/quest-host-vcpkg/x64-linux/include)
@@ -285,7 +285,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     if [ -n "$extra_rows" ]; then extra=(--extra-rows "$extra_rows"); fi
     # `plugin` (docs/adr/0019-quest-plugin-loader.md): the plugin libraries to carry in the APK, for a headset run of the loader:
     # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so.
-    # A packaged plugin loads by default: the repack writes a manifest of them (tools/quest_repack_libs.py write-plugin-manifest) and
+    # A packaged plugin loads by default: the repack writes a manifest of them (build/go-tools/quest-repack-libs write-plugin-manifest) and
     # config.yaml's `plugins:` list only overrides it. `plugin_early` and `plugin_off` (colon-separated file names of packaged plugins)
     # record `early` and `enabled: false` in that manifest. Every file gets every check, and no two may share a name.
     plugins=()
@@ -307,16 +307,16 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             esac
             seen_names="$seen_names$(basename "$p") "
             # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
-            # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
-            python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$p"
+            # staged below, would take that library's place. Refuse before anything is staged (build/go-tools/quest-repack-libs).
+            build/go-tools/quest-repack-libs check-plugin-name --apk "$apk" --plugin "$p"
             # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
             # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
-            python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$p"
+            build/go-tools/quest-repack-libs check-plugin-build-ids --apk "$apk" --plugin "$p"
             # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
             tools/check_quest_static_init.sh --plugin "$llvm_bin" "$p"
         done
     fi
-    # plugin_early / plugin_off: packaged file names, recorded in the manifest (tools/quest_repack_libs.py refuses a name that is
+    # plugin_early / plugin_off: packaged file names, recorded in the manifest (build/go-tools/quest-repack-libs refuses a name that is
     # not packaged). Without a plugin there is nothing to record them on, so they are refused.
     early_args=(); off_args=()
     if [ -n "$plugin_early" ]; then
@@ -363,21 +363,21 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     [ -s "$work/stage/lib/arm64-v8a/libr15.so" ] || { echo "the libr15 patcher wrote no libr15.so: $patcher" >&2; exit 1; }
     # 3b'. libvrapi.so: when the source APK's is the reference runtime (it carries the md5 list its modules gate on; the store's own
     # library carries none and is left as it is), the list's stock entry is replaced by the md5 of the libr15.so just staged, so
-    # the modules accept it (tools/quest_runtime_pin.py). The md5 is computed from the staged file here, never stored: any change
+    # the modules accept it (tools/internal/questruntimepin). The md5 is computed from the staged file here, never stored: any change
     # to the libr15 bytes changes it. The result is staged STORED, and verify-signed below recomputes it from the signed libr15.so.
     apk_entries="$(unzip -Z1 "$apk")"
     if grep -qxF 'lib/arm64-v8a/libvrapi.so' <<<"$apk_entries"; then
         unzip -o -q "$apk" lib/arm64-v8a/libvrapi.so -d "$work/orig"
         pin_status=0
-        python3 -I tools/quest_runtime_pin.py detect --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" || pin_status=$?
+        build/go-tools/quest-runtime-pin detect --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" || pin_status=$?
         case "$pin_status" in
             0)
-                python3 -I tools/quest_runtime_pin.py pin --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" \
+                build/go-tools/quest-runtime-pin pin --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" \
                     --libr15 "$work/stage/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libvrapi.so"
                 stage_libs+=(lib/arm64-v8a/libvrapi.so)
                 ;;
             3) echo "android-repack-apk: the APK's libvrapi.so carries no runtime md5 list: left as it is" ;;
-            *) echo "android-repack-apk: quest_runtime_pin.py detect failed ($pin_status) on the APK's libvrapi.so" >&2; exit 1 ;;
+            *) echo "android-repack-apk: quest-runtime-pin detect failed ($pin_status) on the APK's libvrapi.so" >&2; exit 1 ;;
         esac
     fi
     for p in ${plugins[@]+"${plugins[@]}"}; do
@@ -385,27 +385,27 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
     done
     # 3d. the bundled content pack (docs/adr/0029-quest-bundled-content-pack.md): staged as APK assets, every file through every check
-    # (tools/quest_repack_libs.py stage-pack), and the staged tree checked as the runtime reads it. Nothing happens without a pack.
+    # (build/go-tools/quest-repack-libs stage-pack), and the staged tree checked as the runtime reads it. Nothing happens without a pack.
     if [ -n "$pack" ]; then
-        python3 -I tools/quest_repack_libs.py stage-pack --pack-zip "$pack" --meta "$pack_meta" --stage "$work/stage" --store-apk "$apk"
-        python3 -I tools/quest_repack_libs.py pack-problems --stage "$work/stage"
+        build/go-tools/quest-repack-libs stage-pack --pack-zip "$pack" --meta "$pack_meta" --stage "$work/stage" --store-apk "$apk"
+        build/go-tools/quest-repack-libs pack-problems --stage "$work/stage"
     fi
     # 3c. the manifest of the packaged plugins: their names, staged hashes, early and enabled. Written only when a plugin is packaged,
     # so a repack without one is the same APK as before (docs/adr/0019-quest-plugin-loader.md, section 2).
     if [ "${#plugins[@]}" -gt 0 ]; then
-        python3 -I tools/quest_repack_libs.py write-plugin-manifest --stage "$work/stage" --plugin "${plugins[@]}" \
+        build/go-tools/quest-repack-libs write-plugin-manifest --stage "$work/stage" --plugin "${plugins[@]}" \
             ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
         stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
     fi
-    # 3d'. the variant stamp, every APK: the word as the file's bytes, empty for a plain release (tools/quest_repack_libs.py).
-    python3 -I tools/quest_repack_libs.py write-build-variant --stage "$work/stage" --variant "$variant"
+    # 3d'. the variant stamp, every APK: the word as the file's bytes, empty for a plain release (build/go-tools/quest-repack-libs).
+    build/go-tools/quest-repack-libs write-build-variant --stage "$work/stage" --variant "$variant"
     stage_libs+=("lib/arm64-v8a/libnevr_build_variant.so")
-    # 3e. script libraries (lib<hash16>.so, each checked and listed in SHA256SUMS; tools/quest_repack_libs.py stage-libs), staged
+    # 3e. script libraries (lib<hash16>.so, each checked and listed in SHA256SUMS; build/go-tools/quest-repack-libs stage-libs), staged
     # as STORED entries beside the plugins. A store library one of them replaces is named in the directory's REPLACE file.
     combat_libs=()
     if [ -n "$extra_libs" ]; then
         [ -d "$extra_libs" ] || { echo "android-repack-apk: script library directory not found: $extra_libs" >&2; exit 1; }
-        python3 -I tools/quest_repack_libs.py stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
+        build/go-tools/quest-repack-libs stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
         # The plain names, and the redirected names the stage gives the nine stock libraries a combat unit redirects (#1737).
         for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so "$work/stage/lib/arm64-v8a"/lib????????????????_nevr.so; do
             [ -f "$f" ] && combat_libs+=("lib/arm64-v8a/$(basename "$f")")
@@ -457,7 +457,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, libr15.so
     # being the patcher's output for the store's (the tool runs again here, on its own copy; its three digests are printed),
     # a reference runtime's libvrapi.so being the pin tool's output for the signed libr15.so, and every staged library is there as staged.
-    python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
+    build/go-tools/quest-repack-libs verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
         --patcher "$patcher" --scratch "$work" ${extra[@]+"${extra[@]}"}
     done_ok=1
     echo "Signed sideload APK ready -> $signed"

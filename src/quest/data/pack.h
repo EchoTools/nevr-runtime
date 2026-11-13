@@ -66,7 +66,7 @@ struct PackInfo {
 
 // Parses and checks `text` (pack.json). False with a token in `reason`: not_json, too_large, bad_schema, bad_id, bad_version,
 // bad_stock_version, bad_requires, bad_file, bad_sha256, bad_size, no_manifest, wrong_manifest, duplicate_file, too_many_files,
-// bad_source. The rules the repack tool applies (tools/quest_repack_libs.py, pack_problems) are these.
+// bad_source. The rules the repack tool applies (tools/cmd/quest-repack-libs, pack_problems) are these.
 bool ParsePackJson(const std::string& text, PackInfo* out, std::string* reason);
 
 enum class PackOutcome {

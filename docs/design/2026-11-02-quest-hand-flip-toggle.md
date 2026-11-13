@@ -15,7 +15,7 @@ Controller differences belong in the VrApi-on-OpenXR layer: the code that answer
 
 If #1737 brings the layer into this repo's scope, it is reconstructed here (ADR 0033 rule 3, ADR 0035), with EchoFrame and Ducky's reference combat build cited as references and never taken whole (AGENTS.md, Guardrails). The reconstruction takes its facts from the reference binary's disassembly and the OpenXR specification, its lines follow `docs/standards/logging.md`, and its tests fail when the change is reverted.
 
-The layer is not in this tree. The release base carries the reference build's `libvrapi.so` (`tools/quest_release_base.py` names it), and `tools/quest_runtime_pin.py` and `tools/quest_repack_libs.py` pin its output into the signed APK. This repo therefore changes no code in the layer. ADR 0035 makes the layer class 2 once it is reconstructed here.
+The layer is not in this tree. The release base carries the reference build's `libvrapi.so` (`tools/quest_release_base.py` names it), and `tools/internal/questruntimepin` and `tools/cmd/quest-repack-libs` pin its output into the signed APK. This repo therefore changes no code in the layer. ADR 0035 makes the layer class 2 once it is reconstructed here.
 
 The scope is open. #1737 row G6A-094 marks the VrApi-on-OpenXR runtime out of scope for this repo's own code; the release APK carries the reference build's runtime as it is (above), which this repo neither builds nor changes. ADR 0033 and ADR 0035 say how the layer is made if #1737 brings it into scope; they do not bring it in. This design does not settle that, and no layer work is scheduled until the scope is settled (#1737).
 

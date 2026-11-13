@@ -19,8 +19,8 @@ reach players byte for byte as another build made them (the script libraries, `a
 a recipe here first:
 
 - `libvrapi.so`: its libr15 checksum lists are rewritten on every build to the libr15 the APK carries
-  (`tools/quest_runtime_pin.py`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the
-  signed copy against the pin tool's output (`tools/quest_repack_libs.py`).
+  (`tools/internal/questruntimepin`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the
+  signed copy against the pin tool's output (`tools/cmd/quest-repack-libs`).
 - `libassetpatch.so`: the package rename rewrites two strings in it, as it rewrites five in the reference `libr15.so` and
   one in the manifest (`tools/quest_apk_rename_package.py`).
 - `libr15.so`: the reference build's own byte-patched file, renamed and then accepted by its sha256

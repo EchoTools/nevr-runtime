@@ -17,7 +17,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "quest_pack_from_game_data.py"
-REPACK = ROOT / "tools" / "quest_repack_libs.py"
+REPACK = ROOT / "build" / "go-tools" / "quest-repack-libs"  # built by `just go-tools` (ADR 0044 rule 7)
 BASE = "_data/5932408047/rad15/android/"
 MANIFEST = BASE + "manifests/48037dc70b0ecab2"
 PACKAGE = BASE + "packages/48037dc70b0ecab2_1"
@@ -85,12 +85,12 @@ class QuestCombatPack(unittest.TestCase):
         stage = self.root / "stage"
         stage.mkdir()
         staged = subprocess.run(
-            [sys.executable, "-I", str(REPACK), "stage-pack", "--pack-zip", str(self.out / "pack.zip"),
+            [str(REPACK), "stage-pack", "--pack-zip", str(self.out / "pack.zip"),
              "--meta", str(self.out / "pack_meta.json"), "--stage", str(stage), "--store-apk", str(store)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(staged.returncode, 0, staged.stderr)
         problems = subprocess.run(
-            [sys.executable, "-I", str(REPACK), "pack-problems", "--stage", str(stage)], capture_output=True, text=True)
+            [str(REPACK), "pack-problems", "--stage", str(stage)], capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(problems.returncode, 0, problems.stderr)
 
     def test_a_changed_manifest_is_refused_against_the_pinned_digest(self):
@@ -130,9 +130,9 @@ class QuestCombatPack(unittest.TestCase):
         stage = self.root / "stage"
         stage.mkdir()
         staged = subprocess.run(
-            [sys.executable, "-I", str(REPACK), "stage-pack", "--pack-zip", str(self.out / "pack.zip"),
+            [str(REPACK), "stage-pack", "--pack-zip", str(self.out / "pack.zip"),
              "--meta", str(self.out / "pack_meta.json"), "--stage", str(stage), "--store-apk", str(store)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, cwd=ROOT)
         self.assertNotEqual(staged.returncode, 0, "a pack of nine files must be refused")
 
 

@@ -86,7 +86,7 @@ plugin is one more entry in that list, and each plugin object runs the same stat
 entries may run at load time). The repack refuses a plugin whose file name is the name of any `lib/` entry of the store
 APK or of a library it stages itself, and checks in the signed APK that every store library (the loader aside, and
 `libr15.so`, which must be the patcher's output for the store's, ADR 0021 section 9) and every staged library has its
-bytes (`tools/quest_repack_libs.py`).
+bytes (`tools/cmd/quest-repack-libs`).
 
 The loader finds the directory from the sentinel's own mapping, not from JNI. `dladdr` on the constructor
 (`nevr_sentinel_ctor`, `src/quest/sentinel/entry.cpp:151`) returns the path the linker mapped the sentinel from; its

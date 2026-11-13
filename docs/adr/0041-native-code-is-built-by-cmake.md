@@ -81,7 +81,7 @@ No row is open. Invocations this inventory did not list (the MSVC plugin workflo
 configures without a preset) are tracked by #2065, which adds their rows or their exemptions.
 
 Out of scope, by rule 4: `android-repack-libovr` and `android-repack-apk` in `justfile` (`patchelf`, `zip`, `zipalign`,
-`apksigner`), `tools/quest_repack_libs.py`, `tools/quest_apk_rename_package.py`, `tools/quest_pack_from_game_data.py`,
+`apksigner`), `tools/cmd/quest-repack-libs`, `tools/quest_apk_rename_package.py`, `tools/quest_pack_from_game_data.py`,
 `tools/package_release.py`, `tools/build_distribution.py` (CMake runs it for the `dist-sign` target), `tools/quest-diagnose.sh`;
 the checks `tools/verify_pe_contract.py`, `tools/verify_host_no_core_state.py`, `tools/verify_symbols.py`,
 `tools/check_quest_static_init.sh` and `tools/quest_link_objects.py`. Out of scope by rule 5: the `build-installer` recipe and
