@@ -163,7 +163,7 @@ There is one way over:
 1. Uninstall Echo VR from the headset once (`adb uninstall com.readyatdawn.r15`, or from the headset's app library).
 2. Install this APK with `adb install`.
 
-This APK's `versionCode` is set when it is built, from its version (`tools/quest_apk_version.py`), and is always above
+This APK's `versionCode` is set when it is built, from its version (`tools/internal/questapk/version.go`), and is always above
 4987570, the game build the installer pins. So the installer's own build never replaces this one, and a later build of
 this APK installs over an earlier one. The code is `major*10^7 + minor*10^5 + patch*10^3 + slot`; the slot is
 the development build's distance N from the last release, or 999 for a release (a release `X.Y.Z` has `X*10^7 + Y*10^5 + Z*10^3 + 999`). It carries no

@@ -201,15 +201,15 @@ android-repack-libovr src:
 # The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
 # to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so; counts asserted, META-INF dropped),
 # then `just android-repack-apk <out>` repacks it. The output also carries the launcher label `label` (default "Echo VR"; the reference build
-# reads "Echo Combat (port)"), set in place in the manifest by tools/quest_apk_label.py through the rename tool's --label, so a `label` longer
-# than the reference's is a refusal. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
-quest-reference-base apk out label="Echo VR":
-    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}" --label "{{ label }}"
+# reads "Echo Combat (port)"), set in place in the manifest by tools/internal/questapk/label.go through the rename tool's --label, so a `label` longer
+# than the reference's is a refusal. tools/cmd/quest-apk-rename-package says what it refuses; it logs one JSON line.
+quest-reference-base apk out label="Echo VR": go-tools
+    build/go-tools/quest-apk-rename-package rename --apk "{{ apk }}" --out "{{ out }}" --label "{{ label }}"
 
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key (tools/quest_keystore.sh), and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
-# It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
+# It also sets the manifest's versionCode (tools/cmd/quest-apk-version): the store APK's 4987566 is below the
 # 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
 # code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
 # APK's code is read back with aapt2 before the recipe says it is ready.
@@ -230,7 +230,7 @@ quest-reference-base apk out label="Echo VR":
 # lib/arm64-v8a/libnevr_build_variant.so (tools/quest_repack_libs.py write-build-variant), which the sentinel reads before its first log
 # line; the folded combat modules run only for `q15t` and `combat` (docs/adr/0046 rule 5). Any other word is refused before anything is
 # staged. Every recipe that repacks an APK passes it, the empty word included, as its last argument.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="": go-tools
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
@@ -432,7 +432,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
     unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
-    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" "${version_source[@]}" --shim "$shim")
+    version_code=$(build/go-tools/quest-apk-version patch-manifest "$work/manifest/AndroidManifest.xml" "${version_source[@]}" --shim "$shim")
     ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
@@ -473,7 +473,7 @@ quest-keystore-fingerprint:
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
 # It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
-# minor or patch above 90; tools/quest_apk_version.py).
+# minor or patch above 90; tools/cmd/quest-apk-version).
 # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
 # before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py). To start from a
 # tag's commit instead of origin's tip (release-quest-apk does), run tools/release_preflight.py --tag vX.Y.Z.

@@ -1,4 +1,12 @@
-"""`just android-repack-apk` end to end: the versionCode of the APK it BUILDS (#923).
+"""The fixture of `just android-repack-apk` for the Python repack tests (#923).
+
+The cases that stood here (the versionCode of the APK the recipe builds, and the recipe's refusals) are ported to Go:
+cmd/quest-apk-version/repack_test.go, which runs the same recipe over the same fixture. What stays is RepackFixture, the
+fixture test_quest_repack_libs.py and test_quest_repack_pack.py import; it ends with those tests' port.
+
+The original docstring of the cases follows.
+
+`just android-repack-apk` end to end: the versionCode of the APK it BUILDS (#923).
 
 Android refuses an update whose versionCode is lower than the installed one (INSTALL_FAILED_VERSION_DOWNGRADE).
 The community Quest installer's game is versionCode 4987570; the store APK the recipe repacks is 4987566. The
@@ -62,16 +70,6 @@ def build_lib(path: pathlib.Path, source: str, soname: str, version: str = "") -
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def badging_code(apk: pathlib.Path) -> int:
-    out = subprocess.run(["aapt2", "dump", "badging", str(apk)], capture_output=True, text=True, check=True).stdout
-    return int(re.search(r"^package: .*versionCode='(\d+)'", out, re.M).group(1))
-
-
-def xmltree(apk: pathlib.Path) -> str:
-    return subprocess.run(["aapt2", "dump", "xmltree", "--file", "AndroidManifest.xml", str(apk)],
-                          capture_output=True, text=True, check=True).stdout
-
-
 @unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")
 class RepackFixture(unittest.TestCase):
     """One scratch directory: fixture key, store-like APK, compiled shim, build info."""
@@ -129,153 +127,3 @@ class RepackFixture(unittest.TestCase):
             capture_output=True, text=True, env=self.env, timeout=300)
         self.signed = work / "r15_nevr-sentinel_signed.apk"
         return result
-
-
-class RepackedVersionCodeTest(RepackFixture):
-    """The versionCode of the APK the recipe builds, read back from the signed file."""
-
-    def test_the_built_apk_is_above_the_installers_game_build(self):
-        self.make_inputs(DEV_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertGreater(badging_code(self.signed), INSTALLER_VERSION_CODE,
-                           "an update over a headset on the installer's build would be a downgrade")
-
-    def test_a_development_build_gets_the_code_the_rule_gives_it(self):
-        self.make_inputs(DEV_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(badging_code(self.signed), DEV_CODE)
-
-    def test_a_release_gets_a_code_above_every_development_build_of_it_and_below_the_next(self):
-        self.make_inputs(RELEASE_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        code = badging_code(self.signed)
-        self.assertEqual(code, RELEASE_CODE)
-        self.assertGreater(code, RELEASE_CODE - 1)  # above the same major's dev.998, the slot just below the release's 999
-        self.assertLess(code, DEV_CODE)  # below the next patch's development builds
-
-    def test_the_signed_apk_verifies_and_carries_the_signer_of_the_key_in_pass(self):
-        self.make_inputs(DEV_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        verify = subprocess.run(["apksigner", "verify", "--verbose", "--print-certs", str(self.signed)],
-                                capture_output=True, text=True)
-        self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
-        # apksigner picks the schemes from the manifest's minSdkVersion: 29 (the store APK's, and the fixture's) gets v3
-        # alone. The same is true of the APK the recipe built before the versionCode was set.
-        self.assertIn("Verified using v3 scheme (APK Signature Scheme v3): true", verify.stdout)
-        self.assertIn(f"certificate SHA-256 digest: {self.signer}", verify.stdout)
-
-    def test_only_the_versionCode_line_of_the_manifest_changes(self):
-        self.make_inputs(DEV_VERSION)
-        before = xmltree(self.apk).splitlines()
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        after = xmltree(self.signed).splitlines()
-        changed = [(b, a) for b, a in zip(before, after) if b != a]
-        self.assertEqual(len(before), len(after))
-        self.assertEqual(len(changed), 1, changed)
-        self.assertIn(f"versionCode(0x0101021b)={STORE_VERSION_CODE}", changed[0][0])
-        self.assertIn(f"versionCode(0x0101021b)={DEV_CODE}", changed[0][1])
-
-    def test_every_other_entry_of_the_store_apk_is_byte_identical(self):
-        self.make_inputs(DEV_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        with zipfile.ZipFile(self.apk) as src, zipfile.ZipFile(self.signed) as out:
-            kept = [n for n in src.namelist()
-                    if not n.startswith("META-INF/") and n not in ("AndroidManifest.xml", "lib/arm64-v8a/libovrplatformloader.so")]
-            self.assertEqual(sorted(kept), ["assets/data.bin", "lib/arm64-v8a/libr15.so"])
-            for name in kept:
-                # libr15.so is the one entry the repack changes on purpose: it is the patcher's output (here the stand-in's)
-                expected = src.read(name) + MARKER if name == "lib/arm64-v8a/libr15.so" else src.read(name)
-                self.assertEqual(out.read(name), expected, name)
-            self.assertIn("lib/arm64-v8a/libovrplatformloader_orig.so", out.namelist())
-
-    def test_the_recipe_says_what_it_stamped(self):
-        self.make_inputs(DEV_VERSION)
-        result = self.repack()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f'"version_code_after":{DEV_CODE}', result.stderr.replace(" ", ""))
-        self.assertIn(f"versionCode {DEV_CODE}", result.stdout)
-
-
-class RepackRefusalTest(RepackFixture):
-    """The recipe stops, with nothing signed, when it cannot be sure the versionCode it ships is the right one."""
-
-    def assert_refused(self, result, *needles):
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(self.signed.exists(), "a signed APK was left behind")
-        text = result.stdout + result.stderr
-        for needle in needles:
-            self.assertIn(needle, text)
-
-    def test_no_build_info_beside_the_shim_is_a_refusal_not_a_default(self):
-        self.make_inputs(DEV_VERSION, header=False)
-        self.assert_refused(self.repack(), "nevr_build_info.h")
-
-    def test_a_shim_that_does_not_carry_the_build_version_is_refused(self):
-        self.make_inputs(DEV_VERSION, shim_version=f"{MAJOR}.6.1-dev.36+3a35e0b")
-        self.assert_refused(self.repack(), "shim", DEV_VERSION)
-
-    def test_a_manifest_without_a_versionCode_is_refused(self):
-        self.make_inputs(DEV_VERSION, manifest=fx.build_manifest(version_code_count=0))
-        self.assert_refused(self.repack(), "versionCode")
-
-    def test_a_version_below_the_last_release_is_refused(self):
-        self.make_inputs("0.1.0")
-        self.assert_refused(self.repack(), f"major {MAJOR}")
-
-    def test_the_version_a_build_without_git_reports_is_refused(self):
-        # cmake/set_project_version_from_git.cmake leaves "1.0.0" when git is absent: a release-looking version
-        # that would give a code far below every published build's
-        self.make_inputs("1.0.0")
-        self.assert_refused(self.repack(), "1.0.0", f"major {MAJOR}")
-
-    def fake_tool(self, name, body):
-        """A `name` earlier on PATH than the real one; `body` is bash and may call $REAL (the real tool's path)."""
-        real = shutil.which(name)
-        fake = self.tmp / "fakebin" / name
-        fake.parent.mkdir(exist_ok=True)
-        fake.write_text(f"#!/usr/bin/env bash\nREAL={real}\n{body}\n")
-        fake.chmod(0o755)
-        self.env["PATH"] = f"{fake.parent}:{self.env['PATH']}"
-
-    def test_a_signed_apk_that_reads_back_with_another_code_is_removed_and_the_recipe_fails(self):
-        # The recipe compares what aapt2 reads from the SIGNED APK with what it stamped. Put an aapt2 on PATH
-        # that reports a different code, and the recipe must refuse and leave no signed APK for package-dev.
-        self.make_inputs(DEV_VERSION)
-        self.fake_tool("aapt2", "\"$REAL\" \"$@\" | sed \"s/versionCode='[0-9]*'/versionCode='1'/\"")
-        self.assert_refused(self.repack(), "signed APK versionCode is '1'", str(DEV_CODE))
-
-    def test_an_aapt2_that_fails_leaves_no_signed_apk(self):
-        # set -e quits at a failing command substitution: the APK must not survive for quest-install and the pinned tests
-        self.make_inputs(DEV_VERSION)
-        self.fake_tool("aapt2", "echo 'aapt2: cannot read the apk' >&2; exit 3")
-        self.assert_refused(self.repack(), "aapt2: cannot read the apk")
-
-    def test_an_apksigner_verify_that_fails_leaves_no_signed_apk(self):
-        # `sign` is real (so a signed APK exists to be left behind); only `verify` fails
-        self.make_inputs(DEV_VERSION)
-        self.fake_tool("apksigner", "if [ \"$1\" = verify ]; then echo 'apksigner: DOES NOT VERIFY' >&2; exit 1; fi\n\"$REAL\" \"$@\"")
-        self.assert_refused(self.repack(), "apksigner: DOES NOT VERIFY")
-
-    def test_a_failure_after_the_checks_leaves_no_signed_apk_either(self):
-        # the ELF checks that follow (here `nm`) run on the signed APK; any stop after signing removes it
-        self.make_inputs(DEV_VERSION)
-        self.fake_tool("nm", "echo 'nm: no symbols' >&2; exit 1")
-        self.assert_refused(self.repack(), "nm: no symbols")
-
-    def test_a_signed_apk_from_an_earlier_run_does_not_survive_a_refused_one(self):
-        self.make_inputs(DEV_VERSION)
-        first = self.repack()
-        self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertTrue(self.signed.exists())
-        (self.tmp / "build" / "generated" / "nevr_build_info.h").unlink()
-        self.assert_refused(self.repack(), "nevr_build_info.h")
-
-
-if __name__ == "__main__":
-    unittest.main()

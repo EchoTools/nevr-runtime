@@ -28,10 +28,10 @@ tools/perf/pc_frame_summary.py	ported by its unit of #2132
 tools/pinned_ovr_import_walk.py	ported by its unit of #2132
 tools/proto_stamp.py	ported by its unit of #2132
 tools/publish_quest_apk.py	ported by its unit of #2132
-tools/quest_apk_label.py	ported by its unit of #2132
+tools/quest_apk_label.py	Go twin internal/questapk/label.go; stays for quest_apk_rename_package.py and test_quest_release_base.py until they port
 tools/quest_apk_patch_map.py	ported by its unit of #2132
-tools/quest_apk_rename_package.py	ported by its unit of #2132
-tools/quest_apk_version.py	ported by its unit of #2132
+tools/quest_apk_rename_package.py	Go twin cmd/quest-apk-rename-package; stays for quest_release_base.py until it ports
+tools/quest_apk_version.py	Go twin cmd/quest-apk-version; stays for package_release.py and release_preflight.py until they port
 tools/quest_autopilot_run.py	ported by its unit of #2132
 tools/quest_link_objects.py	ported by its unit of #2132
 tools/quest_pack_from_game_data.py	ported by its unit of #2132
@@ -54,7 +54,7 @@ tools/scenario/control.py	ported by its unit of #2132
 tools/scenario/run_all.py	ported by its unit of #2132
 tools/scenario/run_scenario.py	ported by its unit of #2132
 tools/seed_build_tree.py	ported by its unit of #2132
-tools/tests/axml_fixtures.py	ported by its unit of #2132
+tools/tests/axml_fixtures.py	Go twin internal/axmlfix; stays for test_package_release.py and test_quest_release_base.py until they port
 tools/tests/gitenv.py	ported by its unit of #2132
 tools/tests/installer_world.py	ported by its unit of #2132
 tools/tests/just_recipe.py	ported by its unit of #2132
@@ -168,7 +168,7 @@ tools/tests/test_proto_stamp.py	ported by its unit of #2132
 tools/tests/test_provider_name_redirect_wiring.py	ported by its unit of #2132
 tools/tests/test_publish_quest_apk.py	ported by its unit of #2132
 tools/tests/test_quest_apk_patch_map.py	ported by its unit of #2132
-tools/tests/test_quest_apk_rename_package.py	ported by its unit of #2132
+tools/tests/test_quest_apk_rename_package.py	fixtures for test_quest_release_base.py (its cases are cmd/quest-apk-rename-package and internal/questapk/rename_test.go); ends when it ports
 tools/tests/test_quest_apk_version.py	ported by its unit of #2132
 tools/tests/test_quest_attach_wiring.py	ported by its unit of #2132
 tools/tests/test_quest_autopilot_run.py	ported by its unit of #2132
@@ -200,7 +200,7 @@ tools/tests/test_quest_release_loader.py	ported by its unit of #2132
 tools/tests/test_quest_release_timer.py	ported by its unit of #2132
 tools/tests/test_quest_repack_libs.py	ported by its unit of #2132
 tools/tests/test_quest_repack_pack.py	ported by its unit of #2132
-tools/tests/test_quest_repack_version.py	ported by its unit of #2132
+tools/tests/test_quest_repack_version.py	fixture for test_quest_repack_libs.py and test_quest_repack_pack.py (its cases are cmd/quest-apk-version/repack_test.go); ends when they port
 tools/tests/test_quest_resource_request_wiring.py	ported by its unit of #2132
 tools/tests/test_quest_runtime_pin.py	ported by its unit of #2132
 tools/tests/test_quest_sentinel_link.py	ported by its unit of #2132
