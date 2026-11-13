@@ -2356,6 +2356,8 @@ if(BUILD_TESTING)
       patch/resource_override.cpp
       # #1420: the netgun bullet transforms, driven through the resource seam.
       patch/netgun_bullets.cpp
+      # #1479: the five-name bullet id transform's Install counts the registrations the seam took.
+      patch/netgun_bullet_ids.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
@@ -2428,6 +2430,7 @@ if(BUILD_TESTING)
       patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/netgun_bullets.cpp
+      patch/netgun_bullet_ids.cpp
       patch/xpid_patch.cpp
       patch/provider_name_redirect.cpp
       ext/plugin_loader.cpp

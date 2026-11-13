@@ -1,5 +1,6 @@
 #include "runtime/patch/netgun_bullet_ids.h"
 
+#include <winsock2.h>  // before windows.h (the test build has no precompiled header)
 #include <windows.h>
 
 #include <cstring>
@@ -84,14 +85,26 @@ bool Transform(const void* original, uint64_t size, const void** out, uint64_t* 
 
 }  // namespace
 
-void Install() {
+size_t Install() {
+  size_t registered = 0;
   for (size_t i = 0; i < kNameCount; ++i) {
     g_targets[i].name = kNames[i];
-    RegisterResourceTransform(kResourceType, kNames[i], &Transform, &g_targets[i], "netgun bullet ids");
+    if (RegisterResourceTransform(kResourceType, kNames[i], &Transform, &g_targets[i], "netgun bullet ids")) {
+      ++registered;
+    }
   }
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] netgun bullet ids enabled type=0x%016llx names=%zu pin=%s",
-      static_cast<unsigned long long>(kResourceType), kNameCount, kStockSha256);
+  // The line counts the registrations that took: Info when all did, Warning when the seam refused some (no registry).
+  if (registered == kNameCount) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] netgun bullet ids enabled type=0x%016llx registered=%zu names=%zu pin=%s",
+        static_cast<unsigned long long>(kResourceType), registered, kNameCount, kStockSha256);
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] netgun bullet ids partly registered type=0x%016llx registered=%zu names=%zu pin=%s (the %zu "
+        "names the seam refused load the game's own bullet ids)",
+        static_cast<unsigned long long>(kResourceType), registered, kNameCount, kStockSha256, kNameCount - registered);
+  }
+  return registered;
 }
 
 }  // namespace nevr_netgun_bullet_ids

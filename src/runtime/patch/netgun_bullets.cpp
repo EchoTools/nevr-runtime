@@ -109,20 +109,33 @@ bool TransformBullets(const void* original, uint64_t size, const void** out, uin
 
 }  // namespace
 
-void Install(RegisterFn reg) {
+std::size_t Install(RegisterFn reg) {
+  std::size_t registered = 0;
   for (const Level& level : kLevels) {
     const std::string particles = std::string("netgun bullet effects ") + level.name + " CParticleEffectCR";
     const std::string bullets = std::string("netgun bullet effects ") + level.name + " CR15NetBulletCR";
-    reg(kParticleType, level.hash, &TransformParticles, const_cast<Level*>(&level), particles.c_str());
-    reg(kBulletType, level.hash, &TransformBullets, const_cast<Level*>(&level), bullets.c_str());
+    if (reg(kParticleType, level.hash, &TransformParticles, const_cast<Level*>(&level), particles.c_str())) ++registered;
+    if (reg(kBulletType, level.hash, &TransformBullets, const_cast<Level*>(&level), bullets.c_str())) ++registered;
   }
-  // The seam logs each transform it takes ("Registered transform: ..."); this line says what was asked of it.
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] netgun bullet effects requested levels=%zu transforms=%zu pins=%s,%s,%s (once a combat level "
-      "loads, the magnum, smg, Chain and rifle bullets get particle effects if its resources are these stock files; "
-      "any other bytes are served unchanged)",
-      std::size(kLevels), 2 * std::size(kLevels), kParticleStockSha256, kParticleStockGaussSha256,
-      kBulletStockSha256);
+  // The seam logs each transform it takes at Debug ("Registered transform: ..."); this line counts the registrations
+  // that took. When all did, it says what the player gets; when the seam refused some (a missing registry or a refused
+  // label), it is a Warning that says those resources load the game's own bytes.
+  const std::size_t requested = kTransformsPerLevel * std::size(kLevels);
+  if (registered == requested) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] netgun bullet effects registered transforms=%zu requested=%zu levels=%zu pins=%s,%s,%s (once a "
+        "combat level loads, the magnum, smg, Chain and rifle bullets get particle effects if its resources are these "
+        "stock files; any other bytes are served unchanged)",
+        registered, requested, std::size(kLevels), kParticleStockSha256, kParticleStockGaussSha256, kBulletStockSha256);
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] netgun bullet effects partly registered transforms=%zu requested=%zu levels=%zu pins=%s,%s,%s "
+        "(the %zu resources the seam refused load the game's own bytes, so their levels' bullets get no particle "
+        "effects)",
+        registered, requested, std::size(kLevels), kParticleStockSha256, kParticleStockGaussSha256, kBulletStockSha256,
+        requested - registered);
+  }
+  return registered;
 }
 
 #ifdef NEVR_TEST_HOOKS

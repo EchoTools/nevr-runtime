@@ -22,6 +22,7 @@
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/netgun_bullet_ids.h"
 #include "runtime/patch/netgun_bullets.h"
 #include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/plugin_assets.h"
@@ -1804,7 +1805,7 @@ TEST_F(NetgunBulletTransforms, InstallRegistersBothResourcesOfEachOfTheFiveLevel
   }
   EXPECT_TRUE(TestLogContainsAtLevel(
       EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] netgun bullet effects requested levels=5 transforms=10 "
+      "[NEVR.RESOURCE] netgun bullet effects registered transforms=10 requested=10 levels=5 "
       "pins=7130808e89f3aa9400cb09fb7a30ca85c9a5a0be363557a647974ebd00283b8c,"
       "9f03344fa5e5ea183ffed2b42186a1fa6b7e214953dcbfa1c0308389e9f05750,"
       "611f0ab4d6ada7f275ab1aaf974a08209d3c6e78e1a81b40c88fa11d9a215e6b (once a combat level loads"));
@@ -1950,6 +1951,54 @@ TEST_F(NetgunBulletTransforms, AnotherLevelOrAnotherClassIsNotAnswered) {
   GameFinishesBuffer(kNetgunParticleType + 1, kCombustion, 0, particles_.data(), particles_.size());
   EXPECT_EQ(g_seenBuffer, particles_.data());
   EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+}
+
+// #1479: the caller's summary counts what the seam took, not what was asked of it. A seam that refuses every third
+// registration (calls 3, 6 and 9 of ten) leaves seven, and the line says seven at Warning.
+constexpr std::size_t kNetgunTransformCount =
+    nevr_netgun_bullets::kTransformsPerLevel * std::size(nevr_netgun_bullets::kLevels);
+int g_fakeRegisterCalls = 0;
+bool FakeRegisterEveryThird(std::uint64_t, std::uint64_t, ResourceTransformFn, void*, const char*) {
+  constexpr int kRefusedEvery = 3;
+  return (++g_fakeRegisterCalls % kRefusedEvery) != 0;
+}
+
+TEST_F(NetgunBulletTransforms, InstallReturnsAndLogsTheRegistrationsThatTook) {
+  g_fakeRegisterCalls = 0;
+  constexpr std::size_t kTook = 7;
+  EXPECT_EQ(nevr_netgun_bullets::Install(&FakeRegisterEveryThird), kTook);
+  EXPECT_EQ(static_cast<std::size_t>(g_fakeRegisterCalls), kNetgunTransformCount);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.RESOURCE] netgun bullet effects partly registered transforms=7 requested=10 "
+                                     "levels=5 pins="));
+  EXPECT_TRUE(TestLogContains("(the 3 resources the seam refused load the game's own bytes"));
+  EXPECT_FALSE(TestLogContains("bullets get particle effects"));
+  EXPECT_FALSE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "netgun bullet effects registered"));
+}
+
+TEST_F(NetgunBulletTransforms, InstallAgainstTheRealSeamReturnsAllTen) {
+  EXPECT_EQ(nevr_netgun_bullets::Install(), kNetgunTransformCount);
+  EXPECT_EQ(ShutdownResourceOverride().registered, kNetgunTransformCount);
+}
+
+// ── #1479: the five-name bullet id transform counts what took ───────────────────────────────────────────────────
+
+TEST_F(ResourceTransforms, TheBulletIdInstallCountsTheFiveRegistrationsThatTook) {
+  EXPECT_EQ(nevr_netgun_bullet_ids::Install(), nevr_netgun_bullet_ids::kNameCount);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.RESOURCE] netgun bullet ids enabled type=0x6ef7231bbb0f6342 registered=5 "
+                                     "names=5 pin="));
+  EXPECT_EQ(ShutdownResourceOverride().registered, nevr_netgun_bullet_ids::kNameCount);
+}
+
+TEST_F(ResourceTransforms, TheBulletIdInstallWithNoRegistryCountsNoneAndWarns) {
+  TestHook_CloseResourceOverrides();  // the seam now has no registry, so it refuses every registration
+  EXPECT_EQ(nevr_netgun_bullet_ids::Install(), 0u);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.RESOURCE] netgun bullet ids partly registered type=0x6ef7231bbb0f6342 "
+                                     "registered=0 names=5 pin="));
+  EXPECT_TRUE(TestLogContains("(the 5 names the seam refused load the game's own bullet ids)"));
+  EXPECT_FALSE(TestLogContains("netgun bullet ids enabled"));
 }
 
 }  // namespace
