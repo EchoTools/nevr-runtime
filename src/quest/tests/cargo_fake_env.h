@@ -1,11 +1,14 @@
 // A memory-backed nevr_cargo::Env for the host tests: files in a map that a "restart" can share, a scripted server, a stop switch
-// that makes every mutating call after the Nth fail (a process killed at that point), real SHA-256, and the events as JSON lines.
+// that makes every mutating call after the Nth fail (a process killed at that point), real SHA-256, and the events as JSON lines and
+// as records whose fields a test reads by key. The map channel's tests add a nevr_maps::MapFs over the same files
+// (quest/tests/map_fake_fs.h), which reads the directories, file ids and write counts kept here.
 #pragma once
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -17,6 +20,9 @@
 
 namespace cargo_test {
 
+// A corrupted response has its first byte flipped by this mask, so its SHA-256 no longer matches.
+constexpr char kCorruptMask = 0x5a;
+
 struct Response {
   long status = 200;
   std::string body;
@@ -27,15 +33,45 @@ struct Response {
 struct Fs {
   std::map<std::string, std::string> files;
   int next_temp = 0;
+  // What a file system says about its files beyond their bytes: the directories made, and per file an id that stays while it is
+  // written and a count that moves with every write (a stamp's last-write time).
+  std::set<std::string> dirs;
+  std::map<std::string, std::uint64_t> ids;
+  std::map<std::string, std::uint64_t> writes;
+  std::uint64_t next_id = 0;
+  std::uint64_t write_clock = 0;
+  void Wrote(const std::string& path) {
+    if (ids.find(path) == ids.end()) ids[path] = ++next_id;
+    writes[path] = ++write_clock;
+  }
 };
 
 class FakeHasher : public nevr_cargo::Hasher {
  public:
-  void Update(const void* data, std::size_t length) override { sha_.Update(data, length); }
+  explicit FakeHasher(std::uint64_t* hashed = nullptr) : hashed_(hashed) {}
+  void Update(const void* data, std::size_t length) override {
+    if (hashed_ != nullptr) *hashed_ += length;
+    sha_.Update(data, length);
+  }
   std::string Hex() override { return sha_.Hex(); }
 
  private:
+  std::uint64_t* hashed_;
   nevr_quest::data::Sha256 sha_;
+};
+
+// One structured record, as Event received it.
+struct Record {
+  nevr_cargo::EventLevel level = nevr_cargo::EventLevel::kInfo;
+  std::string name;
+  std::vector<nevr_cargo::Field> fields;
+  // The field's value as text (a number in decimal); empty when the record has no such field.
+  std::string Get(const std::string& key) const {
+    for (const nevr_cargo::Field& f : fields) {
+      if (f.key == key) return f.is_number ? std::to_string(f.number) : f.text;
+    }
+    return std::string();
+  }
 };
 
 class FakeEnv : public nevr_cargo::Env {
@@ -54,6 +90,11 @@ class FakeEnv : public nevr_cargo::Env {
   int device_queries = 0;
   std::size_t disk_bytes_left = std::string::npos;  // appends past this many bytes fail (a full disk)
   std::uint64_t blob_bytes_read = 0;                 // bytes read through ReadBlob: a boot that hashes shows here
+  std::uint64_t hashed_bytes = 0;                    // bytes fed to every hasher NewHasher made
+  std::set<std::string> fail_writes;                 // WriteFileAtomically refuses these paths (the process died before them)
+  std::function<bool()> allow_get;                   // when set and false, a GET is cancelled before it starts (a shutdown)
+  std::vector<Record> records;                       // every event, with its fields
+  std::map<std::string, int> corrupt_times;          // by URL: the next N responses flip the body's first byte
   static nevr_cargo::DeviceFacts DefaultDevice() {
     nevr_cargo::DeviceFacts d;
     d.have_free = true;
@@ -76,11 +117,20 @@ class FakeEnv : public nevr_cargo::Env {
     *out = it->second;
     return true;
   }
-  bool MakeDirs(const std::string&) override { return true; }
+  bool MakeDirs(const std::string& dir) override {
+    for (std::string d = dir; !d.empty(); d = d.substr(0, d.find_last_of('/') == std::string::npos ? 0 : d.find_last_of('/'))) {
+      fs_->dirs.insert(d);
+    }
+    return true;
+  }
 
   class FakeAppend : public nevr_cargo::AppendFile {
    public:
-    FakeAppend(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) { env_->fs_->files[path_];  // created when absent
+    FakeAppend(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) {
+      if (env_->fs_->files.find(path_) == env_->fs_->files.end()) {
+        env_->fs_->files[path_];  // created when absent
+        env_->fs_->Wrote(path_);
+      }
     }
     std::uint64_t Size() const override { return env_->fs_->files[path_].size(); }
     bool Append(const void* data, std::size_t length) override {
@@ -90,6 +140,7 @@ class FakeEnv : public nevr_cargo::Env {
         env_->disk_bytes_left -= length;
       }
       env_->fs_->files[path_].append(static_cast<const char*>(data), length);
+      env_->fs_->Wrote(path_);
       return true;
     }
     bool Truncate(std::uint64_t size) override {
@@ -97,6 +148,7 @@ class FakeEnv : public nevr_cargo::Env {
       std::string& f = env_->fs_->files[path_];
       if (size > f.size()) return false;
       f.resize(static_cast<std::size_t>(size));
+      env_->fs_->Wrote(path_);
       return true;
     }
     bool Sync() override { return env_->Tick(); }
@@ -116,8 +168,9 @@ class FakeEnv : public nevr_cargo::Env {
     return true;
   }
   bool WriteFileAtomically(const std::string& path, const std::string& data) override {
-    if (!Tick()) return false;
+    if (fail_writes.count(path) != 0 || !Tick()) return false;
     fs_->files[path] = data;
+    fs_->Wrote(path);
     return true;
   }
 
@@ -145,8 +198,16 @@ class FakeEnv : public nevr_cargo::Env {
     const auto it = open_.find(handle);
     return it == open_.end() ? std::string() : it->second;
   }
+  // The paths of every handle open now.
+  std::vector<std::string> OpenPaths() const {
+    std::vector<std::string> out;
+    for (const auto& h : open_) out.push_back(h.second);
+    return out;
+  }
 
-  std::unique_ptr<nevr_cargo::Hasher> NewHasher() override { return std::unique_ptr<nevr_cargo::Hasher>(new FakeHasher()); }
+  std::unique_ptr<nevr_cargo::Hasher> NewHasher() override {
+    return std::unique_ptr<nevr_cargo::Hasher>(new FakeHasher(&hashed_bytes));
+  }
 
   nevr_cargo::HttpResult Get(const std::string& url, const nevr_cargo::HttpBody& on_body,
                              const std::function<bool()>& keep_going) override {
@@ -154,9 +215,18 @@ class FakeEnv : public nevr_cargo::Env {
     body_bytes_delivered.push_back(0);
     nevr_cargo::HttpResult r;
     if (Dead()) return r;  // a killed process makes no request
+    if (allow_get && !allow_get()) {
+      r.cancelled = true;
+      return r;
+    }
     const auto it = server.find(url);
     const Response resp = it != server.end() ? it->second : Response{404, std::string(), std::string::npos, std::string()};
     std::string body = resp.body + resp.extra;
+    const auto corrupt = corrupt_times.find(url);
+    if (corrupt != corrupt_times.end() && corrupt->second > 0 && !body.empty()) {
+      --corrupt->second;
+      body[0] = static_cast<char>(body[0] ^ kCorruptMask);
+    }
     const std::size_t limit = resp.drop_after != std::string::npos ? std::min(resp.drop_after, body.size()) : body.size();
     r.status = resp.status;
     std::size_t at = 0;
@@ -190,6 +260,21 @@ class FakeEnv : public nevr_cargo::Env {
     }
     line += "}";
     events.push_back(line);
+    records.push_back(Record{level, name, fields});
+  }
+
+  // The first record named `name`, with `key` equal to `value` when a key is given; null when there is none.
+  const Record* FindRecord(const std::string& name, const std::string& key = std::string(),
+                           const std::string& value = std::string()) const {
+    for (const Record& r : records) {
+      if (r.name == name && (key.empty() || r.Get(key) == value)) return &r;
+    }
+    return nullptr;
+  }
+  std::size_t CountRecords(const std::string& name) const {
+    std::size_t n = 0;
+    for (const Record& r : records) n += r.name == name ? 1 : 0;
+    return n;
   }
 
   std::vector<std::string> EventsNamed(const std::string& name) const {

@@ -140,5 +140,13 @@ inline constexpr std::uint64_t kCacheIndexSchemaVersion = 1;
 inline constexpr const char* kCacheIndexFile = "index.json";
 inline constexpr const char* kStoredManifestFile = "manifest.signed";
 inline constexpr std::size_t kVersionDirChars = 12;  // a version directory is named for the first 12 hex digits of its index sha256
+// What a recipe rebuild writes inside a version directory: the merged set as derived/<platform>.nevrres and each rebuilt script as
+// derived/scripts/<hash16>.dll. They are written under derived.tmp and the directory is renamed when every output verified.
+inline constexpr const char* kDerivedDir = "derived";
+inline constexpr const char* kDerivedSetSuffix = ".nevrres";
+inline constexpr const char* kDerivedScriptsDir = "scripts";
+inline constexpr const char* kDerivedScriptSuffix = ".dll";
+// A directory still being written: a version directory or the rebuild's outputs. Its name is the final one and this suffix.
+inline constexpr const char* kStagingSuffix = ".tmp";
 
 }  // namespace nevr_maps

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nevr_script_image {
 
@@ -41,5 +42,16 @@ ImageVerdict CheckPeScript(const std::uint8_t* image, std::size_t size);
 // elf_textrel, elf_no_symbols (no DT_STRTAB, DT_SYMTAB or DT_HASH it can read), elf_needed, elf_init, elf_no_export,
 // elf_export_not_code.
 ImageVerdict CheckElfScript(const std::uint8_t* image, std::size_t size);
+
+// A range of file offsets, [begin, end).
+struct FileRange {
+  std::uint64_t begin = 0;
+  std::uint64_t end = 0;
+};
+
+// The file ranges of a PE's executable sections (raw offset to raw offset plus raw size, cut at the end of the bytes; a section
+// whose raw data starts past the end is left out). Empty when `image` is not a PE whose section table lies inside it. The recipe
+// rebuild checks a rekeyed script's edits against them (core/map_derive.h, CheckRekeyEdits).
+std::vector<FileRange> ExecutableSectionFileRanges(const std::uint8_t* image, std::size_t size);
 
 }  // namespace nevr_script_image
