@@ -126,10 +126,12 @@ struct CallbackLease {
 };
 
 /* Hands the game `bytes` as the buffer of the callback block: a copy allocated through the game's own allocator, because
- * the game frees that buffer through it when the resource unloads. The caller keeps its bytes. Returns false, and
- * leaves the block alone, when no copy could be made (the game keeps its own buffer). */
+ * the game frees that buffer through it when the resource unloads. The caller keeps its bytes. Once the block names the
+ * copy, the reader's own buffer is held by nothing and is freed through the same allocator (#2345, game_buffer.h);
+ * *readerFree says what became of it. Returns false, and leaves the block and the reader's buffer alone, when no copy
+ * could be made (the game keeps its own buffer). */
 static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const char* label, uint64_t type_hash,
-                          uint64_t name_hash) {
+                          uint64_t name_hash, nevr_game_buffer::ReaderFree* readerFree) {
     void* copy = nullptr;
     const nevr_game_buffer::Copy result = nevr_game_buffer::CopyIntoGameHeap(
         g_memory_context_slot.load(std::memory_order_acquire), reinterpret_cast<const unsigned char*>(cbd), bytes, size,
@@ -142,9 +144,18 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
             static_cast<unsigned long long>(size), nevr_game_buffer::CopyName(result));
         return false;
     }
-    *reinterpret_cast<void**>(cbd + 0x18) = copy;
-    *reinterpret_cast<uint64_t*>(cbd + 0x20) = size;
+    void* const reader = *reinterpret_cast<void**>(cbd + nevr_game_buffer::kBlockBuffer);
+    *reinterpret_cast<void**>(cbd + nevr_game_buffer::kBlockBuffer) = copy;
+    *reinterpret_cast<uint64_t*>(cbd + nevr_game_buffer::kBlockSize) = size;
+    *readerFree = nevr_game_buffer::FreeReaderBuffer(g_memory_context_slot.load(std::memory_order_acquire),
+                                                     reinterpret_cast<const unsigned char*>(cbd), reader);
     return true;
+}
+
+/* The `orig_freed` field of an applied line: what became of the reader's own buffer on this load. */
+static std::string OriginalOutcome(nevr_game_buffer::ReaderFree readerFree) {
+    if (readerFree == nevr_game_buffer::ReaderFree::Freed) return "orig_freed=yes";
+    return std::string("orig_freed=no orig_kept=") + nevr_game_buffer::ReaderFreeName(readerFree);
 }
 
 /* Whether the registry holds an entry that replaces buffer 0 of (type_hash, name_hash): for a texture, its descriptor.
@@ -216,11 +227,13 @@ static bool ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_h
             static_cast<unsigned long long>(name_hash), static_cast<unsigned long long>(inSize));
         return false;
     }
-    if (!GiveGameACopy(cbd, out, outSize, ovr.label.c_str(), type_hash, name_hash)) return false;
+    nevr_game_buffer::ReaderFree readerFree = nevr_game_buffer::ReaderFree::NoBuffer;
+    if (!GiveGameACopy(cbd, out, outSize, ovr.label.c_str(), type_hash, name_hash, &readerFree)) return false;
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] transform applied label=%s type=0x%016llx name=0x%016llx orig_bytes=%llu new_bytes=%llu",
+        "[NEVR.RESOURCE] transform applied label=%s type=0x%016llx name=0x%016llx orig_bytes=%llu new_bytes=%llu %s",
         ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
-        static_cast<unsigned long long>(inSize), static_cast<unsigned long long>(outSize));
+        static_cast<unsigned long long>(inSize), static_cast<unsigned long long>(outSize),
+        OriginalOutcome(readerFree).c_str());
     return true;
 }
 
@@ -268,13 +281,9 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                  * A fixed replacement outranks every transform of the same key whatever the registration order (#1479),
                  * so transforms are offered only when none matches. Every match is recorded, so a shutdown can tell an
                  * entry passed over from one never requested.
-                 * KNOWN-WRONG #2345: the cost of every load. A buffer-0 replacement points the block at a copy in
-                 * the game's heap and leaves the reader's own buffer alone (game_buffer.h: the reader may own it), so
-                 * one buffer of orig_bytes stays allocated for each load served, a level loaded N times leaving N of
-                 * them per overridden buffer-0 resource. Serving one load per entry would cap that at one per entry,
-                 * and the override would not survive a reload; transforms (OfferTransforms) already pay it on every
-                 * load. A buffer-1 payload is written in place and leaves none. Test:
-                 * EachBufferZeroLoadServedLeavesTheReadersOwnBufferAllocatedAndBufferOneLeavesNone. */
+                 * Serving every load costs no memory: a buffer-0 replacement frees the reader's own buffer once the
+                 * block names the copy (GiveGameACopy, #2345), and a buffer-1 payload is written in place. Test:
+                 * EachBufferZeroLoadServedFreesTheReadersOwnBufferAndBufferOneLeavesNone. */
                 std::shared_ptr<ResourceOverride> fixedHit;
                 for (auto& ovr : *g_overrides) {
                     if (ovr->name_hash != name_hash) continue;
@@ -312,6 +321,7 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     }
     CallbackLease lease(selected);
     const bool inPlace = buf_index == 1;
+    nevr_game_buffer::ReaderFree readerFree = nevr_game_buffer::ReaderFree::NoBuffer;
     if (!selected) {
         if (!transforms.empty()) {
             OfferTransforms(transforms, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
@@ -319,7 +329,7 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     } else if (!(inPlace ? WritePayloadInPlace(reinterpret_cast<uintptr_t>(callback_data), *selected, type_hash,
                                                name_hash, orig_size)
                          : GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
-                                         selected->label.c_str(), type_hash, name_hash))) {
+                                         selected->label.c_str(), type_hash, name_hash, &readerFree))) {
         /* Not served: the game keeps its own buffer for this load; the next load is offered the replacement as
          * every load is. The later entries of the key were not passed over by an override that served. */
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
@@ -344,10 +354,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
         if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
         Log(EchoVR::LogLevel::Info,
             "[NEVR.RESOURCE] override applied label=%s buffer=%u type=%s name=%s orig_bytes=%llu "
-            "new_bytes=%llu copy=%s",
+            "new_bytes=%llu copy=%s %s",
             selected->label.c_str(), buf_index, typeBuf, nameBuf,
             static_cast<unsigned long long>(orig_size),
-            static_cast<unsigned long long>(selected->size), inPlace ? "in_place" : "game_heap");
+            static_cast<unsigned long long>(selected->size), inPlace ? "in_place" : "game_heap",
+            inPlace ? "orig_freed=no orig_kept=in_place" : OriginalOutcome(readerFree).c_str());
     }
     original(callback_data);
 }

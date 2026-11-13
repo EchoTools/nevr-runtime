@@ -135,9 +135,10 @@ An override serves every load of its resource: a level loaded again in one proce
 several fixed entries for one key, the first registered serves every load and the later ones are passed over
 (`CachedOverrides.AFixedOverrideReplacesItsResourceOnEveryLoad`, `src/runtime/tests/test_resource_override.cpp`).
 
-KNOWN-WRONG #2345: each served load costs memory. A buffer-0 override gives the game a copy in its own heap and leaves
-the reader's own buffer allocated. Each load served leaves one buffer of the game's original size, so a level loaded N
-times leaves N per overridden buffer-0 resource. A buffer-1 payload is written in place and leaves none.
+A served load leaves no buffer behind. A buffer-0 override gives the game a copy in its own heap, and the reader's own
+buffer, which nothing else holds, is freed through the game's allocator once the copy is in place
+(`src/runtime/patch/game_buffer.h`, `FreeReaderBuffer`); the `override applied` line says `orig_freed=yes`. A buffer-1
+payload is written in place.
 
 The runtime registers a mounted set's overrides itself, at the mount, with the
 override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold

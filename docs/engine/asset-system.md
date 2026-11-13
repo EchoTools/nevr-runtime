@@ -225,6 +225,26 @@ request for the `"Streaming IO"` thread (worker `0x141524cc0`). That thread:
 4. **Release.** `Unload` (`0x140fa3000`) drops a reference; at zero it removes the table entry, calls vtable
    `+0x30`, frees the buffers (`0x140fa2210`) and destroys the object.
 
+**Who owns the buffer the reader allocated.** The resource does, from the callback on, and only the release frees
+it. `ResourceLoadInternal` is the only code that names the callback (`LEA` at `0x140fa33ae`; the other references to
+`0x140fa16d0` are the store of that address as `ReadFileAsync`'s argument at `0x140fa33b5` and unwind data), and `FillResourceFileRequest` (`0x140fa1fe0`) zeroes the request's caller buffer, so
+`SIORequestContext::SetupReadBuffer` (`0x141524910`) allocates every buffer of a resource load through the request's
+allocator, slot `+0x28`, and stores it at context `+0x490` (callback block `+0x18`, block = context `+0x478`); it records
+that allocator at `+0x4a0` (block `+0x28`) even when a caller supplies the buffer. It is the only code of the streaming
+processor that writes `+0x490`: the chunk cache is copied out of into a fresh allocation (`0x141526380`), and a large
+read bypassing the cache goes through `SetupReadBuffer` too (`0x141525416`). The IO-thread callback `[ctx+0x4b8]` is
+called from two places: `ServeRequest` (`0x1415249b0`, at `0x141524c22`) for every status but 2 and 3, and
+`0x141525ea0` (at `0x1415260b8`, with the block in `rcx`; called from the IO thread's main loop `0x141524cc0` and from
+`0x1415255a0`), which completes large reads (status 3, set to 4, 0xb or 0xc) and reads waiting on the chunk cache
+(status 2, filled through `SetupReadBuffer` and a copy out of the cache). After the call, each only pushes the context
+onto the done list (`+0x1c0`). `CStreamingIOProcessor::Update` (`0x141526760`) calls the main-thread callback
+(`0x140fa36e0`, a tail jump to `Unload`) and returns the context to the free list. None of the three reads `+0x490`
+again; a reused context is zero-filled (`0x141524850`). The release frees buffer 0 through memory-context `+0x10`, slot `+0x38` (`call [rax+0x38]` at
+`0x140fa22b8`), the `CElephantAllocator` free (`0x1400cf1e0`, vtable `0x1416ccdb8`, whose slot `+0x28` is the
+allocate `0x1400cdee0`); the `SetMemPool` call before it (`0x1400cecc0`) is a bare `ret`. So a buffer the callback
+block stops naming before the callback runs is referenced by nothing. The runtime's buffer-0 replacement frees it
+there (`src/runtime/patch/game_buffer.h`, `FreeReaderBuffer`).
+
 `CResource` layout (ctor `0x1402a03d0`): `+0x28` logical type, `+0x38` name, `+0x40/+0x48` buffers,
 `+0x50/+0x58` sizes, `+0x60` state, `+0x64` refcount, `+0x68` pending-variant mask, `+0x6c` flags.
 

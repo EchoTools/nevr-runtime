@@ -43,10 +43,9 @@ void InstallResourceOverride();
 
 /// Register an embedded data override (data pointer must outlive the hook). It serves every load of its resource; with
 /// several fixed entries for one key, the first registered serves and the later ones are passed over (#2343).
-/// KNOWN-WRONG #2345: each buffer-0 load served leaves the reader's own buffer (orig_bytes) allocated, since only
-/// the copy is handed to the game and the original is not freed (game_buffer.h); a level loaded N times leaves N per
-/// overridden buffer-0 resource, as a transform's answer already does. A buffer-1 payload is written in place and
-/// leaves none. The type names the buffer replaced (resource_buffer_key.h): 0, the logical type or Make(<logical>,
+/// A buffer-0 load served frees the reader's own buffer once the game has its copy (game_buffer.h, FreeReaderBuffer,
+/// #2345), as a transform's answer does; a buffer-1 payload is written in place. Neither leaves a buffer allocated.
+/// The type names the buffer replaced (resource_buffer_key.h): 0, the logical type or Make(<logical>,
 /// "Win10") name buffer 0, which the game gets a copy of in its own heap; Make(<logical>, "Win10GPU") names buffer 1 (a
 /// texture's payload), which is written over the game's own buffer when it is no larger and is otherwise not served,
 /// with a Warning. The cache and `_overrides/` key the same. A texture's descriptor (buffer 0) and payload (buffer 1)
@@ -66,9 +65,11 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
 std::string FirstFixedOverrideLabelFor(uint64_t on_disk_type, uint64_t name_hash);
 
 /// What a transform returns for a resource: `original` and `original_size` are the buffer the game delivered, and a
-/// transform that wants to serve other bytes sets `*out` and `*out_size` and returns true. The bytes it returns
-/// must stay valid and unchanged for the rest of the process (the game keeps reading them after the callback).
-/// Returning false leaves the game's own buffer in place for this transform; the next transform of the key is asked
+/// transform that wants to serve other bytes sets `*out` and `*out_size` and returns true. `original` is valid only
+/// during the call: when the answer is served, the game's buffer is freed (game_buffer.h, FreeReaderBuffer), so a
+/// transform keeps no pointer into it. The bytes it returns must stay valid and unchanged until the game's callback for
+/// that load returns: the runtime copies them into the game's heap, and the game reads that copy, never the transform's
+/// bytes. Returning false leaves the game's own buffer in place for this transform; the next transform of the key is asked
 /// (RegisterResourceTransform). It runs on the game's resource thread, outside the
 /// registry lock; it must not throw.
 using ResourceTransformFn = bool (*)(const void* original, uint64_t original_size, const void** out,

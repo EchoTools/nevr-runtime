@@ -9,9 +9,25 @@
  * This header holds the two ways a replacement reaches the game. CopyIntoGameHeap allocates through the same allocator,
  * slot +0x28 (FUN_1400cdee0(allocator, alignment, size), CElephantAllocator::vslot[5]; the game's own reader allocates
  * the buffer it reads through that slot, SetupReadBuffer 0x141524952), and copies the bytes in. The caller keeps its own
- * bytes and writes the block only when the copy exists in full. The game's original buffer is left alone (the reader may
- * own it), so one buffer per replaced load stays allocated. CopyIntoGameHeapFor is the same copy for a buffer the runtime
- * serves with no callback block (a plugin asset, plugin_assets.cpp): the release allocator alone decides.
+ * bytes and writes the block only when the copy exists in full. FreeReaderBuffer then frees the reader's own buffer (#2345):
+ * the block was its only reference. CopyIntoGameHeapFor is the same copy for a buffer the runtime serves with no callback
+ * block (a plugin asset, plugin_assets.cpp): the release allocator alone decides.
+ *
+ * Who owns the reader's buffer (echovr.exe, read in the disassembly). CResourceManager::ResourceLoadInternal 0x140fa3220
+ * is the only code that names AsyncResourceIOCallback 0x140fa16d0 (LEA at 0x140fa33ae); it passes the allocator at
+ * memory-context + 0x10 for buffer 0, and FillResourceFileRequest 0x140fa1fe0 zeroes the request's caller buffer
+ * (puVar9[0x8b] = 0, context + 0x460). So SIORequestContext::SetupReadBuffer 0x141524910 always allocates buffer 0
+ * through that allocator, slot +0x28, and stores it at context + 0x490 (block + 0x18); it is the only code in
+ * CStreamingIOProcessor that writes there, and the chunk cache is a staging area copied out of (0x141526380). The
+ * callback copies block + 0x18 into the resource (+0x40) before anything else. The callback is called from two places,
+ * ServeRequest 0x1415249b0 (0x141524c22) and fcn.141525ea0 (0x1415260b8, which completes large reads and the reads
+ * waiting on the chunk cache); after it returns, each only pushes the context onto the done list (+0x1c0), and
+ * CStreamingIOProcessor::Update 0x141526760 runs the main-thread callback and frees the context: none of the three reads
+ * + 0x490 again, a reused context is zero-filled (0x141524850),
+ * and InitializeResource 0x140fa2510 frees buffer 1 only. The one free of buffer 0 is the release, through the resource's
+ * pointer. A buffer the block no longer names is therefore held by nothing. SetupReadBuffer records the allocator at
+ * block + 0x28 even for a caller-supplied buffer, so the allocator check below does not by itself prove the buffer came
+ * from that allocator: what does is that no load through this callback supplies one.
  *
  * WriteInPlace (#1421) writes over the buffer the game's reader already allocated, when the bytes fit it: no allocation,
  * and the buffer the game frees is still its own. It serves a texture's payload (buffer 1), which is up to 78 MB, where a
@@ -91,6 +107,47 @@ inline Copy AllocateCopy(void* release, uint64_t alignment, const void* bytes, u
     std::memcpy(copy, bytes, static_cast<size_t>(size));
     *out = copy;
     return Copy::Copied;
+}
+
+enum class ReaderFree {
+    Freed,
+    NoBuffer,           // the block named no reader buffer
+    NoContext,          // the game has not published its memory context (or no slot was given)
+    NoAllocator,        // the context or the block holds no allocator
+    AllocatorMismatch,  // the block's allocator is not the one the release uses
+};
+
+inline const char* ReaderFreeName(ReaderFree r) {
+    switch (r) {
+        case ReaderFree::Freed: return "freed";
+        case ReaderFree::NoBuffer: return "no_buffer";
+        case ReaderFree::NoContext: return "no_memory_context";
+        case ReaderFree::NoAllocator: return "no_allocator";
+        case ReaderFree::AllocatorMismatch: return "allocator_mismatch";
+    }
+    return "unknown";
+}
+
+using FreeFn = uint64_t (*)(void* allocator, void* pointer);
+
+/// Frees `reader`, the buffer the block `block` named before a copy replaced it, through the release allocator's free
+/// slot (+0x38, FUN_1400cf1e0, CElephantAllocator::vslot[7]: the call the release 0x140fa2210 makes for buffer 0 at
+/// 0x140fa22b8). Only when the block's allocator is that one, the allocator the reader allocated it through; otherwise,
+/// and when the block named no buffer, nothing is freed. Call it once, after the block names the copy: the block was
+/// the buffer's only reference (header comment).
+inline ReaderFree FreeReaderBuffer(void* const* contextSlot, const unsigned char* block, void* reader) {
+    if (reader == nullptr) return ReaderFree::NoBuffer;
+    if (contextSlot == nullptr || *contextSlot == nullptr) return ReaderFree::NoContext;
+    void* const release = ReleaseAllocator(contextSlot);
+    void* blockAllocator = nullptr;
+    std::memcpy(&blockAllocator, block + kBlockAllocator, sizeof(blockAllocator));
+    if (release == nullptr || blockAllocator == nullptr) return ReaderFree::NoAllocator;
+    if (blockAllocator != release) return ReaderFree::AllocatorMismatch;
+    void* const* table = nullptr;
+    std::memcpy(&table, release, sizeof(table));
+    const FreeFn releaseFree = reinterpret_cast<FreeFn>(table[kFreeSlot / sizeof(void*)]);
+    releaseFree(release, reader);
+    return ReaderFree::Freed;
 }
 
 /// Allocates `size` bytes for the block `block` (at least kBlockAlignment + 8 bytes), through the allocator the game
