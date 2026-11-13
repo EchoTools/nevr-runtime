@@ -5,7 +5,7 @@
 // them (the offsets are spelled in this file, not taken from the shared header, so a wrong constant there fails here).
 //
 // What this test does not repeat: the decisions (held, re-armed, superseded, dropped) are the shared header's
-// (src/runtime/patch/new_unlocks_clear_rules.h) and its GTest (src/runtime/tests/test_new_unlocks_clear.cpp). What it pins is the Quest side of
+// (src/runtime/patch/new_unlocks_clear_rules.h) and its GTest (src/runtime/tests/new_unlocks_clear_rules_test.cpp). What it pins is the Quest side of
 // that rule: that the two words are the ones hooked and each wrapper calls ITS word's original with the game's argument, that the table entries are
 // the store libr15's symbol and addresses, that the frame work re-arms by setting the dirty bit once the game's emptiness test says the buffer is
 // empty, that a word that does not hold the clear is refused alone, that a pin that differs refuses the module before any word is touched, and

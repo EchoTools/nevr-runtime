@@ -1,7 +1,7 @@
 """The PC new-unlocks clear hooks (#2410, src/runtime/patch/new_unlocks_clear.cpp): the parts a host test cannot reach without the game.
 
 When a clear is held and when the dirty bit is set again is one definition in src/runtime/patch/new_unlocks_clear_rules.h, driven by
-src/runtime/tests/test_new_unlocks_clear.cpp. What stays here is the glue's wiring, read as source: the hooked clear and the
+src/runtime/tests/new_unlocks_clear_rules_test.cpp. What stays here is the glue's wiring, read as source: the hooked clear and the
 emptiness test are pinned by bytes at the addresses the rules header lists, the hooks go through that table and the rules, the runtime
 installs them once at boot, and the scenario control calls the clear through the detour.
 
@@ -91,7 +91,7 @@ class Wiring(unittest.TestCase):
 
     def test_registered_in_the_build_and_the_inventory(self):
         self.assertIn('"patch/new_unlocks_clear.cpp"', (ROOT / "src/runtime/CMakeLists.txt").read_text())
-        self.assertIn("add_executable(test_new_unlocks_clear tests/test_new_unlocks_clear.cpp)", (ROOT / "src/runtime/CMakeLists.txt").read_text())
+        self.assertIn("add_executable(test_new_unlocks_clear tests/new_unlocks_clear_rules_test.cpp)", (ROOT / "src/runtime/CMakeLists.txt").read_text())
         self.assertIn('"patch/new_unlocks_clear.cpp"', (ROOT / "tools/verify_patch_source_inventory.py").read_text())
         self.assertIn("test_new_unlocks_clear.exe", (ROOT / "justfile").read_text())
 

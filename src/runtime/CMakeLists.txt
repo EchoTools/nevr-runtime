@@ -2041,9 +2041,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
 
-    # test_new_unlocks_clear.cpp (#2410, header-only patch/new_unlocks_clear_rules.h).
-    add_executable(test_new_unlocks_clear tests/test_new_unlocks_clear.cpp)
-    set_source_files_properties(tests/test_new_unlocks_clear.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # new_unlocks_clear_rules_test.cpp (#2410, header-only patch/new_unlocks_clear_rules.h).
+    add_executable(test_new_unlocks_clear tests/new_unlocks_clear_rules_test.cpp)
+    set_source_files_properties(tests/new_unlocks_clear_rules_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_new_unlocks_clear PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_new_unlocks_clear PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_new_unlocks_clear DISCOVERY_MODE PRE_TEST)
