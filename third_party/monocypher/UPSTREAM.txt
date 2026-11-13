@@ -1,0 +1,18 @@
+Monocypher 4.0.2
+Source: https://monocypher.org/download/monocypher-4.0.2.tar.gz (release tarball), cross-checked against
+https://github.com/LoupVaillant/Monocypher/archive/refs/tags/4.0.2.tar.gz: the five files below differ only in the
+first-line version stamp ("4.0.2" in the release, "__git__" in the tag archive).
+Licence: CC0-1.0 or BSD-2-Clause, at the user's choice (LICENCE.md); authors in AUTHORS.md.
+
+Files, unmodified (sha256 of the release tarball's copy):
+afe2b098c8569577a84488e0b98d276d1fba6506adea68bb9241a52111734c59  src/monocypher.c
+f78bb31255cfb7beba66afd2137f5194c8a025cf40488b6cc1e295234d43f374  src/monocypher.h
+7c9b16056cbd27521919e8a6f56a228808b9e718afc42e3d33f28c08e5abdee2  src/optional/monocypher-ed25519.c
+bd546edcd468d64e28caa3dbf4b1d6bfad7435c0ce994723fd81aae26405121b  src/optional/monocypher-ed25519.h
+5f8360e4c06ddcc584bdb4b210c6af824c4bb301e6a9a521869b6d90795ca4b3  LICENCE.md
+75a4d04559754a1016006f2c0e194cc7b459583cf9b1e2ce4ec10c74cb3de578  AUTHORS.md
+
+Layout change only: src/optional/monocypher-ed25519.{c,h} sit in src/ beside monocypher.{c,h}. The same copy, with the
+same sha256 values, is vendored by EchoConstruct (third_party/monocypher, c1d5805b7). nevr_core compiles both files
+(src/core/maps/pc4.cmake) for minisign verification of the custom-map channel manifest (src/core/minisign_verify.cpp:
+Ed25519 with SHA-512 over a BLAKE2b-512 prehash; docs/adr/0047).
