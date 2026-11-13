@@ -465,7 +465,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
     env.Event(EventLevel::kWarn, "cargo_manifest", fields);
     const bool refused = std::string(manifestFailure) == "not_zstd" || std::string(manifestFailure) == "no_content_size";
-    result.stopped = refused ? "manifest_refused" : "manifest_failed";
+    result.stopped = refused ? "manifest_refused" : kStoppedManifestFailed;
     done(result.stopped);
     return result;
   }
@@ -479,7 +479,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     }
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
     env.Event(EventLevel::kWarn, "cargo_manifest", fields);
-    result.stopped = parsed.status == ParseStatus::kTooLarge ? "manifest_failed" : "manifest_refused";
+    result.stopped = parsed.status == ParseStatus::kTooLarge ? kStoppedManifestFailed : "manifest_refused";
     done(result.stopped);
     return result;
   }

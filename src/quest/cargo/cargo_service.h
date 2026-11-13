@@ -38,9 +38,12 @@ nevr_cargo::RunResult RunOnce(nevr_cargo::Env& env, const nevr_cargo::RunConfig&
 inline constexpr const char* kFirstRunFailedMessage =
     "Echo VR could not download its game data. Check the connection and free space on the headset, then start the game again.";
 
+// The `result` of the Warning `cargo_first_run` when the manifest could not be refreshed and the launch went on with the complete set the store held (#2414).
+inline constexpr const char* kFirstRunManifestNotRefreshed = "manifest_not_refreshed";
+
 // The whole-game launch's setup (data_wiring::Options::all_assets_ready, docs/adr/0045 decision 11), on the calling thread, before the
 // engine starts: mounts what the cache holds, then downloads every object of the manifest through the first-run prefetch and mounts the
-// result. Ok only when the store is whole and a manifest was loaded; otherwise the message the player reads. For the host tests.
+// result. Ok when the store is whole and a manifest was loaded, or when the manifest request failed and the set mounted from the saved manifest left no name out (a Warning says the manifest was not refreshed, #2414); otherwise the message the player reads. For the host tests.
 nevr_quest::data::AllAssetsResult FirstRun(nevr_cargo::Env& env, const nevr_cargo::RunConfig& config, PublishFn publish,
                                            const std::function<bool()>& keep_going);
 

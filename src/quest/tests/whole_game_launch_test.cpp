@@ -41,6 +41,10 @@ constexpr const char* kManifestPath = "v1/allassets/test/manifest.json.zst";
 constexpr std::size_t kDescriptorBytes = 248;
 constexpr std::size_t kPixelBytes = 8388608;
 constexpr const char* kType = "0x489bb35d53ca50e9";  // the platform's payload type (nc::kAndroidArm64)
+constexpr std::size_t kStoreAlign = 16;               // the alignment a manifest row states for a stored frame
+constexpr std::size_t kOtherFrameSize = 41;                   // stored bytes of a frame unlike the descriptor's 40
+constexpr std::size_t kSizeSkew = 16;                 // how far a row's stated size is from the frame's own
+constexpr std::size_t kNotAFramePageBytes = 4096;     // the body of a reachable URL that is not a zstd frame
 
 std::mutex g_mutex;
 std::vector<std::string> g_cargoLines;  // the sentinel's JSON lines (the cargo worker and the Quest env log through them)
@@ -228,6 +232,121 @@ void AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored() {
   QCHECK(data_test::ReadFile(launch.scratch.Path("nevr/cache/store-0.pack")).empty());  // nothing of it is stored
 }
 
+// The second launch of the same cache with every request failing: the manifest cannot be refreshed (#2414).
+qd::StepResult RunOffline(Launch& launch) {
+  g_cargoLines.clear();
+  g_published.clear();
+  launch.stepEvents.clear();
+  launch.transport.requests.clear();
+  launch.transport.server.clear();  // every request is a 404, the scripted transport's answer for a URL it does not hold
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  return qd::RunDataStep(launch.config, launch.transport);
+}
+
+void AnOfflineLaunchOverACompleteCacheBootsAndWarnsThatTheManifestWasNotRefreshed() {
+  Launch launch;
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  QCHECK(qd::RunDataStep(launch.config, launch.transport).outcome == qd::StepOutcome::kStubbed);  // the first launch stores everything
+  const qd::StepResult r = RunOffline(launch);
+  std::vector<std::string> step;
+  for (const std::string& l : launch.stepEvents) step.push_back("step " + l);
+  PrintLog("an offline launch, complete cache", step);
+
+  QCHECK(r.outcome == qd::StepOutcome::kStubbed);
+  QCHECK(launch.StepSaid("data_all_assets_ready result=ok reason=worker_done"));
+  QCHECK(!launch.StepSaid("worker_refused"));
+  // The cache was mounted from disk and handed on, once; nothing was downloaded.
+  QCHECK(g_published.size() == 1 && g_published[0]->shadow != nullptr);
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_mounted", "source", "boot") < g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_prefetch_start") == g_cargoLines.size());
+  // One Warning says the manifest was not refreshed, and what that means.
+  const std::size_t at = FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed);
+  QCHECK(at < g_cargoLines.size());
+  if (at < g_cargoLines.size()) {
+    const json line = json::parse(g_cargoLines[at], nullptr, false);
+    QCHECK(line.value("level", "") == "warn" && line.value("stopped", "") == nc::kStoppedManifestFailed && !line.value("consequence", "").empty());
+  }
+}
+
+void AnOfflineLaunchOverAnEmptyCacheStillEndsWithTheMessage() {
+  g_cargoLines.clear();
+  g_published.clear();
+  Launch launch;
+  const qd::StepResult r = RunOffline(launch);  // nothing was ever stored
+  QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
+  QCHECK(g_published.empty());
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", "failed") < g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+}
+
+// A first launch that stores everything, then the saved manifest rewritten to name one more name (`extra`, a manifest entry) than the
+// first launch's two entries gave, then the offline launch of it. The entry decides how the extra name is left out of the boot mount.
+qd::StepResult OfflineLaunchOverASavedManifestWithOneMoreName(Launch& launch, const json& extra) {
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  QCHECK(qd::RunDataStep(launch.config, launch.transport).outcome == qd::StepOutcome::kStubbed);
+  const auto entry = [](const char* name, const char* type, const std::string& blob, std::uint64_t bytes) {
+    return json{{"platform", "android-arm64"}, {"type", type}, {"name", name}, {"format", "zstd-frame"},
+                {"sha256", Sha256Hex(blob.data(), blob.size())}, {"size", blob.size()}, {"bytes", bytes}, {"align", kStoreAlign}, {"stock_size", bytes}};
+  };
+  const json doc = {{"schema", "nevr-cargo-manifest"},
+                    {"schema_version", 1},
+                    {"labels", {{"game", {{"entries", {entry("0x3fa6d25bc24a7b01", "0xe2efe7289d5985b8", launch.descriptor, kDescriptorBytes),
+                                                       entry("0x3fa6d25bc24a7b01", kType, launch.pixels, kPixelBytes), extra}}}}}}};
+  const std::string saved = launch.scratch.Path("nevr/cache/manifest.json.zst");
+  const std::string frame = cargo_test::ZstdFrameOf(doc.dump());
+  std::FILE* f = std::fopen(saved.c_str(), "wb");
+  QCHECK(f != nullptr);
+  if (f != nullptr) {
+    std::fwrite(frame.data(), 1, frame.size(), f);
+    std::fclose(f);
+  }
+  return RunOffline(launch);
+}
+
+void AnOfflineLaunchOverACacheMissingAnObjectOfItsSavedManifestStillEndsWithTheMessage() {
+  Launch launch;
+  const std::string other = cargo_test::MakeFrame(kDescriptorBytes, kOtherFrameSize);  // named by the manifest, never stored
+  const json extra = {{"platform", "android-arm64"}, {"type", "0xe2efe7289d5985b8"}, {"name", "0x3fa6d25bc24a7b02"}, {"format", "zstd-frame"},
+                      {"sha256", Sha256Hex(other.data(), other.size())}, {"size", other.size()}, {"bytes", kDescriptorBytes}, {"align", kStoreAlign},
+                      {"stock_size", kDescriptorBytes}};
+  const qd::StepResult r = OfflineLaunchOverASavedManifestWithOneMoreName(launch, extra);
+  QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+}
+
+void AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestStatesStillEndsWithTheMessage() {
+  Launch launch;
+  // The object is held (the descriptor's hash), but the manifest states another stored size for it: the boot mount refuses the name, and
+  // nothing is missing, so only the refused count tells this set from a complete one.
+  const json extra = {{"platform", "android-arm64"}, {"type", "0xe2efe7289d5985b8"}, {"name", "0x3fa6d25bc24a7b02"}, {"format", "zstd-frame"},
+                      {"sha256", Sha256Hex(launch.descriptor.data(), launch.descriptor.size())}, {"size", launch.descriptor.size() + kSizeSkew},
+                      {"bytes", kDescriptorBytes}, {"align", kStoreAlign}, {"stock_size", kDescriptorBytes}};
+  const qd::StepResult r = OfflineLaunchOverASavedManifestWithOneMoreName(launch, extra);
+  QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+  // The set was refused for its size, not for a missing object: the boot mount says so.
+  const std::size_t at = FirstIndexOf(g_cargoLines, "cargo_mounted", "source", "boot");
+  QCHECK(at < g_cargoLines.size());
+  if (at < g_cargoLines.size()) {
+    const json line = json::parse(g_cargoLines[at], nullptr, false);
+    QCHECK(line.value("missing", 1) == 0 && line.value("refused", 0) == 1);
+  }
+}
+
+void AManifestTheCdnAnswersThatIsNotAZstdFrameStillEndsTheLaunchOverACompleteCache() {
+  Launch launch;
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  QCHECK(qd::RunDataStep(launch.config, launch.transport).outcome == qd::StepOutcome::kStubbed);
+  g_cargoLines.clear();
+  g_published.clear();
+  launch.stepEvents.clear();
+  launch.transport.server[std::string(kBase) + kManifestPath] = std::string(kNotAFramePageBytes, 'x');  // reachable, but not what the CDN publishes
+  launch.config.all_assets_ready = TheSentinelsWorker(launch);
+  const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
+  QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);  // a refused manifest is not an offline launch
+  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+}
+
 }  // namespace
 
 int main() {
@@ -236,6 +355,11 @@ int main() {
   ADownloadThatCannotFinishEndsTheLaunchWithTheMessageNotTheNoWorkerWarning();
   AStoreThatIsWholeButMountsNothingEndsTheLaunchWithTheMessage();
   AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored();
+  AnOfflineLaunchOverACompleteCacheBootsAndWarnsThatTheManifestWasNotRefreshed();
+  AnOfflineLaunchOverAnEmptyCacheStillEndsWithTheMessage();
+  AnOfflineLaunchOverACacheMissingAnObjectOfItsSavedManifestStillEndsWithTheMessage();
+  AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestStatesStillEndsWithTheMessage();
+  AManifestTheCdnAnswersThatIsNotAZstdFrameStillEndsTheLaunchOverACompleteCache();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "whole_game_launch_test: %d check(s) failed\n", quest_test::Failures());

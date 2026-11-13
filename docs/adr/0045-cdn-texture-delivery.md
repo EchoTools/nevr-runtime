@@ -90,7 +90,7 @@ process.
     function beside the mode, from the same configuration: `nevr_quest::cargo::MakeProductionFirstRunWorker` (`src/quest/cargo/cargo_service.h`) mounts what the cache
     holds, then runs the cargo worker with `RunConfig::first_run`, which stores every object of every served label through the first-run
     prefetch (`src/core/cargo_prefetch.h`, over an adapter on the cargo store in `src/core/cargo_run.cpp`), ends at the first object that
-    cannot be had, saves the manifest and mounts the shadow. It answers ok only when the store is whole. A stub that cannot be written ends the launch with a message, because the engine
+    cannot be had, saves the manifest and mounts the shadow. It answers ok only when the store is whole. When the manifest cannot be refreshed (a failed request, or a body over the size limit) and the set mounted from the saved manifest at the start left no name out, it answers ok with one Warning (`cargo_first_run result=manifest_not_refreshed`), so an offline launch over a complete cache boots; a missing name, a refused manifest or an empty cache still ends the launch with the message. A stub that cannot be written ends the launch with a message, because the engine
     could not start either. A manifest that is already there is kept and logged (Warning when it is not the stub or cannot be read); the step
     does not check that the engine will accept it.
 

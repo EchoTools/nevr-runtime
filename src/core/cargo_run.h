@@ -46,6 +46,9 @@ struct RunConfig {
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.
 using Publish = std::function<void(std::unique_ptr<Mounted>)>;
 
+// RunResult::stopped when the manifest could not be had (a failed request, or a body over the size limit; a body that is not a zstd frame is "manifest_refused"): what the store holds stays mounted.
+inline constexpr const char* kStoppedManifestFailed = "manifest_failed";
+
 struct RunResult {
   std::size_t fetched = 0;   // blobs stored this run
   std::size_t cached = 0;    // blobs already held
