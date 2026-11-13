@@ -1,4 +1,4 @@
-#include "runtime/patch/peer_timeout_log_hook.h"
+#include "runtime/patch/peer_timeout_log.h"
 
 #include <chrono>
 #include <cstddef>
@@ -10,11 +10,11 @@
 #include "nevr/pc/nevr_common.h"  // N97: the one ValidatePrologue
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "core/logging.h"
-#include "runtime/compat/peer_timeout_log.h"
+#include "runtime/patch/peer_timeout_log_rules.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/patching.h"
 
-namespace nevr_peer_timeout_hook {
+namespace nevr_peer_timeout_log {
 
 DestroyPeerFn OriginalDestroyPeer = nullptr;
 EchoVR::BroadcasterSendFunc* OriginalBroadcasterSend = nullptr;
@@ -71,11 +71,11 @@ bool Install(std::uintptr_t gameBase, bool isServer) {
     }
     OriginalDestroyPeer = reinterpret_cast<DestroyPeerFn>(destroyVa);
     if (!PatchDetour(&OriginalDestroyPeer, reinterpret_cast<PVOID>(DestroyPeerHook), "PeerTimeoutDestroyPeer")) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer removal log hook not installed name=DestroyPeer va=0x%llX",
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] peer timeout log hook not installed name=DestroyPeer va=0x%llX",
             static_cast<unsigned long long>(destroyVa));
         return false;
     }
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] peer removal log installed name=DestroyPeer va=0x%llX",
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] peer timeout log installed name=DestroyPeer va=0x%llX",
         static_cast<unsigned long long>(destroyVa));
     if (isServer) return true;
     const std::uintptr_t va = gameBase + nevr_patch_addresses::BROADCASTER_SEND;
@@ -151,4 +151,4 @@ void CheckNoSend() {
     Log(EchoVR::LogLevel::Warning, "%s", line.c_str());
 }
 
-}  // namespace nevr_peer_timeout_hook
+}  // namespace nevr_peer_timeout_log

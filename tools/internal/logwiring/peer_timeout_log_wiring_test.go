@@ -11,7 +11,7 @@ import (
 // Peer timeout logging: the PC hooks and their call sites (source sensors, rank 3).
 //
 // The detours run inside echovr.exe, so no test target in this tree drives them. The pure rules are GTest
-// (src/runtime/tests/peer_timeout_log_test.cpp). These sensors check what the hook file and its callers say:
+// (src/runtime/tests/peer_timeout_log_rules_test.cpp). These sensors check what the hook file and its callers say:
 //
 //   - the server hook sits on CBroadcaster::DestroyPeer and logs every removal at its reason's level;
 //   - the hook reads the peer record before the original destroys it, and forwards every argument to the original;
@@ -20,7 +20,7 @@ import (
 //     checks the no-send threshold.
 
 const (
-	peerTimeoutHook = "src/runtime/patch/peer_timeout_log_hook.cpp"
+	peerTimeoutHook = "src/runtime/patch/peer_timeout_log.cpp"
 )
 
 // stripCppComments removes // line comments and /* */ block comments from C++ (or CMake) source text, tracking string
@@ -182,7 +182,7 @@ func TestPeerTimeoutBootInstallsTheHookForTheRunRoleOutsideTheServerBranch(t *te
 	t.Parallel()
 	const path = "src/runtime/lifecycle/boot.cpp"
 	boot := source(t, path)
-	const call = "nevr_peer_timeout_hook::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);"
+	const call = "nevr_peer_timeout_log::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);"
 	if n := strings.Count(boot, call); n != 1 {
 		t.Fatalf("%s calls %q %d times, want once", path, call, n)
 	}
@@ -192,19 +192,18 @@ func TestPeerTimeoutBootInstallsTheHookForTheRunRoleOutsideTheServerBranch(t *te
 func TestPeerTimeoutTheNetGameStateHookReportsInGame(t *testing.T) {
 	t.Parallel()
 	const path = "src/runtime/lifecycle/state_machine.cpp"
-	mustContain(t, path, source(t, path), "nevr_peer_timeout_hook::OnNetGameState(state == EchoVR::NetGameState::InGame);")
+	mustContain(t, path, source(t, path), "nevr_peer_timeout_log::OnNetGameState(state == EchoVR::NetGameState::InGame);")
 }
 
 func TestPeerTimeoutTheFrameTickChecksTheNoSendThreshold(t *testing.T) {
 	t.Parallel()
 	const path = "src/runtime/frame/tick.cpp"
-	mustContain(t, path, source(t, path), "nevr_peer_timeout_hook::CheckNoSend();")
+	mustContain(t, path, source(t, path), "nevr_peer_timeout_log::CheckNoSend();")
 }
 
 func TestPeerTimeoutTheSourcesAreInTheRuntimeLibrary(t *testing.T) {
 	t.Parallel()
 	const path = "src/runtime/CMakeLists.txt"
 	cmake := source(t, path)
-	mustContain(t, path, cmake, `"patch/peer_timeout_log_hook.cpp"`)
-	mustContain(t, path, cmake, `"compat/peer_timeout_log.cpp"`)
+	mustContain(t, path, cmake, `"patch/peer_timeout_log.cpp"`)
 }

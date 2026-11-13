@@ -13,7 +13,7 @@
 #include <thread>
 
 #include "activation.h"
-#include "quest/integration/peer_removal_hook.h"
+#include "quest/integration/peer_timeout_log.h"
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -390,15 +390,15 @@ ActionResult LoginTitleAction() noexcept {
   return Staged("login_title_hook_installed", {Settle::kGiveUp, sentinel::GotStatusName(status)});
 }
 
-// The peer removal log (integration/peer_removal_hook.h): libr15's DestroyPeer slot, once libr15 is loaded. A slot that does not
+// The peer timeout log (integration/peer_timeout_log.h): libr15's DestroyPeer slot, once libr15 is loaded. A slot that does not
 // match its pins is refused for good; a module that is not loaded yet is retried at the next dlopen.
-ActionResult PeerRemovalAction() noexcept {
-  switch (nevr_quest::integration::peer_removal::InstallPeerRemovalHook()) {
-    case sentinel::GotStatus::kOk: return Staged("peer_removal_hook_installed", {Settle::kDone, "installed"});
+ActionResult PeerTimeoutLogAction() noexcept {
+  switch (nevr_quest::integration::peer_timeout_log::Install()) {
+    case sentinel::GotStatus::kOk: return Staged("peer_timeout_log_installed", {Settle::kDone, "installed"});
     case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
     default: break;
   }
-  return Staged("peer_removal_hook_installed", {Settle::kGiveUp, "refused"});
+  return Staged("peer_timeout_log_installed", {Settle::kGiveUp, "refused"});
 }
 
 // The normal plugin pass (#438): the first post-load call is its moment. The loader records every outcome itself and
@@ -818,7 +818,7 @@ class ProductionSteps final : public Steps {
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
     if (login) actions.loginTitle = &LoginTitleAction;  // the title is the prompt's second half: wanted with the login
-    actions.peerRemoval = &PeerRemovalAction;  // non-combat: every build logs peer removals
+    actions.peerTimeoutLog = &PeerTimeoutLogAction;  // non-combat: every build logs peer removals
     if (plugins) actions.plugins = &PluginsAction;
     if (combat) actions.combat = &CombatAction;  // after the plugin pass has returned, on the thread that ran it (post_load.h)
     SetPostLoadActions(actions);

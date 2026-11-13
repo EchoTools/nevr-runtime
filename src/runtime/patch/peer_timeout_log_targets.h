@@ -1,6 +1,6 @@
 // The communication-timeout removal branch of CleanupPeers, per binary: the one call that removes a peer for the
 // communication timeout, and the reason-string load that precedes it. A table of verified addresses and bytes, one
-// row per binary; the rule that reads it is the same for both (peer_timeout_call_site_test.cpp decodes each row).
+// row per binary; the rule that reads it is the same for both (peer_timeout_log_targets_test.cpp decodes each row).
 //
 // Sources (read-only lookup by the lookup seat, scratch/2026-11-12-drop-15s/CALLSITES.md; revault for both binaries):
 //   PC echovr.exe, CBroadcaster::CleanupPeers at 0x140F76500 (revault, 418 instructions):
@@ -19,7 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace nevr_peer_timeout_call_site {
+namespace nevr_peer_timeout_log {
 
 struct CallSiteRow {
     const char* binary;                 // the module the addresses belong to
@@ -54,4 +54,4 @@ inline constexpr CallSiteRow kQuestCallSite{
     0x32E8F81ULL,
 };
 
-}  // namespace nevr_peer_timeout_call_site
+}  // namespace nevr_peer_timeout_log

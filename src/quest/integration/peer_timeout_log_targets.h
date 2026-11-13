@@ -1,4 +1,4 @@
-// The Quest side's addresses for the peer removal log (integration/peer_removal_hook.h): CBroadcaster::DestroyPeer in libr15.so, the
+// The Quest side's addresses for the peer timeout log (integration/peer_timeout_log.h): CBroadcaster::DestroyPeer in libr15.so, the
 // one function every removal of a peer goes through, reached from CleanupPeers' seven call sites through a PLT-style thunk.
 //
 // Per-binary table. Quest has one row here (libr15.so); the PC row is src/runtime/hook/addresses.h DESTROY_PEER (0x140F7BC60).
@@ -20,13 +20,13 @@
 //                                   refuses (GotStatus) when the slot's relocation does not name it, so a wrong guess fails closed.
 //
 // The pinned check: the install stores the handler only when the slot holds kDestroyPeerFnVa at run time (GotTarget.expectedOriginal;
-// got_hook.cpp refuses with kOriginalMismatch otherwise). The thunk's bytes are checked by peer_removal_hook_test.cpp, which decodes them to
+// got_hook.cpp refuses with kOriginalMismatch otherwise). The thunk's bytes are checked by peer_timeout_log_test.cpp, which decodes them to
 // kDestroyPeerSlotVa and kDestroyPeerFnVa's page.
 #pragma once
 
 #include <cstdint>
 
-namespace nevr_quest::integration::peer_removal {
+namespace nevr_quest::integration::peer_timeout_log {
 
 inline constexpr const char* kDestroyPeerSymbol = "_ZN10NRadEngine16SBroadcasterData11DestroyPeerEyPKc";
 inline constexpr std::uintptr_t kDestroyPeerFnVa = 0x2612CDCULL;
@@ -38,4 +38,4 @@ inline constexpr std::uintptr_t kDestroyPeerSlotOffset = 0xE0ULL;       // the l
 // The reason argument is the third; the calls pass it in x2 (CALLSITES-2 section 2, the seven Quest sites).
 using DestroyPeerSig = void(void* self, std::uint64_t index, const char* reason);
 
-}  // namespace nevr_quest::integration::peer_removal
+}  // namespace nevr_quest::integration::peer_timeout_log

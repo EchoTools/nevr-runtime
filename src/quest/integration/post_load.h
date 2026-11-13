@@ -42,8 +42,8 @@ struct PostLoadActions {
   ActionFn login = nullptr;        // null: the feature is off, nothing is tried
   ActionFn matchmaking = nullptr;  // null: same
   ActionFn loginTitle = nullptr;   // null: same
-  // The peer removal log (peer_removal_hook.h): libr15's DestroyPeer slot, once libr15 is loaded. null: not wanted.
-  ActionFn peerRemoval = nullptr;
+  // The peer timeout log (peer_timeout_log.h): libr15's DestroyPeer slot, once libr15 is loaded. null: not wanted.
+  ActionFn peerTimeoutLog = nullptr;
   // The normal plugin pass (#438). Runs once, on the first non-null dlopen, after the actions above and OUTSIDE the lock
   // that guards them, because a plugin's code may call dlopen (which reaches AfterDlopen again on this thread). A call that
   // arrives while it runs does not start it again. It settles whatever it answers (a plugin that fails is a record, not a

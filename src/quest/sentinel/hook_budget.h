@@ -68,7 +68,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/wallfire.cpp", 1, 0},
     {"diag/hwdump_install.cpp", 18, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
-    {"integration/peer_removal_hook.cpp", 1, 0},
+    {"integration/peer_timeout_log.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},
     {"login/login_hook.cpp", 1, 1},
     {"login/login_prerequisites_install.cpp", 22, 22},

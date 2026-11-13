@@ -1,27 +1,27 @@
-// Host test of the Quest peer removal log (src/quest/integration/peer_removal_hook.cpp).
+// Host test of the Quest peer timeout log (src/quest/integration/peer_timeout_log.cpp).
 //
 // What it pins: the table's thunk decodes to the GOT slot and the body the table names (the thunk is the four words read from libr15,
-// peer_removal_targets.h); an install with no libr15 refuses with kModuleNotLoaded and installs nothing; the removal's level is the shared
-// one (src/runtime/compat/peer_timeout_log.h). What it does not pin: a full install into a libr15 image (the slot's relocation and the pinned
+// peer_timeout_log_targets.h); an install with no libr15 refuses with kModuleNotLoaded and installs nothing; the removal's level is the shared
+// one (src/runtime/patch/peer_timeout_log_rules.h). What it does not pin: a full install into a libr15 image (the slot's relocation and the pinned
 // original are checked by the GOT backend's own tests, not here), and the handler's call to the game's function (no libr15 image here).
 //
-// Mutants (one line each, against peer_removal_hook.cpp and peer_removal_targets.h):
+// Mutants (one line each, against peer_timeout_log.cpp and peer_timeout_log_targets.h):
 //   M1 kDestroyPeerSlotOffset 0xe0 -> 0xe8                  -> TheThunkDecodesToItsSlotAndBody fails.
 //   M2 kDestroyPeerFnVa off by 0x10                         -> TheThunkDecodesToItsSlotAndBody fails (the body is not checked here: see the note).
-//   M3 InstallPeerRemovalHookAt: null lookup -> kOk          -> ARefusedInstallWithoutLibR15 fails.
+//   M3 InstallAt: null lookup -> kOk          -> ARefusedInstallWithoutLibR15 fails.
 
 #include <cstdint>
 
-#include "quest/integration/peer_removal_hook.h"
-#include "quest/integration/peer_removal_targets.h"
+#include "quest/integration/peer_timeout_log.h"
+#include "quest/integration/peer_timeout_log_targets.h"
 #include "quest/tests/test_check.h"
-#include "runtime/compat/peer_timeout_log.h"
+#include "runtime/patch/peer_timeout_log_rules.h"
 
 namespace {
 
-using nevr_quest::integration::peer_removal::InstallPeerRemovalHookAt;
-using nevr_quest::integration::peer_removal::Installed;
-namespace targets = nevr_quest::integration::peer_removal;
+using nevr_quest::integration::peer_timeout_log::InstallAt;
+using nevr_quest::integration::peer_timeout_log::Installed;
+namespace targets = nevr_quest::integration::peer_timeout_log;
 
 // The thunk's four words, read little-endian from the bytes revault printed at 0x10533f0:
 //   70 3d 01 d0 -> adrp x16, page      11 72 40 f9 -> ldr x17, [x16, #0xe0]
@@ -57,7 +57,7 @@ void TheThunkDecodesToItsSlotAndBody() {
 
 void ARefusedInstallWithoutLibR15() {
   QCHECK(!Installed());
-  QCHECK_STATUS(InstallPeerRemovalHookAt(nullptr), sentinel::GotStatus::kModuleNotLoaded);
+  QCHECK_STATUS(InstallAt(nullptr), sentinel::GotStatus::kModuleNotLoaded);
   QCHECK(!Installed());
 }
 
@@ -77,9 +77,9 @@ int main() {
   ARefusedInstallWithoutLibR15();
   UnknownReasonsAreWarningsOnTheSharedRule();
   if (quest_test::Failures() != 0) {
-    std::fprintf(stderr, "peer_removal_test: %d failure(s)\n", quest_test::Failures());
+    std::fprintf(stderr, "peer_timeout_log_test: %d failure(s)\n", quest_test::Failures());
     return 1;
   }
-  std::printf("peer_removal_test: OK\n");
+  std::printf("peer_timeout_log_test: OK\n");
   return 0;
 }

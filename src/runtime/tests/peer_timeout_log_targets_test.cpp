@@ -1,4 +1,4 @@
-// The communication-timeout call site per binary (runtime/patch/peer_timeout_call_site.h).
+// The communication-timeout call site per binary (runtime/patch/peer_timeout_log_targets.h).
 //
 // What these tests show: each row's addresses and bytes decode to each other, for both binaries: the call at call_va
 // reaches callee_va, and the reason load at reason_load_va yields reason_va. The bytes are the ones the lookup read
@@ -6,7 +6,7 @@
 // fixtures, not against a live image. The Quest callee is named by the decompile declaration only (UNVERIFIED in the
 // header); the test checks the call reaches the address the table names, not that the address is DestroyPeer.
 //
-// Mutants (one line each, against peer_timeout_call_site.h):
+// Mutants (one line each, against peer_timeout_log_targets.h):
 //   M1 PC callee_va off by 4                       -> PcCallReachesDestroyPeer fails.
 //   M2 Quest call_len 4 -> 5                       -> QuestCallSiteLengthIsTheBl fails.
 //   M3 Quest reason_va off by one                  -> QuestReasonLoadYieldsTheString fails.
@@ -15,12 +15,12 @@
 
 #include <cstdint>
 
-#include "runtime/patch/peer_timeout_call_site.h"
+#include "runtime/patch/peer_timeout_log_targets.h"
 
 namespace {
 
-using nevr_peer_timeout_call_site::kPcCallSite;
-using nevr_peer_timeout_call_site::kQuestCallSite;
+using nevr_peer_timeout_log::kPcCallSite;
+using nevr_peer_timeout_log::kQuestCallSite;
 
 // The PC reason load at 0x140F7687C: LEA R8,[RIP+0xd59afd] (bytes 4c 8d 05 fd 9a d5 00), 7 bytes; the next
 // instruction is at 0x140F76883.
@@ -39,7 +39,7 @@ std::uint32_t WordOf(const std::uint8_t* b) {
            (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
 }
 
-TEST(PeerTimeoutCallSite, PcCallReachesDestroyPeer) {
+TEST(PeerTimeoutLogTargets, PcCallReachesDestroyPeer) {
     ASSERT_EQ(kPcCallSite.call_len, 5u);
     ASSERT_EQ(kPcCallSite.call_bytes[0], 0xE8);
     const std::uint32_t rel = WordOf(&kPcCallSite.call_bytes[1]);
@@ -48,7 +48,7 @@ TEST(PeerTimeoutCallSite, PcCallReachesDestroyPeer) {
     EXPECT_EQ(kPcCallSite.callee_va, 0x140F7BC60ULL);
 }
 
-TEST(PeerTimeoutCallSite, PcReasonLoadYieldsTheString) {
+TEST(PeerTimeoutLogTargets, PcReasonLoadYieldsTheString) {
     ASSERT_EQ(kPcCallSite.reason_load_va, kPcReasonLeaVa);
     const std::uint32_t disp = WordOf(&kPcReasonLea[3]) & 0xFFFFFFFFU;  // disp32 of LEA R8,[RIP+disp]
     const std::uintptr_t target = kPcReasonLeaVa + kPcReasonLeaLen + disp;
@@ -56,13 +56,13 @@ TEST(PeerTimeoutCallSite, PcReasonLoadYieldsTheString) {
     EXPECT_EQ(kPcCallSite.reason_va, 0x141CD0380ULL);
 }
 
-TEST(PeerTimeoutCallSite, QuestCallSiteLengthIsTheBl) {
+TEST(PeerTimeoutLogTargets, QuestCallSiteLengthIsTheBl) {
     EXPECT_EQ(kQuestCallSite.call_len, 4u);
     EXPECT_EQ(WordOf(kQuestCallSite.call_bytes.data()), kQuestBlWord);
     EXPECT_EQ(kQuestBlWord & 0xFC000000U, 0x94000000U);  // BL opcode
 }
 
-TEST(PeerTimeoutCallSite, QuestCallReachesTheTableCallee) {
+TEST(PeerTimeoutLogTargets, QuestCallReachesTheTableCallee) {
     std::int32_t imm26 = static_cast<std::int32_t>(kQuestBlWord & 0x03FFFFFFU);
     if (imm26 & 0x02000000) imm26 -= 0x04000000;  // sign-extend the 26-bit word offset
     const std::uintptr_t target = kQuestCallSite.call_va + static_cast<std::intptr_t>(imm26) * 4;
@@ -70,7 +70,7 @@ TEST(PeerTimeoutCallSite, QuestCallReachesTheTableCallee) {
     EXPECT_EQ(kQuestCallSite.callee_va, 0x10533F0ULL);
 }
 
-TEST(PeerTimeoutCallSite, QuestReasonLoadYieldsTheString) {
+TEST(PeerTimeoutLogTargets, QuestReasonLoadYieldsTheString) {
     ASSERT_EQ(kQuestCallSite.reason_load_va, 0x25EFCA0ULL);
     // adrp x2, page: immlo = bits 29..30, immhi = bits 5..23; the page is (adrp VA & ~0xFFF) + imm << 12.
     const std::uint32_t immlo = (kQuestAdrpWord >> 29) & 0x3U;
@@ -84,7 +84,7 @@ TEST(PeerTimeoutCallSite, QuestReasonLoadYieldsTheString) {
     EXPECT_EQ(kQuestCallSite.reason_va, 0x32E8F81ULL);
 }
 
-TEST(PeerTimeoutCallSite, RowsNameTheirBinaries) {
+TEST(PeerTimeoutLogTargets, RowsNameTheirBinaries) {
     EXPECT_STREQ(kPcCallSite.binary, "echovr.exe");
     EXPECT_STREQ(kQuestCallSite.binary, "libr15.so");
 }

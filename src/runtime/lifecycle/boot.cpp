@@ -16,7 +16,7 @@
 #include "runtime/lifecycle/runtime_entry.h"
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/mode_patches.h"
-#include "runtime/patch/peer_timeout_log_hook.h"
+#include "runtime/patch/peer_timeout_log.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -723,8 +723,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // Peer timeout log: the server's communication-timeout line, or the client's send state and no-send warning
-  // (runtime/compat/peer_timeout_log.h). Both roles, one call; the hook for the other role is not installed.
-  nevr_peer_timeout_hook::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);
+  // (runtime/patch/peer_timeout_log_rules.h). Both roles, one call; the hook for the other role is not installed.
+  nevr_peer_timeout_log::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);
 
   // N131: cosmetics are client-only — a headless server has nothing to render and
   // must not open the CDN connection (it opens ServerDB + login only). AssetCDN

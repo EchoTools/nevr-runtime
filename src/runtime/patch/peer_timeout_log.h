@@ -1,4 +1,4 @@
-// Peer timeout logging, PC hooks (the rules are in runtime/compat/peer_timeout_log.h).
+// Peer timeout logging, PC hooks (the rules are in runtime/patch/peer_timeout_log_rules.h).
 //
 // Server: CBroadcaster::DestroyPeer (addresses.h DESTROY_PEER) is hooked. CleanupPeers is its only caller, and the game
 // passes "communication timeout" as the reason only on CleanupPeers' removal branch; the hook writes one Warning for
@@ -7,8 +7,8 @@
 // Client: CBroadcaster::Send (addresses.h BROADCASTER_SEND) is hooked to record the time of each send to the host, and
 // the NetGame state hook reports entering and leaving the game. The frame tick calls CheckNoSend once per frame.
 //
-// Quest has no hook here yet: its DestroyPeer carries no reason argument (src/reconstruction/r15/destroy_peer.cpp), so
-// the Quest removal needs a hook on CleanupPeers' branch itself.
+// The Quest half is src/quest/integration/peer_timeout_log.h: it hooks libr15's DestroyPeer through its GOT slot and logs
+// each removal at the level the same rules give.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 
-namespace nevr_peer_timeout_hook {
+namespace nevr_peer_timeout_log {
 
 // The first 18 bytes of CBroadcaster::DestroyPeer (0x140F7BC60): MOV [RSP+0x18],RBX; MOV [RSP+0x20],RSI; PUSH RDI;
 // SUB RSP,0x50; MOV R11,R8. All relocatable.
@@ -52,4 +52,4 @@ void OnNetGameState(bool inGame);
 // Called once per frame on the game thread: a client silent for the threshold logs one Warning per silence.
 void CheckNoSend();
 
-}  // namespace nevr_peer_timeout_hook
+}  // namespace nevr_peer_timeout_log

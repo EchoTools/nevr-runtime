@@ -95,10 +95,10 @@ nevr_ht_test(lobby_full_hooks_test GROUP hooks ${_af} NOEXC DL TIMEOUT 60 INCS s
 nevr_ht_test(credits_text_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 INCS src/quest/tests
   OBJS ${_attach_objs} o_hooks_attach_sentinel
   SRC src/quest/tests/credits_text_test.cpp src/quest/sentinel/credits_text.cpp)
-# The Quest peer removal log (integration/peer_removal_hook.cpp, #peer-timeout-log): the table's thunk decodes to its slot and body, a
-# refused install without libr15 installs nothing, and the removal level is the shared rule (src/runtime/compat/peer_timeout_log.cpp).
-nevr_ht_test(peer_removal_test GROUP hooks ${_hf} TIMEOUT 120 INCS src/quest/tests OBJS ${_core} ${_ident}
-  SRC src/quest/tests/peer_removal_test.cpp src/quest/integration/peer_removal_hook.cpp src/runtime/compat/peer_timeout_log.cpp)
+# The Quest peer timeout log (integration/peer_timeout_log.cpp, #peer-timeout-log): the table's thunk decodes to its slot and body, a
+# refused install without libr15 installs nothing, and the removal level is the shared rule (src/runtime/patch/peer_timeout_log_rules.h).
+nevr_ht_test(peer_timeout_log_test GROUP hooks ${_hf} TIMEOUT 120 INCS src/quest/tests OBJS ${_core} ${_ident}
+  SRC src/quest/tests/peer_timeout_log_test.cpp src/quest/integration/peer_timeout_log.cpp)
 
 # The variant build (docs/adr/0021 section 11): the sentinel compiled with NEVR_LIBR15_EXTRA_ROWS and the source configure
 # generates for the example fixture. The rows it reads back are the parser's, the patched ID it expects is the patcher's for them

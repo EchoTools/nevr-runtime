@@ -6,7 +6,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/patch/peer_timeout_log_hook.h"
+#include "runtime/patch/peer_timeout_log.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/server_bringup.h"
@@ -87,8 +87,8 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   const uint32_t fromState = s_prevState;
 
   // Peer timeout log: the client's send state on entering the game, and the no-send check ends on leaving it
-  // (runtime/compat/peer_timeout_log.h). The hook ignores the call on a server.
-  nevr_peer_timeout_hook::OnNetGameState(state == EchoVR::NetGameState::InGame);
+  // (runtime/patch/peer_timeout_log_rules.h). The hook ignores the call on a server.
+  nevr_peer_timeout_log::OnNetGameState(state == EchoVR::NetGameState::InGame);
 
   // Notify plugins of state change
   {

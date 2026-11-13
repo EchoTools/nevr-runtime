@@ -813,11 +813,11 @@ constexpr uintptr_t CLEANUP_PEERS = 0xF76500;
 /// Address: CBroadcaster::DestroyPeer (0x140F7BC60, 383 bytes; the disassembly's CBroadcaster::DestroyPeer). Signature
 /// (this, peer index, reason text): the reason is the game's own string, "communication timeout" on CleanupPeers'
 /// removal branch (the only caller, CBroadcaster::CleanupPeers 0x140F76500). The peer timeout log hooks it on a server
-/// (runtime/patch/peer_timeout_log_hook.h). Prologue: 48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 50 4D 8B D8.
+/// (runtime/patch/peer_timeout_log.h). Prologue: 48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 50 4D 8B D8.
 constexpr uintptr_t DESTROY_PEER = 0xF7BC60;
 
 /// Address: CBroadcaster::Send (0x140F89AF0). The client's sends to its host pass through it; the peer timeout log
-/// records each send's time on a client (runtime/patch/peer_timeout_log_hook.h). Prologue: 48 8B C4 48 89 58 08 4C 89
+/// records each send's time on a client (runtime/patch/peer_timeout_log.h). Prologue: 48 8B C4 48 89 58 08 4C 89
 /// 48 20 44 89 40 18 55.
 constexpr uintptr_t BROADCASTER_SEND = 0xF89AF0;
 

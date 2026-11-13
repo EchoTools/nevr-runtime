@@ -1,7 +1,7 @@
 // Peer timeout logging: the server's communication-timeout line and the client's in-game send state and no-send
-// warning (runtime/compat/peer_timeout_log.h). Pure: every time is passed in; no sleep, no clock.
+// warning (runtime/patch/peer_timeout_log_rules.h). Pure: every time is passed in; no sleep, no clock.
 //
-// Mutants (one line each, run against peer_timeout_log.cpp):
+// Mutants (one line each, run against peer_timeout_log_rules.h):
 //   M1 FormatPeerRemoved: gap = now - last (clamp dropped)            -> ClampsAClockThatReadsEarlier fails.
 //   M2 FormatPeerRemoved: gap_s printed at half the gap                -> ServerLineNamesPeerSlotLastReceiveAndGap fails.
 //   M8 LevelForRemovalReason: "communication timeout" at Info          -> TimeoutsAreWarnings fails.
@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <string>
 
-#include "runtime/compat/peer_timeout_log.h"
+#include "runtime/patch/peer_timeout_log_rules.h"
 
 namespace {
 
