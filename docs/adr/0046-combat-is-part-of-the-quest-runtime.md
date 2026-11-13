@@ -31,7 +31,7 @@ and is built by its CMake, so the boundary separates nothing. What it costs:
   `NEVR_VARIANT_DIR`); a test project of 128 files beside the `test-quest-*` groups.
 
 `src/quest/combat/` already holds combat behaviour built into the sentinel and hooked through the manager (`match_tags.cpp`,
-`equip_refire.cpp`), which install on every launch (`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`).
+`equip_refire.cpp`), which install from constructor steps of their own where combat runs (ADR 0047).
 
 ## Decision
 
@@ -63,9 +63,9 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
 5. **The folded modules run in the q15t and combat variants only.** The packaging step writes the APK's variant word (ADR 0040 rule 1);
    the sentinel reads it before its first line, writes it in that line beside the build kind (`nevr_build::kIsDev`, unchanged), and
    `combat::Active()` is true for `q15t` and `combat`. Modules folded from the combat plugin install only when it is true; a development build may
-   force it with `combat.force`, a release build may not. Combat-area code that ships to every APK (`match_tags`, `equip_refire`) is outside this gate
-   and says so in its header. The combat code is compiled into every sentinel, so the release loader asset serves every variant.
-   The `arena` variant (the store APK with the release's loader and no plugin, listed in the manifest beside the combat APK, #2298) is
+   force it with `combat.force`, a release build may not. `match_tags` and `equip_refire` are inside this gate too (ADR 0047 decision 3:
+   their constructor steps run only when it is true). The combat code is compiled into every sentinel, so the release loader asset serves every variant.
+   The `arena` variant (the store APK with the release's loader and no plugin, #2298, and the default build, ADR 0047) is
    no combat variant: `combat::Active()` is false for it, and a release build cannot force it.
 6. **Install moments are the plugin's.** Modules that must precede `android_main` install in a constructor step after Attach and before
    the clock hook; the rest install in a post-load action of their own, right after the normal plugin pass when there is one, at the
