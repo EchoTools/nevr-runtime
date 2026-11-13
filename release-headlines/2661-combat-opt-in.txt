@@ -1,1 +1,0 @@
-EchoCombat on PC now runs only when your config.yaml says combat: enabled: true, and the Quest arena build no longer turns on the combat name tags, the equipment re-fire or the grey default lighting.

@@ -740,16 +740,6 @@ TEST(NevrConfig, TheInviteCodesKeyIsOnTheSchema) {
   EXPECT_EQ(cfg.GetBool("network.invite_codes").value_or(false), true);
 }
 
-// docs/adr/0047: the PC's combat opt-in is a known key, so a file that opts in is not told the key was ignored, and the
-// combat module reads the value the file holds.
-TEST(NevrConfig, TheCombatOptInIsAKnownKey) {
-  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: 1\ncombat:\n  enabled: true\n");
-  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
-  EXPECT_EQ(cfg.GetString("combat.enabled").value_or(""), "true");
-  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
-  EXPECT_NE(std::find(known.begin(), known.end(), "combat.enabled"), known.end());
-}
-
 TEST(NevrConfig, ACleanFileCountsNothing) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
       "version: 1\nauth:\n  password: \"x\"\nnetwork:\n  regions: \"us-west\"\n");

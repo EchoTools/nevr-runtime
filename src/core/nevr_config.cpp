@@ -239,11 +239,10 @@ void ValidateTopLevel(const YAML::Node& root) {
   }
 }
 
-// The PC's EchoCombat keys in the combat section (src/runtime/combat/combat_settings.h, #2242): the opt-in `enabled`
-// (docs/adr/0047), its group switches and `settings`, which holds Cat's ini values.
+// The PC's EchoCombat keys in the combat section (src/runtime/combat/combat_settings.h, #2242): its group switches and
+// `settings`, which holds Cat's ini values.
 std::map<std::string, std::set<std::string>> WithPcCombatKeys(std::map<std::string, std::set<std::string>> sections) {
-  sections["combat"].insert(
-      {"enabled", "drone", "overcharge", "medigun", "veil", "match_control", "balance", "clean_exit", "settings"});
+  sections["combat"].insert({"drone", "overcharge", "medigun", "veil", "match_control", "balance", "clean_exit", "settings"});
   return sections;
 }
 

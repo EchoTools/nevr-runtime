@@ -771,8 +771,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // after InstallResourceOverride, which created the registry.
   nevr_netgun_bullet_ids::Install();
 
-  // EchoCombat's balance values: a transform of the player's own stock mp_weapon_settings (runtime/combat/combat.h). Registered
-  // only when config.yaml opts into combat (combat.enabled: true, docs/adr/0047); it reads combat.balance when the resource first loads.
+  // EchoCombat's balance values: a transform of the player's own stock mp_weapon_settings (runtime/combat/combat.h). It
+  // reads combat.balance when the resource first loads, after config.yaml is readable.
   nevr_combat::RegisterBalance();
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
@@ -920,8 +920,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // EchoCombat, built in (runtime/combat/combat.h): after every hook of the runtime's own is in place, so its write gate
-  // sees them all, and where Cat's three plugins loaded before. Installs nothing unless config.yaml opts in (combat.enabled:
-  // true, docs/adr/0047): with no config, arena runs as stock.
+  // sees them all, and where Cat's three plugins loaded before.
   nevr_combat::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
 
   // Load external plugins from plugins/ subdirectory
