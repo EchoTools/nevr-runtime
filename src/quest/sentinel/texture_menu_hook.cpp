@@ -193,8 +193,18 @@ std::atomic<int> g_jsonHandFlip[kDocuments];
 // #1823: the walk that found no row, and the top-level keys, of each document's last rewrite of another shape (texture_menu.h). The
 // file-read path writes them and the poller copies them into the log line, under g_shapeMutex.
 pthread_mutex_t g_shapeMutex = PTHREAD_MUTEX_INITIALIZER;
-std::string g_shapeSite[kDocuments];
-std::string g_topKeys[kDocuments];
+struct ShapeTexts {
+  std::string site[kDocuments];
+  std::string topKeys[kDocuments];
+};
+// A function-local static, not two namespace-scope arrays: a std::string has a destructor, so an array at namespace scope gets a
+// load-time initializer (tools/check_quest_static_init.sh). Its first use is RewriteDocument or the poller: RewriteDocument runs
+// before any game code in its call and already allocates (NEVR_OUTSIDE_GAME_CALL), so the destructor's atexit registration there
+// is work of the kind that function already does.
+ShapeTexts& Shapes() noexcept {
+  static ShapeTexts shapes;
+  return shapes;
+}
 
 // The document each thread is inside the file read of (kNone: none). Not a thread_local: the .so would get emulated TLS on the hook
 // path (TestNoEmulatedTLSInHookPath). The slots are keyed by pthread_t under a pthread mutex, the sentinel's own lock convention.
@@ -336,8 +346,8 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   g_jsonHandFlip[document].store(r.handFlipRows, std::memory_order_relaxed);  // KNOWN-WRONG #2043 the interim toggle's rows
   g_jsonStatus[document].store(static_cast<int>(r.status) + 1, std::memory_order_release);
   pthread_mutex_lock(&g_shapeMutex);
-  g_shapeSite[document] = r.shapeSite;
-  g_topKeys[document] = r.topKeys;
+  Shapes().site[document] = r.shapeSite;
+  Shapes().topKeys[document] = r.topKeys;
   pthread_mutex_unlock(&g_shapeMutex);
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
@@ -890,8 +900,8 @@ int PollLocked() noexcept {
     g_logged.json[document] = true;
     const bool ok = status - 1 == static_cast<int>(texture_menu::Status::kRewritten);
     pthread_mutex_lock(&g_shapeMutex);
-    const std::string shapeSite = g_shapeSite[document];
-    const std::string topKeys = g_topKeys[document];
+    const std::string shapeSite = Shapes().site[document];
+    const std::string topKeys = Shapes().topKeys[document];
     pthread_mutex_unlock(&g_shapeMutex);
     std::vector<sentinel::LogField> fields = {
         {"document", DocumentName(document)},
@@ -1266,8 +1276,8 @@ void ResetForTest() noexcept {
     g_jsonPages[i].store(0);
     g_jsonHandFlip[i].store(0);  // KNOWN-WRONG #2043
     pthread_mutex_lock(&g_shapeMutex);
-    g_shapeSite[i].clear();
-    g_topKeys[i].clear();
+    Shapes().site[i].clear();
+    Shapes().topKeys[i].clear();
     pthread_mutex_unlock(&g_shapeMutex);
   }
   g_logged = Logged();

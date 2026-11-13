@@ -65,7 +65,13 @@ std::atomic<bool> g_overlayCapSaid{false};
 
 // The cargo set (PublishCargo). The resolver holds the published shadow and the per-thread pins; g_sets remembers which Mounted each
 // published shadow came from, for the label name of a serve line (read only when a line is written, never on the hot path).
-nevr_cargo::Resolver g_cargo;
+// A function-local static, not a namespace-scope object: the Resolver's constructor takes its id from a counter at run time, so a
+// namespace-scope one gets a load-time initializer (tools/check_quest_static_init.sh). The Resolver is trivially destructible and its
+// constructor neither allocates nor locks; two threads that call this first at once are ordered by the static's guard.
+nevr_cargo::Resolver& Cargo() noexcept {
+  static nevr_cargo::Resolver cargo;
+  return cargo;
+}
 std::atomic<const nevr_cargo::Mounted*> g_sets[kCargoSets];
 std::atomic<unsigned> g_setCount{0};
 std::atomic<std::uint64_t> g_cargoServed{0};
@@ -471,7 +477,7 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
                       unsigned char* request) noexcept {
   // Cargo first: a key the published shadow holds is filled by the game's own function from the shadow, and cargo replaces stock.
   // Select also pins the shadow of a texture's index 0 for its index 1, so it runs for every request.
-  const nevr_shadow::Shadow* const cargo = g_cargo.Select(name, index);
+  const nevr_shadow::Shadow* const cargo = Cargo().Select(name, index);
   nevr_shadow::Found found;
   std::uint32_t user = 0;
   const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);
@@ -582,7 +588,7 @@ void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept {
     g_sets[at].store(mounted, std::memory_order_release);
     g_setCount.store(at + 1, std::memory_order_release);
   }
-  g_cargo.Publish(mounted->shadow.get());
+  Cargo().Publish(mounted->shadow.get());
 }
 
 unsigned long long CargoServedCount() noexcept { return g_cargoServed.load(std::memory_order_relaxed); }
@@ -654,7 +660,7 @@ void ResetForTest() noexcept {
   g_fns.store(nullptr, std::memory_order_release);
   g_logRequests.store(false, std::memory_order_relaxed);
   g_loadBase.store(0, std::memory_order_relaxed);
-  g_cargo.Reset();
+  Cargo().Reset();
   for (unsigned i = 0; i < kCargoSets; ++i) g_sets[i].store(nullptr, std::memory_order_relaxed);
   g_setCount.store(0, std::memory_order_relaxed);
   g_cargoServed.store(0, std::memory_order_relaxed);

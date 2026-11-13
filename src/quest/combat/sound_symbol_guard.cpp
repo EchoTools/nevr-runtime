@@ -2,11 +2,12 @@
 // does not make a post from PlaySound or the bullet site whose symbol can only fail.
 #include "quest/combat/sound_symbol_guard.h"
 
+#include <pthread.h>
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <mutex>
 
 #include "core/burst_then_count.h"
 #include "quest/combat/combat_scope.h"
@@ -32,7 +33,9 @@ std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::uint64_t (*g_clockMs)() = nullptr;
 // The drop lines' budget (core/burst_then_count.h: no lock of its own). Taken only on the drop path, which calls nothing of the game's.
-std::mutex g_budgetLock;
+// A pthread mutex with a constant initializer, not a std::mutex: it has no destructor, so it adds no load-time initializer
+// (tools/check_quest_static_init.sh), and its unlock carries no personality on the hook path (texture_menu_hook.cpp, g_keptMutex).
+pthread_mutex_t g_budgetLock = PTHREAD_MUTEX_INITIALIZER;
 nevr::BurstThenCount g_budget{kDropLines, kDropEveryMs};
 
 // Every word the guard relies on: the bullet site's path to Play3DSound and its default symbol (kWordPins), and what a drop leaves undone,
@@ -55,9 +58,9 @@ std::uint64_t NowMs() noexcept {
 
 // Written instead of the call to Play3DSound, so no game frame is live above it.
 [[gnu::noinline]] void LogDrop(std::uint32_t symbol, rules::Drop d, Caller caller, std::uint64_t n) noexcept {
-  g_budgetLock.lock();
+  pthread_mutex_lock(&g_budgetLock);
   const nevr::BurstThenCount::Line l = g_budget.Event(NowMs());
-  g_budgetLock.unlock();
+  pthread_mutex_unlock(&g_budgetLock);
   if (l.verdict == nevr::BurstThenCount::Verdict::kWrite) {
     char s[11];
     std::snprintf(s, sizeof s, "0x%08x", static_cast<unsigned>(symbol));

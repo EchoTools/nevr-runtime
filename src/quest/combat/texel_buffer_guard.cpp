@@ -2,10 +2,11 @@
 // bindings hold a zeroed view before the game sees the set.
 #include "quest/combat/texel_buffer_guard.h"
 
+#include <pthread.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstring>
-#include <mutex>
 
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/vk_ext_window.h"
@@ -94,14 +95,17 @@ std::atomic<void*> g_realCreateLayout{nullptr};
 std::atomic<void*> g_realAllocate{nullptr};
 std::atomic<bool> g_requested{false};
 
-std::mutex g_tableLock;
+// The two locks are pthread mutexes with a constant initializer, not std::mutex: they have no destructor, so they add no load-time
+// initializer (tools/check_quest_static_init.sh), and their unlock carries no personality inside a wrapped Vulkan call
+// (texture_menu_hook.cpp, g_keptMutex).
+pthread_mutex_t g_tableLock = PTHREAD_MUTEX_INITIALIZER;
 LayoutTable g_table;  // under g_tableLock
 
 // The zeroed view: made once (g_makeLock), then read without the lock once g_view is kMade.
 constexpr int kNotMade = 0;
 constexpr int kMade = 1;
 constexpr int kOff = 2;
-std::mutex g_makeLock;
+pthread_mutex_t g_makeLock = PTHREAD_MUTEX_INITIALIZER;
 std::atomic<int> g_viewState{kNotMade};
 UpdateFn g_update = nullptr;           // the driver's vkUpdateDescriptorSets, written before kMade
 vk::Handle g_views[kMaxDescriptors];   // kMaxDescriptors copies of the view, written before kMade
@@ -212,13 +216,17 @@ bool Make(void* device) noexcept {
 bool EnsureZeroView(void* device) noexcept {
   const int state = g_viewState.load(std::memory_order_acquire);
   if (state != kNotMade) return state == kMade;
-  std::lock_guard<std::mutex> hold(g_makeLock);
+  pthread_mutex_lock(&g_makeLock);
   const int again = g_viewState.load(std::memory_order_acquire);
-  if (again != kNotMade) return again == kMade;
+  if (again != kNotMade) {
+    pthread_mutex_unlock(&g_makeLock);
+    return again == kMade;
+  }
   const bool made = Make(device);
   // A second device may have turned the guard off while the view was made: kOff stays.
   int expected = kNotMade;
   g_viewState.compare_exchange_strong(expected, made ? kMade : kOff, std::memory_order_acq_rel);
+  pthread_mutex_unlock(&g_makeLock);
   return made && expected == kNotMade;
 }
 
@@ -245,10 +253,9 @@ void WriteNewSets(void* device, const vk::DescriptorSetAllocateInfo& info, const
   for (std::uint32_t i = 0; i < info.descriptorSetCount; ++i) {
     LayoutPicks picks;
     bool known = false;
-    {
-      std::lock_guard<std::mutex> hold(g_tableLock);
-      known = g_table.Find(info.pSetLayouts[i], &picks);
-    }
+    pthread_mutex_lock(&g_tableLock);
+    known = g_table.Find(info.pSetLayouts[i], &picks);
+    pthread_mutex_unlock(&g_tableLock);
     if (!known || picks.verdict == Verdict::kNone) {
       g_unknown.fetch_add(1, std::memory_order_relaxed);
       continue;
@@ -310,10 +317,9 @@ vk::Result CreateDescriptorSetLayout(void* device, const vk::DescriptorSetLayout
   if (result != vk::kSuccess || info == nullptr || layout == nullptr || g_viewState.load(std::memory_order_acquire) == kOff) return result;
   const LayoutPicks picks = PickBindings(info);
   LayoutTable::Put put;
-  {
-    std::lock_guard<std::mutex> hold(g_tableLock);
-    put = g_table.Record(*layout, picks);
-  }
+  pthread_mutex_lock(&g_tableLock);
+  put = g_table.Record(*layout, picks);
+  pthread_mutex_unlock(&g_tableLock);
   if (put == LayoutTable::Put::kFull) {
     g_tableFull.fetch_add(1, std::memory_order_relaxed);
     if (!g_fullSaid.exchange(true, std::memory_order_acq_rel)) {
@@ -400,10 +406,9 @@ void ResetForTest() noexcept {
   g_realCreateLayout.store(nullptr);
   g_realAllocate.store(nullptr);
   g_requested.store(false);
-  {
-    std::lock_guard<std::mutex> hold(g_tableLock);
-    g_table.Clear();
-  }
+  pthread_mutex_lock(&g_tableLock);
+  g_table.Clear();
+  pthread_mutex_unlock(&g_tableLock);
   g_viewState.store(kNotMade);
   g_firstDevice.store(nullptr);
   g_deviceSaid.store(false);

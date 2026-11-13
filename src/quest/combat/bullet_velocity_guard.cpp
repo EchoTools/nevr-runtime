@@ -2,11 +2,12 @@
 // call whose velocity FireBullet cannot normalise.
 #include "quest/combat/bullet_velocity_guard.h"
 
+#include <pthread.h>
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <mutex>
 
 #include "core/burst_then_count.h"
 #include "quest/sentinel/hook_install.h"
@@ -26,7 +27,9 @@ std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::uint64_t (*g_clockMs)() = nullptr;
 // The skip lines' budget (core/burst_then_count.h: no lock of its own). Taken only on the skip path, which calls nothing of the game's.
-std::mutex g_budgetLock;
+// A pthread mutex with a constant initializer, not a std::mutex: it has no destructor, so it adds no load-time initializer
+// (tools/check_quest_static_init.sh), and its unlock carries no personality on the hook path (texture_menu_hook.cpp, g_keptMutex).
+pthread_mutex_t g_budgetLock = PTHREAD_MUTEX_INITIALIZER;
 nevr::BurstThenCount g_budget{kSkipLines, kSkipEveryMs};
 
 constexpr const char* kSkipMsg = "a shot with no usable velocity was not fired: FireBullet would divide by zero and store a NaN direction";
@@ -48,9 +51,9 @@ const char* F(char (&b)[32], float v) noexcept {
 
 // Written instead of the call to FireBullet, so no game frame is live above it.
 [[gnu::noinline]] void LogSkip(const float* v, std::uint64_t handle, std::uint64_t n) noexcept {
-  g_budgetLock.lock();
+  pthread_mutex_lock(&g_budgetLock);
   const nevr::BurstThenCount::Line l = g_budget.Event(NowMs());
-  g_budgetLock.unlock();
+  pthread_mutex_unlock(&g_budgetLock);
   const long long index = static_cast<long long>(handle & 0xffff);
   if (l.verdict == nevr::BurstThenCount::Verdict::kWrite) {
     if (v == nullptr) {
