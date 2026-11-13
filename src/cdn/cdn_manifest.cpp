@@ -167,27 +167,6 @@ const char* ParseStatusName(ParseStatus status) noexcept {
   return "unknown";
 }
 
-bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept {
-  if (text.size() <= kHexPrefixChars || text.size() > kHexPrefixChars + kSymbolHexDigits || text[0] != '0' || text[1] != 'x') return false;
-  std::uint64_t v = 0;
-  for (std::size_t i = kHexPrefixChars; i < text.size(); ++i) {
-    unsigned d = 0;
-    if (!HexDigitValue(text[i], &d)) return false;
-    v = (v << kHexDigitBits) | d;
-  }
-  *out = v;
-  return true;
-}
-
-bool IsSha256Hex(std::string_view text) noexcept {
-  if (text.size() != kSha256HexChars) return false;
-  for (const char c : text) {
-    unsigned ignored = 0;
-    if (!HexDigitValue(c, &ignored)) return false;
-  }
-  return true;
-}
-
 ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest* out) {
   *out = Manifest();
   if (!limits.ok) return Fail(ParseStatus::kNoLimits);

@@ -140,8 +140,6 @@ bool StartsWithZstdMagic(std::string_view body) noexcept;
 // Limits::manifest_text_bytes). Both runtime reads of a manifest go through here: the fetch and the boot's saved copy (cdn_run.cpp).
 ParseResult ParseManifestBody(std::string_view body, const Limits& limits, Manifest* out);
 
-// "0x" followed by 1 to 16 hex digits.
-bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept;
-bool IsSha256Hex(std::string_view text) noexcept;
+// ParseHex64 and IsSha256Hex are cdn_format.h's.
 
 }  // namespace nevr_cdn
