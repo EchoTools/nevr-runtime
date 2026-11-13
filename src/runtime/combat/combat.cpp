@@ -47,6 +47,25 @@ constexpr std::size_t kCellsLength = 0x2105000 - kCellsRva;
 
 const char* OnOff(bool on) { return on ? "on" : "off"; }
 
+// The opt-in (combat_settings.h ReadEnabled, docs/adr/0047), read once at the first ask: RegisterBalance and Install both ask, so
+// a process that has not opted in registers no transform and installs nothing. One line says which, the first time.
+bool OptedIn() {
+  static const bool on = [] {
+    const Setting enabled = ReadEnabled([](const char* key) { return NevrCfgCombatValue(key); });
+    if (enabled.on) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.COMBAT] combat opted in key=combat.%s source=%s (the combat module installs its groups)",
+          kEnabledKey, SourceName(enabled.source));
+    } else {
+      Log(enabled.source == Source::kUnrecognised ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+          "[NEVR.COMBAT] combat module not installed key=combat.%s on=false source=%s (no combat hook, write, transform or "
+          "VeilNet: arena runs as stock; combat.%s: true opts in)",
+          kEnabledKey, SourceName(enabled.source), kEnabledKey);
+    }
+    return enabled.on;
+  }();
+  return on;
+}
+
 void LogGroup(const GroupSpec& spec, const Setting& wanted, bool started, const char* reason) {
   if (!wanted.on) {
     Log(EchoVR::LogLevel::Info, "[NEVR.COMBAT] feature off name=\"%s\" key=combat.%s source=%s", spec.name, spec.key,
@@ -103,6 +122,7 @@ bool BalanceTransform(const void* original, uint64_t originalSize, const void** 
 }  // namespace
 
 void RegisterBalance() {
+  if (!OptedIn()) return;  // the opt-in line says why (docs/adr/0047)
   const bool ok = RegisterResourceTransform(balance::kJsonResourceType, balance::kWeaponSettingsName, &BalanceTransform,
                                             nullptr, "EchoCombat balance values");
   Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
@@ -114,6 +134,7 @@ void RegisterBalance() {
 void Install(std::uintptr_t gameBase, bool isServer) {
   static std::once_flag once;
   std::call_once(once, [gameBase, isServer] {
+    if (!OptedIn()) return;  // nothing of combat's installs without combat.enabled: true (docs/adr/0047); the opt-in line says so
     const Settings s = ReadSettings([](const char* key) { return NevrCfgCombatValue(key); });
     const auto at = [&](Group g) -> const Setting& { return s.groups[static_cast<std::size_t>(g)]; };
     const auto spec = [](Group g) -> const GroupSpec& { return kGroups[static_cast<std::size_t>(g)]; };

@@ -25,6 +25,39 @@ nevr_combat::Settings Read(const std::map<std::string, std::string>& file) {
   });
 }
 
+// docs/adr/0047: combat is opted into. With no config.yaml, or one with no `combat.enabled`, the combat module installs nothing;
+// only an explicit true opts in, and a value that is not a boolean stays off and says so.
+TEST(CombatSettings, CombatIsOffUnlessTheConfigOptsIn) {
+  const auto enabled = [](const std::map<std::string, std::string>& file) {
+    return nevr_combat::ReadEnabled([&](const char* key) -> const char* {
+      auto it = file.find(key);
+      return it == file.end() ? nullptr : it->second.c_str();
+    });
+  };
+  EXPECT_STREQ(nevr_combat::kEnabledKey, "enabled");
+  EXPECT_FALSE(nevr_combat::kEnabledFallback);
+  const nevr_combat::Setting none = enabled({});
+  EXPECT_FALSE(none.on);
+  EXPECT_EQ(none.source, Source::kDefault);
+  // Every group switched on is still not an opt-in.
+  EXPECT_FALSE(enabled({{"drone", "true"}, {"veil", "true"}, {"overcharge", "true"}, {"balance", "true"}}).on);
+  for (const char* yes : {"true", "TRUE", "yes", "on", "1"}) {
+    const nevr_combat::Setting s = enabled({{"enabled", yes}});
+    EXPECT_TRUE(s.on) << yes;
+    EXPECT_EQ(s.source, Source::kConfig) << yes;
+  }
+  for (const char* no : {"false", "off", "0"}) {
+    const nevr_combat::Setting s = enabled({{"enabled", no}});
+    EXPECT_FALSE(s.on) << no;
+    EXPECT_EQ(s.source, Source::kConfig) << no;
+  }
+  for (const char* bad : {"maybe", "", "2"}) {
+    const nevr_combat::Setting s = enabled({{"enabled", bad}});
+    EXPECT_FALSE(s.on) << bad;
+    EXPECT_EQ(s.source, Source::kUnrecognised) << bad;
+  }
+}
+
 TEST(CombatSettings, TheDefaultsAreTheNineGroupTable) {
   const nevr_combat::Settings s = Read({});
   EXPECT_TRUE(s.On(Group::kDrone));
