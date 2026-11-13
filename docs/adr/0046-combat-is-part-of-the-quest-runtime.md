@@ -67,6 +67,7 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
    their constructor steps run only when it is true). The combat code is compiled into every sentinel, so the release loader asset serves every variant.
    The `arena` variant (the store APK with the release's loader and no plugin, #2298, and the default build, ADR 0047) is
    no combat variant: `combat::Active()` is false for it, and a release build cannot force it.
+   The opt-in is the Quest build choice only: the PC runtime installs combat as it always did, with no config key (ADR 0047 decision 4).
 6. **Install moments are the plugin's.** Modules that must precede `android_main` install in a constructor step after Attach and before
    the clock hook; the rest install in a post-load action of their own, right after the normal plugin pass when there is one, at the
    first post-load call.
