@@ -151,7 +151,6 @@ tools/tests/test_patch_detour_logging.py	ported by its unit of #2132
 tools/tests/test_pc_frame_summary.py	ported by its unit of #2132
 tools/tests/test_pe_exports.py	ported by its unit of #2132
 tools/tests/test_pe_version_info.py	ported by its unit of #2132
-tools/tests/test_peer_timeout_log_wiring.py	added with the peer timeout log; a wiring sensor like the other tools/tests/*_wiring.py, ported by its unit of #2132
 tools/tests/test_pinned_ovr_import_walk.py	ported by its unit of #2132
 tools/tests/test_plugin_loader_storage.py	ported by its unit of #2132
 tools/tests/test_plugin_sdk_package.py	ported by its unit of #2132
