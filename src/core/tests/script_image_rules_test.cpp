@@ -1,4 +1,4 @@
-// The shape a map's script must have (core/script_image_rules.h; docs/adr/0047, decision 6): the PE rules for a PC
+// The shape a map's script must have (core/script_image_rules.h; docs/adr/0048, decision 6): the PE rules for a PC
 // script DLL and the ELF rules for a Quest script library, one must-fail case per rule. Every image here is a minimal
 // one this test builds byte by byte; nothing of the game's is read. Pure: no windows.h.
 #include <gtest/gtest.h>

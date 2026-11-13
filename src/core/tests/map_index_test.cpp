@@ -1,4 +1,4 @@
-// The map channel's cache index (src/core/map_index.h; docs/adr/0047-custom-maps-channel.md decisions 3 and 4): its JSON round trip
+// The map channel's cache index (src/core/map_index.h; docs/adr/0048-custom-maps-channel.md decisions 3 and 4): its JSON round trip
 // with floors kept per channel, guild and key, and its read, bounded by the memory the device reports (ADR 0045 decision 8), over
 // the fake Env the cargo tests use.
 #include <gtest/gtest.h>
@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/map_index.h"
-#include "quest/tests/cargo_fake_env.h"
+#include "quest/tests/cdn_fake_env.h"
 
 namespace {
 
@@ -119,7 +119,7 @@ TEST(MapCacheIndex, KeepsItsGroupsInOrder) {
 }
 
 struct MapCacheIndexRead : ::testing::Test {
-  cargo_test::FakeEnv env;
+  cdn_test::FakeEnv env;
   std::string path = std::string(kDir) + "/" + nevr_maps::kCacheIndexFile;
 };
 

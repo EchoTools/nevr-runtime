@@ -1,8 +1,8 @@
-/* The custom-map channel's core (docs/adr/0047-custom-maps-channel.md): the fetch that fills the cache with one lobby group's maps,
- * and the mount that hands the cached maps of a list of groups to the registry. Pure over nevr_cargo::Env, MapFs, a Mounter and a
+/* The custom-map channel's core (docs/adr/0048-custom-maps-channel.md): the fetch that fills the cache with one lobby group's maps,
+ * and the mount that hands the cached maps of a list of groups to the registry. Pure over nevr_cdn::Env, MapFs, a Mounter and a
  * Deriver, so the same code runs on the PC, on the Quest and against fakes.
  *
- * Groups (ADR 0047): each lobby group has one signed manifest, <base_url>/guilds/<group id>/manifest, whose body names the group;
+ * Groups (ADR 0048): each lobby group has one signed manifest, <base_url>/guilds/<group id>/manifest, whose body names the group;
  * a manifest that names another group is refused (guild_mismatch). The group id is opaque (core/map_manifest.h,
  * IsPathSafeGroupId). A client and a server both take their group from the lobby session, and no config key chooses a group. The
  * cache index keeps the groups fetched, the latest first, as many as the device's storage share holds (ADR 0045 decision 8); the
@@ -18,7 +18,7 @@
  * written last: it is the commit point.
  *
  * CacheMount::Mount reads the cache and grants what it holds: no network, and no hashing beyond the stored manifests' signatures
- * and each small package.json (ADR 0047 decision 3). It can be called again, after a fetch, to mount what arrived.
+ * and each small package.json (ADR 0048 decision 3). It can be called again, after a fetch, to mount what arrived.
  *
  * Every outcome is a structured event (the env's tag is [NEVR.MAPS]): map_limits, map_mount_group, map_mounted, map_skipped,
  * map_deferred, map_summary in the mount; map_limits, map_index, map_gc, map_rehash, map_manifest, map_trust_changed, map_plan,
@@ -35,7 +35,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/cargo_env.h"
+#include "cdn/cdn_env.h"
 #include "core/map_manifest.h"
 #include "core/map_types.h"
 
@@ -66,7 +66,7 @@ class Mounter {
   virtual void Withdraw(const std::string& owner) = 0;  // undo every grant of `owner`
 };
 
-// ADR 0047 decision 5, on both platforms: a map whose aliases are not all staged keeps nothing it registered (set, scripts,
+// ADR 0048 decision 5, on both platforms: a map whose aliases are not all staged keeps nothing it registered (set, scripts,
 // rebuilt scripts, aliases), or it would mount on stock rules. "" when every pair was staged, else the refusal token.
 inline std::string StageAliasesOrWithdraw(Mounter& mounter, const std::string& owner, const std::string& id,
                                           std::uint64_t main_level, const std::vector<ConfigAlias>& aliases) {
@@ -83,7 +83,7 @@ struct ChannelConfig {
   std::vector<std::string> stock_manifest_sha256;
   std::vector<std::string> local_maps;  // ids a local map loader loads in this run
   std::vector<PinnedKey> keys;
-  bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0047 decision 7)
+  bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
 };
@@ -93,10 +93,10 @@ std::string GroupManifestUrl(const std::string& base_url, const std::string& gro
 std::string StoredGroupManifestPath(const std::string& dir, const std::string& group);
 
 // The groups the cache index keeps, the latest first: what a client mounts at launch and fetches again in the background.
-std::vector<std::string> CachedGroupIds(nevr_cargo::Env& env, const std::string& dir);
+std::vector<std::string> CachedGroupIds(nevr_cdn::Env& env, const std::string& dir);
 
 // The files a mount holds open take at most 1 part in this many of the descriptors the process has free (ADR 0045 decision 8);
-// the texture cargo's store files take their own share (core/cargo_limits.h, kDescriptorShareForStore).
+// the texture cargo's store files take their own share (cdn/cdn_limits.h, kDescriptorShareForStore).
 inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
 
 struct MountedMap {
@@ -120,11 +120,11 @@ struct MountReport {
 // another version is skipped (mounted_other_version): a mounted map is not replaced in this process.
 class CacheMount {
  public:
-  CacheMount(nevr_cargo::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
+  CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
   MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
 
  private:
-  nevr_cargo::Env& env_;
+  nevr_cdn::Env& env_;
   MapFs& fs_;
   const ChannelConfig& config_;
   Mounter& mounter_;
@@ -163,7 +163,7 @@ struct FetchReport {
 
 // Fetches one group's manifest and the maps it lists. `deferred` are maps a mount deferred (MountReport::deferred): their files
 // are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
-FetchReport FetchGroup(nevr_cargo::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
+FetchReport FetchGroup(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
                        const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr);
 

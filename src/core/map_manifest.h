@@ -1,10 +1,10 @@
-/* A guild's signed custom-map manifest and a map's package index (docs/adr/0047-custom-maps-channel.md). Both parsers are strict:
+/* A guild's signed custom-map manifest and a map's package index (docs/adr/0048-custom-maps-channel.md). Both parsers are strict:
  * a document that is not exactly the published shape is refused with a reason token, never with text from the document. Unknown
  * keys are ignored and unknown platforms are skipped. The formats' numbers and names are map_format.h's.
  *
- * Trust: the minisign signature over the manifest body is checked before any JSON is read (ADR 0047 decision 1). Everything else is
+ * Trust: the minisign signature over the manifest body is checked before any JSON is read (ADR 0048 decision 1). Everything else is
  * reached by sha256 from the manifest (manifest -> index -> member -> piece). Each guild has its own manifest, and its body names the
- * guild (`guild`, the group id); comparing that with the guild the manifest was fetched for is the fetch's job. Freshness (ADR 0047
+ * guild (`guild`, the group id); comparing that with the guild the manifest was fetched for is the fetch's job. Freshness (ADR 0048
  * decision 3) is kept per signed channel name, guild and signing key: a serial floor (with the body sha256 at that serial) and one
  * version floor per "<id>/<platform>".
  *

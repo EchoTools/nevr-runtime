@@ -1,7 +1,7 @@
 {
   "schema": "nevr-maps-recipes",
   "schema_version": 2,
-  "about": "Synthetic stock bytes only, never game files (the recipe format, docs/adr/0047-custom-maps-channel.md). Shared with the publisher (EchoConstruct): each side applies `recipe` to `stock_hex` (insert ops index `inserts_hex`) and must produce `result_hex`, or refuse with `reason`. A field `to` is a little-endian value written as a hex string; a field carries no `from`, since it would be stock bytes. Each side computes sha256 itself.",
+  "about": "Synthetic stock bytes only, never game files (the recipe format, docs/adr/0048-custom-maps-channel.md). Shared with the publisher (EchoConstruct): each side applies `recipe` to `stock_hex` (insert ops index `inserts_hex`) and must produce `result_hex`, or refuse with `reason`. A field `to` is a little-endian value written as a hex string; a field carries no `from`, since it would be stock bytes. Each side computes sha256 itself.",
   "vectors": [
     {
       "name": "fields_three_widths",

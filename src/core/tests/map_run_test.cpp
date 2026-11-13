@@ -1,5 +1,5 @@
-// The map channel's fetch and mount (core/map_run.h; docs/adr/0047-custom-maps-channel.md) over the shared fake Env and its MapFs
-// (quest/tests/cargo_fake_env.h, map_fake_fs.h), a scripted server, a recording Mounter and Deriver, and the real parsers fed
+// The map channel's fetch and mount (core/map_run.h; docs/adr/0048-custom-maps-channel.md) over the shared fake Env and its MapFs
+// (quest/tests/cdn_fake_env.h, map_fake_fs.h), a scripted server, a recording Mounter and Deriver, and the real parsers fed
 // group manifests this test signs with fixed-seed keys. No network, no Win32, no game file. Log assertions read each record's
 // fields.
 #include "core/map_run.h"
@@ -17,7 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/base64.h"
-#include "core/cargo_limits.h"
+#include "cdn/cdn_limits.h"
 #include "core/map_fetch_queue.h"
 #include "core/map_index.h"
 #include "core/map_set_tables.h"
@@ -25,15 +25,15 @@
 #include "monocypher.h"
 #include "nevr/resource_set.h"
 #include "nevr/symbol_hash.h"
-#include "quest/tests/cargo_fake_env.h"
+#include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/map_fake_fs.h"
 
 namespace {
 
 using namespace nevr_maps;
-using cargo_test::FakeEnv;
-using cargo_test::FakeMapFs;
-using cargo_test::Record;
+using cdn_test::FakeEnv;
+using cdn_test::FakeMapFs;
+using cdn_test::Record;
 using json = nlohmann::json;
 namespace set = nevr_resource_set;
 
@@ -52,7 +52,7 @@ constexpr unsigned kBitsPerByte = 8;
 constexpr std::uint8_t kFrameDescriptorFourByteSize = 0xA0;  // single segment, a 4-byte content size (RFC 8878 3.1.1.1)
 constexpr std::size_t kFrameHeaderBytes = 9;                  // magic 4, descriptor 1, content size 4
 
-std::string Sha(const std::string& bytes) { return cargo_test::Sha256Of(bytes); }
+std::string Sha(const std::string& bytes) { return cdn_test::Sha256Of(bytes); }
 
 void PutU32(std::string* s, std::uint32_t v) {
   for (std::size_t i = 0; i < sizeof(v); ++i) s->push_back(static_cast<char>(v >> (kBitsPerByte * i)));
@@ -535,7 +535,7 @@ TEST_F(MapRunTest, AnOfflineMountMountsFromTheCacheWithoutNetworkOrMemberHashing
   ExpectNoLeak();
   const Record* summary = env.FindRecord("map_summary");
   ASSERT_NE(summary, nullptr);
-  EXPECT_EQ(summary->level, nevr_cargo::EventLevel::kInfo);
+  EXPECT_EQ(summary->level, nevr_cdn::EventLevel::kInfo);
   EXPECT_EQ(summary->Get("mounted"), "1");
 }
 
@@ -626,7 +626,7 @@ TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRem
   EXPECT_TRUE(fs.HasDir(v1_dir));
 }
 
-// ADR 0047 decision 7: under -require-signed-plugins a map's scripts count only when an official key signed its manifest; a
+// ADR 0048 decision 7: under -require-signed-plugins a map's scripts count only when an official key signed its manifest; a
 // script-free map still mounts.
 TEST_F(MapRunTest, UnderSignedOnlyOnlyAnOfficialManifestsScriptsMount) {
   channel.Publish("plain", "1.0.0", MakeSet(2, 'a'));
@@ -678,7 +678,7 @@ TEST_F(MapRunTest, TheSummaryListsEveryRefusalAndRefusedGroup) {
   EXPECT_FALSE(Mounted(boot, "gamma"));
   const Record* summary = env.FindRecord("map_summary");
   ASSERT_NE(summary, nullptr);
-  EXPECT_EQ(summary->level, nevr_cargo::EventLevel::kWarn);
+  EXPECT_EQ(summary->level, nevr_cdn::EventLevel::kWarn);
   EXPECT_EQ(summary->Get("mounted"), "0");
   EXPECT_EQ(summary->Get("refused"), "alpha:script:pe_rules,beta:collides,gamma:alias_partial");
   EXPECT_EQ(summary->Get("groups_refused"), std::string(kOtherGroup) + ":no_manifest");
@@ -1009,7 +1009,7 @@ TEST_F(MapRunTest, AMapOverTheStorageShareIsSkippedAndTheOthersContinue) {
   channel.Sign(1);
   const std::uint64_t beta = MakeSet(2, 'b').size();
   std::uint64_t free_bytes = beta;
-  while (free_bytes - free_bytes / nevr_cargo::kStorageShareKept < beta) ++free_bytes;
+  while (free_bytes - free_bytes / nevr_cdn::kStorageShareKept < beta) ++free_bytes;
   env.device.free_bytes = free_bytes;
   const FetchReport fetched = Fetch();
   EXPECT_NE(env.FindRecord("map_plan", "reason", "over_budget"), nullptr);
@@ -1096,7 +1096,7 @@ TEST_F(MapRunTest, AShutdownMidDownloadKeepsItsPiecesAndTheNextPassResumes) {
 TEST_F(MapRunTest, APartialContentAnswerCarryingTheWholeObjectIsAccepted) {
   channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
   channel.Sign(1);
-  for (auto& served : env.server) served.second.status = nevr_cargo::kHttpPartialContent;
+  for (auto& served : env.server) served.second.status = nevr_cdn::kHttpPartialContent;
   const FetchReport fetched = Fetch();
   EXPECT_EQ(fetched.outcome, FetchOutcome::kFetched);
   EXPECT_TRUE(Mounted(Boot(), "alpha"));
@@ -1236,7 +1236,7 @@ TEST_F(MapRunTest, SwitchingToTheOfficialKeyStartsItsOwnFloorAndSaysSoOnce) {
   EXPECT_EQ(env.CountRecords("map_trust_changed"), 1u);
 }
 
-// ---- Groups (ADR 0047): one manifest per lobby group, keyed by its opaque id; the cache keeps the union of the groups' maps.
+// ---- Groups (ADR 0048): one manifest per lobby group, keyed by its opaque id; the cache keeps the union of the groups' maps.
 
 // A fetch keyed by one group requests that group's manifest and the objects of its maps, and nothing of another group.
 TEST_F(MapRunTest, AGroupsFetchRequestsOnlyThatGroupsManifestAndObjects) {

@@ -1,4 +1,4 @@
-/* Recipes (docs/adr/0047-custom-maps-channel.md, the recipe format in core/map_format.h): a map never carries stock bytes, so a
+/* Recipes (docs/adr/0048-custom-maps-channel.md, the recipe format in core/map_format.h): a map never carries stock bytes, so a
  * stock asset it duplicated or re-keyed arrives as edits against the player's own install. This rebuilds each one from a
  * StockSource, checks it against the recipe's sha256, and writes the merged set the mount serves in place of the published one.
  *

@@ -1,5 +1,5 @@
 // script_image_rules.h: the shape a map's script DLL must have before the runtime hands it to the game
-// (docs/adr/0047, decision 6).
+// (docs/adr/0048, decision 6).
 //
 // The game loads `<exe dir>\scripts\<hash16>.dll` with LoadLibraryW and calls its one export, setup_bindings
 // (CScriptResource Load, echovr.exe 0x1412ebb50). Every stock script DLL has the shape checked here: PE32+ AMD64, no
@@ -31,7 +31,7 @@ struct ImageVerdict {
 // A debug directory is allowed; it lives in .rdata.
 ImageVerdict CheckPeScript(const std::uint8_t* image, std::size_t size);
 
-// The Quest twin (docs/adr/0047, decision 6; script_image_rules_elf.cpp): the shape of a map's lib<hash16>.so. Every
+// The Quest twin (docs/adr/0048, decision 6; script_image_rules_elf.cpp): the shape of a map's lib<hash16>.so. Every
 // stock Quest script library (465 in the r15 APK) has it: ELF64 little-endian ET_DYN AArch64, needs only libc.so libm.so libdl.so, no text
 // relocations, no writable and executable segment, no initializer (DT_INIT, DT_INIT_ARRAY, DT_PREINIT_ARRAY), and a defined
 // function setup_bindings in an executable segment. Like the PE rules, loading it runs none of its code. Stock libraries

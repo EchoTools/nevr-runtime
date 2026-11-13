@@ -1,4 +1,4 @@
-// A guild's manifest, the package index and the minisign verifier (docs/adr/0047-custom-maps-channel.md decisions 1 to 3).
+// A guild's manifest, the package index and the minisign verifier (docs/adr/0048-custom-maps-channel.md decisions 1 to 3).
 // Manifests are signed here with fixed-seed test keys; one signature made by the minisign tool itself, with a key made for the test
 // (tests/vectors/maps/minisign), cross-checks the verifier. The index cases are the shared vector file
 // tests/vectors/maps/package_index_cases.json.

@@ -7,8 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/cargo_format.h"
-#include "core/cargo_limits.h"
+#include "cdn/cdn_format.h"
+#include "cdn/cdn_limits.h"
 #include "core/device_memory.h"
 #include "core/map_index.h"
 #include "core/map_set_tables.h"
@@ -17,10 +17,10 @@
 namespace nevr_maps {
 namespace {
 
-using nevr_cargo::Env;
-using nevr_cargo::EventLevel;
-using nevr_cargo::Field;
-using nevr_cargo::HttpResult;
+using nevr_cdn::Env;
+using nevr_cdn::EventLevel;
+using nevr_cdn::Field;
+using nevr_cdn::HttpResult;
 using json = nlohmann::json;
 
 // A GET of a piece or an index is tried this many times when it fails in transport or its bytes do not match: the first try and
@@ -29,7 +29,7 @@ constexpr int kDownloadAttempts = 4;
 // One read of a stored file when a piece is copied or a deferred map is hashed again: at most this many bytes, and never more than
 // the device's share for one object (cargo_limits.h, Limits::max_object_bytes).
 constexpr std::uint64_t kCopyStepBytes = std::uint64_t{1} << 20;
-// What one listed map costs the fetch in memory, for the entry share of nevr_cargo::ComputeLimits.
+// What one listed map costs the fetch in memory, for the entry share of nevr_cdn::ComputeLimits.
 constexpr std::uint64_t kMapEntryMemoryBytes = sizeof(MapEntry) + sizeof(PlatformEntry) + sizeof(CachedMap);
 
 std::string Join(const std::string& a, const std::string& b) { return a + "/" + b; }
@@ -44,8 +44,8 @@ std::string ParentOf(const std::string& path) {
 std::string HttpReason(long status) { return status == 0 ? "transport" : "http_" + std::to_string(status); }
 
 // The transport may ask with a range from byte 0, which a CDN answers 206 with the whole object; a server that ignores a range
-// answers 200. Both carry the object from its first byte (core/cargo_run.cpp reads them the same way).
-bool IsWholeBody(long status) { return status == nevr_cargo::kHttpOk || status == nevr_cargo::kHttpPartialContent; }
+// answers 200. Both carry the object from its first byte (cdn/cdn_run.cpp reads them the same way).
+bool IsWholeBody(long status) { return status == nevr_cdn::kHttpOk || status == nevr_cdn::kHttpPartialContent; }
 
 // A failure that leaves the verified pieces worth keeping: the next fetch resumes after them.
 bool Resumable(const std::string& reason) {
@@ -160,9 +160,9 @@ bool ReadExact(Env& env, std::int64_t handle, std::uint64_t offset, void* buffer
 }
 
 // The memory shares a pass takes from the device (ADR 0045 decision 8). A fact that is missing stops the pass with its name.
-nevr_cargo::Limits LoadLimits(Env& env, const std::string& dir, const char* source, nevr_cargo::DeviceFacts* facts) {
+nevr_cdn::Limits LoadLimits(Env& env, const std::string& dir, const char* source, nevr_cdn::DeviceFacts* facts) {
   env.QueryDevice(dir, facts);
-  const nevr_cargo::Limits limits = nevr_cargo::ComputeLimits(*facts, kMapEntryMemoryBytes);
+  const nevr_cdn::Limits limits = nevr_cdn::ComputeLimits(*facts, kMapEntryMemoryBytes);
   if (limits.ok) {
     env.Event(EventLevel::kDebug, "map_limits",
               {{"source", source},
@@ -180,7 +180,7 @@ nevr_cargo::Limits LoadLimits(Env& env, const std::string& dir, const char* sour
   return limits;
 }
 
-std::size_t CopyBufferBytes(const nevr_cargo::Limits& limits) {
+std::size_t CopyBufferBytes(const nevr_cdn::Limits& limits) {
   return static_cast<std::size_t>(std::max<std::uint64_t>(1, std::min(kCopyStepBytes, limits.max_object_bytes)));
 }
 
@@ -212,7 +212,7 @@ class MountRun {
 
   MountReport Run(const std::vector<std::string>& groups, const std::string& now_utc) {
     const std::uint64_t started = env_.NowMs();
-    nevr_cargo::DeviceFacts facts;
+    nevr_cdn::DeviceFacts facts;
     env_.QueryDevice(config_.dir, &facts);
     if (!facts.have_fds) return Stop("no_descriptor_fact");
     if (!facts.have_memory) return Stop("no_memory_fact");
@@ -577,11 +577,11 @@ class FetchRun {
     started_ = env_.NowMs();
     if (!IsPathSafeGroupId(group_)) return Finish("bad_group");
     if (!env_.MakeDirs(config_.dir)) return Finish("cache_dir");
-    nevr_cargo::DeviceFacts facts;
+    nevr_cdn::DeviceFacts facts;
     limits_ = LoadLimits(env_, config_.dir, "fetch", &facts);
     if (!limits_.ok) return Finish(limits_.reason);
     document_bytes_ = MapDocumentBytes(facts);
-    table_bytes_ = nevr_device::Share(facts.memory_available, nevr_cargo::kMemoryShareForEntries);
+    table_bytes_ = nevr_device::Share(facts.memory_available, nevr_cdn::kMemoryShareForEntries);
     buffer_.resize(CopyBufferBytes(limits_));
 
     const CacheIndexStatus status = ReadCacheIndex(env_, config_.dir, &index_);
@@ -875,12 +875,12 @@ class FetchRun {
     }
   }
 
-  // The one place a stored file is hashed: a map a mount deferred (ADR 0047 decision 4), on the worker.
+  // The one place a stored file is hashed: a map a mount deferred (ADR 0048 decision 4), on the worker.
   bool HashFile(const std::string& path, std::string* sha256, FileStamp* stamp) {
     std::int64_t handle = 0;
     std::uint64_t size = 0;
     if (!fs_.OpenHeld(path, &handle, &size)) return false;
-    std::unique_ptr<nevr_cargo::Hasher> hasher = env_.NewHasher();
+    std::unique_ptr<nevr_cdn::Hasher> hasher = env_.NewHasher();
     bool ok = fs_.StampOf(handle, stamp);
     for (std::uint64_t at = 0; ok && at < size;) {
       const std::size_t length = static_cast<std::size_t>(std::min<std::uint64_t>(buffer_.size(), size - at));
@@ -1070,7 +1070,7 @@ class FetchRun {
       reason = GetSmall(config_.base_url + kBlobUrlPrefix + pin.sha256, pin.size, out);
       if (reason == "cancelled" || reason == "over_cap") return reason;
       if (!reason.empty()) continue;
-      std::unique_ptr<nevr_cargo::Hasher> hasher = env_.NewHasher();
+      std::unique_ptr<nevr_cdn::Hasher> hasher = env_.NewHasher();
       hasher->Update(out->data(), out->size());
       if (out->size() == pin.size && hasher->Hex() == pin.sha256) return std::string();
       reason = "index_hash";
@@ -1080,7 +1080,7 @@ class FetchRun {
 
   // A piece a cached file already holds, copied into `file` without hashing it again: the file's stamp must still be the one it
   // had when its bytes were verified. False (with `file` cut back) when the piece cannot be had that way: fetch it.
-  bool ReusePiece(const Pin& piece, nevr_cargo::AppendFile& file) {
+  bool ReusePiece(const Pin& piece, nevr_cdn::AppendFile& file) {
     const auto found = catalog_.find(piece.sha256);
     if (found == catalog_.end() || found->second.size != piece.size) return false;
     const PieceLocation where = found->second;
@@ -1112,10 +1112,10 @@ class FetchRun {
   }
 
   // One GET of a piece, appended to `file` while it is hashed. Any failure cuts the file back to where the piece started.
-  Download GetPiece(const Pin& piece, nevr_cargo::AppendFile& file) {
+  Download GetPiece(const Pin& piece, nevr_cdn::AppendFile& file) {
     Download out;
     const std::uint64_t start = file.Size();
-    std::unique_ptr<nevr_cargo::Hasher> hasher = env_.NewHasher();
+    std::unique_ptr<nevr_cdn::Hasher> hasher = env_.NewHasher();
     std::uint64_t got = 0;
     long status = 0;
     bool too_large = false, write_failed = false;
@@ -1225,7 +1225,7 @@ class FetchRun {
         bytes = point->second.bytes;
       }
     }
-    std::unique_ptr<nevr_cargo::AppendFile> file = env_.OpenAppend(path);
+    std::unique_ptr<nevr_cdn::AppendFile> file = env_.OpenAppend(path);
     if (!file || !file->Truncate(bytes)) return "write_failed";
     if (first > 0) {
       *reused += static_cast<std::size_t>(first);
@@ -1422,7 +1422,7 @@ class FetchRun {
   Deriver* deriver_;
   const std::function<bool()>& keep_going_;
   const FetchProgressFn& progress_fn_;
-  nevr_cargo::Limits limits_;
+  nevr_cdn::Limits limits_;
   std::uint64_t document_bytes_ = 0;
   std::uint64_t table_bytes_ = 0;
   std::uint64_t started_ = 0;
