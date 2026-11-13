@@ -1,0 +1,10 @@
+# Named procedures and the one file that holds each one's steps (tools/cmd/one-home).
+# name<TAB>home<TAB>marker: a regular expression matching a line of the steps. Every other Markdown file links to the home.
+landing	AGENTS.md	HEAD:refs/heads/main
+landing	AGENTS.md	--ff-only origin/main
+releasing	RELEASING.md	gh release create
+headline-files	RELEASING.md	200 characters
+run-on-a-copy	AGENTS.md	cp -a
+filing	AGENTS.md	Evidence at .<sha>
+landing	AGENTS.md	refs/heads/main
+landing	AGENTS.md	rerun the (touched|test recipes|tests)

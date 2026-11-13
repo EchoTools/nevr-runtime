@@ -183,28 +183,28 @@ the name and has to make sense as one.
 
 ### What checks it
 
-The review checks (no automated check reads these). KNOWN-WRONG #2393: no file in the tree defines the lists these rules name (`KNOWN_COLLISIONS`, `KNOWN_ROLE_BREAKS`, `COMBAT_NAMES`, `KNOWN_COMBAT_BREAKS`, `RULES_HOME_SHARED_HOOK`, `KNOWN_DIRECTORY_BREAKS`), so each rule that names one is unchecked until its list exists:
+The review checks these (no automated check reads them):
 
 - **N-COLLIDE.** No two entries of one directory (files by stem, and directories) are equal after lower-casing and
-  removing `_` and `-`. Known breaks are listed in `KNOWN_COLLISIONS`, each marked `KNOWN-WRONG #<issue>`; the list
-  only shrinks, and an entry that no longer collides fails the test until it is removed.
+  removing `_` and `-`.
 - **N-ROLES.** Under `src/`: no stem ends in `_core`; no `.inc` file, and no frame check (`.want`) of one, has a stem
   that ends in `_thunk`; no stem has `quest`, `win`, `pc` or `android` as a word after its first; no C++ file is named
   `test_<stem>.cpp`; and every `<stem>_qemu.cpp` names a stem that has a `<stem>.cpp` or a `<stem>_entry.inc` in the
-  tree. Known breaks: `KNOWN_ROLE_BREAKS`, same form, one entry per file.
+  tree.
 - **N-COMBAT.** Every file in `src/quest/combat/`, `src/quest/combat/mutants.d/`, `src/quest/combat/check/` and
-  `docs/quest/combat/` (its `adr/` aside, and the scaffolding names `CMakeLists.txt`, `README.md`, `mutants.sh`) has a stem that is a name in `COMBAT_NAMES` (the components and the area's infrastructure), optionally with a
-  role suffix from the table (or, for a mutant file, `_<n>`). A new module is added to `COMBAT_NAMES` in the change
-  that creates it, where the review applies the name rule. `COMBAT_NAMES` holds the names that pass, and `KNOWN_COMBAT_BREAKS` holds the stems that break the rule
-  today, each marked `KNOWN-WRONG #<issue>`; the rename table of that issue gives each one's proposed name.
+  `docs/quest/combat/` (its `adr/` aside, and the scaffolding names `CMakeLists.txt`, `README.md`, `mutants.sh`) has a stem that is the name of a component or of the area's infrastructure, optionally with a
+  role suffix from the table (or, for a mutant file, `_<n>`). The change that creates a module names it by that rule, and the
+  review applies it.
 - **N-RULES-HOME.** Every `src/runtime/**/<x>_rules.h` that a file under `src/quest/` includes has a non-test file under
   `src/runtime/` that includes it in the same directory, and a non-test file under `src/quest/` whose stem is `<x>`.
   A component whose hook is shared with another component's file on both platforms has no Quest file of its own
-  name; it is listed in `RULES_HOME_SHARED_HOOK` with that file and the reason (`lobby_failure_message`: its hook is
-  the lobby-full hook of `lobby_full_backoff`). That list is an allowed exception, not a break: its entries carry no
-  `KNOWN-WRONG` marker, and an entry whose header no longer needs it fails the test. Known breaks: same form.
+  name (`lobby_failure_message`: its hook is the lobby-full hook of `lobby_full_backoff`). That is an allowed exception, not
+  a break.
 - **N-DIRS.** No directory under `src/`, `sdk/`, `installer/` or `tools/` has a `-` in its name, the two kinds above
-  aside. Known breaks: `KNOWN_DIRECTORY_BREAKS`, same form.
+  aside.
+
+A break the review finds and the change does not fix is filed as an issue ("Fix it or file it, in the same turn" in
+`AGENTS.md`); no list of known breaks exists in the tree.
 
 Every `KNOWN-WRONG #<n>` marker names an open issue. The review checks
 what no test reads: that a word is whole, that an abbreviation passes its test, and that one component has one name

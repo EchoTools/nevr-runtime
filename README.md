@@ -375,7 +375,7 @@ src/nevr_api/      protobuf target
 sdk/               the plugin SDK (nevr::plugin_sdk), header-only
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)
-extern/            submodules: minhook, breakpad, lss
+extern/            submodules: minhook, breakpad, lss, luau
 gen/               generated protobuf — do not hand-edit
 docs/              see docs/README.md
 ```
@@ -397,7 +397,7 @@ docs/              see docs/README.md
 vcpkg manifest (`vcpkg.json`): curl, gtest, ixwebsocket, nlohmann-json,
 miniupnpc, minhook, opus, protobuf.
 
-Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
+Submodules in `extern/`: `minhook`, `breakpad`, `lss`, `luau`.
 
 ## Related projects
 

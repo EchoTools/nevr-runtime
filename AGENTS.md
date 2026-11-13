@@ -155,7 +155,7 @@ each one gives; do the step this way on yours:
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
 | "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a branch. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
-| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, run the quick check, take the review to its MERGE verdict and rebase onto `origin/main`, then stop: push the branch to your fork and post its name and tip SHA on the issue. A maintainer's agent fetches it ("Git") and lands it. Never open a pull request. take the review to its MERGE verdict, rebase onto `origin/main` and rerun the tests, then stop: push the branch to your fork and post its name and tip SHA on the issue. Never push to `main` of another remote. |
+| "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, run the quick check, take the review to its MERGE verdict, rebase onto `origin/main` and rerun the tests, then stop: push the branch to your fork and post its name and tip SHA on the issue. A maintainer's agent fetches it ("Git") and lands it. Never open a pull request. Never push to `main` of another remote. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
@@ -229,17 +229,14 @@ The message of the commit that lands carries the items below; it is the evidence
   - M2 `undrained_` never decremented -> FAIL test_reader_gate: TimesOutWhenReadersStay
   - restored tree: 9 tests OK
   ```
-- **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`) tip SHA and its
-  result, what was not run, and the tracking issue. exit code, what was not run or not established, and the issue (`Closes #N` or `Refs #N`).
-- **Platform parity.** PCVR and Quest stay at parity. A PR commit that adds or changes player-facing behavior says in its
-  body message what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
+- **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`), its
+  exit code, what was not run or not established, and the issue (`Closes #N` or `Refs #N`).
+- **Platform parity.** PCVR and Quest stay at parity. A commit that adds or changes player-facing behavior says in its
+  message what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
-- **A headline, when players see a change.** A commit that changes what players see adds `release-headlines/<issue-or-topic>.txt`
-  with one line, one plain sentence a player would understand about that change only, written with the change
-  (`RELEASING.md`, "Write the release body"), and deletes the fragments present at the newest `vX.Y.Z` tag
-  (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). The release body's player line is the files the range
-  adds, or "Fixes and internal changes." when it adds none; the commits never write it. A change behind a setting that is
-  off, or internal, adds no file.
+- **A headline, when players see a change.** A commit that changes what players see adds one `release-headlines/` fragment and
+  deletes the fragments already released, as `RELEASING.md`, "Headline files", says. A change behind a setting that is off, or
+  internal, adds no file.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
@@ -476,18 +473,8 @@ systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_M
 
 Output: `build/package-dev/<sha7>/`, and the APK at `build/android-dev/repack/r15_nevr-sentinel_signed.apk`.
 
-Every release follows RELEASING.md.
-
-Releases are built by CI from a tag, never locally, and always from a draft (a draft fires no workflow, so the build is started by
-hand on the tag ref). The steps, in order, from a clone of origin:
-
-```sh
-just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
-git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's tip with the version `python3 tools/next_release_version.py` prints, and push the tag
-just release-preflight && gh release create v<x.y.z> --title v<x.y.z> --draft --prerelease --verify-tag   # 3. once more, then a draft for the pushed tag
-gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attaches the two files to the draft; it stays a draft
-gh release edit v<x.y.z> --draft=false            # 5. publish, only after the draft's files are checked and signed (RELEASING.md)
-```
+Every release follows RELEASING.md: its flow table is the only statement of the steps and of their order. A release is published as a
+pre-release and is never left a draft.
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
 stamps `<next>-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
@@ -499,7 +486,7 @@ stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `bui
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
 
-`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and neither of the two names on the draft is
+KNOWN-WRONG #1865: this paragraph describes what `build.yml` does today, which is to attach the signed files to a draft; a release is never left a draft (RELEASING.md, step 4), so the paragraph and the `drafts` job go when the build stops using drafts. `tools/release_draft.sh` decides what the build does: a tag with exactly one draft, no published release, and neither of the two names on the draft is
 built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries either of the
 two names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
 which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
@@ -510,8 +497,8 @@ runs are published outside GitHub.
 
 `just release-quest-apk vX.Y.Z` runs `tools/release_preflight.py --tag vX.Y.Z` instead, which takes HEAD at that tag's commit rather
 than at origin's tip (clean tree, the tag on origin at the same commit; every other check unchanged), so an older tag still builds.
-`just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
-`gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
+`just release-preflight` also runs first inside `just package-dev`. It is step 0 of the flow in RELEASING.md, before anything is staged,
+tagged or published: the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
@@ -822,12 +809,15 @@ your seat name, for example `claude-main` or `codex`.
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
   `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every change, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
-  first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
+  first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` also runs the Go tests of `tools/`; one of them,
+  `tools/cmd/one-home`, fails when a procedure named in `docs/standards/procedure-homes.txt` (landing, releasing, headline files, running on a
+  copy, filing) is written in a Markdown file other than its home: a new copy of a step goes in the home and the other files link to it.
+  `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
   `test-runs/tools-tests` in the work root, `~/src/nevr-runtime-work`). A failure is reported by the test ids that run's record
-  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its result in the commit message; an item exit code in
+  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its exit code in
   the commit message; an item not run is named as not run.
-  No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; the rest are started CI runs on a landing push except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
+  No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
 - **`just verify` runs only on main, after the release cut, once per cut.** A branch does not run it and the
   review does not ask for it. It is not run again for the same cut. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
@@ -972,11 +962,10 @@ your seat name, for example `claude-main` or `codex`.
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The commit message is the evidence.** The message of the branch's last commit carries what "What a landed commit carries" lists: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`; a commit cannot name its own SHA) and its result, the mutants, what was not run, and the issue. When the content changes before landing, amend it (the branch is unpushed); a content change after a MERGE verdict gets a new review before it lands.
 - **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
-- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict: (1) `git fetch origin main && git rebase origin/main`; a rebase that stops on a conflict goes back to the work, the quick check and a new review; (2) rerun the test recipes that cover the change on the rebased tip; a failure goes back to the work; (3) record `git ls-remote origin refs/heads/main`; (4) `git push origin HEAD:refs/heads/main`, never forced, so it can only fast-forward; (5) run `git ls-remote origin refs/heads/main` again: it prints the branch tip. A rejected push means `main` moved: go back to (1). No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). The main checkout is shared: fast-forward it (`git -C <main checkout> merge --ff-only origin/main`) only when its `git status --porcelain` is empty and `git -C <main checkout> symbolic-ref --short HEAD` prints `main`, and otherwise leave it (rule 3).
+- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test '<command>'` once for each test recipe that covers the change. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
 - **Verification before landing.** A runtime change is tested by its author before it lands (and its covering tests once more after Landing's rebase): the
   quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
-  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after and does not
-  its run them again after a rebase. A red PC login run or a red `just verify` on main is a
+  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after a rebase. A red PC login run or a red `just verify` on main is a
   red main. A red main is bisected, and the culprit is reverted or fixed by a landed commit. Landing does not stop while main is
   red. Main always builds. The PC login run's log shows all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
@@ -1142,7 +1131,7 @@ When something fails, the first act is reading the failing program's **own** log
 ## Dependencies
 
 - **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
-- **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss` (per `.gitmodules`).
+- **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss`, `luau` (per `.gitmodules`).
   `extern/protobuf` is a plain directory, not a submodule.
 - **Toolchain** — CMake 4.0+, Ninja, MinGW (Linux) or MSVC (Windows)
 

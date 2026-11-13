@@ -29,6 +29,7 @@ Retired findings that were not filed, and why:
 
 | File | What it holds |
 |------|---------------|
+| `2026-11-12-instruction-settlement.md` | the contradictions and duplicate procedures settled on 2026-11-12, each with its deciding source, and the three questions left for the owner |
 | `2026-11-05-q15t-origin-citations.md` | the origin citations of the old q15t plugin repository (file, line and source commit of each), its module rules, its commit log and the provenance of the variant libraries (#2167) |
 
 ## Reading an old citation

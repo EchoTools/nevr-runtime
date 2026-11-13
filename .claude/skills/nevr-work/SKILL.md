@@ -115,11 +115,8 @@ live game shows is named as not run unless you ran it (the evidence ladder is `d
 
 No pull requests. The commit message: the issue (`Closes`/`Refs #N`), each command run on the exact tip with its exit
 code, the mutants, and what was not run or not established ("What a landed commit carries"). Start a fresh-context
-review subagent with the diff, the commit message and the issue; FIX goes back to step 4, MERGE goes on to "Landing" in "Review,
-verification and landing": fetch, rebase the branch onto `origin/main`, rerun the touched tests, push the tip to
-`refs/heads/main` by explicit refspec (a fast-forward), record `main`'s SHA before and after, then fast-forward the
-local `main` only when its `git status --porcelain` is empty and HEAD is `main` (AGENTS.md "Landing"; otherwise leave
-it, rule 3). Commit identity and trailers:
+review subagent with the diff, the commit message and the issue; FIX goes back to step 4, MERGE goes on to `just land` as
+"Landing" in "Review, verification and landing" says. Commit identity and trailers:
 "Commit identity" and "Commits, versions and requirement words". Branch and worktree: "Branch lifecycle"; scratch:
 "Ownership and cleanup". A defect you do not fix in the same turn gets an issue ("Fix it or file it, in the same turn"),
 shaped as "What a landed commit carries" says; a security-sensitive one goes to the owner.

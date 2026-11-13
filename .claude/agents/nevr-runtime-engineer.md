@@ -113,8 +113,7 @@ Sensor N109 fails if `${CMAKE_CURRENT_SOURCE_DIR}` returns to that target.
 **Findings and rule tags:** there is no `BUGS.md` on main (`git ls-tree origin/main BUGS.md`
 returns nothing). A defect you find and do not fix gets a GitHub issue in the same turn
 (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn"),
-written as a falsifiable claim: Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md
-"What a landed commit carries"). The `N<number>` rules are tags in code comments and in the
+written as a falsifiable claim (AGENTS.md "Write an issue as a falsifiable claim"). The `N<number>` rules are tags in code comments and in the
 `just verify` recipe, indexed in AGENTS.md "The N-rules index". The highest tag in
 `src`, `tools` and `justfile` on origin/main is **N151**
 (`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`; `N802` in that list is a Python lint code in two `# noqa` comments, not a rule). Read the
@@ -325,8 +324,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 - **Never run against a real install.** The install is a game library, not a run target. AGENTS.md "The game install": no agent runs a
   deploy script or writes into it. Every run uses its own throwaway copy of the
-  pristine copy, made with `cp -a --reflink=auto`, deleted when the run ends, with the
-  safety steps and link check AGENTS.md lists; point the scripts at it with
+  pristine copy, made, checked and deleted as AGENTS.md "The game install" says; point the scripts at it with
   `NEVR_GAME_ROOT=<copy>`. Scratch and the copies live under
   `~/src/nevr-runtime-work/<agent>/`. Every build, test or run goes in
   `nevr-builds.slice` (AGENTS.md "Builds"); wait while 2 or more `ninja` run. If no pristine
@@ -449,7 +447,7 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
   on a pushed branch. Scratch lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only); keep a
   ledger row for every worktree, branch and scratch file you create in the ledger file
   `REAP_LEDGER` names (maintainers only).
-- **Maintainers only.** Push `main` by explicit refspec only, through AGENTS.md "Landing". only with `just land`, from the branch's own worktree (AGENTS.md "Landing"). Never `git push --mirror`, never force-push `main`, and never push a raw SHA from a maintainer clone.
+- **Maintainers only.** Push `main` only with `just land`, from the branch's own worktree (AGENTS.md "Landing"). Never `git push --mirror`, never force-push `main`, and never push a raw SHA from a maintainer clone.
 - `.claude/` is gitignored except the files `.gitignore` negates: the merge-cleanup skill, the nevr-work skill and this primer. Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
 - `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548). The symlink, the `replace`
   directives, the harness `require`, and the harness-importing integration suites
@@ -460,8 +458,8 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
 - `extern/protobuf` is **not a submodule and no longer a gitlink either**. The
   stale `160000` gitlink was removed from the index by `8cf0b6c` (it blocked
   `git add`/`commit` in a worktree). It is now an ordinary untracked directory,
-  ignored via the `extern/protobuf/` entry in `.gitignore`. `git ls-tree HEAD extern/` shows exactly three
-  gitlinks — `breakpad`, `lss`, `minhook` — matching the three `path =` entries
+  ignored via the `extern/protobuf/` entry in `.gitignore`. `git ls-tree HEAD extern/` shows exactly four
+  gitlinks — `breakpad`, `lss`, `luau`, `minhook` — matching the four `path =` entries
   in `.gitmodules`.
 
 ---
