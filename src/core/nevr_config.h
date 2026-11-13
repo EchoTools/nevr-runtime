@@ -181,9 +181,11 @@ class NevrConfig {
   /// Turns `plugins[index]`'s `enabled` on or off in the bound file, the same splice-and-rename as Set: every other byte is
   /// kept. Inserts `enabled:` at the entry's child indentation when the entry has none. A flow-style list or entry is refused
   /// with a named reason, and so is an index past the end; nothing is written then. By index, not name: the loader keeps
-  /// list order and two entries may share a name (#1857). Never throws.
+  /// list order and two entries may share a name (#1857). On success the loaded `Plugins()[index].enabled`
+  /// follows the file; the same lock as Set covers the whole edit. Never throws. The refusals are those of Set that apply, and
+  /// "plugins_missing" (no file, no `plugins` key or a null one), "duplicate_key" (two `enabled` in the entry), "plugins_not_a_list", "plugins_flow_style", "plugin_index_out_of_range",
+  /// "entry_not_a_mapping" and "entry_flow_style".
   ConfigSetResult SetPluginEnabled(std::size_t index, bool enabled) noexcept;
-
 
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
