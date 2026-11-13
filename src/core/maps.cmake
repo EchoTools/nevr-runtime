@@ -34,8 +34,22 @@ set_source_files_properties(${_maps_format_sources} ${_maps_monocypher_sources} 
 target_sources(nevr_core PRIVATE ${_maps_format_sources} ${_maps_monocypher_sources})
 target_include_directories(nevr_core PRIVATE "${_maps_monocypher_dir}")
 
+# The recipe rebuild (core/map_derive.h; ADR 0047): a stock-derived asset rebuilt from the player's own install and merged into
+# the map's set, with the one reader of a set file (core/map_set_tables.h). Each frame header is judged by the texture cargo's
+# validator (core/cargo_validate.h, ADR 0045), and the memory a rebuild holds is a share of the device's (core/cargo_limits.h).
+# The PC build has no other user of those two cargo files, so the map channel brings them into nevr_core. Platform-free: no
+# Windows header, so no PCH.
+set(_maps_derive_sources
+  "${CMAKE_CURRENT_LIST_DIR}/map_set_tables.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/map_derive.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/cargo_validate.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/cargo_limits.cpp")
+set_source_files_properties(${_maps_derive_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE ${_maps_derive_sources})
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
+  find_package(zstd CONFIG QUIET)
 endif()
 if(BUILD_TESTING AND GTest_FOUND)
   include(GoogleTest)
@@ -79,4 +93,15 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_include_directories(test_map_index PRIVATE "${CMAKE_SOURCE_DIR}/src")
   target_link_libraries(test_map_index PRIVATE GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_index DISCOVERY_MODE PRE_TEST)
+
+  # The recipe rebuild over the shared fake Env and its MapFs (quest/tests/cargo_fake_env.h, map_fake_fs.h), a fake install, zstd
+  # to read the merged set back and the SDK's set parser; the shared recipe vectors are read from the source tree.
+  add_executable(test_map_derive "${CMAKE_CURRENT_LIST_DIR}/tests/map_derive_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_derive_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_derive PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_compile_definitions(test_map_derive PRIVATE NEVR_RECIPE_VECTORS="${CMAKE_SOURCE_DIR}/tests/vectors/maps/recipes")
+  target_link_libraries(test_map_derive PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
+    nlohmann_json::nlohmann_json zstd::libzstd)
+  gtest_discover_tests(test_map_derive DISCOVERY_MODE PRE_TEST)
+
 endif()
