@@ -248,7 +248,9 @@ static constexpr uint64_t VA_CNODE3D_SET_VISIBLE = 0x140632140;
 // --- Combat Mod: Level Loading ---
 
 // Source: leveldetect.h in echovr_combat_mod / PC binary analysis
-// Main level load orchestrator
+// Main level load orchestrator. The runtime itself detours this address on every PC run whose prologue matches
+// (hook/load_timing.cpp, or the join hold's detour while one is installed there), so a plugin MUST NOT hook it: the loader stops a
+// server whose plugin re-hooks an address the runtime owns.
 static constexpr uint64_t VA_LEVEL_LOAD = 0x1404FE050;
 
 // Source: swaptoggle.h in echovr_combat_mod / PC binary analysis

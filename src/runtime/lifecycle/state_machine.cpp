@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <cstdio>
 
+#include "runtime/hook/load_timing.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/hook/addresses.h"
@@ -113,6 +114,8 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
     s_prevState = static_cast<uint32_t>(state);
   }
+
+  if (state == EchoVR::NetGameState::LoggedIn) nevr_load_timing::OnLoggedIn();  // the first one writes boot_timing
 
   if (nevr_server_bringup::BeginsMultiplayer(g_isServer != FALSE, static_cast<EchoVR::NetGameState>(fromState),
                                              state)) {

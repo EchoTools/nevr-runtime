@@ -834,7 +834,9 @@ constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 // ============================================================================
 // Level-load state the join hold reads (docs/reference/join-hold.md). With network.join_hold_ms above 0 on a server,
 // server/join_hold.cpp hooks CNCAGAMESPACE_LOAD_LEVEL and CR15NETGAME_ENABLE_GAME_SPACES; CGAMELEVELRESOURCE_ENABLE is
-// validated, not hooked. With the key at 0 (the default) none is hooked.
+// validated, not hooked. With the key at 0 (the default) the join hold hooks none. CNCAGAMESPACE_LOAD_LEVEL is hooked
+// on every PC run whose prologue matches: by hook/load_timing.cpp (the level_load record) whenever the join hold does not hold it, and by the
+// join hold's detour, which times the load too, when it does. One detour at a time owns the address.
 // ============================================================================
 
 /// Address: CncaGameSpace::LoadLevel (0x1404FE050, 2322 bytes). The name is ReVault's record for this function (source:

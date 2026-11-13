@@ -15,6 +15,12 @@ namespace nevr_join_hold {
 
 void Install(bool isServer);
 
+/// True while a join-hold detour is installed on CncaGameSpace::LoadLevel (the load timing hook then stays out of its way).
+/// The flag is set when the LoadLevel site attaches and cleared only when Retire removed that detour, so a detour that stays
+/// installed is still reported and the timing hook does not add a second one. It reads site 1 of kSites in join_hold.cpp,
+/// so reordering the sites means updating kLoadLevelSite there.
+bool HooksLoadLevel();
+
 /// True when the accept was held (a copy was queued): the caller must not forward it now. False: forward it now.
 /// `entrants` is how many entrants it names; `sessionId` only goes into the log.
 bool Admit(const void* encoded, std::size_t size, std::size_t entrants, const char* sessionId);

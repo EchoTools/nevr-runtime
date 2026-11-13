@@ -24,6 +24,7 @@
 #include "runtime/log/run_log_record.h"
 #include "runtime/log/error_dialog_level.h"
 #include "core/log_level.h"
+#include "runtime/hook/load_timing.h"
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
@@ -38,6 +39,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
@@ -620,8 +622,16 @@ static const char* LevelStr(uint32_t level) {
 
 /* N77: a line NEVR emitted, identified by its subsystem tag. docs/standards/logging.md requires
  * every NEVR line to begin with `[NEVR.` — that prefix is the discriminator. */
+static constexpr char kNevrTagPrefix[] = "[NEVR.";
+static constexpr std::size_t kNevrTagPrefixLen = sizeof(kNevrTagPrefix) - 1;
+
 static bool IsNevrLine(const char* message) {
-    return std::strncmp(message, "[NEVR.", 6) == 0;
+    return std::strncmp(message, kNevrTagPrefix, kNevrTagPrefixLen) == 0;
+}
+
+/* The same test for a captured buffer of `len` bytes: a line shorter than the prefix is not a NEVR line. */
+static bool IsNevrLineOfLength(const char* buf, int len) {
+    return len >= 0 && static_cast<std::size_t>(len) >= kNevrTagPrefixLen && IsNevrLine(buf);
 }
 
 /* N77 — suppression is scoped to the emitter it targets.
@@ -957,7 +967,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
         return;
     }
 
-    if (!(len >= 6 && std::strncmp(buf, "[NEVR.", 6) == 0)) {
+    if (!IsNevrLineOfLength(buf, len)) {
         g_game_line_count.fetch_add(1, std::memory_order_relaxed);
 
         // Annotate game-native lines with [EVR] prefix and resolved symbol hashes.
@@ -976,6 +986,11 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     MaybeEmitHealth();  /* N79 */
 
     ObserveGpuHung(buf);
+
+    /* Boot timing: the game's engine-ready line marks engine_ready_ms (runtime/hook/load_timing_rules.h); a runtime line never does. */
+    if (!IsNevrLineOfLength(buf, len)) {
+        nevr_load_timing::OnGameLine(buf);
+    }
 
     /* #1294: the game's report of its own connection to the local bridge is a Debug line. The helper matches
      * game lines only (a line the runtime writes is never demoted here, N77). */

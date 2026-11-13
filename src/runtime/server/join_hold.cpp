@@ -14,6 +14,7 @@
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/load_timing.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/server/join_hold_rules.h"
@@ -22,8 +23,7 @@
 namespace nevr_join_hold {
 namespace {
 
-// The prologues the two detours are written against (echovr.exe, 8 bytes each; tools/hook_identity_manifest.json).
-constexpr std::array<std::uint8_t, 8> kLoadLevelPrologue = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48};
+// The prologues the two detours are written against (echovr.exe, 8 bytes each; tools/hook_identity_manifest.json); LoadLevel's is shared with the timing hook.
 constexpr std::array<std::uint8_t, 8> kEnableGameSpacesPrologue = {0x40, 0x55, 0x53, 0x57, 0x48, 0x8D, 0xAC, 0x24};
 
 // CncaGameSpace::LoadLevel(this, p2, p3) returns a 64-bit value (the decompilation reads three parameters); its caller
@@ -38,22 +38,12 @@ EnableGameSpacesFn g_originalEnableGameSpaces = nullptr;
 
 std::mutex g_mutex;
 Gate g_gate;
+std::atomic<bool> g_loadLevelHooked{false};  // a join-hold detour is installed on LoadLevel (armed or not)
 std::atomic<bool> g_active{false};  // hooks in and the key above 0: the gate is in use
 std::atomic<std::size_t> g_queued{0};  // the queue size, readable without the lock (ReleaseDue's idle path)
 std::string g_sessionId;               // for the detours' lines, under g_mutex
 
 std::uint64_t NowMs() { return GetTickCount64(); }
-
-std::string HexBytes(const void* address, std::size_t count) {
-  if (address == nullptr) return "unreadable";
-  std::string out;
-  char byte[4];
-  for (std::size_t i = 0; i < count; ++i) {
-    std::snprintf(byte, sizeof(byte), "%02x", static_cast<const std::uint8_t*>(address)[i]);
-    out += byte;
-  }
-  return out;
-}
 
 const char* Show(const char* sessionId) { return sessionId != nullptr && sessionId[0] != '\0' ? sessionId : "none"; }
 
@@ -63,7 +53,8 @@ std::uint64_t __fastcall LoadLevelDetour(void* gameSpace, std::uint64_t p2, void
     g_gate.OnLoadBegin(NowMs());
     Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] join hold load begin pending=%zu", g_gate.Pending());
   }
-  const std::uint64_t result = g_originalLoadLevel(gameSpace, p2, p3);
+  // The join hold owns this address while its detour is installed (armed, or left in place after a failed removal), so it times the load too (load_timing.h).
+  const std::uint64_t result = nevr_load_timing::TimedLoad(p2, g_originalLoadLevel, gameSpace, p2, p3);
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_gate.OnLoadEnd(NowMs());
@@ -100,6 +91,8 @@ struct Site {
   PVOID detour;
 };
 
+constexpr std::size_t kLoadLevelSite = 1;  // kSites below
+
 class GameHooker {
  public:
   bool Matches(std::size_t site) {
@@ -110,7 +103,7 @@ class GameHooker {
         "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=prologue_mismatch expected=%s actual=%s "
         "(no detour was installed; accepts are forwarded at once)",
         s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
-        HexBytes(s.prologue->data(), s.prologue->size()).c_str(), HexBytes(address, s.prologue->size()).c_str());
+        nevr_load_timing::HexBytes(s.prologue->data(), s.prologue->size()).c_str(), nevr_load_timing::HexBytes(static_cast<const std::uint8_t*>(address), s.prologue->size()).c_str());
     return false;
   }
 
@@ -118,13 +111,16 @@ class GameHooker {
     const Site& s = kSites[site];
     void* address = AddressOf(s);
     *s.original = address;
-    if (PatchDetour(s.original, s.detour, s.name)) return true;
+    if (PatchDetour(s.original, s.detour, s.name)) {
+      if (site == kLoadLevelSite) g_loadLevelHooked.store(true, std::memory_order_release);
+      return true;
+    }
     *s.original = nullptr;
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=detour_failed expected=%s actual=%s "
         "(accepts are forwarded at once)",
         s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
-        HexBytes(s.prologue->data(), s.prologue->size()).c_str(), HexBytes(address, s.prologue->size()).c_str());
+        nevr_load_timing::HexBytes(s.prologue->data(), s.prologue->size()).c_str(), nevr_load_timing::HexBytes(static_cast<const std::uint8_t*>(address), s.prologue->size()).c_str());
     return false;
   }
 
@@ -136,6 +132,7 @@ class GameHooker {
     void* address = AddressOf(s);
     const MH_STATUS status = PatchRetire(address);
     const bool gone = status == MH_OK || status == MH_ERROR_NOT_CREATED;
+    if (gone && site == kLoadLevelSite) g_loadLevelHooked.store(false, std::memory_order_release);
     if (gone) *s.original = address;  // a detour that stays installed keeps its trampoline: the real address is hooked
     Log(gone ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] join hold hook %s name=%s va=0x%llX status=%s (the other detour failed, so the hold is not "
@@ -152,7 +149,7 @@ class GameHooker {
   static inline const Site kSites[kHookSites] = {
       {nevr_patch_addresses::CR15NETGAME_ENABLE_GAME_SPACES, &kEnableGameSpacesPrologue, "EnableGameSpaces",
        reinterpret_cast<void**>(&g_originalEnableGameSpaces), reinterpret_cast<PVOID>(&EnableGameSpacesDetour)},
-      {nevr_patch_addresses::CNCAGAMESPACE_LOAD_LEVEL, &kLoadLevelPrologue, "LoadLevel",
+      {nevr_patch_addresses::CNCAGAMESPACE_LOAD_LEVEL, &nevr_load_timing::kLoadLevelPrologue, "LoadLevel",
        reinterpret_cast<void**>(&g_originalLoadLevel), reinterpret_cast<PVOID>(&LoadLevelDetour)}};
 };
 
@@ -180,6 +177,8 @@ void Install(bool isServer) {
       "enabled)",
       plan.timeoutMs, static_cast<unsigned long long>(kSettleMs));
 }
+
+bool HooksLoadLevel() { return g_loadLevelHooked.load(std::memory_order_acquire); }
 
 bool Admit(const void* encoded, std::size_t size, std::size_t entrants, const char* sessionId) {
   if (!g_active.load(std::memory_order_acquire) || encoded == nullptr) return false;

@@ -42,6 +42,7 @@
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
 #include "runtime/patch/server_frame_wait_install.h"
+#include "runtime/hook/load_timing.h"
 #include "runtime/server/join_hold.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
@@ -911,6 +912,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // (docs/reference/join-hold.md); off by default, and a client or a server with the key off logs that it does not
   // apply (N122/N124). Server-only (N131/N146): this runs in the deferred bootstrap, after the original call.
   nevr_join_hold::Install(g_isServer != FALSE);
+  // The per-level-load timing record (runtime/hook/load_timing_rules.h): one detour on LoadLevel, unless the join hold holds that address.
+  nevr_load_timing::Install(nevr_join_hold::HooksLoadLevel());
 
   // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
   // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs

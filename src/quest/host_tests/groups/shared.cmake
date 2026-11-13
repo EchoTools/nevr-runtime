@@ -17,6 +17,9 @@ nevr_ht_test(crash_summary_rules_test GROUP shared TIMEOUT 60
 nevr_ht_test(crash_report_quest_test GROUP shared DL TIMEOUT 120 INCS src/quest/tests/stub
   SRC src/quest/tests/crash_report_quest_test.cpp src/core/crash_report.cpp src/quest/sentinel/elf_build_id.cpp
       src/quest/sentinel/sentinel_log.cpp)
+# The load timing records (#2728): src/runtime/hook/load_timing_rules.h, the header the PC runtime compiles, seen from the Quest build.
+nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
+  SRC src/quest/tests/load_timing_rules_test.cpp)
 nevr_ht_test(elf_build_id_test GROUP shared TIMEOUT 120
   SRC src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp)
 nevr_ht_test(evr_codec_test GROUP shared HOST TIMEOUT 120

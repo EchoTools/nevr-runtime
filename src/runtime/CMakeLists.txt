@@ -238,6 +238,8 @@ set(PATCHES_SOURCES
     "server/upnp.cpp"
     # #1737: the join hold on a dedicated server (pure logic in server/join_hold_rules.h).
     "server/join_hold.cpp"
+    # Level-load and boot timing records (runtime/hook/load_timing_rules.h).
+    "hook/load_timing.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -1157,6 +1159,13 @@ if(BUILD_TESTING)
       nlohmann_json::nlohmann_json nevr::plugin_sdk)
     gtest_discover_tests(test_arena_rules_hook DISCOVERY_MODE PRE_TEST)
 
+    # Load timing records: the level_load and boot_timing records and the LoadLevel wrapper (runtime/hook/load_timing_rules.h), also
+    # compiled by the Quest host tests.
+    add_executable(test_load_timing_rules tests/load_timing_rules_test.cpp)
+    set_source_files_properties(tests/load_timing_rules_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_load_timing_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_load_timing_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_load_timing_rules DISCOVERY_MODE PRE_TEST)
     # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
     add_executable(test_join_hold tests/test_join_hold.cpp)
     set_source_files_properties(tests/test_join_hold.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
