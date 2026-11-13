@@ -1,0 +1,1343 @@
+{
+ "schema": "nevr-map-package-cases",
+ "schema_version": 1,
+ "note": "Shared by nevr's ParsePackageIndex (src/core/map_manifest.h) and the publisher's index writer. Each case is an RFC 6902 patch over `base`. After patching, every string \"$rad:<name>\" becomes \"0x\" + 16 lowercase hex digits of rad_hash(<name>) (CSymbol64). The manifest entry that pins the result is id testmap, platform windows-x86_64, version 1.2.0, level rad_hash(testmap), level_name testmap, and the sha256 and size of the patched document as serialized. `reason` is the ParsePackageIndex refusal token; empty means accepted.",
+ "id": "testmap",
+ "platform": "windows-x86_64",
+ "base": {
+  "schema": "nevr-map-package",
+  "schema_version": 1,
+  "id": "testmap",
+  "version": "1.2.0",
+  "platform": "windows-x86_64",
+  "level": "$rad:testmap",
+  "level_name": "testmap",
+  "parent": "0x3f9915d3001dc28e",
+  "game_build": "echovr.exe 34.4.631547",
+  "requires_stock_manifest_sha256": [
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "stock_data_version": "34.4.631547",
+  "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "members": [
+   {
+    "path": "set/windows-x86_64.nevrres",
+    "role": "set",
+    "size": 3000,
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "pieces": [
+     {
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1000
+     },
+     {
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 2000
+     }
+    ]
+   },
+   {
+    "path": "scripts/00aa11bb22cc33dd.dll",
+    "role": "script",
+    "hash": "0x00aa11bb22cc33dd",
+    "size": 90112,
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "pieces": [
+     {
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size": 90112
+     }
+    ]
+   },
+   {
+    "path": "recipe/windows-x86_64.bin",
+    "role": "recipe",
+    "size": 8192,
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "pieces": [
+     {
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 8192
+     }
+    ]
+   }
+  ],
+  "rekeyed": [
+   {
+    "hash": "0x1111111111111111",
+    "stock_source": "0x2222222222222222",
+    "stock_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "edits": [
+     {
+      "at": 16,
+      "width": 8,
+      "to": "$rad:testmap"
+     }
+    ],
+    "result_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "result_size": 90112
+   }
+  ],
+  "derived": [
+   {
+    "type": "0x10",
+    "name": "0x20",
+    "stock": {
+     "type": "0x10",
+     "name": "0x21",
+     "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+     "size": 4096
+    },
+    "result": {
+     "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+     "size": 4096
+    },
+    "edits": {
+     "kind": "fields",
+     "ops": [
+      {
+       "at": 128,
+       "width": 8,
+       "to": "0x2"
+      },
+      {
+       "at": 256,
+       "width": 4,
+       "to": "0x4"
+      }
+     ]
+    }
+   },
+   {
+    "type": "0x10",
+    "name": "0x30",
+    "stock": {
+     "type": "0x10",
+     "name": "0x31",
+     "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+     "size": 65536
+    },
+    "result": {
+     "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+     "size": 65536
+    },
+    "edits": {
+     "kind": "diff",
+     "ops": [
+      {
+       "copy": [
+        0,
+        4096
+       ]
+      },
+      {
+       "insert": [
+        0,
+        4096
+       ]
+      },
+      {
+       "copy": [
+        8192,
+        57344
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "standins": [
+   "0x40"
+  ],
+  "config_aliases": [
+   {
+    "key": "$rad:mp_arena_rules",
+    "key_name": "mp_arena_rules",
+    "alias": "$rad:testmap_arena_rules",
+    "alias_name": "testmap_arena_rules"
+   }
+  ]
+ },
+ "cases": [
+  {
+   "name": "ok_base",
+   "patch": [],
+   "reason": ""
+  },
+  {
+   "name": "derived_fields_from_forbidden",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/derived/0/edits/ops/1/from",
+     "value": "0x3"
+    }
+   ],
+   "reason": "recipe_from_forbidden"
+  },
+  {
+   "name": "rekey_from_forbidden",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/rekeyed/0/edits/0/from",
+     "value": "0x3f9915d3001dc28e"
+    }
+   ],
+   "reason": "recipe_from_forbidden"
+  },
+  {
+   "name": "ok_unknown_keys_ignored",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/extra",
+     "value": {
+      "x": 1
+     }
+    },
+    {
+     "op": "add",
+     "path": "/members/0/note",
+     "value": "n"
+    }
+   ],
+   "reason": ""
+  },
+  {
+   "name": "ok_zero_op_fields_rebuilds_stock",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops",
+     "value": []
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/result/sha256",
+     "value": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+   ],
+   "reason": ""
+  },
+  {
+   "name": "ok_no_optional_lists",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/members/2"
+    },
+    {
+     "op": "remove",
+     "path": "/rekeyed"
+    },
+    {
+     "op": "remove",
+     "path": "/derived"
+    },
+    {
+     "op": "remove",
+     "path": "/standins"
+    },
+    {
+     "op": "remove",
+     "path": "/config_aliases"
+    }
+   ],
+   "reason": ""
+  },
+  {
+   "name": "ok_rekey_without_edits",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/rekeyed/0/edits"
+    },
+    {
+     "op": "remove",
+     "path": "/rekeyed/0/result_sha256"
+    },
+    {
+     "op": "remove",
+     "path": "/rekeyed/0/result_size"
+    }
+   ],
+   "reason": ""
+  },
+  {
+   "name": "ok_d1_field_bytes_at_the_cap",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/stock/size",
+     "value": 64
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/result/size",
+     "value": 64
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops",
+     "value": [
+      {
+       "at": 0,
+       "width": 8,
+       "to": "0x1"
+      },
+      {
+       "at": 8,
+       "width": 8,
+       "to": "0x1"
+      }
+     ]
+    }
+   ],
+   "reason": ""
+  },
+  {
+   "name": "zero_op_fields_changed_bytes",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops",
+     "value": []
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "schema_name",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/schema",
+     "value": "nevr-map-packag"
+    }
+   ],
+   "reason": "bad_schema"
+  },
+  {
+   "name": "schema_version",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/schema_version",
+     "value": 2
+    }
+   ],
+   "reason": "bad_schema"
+  },
+  {
+   "name": "parent_missing",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/parent"
+    }
+   ],
+   "reason": "malformed"
+  },
+  {
+   "name": "level_not_hex",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/level",
+     "value": "12"
+    }
+   ],
+   "reason": "malformed"
+  },
+  {
+   "name": "version_differs",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/version",
+     "value": "1.2.1"
+    }
+   ],
+   "reason": "entry_mismatch"
+  },
+  {
+   "name": "id_differs",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/id",
+     "value": "othermap"
+    }
+   ],
+   "reason": "entry_mismatch"
+  },
+  {
+   "name": "platform_differs",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/platform",
+     "value": "android-arm64"
+    }
+   ],
+   "reason": "entry_mismatch"
+  },
+  {
+   "name": "level_name_differs",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/level_name",
+     "value": "testmap2"
+    }
+   ],
+   "reason": "entry_mismatch"
+  },
+  {
+   "name": "level_differs",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/level",
+     "value": "0x1"
+    }
+   ],
+   "reason": "entry_mismatch"
+  },
+  {
+   "name": "source_missing",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/source_sha256"
+    }
+   ],
+   "reason": "source_missing"
+  },
+  {
+   "name": "source_uppercase",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/source_sha256",
+     "value": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    }
+   ],
+   "reason": "bad_hash"
+  },
+  {
+   "name": "stock_manifest_short",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/requires_stock_manifest_sha256",
+     "value": [
+      "abc"
+     ]
+    }
+   ],
+   "reason": "bad_hash"
+  },
+  {
+   "name": "members_empty",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members",
+     "value": []
+    }
+   ],
+   "reason": "bad_member"
+  },
+  {
+   "name": "role_unknown",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/1/role",
+     "value": "plugin"
+    }
+   ],
+   "reason": "bad_member"
+  },
+  {
+   "name": "script_hash_missing",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/members/1/hash"
+    }
+   ],
+   "reason": "bad_member"
+  },
+  {
+   "name": "member_sha_short",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/sha256",
+     "value": "c"
+    }
+   ],
+   "reason": "bad_hash"
+  },
+  {
+   "name": "set_path_other_platform",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/path",
+     "value": "set/android-arm64.nevrres"
+    }
+   ],
+   "reason": "bad_path"
+  },
+  {
+   "name": "script_path_uppercase",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/1/path",
+     "value": "scripts/00AA11BB22CC33DD.dll"
+    }
+   ],
+   "reason": "bad_path"
+  },
+  {
+   "name": "script_path_quest_form_on_pc",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/1/path",
+     "value": "scripts/lib00aa11bb22cc33dd.so"
+    }
+   ],
+   "reason": "bad_path"
+  },
+  {
+   "name": "script_path_traversal",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/1/path",
+     "value": "scripts/../00aa11bb22cc33dd.dll"
+    }
+   ],
+   "reason": "bad_path"
+  },
+  {
+   "name": "recipe_path",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/2/path",
+     "value": "recipe/x.bin"
+    }
+   ],
+   "reason": "bad_path"
+  },
+  {
+   "name": "pieces_sum_short",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/pieces/0/size",
+     "value": 999
+    }
+   ],
+   "reason": "bad_pieces"
+  },
+  {
+   "name": "pieces_sum_long",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/pieces/0/size",
+     "value": 1001
+    }
+   ],
+   "reason": "bad_pieces"
+  },
+  {
+   "name": "pieces_empty",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/pieces",
+     "value": []
+    }
+   ],
+   "reason": "bad_pieces"
+  },
+  {
+   "name": "piece_zero",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/pieces",
+     "value": [
+      {
+       "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+       "size": 0
+      },
+      {
+       "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "size": 3000
+      }
+     ]
+    }
+   ],
+   "reason": "bad_pieces"
+  },
+  {
+   "name": "piece_over_128mib",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/size",
+     "value": 134217729
+    },
+    {
+     "op": "replace",
+     "path": "/members/0/pieces",
+     "value": [
+      {
+       "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+       "size": 134217729
+      }
+     ]
+    }
+   ],
+   "reason": "bad_pieces"
+  },
+  {
+   "name": "piece_sha_bad",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/0/pieces/0/sha256",
+     "value": "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+    }
+   ],
+   "reason": "bad_hash"
+  },
+  {
+   "name": "no_set",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/members/0"
+    }
+   ],
+   "reason": "set_count"
+  },
+  {
+   "name": "two_sets",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/members/-",
+     "value": {
+      "path": "set/windows-x86_64.nevrres",
+      "role": "set",
+      "size": 3000,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "pieces": [
+       {
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "size": 1000
+       },
+       {
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "size": 2000
+       }
+      ]
+     }
+    }
+   ],
+   "reason": "set_count"
+  },
+  {
+   "name": "script_hash_twice",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/members/-",
+     "value": {
+      "path": "scripts/00aa11bb22cc33dd.dll",
+      "role": "script",
+      "hash": "0x00aa11bb22cc33dd",
+      "size": 90112,
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "pieces": [
+       {
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "size": 90112
+       }
+      ]
+     }
+    }
+   ],
+   "reason": "dup_script"
+  },
+  {
+   "name": "rekeyed_hash_is_script",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/hash",
+     "value": "0x00aa11bb22cc33dd"
+    }
+   ],
+   "reason": "dup_script"
+  },
+  {
+   "name": "rekey_width_4",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/edits/0/width",
+     "value": 4
+    }
+   ],
+   "reason": "rekey_edit"
+  },
+  {
+   "name": "rekey_at_0",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/edits/0/at",
+     "value": 0
+    }
+   ],
+   "reason": "rekey_edit"
+  },
+  {
+   "name": "rekey_overlap",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/rekeyed/0/edits/-",
+     "value": {
+      "at": 20,
+      "width": 8,
+      "to": "0x2"
+     }
+    }
+   ],
+   "reason": "rekey_edit"
+  },
+  {
+   "name": "rekey_unsorted",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/rekeyed/0/edits/0",
+     "value": {
+      "at": 100,
+      "width": 8,
+      "to": "0x2"
+     }
+    }
+   ],
+   "reason": "rekey_edit"
+  },
+  {
+   "name": "rekey_edits_not_list",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/edits",
+     "value": {
+      "at": 16
+     }
+    }
+   ],
+   "reason": "rekey_edit"
+  },
+  {
+   "name": "rekey_past_result",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/edits/0/at",
+     "value": 90105
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "rekey_result_missing",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/rekeyed/0/result_sha256"
+    }
+   ],
+   "reason": "malformed"
+  },
+  {
+   "name": "rekey_result_tiny",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/result_size",
+     "value": 63
+    }
+   ],
+   "reason": "recipe_tiny"
+  },
+  {
+   "name": "rekey_result_over_cap",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/rekeyed/0/result_size",
+     "value": 134217729
+    }
+   ],
+   "reason": "recipe_cap"
+  },
+  {
+   "name": "field_width_3",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops/0/width",
+     "value": 3
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "field_overlap",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops/1/at",
+     "value": 132
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "field_unsorted",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops/1/at",
+     "value": 64
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "field_value_wider_than_width",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops/1/to",
+     "value": "0x100000000"
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "field_past_result",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops/1/at",
+     "value": 4093
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "fields_size_changed",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/result/size",
+     "value": 4100
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "d1_field_bytes_count_as_insert",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/stock/size",
+     "value": 64
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/result/size",
+     "value": 64
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops",
+     "value": [
+      {
+       "at": 0,
+       "width": 8,
+       "to": "0x1"
+      },
+      {
+       "at": 8,
+       "width": 8,
+       "to": "0x1"
+      },
+      {
+       "at": 16,
+       "width": 1,
+       "to": "0x1"
+      }
+     ]
+    }
+   ],
+   "reason": "recipe_cap"
+  },
+  {
+   "name": "diff_sum_long",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/result/size",
+     "value": 65537
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "diff_copy_past_stock",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops/2/copy",
+     "value": [
+      8193,
+      57344
+     ]
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "diff_insert_past_member",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops/1/insert",
+     "value": [
+      4097,
+      4096
+     ]
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "diff_op_zero_size",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops/1/insert",
+     "value": [
+      0,
+      0
+     ]
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "diff_op_two_keys",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops/1",
+     "value": {
+      "insert": [
+       0,
+       4096
+      ],
+      "copy": [
+       0,
+       1
+      ]
+     }
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "diff_op_unknown",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops/1",
+     "value": {
+      "xor": [
+       0,
+       4096
+      ]
+     }
+    }
+   ],
+   "reason": "recipe_ops"
+  },
+  {
+   "name": "diff_insert_over_quarter",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/stock/size",
+     "value": 16
+    },
+    {
+     "op": "replace",
+     "path": "/derived/1/result/size",
+     "value": 64
+    },
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops",
+     "value": [
+      {
+       "copy": [
+        0,
+        16
+       ]
+      },
+      {
+       "insert": [
+        0,
+        48
+       ]
+      }
+     ]
+    }
+   ],
+   "reason": "recipe_cap"
+  },
+  {
+   "name": "result_over_128mib",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/stock/size",
+     "value": 134217729
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/result/size",
+     "value": 134217729
+    }
+   ],
+   "reason": "recipe_cap"
+  },
+  {
+   "name": "result_tiny",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/stock/size",
+     "value": 63
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/result/size",
+     "value": 63
+    },
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/ops",
+     "value": [
+      {
+       "at": 0,
+       "width": 1,
+       "to": "0x1"
+      }
+     ]
+    }
+   ],
+   "reason": "recipe_tiny"
+  },
+  {
+   "name": "stock_size_zero",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/stock/size",
+     "value": 0
+    }
+   ],
+   "reason": "recipe_bounds"
+  },
+  {
+   "name": "edit_kind_unknown",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/edits/kind",
+     "value": "xor"
+    }
+   ],
+   "reason": "malformed"
+  },
+  {
+   "name": "derived_target_twice",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/name",
+     "value": "0x20"
+    }
+   ],
+   "reason": "derived_dup"
+  },
+  {
+   "name": "derived_target_is_its_stock",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/0/name",
+     "value": "0x21"
+    }
+   ],
+   "reason": "derived_stock_key"
+  },
+  {
+   "name": "insert_without_recipe_member",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/members/2"
+    }
+   ],
+   "reason": "bad_recipe_member"
+  },
+  {
+   "name": "recipe_member_without_insert",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/derived/1/edits/ops",
+     "value": [
+      {
+       "copy": [
+        0,
+        65536
+       ]
+      }
+     ]
+    }
+   ],
+   "reason": "bad_recipe_member"
+  },
+  {
+   "name": "recipe_member_without_derived",
+   "patch": [
+    {
+     "op": "remove",
+     "path": "/derived"
+    }
+   ],
+   "reason": "bad_recipe_member"
+  },
+  {
+   "name": "two_recipe_members",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/members/-",
+     "value": {
+      "path": "recipe/windows-x86_64.bin",
+      "role": "recipe",
+      "size": 8192,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "pieces": [
+       {
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 8192
+       }
+      ]
+     }
+    }
+   ],
+   "reason": "bad_recipe_member"
+  },
+  {
+   "name": "recipe_member_over_map_cap",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/members/2/size",
+     "value": 67108865
+    },
+    {
+     "op": "replace",
+     "path": "/members/2/pieces",
+     "value": [
+      {
+       "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+       "size": 67108865
+      }
+     ]
+    }
+   ],
+   "reason": "recipe_cap"
+  },
+  {
+   "name": "standin_not_hex",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/standins",
+     "value": [
+      "zz"
+     ]
+    }
+   ],
+   "reason": "malformed"
+  },
+  {
+   "name": "five_aliases",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/config_aliases/-",
+     "value": {
+      "key": "$rad:mp_arena_rules",
+      "key_name": "mp_arena_rules",
+      "alias": "$rad:testmap_arena_rules",
+      "alias_name": "testmap_arena_rules"
+     }
+    },
+    {
+     "op": "add",
+     "path": "/config_aliases/-",
+     "value": {
+      "key": "$rad:mp_arena_rules",
+      "key_name": "mp_arena_rules",
+      "alias": "$rad:testmap_arena_rules",
+      "alias_name": "testmap_arena_rules"
+     }
+    },
+    {
+     "op": "add",
+     "path": "/config_aliases/-",
+     "value": {
+      "key": "$rad:mp_arena_rules",
+      "key_name": "mp_arena_rules",
+      "alias": "$rad:testmap_arena_rules",
+      "alias_name": "testmap_arena_rules"
+     }
+    },
+    {
+     "op": "add",
+     "path": "/config_aliases/-",
+     "value": {
+      "key": "$rad:mp_arena_rules",
+      "key_name": "mp_arena_rules",
+      "alias": "$rad:testmap_arena_rules",
+      "alias_name": "testmap_arena_rules"
+     }
+    }
+   ],
+   "reason": "alias_count"
+  },
+  {
+   "name": "alias_key_twice",
+   "patch": [
+    {
+     "op": "add",
+     "path": "/config_aliases/-",
+     "value": {
+      "key": "$rad:mp_arena_rules",
+      "key_name": "mp_arena_rules",
+      "alias": "$rad:testmap_arena_rules",
+      "alias_name": "testmap_arena_rules"
+     }
+    }
+   ],
+   "reason": "bad_alias"
+  },
+  {
+   "name": "alias_other_map",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/alias_name",
+     "value": "othermap_arena_rules"
+    },
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/alias",
+     "value": "$rad:othermap_arena_rules"
+    }
+   ],
+   "reason": "bad_alias"
+  },
+  {
+   "name": "alias_no_suffix",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/alias_name",
+     "value": "testmap_"
+    },
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/alias",
+     "value": "$rad:testmap_"
+    }
+   ],
+   "reason": "bad_alias"
+  },
+  {
+   "name": "alias_hash_wrong",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/alias",
+     "value": "0x1"
+    }
+   ],
+   "reason": "bad_alias"
+  },
+  {
+   "name": "key_hash_wrong",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/key",
+     "value": "0x1"
+    }
+   ],
+   "reason": "bad_alias"
+  },
+  {
+   "name": "key_is_alias",
+   "patch": [
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/key_name",
+     "value": "testmap_arena_rules"
+    },
+    {
+     "op": "replace",
+     "path": "/config_aliases/0/key",
+     "value": "$rad:testmap_arena_rules"
+    }
+   ],
+   "reason": "bad_alias"
+  }
+ ]
+}

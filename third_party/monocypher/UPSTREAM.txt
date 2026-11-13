@@ -14,5 +14,5 @@ bd546edcd468d64e28caa3dbf4b1d6bfad7435c0ce994723fd81aae26405121b  src/optional/m
 
 Layout change only: src/optional/monocypher-ed25519.{c,h} sit in src/ beside monocypher.{c,h}. The same copy, with the
 same sha256 values, is vendored by EchoConstruct (third_party/monocypher, c1d5805b7). nevr_core compiles both files
-(src/core/maps/pc4.cmake) for minisign verification of the custom-map channel manifest (src/core/minisign_verify.cpp:
+(src/core/maps.cmake) for minisign verification of the custom-map channel manifest (src/core/minisign_verify.cpp:
 Ed25519 with SHA-512 over a BLAKE2b-512 prehash; docs/adr/0047).

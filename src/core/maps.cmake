@@ -11,6 +11,29 @@ endif()
 # the interned snapshots the runtime's lookup detour reads.
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/config_alias.cpp")
 
+# The formats (ADR 0047 decision 1): a guild's signed manifest and a map's package index (core/map_manifest.h), the cache index
+# (core/map_index.h), and the minisign verifier (core/minisign_verify.h) over the vendored Monocypher (third_party/monocypher).
+# The body sha256 is the portable streaming SHA-256 the Quest data step ships (quest/data/sha256.cpp, ADR 0045).
+set(_maps_monocypher_dir "${CMAKE_SOURCE_DIR}/third_party/monocypher/src")
+set(_maps_format_sources
+  "${CMAKE_CURRENT_LIST_DIR}/map_manifest.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/map_index.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/minisign_verify.cpp"
+  "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp")
+set(_maps_monocypher_sources "${_maps_monocypher_dir}/monocypher.c" "${_maps_monocypher_dir}/monocypher-ed25519.c")
+# Vendored unmodified (third_party/monocypher/UPSTREAM.txt): its warnings are upstream's, so they are off for these two C files
+# only, and -Werror stays on for everything of ours.
+if(MSVC)
+  set_source_files_properties(${_maps_monocypher_sources} PROPERTIES COMPILE_OPTIONS "/W0")
+else()
+  set_source_files_properties(${_maps_monocypher_sources} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+# nevr_core's precompiled header is C++ (pch.h includes <windows.h>): the C files cannot take it, and the format sources include no
+# Windows header, as the Quest builds them.
+set_source_files_properties(${_maps_format_sources} ${_maps_monocypher_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE ${_maps_format_sources} ${_maps_monocypher_sources})
+target_include_directories(nevr_core PRIVATE "${_maps_monocypher_dir}")
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
 endif()
@@ -38,4 +61,22 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_include_directories(test_script_image_rules PRIVATE "${CMAKE_SOURCE_DIR}/src")
   target_link_libraries(test_script_image_rules PRIVATE GTest::gtest GTest::gtest_main)
   gtest_discover_tests(test_script_image_rules DISCOVERY_MODE PRE_TEST)
+
+  # The manifest, the package index and the minisign verifier: manifests signed at run time with fixed-seed test keys, and one
+  # signature the minisign tool made with a key made for the test (tests/vectors/maps/minisign). Reads only tests/vectors/maps;
+  # no network, no game file.
+  add_executable(test_map_manifest "${CMAKE_CURRENT_LIST_DIR}/tests/map_manifest_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_manifest_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_compile_definitions(test_map_manifest PRIVATE NEVR_MAP_VECTORS="${CMAKE_SOURCE_DIR}/tests/vectors/maps")
+  target_include_directories(test_map_manifest PRIVATE "${CMAKE_SOURCE_DIR}/src" "${_maps_monocypher_dir}")
+  target_link_libraries(test_map_manifest PRIVATE GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_manifest DISCOVERY_MODE PRE_TEST)
+
+  # The cache index: its JSON round trip with per-guild floors, and its read bound from the device's memory, over the shared
+  # fake Env (src/quest/tests/cargo_fake_env.h).
+  add_executable(test_map_index "${CMAKE_CURRENT_LIST_DIR}/tests/map_index_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_index_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_index PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_map_index PRIVATE GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_index DISCOVERY_MODE PRE_TEST)
 endif()

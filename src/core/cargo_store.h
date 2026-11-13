@@ -51,8 +51,7 @@ inline constexpr char kIndexMagic[kIndexMagicBytes + 1] = "NEVRCARG";  // the fi
 std::string StoreFilePath(const std::string& dir, std::uint32_t file);
 std::string IndexPath(const std::string& dir);
 std::string ManifestCopyPath(const std::string& dir);
-// "0x" and the value in lowercase hex without leading zeros (the form the manifest and the log use for a type or a name).
-std::string FormatHex64(std::uint64_t value);
+// FormatHex64 is cargo_format.h's.
 std::uint32_t Crc32(const void* data, std::size_t length) noexcept;
 
 struct BlobLoc {
