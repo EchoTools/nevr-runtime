@@ -103,7 +103,9 @@ int CompareVersions(std::string_view a, std::string_view b);
 bool IsValidVersion(std::string_view version);
 bool IsValidMapId(std::string_view id);        // [a-z][a-z0-9_]{0,54}
 bool IsValidChannel(std::string_view channel); // [a-z0-9][a-z0-9.-]{0,63}
-bool IsValidGuildId(std::string_view guild);   // a lowercase canonical UUID: 8-4-4-4-12 hex digits
+// A lobby group id held as an opaque string: 1 to kGroupIdMaxBytes characters of [0-9a-z-], safe as a URL path segment and a
+// directory name. Never parsed as a UUID.
+bool IsPathSafeGroupId(std::string_view group);
 bool IsValidUtc(std::string_view text);        // YYYY-MM-DDTHH:MM:SSZ, a real calendar date
 
 // True when `now_utc` is at or past `expires`, and also when either is not valid UTC (fails closed).

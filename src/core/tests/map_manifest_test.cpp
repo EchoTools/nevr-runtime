@@ -165,6 +165,13 @@ TEST_F(MapManifest, AcceptsASignedManifest) {
   EXPECT_TRUE(p.dropped.empty());
 }
 
+// The group id is opaque: a manifest for a group whose id is not a UUID (a snowflake) is accepted and names it.
+TEST_F(MapManifest, AGroupIdThatIsNotAUuidIsAccepted) {
+  const ParsedManifest p = ParseBody(BaseManifest("echo-community", 42, "123456789012345678"));
+  ASSERT_EQ(p.reason, "");
+  EXPECT_EQ(p.guild, "123456789012345678");
+}
+
 TEST_F(MapManifest, OfficialNamesTheKeyThatVerified) {
   EXPECT_TRUE(Parse(official.SignedObject(BaseManifest().dump())).official);
   // An author key that claims the official key's id does not verify as official.
@@ -212,10 +219,9 @@ TEST_F(MapManifest, EveryBodyRejectionHasItsReason) {
       {"guild_missing", [](json& d) { d.erase("guild"); }, "guild_missing"},
       {"guild_upper", [](json& d) { d["guild"] = "0B6E4C1A-7F3D-4E2A-9C5B-8D1E2F3A4B5C"; }, "bad_guild"},
       {"guild_braced", [](json& d) { d["guild"] = "{0b6e4c1a-7f3d-4e2a-9c5b-8d1e2f3a4b5c}"; }, "bad_guild"},
-      {"guild_no_dashes", [](json& d) { d["guild"] = "0b6e4c1a7f3d4e2a9c5b8d1e2f3a4b5c"; }, "bad_guild"},
-      {"guild_dash_moved", [](json& d) { d["guild"] = "0b6e4c1-a7f3d-4e2a-9c5b-8d1e2f3a4b5c"; }, "bad_guild"},
-      {"guild_not_hex", [](json& d) { d["guild"] = "0b6e4c1a-7f3d-4e2a-9c5b-8d1e2f3a4b5g"; }, "bad_guild"},
-      {"guild_discord_id", [](json& d) { d["guild"] = "123456789012345678"; }, "bad_guild"},
+      {"guild_slash", [](json& d) { d["guild"] = "0b6e4c1a/7f3d"; }, "bad_guild"},
+      {"guild_dot", [](json& d) { d["guild"] = ".."; }, "bad_guild"},
+      {"guild_too_long", [](json& d) { d["guild"] = std::string(nevr_maps::kGroupIdMaxBytes + 1, 'a'); }, "bad_guild"},
       {"guild_number", [](json& d) { d["guild"] = 7; }, "bad_guild"},
       {"guild_empty", [](json& d) { d["guild"] = ""; }, "bad_guild"},
       {"serial_zero", [](json& d) { d["serial"] = 0; }, "malformed"},
@@ -541,6 +547,24 @@ TEST(MapNames, IdsAndChannels) {
   EXPECT_FALSE(nevr_maps::IsValidChannel("-echo"));
   EXPECT_FALSE(nevr_maps::IsValidChannel("echo_community"));
   EXPECT_FALSE(nevr_maps::IsValidChannel(""));
+}
+
+// A group id is opaque (map_format.h kGroupIdMaxBytes): only path safety is checked, so a UUID and a snowflake both pass and
+// nothing that could leave its path segment or its cache directory does.
+TEST(MapNames, GroupIdsAreOpaqueAndPathSafe) {
+  EXPECT_TRUE(nevr_maps::IsPathSafeGroupId("0b6e4c1a-7f3d-4e2a-9c5b-8d1e2f3a4b5c"));  // a UUID
+  EXPECT_TRUE(nevr_maps::IsPathSafeGroupId("12345678901234567890"));                  // a 20-digit snowflake
+  EXPECT_TRUE(nevr_maps::IsPathSafeGroupId("0b6e4c1a7f3d"));                          // no UUID shape is required
+  EXPECT_TRUE(nevr_maps::IsPathSafeGroupId(std::string(nevr_maps::kGroupIdMaxBytes, 'a')));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId(std::string(nevr_maps::kGroupIdMaxBytes + 1, 'a')));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId(""));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId("0B6E4C1A-7F3D-4E2A-9C5B-8D1E2F3A4B5C"));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId("a/b"));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId("a\\b"));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId("a.b"));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId(".."));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId("a_b"));
+  EXPECT_FALSE(nevr_maps::IsPathSafeGroupId(std::string("a\0b", 3)));
 }
 
 // A signature the minisign tool made (tests/vectors/maps/minisign): a manifest-shaped document signed with a key made for the test.
