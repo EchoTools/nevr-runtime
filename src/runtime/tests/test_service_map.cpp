@@ -109,6 +109,12 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("nevr_invite_codes"), "network.invite_codes");  // #1156
   // assets / arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
+  // custom maps (docs/adr/0047)
+  EXPECT_EQ(FlatKeyToYamlPath("maps_base_url"), "maps.base_url");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_official_keys"), "maps.official_keys");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_trusted_keys"), "maps.trusted_keys");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_channel"), "maps.channel");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_boot_budget_ms"), "maps.boot_budget_ms");
   EXPECT_EQ(FlatKeyToYamlPath("arena_round_time"), "arena.round_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_celebration_time"), "arena.celebration_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_mercy_score"), "arena.mercy_score");
@@ -400,6 +406,19 @@ TEST(ServiceMap, LookupFlatCsv_ListJoinsToCsv) {
       "network:\n  regions:\n    - \"us-c\"\n    - \"eu-w\"\n");
   EXPECT_EQ(LookupFlatCsv(cfg, "nevr_guilds").value_or(""), "111,222,333");
   EXPECT_EQ(LookupFlatCsv(cfg, "nevr_regions").value_or(""), "us-c,eu-w");
+}
+
+// The custom-map channel's list keys (docs/adr/0047) are read CSV, like guilds. No cache-size key is mapped
+// (docs/adr/0045, decision 8), and no subscription or server allow-list key: clients and servers follow their guilds.
+TEST(ServiceMap, LookupFlatCsv_MapsListsJoinToCsv) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "maps:\n  trusted_keys: [k3]\n  official_keys: [k1, k2]\n  base_url: \"https://maps.example.org/\"\n");
+  EXPECT_EQ(LookupFlatCsv(cfg, "maps_trusted_keys").value_or(""), "k3");
+  EXPECT_EQ(LookupFlatCsv(cfg, "maps_official_keys").value_or(""), "k1,k2");
+  EXPECT_EQ(LookupFlat(cfg, "maps_base_url").value_or(""), "https://maps.example.org/");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_cap_mib"), "");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_server_allow"), "");
+  EXPECT_EQ(FlatKeyToYamlPath("maps_subscribed"), "");
 }
 
 TEST(ServiceMap, LookupFlatCsv_ScalarStaysSingleElement) {

@@ -31,6 +31,7 @@ struct Names<char> {
   static constexpr const char* kLogs = "logs";
   static constexpr const char* kCrashes = "crashes";
   static constexpr const char* kCache = "cache";
+  static constexpr const char* kMapsCache = "cache\\maps";
   static constexpr const char* kCosmetics = "cosmetics\\v1\\packages";
   static constexpr const char* kPlugins = "plugins";
   static constexpr const char* kContent = "content";
@@ -46,6 +47,7 @@ struct Names<wchar_t> {
   static constexpr const wchar_t* kLogs = L"logs";
   static constexpr const wchar_t* kCrashes = L"crashes";
   static constexpr const wchar_t* kCache = L"cache";
+  static constexpr const wchar_t* kMapsCache = L"cache\\maps";
   static constexpr const wchar_t* kCosmetics = L"cosmetics\\v1\\packages";
   static constexpr const wchar_t* kPlugins = L"plugins";
   static constexpr const wchar_t* kContent = L"content";
@@ -87,6 +89,11 @@ std::basic_string<C> CacheDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kCache);
 }
 
+// Downloaded maps (docs/adr/0047): <root>\cache\maps, where the PC map fetch keeps its blobs and index.
+template <typename C>
+std::basic_string<C> MapsCacheDir(const std::basic_string<C>& root) {
+  return Join(root, Names<C>::kMapsCache);
+}
 template <typename C>
 std::basic_string<C> CosmeticsDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kCosmetics);
