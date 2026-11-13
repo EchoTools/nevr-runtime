@@ -6,7 +6,13 @@
 //
 // Runs in a signal handler: no allocation, no locks of ours, no logger.
 
+#include <cstddef>
+
 namespace sentinel {
+
+// A report's or a minidump's path, with its NUL: the minidump path breakpad announces, the report beside it, and the buffer
+// the dump callback hands FinishCrashReport.
+inline constexpr std::size_t kReportPathBytes = 640;
 
 // Registers the Quest platform with the shared report. Call once at arm time, before a crash can arrive.
 void RegisterCrashReportPlatform();

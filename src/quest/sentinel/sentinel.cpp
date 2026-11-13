@@ -105,7 +105,7 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
         SnapshotMaps(descriptor.path());
         // The readable report (#1605) goes beside the minidump under its stem: moved there when a handler already
         // wrote it with the faulting thread's registers, written here (without them) when none did.
-        char report[640];
+        char report[kReportPathBytes];
         const bool have_report = FinishCrashReport(descriptor.path(), report, sizeof(report));
         __android_log_print(succeeded ? ANDROID_LOG_FATAL : ANDROID_LOG_ERROR,
                             NEVR_TAG, "crash: minidump=%s ok=%d maps written report=%s",

@@ -16,11 +16,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <string>
 
 #define NEVR_TAG "NEVR-Sentinel"
 
@@ -35,6 +34,7 @@ namespace {
 constexpr std::size_t kRegisterCount = 34;  // x0..x30, sp, pc, pstate
 constexpr std::uint64_t kAddressMask = 0x0000ffffffffffffull;  // the 48 address bits of a return address
 constexpr std::uintptr_t kPageSize = 4096;
+constexpr mode_t kReportFileMode = 0644;  // the report and its sibling while the summary is named: rw-r--r--
 
 const char* const kRegisterNames[kRegisterCount] = {
     "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",  "x10", "x11",
@@ -121,7 +121,7 @@ bool ResolveAddress(std::uint64_t address, nevr_crash::Location* out) {
 }
 
 std::intptr_t OpenFile(const char* path) {
-  return ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  return ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, kReportFileMode);
 }
 
 bool WriteFile(std::intptr_t handle, const char* data, std::size_t size) {
@@ -150,7 +150,7 @@ void AppendText(char* buffer, std::size_t capacity, std::size_t* length, const c
 }
 
 // The minidump path the breakpad callback announced; empty until then. Written only by FinishCrashReport.
-char g_dump_path[640];
+char g_dump_path[kReportPathBytes];
 
 bool RenameFile(const char* from, const char* to) { return ::rename(from, to) == 0; }
 
@@ -214,29 +214,56 @@ void Describe(const nevr_crash::CrashInfo& info, nevr_crash::Report* report) {
 }
 
 // The report beside the minidump names the provisional file in its summary (#2129). Rewrites that field to the final name:
-// read the whole report, change the summary line (crash_summary.h), write it under a sibling name and rename it over the
+// read the whole report, change the summary line (crash_summary_rules.h), write it under a sibling name and rename it over the
 // report. Best effort: on a failure the report stays whole under its final name, with the provisional path in its summary,
 // and the log says so.
-bool NameReportInSummary(const char* path, const char* provisional, const char* final) {
-  std::FILE* in = std::fopen(path, "rb");
-  if (in == nullptr) return false;
-  std::string text;
-  char chunk[4096];
-  std::size_t n = 0;
-  while ((n = std::fread(chunk, 1, sizeof(chunk), in)) > 0) text.append(chunk, n);
-  const bool readFailed = std::ferror(in) != 0;
-  std::fclose(in);
-  if (readFailed) return false;
+//
+// This runs inside the breakpad dump callback, in a crashed process: raw syscalls (open, read, write, close, rename, unlink)
+// and the fixed buffers below only, no stdio and no allocation. The buffers are zero-initialized, so they add no load-time
+// initializer. One thread at a time reaches them: OnSignal (crash_first_hook.cpp) runs the dump action, and so this callback,
+// only on the thread that took g_claim.
+constexpr char kNamingSuffix[] = ".naming";
+// The report as read, one byte more than a report can be, so a larger file is seen and left alone.
+char g_namingInput[nevr_crash::kReportCapacity + 1];
+// The rewritten report: the final path replaces the provisional one, and the final path is shorter than kReportPathBytes.
+char g_namingOutput[nevr_crash::kReportCapacity + kReportPathBytes];
+char g_namingPath[kReportPathBytes + sizeof(kNamingSuffix)];
 
-  const std::string named = nevr_quest::crash_summary::NameFinalReport(text, provisional, final);
-  if (named == text) return true;
-  const std::string tmp = std::string(path) + ".naming";
-  std::FILE* out = std::fopen(tmp.c_str(), "wb");
-  if (out == nullptr) return false;
-  const bool wrote = std::fwrite(named.data(), 1, named.size(), out) == named.size();
-  const bool closed = std::fclose(out) == 0;
-  if (!wrote || !closed || ::rename(tmp.c_str(), path) != 0) {
-    std::remove(tmp.c_str());
+bool NameReportInSummary(const char* path, const char* provisional, const char* final) {
+  const std::size_t pathLength = std::strlen(path);
+  if (pathLength + sizeof(kNamingSuffix) > sizeof(g_namingPath)) return false;
+  const int in = ::open(path, O_RDONLY | O_CLOEXEC);
+  if (in < 0) return false;
+  std::size_t size = 0;
+  bool readFailed = false;
+  while (size < sizeof(g_namingInput)) {
+    const ssize_t got = ::read(in, g_namingInput + size, sizeof(g_namingInput) - size);
+    if (got < 0 && errno == EINTR) continue;
+    if (got <= 0) {
+      readFailed = got < 0;
+      break;
+    }
+    size += static_cast<std::size_t>(got);
+  }
+  ::close(in);
+  if (readFailed || size > nevr_crash::kReportCapacity) return false;
+
+  std::size_t namedSize = 0;
+  bool changed = false;
+  if (!nevr_quest::crash_summary::NameFinalReport(g_namingInput, size, provisional, final, g_namingOutput,
+                                                  sizeof(g_namingOutput), &namedSize, &changed)) {
+    return false;
+  }
+  if (!changed) return true;
+  std::memcpy(g_namingPath, path, pathLength);
+  std::memcpy(g_namingPath + pathLength, kNamingSuffix, sizeof(kNamingSuffix));
+  const int out = ::open(g_namingPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, kReportFileMode);
+  if (out < 0) return false;
+  int err = 0;
+  const bool wrote = WriteAll(out, g_namingOutput, namedSize, &err, ::write);
+  const bool closed = ::close(out) == 0;
+  if (!wrote || !closed || ::rename(g_namingPath, path) != 0) {
+    ::unlink(g_namingPath);
     return false;
   }
   return true;
@@ -253,7 +280,7 @@ bool FinishCrashReport(const char* dump_path, char* report_path, unsigned long c
   if (report_path == nullptr || capacity == 0) return false;
   report_path[0] = '\0';
   if (dump_path == nullptr || dump_path[0] == '\0') return false;
-  char target[640];
+  char target[kReportPathBytes];
   if (!BesideMinidump(dump_path, target, sizeof(target))) return false;
 
   if (nevr_crash::ReportWritten()) {
