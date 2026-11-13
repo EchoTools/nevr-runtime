@@ -4,7 +4,8 @@
                                                    publish_quest_apk.py vX.Y.Z --variant NAME [--dir DIR]
                                                    publish_quest_apk.py vX.Y.Z --listed-variant arena [--dir DIR] [--extra-out FILE]
 
-The files are the ones `just release-quest-apk vX.Y.Z` wrote. The APK goes up through the release signer's
+The files are the ones `just release-quest-reference-apk vX.Y.Z` wrote (`just release-quest-apk`, the default, writes the arena APK
+that --listed-variant arena publishes). The APK goes up through the release signer's
 `put-quest-apk`, which checks that the release is published, that the APK was built from the tag's commit and signed with
 the pinned certificate, writes the object only if absent and reads it back from R2. The sidecar goes up with
 `rclone copyto --ignore-existing`, so a name that is already there is never replaced; the fetch-back is what proves the
@@ -150,7 +151,7 @@ def sha256_file(path: pathlib.Path) -> tuple[str, int]:
 def local_files(directory: pathlib.Path, tag: str, variant: str | None = None,
                 listed: bool = False) -> tuple[str, pathlib.Path, pathlib.Path, str, int, bytes]:
     name = apk_name(tag, variant)
-    recipe = (f"release-quest-apk {tag}" if variant is None else
+    recipe = (f"release-quest-reference-apk {tag}" if variant is None else
               f"release-quest-{variant}-apk {tag}" if listed else f"release-quest-variant-apk {tag}")
     apk, sidecar = directory / name, directory / f"{name}.sha256"
     if not apk.is_file():
@@ -324,7 +325,7 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
 def main(argv: list[str], env: dict[str, str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("tag", help="the release tag, vX.Y.Z")
-    parser.add_argument("--dir", help="where release-quest-apk wrote the files (default build/quest-release/<tag>)")
+    parser.add_argument("--dir", help="where the release recipe wrote the files (default build/quest-release/<tag>)")
     parser.add_argument("--extra-out", help="keep the signer's manifest claim in this new file")
     parser.add_argument("--listed-variant", help="publish the arena APK, which the manifest lists as quest-apk-arena (through the signer)")
     parser.add_argument("--variant", help="publish the unlisted APK of this name (lowercase letters and digits): no signer, no claim")

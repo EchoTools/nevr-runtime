@@ -63,6 +63,8 @@ const char* StepName(StepId id) {
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallCrashFirst: return "install_crash_first";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
+    case StepId::kInstallMatchTags: return "install_match_tags";
+    case StepId::kInstallEquipRefire: return "install_equip_refire";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
     case StepId::kInstallOsBuildGate: return "install_os_build_gate";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
@@ -279,6 +281,17 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // Before token auth and the bridge: the request is made when libr15 starts the game, soon after the constructor.
     r.Run(StepId::kInstallPermissionWait, [&] { return steps.InstallPermissionWait(); });
 
+    // Combat name tags on by default (#2090) and the equipment re-fire (#2121): combat-area code, so only where combat runs
+    // (docs/adr/0047). Before the game builds its game object (the name tags wrap its constructor). A plain or arena release skips both
+    // and keeps the game's own behaviour.
+    if (combatNormal) {
+      r.Run(StepId::kInstallMatchTags, [&] { return steps.InstallMatchTags(); });
+      r.Run(StepId::kInstallEquipRefire, [&] { return steps.InstallEquipRefire(); });
+    } else {
+      r.Skip(StepId::kInstallMatchTags, "combat_inactive");
+      r.Skip(StepId::kInstallEquipRefire, "combat_inactive");
+    }
+
     // The device extensions libr15 requires stay inside the 128 entries it reads (#868): every launch, no feature, no
     // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
     r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
@@ -347,9 +360,14 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
     }
 
-    // The grey default irradiance texture (#2091): every launch, no counters. The hooks must be in place before the engine runs
-    // CGEngineResources::Initialize, which is after the constructor.
-    r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });
+    // The grey default irradiance texture (#2091): no counters. The hooks must be in place before the engine runs
+    // CGEngineResources::Initialize, which is after the constructor. It came with the combat build, so only where combat runs
+    // (docs/adr/0047); a plain or arena release uploads the game's own texel.
+    if (combatNormal) {
+      r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });
+    } else {
+      r.Skip(StepId::kInstallIrradianceDefault, "combat_inactive");
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {

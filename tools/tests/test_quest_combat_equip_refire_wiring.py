@@ -87,14 +87,20 @@ class TheModuleIsWired(unittest.TestCase):
         self.assertRegex(code, r"constexpr std::size_t kHookCount = 6;\s*sentinel::GotHook g_hooks\[kHookCount\];")
         self.assertEqual(len(re.findall(r"InstallThunk<", code)), 1)  # one call site, run once per word
 
-    def test_every_launch_installs_it_after_the_name_tags(self):
-        body = extract_braced_function(
-            strip_comments(read("src/quest/sentinel/entry.cpp")), "bool InstallPermissionWaitHook() noexcept {"
-        )
-        self.assertEqual(body.count("nevr_quest::combat::equip_refire::Install();"), 1)
-        self.assertLess(
-            body.index("nevr_quest::combat::match_tags::Install();"), body.index("nevr_quest::combat::equip_refire::Install();")
-        )
+    def test_only_a_run_with_combat_installs_it_after_the_name_tags(self):
+        """docs/adr/0047: its own constructor step, run only where combat runs, right after the name tags' step."""
+        entry = strip_comments(read("src/quest/sentinel/entry.cpp"))
+        body = extract_braced_function(entry, "bool InstallEquipRefireHook() noexcept {")
+        self.assertIn("return nevr_quest::combat::equip_refire::Install();", body)
+        self.assertNotIn("equip_refire::Install", extract_braced_function(entry, "bool InstallPermissionWaitHook() noexcept {"))
+        steps = strip_comments(read("src/quest/integration/production_steps.cpp"))
+        step = extract_braced_function(steps, "bool InstallEquipRefire() override {")
+        self.assertIn("const bool ok = nevr_quest::integration::InstallEquipRefireHook();", step)
+        self.assertIn("return ok;", step)
+        sequence = strip_comments(read("src/quest/integration/ctor_sequence.cpp"))
+        gate = sequence.index("if (combatNormal) {\n      r.Run(StepId::kInstallMatchTags")
+        self.assertLess(gate, sequence.index("r.Run(StepId::kInstallEquipRefire, [&] { return steps.InstallEquipRefire(); });"))
+        self.assertIn('r.Skip(StepId::kInstallEquipRefire, "combat_inactive");', sequence)
 
     def test_the_host_test_is_a_target_of_the_combat_group(self):
         cmake = read("src/quest/host_tests/groups/combat.cmake")

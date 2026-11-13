@@ -1,9 +1,12 @@
 #pragma once
 
-// Which of EchoCombat's feature groups run, from config.yaml's `combat` section, and the defaults in code. Pure (no
-// Windows, no game): test_combat_settings.cpp drives it.
+// Whether EchoCombat runs at all, which of its feature groups run, from config.yaml's `combat` section, and the defaults in
+// code. Pure (no Windows, no game): test_combat_settings.cpp drives it.
 //
-//   group                 key                    default
+// The opt-in (docs/adr/0047): `combat.enabled`, default false. Without `combat.enabled: true` nothing of the combat module
+// installs, the groups below included: no hook, no write, no transform, no script fix, no VeilNet. Arena runs as stock.
+//
+//   group (once opted in) key                    default
 //   stock-game fixes      (none)                 always on: the drone follow crash guard (here); the equipment re-fire
 //                                                (#2121, patch/equipment_refire.h) and the STARBURST log collapse
 //                                                (log/collapse_format_rules.h) are the runtime's own and run anyway
@@ -76,6 +79,10 @@ struct Settings {
   bool On(Group g) const { return groups[static_cast<std::size_t>(g)].on; }
 };
 
+/// The opt-in key under `combat.` and its default in code (docs/adr/0047). The default is here, never in a shipped config.yaml.
+inline constexpr const char* kEnabledKey = "enabled";
+inline constexpr bool kEnabledFallback = false;
+
 /// true/yes/on/1 and false/no/off/0, any case; anything else is unrecognised.
 inline bool ParseSwitch(const char* text, bool* out) {
   if (text == nullptr) return false;
@@ -95,6 +102,17 @@ inline bool ParseSwitch(const char* text, bool* out) {
     return true;
   }
   return false;
+}
+
+/// The opt-in, given `get(key)` as for ReadSettings: `combat.enabled`, false when absent, and false when it is not a boolean
+/// (reported as unrecognised, so the line at install says the file was not obeyed). Only an explicit true opts in.
+template <typename Get>
+Setting ReadEnabled(Get&& get) {
+  const char* text = get(kEnabledKey);
+  if (text == nullptr) return Setting{kEnabledFallback, Source::kDefault};
+  bool value = kEnabledFallback;
+  if (!ParseSwitch(text, &value)) return Setting{kEnabledFallback, Source::kUnrecognised};
+  return Setting{value, Source::kConfig};
 }
 
 /// The settings, given `get(key)`: the scalar at `combat.<key>`, or null when absent. An unrecognised value keeps the

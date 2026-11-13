@@ -148,6 +148,15 @@ class PublishFixture(unittest.TestCase):
 
 
 class PublishQuestApk(PublishFixture):
+    def test_a_missing_apk_names_the_reference_recipe_and_uploads_nothing(self) -> None:
+        """docs/adr/0047: the listed quest-apk is the reference repack, which only `release-quest-reference-apk` writes; the
+        default `release-quest-apk` writes the arena APK, so the refusal names the recipe that makes the missing file."""
+        (self.build / APK_NAME).unlink()
+        result = self.run_tool(TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"run `just release-quest-reference-apk {TAG}` first", result.stderr)
+        self.assertEqual(self.recorded(), [])
+
     def test_each_missing_variable_is_a_refusal_that_names_it_and_uploads_nothing(self) -> None:
         for name in REQUIRED:
             with self.subTest(missing=name):

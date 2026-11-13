@@ -67,11 +67,19 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         budget = read("src/quest/sentinel/hook_budget.h")
         self.assertIn('{"combat/match_tags.cpp", 2, 0}', budget)
 
-    def test_every_launch_installs_it(self):
-        body = extract_braced_function(
-            strip_comments(read("src/quest/sentinel/entry.cpp")), "bool InstallPermissionWaitHook() noexcept {"
-        )
-        self.assertEqual(body.count("nevr_quest::combat::match_tags::Install();"), 1)
+    def test_only_a_run_with_combat_installs_it(self):
+        """docs/adr/0047: its own constructor step, run only where combat runs."""
+        entry = strip_comments(read("src/quest/sentinel/entry.cpp"))
+        body = extract_braced_function(entry, "bool InstallMatchTagsHook() noexcept {")
+        self.assertIn("return nevr_quest::combat::match_tags::Install();", body)
+        self.assertNotIn("match_tags::Install", extract_braced_function(entry, "bool InstallPermissionWaitHook() noexcept {"))
+        steps = strip_comments(read("src/quest/integration/production_steps.cpp"))
+        step = extract_braced_function(steps, "bool InstallMatchTags() override {")
+        self.assertIn("const bool ok = nevr_quest::integration::InstallMatchTagsHook();", step)
+        self.assertIn("return ok;", step)
+        sequence = strip_comments(read("src/quest/integration/ctor_sequence.cpp"))
+        self.assertIn("if (combatNormal) {\n      r.Run(StepId::kInstallMatchTags, [&] { return steps.InstallMatchTags(); });", sequence)
+        self.assertIn('r.Skip(StepId::kInstallMatchTags, "combat_inactive");', sequence)
 
     def test_the_host_test_is_a_target_of_the_combat_group(self):
         cmake = read("src/quest/host_tests/groups/combat.cmake")

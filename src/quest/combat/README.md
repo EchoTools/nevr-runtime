@@ -2,8 +2,8 @@
 
 Combat behaviour that is part of the Quest runtime (docs/adr/0046-combat-is-part-of-the-quest-runtime.md). The code is compiled into every
 sentinel, built into `nevr_quest_combat` without exceptions and with hidden visibility, and hooked through the sentinel's hook manager
-(`nevr_quest_got_hook`). It runs in the combat APKs only (`combat_active.h`), except the two files that say on their header
-that they ship to every APK (`match_tags`, `equip_refire`).
+(`nevr_quest_got_hook`). It runs in the combat APKs only (`combat_active.h`); `match_tags` and `equip_refire` included, which install
+from constructor steps of their own that the sequence runs only where combat runs (docs/adr/0047).
 
 ## Layout
 

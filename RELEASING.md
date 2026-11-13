@@ -217,15 +217,16 @@ its gate in `package_release.py` and `verify_symbols.py`, the signer's optional 
 
 ## The Quest APK
 
-The APK is a repack of the reference combat build, so no workflow builds it. Its input is that build as shipped,
-the recipe's argument, which defaults to `NEVR_QUEST_REFERENCE_APK`: `tools/quest_release_base.py` refuses any other file
+The APK the manifest lists as `quest-apk` is a repack of the reference combat build, so no workflow builds it. Its recipe is
+`just release-quest-reference-apk`, asked for by that name: the default `just release-quest-apk` builds the arena APK (below,
+docs/adr/0047). Its input is the reference build as shipped, the recipe's argument, which defaults to `NEVR_QUEST_REFERENCE_APK`: `tools/quest_release_base.py` refuses any other file
 (its sha256 is pinned there) and renames it to this package first. The store APK carries none of the reference build's
 combat entries (script libraries, `libassetpatch.so`, the reference `libvrapi.so`, `assets/afk_default_on.txt`), and an
 APK repacked from it has no combat (#1994). From a clone whose HEAD is the release tag's commit, after the tag is on origin
 (`tools/release_preflight.py --tag vX.Y.Z` refuses otherwise):
 
 ```sh
-just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
+just release-quest-reference-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
 ```
 
 It compiles nothing: the loader in the APK is the release's own asset, so the asset and the APK carry one file. The recipe
@@ -270,12 +271,14 @@ patcher is built with) and `config/public-defaults.env`, as `just build-android`
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. Neither APK is in the manifest through this document's flow.
 
 **The arena APK.** Each release also gets `nevr-runtime-vX.Y.Z-arena-quest.apk` (with its `.sha256`): the store APK repacked with
-the release's own loader and nothing else, so it has no combat (#2298). `just release-quest-arena-apk vX.Y.Z` builds it into
+the release's own loader and nothing else, so it has no combat (#2298). It is the default Quest build (docs/adr/0047):
+`just release-quest-apk vX.Y.Z` and `just release-quest-arena-apk vX.Y.Z` both build it into
 `build/quest-release/vX.Y.Z/arena/`: no plugin library and no plugin manifest are built or packaged, and the repack stamps the word
 `arena`. `tools/quest_release_base.py check-arena` refuses the APK, before it is copied out, if it holds any entry of the reference
-build (`assets/afk_default_on.txt`, `libassetpatch.so`), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
+build (`assets/afk_default_on.txt`, `libassetpatch.so`, a `libvrapi.so` that carries the reference runtime's libr15 checksum
+table), `libq15t.so`, the plugin manifest, or a stamp other than `arena`. Unlike
 the q15t variant, it is **listed in the manifest**, as the kind `quest-apk-arena` beside the combat `quest-apk` (the reference
-build's repack, whose stamp is empty and which stays the default). `tools/publish_quest_apk.py vX.Y.Z --listed-variant arena`
+build's repack, whose stamp is empty and which installers still take by default, #2662). `tools/publish_quest_apk.py vX.Y.Z --listed-variant arena`
 puts it up through the signer's `put-quest-apk --kind quest-apk-arena` and keeps the claim with `--extra-out`. The build needs the
 store APK (`NEVR_STORE_APK`) and `just configure`, not the NDK.
 
@@ -288,7 +291,7 @@ The Quest APK is built from the store game and signed with the Quest signing key
 workflow can build or upload it. The tool needs the release published, because the signer's `put-quest-apk` accepts only a
 published release.
 
-It runs from a clone of the repository that the publisher keeps for it, named by `QUEST_RELEASE_REPO` (default: the clone the script sits in). It fetches `origin/main` itself, and the `checkout` step refuses, as a `refused` record, unless the clone is clean and HEAD is the freshly fetched `origin/main`, or an ancestor of it: a clean clone behind `origin/main` is advanced by a fast-forward-only merge, logged as `checkout_fast_forward` with the old and new sha (#1945). The `tags` step then refuses, the same way, while any tag in that clone is not on origin or points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands, with the full object id, for each tag it lists.
+It runs from a clone of the repository that the publisher keeps for it, named by `QUEST_RELEASE_REPO` (default: the clone the script sits in). It fetches `origin/main` itself, and the `checkout` step refuses, as a `refused` record, unless the clone is clean and HEAD is the freshly fetched `origin/main`, or an ancestor of it: a clean clone behind `origin/main` is advanced by a fast-forward-only merge, logged as `checkout_fast_forward` with the old and new sha (#1945). The `tags` step then refuses, the same way, while any tag in that clone is not on origin or points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-reference-apk` runs later); the refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands, with the full object id, for each tag it lists.
 
 1. Takes the tag given with `--tag`. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried: the run writes `skipped_after_failures`, with the step and the part of the last failure, and exits 0.
@@ -299,8 +302,8 @@ It runs from a clone of the repository that the publisher keeps for it, named by
    lists needs no release build: the run goes on to the variant (below). Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
    name and size are noted; without one the run fails before it builds.
 3. Makes a clean worktree at the tag and waits while two or more `ninja` processes run. Then, in `nevr-builds.slice` (8G), the
-   `configure` step runs `just configure` (the vcpkg install that the new worktree lacks), and `just release-quest-apk` runs
-   after it.
+   `configure` step runs `just configure` (the vcpkg install that the new worktree lacks), and `just release-quest-reference-apk`
+   runs after it.
 4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
    public host, and the signer's claim is kept for the manifest.
 5. Builds and puts up the arena APK (below), then dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as

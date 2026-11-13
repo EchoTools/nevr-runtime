@@ -311,11 +311,12 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
         self.assertIn("../sentinel/build_variant.cpp", (ROOT / "src/quest/integration/CMakeLists.txt").read_text())
         self.assertIn("combat_active.cpp", (ROOT / "src/quest/combat/CMakeLists.txt").read_text())
 
-    def test_the_combat_code_that_ships_to_every_apk_says_it_is_outside_the_gate(self):
+    def test_the_combat_code_that_used_to_ship_to_every_apk_says_it_is_inside_the_gate(self):
+        """docs/adr/0047: the name tags and the equipment re-fire install only where combat::Active() is true."""
         for name in ("match_tags.h", "equip_refire.h"):
             text = (ROOT / "src/quest/combat" / name).read_text()
-            self.assertIn("ships to every APK", text, name)
-            self.assertIn("not gated by combat::Active()", text, name)
+            self.assertIn("It installs only where combat::Active() is true", text, name)
+            self.assertNotIn("ships to every APK", text, name)
 
 
 class NoLoadTimeInitializer(unittest.TestCase):

@@ -60,6 +60,13 @@
 //      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
 //                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
 //                                    the process-end hook; no counters
+//      InstallMatchTags              combat name tags on by default (#2090, combat/match_tags.h): CR15Game's two constructor
+//                                    slots, right after the permission-wait hook and before the game builds its game object;
+//                                    no counters. Skipped, with the reason `combat_inactive`, unless combat::Active()
+//                                    (docs/adr/0047): an arena or plain release keeps the game's own default
+//      InstallEquipRefire            the equipment change the scripts drop is sent again (#2121, combat/equip_refire.h): the
+//                                    six setter words and a frame work, right after the name tags; no counters. Skipped, with
+//                                    the reason `combat_inactive`, unless combat::Active() (docs/adr/0047)
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
@@ -109,7 +116,9 @@
 //                                    of the patched libr15 (ADR 0021), on every launch, right after the clock-level
 //                                    arming; no counters. Initialize runs after the constructor, so the hooks are in place before the
 //                                    texture is uploaded. Refused (the step reports failure) unless Attach verified libr15;
-//                                    the game then uploads its own black texel.
+//                                    the game then uploads its own black texel. It came with the combat build (the reference
+//                                    build's lighting patch), so it is skipped, with the reason `combat_inactive`, unless
+//                                    combat::Active() (docs/adr/0047): an arena or plain release uploads the game's own texel
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   Attach not verified     -> NOTHING is gated on it by the sequence: AttachLibR15 reports failure with the reason token
@@ -128,8 +137,9 @@
 //   dlopen hook not live    -> the plugin entries still pending (the normal pass has no moment to run in) end as
 //                              `not_started` with reason post_load_hook_unavailable (Steps::FinishPlugins), and so does the
 //                              combat area's normal step (one `combat_install` record, Steps::FinishCombat)
-//   combat not active       -> no combat step is set: the early step is skipped (`combat_inactive`), the dlopen hook is not
-//                              wanted for combat, and nothing is ended when it is not live (combat::Active(), combat_active.h)
+//   combat not active       -> no combat step is set: the early step, the name tags, the equipment re-fire and the grey
+//                              irradiance default are skipped (`combat_inactive`), the dlopen hook is not wanted for combat,
+//                              and nothing is ended when it is not live (combat::Active(), combat_active.h, docs/adr/0047)
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
@@ -197,6 +207,8 @@ enum class StepId : std::uint8_t {
   kInstallProcessEnd,
   kInstallCrashFirst,
   kInstallPermissionWait,
+  kInstallMatchTags,
+  kInstallEquipRefire,
   kInstallVkExtWindow,
   kInstallOsBuildGate,
   kInstallResourceRequestLog,
@@ -302,6 +314,12 @@ class Steps {
   virtual bool InstallCrashFirst() = 0;
   // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
   virtual bool InstallPermissionWait() = 0;
+  // Combat name tags on by default (#2090): CR15Game's two constructor slots. Asked only when CombatActive(). True when both slots
+  // hold their thunks.
+  virtual bool InstallMatchTags() = 0;
+  // The dropped equipment change sent again (#2121): six setter words and a frame work. Asked only when CombatActive(). True when
+  // every word holds its thunk.
+  virtual bool InstallEquipRefire() = 0;
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
@@ -325,7 +343,7 @@ class Steps {
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
   // The grey default irradiance texture (#2091): the GOT hook on CGEngineResources::Initialize and the row of the patched libr15
-  // that holds the upload helper, on every launch, no counters. True when both are live.
+  // that holds the upload helper, no counters. Asked only when CombatActive(). True when both are live.
   virtual bool InstallIrradianceDefault() = 0;
   // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
   virtual bool WizardMetricWanted() = 0;

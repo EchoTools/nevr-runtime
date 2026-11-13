@@ -188,19 +188,22 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
                                      handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
-    // Combat name tags on by default (#2090): CR15Game's two constructor slots, installed on every launch before the game builds its
-    // game object (the sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the
-    // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
-    // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
-    nevr_quest::combat::match_tags::Install();
-    // The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
-    // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
-    // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are.
-    nevr_quest::combat::equip_refire::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
 }
+
+// Combat name tags on by default (#2090): CR15Game's two constructor slots, installed before the game builds its game object (the
+// sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the stock default gets
+// bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its combat_match_tags_install line says whether
+// it went in; a refused install leaves the game's constructor as it is. The sequence asks only where combat runs (docs/adr/0047).
+bool InstallMatchTagsHook() noexcept { return nevr_quest::combat::match_tags::Install(); }
+
+// The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
+// setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
+// combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are. The sequence
+// asks only where combat runs (docs/adr/0047).
+bool InstallEquipRefireHook() noexcept { return nevr_quest::combat::equip_refire::Install(); }
 
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.

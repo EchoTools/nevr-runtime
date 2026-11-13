@@ -467,8 +467,12 @@ combat:
   # peerclamp: false
 
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
-  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
-  # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
+  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. Party guns, payload speed, a
+  # client's own damage bonus and CombatBots are never on.
+  # enabled: true           # Opts into EchoCombat (docs/adr/0047). Without it nothing below applies: no combat hook, write, transform or
+  #                         # VeilNet installs, and the [NEVR.COMBAT] line `combat module not installed` says so. A value that is not a
+  #                         # boolean stays off, with a warning. Default (absent): false.
+  # Once enabled, the drone follow crash guard runs whatever the keys below say.
   # drone: false            # DRONE. Default: true.
   # overcharge: false       # OVERCHARGE. Default: true.
   # medigun: true           # MEDIGUN (needs overcharge and veil; a client shows it only on a server that states it, #2333). Default: false.

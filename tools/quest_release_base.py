@@ -16,7 +16,9 @@ WHAT.
 
     quest_release_base.py check-arena --apk ARENA.apk
         Refuses unless ARENA.apk (the store APK repacked with the release's loader, #2298) holds none of REFERENCE_ENTRIES, no
-        q15t library and no plugin manifest, and its variant stamp is exactly `arena`.
+        q15t library, no plugin manifest and no reference runtime (a libvrapi.so that carries the reference runtime's libr15
+        checksum table, quest_runtime_pin.carries_table; the store's own libvrapi.so carries none), and its variant stamp is
+        exactly `arena`.
 
     quest_release_base.py check-release --apk RELEASE.apk --base BASE.apk
         Refuses unless BASE.apk holds every REFERENCE_ENTRIES name and RELEASE.apk holds every entry name of BASE.apk
@@ -37,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quest_apk_rename_package as qr  # noqa: E402
+import quest_runtime_pin as runtime_pin  # noqa: E402
 
 TAG = "NEVR.QUEST.BASE"
 
@@ -52,6 +55,8 @@ LABEL = "Echo VR"
 # What an arena APK must not carry besides REFERENCE_ENTRIES (#2298): the q15t library and the manifest that lists packaged plugins.
 ARENA_FORBIDDEN_ENTRIES = ("lib/arm64-v8a/libq15t.so", "lib/arm64-v8a/libnevr_plugin_manifest.so")
 ARENA_STAMP_ENTRY = "lib/arm64-v8a/libnevr_build_variant.so"
+# The VrApi library: the store's own in a store APK, the reference build's combat runtime in the reference APK (docs/adr/0047).
+RUNTIME_ENTRY = "lib/arm64-v8a/libvrapi.so"
 
 
 class Refused(Exception):
@@ -123,15 +128,17 @@ def check_release(apk: Path, base: Path) -> dict:
 
 
 def check_arena(apk: Path) -> dict:
-    """The arena APK carries no combat (#2298): none of the reference build's entries, no q15t library, no plugin manifest, and the
-    variant stamp `arena` (the exact bytes). A refusal names every offending entry."""
+    """The arena APK carries no combat (#2298): none of the reference build's entries, no q15t library, no plugin manifest, no
+    reference runtime (docs/adr/0047), and the variant stamp `arena` (the exact bytes). A refusal names every offending entry."""
     try:
         with zipfile.ZipFile(apk) as z:
             names = {n for n in z.namelist() if not n.endswith("/")}
             stamp = z.read(ARENA_STAMP_ENTRY) if ARENA_STAMP_ENTRY in names else None
+            reference_runtime = RUNTIME_ENTRY in names and runtime_pin.carries_table(z.read(RUNTIME_ENTRY))
     except (OSError, zipfile.BadZipFile) as error:
         raise Refused("unreadable_apk", apk=str(apk), error=type(error).__name__) from error
-    combat = sorted(n for n in names if n in REFERENCE_ENTRIES or n in ARENA_FORBIDDEN_ENTRIES)
+    combat = sorted(n for n in names if n in REFERENCE_ENTRIES or n in ARENA_FORBIDDEN_ENTRIES or
+                    (n == RUNTIME_ENTRY and reference_runtime))
     if combat:
         raise Refused("arena_has_combat_entries", apk=str(apk), entries=combat)
     if stamp != b"arena":
