@@ -166,3 +166,8 @@ nevr_ht_test(update_wiring_test GROUP shared HOST DL PTHREAD TIMEOUT 120
 # The pending decision (ADR 0024, section 6, R2) over a fake UpdateFs: no file system, the same cases as the PC build.
 nevr_ht_test(engine_pending_test GROUP shared HOST GTEST PTHREAD TIMEOUT 120
   SRC src/runtime/tests/engine_pending_test.cpp src/core/update/engine_start.cpp src/core/update/names.cpp)
+# The map channel's file seam on the Quest (cdn/posix_map_fs.h; docs/adr/0048): the stamp, a held file, the listing, the
+# removal and the rename, on real files under the group's own build folder.
+set(_shared_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/shared)
+nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
+  SRC src/cdn/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)

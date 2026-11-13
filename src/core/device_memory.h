@@ -12,8 +12,9 @@ namespace nevr_device {
 // `MemAvailable` of the text of /proc/meminfo, in bytes. False when the line is absent, malformed or does not fit 64 bits.
 bool ParseMemAvailable(const char* meminfo_text, std::uint64_t* bytes) noexcept;
 
-// What the system says a process can still use without swapping, read from /proc/meminfo. False when it cannot be read; nothing is
-// guessed in its place (a caller that needs the number then does nothing, and says so).
+// What the system says a process can still use without swapping, read from /proc/meminfo (on Windows, GlobalMemoryStatusEx's
+// available physical memory). False when it cannot be read; nothing is guessed in its place (a caller that needs the number then
+// does nothing, and says so).
 bool MemoryAvailable(std::uint64_t* bytes) noexcept;
 
 // `whole / divisor`: the share a limit may take. A divisor of 0 gives 0.
