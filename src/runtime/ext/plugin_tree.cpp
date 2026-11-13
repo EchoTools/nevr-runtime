@@ -55,15 +55,19 @@ std::string Lower(std::string s) {
 std::string WithDefaultExtension(const std::string& name) { return WithDefaultExtensionOf(name); }
 std::wstring WithDefaultExtension(const std::wstring& name) { return WithDefaultExtensionOf(name); }
 
-bool SuppliedBySystem32Only(const std::string& file) {
+bool SuppliedBySystem32OnlyIn(const std::string& file, const std::string& systemDir) {
   const std::string lower = Lower(file);
   if (lower.compare(0, 7, "api-ms-") == 0 || lower.compare(0, 7, "ext-ms-") == 0) return false;
   if (GetModuleHandleA(lower.c_str()) != nullptr) return false;
+  const DWORD attributes = GetFileAttributesA((systemDir + "\\" + lower).c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool SuppliedBySystem32Only(const std::string& file) {
   char system[MAX_PATH] = {};
   const UINT n = GetSystemDirectoryA(system, MAX_PATH);
   if (n == 0 || n >= MAX_PATH) return false;
-  const DWORD attributes = GetFileAttributesA((std::string(system) + "\\" + lower).c_str());
-  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+  return SuppliedBySystem32OnlyIn(file, system);
 }
 
 bool SuppliedByTheSystem(const std::string& file) {

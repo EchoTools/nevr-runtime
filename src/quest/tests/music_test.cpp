@@ -550,6 +550,7 @@ void ARefusedInstallChangesNothing() {
     const auto r = InstallOn();
     QCHECK(!r.installed && std::strcmp(r.status, "hook") == 0);
     QCHECK(*g_image.Slot(g_pins.slotVaddr) == reinterpret_cast<void*>(&End));  // left as it was
+    QCHECK(tick::Count() == 0U);                                              // a refused hook leaves no tick behind (#2332)
     QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"hook\"") && !Has(Lines("combat_music_install")[0].text, "\"status\":\"ok\""));
     End();
   }

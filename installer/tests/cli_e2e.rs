@@ -11,6 +11,8 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
 
+/// The binary's override of "is echovr.exe running" (`installer/src/main.rs`, `GAME_RUNNING_ENV`).
+const GAME_RUNNING_ENV: &str = "NEVR_INSTALL_GAME_RUNNING";
 const HOST: &[u8] = b"new host NEVR-BUILD 9.9.9";
 const RT: &[u8] = b"new runtime";
 const GAME: &[u8] = b"the game's BugSplat64.dll";
@@ -132,6 +134,9 @@ fn run_cmd(server: &World, dirs: &World, args: &[&str], base: &str, envs: &[(&st
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"));
     // The fixture's nevr root is a temporary folder, not the canonical one: a dev run says so (#1353).
     cmd.args(args).args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", base, "--pins", server.pins.to_str().unwrap(), "--now", NOW]);
+    // No echovr.exe the machine runs decides these runs: a live game on the machine must not fail them (#1231). A test that
+    // needs the game running sets the override itself, in `envs`.
+    cmd.env(GAME_RUNNING_ENV, "0");
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -187,6 +192,19 @@ fn pc_plan_changes_nothing() {
     assert!(!w.game.path().join("nevr-runtime.dll").exists());
     assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
     assert!(!w.root.path().join("state/install-record.json").exists());
+}
+
+#[test]
+fn a_running_game_refuses_the_pc_install_changes_nothing_and_the_override_is_on_record() {
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, out, _) = run_with(&w, &["pc", "install", "--dir", dir], &w.base, &[(GAME_RUNNING_ENV, "1".to_string())]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("echovr.exe is running; close the game first"), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
+    let start = records(&w).into_iter().find(|r| r["event"] == "run_start").expect("run_start is on record");
+    assert_eq!(start["game_running_override"], true, "{start}");
 }
 
 #[test]
@@ -338,12 +356,26 @@ fn reopen_game_folder(w: &World) {
     std::fs::set_permissions(w.game.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+// The installer folder refuses the record file, so the record write fails after the host was replaced. The aside folder is
+// made first: the run makes it at its start, and it stays writable inside the read-only folder.
+fn setup_failing_record_write(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(w.nevr.path().join("installer/aside")).unwrap();
+    std::fs::set_permissions(w.nevr.path().join("installer"), std::fs::Permissions::from_mode(0o555)).unwrap();
+}
+
+fn reopen_installer_folder(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(w.nevr.path().join("installer"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// Bytes of log written before the first record named `target` in a healthy run of the scenario.
 fn log_bytes_before(target: &str, scenario: fn(&World)) -> usize {
     let probe = world(false);
     scenario(&probe);
     let _ = run(&probe, &["pc", "install", "--dir", probe.game.path().to_str().unwrap()]);
     reopen_game_folder(&probe);
+    reopen_installer_folder(&probe);
     let text = std::fs::read_to_string(probe.root.path().join("logs/nevr-install.jsonl")).unwrap();
     let mut before = 0;
     for line in text.lines() {
@@ -367,6 +399,7 @@ fn run_with_log_cut_before(w: &World, target: &str, scenario: fn(&World)) -> (i3
         .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_install-nevr-runtime")])
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap()])
         .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", &w.base,"--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .env(GAME_RUNNING_ENV, "0")
         .output()
         .unwrap();
     reopen_game_folder(w);
@@ -385,6 +418,17 @@ fn a_log_that_fails_while_the_rollback_is_due_does_not_stop_the_rollback() {
     let reason = out["reason"].as_str().unwrap();
     // The record of the failure and the record of the one file put back were both lost.
     assert!(reason.contains("; 2 log record(s) could not be written during the rollback: FAIL step 0: cannot write the log"), "the lost records are said: {reason}");
+}
+
+#[test]
+fn a_log_that_fails_after_a_host_replace_still_puts_the_host_back() {
+    // The host is replaced, then the record write fails; the log cannot take `install_failed`, and the host must still be the
+    // game's own bytes after the rollback. The runtime is not asserted here: the host bytes are the point of this case.
+    let w = world(false);
+    let (code, out, _) = run_with_log_cut_before(&w, "install_failed", setup_failing_record_write);
+    reopen_installer_folder(&w);
+    assert_eq!((code, out["state"].as_str()), (3, Some("restored")), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
 }
 
 #[test]
@@ -1017,6 +1061,36 @@ fn the_record_names_its_owner_and_a_record_owned_by_another_installer_is_refused
 }
 
 #[test]
+fn a_recorded_install_whose_backup_is_gone_or_whose_dbgcore_is_back_exits_2_and_changes_nothing() {
+    // #781: the game's file already equals the package's host, so the run takes the recorded branch. That branch must refuse
+    // as the update does: exit 2 (needs the player), and no file or record changed.
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", dir]);
+    assert_eq!(code, 0, "{out} {err}");
+    let record = w.nevr.path().join("installer").join("nevr-install.txt");
+    let text = std::fs::read_to_string(&record).unwrap();
+    let backup = text.lines().find_map(|l| l.strip_prefix("backup=")).expect("the record names the backup").to_string();
+    let moved = format!("{backup}.moved");
+    std::fs::rename(&backup, &moved).unwrap();
+    let before = tree_of(w.game.path());
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", dir, "--version", "1.0.0"]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("the backup named in nevr-install.txt is gone"), "{out}");
+    assert_eq!(tree_of(w.game.path()), before);
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), text, "the record is not rewritten");
+    std::fs::rename(&moved, &backup).unwrap();
+
+    std::fs::write(w.game.path().join("dbgcore.dll"), b"a dbgcore that came back").unwrap();
+    let before = tree_of(w.game.path());
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", dir, "--version", "1.0.0"]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("a dbgcore.dll exists again"), "{out}");
+    assert_eq!(tree_of(w.game.path()), before);
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), text, "the record is not rewritten");
+}
+
+#[test]
 fn the_2017_builds_win7_folder_is_matched_too() {
     let w = world(false);
     let l = launcher_install();
@@ -1129,7 +1203,7 @@ fn a_stage_download_that_fails_logs_the_whole_base() {
     assert_eq!(stored.status.code(), Some(0), "{}", String::from_utf8_lossy(&stored.stdout));
     let base = "https://user:s3cret-token@127.0.0.1:1/nevr-runtime";
     let o = Command::new(bin)
-        .args(["pc", "stage", "--root", nevr.to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", base, "--pins", pins, "--now", NOW])
+        .args(["pc", "stage", "--root", nevr.to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", base, "--pins", pins, "--now", NOW, "--dev-nevr-root"])
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(1), "{}", String::from_utf8_lossy(&o.stdout));

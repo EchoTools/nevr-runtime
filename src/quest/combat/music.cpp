@@ -245,16 +245,21 @@ ModuleResult InstallAt(bool configOn, sentinel::ImageLookup lookup, const target
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return refuse("no_build_id", "none");
   if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return refuse("build_id_mismatch", "none");
   if (FirstPinMismatch(reinterpret_cast<const unsigned char*>(image.base)) != nullptr) return refuse("pin_mismatch", "none");
-  // The tick first: a module whose Stops at the end of the match could never run installs nothing.
-  if (!g_tickRegistered.load(std::memory_order_acquire)) {
-    if (!tick::Add(&Tick)) return refuse("tick_table_full", "none");
-    g_tickRegistered.store(true, std::memory_order_release);
-  }
   tgt::Thunk::Arm(kRecord);
   const sentinel::GotStatus status = sentinel::InstallThunk<tgt::Thunk>(g_hook, tgt::Target(image.base, pins), lookup);
   if (status != sentinel::GotStatus::kOk) {
     if (!g_hook.installed()) tgt::Thunk::Disarm();
     return refuse("hook", sentinel::GotStatusName(status));
+  }
+  // The tick last, as sensorwd does (#2332): a refused hook leaves no callback behind in the tick table, and a module whose
+  // tick could never run installs nothing, so the hook is put back when the table is full.
+  if (!g_tickRegistered.load(std::memory_order_acquire)) {
+    if (!tick::Add(&Tick)) {
+      g_hook.Remove();
+      tgt::Thunk::Disarm();
+      return refuse("tick_table_full", "none");
+    }
+    g_tickRegistered.store(true, std::memory_order_release);
   }
   g_on.store(true, std::memory_order_release);
   LogInstall(sentinel::LogLevel::kInfo, "on", "default", sentinel::GotStatusName(status),

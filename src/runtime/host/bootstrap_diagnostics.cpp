@@ -649,7 +649,7 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
   }
 
   // A record that carries a string `log` (the stop facts, stop_line.h) names the file it is written to: the field is
-  // set per directory tried, so a record that fell back to %TEMP% does not name the primary directory.
+  // set to the main log's path, so a record that the main log refused names the one file it was tried against.
   if (stamped.contains("log") && stamped.at("log").is_string()) return AppendRecordNamingLog(stamped);
 
   const std::string line = SerializeRecord(stamped);

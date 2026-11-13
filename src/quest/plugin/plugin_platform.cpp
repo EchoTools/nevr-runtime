@@ -7,6 +7,11 @@
 
 #include <atomic>
 #include <cerrno>
+#include <string>
+
+#if defined(__ANDROID__)
+#include <android/dlext.h>
+#endif
 
 #include "quest/plugin/input_seam_hook.h"
 #include "quest/plugin/plugin_game_image.h"
@@ -48,8 +53,10 @@ std::string DirectoryOf(const char* path) {
 SentinelPlatform::SentinelPlatform(std::string libraryDir, bool emitDebug)
     : libraryDir_(std::move(libraryDir)), emitDebug_(emitDebug) {}
 
-ReadOutcome SentinelPlatform::ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why) {
+ReadOutcome SentinelPlatform::ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why,
+                                              int* keepFd) {
   *why = "";
+  if (keepFd != nullptr) *keepFd = -1;
   if (libraryDir_.empty()) {
     *why = "no_library_dir";
     return ReadOutcome::kUnreadable;
@@ -89,13 +96,17 @@ ReadOutcome SentinelPlatform::ReadFileOutcome(const std::string& file, std::vect
       return ReadOutcome::kUnreadable;
     }
   }
-  ::close(fd);
+  if (keepFd != nullptr) {
+    *keepFd = fd;
+  } else {
+    ::close(fd);
+  }
   return ReadOutcome::kRead;
 }
 
-bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) {
+bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes, int* fd) {
   const char* why = "";
-  return ReadFileOutcome(file, bytes, &why) == ReadOutcome::kRead;
+  return ReadFileOutcome(file, bytes, &why, fd) == ReadOutcome::kRead;
 }
 
 // By name: the linker finds the file in the app's native library directory, the same one the sentinel was mapped from.
@@ -103,11 +114,24 @@ void SentinelPlatform::Close(void* handle) {
   if (handle != nullptr) ::dlclose(handle);
 }
 
-// The path ReadFile hashed and checked, never the bare name: a bare name makes the linker search, so a name that shadows a
-// system or an already-mapped library could load something other than the bytes that were recorded.
-void* SentinelPlatform::Open(const std::string& file) {
-  if (libraryDir_.empty()) return nullptr;
-  return ::dlopen((libraryDir_ + "/" + file).c_str(), RTLD_NOW | RTLD_LOCAL);
+// The object is mapped from the descriptor ReadFile read and checked, so the bytes mapped are the bytes checked (#1521). The
+// name is never opened: on the device it is the identity Bionic keeps for the object, on the host the descriptor's
+// /proc path is the only name dlopen can take for it.
+void* SentinelPlatform::Open(int fd, const std::string& file) {
+  if (fd < 0 || libraryDir_.empty()) return nullptr;
+#if defined(__ANDROID__)
+  android_dlextinfo info{};
+  info.flags = ANDROID_DLEXT_USE_LIBRARY_FD;
+  info.library_fd = fd;
+  return ::android_dlopen_ext((libraryDir_ + "/" + file).c_str(), RTLD_NOW | RTLD_LOCAL, &info);
+#else
+  static_cast<void>(file);
+  return ::dlopen(("/proc/self/fd/" + std::to_string(fd)).c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+
+void SentinelPlatform::CloseFile(int fd) {
+  if (fd >= 0) ::close(fd);
 }
 
 void* SentinelPlatform::Symbol(void* handle, const char* name) { return ::dlsym(handle, name); }

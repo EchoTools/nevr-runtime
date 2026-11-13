@@ -327,6 +327,39 @@ func TestEnvAtTakesPathAndTheCachesFromTheGetenvItIsGivenNotFromTheProcess(t *te
 	}
 }
 
+// Not parallel: it sets HOME and the Go cache variables of the test process, which t.Setenv forbids with t.Parallel. The
+// answer for a process's caches is the answer its go gives under that process's HOME, so a second HOME must get its own answer
+// and not the first one's from the kit's cache of go's answers.
+func TestGoDefaultsFollowTheHomeTheGoRunsIn(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	cacheFromKit := func(home string) string {
+		t.Setenv("HOME", home)
+		env, err := EnvAt(t.TempDir(), func(string) string { return "" }, goBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := lookup(env, "GOCACHE")
+		return got
+	}
+	homeA, homeB := t.TempDir(), t.TempDir()
+	gotA := cacheFromKit(homeA)
+	wantA := goEnv(t, "GOCACHE")
+	gotB := cacheFromKit(homeB)
+	wantB := goEnv(t, "GOCACHE")
+	if gotA != wantA {
+		t.Errorf("GOCACHE under HOME %q = %q, want go env's %q", homeA, gotA, wantA)
+	}
+	if gotB != wantB {
+		t.Errorf("GOCACHE under HOME %q = %q (the answer for the first HOME was kept), want go env's %q", homeB, gotB, wantB)
+	}
+}
+
 func TestEnvAtAsksTheGoItIsGivenForCachesTheCallerDoesNotSet(t *testing.T) {
 	t.Parallel()
 	goBin, err := exec.LookPath("go")

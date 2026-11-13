@@ -65,6 +65,13 @@ After "How an agent works here", these come before every other rule in this file
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **Read a text to its end before a claim about what it lacks.** Before you state that a text (an issue, a pull request
+  body, a comment, a file, a log) does not contain something, read all of it. A slice does not count: `head`, `tail`,
+  `cut -c`, `grep -m`, a `[0:N]` slice of `.body` in `gh ... --jq`, or a `Read` with a `limit` that stops short. When the
+  text is too large for one read, page through it (`Read` with `offset` and `limit` until the last line, or the API's
+  paging until the last page) and say how much you read. A statement that a text lacks something names what was read and
+  how much of it. Reason: a claim made from a cut-off text is a claim about the part that was read, and the owner cannot
+  tell which part that was.
 - **Every action follows a documented pattern.** Before an action, name the pattern this repo documents that covers it:
   a rule in this file, a `justfile` recipe, or a step in `RELEASING.md` or a runbook under `docs/`. An action no
   documented pattern covers is not taken: stop, name the gap and the action it blocks, and report it.
@@ -376,7 +383,7 @@ that each Kind and rank is true.
 | N90 | run | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | rank 3: verify; unchecked: that the hook installs and routes pnsrad output in a run |
 | N108 | source | `src/abi/` never includes `src/core/`. | `src/abi` | rank 3: verify |
 | N109 | source | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | rank 3: verify |
-| N122, N124 | run | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 3: `tools/tests/test_server_bringup_wiring.py` (the bring-up prologue outcome is logged at Info), `tools/tests/test_netgun_bullets_wiring.py` (the server-mode branch logs at Info); unchecked: the UPnP and telemetry decision lines, which no verify sensor or test names (`tests/smoke/score-log.sh` reads a captured run by hand) |
+| N122, N124 | run | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 3: verify (N122, N124: the UPnP config line and the mapping line are Info, and both telemetry-disabled lines are Info), `tools/tests/test_server_bringup_wiring.py` (the bring-up prologue outcome is logged at Info), `tools/tests/test_netgun_bullets_wiring.py` (the server-mode branch logs at Info); unchecked: that each line is emitted in a run (no run drives a server with UPnP on or off, or with telemetry absent; `tests/smoke/score-log.sh` reads a captured run by hand) |
 
 #### The game folder
 
@@ -427,7 +434,7 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's when it was built at this commit)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's, whatever commit it was built at)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the keystore file `NEVR_QUEST_KEYSTORE` names (passphrase in `NEVR_QUEST_KEYSTORE_PASS`)

@@ -143,9 +143,9 @@ TEST(DataInTheMediaRootIsUsedAndNotFetched) {
   CHECK(rig.shown.empty());
   CHECK(rig.order.empty());  // data that is there is not announced
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[0], "data_check action=use source=android_media"));
-  CHECK(Contains(rig.events[1], "data_packages "));  // a manifest outside the pinned table: said, not checked
-  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_check action=use source=android_media"));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages "));  // a manifest outside the pinned table: said, not checked
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "outcome=unpinned"));
   CHECK(rig.warns.empty());
 }
 
@@ -168,7 +168,7 @@ TEST(AnUnmarkedMediaRootIsFetchedInto) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(r.action, DataAction::kFetch);
   CHECK_EQ(net.calls, 1);
-  CHECK(Contains(rig.events[0], "action=fetch source=android_media_unmarked"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=android_media_unmarked"));
 }
 
 TEST(NoDataFetchesVerifiesAndPlacesIt) {
@@ -181,8 +181,8 @@ TEST(NoDataFetchesVerifiesAndPlacesIt) {
   CHECK(Exists(rig.Root() + "/" + kManifestRel));
   CHECK(rig.shown.empty());
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(1));  // the announcement only
-  CHECK_EQ(rig.order[0], std::string("announce"));
-  CHECK(Contains(rig.events[0], "action=fetch source=none"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("announce"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none"));
 }
 
 TEST(DataOfAnotherBuildIsReplacedAndTheOldOneKeptAside) {
@@ -203,14 +203,14 @@ TEST(NoNetworkShowsTheFloorMessageThenHoldsIt) {
   const StepResult r = RunDataStep(rig.config, net);
   CHECK_EQ(r.outcome, StepOutcome::kFailed);
   CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
-  CHECK_EQ(rig.shown[0], r.message);
+  CHECK(rig.shown.size() > 0 && rig.shown[0] == r.message);
   CHECK(Contains(r.message, rig.Root() + "/_data"));  // the path
   CHECK(Contains(r.message, kBuild));                 // the build
   CHECK(Contains(r.message, "Check the network connection and start the game again"));  // the action
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(3));
-  CHECK_EQ(rig.order[0], std::string("announce"));  // before the download
-  CHECK_EQ(rig.order[1], std::string("present"));
-  CHECK_EQ(rig.order[2], std::string("hold"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("announce"));  // before the download
+  CHECK(rig.order.size() > 1 && rig.order[1] == std::string("present"));
+  CHECK(rig.order.size() > 2 && rig.order[2] == std::string("hold"));
   CHECK(!Exists(rig.Root() + "/_data"));
 }
 
@@ -464,7 +464,7 @@ TEST(OnlyTheEngineRootCountsAsData) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(r.action, DataAction::kFetch);
   CHECK_EQ(r.root, Legacy());  // the fetch is for the root the engine reads
-  CHECK(Contains(rig.events[0], "action=fetch source=none root=" + Legacy()));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none root=" + Legacy()));
 }
 
 TEST(DataInTheEngineRootIsUsedWhateverElseIsThere) {
@@ -490,12 +490,12 @@ TEST(WithoutAllowFetchMissingDataIsPresentedHeldAndNotFetched) {
   CHECK_EQ(net.calls, 0);  // no network at all
   CHECK_EQ(r.message, std::string(kGameDataMissing));
   CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
-  CHECK_EQ(rig.shown[0], std::string(kGameDataMissing));
+  CHECK(rig.shown.size() > 0 && rig.shown[0] == std::string(kGameDataMissing));
   CHECK_EQ(rig.order.size(), static_cast<std::size_t>(2));  // present, hold: no download notice
-  CHECK_EQ(rig.order[0], std::string("present"));
-  CHECK_EQ(rig.order[1], std::string("hold"));
+  CHECK(rig.order.size() > 0 && rig.order[0] == std::string("present"));
+  CHECK(rig.order.size() > 1 && rig.order[1] == std::string("hold"));
   CHECK(!Exists(rig.Root()));  // nothing was created
-  CHECK(Contains(rig.events[0], "action=fetch source=none"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=fetch source=none"));
   CHECK(Contains(kGameDataMissing, "Echo Launcher"));
 }
 
@@ -565,10 +565,10 @@ TEST(TheDataCheckNamesTheVersionFolderAndTheManifestHashOfTheDataItFound) {
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
   CHECK(!rig.events.empty());
-  CHECK(Contains(rig.events[0], "data_version=7777777777"));
-  CHECK(!Contains(rig.events[0], "data_version=5932408047"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=7777777777"));
+  CHECK(rig.events.size() > 0 && !Contains(rig.events[0], "data_version=5932408047"));
   const std::string bytes = "another build's manifest";
-  CHECK(Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
 }
 
 // A folder name is judged by its characters and by the file system's own bound (NAME_MAX), not by a number of ours: a long plain name is named.
@@ -605,15 +605,15 @@ TEST(TheDataCheckNamesThePinnedFolderAndItsManifestHashWhenThatIsWhatIsThere) {
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
   const std::string bytes = "pinned manifest";
-  CHECK(Contains(rig.events[0], "action=use"));
-  CHECK(Contains(rig.events[0], "data_version=5932408047 manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "action=use"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=5932408047 manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
 }
 
 TEST(TheDataCheckSaysNoneWhenThereIsNoDataAndHashesNothing) {
   Rig rig;
   OneShotTransport net(rig.zip, false);
   RunDataStep(rig.config, net);
-  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=none manifest_sha256=none"));
 }
 
 TEST(AFolderNameThatIsNotPlainIsNotLogged) {
@@ -623,8 +623,8 @@ TEST(AFolderNameThatIsNotPlainIsNotLogged) {
   rig.config.allow_fetch = false;
   OneShotTransport net(rig.zip, true);
   RunDataStep(rig.config, net);
-  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
-  CHECK(!Contains(rig.events[0], "forged"));
+  CHECK(rig.events.size() > 0 && Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+  CHECK(rig.events.size() > 0 && !Contains(rig.events[0], "forged"));
 }
 
 TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
@@ -635,8 +635,8 @@ TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
   CHECK_EQ(r.outcome, StepOutcome::kFetched);
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
   const std::string manifest = Pattern(20000);
-  CHECK(Contains(rig.events[1], "data_version root=" + rig.Root()));
-  CHECK(Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_version root=" + rig.Root()));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
 }
 
 // ---- the package files of a pinned data set (package_pins.h) ----
@@ -813,7 +813,7 @@ TEST(WholePackagesAreHashedOnceAndTheMarkerIsWritten) {
   CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].first, PinnedRig::MarkerPath());
   CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].second, rig.manifest_sha + " " + kBuild + "\n");
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 manifest_sha256=" +
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 manifest_sha256=" +
                                     rig.manifest_sha + " outcome=verified packages=2 sha=checked"));
 }
 
@@ -917,8 +917,8 @@ TEST(AManifestOutsideThePinnedTableIsNotCheckedAndIsUsedAsBefore) {
   CHECK(rig.writes.empty());
   CHECK(rig.warns.empty());
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
-  CHECK(Contains(rig.events[1], "data_packages "));
-  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages "));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "outcome=unpinned"));
 }
 
 TEST(TheDataIsNotCheckedWhenItIsFetchedOrReplaced) {

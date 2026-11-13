@@ -698,9 +698,16 @@ TEST(BootstrapDiagnostics, TwoProcessesAppendingToOneFileLoseNoLine) {
   for (HANDLE child : children) CloseHandle(child);
   SetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", nullptr);
   SetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", nullptr);
-  const LineCount count = CountLines(ReadAll(nevr_test::HostLogPath(local)));
-  EXPECT_EQ(count.lines, 800u);
-  EXPECT_EQ(count.distinct, 800u);
+  // Each child appends kThreadsPerChild threads of kLinesPerThread lines, all starting with 'P'. Once the log lock
+  // degrades the file also holds host_log_lock records, which are not appended lines (#1219, #1327).
+  constexpr std::size_t kChildren = 2;
+  constexpr std::size_t kThreadsPerChild = 4;
+  constexpr std::size_t kLinesPerThread = 100;
+  constexpr std::size_t kExpected = kChildren * kThreadsPerChild * kLinesPerThread;
+  const std::string text = ReadAll(nevr_test::HostLogPath(local));
+  const LineCount count = CountLinesWithPrefix(text, 'P');
+  EXPECT_EQ(count.lines, kExpected) << LockDiagnosis(text);
+  EXPECT_EQ(count.distinct, kExpected) << LockDiagnosis(text);
 }
 
 // --- the log lock, and a flush that must not read an entry before it is written -----------------
@@ -722,10 +729,17 @@ DWORD WINAPI HoldLogLock(void* raw) {
 
 // A mutex name no other test process shares, so two runs under one wineserver cannot hold each other's lock.
 std::wstring UniqueMutexName(const wchar_t* tag) {
+  static LONG counter = 0;
+  const LONG sequence = InterlockedIncrement(&counter);
   wchar_t name[128] = {};
-  swprintf(name, 128, L"Local\\nevr-test-log-%ls-%lu-%llu", tag, static_cast<unsigned long>(GetCurrentProcessId()),
-           static_cast<unsigned long long>(GetTickCount64()));
+  swprintf(name, 128, L"Local\\nevr-test-log-%ls-%lu-%llu-%ld", tag, static_cast<unsigned long>(GetCurrentProcessId()),
+           static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(sequence));
   return std::wstring(name);
+}
+
+// Two calls with one tag in one clock tick must not name the same mutex (the tick alone does not separate them).
+TEST(BootstrapDiagnostics, TwoMutexNamesForOneTagDiffer) {
+  EXPECT_NE(UniqueMutexName(L"same-tag"), UniqueMutexName(L"same-tag"));
 }
 
 // The log mutex of this process is named `name` for the scope; the old one is closed first and the

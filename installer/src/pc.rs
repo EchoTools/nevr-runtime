@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::log::Log;
 use crate::util::{now_utc, semver_cmp, sha256_hex};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -781,6 +781,13 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         verify_file(&b, &orig).map_err(|e| format!("{e} (delete the bad copy by hand)"))?;
         write_log(&b, &orig, "", &host.display().to_string())?;
         backup = b.display().to_string();
+    } else if writes_host {
+        // The host an update or an adoption replaces is kept too, so a kill mid-apply cannot lose its bytes (#1245). The
+        // record does not name this copy: uninstall never restores it.
+        let b = fresh(&aside, &format!("{HOST}.replaced-{st}"));
+        put(&b, &host_bytes).map_err(|e| io(&b, e))?;
+        undo.push(Undo::Remove { what: "host_replaced_copy", path: b.clone() });
+        write_log(&b, &orig, "", &host.display().to_string())?;
     }
     if action == Action::First || action == Action::Adopt {
         if obs.dbgcore_present {
@@ -817,6 +824,13 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
             undo.push(Undo::Move { what: "runtime_aside", from: to.clone(), to: runtime.clone() });
             write_log(&runtime, "", obs.runtime_sha.as_deref().unwrap_or(""), &to.display().to_string())?;
             runtime_aside = to.display().to_string();
+        }
+        // A runtime an update replaces is kept too (#1245). The record does not name this copy: uninstall never restores it.
+        if let Some(prior) = prior_runtime.as_ref().filter(|p| action != Action::First && sha256_hex(p.as_slice()) != ours_rt) {
+            let to = fresh(&aside, &format!("{RUNTIME}.replaced-{st}"));
+            put(&to, prior).map_err(|e| io(&to, e))?;
+            undo.push(Undo::Remove { what: "runtime_replaced_copy", path: to.clone() });
+            write_log(&to, &sha256_hex(prior), "", "")?;
         }
         // The runtime first: until the host is replaced nothing loads it.
         put(&runtime, &pkg.runtime).map_err(|e| io(&runtime, e))?;
@@ -932,6 +946,86 @@ pub fn is_run_log_name(name: &str) -> bool {
             19 => *c == b'.',
             _ => c.is_ascii_digit(),
         })
+}
+
+/// The file that makes a folder an Echo VR install (`bin\win10\echovr.exe`).
+pub const EXE_NAME: &str = "echovr.exe";
+
+/// The folders, under a fixed drive's root or under a library the Oculus app records, that an Echo VR install may sit in
+/// (#1300): the drive root itself, the folders players have used by hand, and the Oculus and Meta Horizon libraries.
+const FIND_FOLDERS: &[&[&str]] = &[
+    &[],
+    &["EchoVR"],
+    &["Echo VR"],
+    &["Games", "EchoVR"],
+    &["Program Files", "Meta Horizon"],
+    &["Program Files", "Oculus"],
+    &["Program Files (x86)", "Oculus"],
+    &["Oculus"],
+    &["Meta Horizon"],
+];
+
+/// The three layouts of an install under a folder that `FIND_FOLDERS` names (the store and launcher layouts, newest first).
+const FIND_SUFFIXES: &[&[&str]] = &[
+    &["Software", "Software", "ready-at-dawn-echo-arena", "bin", "win10"],
+    &["Software", "ready-at-dawn-echo-arena", "bin", "win10"],
+    &["ready-at-dawn-echo-arena", "bin", "win10"],
+];
+
+/// Joins each part to `base` as a path component, so the same spelling works on every platform.
+fn join_parts(base: &Path, parts: &[&str]) -> PathBuf {
+    parts.iter().fold(base.to_path_buf(), |p, part| p.join(part))
+}
+
+/// The roots of the fixed drives this PC has (`C:\`, `D:\`, ...), enumerated by the OS: a drive letter is searched whatever it
+/// is. Windows only; elsewhere there are none.
+#[cfg(windows)]
+pub fn fixed_drive_roots() -> Vec<PathBuf> {
+    const DRIVE_FIXED: u32 = 3;
+    const DRIVE_LETTERS: u32 = 26;
+    extern "system" {
+        #[link_name = "GetLogicalDrives"]
+        fn get_logical_drives() -> u32;
+        #[link_name = "GetDriveTypeW"]
+        fn get_drive_type_w(root: *const u16) -> u32;
+    }
+    let mask = unsafe { get_logical_drives() };
+    (0..DRIVE_LETTERS)
+        .filter(|&bit| mask & (1u32 << bit) != 0)
+        .filter_map(|bit| {
+            let root = format!("{}:\\", char::from(b'A' + bit as u8));
+            let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+            (unsafe { get_drive_type_w(wide.as_ptr()) } == DRIVE_FIXED).then(|| PathBuf::from(root))
+        })
+        .collect()
+}
+
+/// The roots of the fixed drives this PC has. Only Windows has drive letters; elsewhere there are none.
+#[cfg(not(windows))]
+pub fn fixed_drive_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// The folders that hold an `echovr.exe`, in search order: each drive root and each search root, joined with each
+/// `FIND_FOLDERS` entry and then each `FIND_SUFFIXES` layout. A folder is reported once, whatever the case of its spelling.
+/// A folder no drive or library has is simply absent (the file is looked for with `is_file`, which answers false).
+pub fn find_installs(drives: &[PathBuf], search_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut bases: Vec<PathBuf> = drives.iter().flat_map(|d| FIND_FOLDERS.iter().map(move |f| join_parts(d, f))).collect();
+    bases.extend(search_roots.iter().cloned());
+    let mut seen = BTreeSet::new();
+    let mut found = Vec::new();
+    for base in &bases {
+        for suffix in FIND_SUFFIXES {
+            let folder = join_parts(base, suffix);
+            if !folder.join(EXE_NAME).is_file() {
+                continue;
+            }
+            if seen.insert(folder.to_string_lossy().to_ascii_lowercase()) {
+                found.push(folder);
+            }
+        }
+    }
+    found
 }
 
 /// The newest process main log in `logs` (names sort by time), or None when the folder holds none.

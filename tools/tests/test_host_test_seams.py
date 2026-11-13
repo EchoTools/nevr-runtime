@@ -66,12 +66,28 @@ class StrayDefinitionTest(unittest.TestCase):
             "a #cmakedefine in a template": ("src/runtime/host/config.h.in", f"#cmakedefine {DEFINE}\n"),
             "a #define in a template": ("src/runtime/host/config.h.in", f"#define {DEFINE} 1\n"),
             "a #define in an .inl": ("src/runtime/host/seams.inl", f"#define {DEFINE} 1\n"),
+            "a gate that is always true in an .inc": ("src/runtime/host/seams.inc", f"#if defined({DEFINE}) || 1\n#endif\n"),
+            "a gate that is always true in a .def": ("src/runtime/host/exports.def", f"#if defined({DEFINE}) || 1\n#endif\n"),
+            "an always-true gate after a block comment": ("src/runtime/host/runtime_rendezvous.h",
+                                                          f"/* x */ #if defined({DEFINE}) || 1\n#endif\n"),
             "a python build driver": ("tools/build_x.py", f'args = ["-D{DEFINE}"]\n'),
             "a second nevr_host_core line": (CMAKE, ALLOWED_LINE + ALLOWED_LINE.replace("PUBLIC", "PRIVATE")),
         }
         for label, (path, text) in spellings.items():
             with self.subTest(label):
                 self.assertNotEqual(self.offenders({path: text}), [], label)
+
+
+class UnreadableSubjectTest(unittest.TestCase):
+    def test_a_c_source_with_an_undecodable_byte_is_still_scanned(self):
+        # tracked_text_files decodes a C source with errors="replace"; the stray define in it is still found.
+        text = (b"int x; \xff\n#if defined(" + DEFINE.encode() + b") || 1\n#endif\n").decode("utf-8", errors="replace")
+        self.assertNotEqual(seams.stray_definitions({"src/runtime/host/x.cpp": text}), [])
+
+    def test_a_missing_tool_is_a_reported_failure_not_a_traceback(self):
+        with self.assertRaises(RuntimeError) as caught:
+            seams.run_tool(["nevr-no-such-compiler-for-test"])
+        self.assertIn("could not be run", str(caught.exception))
 
 
 class CompileCommandTest(unittest.TestCase):

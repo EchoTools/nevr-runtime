@@ -20,6 +20,7 @@ FILES = {
                                    'add_executable(thing_test t.cpp)\n'
                                    'target_compile_definitions(x PRIVATE GIT_COMMIT_HASH="a" NEVR_OK=1 NOMINMAX)\n'),
     "extern/old.h": "namespace OldThing {\n}\n",
+    "docs/prose.md": "The brand nEVR is spelled in prose.\nA bad spelling NeVR is still a finding.\n",
 }
 
 
@@ -46,6 +47,12 @@ class NamingInventoryTest(unittest.TestCase):
         self.assertIn("src/runtime/b.cpp:3  [TELEMETRY.DIAG]", out)
         self.assertIn("src/runtime/CMakeLists.txt:1  platform_compat", out)
         self.assertIn("src/runtime/CMakeLists.txt:4  GIT_COMMIT_HASH", out)
+
+    def test_brand_spelling_in_prose_of_a_document_is_not_a_finding(self):
+        out = self.inventory("--category", "spellings")
+        self.assertNotIn("docs/prose.md:1  nEVR", out)  # naming.md: the brand spelling is allowed in document prose
+        self.assertIn("docs/prose.md:2  NeVR", out)  # any other spelling in a document is still a finding
+        self.assertIn("src/runtime/a.h:5  n" "EVR", out)  # a code file keeps its finding
 
     def test_compliant_and_excluded_names_are_not_findings(self):
         out = self.inventory()

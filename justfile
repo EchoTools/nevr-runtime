@@ -900,7 +900,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_server_features --target test_lobby_settings_hook --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_server_frame_wait --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_dronemuzzle_rules --target test_powerboost_rules --target test_dronekill_rules --target test_ec_rules --target test_ecfx_rules --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_resource_sets --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_script_hooks --target test_script_guard --target test_team_ready --target test_station_cells --target test_dot_script --target test_shared_magazine --target test_server_bots --target test_join_hold --target test_deadlock_monitor --target test_arena_rules_hook --target test_cmdline_waiver --target test_broadcaster_allow_incoming --target test_loading_tips --target test_combat_write_gate --target test_combat_bullet_spawn --target test_combat_settings --target test_content_pack --target test_combat_match_type --target test_combat_shipped_settings --target test_orb_pause --target test_rules_button --target test_clock_pause --target test_point_rate --target test_capture_scores --target test_capture_time --target test_unlock_time
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_server_features --target test_lobby_settings_hook --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_server_frame_wait --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_dronemuzzle_rules --target test_powerboost_rules --target test_dronekill_rules --target test_ec_rules --target test_ecfx_rules --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_invite_answer_text --target test_invite_transport --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_resource_sets --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_script_hooks --target test_script_guard --target test_team_ready --target test_station_cells --target test_dot_script --target test_shared_magazine --target test_server_bots --target test_join_hold --target test_deadlock_monitor --target test_arena_rules_hook --target test_cmdline_waiver --target test_broadcaster_allow_incoming --target test_loading_tips --target test_combat_write_gate --target test_combat_bullet_spawn --target test_combat_settings --target test_content_pack --target test_combat_match_type --target test_combat_shipped_settings --target test_orb_pause --target test_rules_button --target test_clock_pause --target test_point_rate --target test_capture_scores --target test_capture_time --target test_unlock_time
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -1250,7 +1250,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_log_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_resource_sets test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_render_config test_render_config_hook test_script_hooks test_script_guard test_team_ready test_rules_button test_station_cells test_dot_script test_shared_magazine test_orb_pause test_clock_pause test_point_rate test_capture_scores test_capture_time test_unlock_time test_server_team_size test_server_frame_wait test_server_bots test_join_hold test_deadlock_monitor test_arena_rules_hook test_server_bots test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_log_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_invite_answer_text test_invite_transport test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_resource_sets test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_render_config test_render_config_hook test_script_hooks test_script_guard test_team_ready test_rules_button test_station_cells test_dot_script test_shared_magazine test_orb_pause test_clock_pause test_point_rate test_capture_scores test_capture_time test_unlock_time test_server_team_size test_server_frame_wait test_server_bots test_join_hold test_deadlock_monitor test_arena_rules_hook test_server_bots test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1364,7 +1364,10 @@ test-quest-data-net: _vcpkg-quest-host
     root="{{ justfile_directory() }}"
     host="$root/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    rm -f -- build/quest-host-data-net/data-net/curl_transport_test build/quest-host-data-net/data-net/data_wiring_test
     (cd src/quest && cmake --preset quest-host-data-net && cmake --build --preset quest-host-data-net)
+    ninja -C build/quest-host-data-net -t targets all > build/quest-host-data-net/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-data-net --targets build/quest-host-data-net/test-programs-targets.txt data-net/curl_transport_test data-net/data_wiring_test
     bin="$root/build/quest-host-data-net/data-net"
     out="build/quest-host-data-net/run"
     rm -rf "$out"
@@ -1491,7 +1494,10 @@ test-quest-tls: _vcpkg-quest-host
     done
     pkg-config --exists libcurl || { echo "test-quest-tls: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
     root="{{ justfile_directory() }}"
+    rm -f -- build/quest-host-tls/tls/curl_ws_tls_test
     (cd src/quest && cmake --preset quest-host-tls && cmake --build --preset quest-host-tls)
+    ninja -C build/quest-host-tls -t targets all > build/quest-host-tls/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-tls --targets build/quest-host-tls/test-programs-targets.txt tls/curl_ws_tls_test
     bin="$root/build/quest-host-tls/tls"
     out="build/quest-host-tls/run"
     rm -rf "$out"
@@ -1616,7 +1622,10 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
     echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
     echo "d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8  $out/lib/lib/arm64-v8a/libpnsrad.so" | sha256sum -c -
+    rm -f -- build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test
     (cd src/quest && cmake --preset quest-host-hooks-pinned && cmake --build --preset quest-host-hooks-pinned)
+    ninja -C build/quest-host-hooks-pinned -t targets all > build/quest-host-hooks-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-hooks-pinned --targets build/quest-host-hooks-pinned/test-programs-targets.txt hooks-pinned/got_pinned_test
     build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" "$out/lib/lib/arm64-v8a/libpnsrad.so"
     # Each combat module's own pinned program (src/quest/combat/README.md rule 6) checks its targets header against the
@@ -1708,7 +1717,10 @@ test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host
     obb="{{ obb }}"
     [ -n "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB names no store OBB" >&2; exit 1; }
     [ -f "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB is not a file: $obb" >&2; exit 1; }
+    rm -f -- build/quest-host-obb-pinned/obb-pinned/obb_pinned_test
     (cd src/quest && cmake --preset quest-host-obb-pinned && cmake --build --preset quest-host-obb-pinned)
+    ninja -C build/quest-host-obb-pinned -t targets all > build/quest-host-obb-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-obb-pinned --targets build/quest-host-obb-pinned/test-programs-targets.txt obb-pinned/obb_pinned_test
     scratch="build/quest-host-obb-pinned/scratch"
     build/quest-host-obb-pinned/obb-pinned/obb_pinned_test "$obb" tools/quest_stock_data.pin "$scratch" | tee "build/quest-host-obb-pinned/run.log"
     rm -rf "$scratch"
@@ -1784,7 +1796,10 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr
     scratch="$out/pinned-scratch"
     rm -rf "$scratch"; mkdir -p "$scratch"
     trap 'rm -rf "$scratch"' EXIT
+    rm -f -- build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test
     (cd src/quest && cmake --preset quest-host-patcher-pinned && cmake --build --preset quest-host-patcher-pinned)
+    ninja -C build/quest-host-patcher-pinned -t targets all > build/quest-host-patcher-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-patcher-pinned --targets build/quest-host-patcher-pinned/test-programs-targets.txt patcher-pinned/libr15_patcher_pinned_test
     timeout 600 build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
@@ -1829,7 +1844,10 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
+    rm -f -- build/quest-host-social-pinned/social-pinned/social_pinned_test
     (cd src/quest && cmake --preset quest-host-social-pinned && cmake --build --preset quest-host-social-pinned)
+    ninja -C build/quest-host-social-pinned -t targets all > build/quest-host-social-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-social-pinned --targets build/quest-host-social-pinned/test-programs-targets.txt social-pinned/social_pinned_test
     social_pinned_test="build/quest-host-social-pinned/social-pinned/social_pinned_test"
     "$social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
@@ -1922,7 +1940,10 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
     unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
+    rm -f -- build/quest-host-integration-pinned/integration-pinned/integration_pinned_test
     (cd src/quest && cmake --preset quest-host-integration-pinned && cmake --build --preset quest-host-integration-pinned)
+    ninja -C build/quest-host-integration-pinned -t targets all > build/quest-host-integration-pinned/test-programs-targets.txt
+    python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-integration-pinned --targets build/quest-host-integration-pinned/test-programs-targets.txt integration-pinned/integration_pinned_test
     build/quest-host-integration-pinned/integration-pinned/integration_pinned_test "$lib/libr15.so"
 
 # --- Verify (closed-loop gate) ---
@@ -2547,6 +2568,39 @@ verify:
         exit 1
     fi
 
+    # --- N122, N124: a config or mode decision logs its outcome at Info ----------
+    # A healthy-but-off server must say so at the default level. Three decision lines:
+    # the UPnP config key (config.cpp, every run), the mapping result (upnp.cpp), and
+    # the telemetry-disabled line on each of its two guards (gameserver_telemetry.cpp).
+    # Each call may break its line after the level, so the file is joined into one line
+    # before the match, and the level must be Info.
+    N122_CF_RC=0; N122_CF=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp) || N122_CF_RC=$?
+    sensor_stage1 "N122 UPnP config line" "src/runtime/lifecycle/config.cpp" "$N122_CF_RC"
+    sensor_nonempty "N122 UPnP config line" "non-comment lines of config.cpp" "$N122_CF"
+    N122_UP_RC=0; N122_UP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/upnp.cpp) || N122_UP_RC=$?
+    sensor_stage1 "N122 UPnP mapping line" "src/runtime/server/upnp.cpp" "$N122_UP_RC"
+    sensor_nonempty "N122 UPnP mapping line" "non-comment lines of upnp.cpp" "$N122_UP"
+    N124_TM_RC=0; N124_TM=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver_telemetry.cpp) || N124_TM_RC=$?
+    sensor_stage1 "N124 telemetry disabled lines" "src/runtime/server/gameserver_telemetry.cpp" "$N124_TM_RC"
+    sensor_nonempty "N124 telemetry disabled lines" "non-comment lines of gameserver_telemetry.cpp" "$N124_TM"
+    N122_CF_J=$(tr '\n' ' ' <<<"$N122_CF")
+    N122_UP_J=$(tr '\n' ' ' <<<"$N122_UP")
+    N124_TM_J=$(tr '\n' ' ' <<<"$N124_TM")
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.UPNP\] config key upnp=' <<<"$N122_CF_J"; then
+        echo "verify: FAIL — N122 config.cpp no longer logs the UPnP config key at Info (config key upnp=)." >&2
+        echo "Without it, a server with UPnP on and a server with UPnP off write the same run log." >&2
+        exit 1
+    fi
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.UPNP\] Port mapping added' <<<"$N122_UP_J"; then
+        echo "verify: FAIL — N122 upnp.cpp no longer logs the port mapping result at Info (Port mapping added)." >&2
+        exit 1
+    fi
+    if ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.GAMESERVER\] No telemetry_uri in config' <<<"$N124_TM_J" || ! grep -qE 'Log\(EchoVR::LogLevel::Info,[[:space:]]*"\[NEVR\.GAMESERVER\] telemetry disabled \(enabled=' <<<"$N124_TM_J"; then
+        echo "verify: FAIL — N124 gameserver_telemetry.cpp no longer logs both telemetry-disabled cases at Info." >&2
+        echo "A server running without telemetry must say so, or deliberate and broken read the same." >&2
+        exit 1
+    fi
+
     # --- N128: a failed hook must report WHICH MinHook error ---------------------
     # N126 made a failed detour visible; N128 made it DIAGNOSABLE. Hooking::Attach
     # captures MH_StatusToString on failure and PatchDetour surfaces it, so the log
@@ -3113,7 +3167,7 @@ verify:
     # no user git configuration or signing key, a fixed identity, no display.
     # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
     just go-tools
-    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.

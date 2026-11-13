@@ -66,8 +66,9 @@ Seen CurrentSeen() noexcept;
 
 // Installs the hook into libr15's OSBuildVersion slot after reading the floor and the original's first instruction from
 // the loaded libr15. True when the slot holds the thunk. A refused install is logged by GotHook and by the hook's own
-// line, and leaves the game's call intact.
-bool Install() noexcept;
+// line, and leaves the game's call intact. The libr15 image is found through `lookup` (production: the loaded library;
+// the host test: a fixture).
+bool Install(sentinel::ImageLookup lookup = sentinel::FindLoadedImage) noexcept;
 
 // The floor read from `image` (a libr15 image): the constant at the pinned address when the image's build ID is the
 // pinned one, else 0. `*source` names the outcome ("pinned", "no_build_id", "build_id_mismatch").

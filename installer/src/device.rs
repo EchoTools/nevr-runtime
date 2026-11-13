@@ -21,7 +21,23 @@ pub trait Device {
     fn push(&self, local: &Path, remote: &str) -> Result<Output, String>;
 }
 
+/// The most bytes one output stream (stdout or stderr) of a call may hold. adb's answers are a few lines; a stream past
+/// this is a fault, reported as an error, never cut short into an answer.
+pub const MAX_OUTPUT_BYTES: u64 = 1 << 20;
+
+/// Reads one output stream to its end, at most `MAX_OUTPUT_BYTES`. A stream over the cap, a read that fails, or bytes
+/// that are not UTF-8 is an error: an unreadable answer is never taken for an empty one.
+fn read_capped<R: Read>(r: R) -> Result<String, String> {
+    let mut buf = Vec::new();
+    r.take(MAX_OUTPUT_BYTES + 1).read_to_end(&mut buf).map_err(|e| format!("reading output: {e}"))?;
+    if buf.len() as u64 > MAX_OUTPUT_BYTES {
+        return Err(format!("output is over {MAX_OUTPUT_BYTES} bytes"));
+    }
+    String::from_utf8(buf).map_err(|_| "output is not valid UTF-8".to_string())
+}
+
 /// Runs `program args...` and returns its exit code and combined stdout and stderr, killing it after `timeout`.
+/// An output stream that is over `MAX_OUTPUT_BYTES` or is not UTF-8 makes the call an error.
 pub fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<Output, String> {
     let mut child = Command::new(program)
         .args(args)
@@ -30,18 +46,10 @@ pub fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cannot run {program}: {e}"))?;
-    let mut out = child.stdout.take().expect("piped");
-    let mut err = child.stderr.take().expect("piped");
-    let t_out = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = out.read_to_string(&mut s);
-        s
-    });
-    let t_err = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = err.read_to_string(&mut s);
-        s
-    });
+    let out = child.stdout.take().expect("piped");
+    let err = child.stderr.take().expect("piped");
+    let t_out = std::thread::spawn(move || read_capped(out));
+    let t_err = std::thread::spawn(move || read_capped(err));
     let started = Instant::now();
     let status = loop {
         match child.try_wait().map_err(|e| format!("{program}: {e}"))? {
@@ -54,8 +62,8 @@ pub fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
             None => std::thread::sleep(Duration::from_millis(50)),
         }
     };
-    let mut text = t_out.join().unwrap_or_default();
-    text.push_str(&t_err.join().unwrap_or_default());
+    let mut text = t_out.join().map_err(|_| format!("{program}: reading stdout panicked"))?.map_err(|e| format!("{program} stdout: {e}"))?;
+    text.push_str(&t_err.join().map_err(|_| format!("{program}: reading stderr panicked"))?.map_err(|e| format!("{program} stderr: {e}"))?);
     Ok(Output { code: status.code().unwrap_or(-1), text })
 }
 
@@ -142,5 +150,21 @@ mod tests {
         let o = run_with_timeout("sh", &["-c", "echo out; echo err >&2; exit 3"], Duration::from_secs(5)).unwrap();
         assert_eq!(o.code, 3);
         assert!(o.text.contains("out") && o.text.contains("err"));
+    }
+
+    #[test]
+    fn output_that_is_not_utf8_is_an_error_not_an_empty_answer() {
+        let e = run_with_timeout("sh", &["-c", "printf '\\377\\376'"], Duration::from_secs(5)).unwrap_err();
+        assert!(e.contains("not valid UTF-8"), "{e}");
+    }
+
+    #[test]
+    fn output_over_the_cap_is_an_error_and_output_at_the_cap_is_kept() {
+        let over = format!("head -c {} /dev/zero", MAX_OUTPUT_BYTES + 1);
+        let e = run_with_timeout("sh", &["-c", &over], Duration::from_secs(5)).unwrap_err();
+        assert!(e.contains("over") && e.contains(&MAX_OUTPUT_BYTES.to_string()), "{e}");
+        let at = format!("head -c {} /dev/zero | tr '\\0' a", MAX_OUTPUT_BYTES);
+        let o = run_with_timeout("sh", &["-c", &at], Duration::from_secs(5)).unwrap();
+        assert_eq!(o.text.len() as u64, MAX_OUTPUT_BYTES);
     }
 }

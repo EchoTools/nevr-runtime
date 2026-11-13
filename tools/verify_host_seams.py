@@ -64,7 +64,8 @@ SHARED_UNIT_SEAMS = {
 # instantiates std::runtime_error's typeinfo).
 LIBRARY_SYMBOL = re.compile(r"\bstd::|_ZT[ISV]St|_ZNSt|_ZSt|\.refptr\.")
 
-C_SUFFIXES = (".h", ".hpp", ".hh", ".hxx", ".c", ".cc", ".cpp", ".cxx", ".inl", ".ipp", ".tpp")
+# .inc and .def files are read as C: a preprocessor line in one is a directive, not a comment.
+C_SUFFIXES = (".h", ".hpp", ".hh", ".hxx", ".c", ".cc", ".cpp", ".cxx", ".inl", ".ipp", ".tpp", ".inc", ".def")
 C_TEMPLATE_SUFFIXES = tuple(suffix + ".in" for suffix in C_SUFFIXES)
 # Files that name the define because they are this check; markdown only describes it.
 EXEMPT_FILES = {"tools/verify_host_seams.py", "tools/tests/test_host_test_seams.py"}
@@ -146,6 +147,15 @@ def define_only_unnamed(with_define, without_define):
                   if name not in without_define and not SEAM_SYMBOL.search(name) and not LIBRARY_SYMBOL.search(name))
 
 
+def run_tool(argv, **kwargs):
+    """subprocess.run that turns a tool that cannot be started (missing compiler or nm) into a RuntimeError the
+    caller reports as a FAIL line, never an uncaught traceback."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, **kwargs)
+    except OSError as error:
+        raise RuntimeError(f"{argv[0]} could not be run: {error}") from error
+
+
 def compile_unit(entry, scratch, with_define):
     """Compile one nevr_host_core unit, with or without the define; returns (object path, flags removed, compiler)."""
     argv = real_compiler_argv(shlex.split(entry["command"]))
@@ -158,7 +168,7 @@ def compile_unit(entry, scratch, with_define):
     else:
         argv += ["-o", str(obj)]
     argv = [a for a in argv if not a.startswith("-fdiagnostics-color")]
-    result = subprocess.run(argv, cwd=entry["directory"], capture_output=True, text=True)
+    result = run_tool(argv, cwd=entry["directory"])
     if result.returncode != 0:
         raise RuntimeError(f"{Path(entry['file']).name} did not compile {'with' if with_define else 'without'} "
                            f"{DEFINE} (rc={result.returncode}):\n{result.stderr}")
@@ -210,7 +220,10 @@ def stray_definitions(files):
                 continue
             code = line.strip()
             if is_c_file(path):
-                if code.startswith("//") or code.startswith("*") or code.startswith("/*"):
+                # A line that is only comments is skipped; a line that carries code after a complete
+                # block comment (`/* x */ #if ... || 1`) is read as code.
+                stripped = without_comments(line).strip()
+                if code.startswith("//") or code.startswith("*") or stripped == "" or stripped.startswith("/*"):
                     continue
                 if GATE_LINE.match(without_comments(line)):
                     continue
@@ -234,7 +247,11 @@ def tracked_text_files():
         if not path.is_file():
             continue
         try:
-            files[name] = path.read_text(encoding="utf-8")
+            if is_c_file(name):
+                # A C source with an undecodable byte is still scanned: the define is ASCII.
+                files[name] = path.read_bytes().decode("utf-8", errors="replace")
+            else:
+                files[name] = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue  # a binary file spells nothing
     return files
@@ -275,7 +292,12 @@ def main(argv):
             continue
         listings = {}
         for label, path in (("without", obj), ("with", obj_with)):
-            listing = subprocess.run([nm, "-C", str(path)], capture_output=True, text=True)
+            try:
+                listing = run_tool([nm, "-C", str(path)])
+            except RuntimeError as error:
+                failures.append(f"{name}: {error}")
+                listings = {}
+                break
             if listing.returncode != 0 or not listing.stdout.strip():
                 failures.append(f"{name}: nm could not read {path} (rc={listing.returncode}): {listing.stderr}")
             listings[label] = listing.stdout

@@ -410,7 +410,7 @@ TEST(NoSpaceWritesNothingAndSaysFreeAndNeededMiB) {
   CHECK(Names(rig.android + "/packages").empty());
   CHECK(rig.probes.empty());
   CHECK(rig.shown.size() == 1 && rig.holds == 1);
-  CHECK(rig.shown[0] == r.message);
+  CHECK(rig.shown.size() > 0 && rig.shown[0] == r.message);
   const std::uint64_t needed = PlacedBytes() + kPackHeadroomBytes;
   const std::string mib_needed = std::to_string((needed + 1048575) / 1048576);
   CHECK(r.message.find("10 MiB free") != std::string::npos);

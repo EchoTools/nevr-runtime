@@ -43,10 +43,14 @@ class SentinelPlatform final : public Platform {
 
   // The game's main level from the source the sentinel set (SetMainLevelSource); none when no source is set.
   MainLevel CurrentMainLevel() override;
-  bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override;
+  bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes, int* fd) override;
   // ReadFile with the difference between "not there" and "not usable". `*why` is a reason token for kUnreadable, "" otherwise.
-  ReadOutcome ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why);
-  void* Open(const std::string& file) override;
+  // With `keepFd`, a read that succeeds leaves its descriptor open in `*keepFd` (the caller closes it through CloseFile);
+  // without it the descriptor is closed here.
+  ReadOutcome ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why,
+                              int* keepFd = nullptr);
+  void* Open(int fd, const std::string& file) override;
+  void CloseFile(int fd) override;
   void Close(void* handle) override;
   void* Symbol(void* handle, const char* name) override;
   std::string GameBuildId() override;

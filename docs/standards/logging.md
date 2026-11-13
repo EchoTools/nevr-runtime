@@ -174,7 +174,7 @@ built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `Wri
 | `host_version`    | The version in the host's own `NEVR-BUILD <version> <commit40>` literal                              |
 | `runtime_version` | The version in `nevr-runtime.dll`'s literal when the host read the file, else `not loaded`           |
 | `detail`          | What is wrong and where, in words: the path searched, the verifier's own words, the Win32 error or the ABI status. When the runtime is absent from the nEVR root and a `nevr-runtime.dll` sits beside `BugSplat64.dll`, it names that folder, says the host does not load that file and names the root to move it to. A piece that does not fit the detail's buffer is left out whole and the detail ends with `[detail incomplete: a path did not fit]` |
-| `log`             | The full path of the host log file that accepted the record (the %TEMP% copy when the primary folder refused it); the record and the line name the same file. Empty when no log file did |
+| `log`             | The full path of the host log file that accepted the record (the one destination; a record the main log refused goes to standard error and names no file); the record and the line name the same file. Empty when no log file did |
 
 | `reason`                 | `stopped` | `code`                    | Meaning                                                                         |
 | ------------------------ | --------- | ------------------------- | ------------------------------------------------------------------------------- |
@@ -353,9 +353,10 @@ retry counts, and stable event markers. Three things are logged as values:
   as it is.
 - A peer's endpoint or lobby id that did not parse, which the operator needs to
   see why a session success was refused, is logged through
-  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value
-  (Rule 15): at most 64 bytes of it, inside double quotes, each non-printable
-  byte, each backslash and each double quote written as `\xNN`, so the text
+  `nevr_remote_text::Escape` (`src/core/remote_text.h`) as a quoted value:
+  at most 64 bytes of it, always inside double quotes, each non-printable
+  byte, each backslash and each double quote written as `\xNN` (Rule 15's
+  `Value` quotes only a value that needs it and writes `\"`, so the two differ), so the text
   cannot end its own field or start another, with its full length beside it
   (`endpoint_len=<n>`, `lobby_len=<n>`, so a cut value says so).
 

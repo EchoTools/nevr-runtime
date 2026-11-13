@@ -28,10 +28,10 @@
  *     frame wait (#2109, patch/server_frame_wait.h): raw pings answered as
  *     they arrive, never an early return.
  *
- * 0e. CSpinWait::WaitForValue — corrected backoff (BUG #14, High)
- *     Original: sleep_ms starts at 10 and decrements to 0 (maximum CPU
- *     at peak contention). Fix: start at 0, increment to 10 (proper
- *     increasing backoff). Adds YieldProcessor() for HT friendliness.
+ * 0e. CSpinWait::WaitForValue — the original's yield phase (BUG #14, High; #2110)
+ *     The original spins with PAUSE up to its spin limit, then Sleep(0) for its first ten
+ *     rounds and Sleep(1) a round after that. The hook keeps that sequence (spin_wait_rules.h)
+ *     and the spin-limit check (N31); PAUSE is YieldProcessor().
  *
  * 0f. CPrecisionSleep::BusyWait — RET patch (BUG #13, High)
  *     Patches first byte to 0xC3 (RET). Eliminates the tight QPC + Sleep(0)
@@ -64,6 +64,7 @@
 #include "runtime/lifecycle/cli.h"              // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
 #include "runtime/patch/http_port_scan.h"       // HTTP session API port scan (#1511)
+#include "runtime/patch/spin_wait_rules.h"      // #2110: the original's yield phase (Sleep(0) x10, then Sleep(1))
 #include "runtime/patch/server_frame_wait_install.h"  // #2109: a server's frame wait
 #endif
 
@@ -377,12 +378,11 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 }
 
 /* --------------------------------------------------------------------
- * Hook 0e — CSpinWait::WaitForValue backoff fix (BUG #14, High)
+ * Hook 0e — CSpinWait::WaitForValue yield phase (BUG #14, High; #2110)
  *
- * Original starts sleep_ms at 10 and decrements to 0 — maximum CPU
- * consumption at peak contention. Fix: start at 0 and increment to
- * 10 (proper increasing backoff). Also adds YieldProcessor() for
- * hyperthreading-friendly spinning.
+ * The original's Sleep argument is `counter <= 0` with the counter starting at 10, so the
+ * first ten yields are Sleep(0) and later rounds Sleep(1). The earlier reading ("the backoff
+ * decreases from 10 ms to 0") was wrong; the disassembly is the source (0x141500ed8-0x141500f33).
  *
  * Signature: void __fastcall(uint32_t* ptr, uint32_t expected, uint32_t mask)
  * -------------------------------------------------------------------- */
@@ -418,16 +418,18 @@ static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expecte
         spin_limit = SPIN_LIMIT_DEFAULT;
     }
 
+    // The original's yield phase (#2110): Sleep(0) for the first ten rounds, then Sleep(1) a round. The rounds are counted
+    // from the wait's start, as the original counts them.
     uint32_t spin_count = 0;
-    uint32_t sleep_ms = 0;  // Start at 0, increase under contention (not inverted)
+    uint32_t rounds_done = 0;
 
     while ((*ptr & mask) != expected) {
         YieldProcessor();  // PAUSE instruction — yields to HT sibling
         spin_count++;
         if (spin_count >= spin_limit) {
-            Sleep(sleep_ms == 0 ? 0 : 1);
+            Sleep(nevr_spin_wait::SleepMsForRound(rounds_done));
             spin_count = 0;
-            if (sleep_ms < 10) sleep_ms++;  // Increasing backoff
+            if (rounds_done < nevr_spin_wait::kYieldRounds) rounds_done++;  // saturates: only the yield phase matters
         }
     }
 }
@@ -629,7 +631,7 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
           (void**)&s_origWaitForValue, "CSpinWait::WaitForValue",
           SPINWAIT_WAIT_FOR_VALUE_PROLOGUE, sizeof(SPINWAIT_WAIT_FOR_VALUE_PROLOGUE),
-          "its backoff decreased (10 to 0 ms) under contention; it now increases (0 to 10 ms) and yields the hyper-thread" },
+          "it yields the hyper-thread with PAUSE, then Sleep(0) for ten rounds and Sleep(1) a round after that, as the game does; the spin limit is bounds-checked (N31)" },
     };
 
     int installed = 0;

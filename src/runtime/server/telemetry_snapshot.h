@@ -89,26 +89,50 @@ constexpr uint64_t PLAYER_PING_OFFSET = 0x8A;
 constexpr uint64_t PLAYER_TEAM_INDEX_OFFSET = 0x8E;
 constexpr uint64_t PLAYER_COUNT_OFFSET = 0xE2;
 
-// Player stats: CR15NetGame + 0x72AC + teamRole * 0x4D08
-// teamRole = flags & 0x1F (5 bits → 0–31), but the actual table capacity
-// is smaller (per-slot data for up to 16 players).  Clamp to prevent OOB
-// reads when a corrupted/edge-case flags byte produces a high index.
-constexpr uint64_t STATS_BASE_OFFSET = 0x72AC;
+// Player stats (#2099): the game's own /session writer reads each stat from the net game's per-slot record, at
+// netGame + slot * STATS_STRIDE + STAT_*. The offsets below are that writer's (echovr.exe 34.4.631547.1). An entry is three
+// words: type at +0, value at +4, count at +8. The writer takes value / count when type == STAT_TYPE_AVERAGE, else value.
+// Entries are 0x30 apart. The slot is clamped to STATS_TABLE_MAX_ENTRIES to prevent an OOB read on a corrupted flags byte.
 constexpr uint64_t STATS_STRIDE = 0x4D08;
 constexpr uint16_t STATS_TABLE_MAX_ENTRIES = 16;
-// Each stat entry: { uint32_t type, uint32_t count, double value } = 16 bytes
-constexpr uint64_t STAT_POINTS = 0x000;
-constexpr uint64_t STAT_GOALS = 0x010;
-constexpr uint64_t STAT_ASSISTS = 0x020;
-constexpr uint64_t STAT_STUNS = 0x030;
-constexpr uint64_t STAT_BLOCKS = 0x040;
-constexpr uint64_t STAT_SAVES = 0x050;
-constexpr uint64_t STAT_INTERCEPTIONS = 0x060;
-constexpr uint64_t STAT_STEALS = 0x070;
-constexpr uint64_t STAT_CATCHES = 0x080;
-constexpr uint64_t STAT_PASSES = 0x090;
-constexpr uint64_t STAT_SHOTS_TAKEN = 0x0A0;
-constexpr uint64_t STAT_POSSESSION_TIME = 0x300;
+constexpr uint32_t STAT_TYPE_AVERAGE = 5;
+constexpr uint64_t STAT_STUNS = 0x7184;
+constexpr uint64_t STAT_BLOCKS = 0x71B4;
+constexpr uint64_t STAT_POINTS = 0x72A4;
+constexpr uint64_t STAT_GOALS = 0x72D4;
+constexpr uint64_t STAT_STEALS = 0x7394;
+constexpr uint64_t STAT_ASSISTS = 0x73C4;
+constexpr uint64_t STAT_SAVES = 0x73F4;
+constexpr uint64_t STAT_SHOTS_TAKEN = 0x7454;
+constexpr uint64_t STAT_PASSES = 0x74B4;
+constexpr uint64_t STAT_CATCHES = 0x74E4;
+constexpr uint64_t STAT_INTERCEPTIONS = 0x7544;
+constexpr uint64_t STAT_POSSESSION_TIME = 0x75A4;  // float value word
+
+constexpr uint64_t STAT_WORD_TYPE = 0;
+constexpr uint64_t STAT_WORD_VALUE = 4;
+constexpr uint64_t STAT_WORD_COUNT = 8;
+
+// One stat as the writer computes it. `netGame` is the net game record; `slot` is clamped by the caller.
+inline uint32_t ReadStatValue(const char* netGame, uint16_t slot, uint64_t off) {
+  const char* entry = netGame + static_cast<uint64_t>(slot) * STATS_STRIDE + off;
+  uint32_t type = 0;
+  uint32_t value = 0;
+  uint32_t count = 0;
+  std::memcpy(&type, entry + STAT_WORD_TYPE, sizeof type);
+  std::memcpy(&value, entry + STAT_WORD_VALUE, sizeof value);
+  std::memcpy(&count, entry + STAT_WORD_COUNT, sizeof count);
+  if (type == STAT_TYPE_AVERAGE) return count == 0 ? 0 : value / count;
+  return value;
+}
+
+// Possession time is a float in the value word (the writer's movss).
+inline uint32_t ReadStatFloat(const char* netGame, uint16_t slot, uint64_t off) {
+  const char* entry = netGame + static_cast<uint64_t>(slot) * STATS_STRIDE + off + STAT_WORD_VALUE;
+  float value = 0.0f;
+  std::memcpy(&value, entry, sizeof value);
+  return static_cast<uint32_t>(value);
+}
 
 // Disc: GameStateData offsets
 constexpr uint64_t DISC_ORIENT_OFFSET = 0xE4;   // float[4] quaternion

@@ -402,11 +402,10 @@ void TelemetryStreamer::RunDiagnostics() {
           teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES);
       teamRole = 0;
     }
-    CHAR* statsBase = ngBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
-    uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
-    uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
-    uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
-    uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
+    uint32_t points = nevr_game_offsets::ReadStatValue(ngBase, teamRole, nevr_game_offsets::STAT_POINTS);
+    uint32_t goals = nevr_game_offsets::ReadStatValue(ngBase, teamRole, nevr_game_offsets::STAT_GOALS);
+    uint32_t assists = nevr_game_offsets::ReadStatValue(ngBase, teamRole, nevr_game_offsets::STAT_ASSISTS);
+    uint32_t stuns = nevr_game_offsets::ReadStatValue(ngBase, teamRole, nevr_game_offsets::STAT_STUNS);
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
         points, goals, assists, stuns);
   }
@@ -525,22 +524,20 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
           teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES, i);
       teamRole = 0;
     }
-    CHAR* statsBase = netGameBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
     auto& s = snap->stats[i];
 
-    // Each stat entry: [4B type][4B count][8B value] — we read the count field at offset +4
-    s.points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
-    s.goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
-    s.assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
-    s.stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
-    s.blocks = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_BLOCKS + 4);
-    s.saves = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SAVES + 4);
-    s.interceptions = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_INTERCEPTIONS + 4);
-    s.steals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STEALS + 4);
-    s.catches = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_CATCHES + 4);
-    s.passes = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_PASSES + 4);
-    s.shotsTaken = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SHOTS_TAKEN + 4);
-    s.possessionTime = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POSSESSION_TIME + 4);
+    s.points = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_POINTS);
+    s.goals = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_GOALS);
+    s.assists = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_ASSISTS);
+    s.stuns = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_STUNS);
+    s.blocks = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_BLOCKS);
+    s.saves = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_SAVES);
+    s.interceptions = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_INTERCEPTIONS);
+    s.steals = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_STEALS);
+    s.catches = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_CATCHES);
+    s.passes = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_PASSES);
+    s.shotsTaken = nevr_game_offsets::ReadStatValue(netGameBase, teamRole, nevr_game_offsets::STAT_SHOTS_TAKEN);
+    s.possessionTime = nevr_game_offsets::ReadStatFloat(netGameBase, teamRole, nevr_game_offsets::STAT_POSSESSION_TIME);
   }
 
   // Disc state

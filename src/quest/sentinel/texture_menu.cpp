@@ -139,6 +139,25 @@ std::string Dump(const Json& doc) {
   return doc.dump(-1, ' ', /*ensure_ascii=*/false, Json::error_handler_t::replace);
 }
 
+// The top-level keys of a document of another shape, for the log (#1823): comma-separated, cut at kTopKeysCap bytes; a document
+// that is not an object is named by its type.
+constexpr std::size_t kTopKeysCap = 200;
+
+std::string TopLevelKeys(const Json& doc) {
+  if (doc.is_array()) return "[array]";
+  if (!doc.is_object()) return "[scalar]";
+  std::string keys;
+  for (auto it = doc.begin(); it != doc.end(); ++it) {
+    if (!keys.empty()) keys += ',';
+    keys += it.key();
+    if (keys.size() > kTopKeysCap) {
+      keys.resize(kTopKeysCap);
+      break;
+    }
+  }
+  return keys;
+}
+
 }  // namespace
 
 const char* StatusName(Status status) noexcept {
@@ -157,6 +176,8 @@ Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlip
   WalkMenu(doc, defaultIndex, handFlipIndex, &result);
   if (result.rows == 0) {
     result.status = Status::kShapeMismatch;
+    result.shapeSite = "menu_rows";
+    result.topKeys = TopLevelKeys(doc);
     return result;
   }
   result.status = Status::kRewritten;
@@ -171,6 +192,8 @@ Result RewriteGameSettings(std::string_view text, bool offerHandFlip) {
   WalkGameSettings(doc, offerHandFlip, &result);
   if (result.rows == 0) {
     result.status = Status::kShapeMismatch;
+    result.shapeSite = "settings_rows";
+    result.topKeys = TopLevelKeys(doc);
     return result;
   }
   result.status = Status::kRewritten;

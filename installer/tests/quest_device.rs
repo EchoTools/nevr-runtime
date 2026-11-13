@@ -3,7 +3,9 @@
 //! (PATH), so each holds `BENCH` for its whole length.
 #![cfg(unix)]
 
-use nevr_install::device::{AdbDevice, Device};
+use nevr_install::device::{AdbDevice, Device, MAX_OUTPUT_BYTES};
+use nevr_install::manifest::{Artifact, Content};
+use nevr_install::quest::{roots_hold, MEDIA_ROOT};
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -52,6 +54,10 @@ exit "$(cat "$here/rc.$verb" 2>/dev/null || echo 0)"
 
     fn set(&self, name: &str, text: &str) {
         std::fs::write(self.dir.path().join(name), text).unwrap();
+    }
+
+    fn set_bytes(&self, name: &str, bytes: &[u8]) {
+        std::fs::write(self.dir.path().join(name), bytes).unwrap();
     }
 
     fn calls(&self) -> Vec<String> {
@@ -205,6 +211,46 @@ fn a_nonzero_exit_and_the_output_of_a_call_are_returned_to_the_caller() {
     let o = d.push(Path::new("/w/data.zip"), "/data/local/tmp/_nevr_data.zip").unwrap();
     assert_eq!(o.code, 1);
     assert!(o.text.contains("failed to copy"), "{}", o.text);
+}
+
+#[test]
+fn a_reply_that_is_not_utf8_is_an_error_not_an_empty_answer() {
+    let b = Bench::new(ONE);
+    let d = b.pick(None).unwrap();
+    b.set_bytes("reply.shell", &[0xff, 0xfe, b'\n']);
+    let e = d.shell("getprop ro.product.model", 30).unwrap_err();
+    assert!(e.contains("not valid UTF-8"), "{e}");
+}
+
+#[test]
+fn a_reply_over_the_output_cap_is_an_error() {
+    let b = Bench::new(ONE);
+    let d = b.pick(None).unwrap();
+    b.set_bytes("reply.shell", &vec![b'a'; (MAX_OUTPUT_BYTES + 1) as usize]);
+    let e = d.shell("getprop ro.product.model", 30).unwrap_err();
+    assert!(e.contains("over") && e.contains(&MAX_OUTPUT_BYTES.to_string()), "{e}");
+}
+
+/// Falsifier (#1212): a stat listing that is not UTF-8 must read as a failed read, not as "the data is absent".
+#[test]
+fn an_unreadable_stat_listing_is_a_failed_read_not_an_absent_data_root() {
+    let b = Bench::new(ONE);
+    let d = b.pick(None).unwrap();
+    b.set_bytes("reply.shell", &[0xff, b'\n']);
+    let art = Artifact {
+        kind: "game-data".into(),
+        platform: None,
+        path: "p".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+        android: None,
+        game_data: None,
+        content_pack: None,
+        contents: vec![Content { path: "a.bin".into(), sha256: "0".repeat(64), size: 1 }],
+    };
+    let e = roots_hold(&d, MEDIA_ROOT, &art).unwrap_err();
+    assert_eq!(e.step, 9);
+    assert!(e.msg.contains("not valid UTF-8"), "{}", e.msg);
 }
 
 #[test]

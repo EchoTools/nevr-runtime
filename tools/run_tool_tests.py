@@ -194,7 +194,10 @@ HERMETIC_SET = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_CONFIG_COUNT": str(len(HERMETIC_GIT_CONFIG)),
                 **{f"GIT_CONFIG_{kind}_{i}": text for i, pair in enumerate(HERMETIC_GIT_CONFIG)
                    for kind, text in zip(("KEY", "VALUE"), pair)}}
-HERMETIC_UNSET = ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME")
+# The caller's git authorship and config-parameter variables go too: git sets GIT_CONFIG_PARAMETERS for `git -c` and
+# for aliases, and the authorship ones would name another author in a commit the tests make (#2149).
+HERMETIC_UNSET = ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME", "GIT_CONFIG_PARAMETERS", "GIT_AUTHOR_NAME",
+                  "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
 # Lines the echo may fall behind stdout before it is dropped.
 ECHO_BACKLOG = 10000
 HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)

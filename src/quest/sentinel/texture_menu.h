@@ -56,6 +56,8 @@ struct Result {
   int rows = 0;              // menu: `graphics|msaa` rows turned into the control; settings: removals made
   int pages = 0;             // menu: pages reduced to the one row; settings: page removals made
   int handFlipRows = 0;      // KNOWN-WRONG #2043 menu: Controller Hand Flip rows added under Texture Resolution; settings: its removals made
+  std::string shapeSite;     // #1823, kShapeMismatch: the walk that found no row, "menu_rows" or "settings_rows"; "" otherwise
+  std::string topKeys;       // #1823, kShapeMismatch: the document's top-level keys, comma-separated ("[array]" / "[scalar]" when not an object)
 };
 
 // menu_settings.json -> the Texture Resolution control, and under it, on the same page, the Controller Hand Flip row (hand_flip.h;

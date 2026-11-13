@@ -162,7 +162,7 @@ On the first run that finds the old layout, the runtime moves, and logs every fi
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
 safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved, and nothing is written in the folders it takes files from: no note is left in `_local`, in
 the original game's folder or in the game folder. What it did is in the log, one `[NEVR.ROOT]` line per file. The uninstaller leaves the
-root as it is and puts nothing back: a release that reads the old places finds no login and no plugins until they are copied there.
+root as it is and puts nothing back: a release that reads the old places finds no login and no plugins until they are copied there. Going back to a release that loads plugins from beside `echovr.exe` therefore means copying the files of the root's `plugins\` folder to that folder by hand. The uninstaller does not do it, because it would write into the game folder, which the standing rule forbids.
 
 ### Updating only the host, and going back
 

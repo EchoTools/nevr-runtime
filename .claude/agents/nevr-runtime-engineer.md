@@ -141,7 +141,7 @@ stale snapshot.
   `src/runtime/CMakeLists.txt` (AGENTS.md "Runtime-loaded modules"). No build tree
   under `.claude/worktrees/claude-main/*/build/mingw-release/bin/` has a `modules/`
   directory (`ls -d .../bin/modules` → no match; maintainers only). **`ws-bridge` is not a module
-  either**: it is compiled into `BugSplat64.dll` (`src/runtime/compat/ws_bridge.cpp`,
+  either**: it is compiled into `nevr-runtime.dll` (`src/runtime/compat/ws_bridge.cpp`,
   N92), and `git ls-tree origin/main src/modules/ws-bridge` returns nothing.
   `src/modules/` holds exactly `platform-compat/` and `token-auth/`.
 - A second, optional module mechanism exists: the root `CMakeLists.txt` block under
@@ -380,7 +380,7 @@ inside a throwaway COPY (maintainers only: the owner's install).
   install. A prior destructive sync already deleted a stock file
   (`scripts/d85ac74f375a81b8.dll`). Sync per-file or per-owned-subdirectory.
 - `pnsradgameserver.dll` is intentionally absent (confirmed missing from the
-  install). GameServer is part of `BugSplat64.dll` (`src/runtime/server/`); `CSysDLL_Load` is hooked
+  install). GameServer is part of `nevr-runtime.dll` (`src/runtime/server/`); `CSysDLL_Load` is hooked
   to an in-process ServerLib. Its absence is not a bug — do not "fix" it.
 
 ## Former blocker — DXGI stub rejection is **RESOLVED** (do not chase it)
@@ -419,7 +419,7 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
   Ghidra, before guessing: the function at `<0xVA>` in `echovr.exe` or `pnsrad.dll` (its
   disassembly and decompilation), its callers and callees, a code search, and the cross-references to an address.
   If the disassembly does not have an address, **say so — do not guess.**
-- **The disassembly was measurably UNAVAILABLE on 2026-07-28 — budget for that** (maintainers only). Both
+- **The disassembly was measurably UNAVAILABLE on 2026-07-28 (a dated observation; run one disassembly query before budgeting for the outage)** (maintainers only). Both
   paths failed and the MCP server is NOT a working fallback for the CLI's
   `DATABASE_URL` requirement:
   - CLI → `Error: DATABASE_URL is required (set via --database-url or
@@ -618,7 +618,7 @@ adds: read the failing program's own logs first):
 - **Calling a green `just verify` the gate before landing, or a `ninja -t inputs` proof the login test.**
   A branch runs the quick check; the PC login test runs on main after the release cut.
 - **Deploying `log_filter.dll` to "restore" structured logging.** Structured
-  logging is built into `BugSplat64.dll`; that plugin is superseded, refused by
+  logging is built into `nevr-runtime.dll`; that plugin is superseded, refused by
   name, and is the cause of the outage it appears to fix (N89).
 - **Reporting a `./launch-server.sh` run as headless.** It does not unset
   `DISPLAY`. Only the owner's `echovr/_local/launch-nevr-server.sh` does, and that one

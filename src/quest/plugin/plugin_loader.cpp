@@ -47,6 +47,34 @@ LoadRecord BaseRecord(const PlanEntry& entry, bool configRejected) {
   return record;
 }
 
+// The descriptor ReadFile returned for a load. It is closed when the load ends on any path, after the object has been mapped
+// from it (mapping does not need it open afterwards).
+class FileHold {
+ public:
+  explicit FileHold(Platform& platform) : platform_(platform) {}
+  ~FileHold() { Release(); }
+  FileHold(const FileHold&) = delete;
+  FileHold& operator=(const FileHold&) = delete;
+
+  int* slot() { return &fd_; }
+  int fd() const { return fd_; }
+
+ private:
+  void Release() {
+    if (fd_ < 0) return;
+    const int fd = fd_;
+    fd_ = -1;
+    try {
+      platform_.CloseFile(fd);
+    } catch (const std::exception&) {
+      // A descriptor the platform cannot close is not a reason to fail the load that is already settled.
+    }
+  }
+
+  Platform& platform_;
+  int fd_ = -1;
+};
+
 }  // namespace
 
 Loader::Loader(Platform& platform, Options options) : platform_(platform), options_(options) { g_active.store(this); }
@@ -191,6 +219,7 @@ void Loader::RefreshMainLevel() {
 void Loader::Load(PlanEntry& entry) {
   LoadRecord record = BaseRecord(entry, options_.configRejected);
   void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
+  FileHold file(platform_);  // the one descriptor every check reads and the mapping uses (#1521)
   // The plugin's id as the host knows it: bound around its init and the Shutdown after a failed init, so a handler it registers
   // on the loader's thread is recorded under this id and no other (slot_hook.h).
   slot_hook::Binding binding(entry.item.name.c_str());
@@ -233,9 +262,11 @@ void Loader::Load(PlanEntry& entry) {
     record.libr15Patched = view.patched;
 
     // Everything that decides whether the plugin may run is decided from the file's bytes, before dlopen: mapping a
-    // shared object runs its constructors, so a refusal after the mapping would come after the plugin's own code.
+    // shared object runs its constructors, so a refusal after the mapping would come after the plugin's own code. The bytes
+    // and the descriptor come from one open, and the mapping is made from that descriptor (#1521): a later write under the
+    // name cannot change what is mapped.
     std::vector<std::uint8_t> bytes;
-    if (!platform_.ReadFile(entry.item.file, &bytes)) {
+    if (!platform_.ReadFile(entry.item.file, &bytes, file.slot())) {
       record.sha256 = "unavailable";
       record.pluginBuildId = "unavailable";
       return end(Outcome::kFailed, reason::kFileUnreadable);
@@ -261,7 +292,7 @@ void Loader::Load(PlanEntry& entry) {
     // attach verified as our patch. On any other libr15 (the stock file, or a note with no verified stubs) it is refused.
     if (!view.patched) return end(Outcome::kRefused, reason::kLibR15NotVerified);
 
-    handle = platform_.Open(entry.item.file);
+    handle = platform_.Open(file.fd(), entry.item.file);
     if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);
 
     std::vector<std::string> deprecatedUsed;

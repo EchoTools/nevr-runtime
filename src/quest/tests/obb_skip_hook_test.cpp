@@ -307,6 +307,7 @@ void ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt() {
   QCHECK(SomeLineContains("\"event\":\"data_root\""));
   QCHECK(SomeLineContains("\"result\":\"found\""));
   QCHECK(SomeLineContains("\"source\":\"android_media\""));
+  QCHECK(g_lines.size() == 1);  // the found root is one line, and the game's init adds none (as in the not-found case)
   QCHECK(SomeLineContains("\"level\":\"info\""));  // a root found is an operator line, not a warning (#757)
 }
 

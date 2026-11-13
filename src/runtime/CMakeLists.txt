@@ -1120,6 +1120,16 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
+    # #2099: the per-player stats read at the game writer's offsets (telemetry_snapshot.h). Plain checks, no gtest.
+    add_executable(test_telemetry_stats tests/test_telemetry_stats.cpp)
+    target_include_directories(test_telemetry_stats PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME test_telemetry_stats COMMAND test_telemetry_stats)
+
+    # #2110: the yield phase of CSpinWait::WaitForValue (patch/spin_wait_rules.h). Plain checks, no gtest.
+    add_executable(test_spin_wait_rules tests/test_spin_wait_rules.cpp)
+    target_include_directories(test_spin_wait_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME test_spin_wait_rules COMMAND test_spin_wait_rules)
+
     # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
@@ -1731,6 +1741,13 @@ if(BUILD_TESTING)
     target_include_directories(test_login_refusal PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_login_refusal PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_login_refusal DISCOVERY_MODE PRE_TEST)
+
+    # #1845: the log level of a relative \\?\ path the CreateDirectoryW hook creates (platform-compat's nt_path_log.h): header only, pure.
+    add_executable(test_nt_path_log tests/test_nt_path_log.cpp)
+    set_source_files_properties(tests/test_nt_path_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_nt_path_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nt_path_log PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_nt_path_log DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
@@ -2538,8 +2555,8 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_log_retention.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_log_retention.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk nlohmann_json::nlohmann_json)

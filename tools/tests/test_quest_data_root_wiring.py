@@ -79,10 +79,21 @@ class TheGamesCallPathDoesNoWork(unittest.TestCase):
     game's own thread inside its OBB wait. The host test counts the log lines but cannot see a stat.
     """
 
-    FORBIDDEN = re.compile(
-        r"\b(DirectoryExists|HoldsData|Resolve|ResolveRoot|stat|lstat|fstat|access|open|fopen|opendir|readdir|"
-        r"LogFields|Log|Emit|printf|fprintf|snprintf|syslog|__android_log_print|malloc|new)\b"
-    )
+    # The names each handler body may use: an allowlist, so a name not listed fails whatever it is called. The denylist
+    # that stood here passed any call it did not name (#771).
+    MOUNT_NAMES = frozenset({
+        "if", "callback", "nullptr", "original", "manager", "filename", "key", "data", "return", "g_skipped", "store",
+        "true", "std", "memory_order_release", "g_mountSkipped", "fetch_add", "memory_order_relaxed", "sentinel",
+        "pinned", "kObbStateMounted",
+    })
+    PATH_NAMES = frozenset({
+        "if", "g_skipped", "load", "std", "memory_order_acquire", "return", "original", "manager", "filename",
+        "g_pathServed", "fetch_add", "memory_order_relaxed", "g_root",
+    })
+    DATAROOT_NAMES = frozenset({
+        "const", "char", "redirect", "g_dataRootRedirect", "load", "std", "memory_order_acquire", "nullptr", "if",
+        "return", "original", "g_dataRootServed", "fetch_add", "memory_order_relaxed",
+    })
 
     def handler(self, signature, must_contain):
         source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
@@ -90,17 +101,46 @@ class TheGamesCallPathDoesNoWork(unittest.TestCase):
         self.assertIn(must_contain, body, f"{signature}: the body read is not the handler (a sensor over nothing)")
         return body
 
+    @staticmethod
+    def unlisted(body, allowed):
+        return sorted(set(re.findall(r"[A-Za-z_]\w*", body)) - allowed)
+
     def test_the_mount_handler_does_no_filesystem_or_log_work(self):
         body = self.handler("void MountHandler(", "g_skipped.store")
-        self.assertIsNone(self.FORBIDDEN.search(body), self.FORBIDDEN.search(body))
+        self.assertEqual(self.unlisted(body, self.MOUNT_NAMES), [])
 
     def test_the_path_handler_does_no_filesystem_or_log_work(self):
         body = self.handler("const char* PathHandler(", "g_root.load")
-        self.assertIsNone(self.FORBIDDEN.search(body), self.FORBIDDEN.search(body))
+        self.assertEqual(self.unlisted(body, self.PATH_NAMES), [])
 
     def test_the_data_root_handler_does_no_filesystem_or_log_work(self):
         body = self.handler("const char* DataRootHandler(", "g_dataRootRedirect.load")
-        self.assertIsNone(self.FORBIDDEN.search(body), self.FORBIDDEN.search(body))
+        self.assertEqual(self.unlisted(body, self.DATAROOT_NAMES), [])
+
+
+class AMutantCallIsCaught(unittest.TestCase):
+    """#771: a call the handler does not need, under a name no denylist lists, must fail the sensor. Each mutant here
+    inserts one such call into a real handler body and asserts the sensor reports it."""
+
+    MUTANT_CALL = "  Helper();\n"
+
+    def mutant_of(self, signature, must_contain):
+        body = TheGamesCallPathDoesNoWork().handler(signature, must_contain)
+        return body.replace("{\n", "{\n" + self.MUTANT_CALL, 1)
+
+    def test_the_mount_handler_sensor_catches_an_unlisted_call(self):
+        mutant = self.mutant_of("void MountHandler(", "g_skipped.store")
+        self.assertEqual(TheGamesCallPathDoesNoWork.unlisted(mutant, TheGamesCallPathDoesNoWork.MOUNT_NAMES), ["Helper"])
+
+    def test_the_path_handler_sensor_catches_an_unlisted_call(self):
+        mutant = self.mutant_of("const char* PathHandler(", "g_root.load")
+        self.assertEqual(TheGamesCallPathDoesNoWork.unlisted(mutant, TheGamesCallPathDoesNoWork.PATH_NAMES), ["Helper"])
+
+    def test_the_data_root_handler_sensor_catches_an_unlisted_call(self):
+        mutant = self.mutant_of("const char* DataRootHandler(", "g_dataRootRedirect.load")
+        self.assertEqual(
+            TheGamesCallPathDoesNoWork.unlisted(mutant, TheGamesCallPathDoesNoWork.DATAROOT_NAMES), ["Helper"]
+        )
 
 
 class InstallCallsResolveRootUnconditionally(unittest.TestCase):

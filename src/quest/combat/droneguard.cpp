@@ -80,17 +80,20 @@ struct RunTable {
       const std::int64_t now = NowMs();
       if (freeAt >= 0) {
         std::uintptr_t none = 0;
-        if (!cs[freeAt].compare_exchange_strong(none, c, std::memory_order_relaxed)) continue;  // another thread took it: look again
+        // The start time is stored before the claim (#2355): a sweep that sees the slot taken must read this run's time, not the last run's.
         since[freeAt].store(now, std::memory_order_relaxed);
+        if (!cs[freeAt].compare_exchange_strong(none, c, std::memory_order_relaxed)) continue;  // another thread took it: look again
         open.fetch_add(1, std::memory_order_relaxed);
         return Began::kNew;
       }
       for (unsigned i = 0; i < kRunSlots; ++i) {  // full: reclaim the first slot whose run is stale (the slot stays counted in `open`)
         std::uintptr_t v = cs[i].load(std::memory_order_relaxed);
         if (v == 0 || now - since[i].load(std::memory_order_relaxed) <= kStaleMs) continue;
+        // Stored before the claim too (#2355): a sweep that sees the new run must not read the stale run's time. A failed claim
+        // leaves this slot's time younger than its run, so that run is released up to kRunStaleSeconds later, never sooner.
+        since[i].store(now, std::memory_order_relaxed);
         if (!cs[i].compare_exchange_strong(v, c, std::memory_order_relaxed)) continue;
         g_runsStale.fetch_add(1, std::memory_order_relaxed);
-        since[i].store(now, std::memory_order_relaxed);
         return Began::kNew;
       }
       return Began::kFull;

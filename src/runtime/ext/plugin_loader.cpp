@@ -225,6 +225,7 @@ bool PluginFileStaysInDirectory(const std::string& file) {
 thread_local bool t_pinning = false;  // PluginLoadFilter ignores the loads made while this thread pins
 #ifdef NEVR_TEST_HOOKS
 bool g_failPinning = false;  // a test makes every pin fail with ERROR_ACCESS_DENIED
+std::string g_pinDirectory;  // a test names the directory the pins load from instead of System32 (empty: System32)
 #endif
 
 class PinnedModules {
@@ -246,12 +247,16 @@ class PinnedModules {
       *error = GetLastError();
       return false;
     }
+    std::string directory = system;
+#ifdef NEVR_TEST_HOOKS
+    if (!g_pinDirectory.empty()) directory = g_pinDirectory;
+#endif
     struct Pinning {
       Pinning() { t_pinning = true; }
       ~Pinning() { t_pinning = false; }
     } pinning;
     for (const std::string& name : names) {
-      HMODULE m = LoadLibraryExA((std::string(system) + "\\" + name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+      HMODULE m = LoadLibraryExA((directory + "\\" + name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #ifdef NEVR_TEST_HOOKS
       if (g_failPinning) {
         if (m != nullptr) FreeLibrary(m);
@@ -276,6 +281,14 @@ class PinnedModules {
  private:
   std::vector<HMODULE> modules_;
 };
+
+#ifdef NEVR_TEST_HOOKS
+// A test's pin: the libraries are freed when this returns.
+bool PinForTest(const std::vector<std::string>& names, std::string* failed, DWORD* error) {
+  PinnedModules pins;
+  return pins.Pin(names, failed, error);
+}
+#endif
 
 // #741 (ADR 0010): the plugin file, open for reading with FILE_SHARE_READ only, so no Windows process can
 // write to it or replace it while it is held. StageOne verifies the signature on it and keeps it open
@@ -370,12 +383,40 @@ thread_local std::wstring t_stagedPath;
 thread_local std::wstring t_checkedAsked;
 thread_local std::wstring t_checkedFile;
 
+// The identity of an open file or directory: its volume and file index. Two spellings name one object when these match,
+// whatever path or link leads to it.
+struct FileId {
+  DWORD volume = 0;
+  DWORD indexHigh = 0;
+  DWORD indexLow = 0;
+  bool operator==(const FileId& other) const {
+    return volume == other.volume && indexHigh == other.indexHigh && indexLow == other.indexLow;
+  }
+};
+
+// Opens `path` for its attributes only, sharing everything, and reads its identity (#788).
+bool IdentityOf(const std::wstring& path, FileId* out) {
+  HANDLE h = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  BY_HANDLE_FILE_INFORMATION info = {};
+  const bool ok = GetFileInformationByHandle(h, &info) != 0;
+  CloseHandle(h);
+  if (!ok) return false;
+  out->volume = info.dwVolumeSerialNumber;
+  out->indexHigh = info.nFileIndexHigh;
+  out->indexLow = info.nFileIndexLow;
+  return true;
+}
+
 struct FilterState {
   std::mutex mutex;
   std::wstring dirLower;  // plugins directory, lowercase, backslashes, trailing backslash; empty: filter inactive
   std::wstring appDir;    // the directory that holds the plugins directory (a relative path is tried against it), lowercase, trailing backslash
   std::string dirNarrow;  // the same directory as the loader spells it, for the dependency walk
   std::wstring dirFinal;  // the directory's final path (long names, no prefix, no reparse points), lowercase, trailing backslash
+  FileId dirId;           // the plugins directory's identity, for a name that reaches it through a link (#788)
+  bool dirIdKnown = false;  // false: the identity could not be read, and only the path text is compared
   // Verified files stay open (FILE_SHARE_READ only) for the life of the process: the bytes that were checked
   // are the bytes the real load maps, and nobody can swap them in between or afterwards.
   struct Verified {
@@ -416,7 +457,8 @@ std::string NarrowName(const std::wstring& wide) {
 
 // The final path of an open file or directory: long names resolved, the extended-length prefix removed, the case the
 // file system reports. Windows resolves symbolic links and junctions in it; Wine does not resolve a unix symbolic link
-// to a directory, so a link to the plugins directory is not recognised there (#788).
+// to a directory, so the path text does not show such a link leads to the plugins directory: FileInPluginsDirectory
+// compares identities for that case (#788).
 bool FinalPathOfHandleExact(HANDLE handle, std::wstring* out) {
   std::wstring buf(512, L'\0');
   for (;;) {
@@ -485,10 +527,31 @@ void (*g_afterLateLoadAccepted)(const std::wstring& checked) = nullptr;
 void (*g_afterDependenciesChecked)() = nullptr;
 #endif
 
+// Whether the file `candidate` names sits in the plugins directory, by identity: the directory its text names is the
+// plugins directory. A unix symbolic link to the directory is spelled through here, where the final path does not
+// resolve it (#788). A name or parent that cannot be opened is not in the directory.
+bool ParentIsPluginsDirectory(const FilterState& f, const std::wstring& candidate) {
+  if (!f.dirIdKnown) return false;
+  const size_t sep = candidate.find_last_of(L'\\');
+  if (sep == std::wstring::npos || sep + 1 == candidate.size()) return false;
+  const std::wstring name = candidate.substr(sep + 1);
+  if (name == L"." || name == L"..") return false;
+  FileId parent;
+  if (!IdentityOf(candidate.substr(0, sep + 1), &parent)) return false;
+  return parent == f.dirId;
+}
+
 // Whether `candidate` names a file in the plugins directory, and which one. False: it names nothing there.
 bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate, std::wstring* full) {
   if (FinalPathOf(candidate, full)) {
-    return full->compare(0, f.dirFinal.size(), f.dirFinal) == 0 && full->size() > f.dirFinal.size();
+    if (full->compare(0, f.dirFinal.size(), f.dirFinal) == 0 && full->size() > f.dirFinal.size()) return true;
+    if (!ParentIsPluginsDirectory(f, candidate)) return false;
+    if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PLUGIN] a later load named through a link matched the plugins directory by identity: %s",
+          NarrowName(candidate).c_str());
+    }
+    return true;  // *full keeps the final path the query gave; the open and the check below use that spelling
   }
   if (candidate.compare(0, f.dirLower.size(), f.dirLower) == 0 && candidate.size() > f.dirLower.size()) {
     *full = candidate;  // cannot be resolved (denied, say) but is spelled as a file in the directory: the open decides
@@ -717,6 +780,12 @@ void InstallPluginLoadFilter(const std::string& pluginDir) {
     f.dirFinal.clear();
     if (!f.dirLower.empty() && !FinalPathOf(f.dirLower, &f.dirFinal)) f.dirFinal = f.dirLower;
     if (!f.dirFinal.empty() && f.dirFinal.back() != L'\\') f.dirFinal.push_back(L'\\');
+    f.dirIdKnown = !f.dirLower.empty() && IdentityOf(f.dirLower, &f.dirId);
+    if (!f.dirLower.empty() && !f.dirIdKnown) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] the plugins directory's identity cannot be read: a later load through a link to it is matched "
+          "by its path text only");
+    }
   }
   if (!registered) {
     registered = true;
@@ -1597,6 +1666,10 @@ void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPlu
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
 void TestHook_SetAfterDependenciesChecked(void (*hook)()) { g_afterDependenciesChecked = hook; }
 void TestHook_FailPinning(bool fail) { g_failPinning = fail; }
+void TestHook_SetPinDirectory(const char* directory) { g_pinDirectory = directory != nullptr ? directory : ""; }
+bool TestHook_PinSystemLibraries(const std::vector<std::string>& names, std::string* failed, DWORD* error) {
+  return PinForTest(names, failed, error);
+}
 
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
 
@@ -1618,6 +1691,7 @@ void TestHook_ResetPluginLoadFilter() {
   f.dirLower.clear();
   f.appDir.clear();
   f.dirFinal.clear();
+  f.dirIdKnown = false;
   f.dirNarrow.clear();
   f.verified.clear();  // closes the held handles, so a test can delete or rewrite its files
 }

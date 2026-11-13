@@ -117,7 +117,7 @@ void TheInstallStoresTheDecisionAndWritesOneLine() {
   }
   Fresh();
   const nevr_quest::combat::ModuleResult off = pfx::Install(false);
-  QCHECK(!off.installed && std::string(off.status) == "off_config");
+  QCHECK(!off.installed && off.off && std::string(off.status) == "off_config");
   QCHECK(!pfx::GateOn());
   const std::vector<Line> offLines = Lines("combat_pfx_install");
   QCHECK(offLines.size() == 1U);

@@ -8,6 +8,7 @@
 
 #include <wincrypt.h>
 
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -184,8 +185,9 @@ TEST_F(RealSigned, OneChangedCodeByteIsRefused) {
   ASSERT_GT(bytes_.size(), kFlippedOffset);
   char dir[MAX_PATH] = {};
   ASSERT_GT(GetTempPathA(sizeof(dir), dir), 0u);
+  static std::atomic<std::uint64_t> sequence{0};
   const std::string copy = std::string(dir) + "nevr-real-signed-flipped-" + std::to_string(GetCurrentProcessId()) + "-" +
-                           std::to_string(GetTickCount64()) + ".dll";
+                           std::to_string(GetTickCount64()) + "-" + std::to_string(sequence.fetch_add(1)) + ".dll";
   std::vector<uint8_t> changed = bytes_;
   changed[kFlippedOffset] ^= 0x01;
   {

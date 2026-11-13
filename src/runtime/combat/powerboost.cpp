@@ -390,6 +390,7 @@ void AddSelfDamage(void *cs, uint32_t index, unsigned seconds);
 // on both while that hook is installed (when its prologue check fails, a decline after the last Warning is not flushed).
 std::atomic<unsigned> g_declined{0}, g_declined_written{0};
 std::atomic<ULONGLONG> g_declined_at{0}, g_declined_line_at{0};
+std::atomic<bool> g_declinedThreadLogged{false};  // the Log of the thread Hooked_Heal first runs on (#2348)
 
 // Writes the count of declined markers the last Warning did not cover, once no decline has come for 10 s.
 void FlushDeclined(ULONGLONG now) {
@@ -398,6 +399,14 @@ void FlushDeclined(ULONGLONG now) {
     if (n <= written || now - g_declined_at.load(std::memory_order_relaxed) < 10000) return;
     if (!g_declined_written.compare_exchange_strong(written, n, std::memory_order_relaxed)) return;
     LogWarning("declined markers: %u in all; the ones since the last line are counted, not logged, and none has come for 10 s", n);
+}
+
+// Raises the count the last line covered to n, never lower (#2348): the decline threads and FlushDeclined all write it, so a late
+// store of a smaller count cannot move it back and make a later line repeat a count.
+void RaiseDeclinedWritten(unsigned n) {
+    unsigned w = g_declined_written.load(std::memory_order_relaxed);
+    while (w < n && !g_declined_written.compare_exchange_weak(w, n, std::memory_order_relaxed)) {
+    }
 }
 
 // nEVR port: a marker's kind (use, link, unlink, or a real heal), rez and the encoded value are pbr::Decode
@@ -414,20 +423,22 @@ void __fastcall Hooked_Heal(void *cs, uint32_t index, float amount, uint64_t a4,
         // The first 32 are each written. The 33rd writes one Warning that says the rest are counted, not logged; after it a Warning
         // with the count goes out on the first decline at least 10 s after the last Warning, and FlushDeclined (the heal bubble
         // update, both sides) writes the count once no decline has come for 10 s.
+        if (!g_declinedThreadLogged.exchange(true, std::memory_order_relaxed))
+            Log("declined marker hook first call thread=%lu", static_cast<unsigned long>(GetCurrentThreadId()));
         const ULONGLONG now = GetTickCount64();
+        g_declined_at.store(now, std::memory_order_relaxed);  // the time before the count: a flush that sees the count sees this decline's time (#2348)
         const unsigned n = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;
-        g_declined_at.store(now, std::memory_order_relaxed);
         if (n <= 32) {
-            g_declined_written.store(n, std::memory_order_relaxed);
+            RaiseDeclinedWritten(n);
             LogWarning("marker %.2f for %p/%u declined: its value rounds out of its band; no buff, not a heal", amount, cs, index & 0xffff);
         } else if (n == 33) {
             g_declined_line_at.store(now, std::memory_order_relaxed);
-            g_declined_written.store(n, std::memory_order_relaxed);
+            RaiseDeclinedWritten(n);
             LogWarning("declined markers: %u so far; later ones are counted, not logged, and the count follows at most every 10 s", n);
         } else {
             ULONGLONG last = g_declined_line_at.load(std::memory_order_relaxed);
             if (now - last >= 10000 && g_declined_line_at.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-                g_declined_written.store(n, std::memory_order_relaxed);
+                RaiseDeclinedWritten(n);
                 LogWarning("declined markers: %u so far; the ones since the last line are counted, not logged", n);
             }
         }
@@ -2287,6 +2298,9 @@ void ActivateRemote(void *cs, ULONGLONG now) {
 
 void __fastcall Hooked_BubbleUpdate(void *cs) {
     g_bubble_cs = cs;
+    static std::atomic<bool> s_bubbleThreadLogged{false};
+    if (!s_bubbleThreadLogged.exchange(true, std::memory_order_relaxed))
+        Log("heal bubble update first call thread=%lu", static_cast<unsigned long>(GetCurrentThreadId()));
     ULONGLONG now = GetTickCount64();
     static ULONGLONG offset_read = 0;
     if (now - offset_read >= 1000) {

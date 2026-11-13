@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <string_view>
 
 #if defined(__ANDROID__)
@@ -189,6 +190,11 @@ std::atomic<int> g_jsonRows[kDocuments];
 std::atomic<int> g_jsonPages[kDocuments];
 // KNOWN-WRONG #2043 Controller Hand Flip rows each document's rewrite added or removed (hand_flip.h).
 std::atomic<int> g_jsonHandFlip[kDocuments];
+// #1823: the walk that found no row, and the top-level keys, of each document's last rewrite of another shape (texture_menu.h). The
+// file-read path writes them and the poller copies them into the log line, under g_shapeMutex.
+pthread_mutex_t g_shapeMutex = PTHREAD_MUTEX_INITIALIZER;
+std::string g_shapeSite[kDocuments];
+std::string g_topKeys[kDocuments];
 
 // The document each thread is inside the file read of (kNone: none). Not a thread_local: the .so would get emulated TLS on the hook
 // path (TestNoEmulatedTLSInHookPath). The slots are keyed by pthread_t under a pthread mutex, the sentinel's own lock convention.
@@ -329,6 +335,10 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   g_jsonPages[document].store(r.pages, std::memory_order_relaxed);
   g_jsonHandFlip[document].store(r.handFlipRows, std::memory_order_relaxed);  // KNOWN-WRONG #2043 the interim toggle's rows
   g_jsonStatus[document].store(static_cast<int>(r.status) + 1, std::memory_order_release);
+  pthread_mutex_lock(&g_shapeMutex);
+  g_shapeSite[document] = r.shapeSite;
+  g_topKeys[document] = r.topKeys;
+  pthread_mutex_unlock(&g_shapeMutex);
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
   pthread_mutex_lock(&g_keptMutex);
@@ -879,13 +889,25 @@ int PollLocked() noexcept {
     if (status == 0 || g_logged.json[document]) continue;
     g_logged.json[document] = true;
     const bool ok = status - 1 == static_cast<int>(texture_menu::Status::kRewritten);
-    sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "texture_menu_json",
-                        {{"document", DocumentName(document)},
-                         {"result", texture_menu::StatusName(static_cast<texture_menu::Status>(status - 1))},
-                         {"rows", g_jsonRows[document].load(std::memory_order_relaxed)},
-                         {"pages", g_jsonPages[document].load(std::memory_order_relaxed)},
-                         // KNOWN-WRONG #2043 the Controller Hand Flip rows the rewrite wrote or removed (hand_flip.h).
-                         {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}});
+    pthread_mutex_lock(&g_shapeMutex);
+    const std::string shapeSite = g_shapeSite[document];
+    const std::string topKeys = g_topKeys[document];
+    pthread_mutex_unlock(&g_shapeMutex);
+    std::vector<sentinel::LogField> fields = {
+        {"document", DocumentName(document)},
+        {"result", texture_menu::StatusName(static_cast<texture_menu::Status>(status - 1))},
+        {"rows", g_jsonRows[document].load(std::memory_order_relaxed)},
+        {"pages", g_jsonPages[document].load(std::memory_order_relaxed)},
+        // KNOWN-WRONG #2043 the Controller Hand Flip rows the rewrite wrote or removed (hand_flip.h).
+        {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}};
+    // #1823: a document of another shape also says which walk found no row and its top-level keys (texture_menu.h); a rewritten
+    // document's line is unchanged.
+    if (!shapeSite.empty()) {
+      fields.emplace_back("shape_site", shapeSite.c_str());
+      fields.emplace_back("top_keys", topKeys.c_str());
+    }
+    sentinel::LogFieldList(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "texture_menu_json", fields.data(),
+                           fields.size());
     ++lines;
   }
   lines += SaveChoice();
@@ -1243,6 +1265,10 @@ void ResetForTest() noexcept {
     g_jsonRows[i].store(0);
     g_jsonPages[i].store(0);
     g_jsonHandFlip[i].store(0);  // KNOWN-WRONG #2043
+    pthread_mutex_lock(&g_shapeMutex);
+    g_shapeSite[i].clear();
+    g_topKeys[i].clear();
+    pthread_mutex_unlock(&g_shapeMutex);
   }
   g_logged = Logged();
   g_gate = rules::LookGate();

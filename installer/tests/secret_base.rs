@@ -127,7 +127,7 @@ fn an_artifact_staged_from_a_base_with_a_query_is_logged_with_it() {
     let state = nevr.path().join("update").join("manifest");
     let stored = cli(&["manifest", "verify", "--root", s(root.path()), "--state-dir", s(&state), "--base", &base, "--pins", s(&pins), "--now", NOW]);
     assert_eq!(stored.status.code(), Some(0), "{}", String::from_utf8_lossy(&stored.stdout));
-    let o = cli(&["pc", "stage", "--root", s(nevr.path()), "--state-dir", s(&state), "--base", &base, "--pins", s(&pins), "--now", NOW]);
+    let o = cli(&["pc", "stage", "--root", s(nevr.path()), "--state-dir", s(&state), "--base", &base, "--pins", s(&pins), "--now", NOW, "--dev-nevr-root"]);
     let stdout = String::from_utf8_lossy(&o.stdout).to_string();
     let stderr = String::from_utf8_lossy(&o.stderr).to_string();
     assert_eq!(o.status.code(), Some(0), "{stdout} {stderr}");

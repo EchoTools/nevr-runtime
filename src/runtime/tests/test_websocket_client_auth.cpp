@@ -29,6 +29,9 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <stdexcept>
@@ -236,6 +239,18 @@ void DeliverForTest(WebSocketClient& client, ix::WebSocketMessageType type, cons
   client.TestDeliverMessage(message);
 }
 
+// One ServerDB message as the wire carries it: the magic, the message id, the payload length, the payload.
+std::string EncodeServerDbMessage(EchoVR::SymbolId messageId, const std::string& payload) {
+  constexpr uint64_t kWireMagic = 0xBB8CE7A278BB40F6ULL;
+  std::string frame(sizeof(kWireMagic) + sizeof(messageId) + sizeof(uint64_t) + payload.size(), '\0');
+  const uint64_t length = payload.size();
+  std::memcpy(frame.data(), &kWireMagic, sizeof(kWireMagic));
+  std::memcpy(frame.data() + sizeof(kWireMagic), &messageId, sizeof(messageId));
+  std::memcpy(frame.data() + sizeof(kWireMagic) + sizeof(messageId), &length, sizeof(length));
+  if (!payload.empty()) std::memcpy(frame.data() + frame.size() - payload.size(), payload.data(), payload.size());
+  return frame;
+}
+
 }  // namespace
 
 TEST(WebSocketClientCallbackBoundary, ContainsConnectionHandlerExceptionAndAcceptsNextEvent) {
@@ -277,23 +292,42 @@ TEST(WebSocketClientCallbackBoundary, QueueAppendExceptionReleasesLockForNextMes
   const auto queued = encoder.TestCopyPendingMessages();
   ASSERT_EQ(queued.size(), 1U);
 
-  WebSocketClient client;
-  client.TestSetBeforeReceiveEnqueue([] { throw std::bad_alloc(); });
-  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  // Owned by a shared_ptr so the probe thread below can outlive this function on the failure path.
+  auto client = std::make_shared<WebSocketClient>();
+  client->TestSetBeforeReceiveEnqueue([] { throw std::bad_alloc(); });
+  EXPECT_NO_THROW(DeliverForTest(*client, ix::WebSocketMessageType::Message, queued.front(), true));
   EXPECT_TRUE(LogContains("callback threw and was CONTAINED at=WebSocketClient::OnMessage"));
   EXPECT_TRUE(LogContains("failure=1"));
 
-  client.TestSetBeforeReceiveEnqueue({});
-  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  // The lock must be free for another thread. Re-locking on this thread proves nothing: a leaked std::mutex is
+  // undefined behaviour to re-lock, and a leaked recursive lock would pass. The probe waits on the receive mutex
+  // from a second thread, with a deadline.
+  auto probed = std::make_shared<std::promise<void>>();
+  std::future<void> probedDone = probed->get_future();
+  std::thread probe([client, probed]() {
+    client->TestCopyPendingMessages();
+    probed->set_value();
+  });
+  constexpr auto kProbeDeadline = std::chrono::seconds(5);
+  const bool released = probedDone.wait_for(kProbeDeadline) == std::future_status::ready;
+  if (released) {
+    probe.join();
+  } else {
+    probe.detach();
+  }
+  EXPECT_TRUE(released) << "receive mutex still held by the thread that threw";
+
+  client->TestSetBeforeReceiveEnqueue({});
+  EXPECT_NO_THROW(DeliverForTest(*client, ix::WebSocketMessageType::Message, queued.front(), true));
   int received = 0;
-  client.SetMessageHandler([&](EchoVR::SymbolId id, VOID* bytes, UINT64 size) {
+  client->SetMessageHandler([&](EchoVR::SymbolId id, VOID* bytes, UINT64 size) {
     EXPECT_EQ(id, 0x1234U);
     ASSERT_NE(bytes, nullptr);
     ASSERT_EQ(size, 1U);
     EXPECT_EQ(*static_cast<std::uint8_t*>(bytes), payload);
     ++received;
   });
-  client.ProcessReceivedMessages();
+  client->ProcessReceivedMessages();
   EXPECT_EQ(received, 1);
 }
 
@@ -301,6 +335,27 @@ TEST(WebSocketClientCallbackBoundary, QueueAppendExceptionReleasesLockForNextMes
 // memory runs out. The handler is replaced here to observe the overflow.
 static size_t g_capOverflowCalls = 0;
 static void CountCapOverflow(size_t) { ++g_capOverflowCalls; }
+
+// A frame whose messages are more than the receive queue takes: the receive observer sees every message of the frame, and the
+// queue's drop Warning counts the messages it could not queue and names the first one, so a dropped registration answer or
+// session end is visible to the watchdogs and to the log.
+TEST(WebSocketClientReceive, AFullQueueStillShowsEveryMessageToTheObserverAndNamesTheFirstDropped) {
+  ClearLog();
+  WebSocketClient client;
+  std::vector<EchoVR::SymbolId> observed;
+  client.SetReceiveObserver([&observed](EchoVR::SymbolId msgId, VOID*, UINT64) { observed.push_back(msgId); });
+  constexpr size_t kQueueLimit = 1024;
+  constexpr EchoVR::SymbolId kDroppedId = 0x2222;
+  std::string frame;
+  for (size_t i = 0; i < kQueueLimit; ++i) frame += EncodeServerDbMessage(1, "");
+  frame += EncodeServerDbMessage(kDroppedId, "");
+  DeliverForTest(client, ix::WebSocketMessageType::Message, frame, true);
+  EXPECT_EQ(observed.size(), kQueueLimit + 1);
+  ASSERT_FALSE(observed.empty());
+  EXPECT_EQ(observed.back(), kDroppedId);
+  EXPECT_TRUE(LogContains("dropped 1 frame message"));
+  EXPECT_TRUE(LogContains("first msgId 0x2222"));
+}
 
 TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
   ClearLog();
