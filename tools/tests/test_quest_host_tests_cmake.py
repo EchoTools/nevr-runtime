@@ -239,6 +239,7 @@ PROGRAMS = {
         "auth_core_test",
         "crash_report_quest_test",
         "crash_report_test",
+        "crash_send_test",
         "elf_build_id_test",
         "evr_codec_test",
         "hwdump_core_test",

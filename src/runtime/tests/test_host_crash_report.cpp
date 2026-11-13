@@ -5,6 +5,7 @@
 #include "runtime/host/crash_report_host.h"
 
 #include "core/crash_send.h"
+#include "runtime/host/crash_send_files.h"
 
 #include <gtest/gtest.h>
 
@@ -18,6 +19,13 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+// The status the service answers an accepted report with.
+constexpr int kHttpCreated = 201;
+
+// A file longer than one ReadFile chunk of the host's reader (1 MiB), so a read has to go round its loop.
+constexpr std::size_t kBytesPastTwoChunks = 2 * 1024 * 1024 + 5;
+constexpr std::size_t kSmallLimit = 10;
 
 __declspec(noinline) std::uint64_t AddressInThisExecutable() {
   return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&AddressInThisExecutable)) + 4;
@@ -93,7 +101,7 @@ TEST_F(HostCrashReport, ACrashWithNoRuntimeLeavesAReportTheSenderReads) {
   ASSERT_EQ(reports.size(), 1u);
   EXPECT_EQ(reports[0].filename().string().rfind("nevr-host-", 0), 0u);  // the host's own name, never the runtime's `nevr-crash-`
   std::string text;
-  ASSERT_TRUE(nevr_crash_send::ReadFileBounded(reports[0], 64 * 1024, &text));
+  ASSERT_TRUE(nevr_crash_send::ReadFileBounded(*nevr_host::CrashSendFiles(), reports[0].u8string(), nevr_crash_send::kMaxReportBytes, &text));
   const auto parsed = nevr_crash_send::ParseReport(text);
   ASSERT_TRUE(parsed.has_value()) << text;
   EXPECT_EQ(parsed->signalName, "EXCEPTION_ACCESS_VIOLATION");
@@ -119,13 +127,14 @@ TEST_F(HostCrashReport, ASenderPassTakesIt) {
   static std::vector<std::string> bodies;
   bodies.clear();
   nevr_crash_send::Config config;
-  config.dir = CrashDir();
+  config.dir = CrashDir().u8string();
+  config.files = nevr_host::CrashSendFiles();
   config.url = "https://service.invalid/api/v3/crash-reports";
   config.build = "5.7.1";
   config.platform = "pc";
   config.post = [](void*, const std::string&, const std::string& body, const nevr_crash_send::Timeouts&) {
     bodies.push_back(body);
-    return nevr_crash_send::PostResult{true, 201, 0};
+    return nevr_crash_send::PostResult{true, kHttpCreated, 0};
   };
   config.random = [](std::uint8_t* bytes, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i) bytes[i] = static_cast<std::uint8_t>(i);
@@ -137,6 +146,91 @@ TEST_F(HostCrashReport, ASenderPassTakesIt) {
   EXPECT_EQ(bodies[0].find("rax"), std::string::npos);  // the registers stay in the file
 }
 
+// #1983: the folder is a UTF-8 string and the host's own Fs opens it with the wide calls, so a profile folder with
+// non-ASCII letters (a user name with an accent) is read, marked and given an install id like any other.
+TEST_F(HostCrashReport, ASenderPassTakesAReportFromAFolderWithNonAsciiLetters) {
+  nevr_host::PrepareCrashReport(nullptr);
+  nevr_host::SnapshotModulesForCrashReport();
+  Fault fault;
+  MakeFault(&fault, AddressInThisExecutable());
+  ASSERT_TRUE(nevr_host::WriteCrashReport(&fault.pointers));
+  const std::vector<fs::path> reports = Reports();
+  ASSERT_EQ(reports.size(), 1u);
+  const fs::path accented = root_ / u8"Jos\u00e9-crashes";
+  fs::create_directories(accented);
+  fs::rename(reports[0], accented / reports[0].filename());
+
+  static int posts;
+  posts = 0;
+  nevr_crash_send::Config config;
+  config.dir = accented.u8string();
+  config.files = nevr_host::CrashSendFiles();
+  config.url = "https://service.invalid/api/v3/crash-reports";
+  config.build = "5.7.1";
+  config.platform = "pc";
+  config.post = [](void*, const std::string&, const std::string&, const nevr_crash_send::Timeouts&) {
+    ++posts;
+    return nevr_crash_send::PostResult{true, kHttpCreated, 0};
+  };
+  config.random = [](std::uint8_t* bytes, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) bytes[i] = static_cast<std::uint8_t>(i);
+    return true;
+  };
+  EXPECT_EQ(nevr_crash_send::SendPending(config).sent, 1u);
+  EXPECT_EQ(posts, 1);
+  EXPECT_TRUE(fs::exists(accented / "install-id.txt"));
+  EXPECT_TRUE(fs::exists(accented / (reports[0].filename().string() + ".sent")));
+}
+
+// The host's own file functions behind the sender's Files seam (crash_send_files.cpp).
+TEST_F(HostCrashReport, TheHostFilesReadWriteRenameRemoveAndListLikeTheOldStdFilesystemCode) {
+  const nevr_crash_send::Files& files = *nevr_host::CrashSendFiles();
+  const fs::path folder = root_ / "files";
+  fs::create_directories(folder);
+  const std::string base = folder.u8string();
+  const std::string a = base + "\\a.report.txt";
+  const std::string b = base + "\\b.report.txt";
+
+  // A read longer than one chunk comes back whole, and the limit cuts it.
+  std::string big(kBytesPastTwoChunks, 'x');
+  big[kBytesPastTwoChunks - 1] = 'z';
+  ASSERT_TRUE(files.write(a, big));
+  std::string text;
+  ASSERT_TRUE(files.read(a, kBytesPastTwoChunks, &text));
+  EXPECT_EQ(text, big);
+  ASSERT_TRUE(files.read(a, kSmallLimit, &text));
+  EXPECT_EQ(text.size(), kSmallLimit);
+  EXPECT_FALSE(files.read(base + "\\missing.report.txt", kSmallLimit, &text));
+
+  // A directory is listed and is not a regular file.
+  fs::create_directories(folder / "d.report.txt");
+  std::vector<nevr_crash_send::DirectoryEntry> entries;
+  ASSERT_TRUE(files.list(base, kBytesPastTwoChunks, &entries));
+  std::size_t regular = 0;
+  for (const auto& entry : entries) {
+    if (entry.name == "a.report.txt") {
+      EXPECT_TRUE(entry.regular);
+    }
+    if (entry.name == "d.report.txt") {
+      EXPECT_FALSE(entry.regular);
+    }
+    if (entry.regular) ++regular;
+  }
+  EXPECT_EQ(regular, 1u);
+  EXPECT_EQ(entries.size(), 2u);
+  std::vector<nevr_crash_send::DirectoryEntry> one;
+  ASSERT_TRUE(files.list(base, 1, &one));
+  EXPECT_EQ(one.size(), 1u);
+  EXPECT_FALSE(files.list(base + "\\nowhere", 1, &one));
+
+  // Rename moves the file, and remove takes it.
+  ASSERT_TRUE(files.rename(a, b));
+  EXPECT_FALSE(files.read(a, kSmallLimit, &text));
+  EXPECT_TRUE(files.read(b, kSmallLimit, &text));
+  files.remove(b);
+  EXPECT_FALSE(files.read(b, kSmallLimit, &text));
+}
+
 TEST_F(HostCrashReport, AnAddressInNoKnownModuleIsStillReported) {
   nevr_host::PrepareCrashReport(nullptr);
   nevr_host::SnapshotModulesForCrashReport();
@@ -146,7 +240,7 @@ TEST_F(HostCrashReport, AnAddressInNoKnownModuleIsStillReported) {
   const std::vector<fs::path> reports = Reports();
   ASSERT_EQ(reports.size(), 1u);
   std::string text;
-  ASSERT_TRUE(nevr_crash_send::ReadFileBounded(reports[0], 64 * 1024, &text));
+  ASSERT_TRUE(nevr_crash_send::ReadFileBounded(*nevr_host::CrashSendFiles(), reports[0].u8string(), nevr_crash_send::kMaxReportBytes, &text));
   const auto parsed = nevr_crash_send::ParseReport(text);
   ASSERT_TRUE(parsed.has_value()) << text;
   EXPECT_EQ(parsed->pc.module, "unknown");

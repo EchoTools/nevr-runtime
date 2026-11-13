@@ -15,6 +15,7 @@ set(NEVR_HOST_UNITS
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
     "host/crash_report_host.cpp"
+    "host/crash_send_files.cpp"
     "host/crash_send_host.cpp"
     "host/crash_send_winhttp.cpp"
     "host/file_digest.cpp"

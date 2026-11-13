@@ -113,6 +113,12 @@ HOST_ALLOWED_IMPORT_PREFIXES = ("api-ms-win-crt-",)
 RUNTIME_ONLY_MARKERS = (b"NEVR-PLUGIN-TRUST ", b"[NEVR.PLUGIN]", b"[NEVR.WS]", b"ixwebsocket")
 # The host's sections other than .debug_* end at 0x1f2000; the runtime's image is 0x1c30000.
 HOST_MAX_SIZE_OF_IMAGE = 0x400000
+# The cap on the host's own .text (#1983). SizeOfImage does not see code growth in the stripped host: one object pulling in
+# iostream and locale code made .text 0x188670, under the 0x400000 cap. With that object free of them the host's .text is
+# 0xdcb50 (mingw-release, `x86_64-w64-mingw32-objdump -h`), so the cap is that size rounded up to 0xe0000: room for ordinary
+# growth, none for a standard-library stream or locale layer. A change that needs more raises it here, in the same commit,
+# with the new measurement.
+HOST_MAX_TEXT_SIZE = 0xe0000
 
 # echovr.exe sha256 b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043
 # (PE timestamp 0x6452dff6): nine named imports from BugSplat64.dll, no ordinal imports.
@@ -294,6 +300,15 @@ def check_host_is_thin(objdump_text, blob):
     if loaded > HOST_MAX_SIZE_OF_IMAGE:
         raise ContractError(f"host SizeOfImage is {image['size']:#x} ({loaded:#x} without its .debug_* sections), "
                             f"over the {HOST_MAX_SIZE_OF_IMAGE:#x} cap (runtime code does not belong in the host)")
+    rows = _SECTION_ROW.findall(objdump_text)
+    text = [int(length, 16) for name, length, _vma in rows if name == ".text"]
+    # A dump with a section table (the real run is `objdump -p -h`) and no .text row is a subject this check cannot read.
+    if rows and not text:
+        raise ContractError("host section table has no .text row, so its code size cannot be checked against the "
+                            f"{HOST_MAX_TEXT_SIZE:#x} cap (objdump format changed, or the host has no code)")
+    if text and max(text) > HOST_MAX_TEXT_SIZE:
+        raise ContractError(f"host .text is {max(text):#x}, over the {HOST_MAX_TEXT_SIZE:#x} cap "
+                            "(runtime code does not belong in the host)")
     identity_in(blob, HOST_DLL)
     return image
 

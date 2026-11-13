@@ -174,6 +174,49 @@ std::string ReadAll(const fs::path& path) {
   return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+#ifdef _WIN32
+// std::filesystem over the same seam the host fills with the wide Win32 calls. Test code only: the sender holds none.
+bool TestList(const std::string& dir, std::size_t limit, std::vector<nevr_crash_send::DirectoryEntry>* out) {
+  std::error_code ec;
+  fs::directory_iterator it(fs::u8path(dir), ec);
+  if (ec) return false;
+  for (; it != fs::directory_iterator() && out->size() < limit; it.increment(ec)) {
+    if (ec) break;
+    std::error_code e2;
+    nevr_crash_send::DirectoryEntry entry;
+    entry.name = it->path().filename().u8string();
+    entry.regular = it->is_regular_file(e2) && !e2;
+    const auto when = fs::last_write_time(it->path(), e2);
+    entry.modified = e2 ? 0 : static_cast<std::uint64_t>(when.time_since_epoch().count());
+    out->push_back(std::move(entry));
+  }
+  return true;
+}
+bool TestRead(const std::string& path, std::size_t maxBytes, std::string* out) {
+  std::ifstream in(fs::u8path(path), std::ios::binary);
+  if (!in) return false;
+  out->assign(maxBytes, '\0');
+  in.read(&(*out)[0], static_cast<std::streamsize>(maxBytes));
+  out->resize(static_cast<std::size_t>(in.gcount()));
+  return true;
+}
+bool TestWrite(const std::string& path, const std::string& bytes) {
+  std::ofstream out(fs::u8path(path), std::ios::binary | std::ios::trunc);
+  out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  return static_cast<bool>(out);
+}
+bool TestRename(const std::string& from, const std::string& to) {
+  std::error_code ec;
+  fs::rename(fs::u8path(from), fs::u8path(to), ec);
+  return !ec;
+}
+void TestRemove(const std::string& path) {
+  std::error_code ec;
+  fs::remove(fs::u8path(path), ec);
+}
+const nevr_crash_send::Files TestFiles = {&TestList, &TestRead, &TestWrite, &TestRename, &TestRemove};
+#endif
+
 class CrashSend : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -194,7 +237,10 @@ class CrashSend : public ::testing::Test {
   }
   nevr_crash_send::Config Config() const {
     nevr_crash_send::Config c;
-    c.dir = dir_;
+    c.dir = dir_.u8string();
+#ifdef _WIN32
+    c.files = &TestFiles;  // Windows has no default Files; the host's own is tested in test_host_crash_report
+#endif
     c.url = "https://service.invalid/api/v3/crash-reports";
     c.build = "5.7.1-dev.3+abc1234";
     c.platform = "pc";
@@ -517,6 +563,48 @@ TEST_F(CrashSend, OffWithoutAUrlAnHttpsUrlAFolderOrATransport) {
   EXPECT_EQ(g_events.size(), 4u);
   for (const auto& e : g_events) EXPECT_STREQ(e.event, "off");
   EXPECT_TRUE(Exists("a.report.txt"));
+}
+
+#ifdef _WIN32
+// Windows has no default Files (the narrow C library cannot open a UTF-16 name): a send with none is off and says why.
+TEST_F(CrashSend, OffOnWindowsWithoutFileFunctions) {
+  Report("a");
+  auto c = Config();
+  c.files = nullptr;
+  const auto outcome = nevr_crash_send::SendPending(c);
+  EXPECT_EQ(outcome.sent, 0u);
+  EXPECT_TRUE(g_posted.bodies.empty());
+  ASSERT_EQ(g_events.size(), 1u);
+  EXPECT_STREQ(g_events[0].event, "off");
+  EXPECT_EQ(g_events[0].detail, "no file system");
+  EXPECT_TRUE(Exists("a.report.txt"));
+}
+#endif
+
+// A Files with no write or no rename cannot make the install id: nothing is called through the null, nothing is made.
+TEST_F(CrashSend, NoInstallIdIsMadeWithoutAWriteOrARename) {
+#ifdef _WIN32
+  nevr_crash_send::Files noWrite = TestFiles;
+  nevr_crash_send::Files noRename = TestFiles;
+#else
+  nevr_crash_send::Files noWrite = *nevr_crash_send::PosixFiles();
+  nevr_crash_send::Files noRename = *nevr_crash_send::PosixFiles();
+#endif
+  noWrite.write = nullptr;
+  noRename.rename = nullptr;
+  const std::string folder = dir_.u8string();
+  EXPECT_TRUE(nevr_crash_send::LoadOrCreateInstallId(noWrite, folder, &FakeRandom).empty());
+  EXPECT_TRUE(nevr_crash_send::LoadOrCreateInstallId(noRename, folder, &FakeRandom).empty());
+  EXPECT_FALSE(Exists(nevr_crash_send::kInstallIdName));
+  EXPECT_EQ(g_randomCalls, 0);  // the guard comes before the random bytes are asked for
+}
+
+TEST(CrashSendPaths, JoinPathKeepsTheSeparatorTheFolderUses) {
+  EXPECT_EQ(nevr_crash_send::JoinPath("C:\\Users\\x\\crashes", "a.report.txt"), "C:\\Users\\x\\crashes\\a.report.txt");
+  EXPECT_EQ(nevr_crash_send::JoinPath("/data/crashes", "a.report.txt"), "/data/crashes/a.report.txt");
+  EXPECT_EQ(nevr_crash_send::JoinPath("/data/crashes/", "a"), "/data/crashes/a");
+  EXPECT_EQ(nevr_crash_send::JoinPath("C:\\crashes\\", "a"), "C:\\crashes\\a");
+  EXPECT_EQ(nevr_crash_send::JoinPath("", "a"), "a");
 }
 
 TEST_F(CrashSend, PlainHttpIsForTestsOnly) {

@@ -5,6 +5,11 @@ import importlib.util
 import pathlib
 import unittest
 
+# The host's .text (objdump -h of BugSplat64.dll, mingw-release) on the commit before and after #1983 took the iostream and
+# locale code out of crash_send_host.cpp.obj.
+HOST_TEXT_BEFORE_1983 = 0x188670
+HOST_TEXT_AFTER_1983 = 0xdcb50
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location(
     "verify_pe_contract", REPO / "tools" / "verify_pe_contract.py")
@@ -243,9 +248,9 @@ class ThinHostTest(unittest.TestCase):
 
     def test_debug_sections_do_not_count_toward_the_cap(self):
         # The toolchain's static libstdc++ carries DWARF; a host of 0x1f2000 mapped bytes is thin whatever it adds.
-        sections = (" 0 .text   00188670  0000000180001000  0000000180001000  00000400  2**4\n"
+        sections = (" 0 .text   %08x  0000000180001000  0000000180001000  00000400  2**4\n"
                     " 1 .reloc  000017ac  00000001801f0000  00000001801f0000  00000800  2**2\n"
-                    " 2 .debug_info 007455fc  0000000180203000  0000000180203000  00000c00  2**0\n")
+                    " 2 .debug_info 007455fc  0000000180203000  0000000180203000  00000c00  2**0\n") % HOST_TEXT_AFTER_1983
         dump = thin_host_dump(size=0xdd2000) + sections
         image = contract.check_host_is_thin(dump, b"MZ" + identity())
         self.assertEqual(image["loaded_size"], 0x1f2000)
@@ -255,6 +260,25 @@ class ThinHostTest(unittest.TestCase):
                     " 1 .debug_info 00001000  0000000181501000  0000000181501000  00000c00  2**0\n")
         with self.assertRaisesRegex(contract.ContractError, "without its .debug_"):
             contract.check_host_is_thin(thin_host_dump(size=0x1502000) + sections, b"MZ" + identity())
+
+    def test_the_hosts_text_section_has_its_own_cap(self):
+        # #1983: the host's SizeOfImage cap does not see code growth. One object that pulled in iostream and locale code made
+        # .text 0x188670 under the 0x400000 cap; with it free of them .text is 0xdcb50 (mingw-release, objdump -h).
+        row = " 0 .text   %08x  0000000180001000  0000000180001000  00000400  2**4\n"
+        for size in (HOST_TEXT_AFTER_1983, contract.HOST_MAX_TEXT_SIZE):
+            with self.subTest(size=size):
+                contract.check_host_is_thin(thin_host_dump() + row % size, b"MZ" + identity())
+        for size in (contract.HOST_MAX_TEXT_SIZE + 1, HOST_TEXT_BEFORE_1983):
+            with self.subTest(size=size):
+                with self.assertRaisesRegex(contract.ContractError, rf"host \.text is {size:#x}.*over the "
+                                            rf"{contract.HOST_MAX_TEXT_SIZE:#x} cap"):
+                    contract.check_host_is_thin(thin_host_dump() + row % size, b"MZ" + identity())
+
+    def test_a_section_table_with_no_text_row_is_not_a_pass(self):
+        # #1983: a cap that finds no .text row has checked nothing; with a section table present that is a failure.
+        sections = " 1 .reloc  000017ac  00000001801f0000  00000001801f0000  00000800  2**2\n"
+        with self.assertRaisesRegex(contract.ContractError, r"no \.text row"):
+            contract.check_host_is_thin(thin_host_dump() + sections, b"MZ" + identity())
 
     def test_the_host_is_linked_at_the_image_base_the_game_imports_it_at(self):
         # N146: the DLL the game imports stays at the stock image base, so the game's graphics DLLs load.

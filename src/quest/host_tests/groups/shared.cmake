@@ -9,6 +9,10 @@ nevr_ht_test(service_redirect_test GROUP shared TIMEOUT 120
 # The shared crash report (#1605): what it prints, what it writes and in what order, with the platform seams faked.
 nevr_ht_test(crash_report_test GROUP shared TIMEOUT 120
   SRC src/core/crash_report.cpp src/quest/tests/crash_report_test.cpp)
+# The sender's POSIX file functions (core/crash_send.h, #1983), which the sentinel uses in place of std::filesystem: age order, regular
+# report files only, a bounded read, the .sent mark, the install id, and a whole pass with no Files given.
+nevr_ht_test(crash_send_test GROUP shared HOST TIMEOUT 120
+  SRC src/core/crash_report.cpp src/quest/tests/crash_send_test.cpp)
 # #2129: the report's summary names its final file after the rename (sentinel/crash_summary_rules.h). Header-only rule.
 nevr_ht_test(crash_summary_rules_test GROUP shared TIMEOUT 60
   SRC src/quest/tests/crash_summary_rules_test.cpp)

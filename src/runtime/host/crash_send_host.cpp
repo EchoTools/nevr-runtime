@@ -1,6 +1,7 @@
 #include "runtime/host/crash_send_host.h"
 
 #include "core/crash_send.h"
+#include "runtime/host/crash_send_files.h"
 #include "runtime/host/crash_send_winhttp.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/host_paths.h"
@@ -82,7 +83,8 @@ void StartCrashSend(BootstrapDiagnostics& diagnostics) noexcept {
     g_diagnostics.store(&diagnostics, std::memory_order_release);
     if (CopyEnv(local_app_data, MAX_PATH, L"LOCALAPPDATA") &&
         AppendPath(crashes, MAX_PATH, local_app_data, kCrashesSubdirectory)) {
-      job->config.dir = std::filesystem::path(crashes);
+      job->config.dir = Utf8FromWide(crashes);
+      job->config.files = CrashSendFiles();
     }
     job->config.url = nevr_crash_send::ConfiguredUrl();
     job->config.build = Version();

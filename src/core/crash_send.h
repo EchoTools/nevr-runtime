@@ -35,8 +35,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -48,9 +47,12 @@
 
 #include "core/crash_report.h"
 
-namespace nevr_crash_send {
+#ifndef _WIN32
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
-namespace fs = std::filesystem;
+namespace nevr_crash_send {
 
 // The service's route: nevr-api, POST /v3/crash-reports, no credential, behind the portal's /api prefix. Compiled in
 // because the sender runs before any config, runtime or login exists.
@@ -103,8 +105,81 @@ struct LogEvent {
 };
 using LogFn = void (*)(const LogEvent& event);
 
+// The crash folder, as the sender needs it: paths are UTF-8 strings and the platform does the file work, so this header
+// pulls in no std::filesystem (its path type carries the codecvt and locale code the thin host must not hold, #1983).
+// Every function must not throw. Non-Windows builds (the Quest sentinel, the Linux tests) get PosixFiles() when Config::files is
+// null; Windows has no default because the narrow C library cannot open a UTF-16 name: the host supplies one built on the
+// wide Win32 calls (runtime/host/crash_send_files.h).
+struct DirectoryEntry {
+  std::string name;
+  std::uint64_t modified = 0;  // any clock that orders files by age; equal values order by name
+  bool regular = false;
+};
+
+struct Files {
+  // Up to `limit` entries of `dir`; false when the directory cannot be read.
+  bool (*list)(const std::string& dir, std::size_t limit, std::vector<DirectoryEntry>* out) = nullptr;
+  // At most `maxBytes` of the file; false when it cannot be read.
+  bool (*read)(const std::string& path, std::size_t maxBytes, std::string* out) = nullptr;
+  // Creates or truncates `path` and writes all of `bytes`; false when it cannot.
+  bool (*write)(const std::string& path, const std::string& bytes) = nullptr;
+  bool (*rename)(const std::string& from, const std::string& to) = nullptr;
+  void (*remove)(const std::string& path) = nullptr;
+};
+
+#ifndef _WIN32
+constexpr std::uint64_t kNanosecondsPerSecond = 1000000000ull;
+
+inline bool PosixList(const std::string& dir, std::size_t limit, std::vector<DirectoryEntry>* out) {
+  DIR* d = ::opendir(dir.c_str());
+  if (d == nullptr) return false;
+  while (out->size() < limit) {
+    const dirent* e = ::readdir(d);
+    if (e == nullptr) break;
+    const std::string name = e->d_name;
+    if (name == "." || name == "..") continue;
+    DirectoryEntry entry;
+    entry.name = name;
+    struct stat st = {};
+    if (::stat((dir + "/" + name).c_str(), &st) == 0) {
+      entry.regular = S_ISREG(st.st_mode);
+      entry.modified = static_cast<std::uint64_t>(st.st_mtim.tv_sec) * kNanosecondsPerSecond + static_cast<std::uint64_t>(st.st_mtim.tv_nsec);
+    }
+    out->push_back(std::move(entry));
+  }
+  ::closedir(d);
+  return true;
+}
+
+inline bool PosixRead(const std::string& path, std::size_t maxBytes, std::string* out) {
+  std::FILE* in = std::fopen(path.c_str(), "rb");
+  if (in == nullptr) return false;
+  out->assign(maxBytes, '\0');
+  const std::size_t got = maxBytes == 0 ? 0 : std::fread(&(*out)[0], 1, maxBytes, in);
+  std::fclose(in);
+  out->resize(got);
+  return true;
+}
+
+inline bool PosixWrite(const std::string& path, const std::string& bytes) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr) return false;
+  const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size() && std::fflush(f) == 0;
+  return std::fclose(f) == 0 && ok;
+}
+
+inline bool PosixRename(const std::string& from, const std::string& to) { return std::rename(from.c_str(), to.c_str()) == 0; }
+inline void PosixRemove(const std::string& path) { std::remove(path.c_str()); }
+
+inline const Files* PosixFiles() {
+  static const Files files = {&PosixList, &PosixRead, &PosixWrite, &PosixRename, &PosixRemove};
+  return &files;
+}
+#endif
+
 struct Config {
-  fs::path dir;          // the crash folder; empty turns the send off
+  std::string dir;       // the crash folder, UTF-8; empty turns the send off
+  const Files* files = nullptr;  // null: PosixFiles() where there is one; where there is none (Windows) the send is off
   std::string url;       // empty turns the send off; must be https unless allowPlainHttp
   std::string build;     // the build string
   std::string platform;  // "pc" or "quest"
@@ -393,36 +468,35 @@ inline std::string BuildBody(const Parsed& parsed, const std::string& installId,
 // ---- the crash folder ----
 
 struct Pending {
-  fs::path report;
-  std::string stem;  // the report id the service sees
+  std::string report;  // the full path
+  std::string stem;    // the report id the service sees
 };
 
 inline bool EndsWith(const std::string& text, const std::string& suffix) {
   return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+// <dir>/<name>, with the separator the folder's own path uses.
+inline std::string JoinPath(const std::string& dir, const std::string& name) {
+  if (dir.empty()) return name;
+  const char last = dir.back();
+  if (last == '/' || last == '\\') return dir + name;
+  return dir + (dir.find('\\') != std::string::npos ? '\\' : '/') + name;
+}
+
 // The pending reports in `dir`, oldest first: a regular file named <stem>.report.txt whose stem the service accepts as
 // a report id. Looks at most kMaxEntriesScanned entries. A directory that cannot be read has none.
-inline std::vector<Pending> FindPending(const fs::path& dir) {
-  std::vector<std::pair<fs::file_time_type, Pending>> found;
-  std::error_code ec;
-  fs::directory_iterator it(dir, ec);
-  if (ec) return {};
+inline std::vector<Pending> FindPending(const Files& files, const std::string& dir) {
+  std::vector<DirectoryEntry> entries;
+  if (files.list == nullptr || !files.list(dir, kMaxEntriesScanned, &entries)) return {};
   const std::size_t suffixLength = std::char_traits<char>::length(nevr_crash::kReportSuffix);
-  std::size_t looked = 0;
-  const fs::directory_iterator end;
-  for (; it != end && looked < kMaxEntriesScanned; it.increment(ec), ++looked) {
-    if (ec) break;
-    const std::string name = it->path().filename().u8string();
-    if (!EndsWith(name, nevr_crash::kReportSuffix) || name.size() == suffixLength) continue;
-    std::error_code fileEc;
-    if (!it->is_regular_file(fileEc) || fileEc) continue;
+  std::vector<std::pair<std::uint64_t, Pending>> found;
+  for (const DirectoryEntry& entry : entries) {
+    if (!entry.regular || !EndsWith(entry.name, nevr_crash::kReportSuffix) || entry.name.size() == suffixLength) continue;
     Pending p;
-    p.report = it->path();
-    p.stem = name.substr(0, name.size() - suffixLength);
-    fs::file_time_type when = fs::last_write_time(p.report, fileEc);
-    if (fileEc) when = fs::file_time_type::min();
-    found.emplace_back(when, std::move(p));
+    p.report = JoinPath(dir, entry.name);
+    p.stem = entry.name.substr(0, entry.name.size() - suffixLength);
+    found.emplace_back(entry.modified, std::move(p));
   }
   std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
     return a.first != b.first ? a.first < b.first : a.second.stem < b.second.stem;
@@ -434,39 +508,26 @@ inline std::vector<Pending> FindPending(const fs::path& dir) {
 }
 
 // Reads at most `maxBytes` of a file. False when it cannot be read.
-inline bool ReadFileBounded(const fs::path& path, std::size_t maxBytes, std::string* out) {
-  std::error_code ec;
-  const std::uintmax_t size = fs::file_size(path, ec);
-  if (ec) return false;
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
-  const std::size_t want = static_cast<std::size_t>(std::min<std::uintmax_t>(size, maxBytes));
-  out->assign(want, '\0');
-  in.read(&(*out)[0], static_cast<std::streamsize>(want));
-  out->resize(static_cast<std::size_t>(in.gcount()));
-  return true;
+inline bool ReadFileBounded(const Files& files, const std::string& path, std::size_t maxBytes, std::string* out) {
+  return files.read != nullptr && files.read(path, maxBytes, out);
 }
 
 // <stem>.report.txt becomes <stem>.report.txt<suffix>, which FindPending no longer matches.
-inline bool Mark(const Pending& pending, const char* suffix) {
-  fs::path to = pending.report;
-  to += suffix;
-  std::error_code ec;
-  fs::rename(pending.report, to, ec);
-  return !ec;
+inline bool Mark(const Files& files, const Pending& pending, const char* suffix) {
+  return files.rename != nullptr && files.rename(pending.report, pending.report + suffix);
 }
 
 // The install id: 32 lowercase hex characters in `<dir>/install-id.txt`, made from 16 random bytes the first time a
 // report is to be sent. Empty when it cannot be read or made (then nothing is sent: a send without it could not be
 // counted once).
-inline std::string LoadOrCreateInstallId(const fs::path& dir, RandomFn random) {
-  const fs::path path = dir / kInstallIdName;
+inline std::string LoadOrCreateInstallId(const Files& files, const std::string& dir, RandomFn random) {
+  const std::string path = JoinPath(dir, kInstallIdName);
   std::string text;
-  if (ReadFileBounded(path, 64, &text)) {
+  if (ReadFileBounded(files, path, 64, &text)) {
     while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
     if (IsInstallId(text)) return text;
   }
-  if (random == nullptr) return std::string();
+  if (random == nullptr || files.write == nullptr || files.rename == nullptr) return std::string();
   std::uint8_t bytes[16] = {};
   if (!random(bytes, sizeof(bytes))) return std::string();
   static const char kHex[] = "0123456789abcdef";
@@ -475,19 +536,13 @@ inline std::string LoadOrCreateInstallId(const fs::path& dir, RandomFn random) {
     id.push_back(kHex[b >> 4]);
     id.push_back(kHex[b & 0xf]);
   }
-  fs::path temp = path;
-  temp += ".tmp";
-  {
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-    if (!out) return std::string();
-    out << id << '\n';
-    out.flush();
-    if (!out) return std::string();
+  const std::string temp = path + ".tmp";
+  if (!files.write(temp, id + "\n")) {
+    if (files.remove != nullptr) files.remove(temp);
+    return std::string();
   }
-  std::error_code ec;
-  fs::rename(temp, path, ec);
-  if (ec) {
-    fs::remove(temp, ec);
+  if (!files.rename(temp, path)) {
+    if (files.remove != nullptr) files.remove(temp);
     return std::string();
   }
   return id;
@@ -531,8 +586,16 @@ inline Outcome SendPending(const Config& config) {
     Emit(config, "off", std::string(), 0, 0, 0, "the service URL is not https");
     return outcome;
   }
+  const Files* files = config.files;
+#ifndef _WIN32
+  if (files == nullptr) files = PosixFiles();
+#endif
+  if (files == nullptr) {
+    Emit(config, "off", std::string(), 0, 0, 0, "no file system");
+    return outcome;
+  }
   const auto deadline = std::chrono::steady_clock::now() + config.budget;
-  const std::vector<Pending> pending = FindPending(config.dir);
+  const std::vector<Pending> pending = FindPending(*files, config.dir);
   if (pending.empty()) return outcome;  // nothing crashed since the last start: no record, every start would write one
   std::size_t taken = 0;
   std::string installId;
@@ -543,16 +606,16 @@ inline Outcome SendPending(const Config& config) {
     ++taken;
     std::string text;
     std::optional<Parsed> parsed;
-    if (ReadFileBounded(item.report, kMaxReportBytes, &text)) parsed = ParseReport(text);
+    if (ReadFileBounded(*files, item.report, kMaxReportBytes, &text)) parsed = ParseReport(text);
     if (!IsPlainId(item.stem, 1, 96)) parsed.reset();
     if (!parsed) {
       // A report this parser cannot read will not be readable next start either.
-      Mark(item, kRejectedSuffix);
+      Mark(*files, item, kRejectedSuffix);
       ++outcome.rejected;
       Emit(config, "unreadable", item.stem, 0, 0, text.size(), "the report has no signal and pc line, or its name is not a report id");
       continue;
     }
-    if (installId.empty()) installId = LoadOrCreateInstallId(config.dir, config.random);
+    if (installId.empty()) installId = LoadOrCreateInstallId(*files, config.dir, config.random);
     if (installId.empty()) {
       Emit(config, "install_id_unavailable", item.stem, 0, 0, 0, "the install id could not be read or made; nothing is sent");
       ++outcome.deferred;
@@ -560,7 +623,7 @@ inline Outcome SendPending(const Config& config) {
     }
     const std::string body = BuildBody(*parsed, installId, item.stem, config.build, config.platform, config.headset);
     if (body.size() > kMaxBodyBytes) {
-      Mark(item, kRejectedSuffix);
+      Mark(*files, item, kRejectedSuffix);
       ++outcome.rejected;
       Emit(config, "rejected", item.stem, 0, 0, body.size(), "the body is over the size the service takes");
       continue;
@@ -573,7 +636,7 @@ inline Outcome SendPending(const Config& config) {
     switch (Classify(result)) {
       case Verdict::kAccepted:
         ++outcome.sent;
-        if (!Mark(item, kSentSuffix)) {
+        if (!Mark(*files, item, kSentSuffix)) {
           Emit(config, "sent", item.stem, result.status, 0, body.size(),
                "the report could not be renamed to .sent; the service counts a second send once");
         } else {
@@ -581,7 +644,7 @@ inline Outcome SendPending(const Config& config) {
         }
         break;
       case Verdict::kRejected:
-        Mark(item, kRejectedSuffix);
+        Mark(*files, item, kRejectedSuffix);
         ++outcome.rejected;
         Emit(config, "rejected", item.stem, result.status, 0, body.size(), "the service refused the report for good; it is not offered again");
         break;
