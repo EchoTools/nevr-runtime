@@ -3,7 +3,7 @@
 //
 // The step is run as the sentinel runs it: StepConfig::all_assets on, and all_assets_ready the function the sentinel sets
 // (nevr_quest::cargo::MakeFirstRunWorker, the one MakeProductionFirstRunWorker wraps over libcurl), here over a scripted transport and
-// a scratch cache. The sentinel's own line that sets it (src/quest/sentinel/entry.cpp) is checked by tools/tests/test_whole_game_wiring.py.
+// a scratch cache. The sentinel's own line that sets it (src/quest/sentinel/entry.cpp) is checked by tools/internal/questwiring/whole_game_test.go.
 //
 // Built and run by `just test-quest-data`.
 
