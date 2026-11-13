@@ -17,14 +17,17 @@ using nevr_menu_press::Press;
 using nevr_menu_press::Sender;
 
 constexpr uint64_t kOtherComponent = 0x35ec861316abbb34ULL;  // PLAY's
+constexpr size_t kBufferAlign = alignof(uint64_t);
+constexpr uint64_t kNoActor = 0xffffULL;
+constexpr uint64_t kSeenCount = 12;
 
 // One event as the hook reads it. The sender is "none" (0xffff), so no game space or actor table is needed: the decision
 // has to hold whether or not the sender resolves.
 struct FakeEvent {
-  alignas(8) uint8_t event[nevr_invite_choices::kEventBytes] = {};
+  alignas(kBufferAlign) uint8_t event[nevr_invite_choices::kEventBytes] = {};
   FakeEvent(uint64_t symbol, uint64_t component) {
     Put(nevr_invite_choices::kEventSymbolOffset, symbol);
-    Put(nevr_invite_choices::kEventSenderOffset, 0xffffULL);
+    Put(nevr_invite_choices::kEventSenderOffset, kNoActor);
     Put(nevr_invite_choices::kEventComponentOffset, component);
   }
   void Put(size_t at, uint64_t v) { std::memcpy(event + at, &v, sizeof(v)); }
@@ -82,7 +85,7 @@ TEST(PluginsCardLine, OnePressIsOneTaggedInfoLineWithItsIdentifiers) {
   Press press;
   press.symbol = nevr_invite_choices::kEvtCardClicked;
   press.component = nevr_plugins_card::kPluginsCardComponent;
-  EXPECT_EQ(nevr_plugins_card::PluginsPressLine(press, 12),
+  EXPECT_EQ(nevr_plugins_card::PluginsPressLine(press, kSeenCount),
             "[NEVR.PLUGINMGR] plugins card pressed component=0x35ec861316abbbf1 seen=12 "
             "(no page opens yet; the press is only recorded)");
 }

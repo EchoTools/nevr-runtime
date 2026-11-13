@@ -20,23 +20,44 @@ using nevr_menu_press::Press;
 using nevr_menu_press::Sender;
 
 constexpr uint64_t kNewCardOwner = 0xf67c7e3e9088c0feULL;
+constexpr size_t kBufferAlign = alignof(uint64_t);
+constexpr size_t kSpaceBytes = 0x400;
+constexpr size_t kTableBytes = 0x100;
+constexpr size_t kNameSlots = 16;
+constexpr size_t kLastSlot = kNameSlots - 1;
+constexpr uint64_t kCardSlot = 5;
+constexpr uint64_t kComponentFirst = 0x77;
+constexpr uint64_t kComponentSecond = 0x99;
+constexpr uint64_t kOtherSymbol = 0xabcdULL;
+constexpr uint64_t kNoSenderWord = 0x1234ffffULL;
+constexpr uint64_t kSenderHighBits = 0xabcd0000ULL;
+constexpr uint64_t kLastSlotOwner = 0x1111222233334444ULL;
+constexpr uint64_t kTargetWord = 0x1111;
+constexpr uint64_t kValueWord = 0x2222;
+constexpr uint64_t kExpectedTargetOffset = 0x08;
+constexpr uint64_t kExpectedValueOffset = 0x20;
+constexpr uint64_t kLineSymbol = 0x1122334455667788ULL;
+constexpr uint64_t kLineTarget = 0x1234;
+constexpr uint64_t kLineValue = 0x5;
+constexpr uint64_t kSeenFirst = 42;
+constexpr uint64_t kSeenSecond = 7;
 
 // A game space, its actor table and an event, as buffers in this process, plus a reader that serves only what was
 // registered. `refuse` makes one address unreadable, the way a freed page is.
 struct FakeGame {
-  alignas(8) uint8_t event[nevr_invite_choices::kEventBytes] = {};
-  alignas(8) uint8_t space[0x400] = {};
-  alignas(8) uint8_t table[0x100] = {};
-  alignas(8) uint64_t names[16] = {};
+  alignas(kBufferAlign) uint8_t event[nevr_invite_choices::kEventBytes] = {};
+  alignas(kBufferAlign) uint8_t space[kSpaceBytes] = {};
+  alignas(kBufferAlign) uint8_t table[kTableBytes] = {};
+  alignas(kBufferAlign) uint64_t names[kNameSlots] = {};
   uintptr_t refuse = 0;
   mutable int reads = 0;
 
   FakeGame() {
     Put(space, nevr_invite_choices::kSpaceActorTableOffset, reinterpret_cast<uintptr_t>(table));
     Put(table, nevr_invite_choices::kTableNamesOffset, reinterpret_cast<uintptr_t>(names));
-    Put(table, nevr_invite_choices::kTableCapacityOffset, 16);
-    SetEvent(EchoVR::CSymbol64Hash("evt_something_else"), 5, 0x77);
-    names[5] = kNewCardOwner;
+    Put(table, nevr_invite_choices::kTableCapacityOffset, kNameSlots);
+    SetEvent(EchoVR::CSymbol64Hash("evt_something_else"), kCardSlot, kComponentFirst);
+    names[kCardSlot] = kNewCardOwner;
   }
   static void Put(uint8_t* base, size_t at, uint64_t v) { std::memcpy(base + at, &v, sizeof(v)); }
   void SetWords(uint64_t target, uint64_t value) {
@@ -79,12 +100,12 @@ TEST(MenuPressRead, AnyEventSymbolIsReadWithItsOwnerAndComponent) {
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.symbol, EchoVR::CSymbol64Hash("evt_something_else"));
   EXPECT_EQ(e.owner, kNewCardOwner);
-  EXPECT_EQ(e.component, 0x77u);
+  EXPECT_EQ(e.component, kComponentFirst);
 }
 
 TEST(MenuPressRead, TheWizardsOwnSymbolIsReadTheSameWay) {
   FakeGame game;
-  game.SetEvent(nevr_invite_choices::kEvtCardClicked, 5, nevr_invite_choices::kCardLeft);
+  game.SetEvent(nevr_invite_choices::kEvtCardClicked, kCardSlot, nevr_invite_choices::kCardLeft);
   Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.symbol, nevr_invite_choices::kEvtCardClicked);
@@ -93,17 +114,17 @@ TEST(MenuPressRead, TheWizardsOwnSymbolIsReadTheSameWay) {
 
 TEST(MenuPressRead, ASenderOfFFFFIsNoSenderButTheSymbolAndComponentAreKept) {
   FakeGame game;
-  game.SetEvent(0xabcdULL, 0x1234ffffULL, 0x99);
+  game.SetEvent(kOtherSymbol, kNoSenderWord, kComponentSecond);
   Press e;
   EXPECT_EQ(game.Run(&e), Sender::NoSender);
-  EXPECT_EQ(e.symbol, 0xabcdULL);
-  EXPECT_EQ(e.component, 0x99u);
+  EXPECT_EQ(e.symbol, kOtherSymbol);
+  EXPECT_EQ(e.component, kComponentSecond);
   EXPECT_EQ(e.owner, 0u);
 }
 
 TEST(MenuPressRead, OnlyTheLow16BitsOfTheSenderIndexTheTable) {
   FakeGame game;
-  game.SetEvent(0xabcdULL, 0xabcd0000ULL | 5, 0x99);
+  game.SetEvent(kOtherSymbol, kSenderHighBits | kCardSlot, kComponentSecond);
   Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
   EXPECT_EQ(e.owner, kNewCardOwner);
@@ -112,13 +133,13 @@ TEST(MenuPressRead, OnlyTheLow16BitsOfTheSenderIndexTheTable) {
 TEST(MenuPressRead, AnIndexAtOrPastTheCapacityIsOutOfRange) {
   FakeGame game;
   Press e;
-  game.SetEvent(0xabcdULL, 16, 0x99);
+  game.SetEvent(kOtherSymbol, kNameSlots, kComponentSecond);
   EXPECT_EQ(game.Run(&e), Sender::OutOfRange);
   EXPECT_EQ(e.owner, 0u);
-  game.SetEvent(0xabcdULL, 15, 0x99);
-  game.names[15] = 0x1111222233334444ULL;
+  game.SetEvent(kOtherSymbol, kLastSlot, kComponentSecond);
+  game.names[kLastSlot] = kLastSlotOwner;
   EXPECT_EQ(game.Run(&e), Sender::Resolved);
-  EXPECT_EQ(e.owner, 0x1111222233334444ULL);
+  EXPECT_EQ(e.owner, kLastSlotOwner);
 }
 
 TEST(MenuPressRead, AMissingTableOrNamesArrayIsRefusedNotFollowed) {
@@ -158,36 +179,36 @@ TEST(MenuPressRead, MemoryThatCannotBeReadIsRefusedAtEveryStep) {
   }
   {
     FakeGame game;
-    game.refuse = reinterpret_cast<uintptr_t>(game.names) + 5 * sizeof(uint64_t);
+    game.refuse = reinterpret_cast<uintptr_t>(game.names) + kCardSlot * sizeof(uint64_t);
     EXPECT_EQ(game.Run(&e), Sender::Unreadable);
   }
 }
 
 TEST(MenuPressRead, TheTargetAndTheValueWordsAreReadWithTheRest) {
   FakeGame game;
-  game.SetEvent(0xabcdULL, 5, 0x99);
-  game.SetWords(0x1111, 0x2222);
+  game.SetEvent(kOtherSymbol, kCardSlot, kComponentSecond);
+  game.SetWords(kTargetWord, kValueWord);
   Press e;
   ASSERT_EQ(game.Run(&e), Sender::Resolved);
-  EXPECT_EQ(e.target, 0x1111u);
-  EXPECT_EQ(e.value, 0x2222u);
-  EXPECT_EQ(e.component, 0x99u);
+  EXPECT_EQ(e.target, kTargetWord);
+  EXPECT_EQ(e.value, kValueWord);
+  EXPECT_EQ(e.component, kComponentSecond);
 }
 
 TEST(MenuPressRead, TheTargetAndTheValueAreKeptWhenTheSenderDoesNotResolve) {
   FakeGame game;
-  game.SetEvent(0xabcdULL, 0x1234ffffULL, 0x99);
-  game.SetWords(0x1111, 0x2222);
+  game.SetEvent(kOtherSymbol, kNoSenderWord, kComponentSecond);
+  game.SetWords(kTargetWord, kValueWord);
   Press e;
   EXPECT_EQ(game.Run(&e), Sender::NoSender);
-  EXPECT_EQ(e.target, 0x1111u);
-  EXPECT_EQ(e.value, 0x2222u);
+  EXPECT_EQ(e.target, kTargetWord);
+  EXPECT_EQ(e.value, kValueWord);
 }
 
 TEST(MenuPressRead, TheWordOffsetsAreTheOnesTheGameReads) {
   // SComponentEvent (echovr.exe 0x14050fb60): word 1 is the target space id, word 4 the value.
-  EXPECT_EQ(nevr_menu_press::kEventTargetOffset, 0x08u);
-  EXPECT_EQ(nevr_menu_press::kEventValueOffset, 0x20u);
+  EXPECT_EQ(nevr_menu_press::kEventTargetOffset, kExpectedTargetOffset);
+  EXPECT_EQ(nevr_menu_press::kEventValueOffset, kExpectedValueOffset);
 }
 
 TEST(MenuPressRead, ANullEventOrSpaceIsRefused) {
@@ -203,21 +224,21 @@ TEST(MenuPressRead, ANullEventOrSpaceIsRefused) {
 
 TEST(MenuPressLine, ACardPressIsOneTaggedLineWithTheSymbolOwnerAndComponent) {
   Press e;
-  e.symbol = 0x1122334455667788ULL;
+  e.symbol = kLineSymbol;
   e.owner = kNewCardOwner;
-  e.component = 0x77;
-  e.target = 0x1234;
-  e.value = 0x5;
-  EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::Resolved, 42),
+  e.component = kComponentFirst;
+  e.target = kLineTarget;
+  e.value = kLineValue;
+  EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::Resolved, kSeenFirst),
             "[NEVR.PLUGINMGR] component event read=resolved event=0x1122334455667788 owner=0xf67c7e3e9088c0fe "
             "component=0x77 target=0x1234 value=0x5 seen=42");
 }
 
 TEST(MenuPressLine, AnUnresolvedSenderSaysWhyAndKeepsWhatWasRead) {
   Press e;
-  e.symbol = 0xabcd;
-  e.component = 0x99;
-  EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::NoSender, 7),
+  e.symbol = kOtherSymbol;
+  e.component = kComponentSecond;
+  EXPECT_EQ(nevr_menu_press::PressLine(e, Sender::NoSender, kSeenSecond),
             "[NEVR.PLUGINMGR] component event read=no_sender event=0xabcd owner=0x0 component=0x99 target=0x0 value=0x0 "
             "seen=7");
 }

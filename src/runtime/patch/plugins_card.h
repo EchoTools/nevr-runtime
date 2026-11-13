@@ -30,10 +30,12 @@ inline bool IsPluginsPress(const nevr_menu_press::Press& press) {
   return press.symbol == nevr_invite_choices::kEvtCardClicked && press.component == kPluginsCardComponent;
 }
 
+inline constexpr size_t kPluginsLineBytes = 192;
+
 /// The one Info line for a press: the tag, the component and `seen`, the hook's count of every call, which orders the
 /// lines of one run. The consequence is in the line: nothing opens yet.
 inline std::string PluginsPressLine(const nevr_menu_press::Press& press, uint64_t seen) {
-  char line[192];
+  char line[kPluginsLineBytes];
   std::snprintf(line, sizeof(line),
                 "[NEVR.PLUGINMGR] plugins card pressed component=0x%llx seen=%llu (no page opens yet; the press is only "
                 "recorded)",

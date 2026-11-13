@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "src/runtime/patch/invite_choice_hook.cpp"
 STANDARD = ROOT / "docs/standards/logging.md"
 TAG = "[NEVR.PLUGINMGR]"
+# Install and EnsureHook: the one detour on SendComponentEvent is attached from these two sites.
+EXPECTED_PATCH_DETOURS = 2
 
 
 def strip_comments(text: str) -> str:
@@ -36,7 +38,7 @@ def hook_problems(hook: str) -> list[str]:
         )
     if not re.search(r'Log\(\s*EchoVR::LogLevel::Info,\s*"%s",\s*nevr_plugins_card::PluginsPressLine\(', code):
         problems.append("the plugins press line is not logged at Info through nevr_plugins_card::PluginsPressLine")
-    if code.count("PatchDetour(") != 2:
+    if code.count("PatchDetour(") != EXPECTED_PATCH_DETOURS:
         problems.append("the hook no longer has exactly the two PatchDetour call sites of its one detour (Install and EnsureHook)")
     return problems
 

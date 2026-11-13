@@ -22,11 +22,14 @@ OVERRIDE_FILE = "0xa691ec467180d00c.0xac360e41e4ede056"
 # it (the PLUGINS card). Measured on the override set of #1857, not a layout the game documents.
 TUTORIALS_ID_OFFSET = 4080
 PLUGINS_ID_OFFSET = 5616
+HEX_BASE = 16
+# Size of the stand-in override file the tests below build; it only has to cover both offsets plus an 8-byte id.
+FAKE_OVERRIDE_BYTES = 6000
 
 
 def constant(header: str, name: str) -> int | None:
     match = re.search(rf"\b{name}\s*=\s*(0x[0-9a-fA-F]+)", header)
-    return int(match.group(1), 16) if match else None
+    return int(match.group(1), HEX_BASE) if match else None
 
 
 def ids_in(blob: bytes) -> tuple[int, int]:
@@ -53,7 +56,7 @@ def problems(header: str, blob: bytes) -> list[str]:
 
 
 def blob_with(tutorials: int, plugins: int) -> bytes:
-    blob = bytearray(6000)
+    blob = bytearray(FAKE_OVERRIDE_BYTES)
     struct.pack_into("<Q", blob, TUTORIALS_ID_OFFSET, tutorials)
     struct.pack_into("<Q", blob, PLUGINS_ID_OFFSET, plugins)
     return bytes(blob)

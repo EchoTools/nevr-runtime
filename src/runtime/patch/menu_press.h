@@ -58,11 +58,13 @@ inline Sender ReadPress(Reader&& read, uintptr_t space, uintptr_t event, Press* 
   return nevr_invite_choices::ReadSender(read, space, event, out);
 }
 
+inline constexpr size_t kPressLineBytes = 320;
+
 /// The Debug line for one call: the same shape as the wizard observer's lines ("[NEVR.INVITE] wizard symbol not on a
 /// wizard page read=... owner=0x... component=0x... unresolved=..."). `seen` is the hook's count of every call, the
 /// identifier that orders the lines of one run.
 inline std::string PressLine(const Press& e, Sender sender, uint64_t seen) {
-  char line[320];
+  char line[kPressLineBytes];
   std::snprintf(line, sizeof(line),
                 "[NEVR.PLUGINMGR] component event read=%s event=0x%llx owner=0x%llx component=0x%llx target=0x%llx "
                 "value=0x%llx seen=%llu",
