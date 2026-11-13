@@ -1,4 +1,5 @@
 #include "runtime/log/gpu_hung_notice.h"
+#include "runtime/log/runtime_adapter_note.h"
 
 #include <gtest/gtest.h>
 
@@ -47,6 +48,57 @@ TEST(GpuHungNotice, TheCardAndDriverAreUnknownWhenTheGameHasNotNamedThemYet) {
   EXPECT_EQ(result.action, Action::LogAndNotify);
   EXPECT_NE(result.log_line.find("gpu=\"unknown\""), std::string::npos) << result.log_line;
   EXPECT_NE(result.log_line.find("driver=\"unknown\""), std::string::npos) << result.log_line;
+}
+
+// #1846: the game prints its System Info after the HUNG line, so the runtime's own reading of the adapter (the
+// first render_config line) is what names the card and driver the notice shows.
+TEST(GpuHungNotice, TheRuntimesOwnAdapterNamesTheCardAndDriverBeforeTheGamePrintsThem) {
+  Tracker tracker;
+  tracker.SetKnownAdapter("NVIDIA GeForce RTX 4050 Laptop GPU", "32.0.15.6636");
+  const auto result = tracker.Observe(kHungLine, false, false);
+  EXPECT_EQ(result.action, Action::LogAndNotify);
+  EXPECT_NE(result.log_line.find("gpu=\"NVIDIA GeForce RTX 4050 Laptop GPU\""), std::string::npos) << result.log_line;
+  EXPECT_NE(result.log_line.find("driver=\"32.0.15.6636\""), std::string::npos) << result.log_line;
+  EXPECT_EQ(result.log_line.find("unknown"), std::string::npos) << result.log_line;
+}
+
+TEST(GpuHungNotice, ASystemInfoValueSeenBeforeTheHungLineStillWins) {
+  Tracker tracker;
+  tracker.SetKnownAdapter("RUNTIME CARD", "RUNTIME DRIVER");
+  tracker.Observe("[EVR] Video Card: NVIDIA GeForce RTX 2070 SUPER", false, false);
+  tracker.Observe("[EVR] Driver Version: r566_31 (56636)", false, false);
+  const auto result = tracker.Observe(kHungLine, false, false);
+  EXPECT_NE(result.log_line.find("gpu=\"NVIDIA GeForce RTX 2070 SUPER\""), std::string::npos) << result.log_line;
+  EXPECT_NE(result.log_line.find("driver=\"r566_31 (56636)\""), std::string::npos) << result.log_line;
+}
+
+TEST(GpuHungNotice, AnEmptyKnownAdapterLeavesTheNoticeUnknown) {
+  Tracker tracker;
+  tracker.SetKnownAdapter("", "");
+  const auto result = tracker.Observe(kHungLine, false, false);
+  EXPECT_NE(result.log_line.find("gpu=\"unknown\""), std::string::npos) << result.log_line;
+  EXPECT_NE(result.log_line.find("driver=\"unknown\""), std::string::npos) << result.log_line;
+}
+
+// The runtime's note of its own adapter is process-wide; each test below sets what it reads.
+TEST(RuntimeAdapterNote, AnEmptyOrNullArgumentLeavesTheEarlierValueInPlace) {
+  nevr_gpu_hung::NoteRuntimeAdapter("CARD ONE", "DRIVER ONE");
+  nevr_gpu_hung::NoteRuntimeAdapter("", nullptr);
+  std::string card;
+  std::string driver;
+  nevr_gpu_hung::KnownRuntimeAdapter(card, driver);
+  EXPECT_EQ(card, "CARD ONE");
+  EXPECT_EQ(driver, "DRIVER ONE");
+}
+
+TEST(RuntimeAdapterNote, ALaterValueReplacesTheEarlierOne) {
+  nevr_gpu_hung::NoteRuntimeAdapter("CARD ONE", "DRIVER ONE");
+  nevr_gpu_hung::NoteRuntimeAdapter("CARD TWO", "DRIVER TWO");
+  std::string card;
+  std::string driver;
+  nevr_gpu_hung::KnownRuntimeAdapter(card, driver);
+  EXPECT_EQ(card, "CARD TWO");
+  EXPECT_EQ(driver, "DRIVER TWO");
 }
 
 TEST(GpuHungNotice, TheNoticeIsOnceOnlyPerRun) {

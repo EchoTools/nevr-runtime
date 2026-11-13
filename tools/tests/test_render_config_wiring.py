@@ -48,6 +48,22 @@ def function_body(code: str, signature: str) -> str | None:
     return None
 
 
+def gpu_hung_adapter_problems(filter_text: str) -> list[str]:
+    """#1846: ObserveGpuHung hands the runtime's own adapter to the tracker before it observes the line."""
+    code = strip_comments(filter_text)
+    body = function_body(code, "static void ObserveGpuHung(")
+    if body is None:
+        return ["ObserveGpuHung not found in builtin_filter.cpp"]
+    read = body.find("KnownRuntimeAdapter(")
+    hand = body.find("g_gpuHung.SetKnownAdapter(")
+    observe = body.find("g_gpuHung.Observe(")
+    if read < 0 or hand < 0 or observe < 0:
+        return ["ObserveGpuHung must read KnownRuntimeAdapter, call SetKnownAdapter and call Observe"]
+    if not read < hand < observe:
+        return ["ObserveGpuHung must read the adapter, hand it to the tracker, then observe the line"]
+    return []
+
+
 def poll_call_problems(tick: str) -> list[str]:
     """Poll is called once, inside DispatchPerFrameWork, and nowhere else in tick.cpp."""
     code = strip_comments(tick)
@@ -264,6 +280,23 @@ class RenderConfigWiring(unittest.TestCase):
         self.assertTrue(model_purity_problems(files))
         self.assertTrue(model_purity_problems({"m.cpp": 'void F() { Log(x); }'}))
         self.assertEqual(model_purity_problems({"m.cpp": "// Log( and <windows.h> in a comment only"}), [])
+
+    def test_the_gpu_hung_notice_is_given_the_runtimes_adapter_before_it_observes(self):
+        self.assertEqual(gpu_hung_adapter_problems(FILTER.read_text(encoding="utf-8")), [])
+
+    def test_the_adapter_check_fails_without_each_piece_or_in_the_wrong_order(self):
+        text = FILTER.read_text(encoding="utf-8")
+        hand = "        g_gpuHung.SetKnownAdapter(knownCard, knownDriver);\n"
+        read = "    nevr_gpu_hung::KnownRuntimeAdapter(knownCard, knownDriver);\n"
+        self.assertIn(hand, text)
+        self.assertIn(read, text)
+        self.assertTrue(gpu_hung_adapter_problems(text.replace(hand, "", 1)))
+        self.assertTrue(gpu_hung_adapter_problems(text.replace(read, "", 1)))
+        observe = "        result = g_gpuHung.Observe("
+        self.assertIn(observe, text)
+        late = text.replace(hand, "", 1).replace("g_isHeadless != FALSE);\n", "g_isHeadless != FALSE);\n" + hand, 1)
+        self.assertNotEqual(late, text)
+        self.assertTrue(gpu_hung_adapter_problems(late))
 
     def test_the_tag_is_registered(self):
         self.assertEqual(tag_problems(LOGGING_DOC.read_text(encoding="utf-8")), [])

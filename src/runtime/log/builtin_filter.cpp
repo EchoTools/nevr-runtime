@@ -28,6 +28,7 @@
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
+#include "runtime/log/runtime_adapter_note.h"
 #include "runtime/log/rate_limiter.h"
 #include "runtime/log/log_retention.h"
 #include "core/globals.h"
@@ -926,9 +927,13 @@ static void ObserveGpuHung(const char* line) {
         std::strstr(line, "Driver Version:") == nullptr) {
         return;
     }
+    /* #1846: the adapter the runtime read itself, for a HUNG line that comes before the game's System Info. */
+    std::string knownCard, knownDriver;
+    nevr_gpu_hung::KnownRuntimeAdapter(knownCard, knownDriver);
     nevr_gpu_hung::Result result;
     {
         std::lock_guard<std::mutex> lock(g_gpuHungMutex);
+        g_gpuHung.SetKnownAdapter(knownCard, knownDriver);
         result = g_gpuHung.Observe(line, g_isServer != FALSE, g_isHeadless != FALSE);
     }
     if (result.action == nevr_gpu_hung::Action::None) return;

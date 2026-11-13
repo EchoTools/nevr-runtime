@@ -26,6 +26,7 @@
 #include "core/hooking.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/runtime_adapter_note.h"
 #include "runtime/patch/render_config_hook.h"
 
 namespace {
@@ -346,6 +347,23 @@ TEST_F(RenderConfigHook, TheFirstFrameLineIsLoggedOnceAtInfoWithTheImagesValues)
   EXPECT_NE(trace.find(" apply_calls=2 read_failures=0 "), std::string::npos) << trace;
   EXPECT_NE(trace.find(" last_apply_return=0x"), std::string::npos) << trace;
   EXPECT_NE(trace.find(" boot_return=0x"), std::string::npos) << trace;
+}
+
+// #1846: the first line hands the adapter it read to the GPU-hung notice, which names it when the game's System Info
+// comes after its HUNG line.
+TEST_F(RenderConfigHook, TheFirstFrameLineHandsTheAdapterToTheGpuHungNotice) {
+  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
+  hook::SetBootReturnForTest(hook::LastApplyReturnForTest());
+  ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
+  ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
+
+  hook::Poll(1'000'000);
+  std::string card;
+  std::string driver;
+  nevr_gpu_hung::KnownRuntimeAdapter(card, driver);
+  EXPECT_EQ(card, "NVIDIA GeForce GTX 970");
+  EXPECT_EQ(driver, "31.0.15.3623");
 }
 
 TEST_F(RenderConfigHook, AMsaaChangeThroughTheApplyHookAndANewRefreshRateAreOneChangeLine) {

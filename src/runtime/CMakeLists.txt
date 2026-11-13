@@ -201,6 +201,7 @@ set(PATCHES_SOURCES
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
+    "log/runtime_adapter_note.cpp"
     # #2245: the game's error dialog; the lines it logs are recorded at error.
     "log/error_dialog_level.cpp"
     "log/symcache.cpp"
@@ -1071,9 +1072,10 @@ if(BUILD_TESTING)
       tests/test_url_diagnostics.cpp
       tests/test_gpu_hung_notice.cpp
       tests/test_game_data_notice.cpp
-      log/url_diagnostics.cpp)
+      log/url_diagnostics.cpp
+      log/runtime_adapter_note.cpp)
     set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp
-      tests/test_game_data_notice.cpp log/url_diagnostics.cpp
+      tests/test_game_data_notice.cpp log/url_diagnostics.cpp log/runtime_adapter_note.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -1359,9 +1361,9 @@ if(BUILD_TESTING)
 
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp log/runtime_adapter_note.cpp)
     set_source_files_properties(tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp log/runtime_adapter_note.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_render_config_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS
       NEVR_RENDER_CONFIG_TESTING)
     target_include_directories(test_render_config_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
