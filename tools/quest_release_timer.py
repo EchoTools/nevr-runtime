@@ -15,7 +15,8 @@ Given the published release's tag, this tool finishes the release:
                    else the game data it carries
   worktree         a clean worktree at the tag, set up for a build
   build_slot       waits while two or more ninja processes run
-  build_apk        `just release-quest-apk` in the shared build slice
+  build_apk        `just release-quest-reference-apk` (the APK the manifest lists as quest-apk; at a tag older than
+                   docs/adr/0047, whose justfile has no such recipe, `just release-quest-apk`) in the shared build slice
   publish_apk      tools/publish_quest_apk.py: R2, fetched back, and the manifest claim
   arena_*          the arena APK (the store APK with the loader, no combat), listed as the kind quest-apk-arena in the same
                    manifest publish: arena_gate (the signer takes `--kind`, else `arena_skipped`), arena_build, arena_publish.
@@ -72,7 +73,7 @@ a failure, and that log is the record of each run. A failed step exits 1 and nam
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
 variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY), NEVR_RCLONE_REMOTE, RELEASE_PUBLIC_BASE,
-NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994), NEVR_STORE_APK (the store APK the variant is
+NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-reference-apk` repacks, #1994), NEVR_STORE_APK (the store APK the variant is
 repacked from, a file), ANDROID_NDK_HOME and VCPKG_ROOT (the Quest
 build); a missing one, an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not a vcpkg checkout, and a checkout without
 config/public-defaults.env are refusals that name it. Nothing written is masked.
@@ -101,7 +102,7 @@ from publish_quest_apk import FETCH_TIMEOUT_SECONDS, Failure, Log, NoRedirect, p
 from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
-# NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-apk`, #1994).
+# NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-reference-apk`, #1994).
 # NEVR_STORE_APK is the store APK the variant is repacked from (`just release-quest-variant-apk`); it is read after the main release
 # is published, so a run without it is refused before that, as for the build inputs below.
 # ANDROID_NDK_HOME and VCPKG_ROOT are the inputs of the variant's configure step (`just configure-android`, which the repack's libr15
@@ -144,6 +145,9 @@ LOCAL_TAGS_FORMAT = "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)"
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
+
+# The recipe that builds the reference repack (docs/adr/0047); a tag older than it names that build release-quest-apk.
+REFERENCE_RECIPE = "release-quest-reference-apk"
 
 class StepFailure(Failure):
     def __init__(self, step: str, message: str, reason: str = "") -> None:
@@ -353,7 +357,7 @@ class Timer:
 
     def check_tags(self) -> None:
         """Every local tag is on origin at the same commit, or the run refuses before it takes a token or builds: the
-        preflight inside `just release-quest-apk` refuses the same checkout, after the signer and the worktree are made.
+        preflight inside `just release-quest-reference-apk` refuses the same checkout, after the signer and the worktree are made.
         The rule is tools/release_preflight.py's (its parse_ls_remote and commit_of): a tag that origin lacks, or that
         peels to another commit there. A tag only origin has is not an offender."""
         step = "tags"
@@ -466,7 +470,7 @@ class Timer:
         self.make_worktree(tag, worktree, made)
         build_env = self.prepare_build(worktree)
         self.cmd("build_apk", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
-                               "just", "release-quest-apk", tag], worktree, build_env)
+                               "just", self.reference_recipe(worktree), tag], worktree, build_env)
         self.ok("build_apk")
 
         publish_env = {**self.r2, "GH_TOKEN": self.token, "RELEASE_SIGNER_BIN": str(binary),
@@ -578,6 +582,18 @@ class Timer:
             self.log.event("main_complete")
         self.part = "variant"
 
+    def reference_recipe(self, worktree: pathlib.Path) -> str:
+        """The tag's recipe for the reference repack, the APK the manifest lists as quest-apk: `release-quest-reference-apk` from
+        the change that made arena the default build (docs/adr/0047) on; at an older tag that recipe does not exist and
+        `release-quest-apk` is the reference repack. Read from the tag's own justfile, and logged."""
+        try:
+            text = (worktree / "justfile").read_text(encoding="utf-8")
+        except OSError as error:
+            raise StepFailure("build_apk", f"cannot read the tag's justfile: {error.strerror}") from error
+        name = REFERENCE_RECIPE if re.search(rf"^{REFERENCE_RECIPE}\s", text, re.M) else "release-quest-apk"
+        self.log.event("reference_recipe", recipe=name)
+        return name
+
     def make_worktree(self, tag: str, worktree: pathlib.Path, made: dict) -> None:
         """A clean worktree at the tag, set up for a build."""
         repo = str(self.repo)
@@ -594,7 +610,7 @@ class Timer:
         self.ok("build_slot")
         build_env = {"VCPKG_MAX_CONCURRENCY": "6", "CMAKE_BUILD_PARALLEL_LEVEL": "6", "GH_BIN": self.gh}
         # A new tag's worktree has no vcpkg install yet (worktree-setup seeds the build tree only at a commit the main
-        # checkout built), and release-quest-apk needs the nlohmann/json headers that install provides.
+        # checkout built), and release-quest-reference-apk needs the nlohmann/json headers that install provides.
         self.cmd("configure", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
                                "just", "configure"], worktree, build_env)
         self.ok("configure")

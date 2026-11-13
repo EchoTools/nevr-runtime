@@ -622,7 +622,17 @@ quest-combat-pack:
 quest-autopilot-run route *args:
     python3 tools/quest_autopilot_run.py --route "{{ route }}" {{ args }}
 
-# The Quest APK of a RELEASE: the repack of the reference build with the loader CI built from the release tag. The input is the
+# The Quest APK of a RELEASE, the default (docs/adr/0047-arena-is-the-default-build-and-combat-is-opted-into.md): the store APK
+# repacked with the release's own loader asset and nothing else, stamped `arena`, so it carries no combat: none of the reference
+# build's entries (its libvrapi.so runtime included), no script library, no game-data pack, and the folded combat modules do not
+# install (src/quest/combat/combat_active.h). The same body and output as release-quest-arena-apk:
+# build/quest-release/<tag>/arena/nevr-runtime-<tag>-arena-quest.apk and its .sha256, after tools/quest_release_base.py check-arena.
+# A combat APK is built only by name: release-quest-combat-apk, release-quest-variant-apk, release-quest-reference-apk.
+# It uploads nothing and never tags.
+release-quest-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-apk" tag store_apk "arena" "" "" "")
+
+# The reference Quest APK of a RELEASE, built only when it is asked for by this name: the repack of the reference combat build
+# with the loader CI built from the release tag. The input is the
 # reference combat build as shipped, `reference_apk` (default $NEVR_QUEST_REFERENCE_APK): tools/quest_release_base.py prepare
 # refuses any other file (its sha256 is pinned there) and renames it to this package, the `just quest-reference-base` step; the
 # store APK has none of the reference build's combat entries (#1994). After the repack, tools/quest_release_base.py check-release
@@ -635,22 +645,23 @@ quest-autopilot-run route *args:
 # Run it from a clone whose HEAD is the tag's commit and that passes `tools/release_preflight.py --tag <tag>` (HEAD is the
 # tag's commit, which need not be origin's tip: an older tag builds after main has moved on; the tree is clean and origin has
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
-# build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
+# build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The release timer
+# builds it (tools/quest_release_timer.py, step build_apk) and the manifest lists it as `quest-apk`. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
-release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-quest-apk "release-quest-apk" tag reference_apk "" "" "" "")
+release-quest-reference-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-quest-apk "release-quest-reference-apk" tag reference_apk "" "" "" "")
 
 # The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
 # repack of the store game with the same release loader asset, stamped with the variant word `q15t` (docs/adr/0040 rule 1), which
 # turns on the combat area (docs/adr/0046 rule 5). It carries no plugin library: every combat module is the sentinel's own
-# (src/quest/combat/). No library is an argument: a path passed where the store APK goes is refused. Everything `release-quest-apk` checks is
-# checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
+# (src/quest/combat/). No library is an argument: a path passed where the store APK goes is refused. Everything the shared body checks of every
+# release APK (the tag, the clone, the loader asset) is checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
 # build/quest-release/<tag>/variant/nevr-runtime-<tag>-q15t-quest.apk and its .sha256 beside, in sha256sum format. The APK is
 # never listed in the manifest: tools/publish_quest_apk.py --variant puts it on the release host. It uploads nothing and never tags.
 # `pack` and `pack_meta` (both empty, or both a file) carry a game-data pack as APK assets (android-repack-apk, docs/adr/0029-quest-bundled-content-pack.md);
 # only this variant takes them, never the release APK.
 release-quest-variant-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk "q15t" pack pack_meta)
 
-# The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, stamped with the variant word
+# The combat APK of a release: the same repack of the store APK as release-quest-apk, from the same loader asset, stamped with the variant word
 # `combat`, with no plugin library (the combat modules are the sentinel's own, src/quest/combat/). It is written to build/quest-release/<tag>/combat/ under the release's own name,
 # `libs` is a directory of script libraries and their SHA256SUMS: `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
@@ -663,8 +674,8 @@ release-quest-combat-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="
 # `quest-apk`: tools/publish_quest_apk.py --listed-variant arena puts it up through the signer. It uploads nothing and never tags.
 release-quest-arena-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-arena-apk" tag store_apk "arena" "" "" "")
 
-# The body of release-quest-apk, release-quest-variant-apk, release-quest-combat-apk and release-quest-arena-apk. `label` is the public recipe's name, which every
-# message of the run carries. `variant` is empty (the release APK) or names the variant: `q15t` (written under
+# The body of release-quest-apk, release-quest-reference-apk, release-quest-variant-apk, release-quest-combat-apk and release-quest-arena-apk. `label` is the public recipe's name, which every
+# message of the run carries. `variant` is empty (the reference APK) or names the variant: `q15t` (written under
 # build/quest-release/<tag>/variant) or `combat`, whose word turns the combat area on, or `arena` (written under
 # build/quest-release/<tag>/arena), the store APK with the loader and no combat. No APK of this recipe carries a plugin library.
 # `pack` and `pack_meta` are empty (every release APK) or, for a variant, a game-data pack zip and its description file.
@@ -737,7 +748,7 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
     fi
 
-# Put the Quest APK that `release-quest-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
+# Put the Quest APK that `release-quest-reference-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
 # back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that
 # built the APK. The bucket, the public host, the release-signer executable and a GitHub read token come from the
 # environment only (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, RELEASE_PUBLIC_BASE, RELEASE_SIGNER_DIR,

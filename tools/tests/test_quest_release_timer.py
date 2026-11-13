@@ -83,6 +83,7 @@ class Fake:
         self.apk_entries = {APK_ENTRY: b"q15t"}  # what the APK the variant recipe writes holds: no plugin library
         self.signer_usage = ""  # what `put-quest-apk -h` prints on standard error: empty is a signer without `--kind` (#2298)
         self.arena_listed = True  # the live manifest lists the arena APK once the release is published
+        self.old_tag = False  # the tag predates docs/adr/0047: its justfile has no release-quest-reference-apk
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -97,7 +98,7 @@ class Fake:
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
             ("^{commit}", "worktree.rev"), ("worktree add", "worktree.add"), ("worktree-setup", "worktree.setup"),
             ("pgrep", "build_slot"), ("just configure-android", "variant_configure"), ("just configure", "configure"),
-            ("release-quest-apk", "build_apk"),
+            ("release-quest-reference-apk", "build_apk"), ("just release-quest-apk ", "build_apk"),
             ("release-quest-variant-apk", "variant_build"), (" --variant ", "variant_publish"),
             ("publish_quest_apk.py", "publish_apk"),
             ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
@@ -150,6 +151,9 @@ class Fake:
             return completed(argv, 0, "3b775972" + "0" * 32 + "\n")
         if step == "worktree.add":
             pathlib.Path(argv[-2]).mkdir(parents=True, exist_ok=True)
+            # The tag's justfile: the reference recipe by its name (docs/adr/0047), or, at an older tag, release-quest-apk.
+            recipe = "release-quest-apk tag reference_apk" if self.old_tag else "release-quest-reference-apk tag reference_apk"
+            (pathlib.Path(argv[-2]) / "justfile").write_text(f'{recipe}=env("NEVR_QUEST_REFERENCE_APK"): (_x)\n')
         if step == "build_slot":
             lines = self.ninja.pop(0) if len(self.ninja) > 1 else self.ninja[0]
             return completed(argv, 0 if lines else 1, "1234\n" * lines)
@@ -255,6 +259,20 @@ class RunsInOrder(TimerCase):
         self.assertEqual(self.events()[-1]["tag"], TAG)
         build = next(c for c in fake.calls if c["step"] == "build_apk")
         self.assertEqual(build["argv"][-1], TAG)
+
+    def test_the_listed_apk_is_built_by_the_reference_recipe_and_an_older_tag_by_its_own_name(self) -> None:
+        """docs/adr/0047: `release-quest-apk` builds arena now, so the timer builds the APK the manifest lists as quest-apk with
+        `release-quest-reference-apk`; a tag from before that change has no such recipe, and its `release-quest-apk` is that build.
+        The tag's own justfile decides, and a `reference_recipe` record says which."""
+        for old, want in ((False, "release-quest-reference-apk"), (True, "release-quest-apk")):
+            with self.subTest(old_tag=old):
+                self.log.unlink(missing_ok=True)
+                fake = Fake(self.root)
+                fake.old_tag = old
+                self.assertEqual(self.run_timer(fake), 0)
+                build = next(c for c in fake.calls if c["step"] == "build_apk")
+                self.assertEqual(build["argv"][-2:], [want, TAG])
+                self.assertEqual([e["recipe"] for e in self.events() if e["event"] == "reference_recipe"], [want])
 
     def test_the_build_runs_in_the_slice_and_waits_for_a_free_slot(self) -> None:
         fake = Fake(self.root, ninja=[2, 2, 1])

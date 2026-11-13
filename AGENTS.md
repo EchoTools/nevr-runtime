@@ -443,7 +443,7 @@ Set these in the shell, never as arguments (a passphrase on the command line sho
 ```sh
 export ANDROID_NDK_HOME=<NDK r26d directory>          # the one that holds toolchains/llvm
 export VCPKG_ROOT=<vcpkg checkout>
-export NEVR_STORE_APK=<unmodified store APK>         # release-quest-apk takes NEVR_QUEST_REFERENCE_APK, the reference build (#1994)
+export NEVR_STORE_APK=<unmodified store APK>         # release-quest-reference-apk takes NEVR_QUEST_REFERENCE_APK, the reference build (#1994)
 export NEVR_QUEST_KEYSTORE=<the persistent keystore file>
 export NEVR_QUEST_KEYSTORE_PASS=<its store passphrase>
 ```
