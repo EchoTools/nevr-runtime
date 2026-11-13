@@ -1,4 +1,4 @@
-/* The custom-map channel's shared types (docs/adr/0047-custom-maps-channel.md): a guild's signed manifest, a map's package index,
+/* The custom-map channel's shared types (docs/adr/0048-custom-maps-channel.md): a guild's signed manifest, a map's package index,
  * and the file-system seam the channel needs beside nevr_cargo::Env. Every part of the channel compiles against this header.
  *
  * Hashes are sha256 as 64 lowercase hex; symbols (level, script hash, record key) are rad_hash values. The numbers the formats
@@ -35,7 +35,7 @@ struct Member {
   std::vector<Pin> pieces;        // concatenated in order they are the member
 };
 
-// Recipes (ADR 0047, the recipe format in map_format.h): a stock-derived asset ships as edits against the player's own stock
+// Recipes (ADR 0048, the recipe format in map_format.h): a stock-derived asset ships as edits against the player's own stock
 // bytes. An edit carries no stock value: that would ship stock bytes. The stock sha256 pins what it applies to.
 struct FieldEdit {
   std::uint64_t at = 0;
@@ -106,7 +106,7 @@ struct Manifest {
   std::map<std::string, MapEntry> maps;  // keyed by map id
 };
 
-// Identifies one version of one file: equal stamps mean the bytes verified at fetch are the bytes on disk (ADR 0047 decision 4).
+// Identifies one version of one file: equal stamps mean the bytes verified at fetch are the bytes on disk (ADR 0048 decision 4).
 struct FileStamp {
   std::uint64_t volume = 0, id_hi = 0, id_lo = 0, size = 0, last_write = 0;
 
@@ -118,7 +118,7 @@ struct FileStamp {
   bool operator!=(const FileStamp& other) const { return !(*this == other); }
 };
 
-// The file operations the channel needs that nevr_cargo::Env does not have: a held, share-read handle and its stamp (ADR 0047
+// The file operations the channel needs that nevr_cargo::Env does not have: a held, share-read handle and its stamp (ADR 0048
 // decision 4), and whole-directory moves. The channel reaches files through two seams: Env (src/core/cargo_env.h) for what the
 // texture cargo also does, read small files, write one atomically, append, sync, query the device's facts (ADR 0045 decision 8)
 // and fetch over HTTP, and MapFs for what only a map needs. A platform implements both.

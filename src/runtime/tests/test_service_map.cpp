@@ -109,7 +109,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("nevr_invite_codes"), "network.invite_codes");  // #1156
   // assets / arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
-  // custom maps (docs/adr/0047)
+  // custom maps (docs/adr/0048)
   EXPECT_EQ(FlatKeyToYamlPath("maps_base_url"), "maps.base_url");
   EXPECT_EQ(FlatKeyToYamlPath("maps_official_keys"), "maps.official_keys");
   EXPECT_EQ(FlatKeyToYamlPath("maps_trusted_keys"), "maps.trusted_keys");
@@ -408,7 +408,7 @@ TEST(ServiceMap, LookupFlatCsv_ListJoinsToCsv) {
   EXPECT_EQ(LookupFlatCsv(cfg, "nevr_regions").value_or(""), "us-c,eu-w");
 }
 
-// The custom-map channel's list keys (docs/adr/0047) are read CSV, like guilds. No cache-size key is mapped
+// The custom-map channel's list keys (docs/adr/0048) are read CSV, like guilds. No cache-size key is mapped
 // (docs/adr/0045, decision 8), and no subscription or server allow-list key: clients and servers follow their guilds.
 TEST(ServiceMap, LookupFlatCsv_MapsListsJoinToCsv) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(

@@ -1,4 +1,4 @@
-/* The requests for a lobby group's maps (docs/adr/0047-custom-maps-channel.md): a client asks when a lobby session succeeds, and a
+/* The requests for a lobby group's maps (docs/adr/0048-custom-maps-channel.md): a client asks when a lobby session succeeds, and a
  * dedicated server when it is allocated a session, each with the session's group id. A request is answered on the channel's
  * worker, which runs the fetch (core/map_run.h, FetchGroup) one group at a time, never on the game's frame; the caller learns the
  * outcome from its callback: fetched, cached or failed with a reason.

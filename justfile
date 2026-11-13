@@ -3760,7 +3760,7 @@ verify:
     # nevr_empty_server_ttl_s (#58) and
     # nevr_tick_rate_hz (#595), nevr_session_router (#708), nevr_invite_codes (#1156) and
     # nevr_bots_per_session (#1423).
-    # nevr_max_team_size (#1422), and the five maps_* keys of the custom-map channel (ADR 0047).
+    # nevr_max_team_size (#1422), and the five maps_* keys of the custom-map channel (ADR 0048).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
     if [ "$N133_S7B" -ne 41 ]; then
         echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 41." >&2

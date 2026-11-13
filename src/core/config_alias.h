@@ -1,5 +1,5 @@
 #pragma once
-// ConfigAlias (docs/adr/0047, decision 5): a mounted map's balance-config keys answered from its own
+// ConfigAlias (docs/adr/0048, decision 5): a mounted map's balance-config keys answered from its own
 // record (mp_arena_rules -> <id>_arena_rules) while ANY level of that map is loaded. This half is pure: the staged and
 // armed tables, the winner rule, and the interned snapshots the lookup detour (runtime/content/config_alias_hook.h)
 // reads. Nothing here touches the game.
@@ -20,7 +20,7 @@ namespace nevr_config_alias {
 
 constexpr std::size_t kMaxPerMap = 4, kMaxSnapshots = 64;
 
-// rad_hash("mp_arena_rules"). v1 aliases only this key (ADR 0047 decision 5); adding one is an allowlist edit.
+// rad_hash("mp_arena_rules"). v1 aliases only this key (ADR 0048 decision 5); adding one is an allowlist edit.
 constexpr std::uint64_t kArenaRulesKey = 0x12220d7a60d8f9c3ull;
 
 // The type of the <id>_arena_rules record a map's set carries, the type stock mp_arena_rules has in both platforms'
@@ -66,7 +66,7 @@ class Table {
   // Returns the number of armed pairs. Until an owner is armed, Resolve never answers with its alias.
   std::size_t Arm(const OwnerLevels& mounted_owner_levels, HoldsFn holds, void* ctx);
 
-  // The winners for one load state (ADR 0047 decision 5): per allowed key, among the armed maps with a level in
+  // The winners for one load state (ADR 0048 decision 5): per allowed key, among the armed maps with a level in
   // `loaded_levels` or equal to `main_level`, the map that owns the main level, else the lowest map id. Sorted by key.
   std::vector<Winner> Decide(std::uint64_t main_level, const std::vector<std::uint64_t>& loaded_levels) const;
 

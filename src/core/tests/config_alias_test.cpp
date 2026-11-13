@@ -1,4 +1,4 @@
-// ConfigAlias's pure half (core/config_alias.h; docs/adr/0047, decision 5): staging, arming, the winner rule, the
+// ConfigAlias's pure half (core/config_alias.h; docs/adr/0048, decision 5): staging, arming, the winner rule, the
 // interned snapshots, and the revalidated sublevel set. Each test builds its own Table, except the allocation test,
 // which reads the process's one. Log() is captured through the boot sink.
 

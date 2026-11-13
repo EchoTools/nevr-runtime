@@ -480,7 +480,7 @@ TEST(NevrConfig, AcceptsGraphicsSection) {
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
 }
 
-// `maps` is the custom-map channel's section (docs/adr/0047): a config.yaml that configures the channel loads, and every
+// `maps` is the custom-map channel's section (docs/adr/0048): a config.yaml that configures the channel loads, and every
 // key the PC or the Quest reads from it is known. A cache-size key is not a key (docs/adr/0045, decision 8: the cap is
 // a share of the device's facts), and no local list chooses a player's or a host's maps (clients and servers follow
 // their guilds), so `cap_mib`, `subscribed` and `server_allow` count as unknown.

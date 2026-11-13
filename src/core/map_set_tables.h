@@ -1,4 +1,4 @@
-/* The one reader of a map's resource-set file on disk (docs/adr/0047-custom-maps-channel.md, the set layout of
+/* The one reader of a map's resource-set file on disk (docs/adr/0048-custom-maps-channel.md, the set layout of
  * sdk/include/nevr/resource_set.h). The fetch reads a set's tables to check every frame header after the set's pieces matched
  * their pins, and the recipe rebuild reads them to merge its records into the set. A set can be far larger than memory, so the
  * file is read through an open blob (nevr_cargo::Env::ReadBlob): the header, the record and chunk tables, and the first bytes of
