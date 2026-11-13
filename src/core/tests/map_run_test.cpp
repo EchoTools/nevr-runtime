@@ -1,4 +1,4 @@
-// The map channel's fetch and mount (core/map_run.h; docs/adr/0047-custom-maps-channel.md) over the shared fake Env and its MapFs
+// The map channel's fetch and mount (core/map_run.h; docs/adr/0048-custom-maps-channel.md) over the shared fake Env and its MapFs
 // (quest/tests/cargo_fake_env.h, map_fake_fs.h), a scripted server, a recording Mounter and Deriver, and the real parsers fed
 // group manifests this test signs with fixed-seed keys. No network, no Win32, no game file. Log assertions read each record's
 // fields.
@@ -626,7 +626,7 @@ TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRem
   EXPECT_TRUE(fs.HasDir(v1_dir));
 }
 
-// ADR 0047 decision 7: under -require-signed-plugins a map's scripts count only when an official key signed its manifest; a
+// ADR 0048 decision 7: under -require-signed-plugins a map's scripts count only when an official key signed its manifest; a
 // script-free map still mounts.
 TEST_F(MapRunTest, UnderSignedOnlyOnlyAnOfficialManifestsScriptsMount) {
   channel.Publish("plain", "1.0.0", MakeSet(2, 'a'));
@@ -1236,7 +1236,7 @@ TEST_F(MapRunTest, SwitchingToTheOfficialKeyStartsItsOwnFloorAndSaysSoOnce) {
   EXPECT_EQ(env.CountRecords("map_trust_changed"), 1u);
 }
 
-// ---- Groups (ADR 0047): one manifest per lobby group, keyed by its opaque id; the cache keeps the union of the groups' maps.
+// ---- Groups (ADR 0048): one manifest per lobby group, keyed by its opaque id; the cache keeps the union of the groups' maps.
 
 // A fetch keyed by one group requests that group's manifest and the objects of its maps, and nothing of another group.
 TEST_F(MapRunTest, AGroupsFetchRequestsOnlyThatGroupsManifestAndObjects) {

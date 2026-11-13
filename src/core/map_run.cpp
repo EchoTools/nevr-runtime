@@ -875,7 +875,7 @@ class FetchRun {
     }
   }
 
-  // The one place a stored file is hashed: a map a mount deferred (ADR 0047 decision 4), on the worker.
+  // The one place a stored file is hashed: a map a mount deferred (ADR 0048 decision 4), on the worker.
   bool HashFile(const std::string& path, std::string* sha256, FileStamp* stamp) {
     std::int64_t handle = 0;
     std::uint64_t size = 0;

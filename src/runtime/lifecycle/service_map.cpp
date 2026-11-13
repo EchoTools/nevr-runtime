@@ -88,7 +88,7 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       {"nevr_guilds", "guilds"},
       // assets
       {"asset_cdn_url", "assets.cdn_url"},
-      // custom maps (docs/adr/0047): the key lists are read CSV, like guilds
+      // custom maps (docs/adr/0048): the key lists are read CSV, like guilds
       {"maps_base_url", "maps.base_url"},
       {"maps_official_keys", "maps.official_keys"},
       {"maps_trusted_keys", "maps.trusted_keys"},

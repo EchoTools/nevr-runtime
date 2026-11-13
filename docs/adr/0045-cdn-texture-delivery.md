@@ -78,7 +78,8 @@ process.
 9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;
    any label not listed is off. Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
    manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
-10. **Client only.** A dedicated server fetches nothing.
+10. **Client only.** A dedicated server fetches no texture cargo. The one exception is custom maps: a server fetches the maps of
+    the lobby group it hosts (`docs/adr/0048-custom-maps-channel.md`, decision 13).
 11. **Whole-game mode.** On Quest, `assets.whole_game: true` (needs `assets.manifest`) says the manifest holds every asset of the game, so
     the first-run data step (`docs/adr/0011-quest-game-data-first-run.md`) does not fetch the data zip and never ends the process for
     missing `_data`, in any build. The engine reads each boot package set's manifest file straight from disk, with no resolver hook in the

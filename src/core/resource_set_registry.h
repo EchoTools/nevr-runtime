@@ -61,7 +61,7 @@ enum class Refusal {
   kFrameSize,       // a chunk whose zstd frame header states no content size, or one other than the chunk's
   // A map's file set (RegisterFileResourceSet, resource_sets.h) only:
   kHash,            // the file's SHA-256, read through its handle, is not the one the manifest pins
-  kOverride,        // the set carries an override: a map only adds resources (docs/adr/0047, decision 5)
+  kOverride,        // the set carries an override: a map only adds resources (docs/adr/0048, decision 5)
 };
 
 // The owner every map's file set is registered under: "map:<id>". Only AddMapFile applies the script waiver, so a
@@ -210,7 +210,7 @@ class Registry {
   bool mounted_ = false;
 };
 
-// Map scripts (docs/adr/0047, decision 6): while a waiver is set, a kScriptType record of a map's set (IsMapOwner)
+// Map scripts (docs/adr/0048, decision 6): while a waiver is set, a kScriptType record of a map's set (IsMapOwner)
 // passes AddMapFile when `holds(owner, name)` (the map script provider holds that script for that owner) and is refused kScript otherwise. A
 // plugin's set is refused kScript whatever the waiver says. Null clears it. Process-wide: every Registry reads it.
 void SetScriptWaiver(bool (*holds)(const std::string& owner, std::uint64_t name));

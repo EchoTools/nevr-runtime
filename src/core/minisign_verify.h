@@ -1,4 +1,4 @@
-/* minisign signature verification (docs/adr/0047-custom-maps-channel.md decision 1): the one signature over a guild's custom-map
+/* minisign signature verification (docs/adr/0048-custom-maps-channel.md decision 1): the one signature over a guild's custom-map
  * manifest. Only the prehashed algorithm "ED" is accepted: Ed25519 over BLAKE2b-512(message). Legacy "Ed" (the raw message
  * signed) is kUnsupported. The trusted comment is covered by the global signature, so it is returned only when that checks.
  *

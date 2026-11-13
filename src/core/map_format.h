@@ -1,11 +1,11 @@
 /* The numbers and names the custom-map channel's formats define, each cited to its format, so no other map file carries a bare
- * literal for one (docs/adr/0047-custom-maps-channel.md):
+ * literal for one (docs/adr/0048-custom-maps-channel.md):
  *   - minisign's public key and signature (the minisign tool's own file format, minisign 0.12): what minisign_verify.cpp reads;
- *   - the signed channel manifest, `nevr-maps-manifest` v1, and the signed object that carries it (ADR 0047 decision 1);
- *   - a map's package index, `nevr-map-package` v1 (ADR 0047 decisions 1, 2, 5 and 9);
- *   - the recipe format a stock-derived asset ships as (ADR 0047), whose numbers the publisher shares through
+ *   - the signed channel manifest, `nevr-maps-manifest` v1, and the signed object that carries it (ADR 0048 decision 1);
+ *   - a map's package index, `nevr-map-package` v1 (ADR 0048 decisions 1, 2, 5 and 9);
+ *   - the recipe format a stock-derived asset ships as (ADR 0048), whose numbers the publisher shares through
  *     tests/vectors/maps/constants.json;
- *   - the cache index, `nevr-maps-index` v1 (ADR 0047 decision 4).
+ *   - the cache index, `nevr-maps-index` v1 (ADR 0048 decision 4).
  * A number that limits how much memory, disk or descriptors this process uses is not here: it is a share of what the device reports
  * (ADR 0045 decision 8; src/core/cargo_limits.h, src/core/device_memory.h). Hexadecimal and SHA-256 text are src/core/cargo_format.h's.
  */
@@ -101,14 +101,14 @@ inline constexpr int kLeapEvery = 4, kLeapCenturySkip = 100, kLeapCenturyKeep = 
 // so every device accepts the same documents. Reading one also needs the device's memory share (MapDocumentBytes, map_manifest.h).
 inline constexpr std::uint64_t kMaxManifestBytes = std::uint64_t{4} << 20;
 inline constexpr std::uint64_t kMaxIndexBytes = std::uint64_t{8} << 20;
-// The most config aliases one map may carry (ADR 0047 decision 5).
+// The most config aliases one map may carry (ADR 0048 decision 5).
 inline constexpr std::size_t kMaxConfigAliases = 4;
 
 // ---- nevr-map-package v1.
 inline constexpr const char* kPackageSchema = "nevr-map-package";
 inline constexpr std::uint64_t kPackageSchemaVersion = 1;
 // The largest piece a member may list (tests/vectors/maps/package_index_cases.json "piece_over_128mib"; the publisher cuts a piece
-// before 8 MiB, ADR 0047 decision 2).
+// before 8 MiB, ADR 0048 decision 2).
 inline constexpr std::uint64_t kMaxPieceBytes = std::uint64_t{128} << 20;
 // A member's path, by role: set/<platform>.nevrres, scripts/<hash16>.dll (PC) or scripts/lib<hash16>.so (Quest),
 // recipe/<platform>.bin. <hash16> is the script's symbol in 16 lowercase hex digits.
@@ -127,7 +127,7 @@ inline constexpr std::uint64_t kRekeyOpcodeBytes = 2;
 // A field edit writes 1, 2, 4 or 8 little-endian bytes.
 inline constexpr std::uint64_t kFieldWidths[] = {1, 2, 4, 8};
 
-// ---- The recipe format (ADR 0047): a stock-derived asset ships as edits against the player's own stock bytes. The values are the
+// ---- The recipe format (ADR 0048): a stock-derived asset ships as edits against the player's own stock bytes. The values are the
 // publisher's too; tests/vectors/maps/constants.json holds the same ones and map_manifest_test compares them. Each is a rule of the
 // format both sides enforce, not a bound on this process's memory: the rebuild that allocates a result also checks the device's
 // memory share (ADR 0045 decision 8) before it does.

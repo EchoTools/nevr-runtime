@@ -178,7 +178,7 @@ bool FloorsFromJson(const json& value, FloorBook* out) {
     if (!it.value().is_object()) return false;
     auto& by_guild = out->channels[it.key()];
     for (auto g = it.value().begin(); g != it.value().end(); ++g) {
-      // Floors are kept per guild (ADR 0047 decision 3): an entry that is not a guild id is not a floor and is dropped; the
+      // Floors are kept per guild (ADR 0048 decision 3): an entry that is not a guild id is not a floor and is dropped; the
       // next accepted manifest of each guild sets its own.
       if (!IsPathSafeGroupId(g.key()) || !g.value().is_object()) continue;
       auto& by_key = by_guild[g.key()];

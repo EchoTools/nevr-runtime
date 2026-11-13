@@ -267,7 +267,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"social", {"facade", "send_presence_to_meta"}},
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
-      // The custom-map channel (docs/adr/0047): the keys the PC reads through service_map.cpp and the Quest through
+      // The custom-map channel (docs/adr/0048): the keys the PC reads through service_map.cpp and the Quest through
       // quest_config.cpp. No cache-size key: the cache's cap is a share of the device's facts (docs/adr/0045,
       // decision 8), never a configured constant. No subscription or server allow-list key: no local config chooses
       // which maps a player or a host has; clients and servers both follow their guilds.

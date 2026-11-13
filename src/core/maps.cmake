@@ -1,17 +1,17 @@
-# The custom-map channel's core (docs/adr/0047), in nevr_core, and its tests. Included from src/core/CMakeLists.txt
+# The custom-map channel's core (docs/adr/0048), in nevr_core, and its tests. Included from src/core/CMakeLists.txt
 # after nevr_core is defined; each part of the channel adds its core sources and tests here.
 
-# The PE rules a map's script DLL must meet (core/script_image_rules.h; ADR 0047 decision 6). The ELF half
+# The PE rules a map's script DLL must meet (core/script_image_rules.h; ADR 0048 decision 6). The ELF half
 # (script_image_rules_elf.cpp) is the Quest's: its Quest consumer compiles it, and test_script_image_rules below runs it.
 if(WIN32)
   target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/script_image_rules.cpp")
 endif()
 
-# ConfigAlias's pure half (core/config_alias.h; ADR 0047 decision 5): the staged and armed tables, the winner rule and
+# ConfigAlias's pure half (core/config_alias.h; ADR 0048 decision 5): the staged and armed tables, the winner rule and
 # the interned snapshots the runtime's lookup detour reads.
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/config_alias.cpp")
 
-# The formats (ADR 0047 decision 1): a guild's signed manifest and a map's package index (core/map_manifest.h), the cache index
+# The formats (ADR 0048 decision 1): a guild's signed manifest and a map's package index (core/map_manifest.h), the cache index
 # (core/map_index.h), and the minisign verifier (core/minisign_verify.h) over the vendored Monocypher (third_party/monocypher).
 # The body sha256 is the portable streaming SHA-256 the Quest data step ships (quest/data/sha256.cpp, ADR 0045).
 set(_maps_monocypher_dir "${CMAKE_SOURCE_DIR}/third_party/monocypher/src")
@@ -34,7 +34,7 @@ set_source_files_properties(${_maps_format_sources} ${_maps_monocypher_sources} 
 target_sources(nevr_core PRIVATE ${_maps_format_sources} ${_maps_monocypher_sources})
 target_include_directories(nevr_core PRIVATE "${_maps_monocypher_dir}")
 
-# The recipe rebuild (core/map_derive.h; ADR 0047): a stock-derived asset rebuilt from the player's own install and merged into
+# The recipe rebuild (core/map_derive.h; ADR 0048): a stock-derived asset rebuilt from the player's own install and merged into
 # the map's set, with the one reader of a set file (core/map_set_tables.h). Each frame header is judged by the texture cargo's
 # validator (core/cargo_validate.h, ADR 0045), and the memory a rebuild holds is a share of the device's (core/cargo_limits.h).
 # The PC build has no other user of those two cargo files, so the map channel brings them into nevr_core. Platform-free: no
@@ -47,7 +47,7 @@ set(_maps_derive_sources
 set_source_files_properties(${_maps_derive_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_derive_sources})
 
-# The fetch of one lobby group's maps and the mount of the cached maps (core/map_run.h; ADR 0047, ADR 0045 decisions 7 and 8),
+# The fetch of one lobby group's maps and the mount of the cached maps (core/map_run.h; ADR 0048, ADR 0045 decisions 7 and 8),
 # and the queue of group requests the worker answers (core/map_fetch_queue.h). Platform-free: no PCH.
 set(_maps_run_sources
   "${CMAKE_CURRENT_LIST_DIR}/map_run.cpp"

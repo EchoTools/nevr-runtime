@@ -1,4 +1,4 @@
-// The recipe rebuild (core/map_derive.h; docs/adr/0047-custom-maps-channel.md): recipes rebuilt from a fake install into memory
+// The recipe rebuild (core/map_derive.h; docs/adr/0048-custom-maps-channel.md): recipes rebuilt from a fake install into memory
 // files, over the shared fake Env and its MapFs (quest/tests/cargo_fake_env.h, map_fake_fs.h). Synthetic bytes only.
 #include "core/map_derive.h"
 
