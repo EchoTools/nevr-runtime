@@ -108,8 +108,9 @@ void InstallFatalErrorHandler();
 /// socket FD to prevent wineserver zombie — N38 root cause), (2) unhooks BinaryBugFixes
 /// MinHook hooks, (3) calls ForceFatalExit to terminate the process.
 /// Safe to call from any thread — uses InterlockedExchange to prevent re-entry.
-/// Primary call sites: console control handler, per-frame
-/// PrecisionSleepWaitHook, and per-transition NetGameSwitchStateHook.
+/// Call sites: ConsoleCtrlHandler, ShutdownWatchdogThread and GameMainWrapperHook
+/// (crash_recovery.cpp), NetGameSwitchStateHook (state_machine.cpp), GameServerLib::Terminate
+/// (gameserver.cpp) and GameServerLib::ArmEndedSessionWatchdog (gameserver_callbacks.cpp).
 void PerformGracefulShutdown(unsigned int exitCode);
 
 /// Server-mode fatal exit — logs the cause as the last log line and immediately

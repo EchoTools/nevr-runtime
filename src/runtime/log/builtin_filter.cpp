@@ -28,6 +28,7 @@
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
+#include "runtime/log/passthrough_forward_rules.h"
 #include "runtime/log/runtime_adapter_note.h"
 #include "runtime/log/rate_limiter.h"
 #include "runtime/log/log_retention.h"
@@ -967,7 +968,8 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     if (len == 0) {
         g_suppressed_count++;
-        if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr)
+        if (g_config.passthrough_to_engine && orig_PrintfImpl &&
+        nevr_passthrough_forward::CanForward(fmt, varargs))
             orig_PrintfImpl(level, category, fmt, varargs);
         return;
     }
@@ -1035,7 +1037,8 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     EmitLine(level, insideErrorDialog, buf, emit_len);
 
-    if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr) {
+    if (g_config.passthrough_to_engine && orig_PrintfImpl &&
+        nevr_passthrough_forward::CanForward(fmt, varargs)) {
         /* N89: max_line_length must apply to the console too, not ONLY to our
          * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
          * reformat the FULL line to console — which is what
