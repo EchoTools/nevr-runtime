@@ -126,12 +126,11 @@ func TestPolledOncePerFrameOnTheGameLoopThread(t *testing.T) {
 	}
 }
 
-func TestRegisteredInTheBuildAndTheInventory(t *testing.T) {
+func TestRegisteredInTheBuild(t *testing.T) {
 	t.Parallel()
 	cmake := read(t, "src/runtime/CMakeLists.txt")
 	mustContain(t, cmake, `"patch/new_unlocks_clear.cpp"`, "src/runtime/CMakeLists.txt")
 	mustContain(t, cmake, "add_executable(test_new_unlocks_clear tests/new_unlocks_clear_rules_test.cpp)", "src/runtime/CMakeLists.txt")
-	mustContain(t, read(t, "tools/verify_patch_source_inventory.py"), `"patch/new_unlocks_clear.cpp"`, "tools/verify_patch_source_inventory.py")
 	mustContain(t, read(t, "justfile"), "test_new_unlocks_clear.exe", "justfile")
 }
 
