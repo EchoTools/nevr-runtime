@@ -50,11 +50,15 @@ class PrefetchStore {
   virtual std::unique_ptr<ObjectSink> Open(const std::string& sha256, std::uint64_t size, StoreStatus* status) = 0;
 };
 
+// How long the first-run hold waits on a transfer that delivers no body byte before it ends the run as stalled. A policy number, not a
+// format or a device fact: the player is held at the first-run screen meanwhile.
+inline constexpr std::uint64_t kPrefetchStallMs = 30000;
+
 // The object URL is `base_url` + "blobs/sha256/" + sha256 (the bucket's immutable blob path, docs/adr/0045 decision 5).
 struct PrefetchConfig {
   std::string base_url;             // ends in '/', e.g. "https://cargo.echo.taxi/"
   std::vector<Entry> objects;       // every entry of the manifest the run serves; duplicates by sha256 are fetched once
-  std::uint64_t stall_ms = 30000;   // no body byte for this long ends the run as stalled
+  std::uint64_t stall_ms = kPrefetchStallMs;  // no body byte for this long ends the run as stalled
   // false cancels at the next boundary; null: never. The stall rule needs the transport to call it while no bytes arrive: an Env::Get
   // that blocks in a read without calling keep_going is never detected as stalled (the P6 transport must poll it, e.g. from curl's
   // progress callback).

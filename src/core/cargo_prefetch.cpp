@@ -4,6 +4,7 @@
 #include <set>
 #include <utility>
 
+#include "core/cargo_format.h"
 #include "core/cargo_store.h"
 
 namespace nevr_cargo {
@@ -63,7 +64,7 @@ Attempt Transfer(Env& env, PrefetchStore& store, const PrefetchConfig& config, c
   const std::string url = config.base_url + "blobs/sha256/" + entry.sha256;
   const HttpBody on_body = [&](long status, const void* data, std::size_t length) -> bool {
     if (answer == 0) answer = status;
-    if (status != 200 && status != 206) return false;  // a refused answer delivers nothing
+    if (status != kHttpOk && status != kHttpPartialContent) return false;  // a refused answer delivers nothing
     if (length == 0) return true;
     if (delivered + length > entry.size) {
       too_long = true;
@@ -98,7 +99,7 @@ Attempt Transfer(Env& env, PrefetchStore& store, const PrefetchConfig& config, c
     out.detail = StoreStatusName(write_status);
     return out;
   }
-  if (answer != 0 && answer != 200 && answer != 206) {
+  if (answer != 0 && answer != kHttpOk && answer != kHttpPartialContent) {
     sink->Abort();
     out.status = PrefetchStatus::kHttpFailed;
     out.http_status = answer;
