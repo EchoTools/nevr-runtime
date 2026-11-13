@@ -147,6 +147,27 @@ const Section* SectionHolding(const std::vector<Section>& sections, std::uint32_
 
 }  // namespace
 
+std::vector<FileRange> ExecutableSectionFileRanges(const std::uint8_t* image, std::size_t size) {
+  std::vector<FileRange> ranges;
+  if (image == nullptr) return ranges;
+  const Reader r(image, size);
+  if (!r.Has(0, kDosHeaderBytes) || r.U16(0) != kDosMagic) return ranges;
+  const std::uint64_t nt = r.U32(kDosNtOffset);
+  if (!r.Has(nt, kNtSignatureBytes + kFileHeaderBytes) || r.U32(nt) != kNtSignature) return ranges;
+  const std::uint64_t file_header = nt + kNtSignatureBytes;
+  const std::uint16_t section_count = r.U16(file_header + kFileSectionCount);
+  const std::uint64_t table = file_header + kFileHeaderBytes + r.U16(file_header + kFileOptionalBytes);
+  if (!r.Has(table, kSectionBytes * section_count)) return ranges;
+  for (std::uint16_t i = 0; i < section_count; ++i) {
+    const std::uint64_t at = table + kSectionBytes * i;
+    const std::uint64_t raw_offset = r.U32(at + kSectionRawOffset);
+    if ((r.U32(at + kSectionFlags) & kScnExecute) == 0 || raw_offset >= size) continue;
+    const std::uint64_t raw_end = raw_offset + r.U32(at + kSectionRawSize);
+    ranges.push_back(FileRange{raw_offset, raw_end < size ? raw_end : size});
+  }
+  return ranges;
+}
+
 ImageVerdict CheckPeScript(const std::uint8_t* image, std::size_t size) {
   if (image == nullptr) return Fail("pe_truncated", "no bytes");
   const Reader r(image, size);
