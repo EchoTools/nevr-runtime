@@ -87,9 +87,9 @@ WARN_DEV_N = 900
 WARN_MINOR_PATCH = 90
 
 _NUM = r"(0|[1-9][0-9]*)"
-# The base APK a development build is on, named after the dev trailer (#2040): `-store` or `-q15t`. The suffix does
-# not change the versionCode; a store build and a q15t build of one commit stamp the same code.
-BASE_SUFFIXES = ("store", "q15t")
+# The base APK a development build is on, named after the dev trailer (#2040): `-store` or `-combat`. The suffix does
+# not change the versionCode; a store build and a combat build of one commit stamp the same code.
+BASE_SUFFIXES = ("store", "combat")
 _BASE_SUFFIX = "(?:-(?:" + "|".join(BASE_SUFFIXES) + "))?"
 VERSION = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}(?:-dev\.{_NUM}{_BASE_SUFFIX}\+[0-9a-f]{{7,40}})?")
 

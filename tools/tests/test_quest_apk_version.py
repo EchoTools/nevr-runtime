@@ -99,12 +99,12 @@ class NumberingTest(unittest.TestCase):
 
     def test_a_base_suffix_stamps_the_same_code_as_the_unsuffixed_version(self):
         plain = qv.version_code_for("6.16.5-dev.58+aa977701")
-        for base in ("store", "q15t"):
+        for base in ("store", "combat"):
             with self.subTest(base=base):
                 self.assertEqual(qv.version_code_for(f"6.16.5-dev.58-{base}+aa977701"), plain)
 
     def test_a_suffix_other_than_the_two_bases_is_refused(self):
-        for bad in ("6.16.5-dev.58-foo+aa977701", "6.16.5-dev.58-store-q15t+aa977701", "6.16.5-dev.58-+aa977701",
+        for bad in ("6.16.5-dev.58-foo+aa977701", "6.16.5-dev.58-store-combat+aa977701", "6.16.5-dev.58-+aa977701",
                     "6.16.5-store+aa977701"):
             with self.subTest(version=bad):
                 with self.assertRaises(qv.VersionError):
