@@ -21,6 +21,11 @@
  *      sites, in Initialize and in the Create* helpers) is passed to the original untouched. No return-address test, one
  *      trampoline, initialization only.
  *
+ * Which APKs (docs/adr/0047). The constructor sequence installs it only where combat::Active() is true (step
+ * `install_irradiance_default`, skipped with `combat_inactive` otherwise). Skipped, neither hook is installed: the GOT slot keeps the
+ * game's Initialize and the row stays pass-through (docs/adr/0021: a hook that is not wanted stays pass-through), so the engine
+ * uploads its own black texel.
+ *
  * Owner (docs/adr/0039). This file owns the default 3D texture's texel. Its input is nothing: the texel is a constant, not a
  * setting. The substitution is one atomic load and a compare on the other 24 call sites.
  *

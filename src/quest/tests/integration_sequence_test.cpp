@@ -156,6 +156,8 @@ struct FakeSteps final : Steps {
   bool InstallProcessEnd() override { return Step("process_end"); }
   bool InstallCrashFirst() override { return Step("crash_first"); }
   bool InstallPermissionWait() override { return Step("permission_wait"); }
+  bool InstallMatchTags() override { return Step("match_tags"); }
+  bool InstallEquipRefire() override { return Step("equip_refire"); }
   bool InstallVkExtWindow() override { return Step("vk_ext_window"); }
   bool InstallOsBuildGate() override { return Step("os_build_gate"); }
   bool InstallResourceRequestLog(bool counted, bool logLines) override {
@@ -229,7 +231,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -255,7 +257,7 @@ void TestFullStackOrder() {
   QCHECK(s.clockLevelsArgSeen && s.clockLevelsOverrideArg);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach",
-                                         "plugins_early", "combat_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "irradiance", "token",      "prompt",       "bridge",
+                                         "plugins_early", "combat_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "match_tags", "equip_refire", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "irradiance", "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump",     "pns_provider"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg && s.pluginsArg && s.combatArg);
@@ -317,7 +319,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -621,13 +623,14 @@ void TestMenuCardsAreUnconditionalOrderedAndContained() {
   }
 }
 
-// The grey default irradiance texture (#2091) installs on every launch, whatever else is on, after the menu cards and the clock-level
-// arming and before token auth; the step has its own stable name; a failing or throwing step is contained and every other step
-// still runs, and it still runs when any single other early step fails or throws.
-void TestIrradianceDefaultIsUnconditionalOrderedAndContained() {
+// The grey default irradiance texture (#2091) installs only where combat runs (docs/adr/0047), whatever else is on, after the menu
+// cards and the clock-level arming and before token auth; the step has its own stable name; a failing or throwing step is contained
+// and every other step still runs, and it still runs when any single other early step fails or throws.
+void TestIrradianceDefaultIsCombatOnlyOrderedAndContained() {
   QCHECK(std::strcmp(StepName(StepId::kInstallIrradianceDefault), "install_irradiance_default") == 0);
   for (const bool everything : {false, true}) {
     FakeSteps s = FakeSteps::With(everything, everything, everything, everything);
+    s.combatActive = true;
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kInstallIrradianceDefault).state == StepState::kOk);
     QCHECK(s.Index("irradiance") == s.Index("clock_levels") + 1);
@@ -636,18 +639,68 @@ void TestIrradianceDefaultIsUnconditionalOrderedAndContained() {
   }
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.combatActive = true;
     if (std::strcmp(mode, "fail") == 0) s.failing = {"irradiance"}; else s.throwing = {"irradiance"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kInstallIrradianceDefault).state != StepState::kOk);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
   }
-  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "texture", "credits", "menu_cards", "clock_levels"}) {
+  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "crash_first", "permission_wait", "match_tags", "equip_refire", "vk_ext_window", "texture", "credits", "menu_cards", "clock_levels"}) {
     for (const char* mode : {"fail", "throw"}) {
       FakeSteps s = FakeSteps::With(false, false, false, false);
+      s.combatActive = true;
       if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
       const ConstructorReport r = RunConstructorSequence(s);
       QCHECK(r.at(StepId::kInstallIrradianceDefault).state == StepState::kOk);
       QCHECK(s.Ran("irradiance"));
+    }
+  }
+}
+
+// Arena is the default build and combat is opted into (docs/adr/0047). The three hooks that came with the combat build and
+// used to install on every launch (the name tags, the equipment re-fire, the grey irradiance default) install only where combat
+// runs. Where it does not (a plain or arena release, or a question that throws), each step is skipped with `combat_inactive`, no
+// install is asked for, and every other step is as it was. Where it does, the name tags and the re-fire run right after the
+// permission-wait hook, in that order, before the Vulkan extension window, and each failing or throwing is contained.
+void TestCombatOriginHooksInstallOnlyWhereCombatRuns() {
+  QCHECK(std::strcmp(StepName(StepId::kInstallMatchTags), "install_match_tags") == 0);
+  QCHECK(std::strcmp(StepName(StepId::kInstallEquipRefire), "install_equip_refire") == 0);
+  const StepId combatOnly[] = {StepId::kInstallMatchTags, StepId::kInstallEquipRefire, StepId::kInstallIrradianceDefault};
+  for (const bool everything : {false, true}) {
+    for (const bool throws : {false, true}) {
+      FakeSteps s = FakeSteps::With(everything, everything, everything, everything);
+      s.combatActive = throws;  // a question that throws is combat off, whatever it would have said
+      s.combatActiveThrows = throws;
+      const ConstructorReport r = RunConstructorSequence(s);
+      for (const StepId id : combatOnly) {
+        QCHECK(r.at(id).state == StepState::kSkipped);
+        QCHECK(std::strcmp(r.at(id).reason, "combat_inactive") == 0);
+      }
+      QCHECK(!s.Ran("match_tags") && !s.Ran("equip_refire") && !s.Ran("irradiance"));
+      QCHECK(s.Index("vk_ext_window") == s.Index("permission_wait") + 1);
+      QCHECK(r.at(StepId::kInstallPermissionWait).state == StepState::kOk);
+      QCHECK(r.at(StepId::kArmClockLevels).state == StepState::kOk);
+    }
+  }
+  {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.combatActive = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    for (const StepId id : combatOnly) QCHECK(r.at(id).state == StepState::kOk);
+    QCHECK(s.Index("match_tags") == s.Index("permission_wait") + 1);
+    QCHECK(s.Index("equip_refire") == s.Index("match_tags") + 1);
+    QCHECK(s.Index("vk_ext_window") == s.Index("equip_refire") + 1);
+  }
+  for (const char* step : {"match_tags", "equip_refire"}) {
+    for (const char* mode : {"fail", "throw"}) {
+      FakeSteps s = FakeSteps::With(true, true, true, true);
+      s.combatActive = true;
+      if (std::strcmp(mode, "fail") == 0) s.failing = {step}; else s.throwing = {step};
+      const ConstructorReport r = RunConstructorSequence(s);
+      const StepId id = std::strcmp(step, "match_tags") == 0 ? StepId::kInstallMatchTags : StepId::kInstallEquipRefire;
+      QCHECK(r.at(id).state != StepState::kOk);
+      QCHECK(s.Ran("match_tags") && s.Ran("equip_refire") && s.Ran("vk_ext_window") && s.Ran("irradiance"));
+      QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
     }
   }
 }
@@ -699,7 +752,7 @@ void TestResourceRequestHookRunsInEveryBuildOrderedAndContained() {
   {  // release: the counters and the hook run, its log lines are off, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
@@ -712,7 +765,7 @@ void TestResourceRequestHookRunsInEveryBuildOrderedAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
@@ -854,7 +907,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -866,7 +919,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     // The unresolved configuration is a mistake, so the level is `stock`: its counters are registered and the step runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -1056,9 +1109,10 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "identify_headset", "attach", "clock", "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "match_tags", "equip_refire", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "irradiance", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.combatActive = true;  // so the combat-only steps run and can throw (docs/adr/0047)
     s.throwing = {name};
     const ConstructorReport r = RunConstructorSequence(s);  // must return, not terminate
     QCHECK(r.attempted > 0);
@@ -2570,7 +2624,8 @@ int main() {
   TestTextureQualityIsUnconditionalIndependentAndContained();
   TestRenderConfigIsUnconditionalOrderedAndContained();
   TestMenuCardsAreUnconditionalOrderedAndContained();
-  TestIrradianceDefaultIsUnconditionalOrderedAndContained();
+  TestIrradianceDefaultIsCombatOnlyOrderedAndContained();
+  TestCombatOriginHooksInstallOnlyWhereCombatRuns();
   TestWizardMetricIsGatedOrderedAndContained();
   TestClockLevelsIsUnconditionalIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();

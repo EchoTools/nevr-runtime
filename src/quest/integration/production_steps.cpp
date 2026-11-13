@@ -596,6 +596,18 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallMatchTags() override {
+    const bool ok = nevr_quest::integration::InstallMatchTagsHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallEquipRefire() override {
+    const bool ok = nevr_quest::integration::InstallEquipRefireHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallVkExtWindow() override {
     const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
     detail_ = ok ? "ok" : "got_hook_refused";

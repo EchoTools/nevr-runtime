@@ -2,7 +2,7 @@
  *
  * What a module asks. A combat module installs only when `combat::Active()` is true, and a decision a
  * sentinel hook asks of the combat area (the refresh-rate rule, ADR 0046 rule 3) answers with the game's own value when it is false.
- * The release APK's base is the reference build, whose own combat modules live in its `libvrapi.so` and hook libr15 words
+ * The reference APK's base (`just release-quest-reference-apk`) is the reference build, whose own combat modules live in its `libvrapi.so` and hook libr15 words
  * (docs/adr/0034-one-hook-manager-per-process.md); a folded module installed there would be a second owner of the same behaviour. The
  * combat code is compiled into every sentinel, so one loader asset per tag serves every variant (ADR 0040 rule 1), and this gate is
  * what keeps it from running in the APKs that do not carry combat.
@@ -13,8 +13,9 @@
  * is read from the APK's stamp before the first log line (SetVariant); the answer is made once the configuration is resolved
  * (Resolve, from the constructor sequence's config step), because `combat.force` lives there. Until then nothing is active.
  *
- * Not gated by this. Combat-area code that ships to every APK on purpose is outside the rule and says so in its header:
- * match_tags.h (name tags on by default, #2090) and equip_refire.h (the equipment change event sent again, #2121) install on every launch.
+ * Gated by this too (docs/adr/0047). match_tags.h (name tags on by default, #2090) and equip_refire.h (the equipment change event sent
+ * again, #2121) install from constructor steps of their own that the sequence runs only when Active() is true, and so does the grey
+ * irradiance default (sentinel/irradiance_default_hook.h).
  *
  * Lines (sentinel log), one per process:
  *   {"event":"combat_active","variant":"none|q15t|combat|perf-probe|arena","kind":"dev|release","active":1|0,

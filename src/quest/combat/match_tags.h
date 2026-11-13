@@ -33,8 +33,9 @@
  * for the base object). Both are hooked, so every construction path gets the default whichever symbol it takes; no ADR 0021 row is
  * needed, because libr15 is linked BIND_NOW and calls the constructor through a PLT stub.
  *
- * Which APKs (docs/adr/0046 rule 5). This ships to every APK, the release APK and the variants alike, and is not gated by combat::Active()
- * (combat_active.h): it installs on every launch (entry.cpp, InstallPermissionWaitHook) whatever the variant stamp says.
+ * Which APKs (docs/adr/0047). It installs only where combat::Active() is true (combat_active.h): the constructor sequence's own step
+ * `install_match_tags` (integration/ctor_sequence.h), right after the permission-wait hook. An arena or plain release skips it
+ * (`combat_inactive`) and keeps the game's own default.
  *
  * Frequency (ADR 0038). The constructor runs once per process (Main_), so the wrapper's cost is paid once; it is not a hot path.
  *

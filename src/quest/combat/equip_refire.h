@@ -39,8 +39,9 @@
  * already replaced, is refused on its own and logged by GotHook with its chain); a slot that is refused leaves the game's call through
  * it as it is. A pin that differs refuses the module and changes nothing.
  *
- * Which APKs (docs/adr/0046 rule 5). This ships to every APK, the release APK and the variants alike, and is not gated by combat::Active()
- * (combat_active.h): it installs on every launch (entry.cpp, InstallPermissionWaitHook) whatever the variant stamp says.
+ * Which APKs (docs/adr/0047). It installs only where combat::Active() is true (combat_active.h): the constructor sequence's own step
+ * `install_equip_refire` (integration/ctor_sequence.h), right after the name tags. An arena or plain release skips it
+ * (`combat_inactive`) and keeps the game's own setters.
  *
  * Frequency (ADR 0038). The setters run once per loadout event (a station button press, a bot cycling its gun, the game restoring a
  * loadout), reached from script nodes and the deferred queue, never per frame (the callers were read in ReVault; calls per frame were not
