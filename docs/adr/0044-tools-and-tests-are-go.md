@@ -7,12 +7,16 @@ audience: all
 
 # ADR 0044: tools and their tests are written in Go; Python only with a recorded reason
 
-Status: proposed. Applies to everything under `tools/` (tools, checks, code generators, test helpers), to `tools/tests/`,
+Status: accepted 2026-11-13. Applies to everything under `tools/` (tools, checks, code generators, test helpers), to `tools/tests/`,
 and to every test of a tool, wherever it lives. Amends ADR 0041 rule 4 where it names Python. Tracked by #2132.
+
+Reason for accepting: nothing a tool or a test does needs Python when Go can do it, tests above all, and a fake command
+costs 1.8 ms in Go against 37 ms as a Python shim (Context), and the suite runs thousands of them. Python files are still
+being added under `tools/`, so rule 2 has a check that refuses a new one without a recorded reason.
 
 ## Context
 
-`just test-tools` runs on every pull request (AGENTS.md, "Builds": "Every PR, whatever it touches, also runs
+`just test-tools` runs on every change (AGENTS.md, "Builds": "Every change, whatever it touches, also runs
 `just test-tools`"). It is 223 Python test files (`tools/tests/test_*.py`, 51,136 lines, about 3,900 cases) over 103
 Python files of tools (27,776 lines, `git ls-files 'tools/*.py'` outside `tools/tests`). Measured for #2132 on a 16-core,
 32-thread Linux machine:
@@ -69,13 +73,20 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 
    "It works", "it is quicker to write in Python" and "the tests are already Python" are not reasons.
 
+   A Python file added under `tools/` since the merge-base with `origin/main` records its reason in its own header: a
+   line in its first 20 lines reading `ADR 0044 recorded reason: <the reason, in words>` (at least 10 characters
+   after the colon). `tools/internal/policy` (`AddedPython`, `WithoutReason`) finds the added files with git and
+   `go test` fails each one whose header lacks the line. The marker is in addition to the port-list entry below (or the
+   row of "Where Python stays"), not a replacement for it. Files already in the tree are not touched by this check.
+
    A Python file that is to be ported is on the port list (`tools/internal/policy/python_to_port.txt`: its path, a tab,
    and why it is still Python). A file added after this ADR goes on the list in the change that adds it, with that
-   reason, and the policy test fails an added file with no entry and an entry with no reason. The reason for a file that
+   reason, and the policy test fails an added file with no entry and an entry with no reason (and, by the paragraph above,
+   an added file whose header lacks the marker). The reason for a file that
    extends an existing Python test pattern is that it is ported with the units of #2132 that own that pattern.
 3. **Ports follow the units of #2132.** A Python tool not in the table is ported by its unit. Until then a fix may stay
    Python, and so may a change to a test's setup that adds no behaviour to a tool (an argument, an environment
-   variable); a pull request that adds behaviour to a Python tool (a new option, step or output) ports it first.
+   variable); a change that adds behaviour to a Python tool (a new option, step or output) ports it first.
 4. **Shell is for sequencing.** A shell script that runs other commands one after another and reads nothing back but
    their exit status may stay shell. A script that parses output, loops, polls, waits or times anything is a tool and
    is Go, except:
@@ -91,7 +102,7 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 5. **One module.** `tools/go.mod` (module `github.com/EchoTools/nevr-runtime/tools`) holds every Go tool;
    `tools/symcache` is a package of it. A command is `tools/cmd/<kebab-name>/`, and the binary takes the directory's
    name. Shared code is `tools/internal/<package>/`; the test kit is `tools/internal/testkit/`. A third-party module
-   needs a line in the pull request saying why the standard library does not do it.
+   needs a line in the commit message saying why the standard library does not do it.
 6. **`main` is a shell around `run`.** A command's `main` is
    `os.Exit(run(ctx, args, os.Getenv, os.Stdin, os.Stdout, os.Stderr))`. Tests call `run` in the test process; they
    start the binary only where the process boundary is what is tested (an exit status from a signal, a process group,
@@ -146,7 +157,7 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
     the form of the test runner's file stem) and `pid`, then the fields of the call. A port keeps the file name and the
     fields of the Python tool's log, passing any field `runlog` does not add itself as a field of the call, so a query over
     the history keeps working.
-14. **A port proves itself.** A pull request that ports a tool:
+14. **A port proves itself.** A change that ports a tool:
     1. runs the Python tests that start the tool as a process against the Go binary, once, before it deletes them,
        and shows them passing;
     2. runs `gremlins` over the ported packages, while it runs on the Go version the builder image pins, and lists
@@ -158,7 +169,7 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 
 | File(s) | Reason | Ends when |
 | --- | --- | --- |
-| `tools/echomod/**` (31 Python files, 8,708 lines) and the `generate-combat-overrides` recipe | Port cost against saving: no test in `tools/tests` names it, so a port saves no test time; 8,708 lines; five commits in its history, the last that changed what it does is `2ef919f32c88738dae649a0c1bbb1924d2c1a8d5`, since which it has had a 1-line path change (`2e23a64a5a9374d45e0d38a23d404a002531e5ae`), a mode bit (`c780136e41115d44e043abfdd36c3e3fb13bad7e`) and its README (`6cea8e3e684b2ec08ac462faa93c95e85210f98e`) | a pull request changes its behaviour; that pull request ports what it changes |
+| `tools/echomod/**` (31 Python files, 8,708 lines) and the `generate-combat-overrides` recipe | Port cost against saving: no test in `tools/tests` names it, so a port saves no test time; 8,708 lines; five commits in its history, the last that changed what it does is `2ef919f32c88738dae649a0c1bbb1924d2c1a8d5`, since which it has had a 1-line path change (`2e23a64a5a9374d45e0d38a23d404a002531e5ae`), a mode bit (`c780136e41115d44e043abfdd36c3e3fb13bad7e`) and its README (`6cea8e3e684b2ec08ac462faa93c95e85210f98e`) | a change alters its behaviour; that change ports what it alters |
 | `tools/run_tool_tests.py` | Retired by unit G1a of #2132 | G1a merges |
 
 `tools/winvm/` is not in the table: both of its libraries have a Go counterpart (Context), and it ports in its own unit.
@@ -169,8 +180,9 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
   the port list of #2132 or a violation. `tools/internal/policy` holds that list (`python_to_port.txt`, each entry with
   its reason) and its test fails on a `.py` file that is neither on it nor in the table, on a listed file that is no
   longer tracked, on an entry with no reason, and on an entry added since the merge-base with `origin/main` that has
-  none. The check fails, rather than skips, when `origin/main` exists but shares no history with HEAD (a shallow clone:
-  fetch more history), and names its skip when there is no `origin/main`.
+  none. A second test fails a `.py` file added since the merge-base whose first 20 lines lack the
+  `ADR 0044 recorded reason:` marker (`AddedPython`). Both checks fail, rather than skip, when `origin/main` exists but shares
+  no history with HEAD (a shallow clone: fetch more history), and name their skip when there is no `origin/main`.
 - `git grep -nE 'time\.Sleep\(' -- 'tools/*.go'`: a hit in a `_test.go` file is a violation unless it is inside a
   `synctest.Test` bubble; a hit in a tool is a violation unless its duration is a parameter. The policy test makes the
   same check on the syntax tree.
@@ -204,12 +216,12 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
   `generate-symcache`, which runs `go run .` in `tools/symcache`. What goes is the need for Python and pytest.
 - `.github/workflows/echo-symbols-sync.yml` takes its Go version from `tools/go.mod` (`go-version-file`), and its
   `go run .` and `go test ./...` still run in `tools/symcache`, now a package of that module.
-- Test time on a pull request no longer grows with interpreter starts or fixed waits; a toolchain test costs time only
-  on the pull requests that change its inputs.
+- Test time on a change no longer grows with interpreter starts or fixed waits; a toolchain test costs time only
+  on the changes that touch its inputs.
 - A regression a gated test would catch, made by a file not in its inputs, is found at the next `--all` run (the
-  release cut), not on its pull request. Inputs are therefore declared wide (directories, not single files).
-- Pull requests open when this ADR merges keep their Python tests; a Python file one adds goes on the port list with
-  its reason, which the policy test requires and a reviewer reads.
+  release cut), not on its change. Inputs are therefore declared wide (directories, not single files).
+- Branches open when this ADR lands keep their Python tests; a Python file one adds goes on the port list (or is a row
+  of "Where Python stays") with its reason and carries the recorded-reason marker in its header, which the policy tests require and a reviewer reads.
 
 ## Not claimed
 

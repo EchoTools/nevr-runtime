@@ -1,6 +1,6 @@
 // Package policy holds the machine-checked half of ADR 0044: which Python files under tools/ remain, and why; and the
 // scan for sleeping to wait in Go. The data is python_to_port.txt (the files still to port; it only shrinks) and Stays
-// (the files that stay Python, mirrored by the ADR's table); policy_test.go is the check.
+// (the files that stay Python, mirrored by the ADR's table); policy_test.go and reason_test.go are the checks.
 package policy
 
 import (
@@ -33,7 +33,7 @@ var Stays = []Stay{
 	{
 		Path:     "tools/echomod/",
 		Reason:   "port cost against saving: no test in tools/tests names it, so a port saves no test time",
-		EndsWhen: "a pull request changes its behaviour; that pull request ports what it changes",
+		EndsWhen: "a change alters its behaviour; that change ports what it alters",
 	},
 	{
 		Path:     "tools/run_tool_tests.py",
