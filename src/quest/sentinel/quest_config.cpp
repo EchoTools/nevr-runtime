@@ -47,6 +47,7 @@ constexpr const char* kHandFlipName = "hand_flip";               // the other ke
 constexpr const char* kAssetsCdnUrlKey = "assets.cdn_url";
 constexpr const char* kAssetsManifestKey = "assets.manifest";
 constexpr const char* kAssetsRequiredOnlyKey = "assets.required_only";
+constexpr const char* kAssetsWholeGameKey = "assets.whole_game";
 constexpr const char* kAssetsLabelsPath = "assets.labels";
 constexpr std::size_t kMaxAssetLabels = 32;
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
@@ -405,6 +406,19 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
       Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsRequiredOnlyKey + " rejected reason=not_a_boolean (default stays)");
     }
   }
+  if (cfg.Kind(kAssetsWholeGameKey) != nevr::NodeKind::kAbsent) {
+    if (cfg.GetBool(kAssetsWholeGameKey).has_value()) {
+      a.wholeGame = ReadBool(cfg, kAssetsWholeGameKey, false, r);
+      given = true;
+    } else {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsWholeGameKey + " rejected reason=not_a_boolean (default stays)");
+    }
+  }
+  if (a.wholeGame && a.manifest.empty()) {
+    // The mode serves the game from the manifest `assets.manifest` names; with none there is nothing to serve it from.
+    a.wholeGame = false;
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsWholeGameKey + " rejected reason=no_manifest (the game's own data stays in use; name assets.manifest)");
+  }
   const nevr::NodeKind labelsKind = cfg.Kind(kAssetsLabelsPath);
   if (labelsKind == nevr::NodeKind::kMapping) {
     std::size_t seen = 0;
@@ -709,6 +723,7 @@ void ReportState(LoadResult& r) {
       std::string("config key=assets labels=") + std::to_string(r.config.assets.labels.size()) +
           " required_only=" + (r.config.assets.requiredOnly ? "1" : "0") + " cdn_url=" + (r.config.assets.cdnUrl.empty() ? "default" : "config") +
           " manifest=" + (r.config.assets.manifest.empty() ? "default" : "config") +
+          " whole_game=" + (r.config.assets.wholeGame ? "1" : "0") +
           " source=" + (r.config.assets.source == Source::kFile ? "config" : "default"));
   // The `combat:` keys are reported once, as the structured `combat_config` line (combat/combat_install.h LogConfig), not here.
   for (const FeatureSpec& f : kFeatures) {

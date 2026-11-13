@@ -30,6 +30,11 @@
  *   - the fetch fails: the visible message (toast_presenter.h) is shown and held ten seconds, a `data_step` Error line
  *     records it, and the process ends with a nonzero code after the `android_main_returned` line and the before-exit
  *     report (process_end::EndWithExitCode) instead of letting the game fail its own load.
+ * The whole-game mode (Options::all_assets, `assets.whole_game`, any build) replaces all of the above for the data: nothing is looked up
+ * as a data set, recovered, cleaned or fetched, and the process never ends for missing `_data`. The step writes the two zero-package stub
+ * manifests the engine reads at boot (data/boot_stub.h), keeps any manifest already there, runs Options::all_assets_ready, and ends as
+ * `data_step outcome=stubbed`. A stub that cannot be written, or a worker that answers not-ok, shows its message, holds it and ends the
+ * process with reason `data_step_failed`. The bundled content pack still follows.
  * There is no cancel. The step blocks android_main's thread, the only thread that reads the glue's destroy command
  * (android_app::destroyRequested is written by android_main's own looper poll), so nothing can end the download from
  * inside. A player who quits ends the process by the system; the marked `_data.zip.part` stays, and the next launch
@@ -68,6 +73,7 @@
 #include <vector>
 
 #include "permission_wait_hook.h"
+#include "quest/data/data_step.h"
 #include "quest/data/transport.h"
 #include "quest/sentinel/data_root.h"
 
@@ -97,6 +103,12 @@ struct Options {
                                                // 0: not held and not shown again (release builds, entry.cpp)
   bool probe_enabled = false;                  // read the measurement probe file (dev builds only; entry.cpp sets it)
   bool allow_fetch = false;                    // download missing data (dev builds only; entry.cpp sets it); false: only look
+  // The whole-game mode (`assets.whole_game`, quest_config.h; entry.cpp sets it from the configuration), any build: the data step writes the
+  // two zero-package stub manifests (data/boot_stub.h) instead of fetching the data zip and never ends the process for missing `_data`.
+  // `all_assets_ready` is the launch's own setup that follows the stubs (the download of the game's objects and the mount of the shadow
+  // manifest, which the first archive load needs), called with the data root; null: nothing follows. A result that is not ok ends the process.
+  bool all_assets = false;
+  std::function<data::AllAssetsResult(const std::string& root)> all_assets_ready;
   std::vector<std::string> recovery_roots;     // empty: both data roots (test seam)
   // The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md). `apk_path` empty: the APK the sentinel was
   // mapped from (dladdr). The rest are test seams: free bytes of the root (null: statvfs) and a probe the pack step calls

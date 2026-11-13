@@ -34,7 +34,9 @@
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
 //
 // `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0045) change the CDN texture delivery's defaults
-// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default.
+// (AssetsChoice); a wrong value is one Warning that names the key and leaves the default. `assets.whole_game` (a boolean, off when absent; ADR 0045
+// decision 11) says the manifest holds every asset of the game: the data step then writes the stub manifests instead of fetching the data zip.
+// It needs `assets.manifest`; without one it is off, with one Warning.
 //
 // `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
 // written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
@@ -162,6 +164,7 @@ struct AssetsChoice {
   std::string manifest;
   bool requiredOnly = false;
   std::vector<std::pair<std::string, std::string>> labels;  // (label, "on" | "off" | "required"), in file order
+  bool wholeGame = false;  // `assets.whole_game`: the manifest named by `assets.manifest` holds every asset of the game, so the data step writes the stub manifests (data/boot_stub.h) and fetches no data zip. Needs `assets.manifest`.
   Source source = Source::kAbsent;                         // kFile: the file gave at least one accepted assets key
 };
 

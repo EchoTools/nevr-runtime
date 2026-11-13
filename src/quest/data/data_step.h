@@ -29,6 +29,7 @@ enum class StepOutcome {
   kFetched,  // the data was fetched and is in place
   kFailed,   // the data could not be had; the floor message was presented
   kMissing,  // the data is not there and this build does not fetch (allow_fetch false); kGameDataMissing was presented
+  kStubbed,  // the whole-game mode (StepConfig::all_assets): both stub manifests are in place; no data was fetched
 };
 
 const char* StepOutcomeName(StepOutcome outcome) noexcept;
@@ -61,8 +62,28 @@ inline constexpr const char* kNeedsStoragePermission =
 inline constexpr const char* kGameDataMissing =
     "Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again.";
 
+// What the whole-game mode's worker (StepConfig::all_assets_ready) answers: ok, or the message the player reads before the process ends.
+struct AllAssetsResult {
+  bool ok = true;
+  std::string message;
+};
+
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
+  // The whole-game mode (`assets.whole_game`, quest_config.h): the CDN holds every asset of the game, so the data zip is not the data
+  // of this launch. The step decides nothing about fetching and fetches nothing, whatever `allow_fetch` says and whatever is or is not
+  // under the data root: it writes the two zero-package stub manifests the engine reads at boot (boot_stub.h) where they are absent,
+  // keeps any manifest that is there, then asks `all_assets_ready` to finish the launch's setup (the download and the mount) and
+  // returns kStubbed. It never ends the process for a missing `_data`. A stub that cannot be written is kFailed (status kBadRoot): the
+  // engine could not start without it either. The stubs go to `fetch_root_override` when it is set, else to the root the decision picked.
+  bool all_assets = false;
+  // Called once, after both stubs are in place, with the root they are in. Null: nothing follows, and one `data_all_assets_ready` Warning says
+  // the launch is degraded (the engine boots on stubs with no asset source).
+  // A result that is not ok ends the step as kFailed with its message, presented and held like any floor message.
+  std::function<AllAssetsResult(const std::string& root)> all_assets_ready;
+  // Test seams for the stub files. `make_dirs` creates a directory and its parents (null: the real filesystem); `write_file` (below)
+  // writes a stub.
+  std::function<bool(const std::string& dir)> make_dirs;
   // The legacy root (/storage/emulated/0/readyatdawn) is read only with the storage permission; the media root
   // (Android/media/<package>, the app's own directory) needs none. False: the legacy root is neither recovered nor
   // looked at, the decision is made on the media root alone, and one `data_legacy_skipped` event says so.
@@ -136,6 +157,7 @@ struct StepResult {
   DataAction action = DataAction::kUse;
   std::string root;
   std::string message;  // set when the outcome is kFailed
+  bool stub_write_failed = false;  // kFailed in the whole-game mode because a stub manifest could not be written (status is kBadRoot)
 };
 
 StepResult RunDataStep(const StepConfig& config, Transport& transport);
