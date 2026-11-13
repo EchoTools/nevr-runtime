@@ -8,6 +8,8 @@
 //  1. fetches origin and records origin's main (`git ls-remote origin refs/heads/main`), the "before" SHA;
 //  2. rebases the branch's own commits onto origin/main, so each commit keeps its message and no merge commit or squash
 //     lands, or leaves the branch as it is when it already contains origin/main; a conflict aborts the rebase and stops;
+//     checks the tip commit's message for the evidence "What a landed commit carries" lists (internal/evidence, the check
+//     of tools/cmd/commit-evidence); a message that lacks any of it stops before the tests and the push;
 //  3. runs each -test command on the result through bash -c; a non-zero exit stops before the push;
 //  4. pushes the tip with `git push origin HEAD:refs/heads/main`, never forced, so origin takes only a fast-forward;
 //  5. records origin's main again, the "after" SHA, which must be the tip;
@@ -18,7 +20,7 @@
 // Exit codes: 0 landed; 2 refused before the lock (main checkout, detached HEAD, main itself, a dirty tree, no -test,
 // bad flags); 3 the lock was not free within -lock-wait; 4 rebase conflict; 5 a test failed; 6 origin refused the push
 // (its main moved: run it again); 7 origin's main after the push is not the tip; 8 nothing to land; 9 a git command
-// failed; 74 the log could not be written.
+// failed; 10 the tip commit message lacks its evidence; 74 the log could not be written.
 package main
 
 import (
@@ -36,10 +38,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/EchoTools/nevr-runtime/tools/internal/evidence"
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 )
 
 const lockName = "nevr-land.lock"
+
+// exitEvidenceMissing is the exit code of a tip commit whose message lacks its evidence.
+const exitEvidenceMissing = 10
 
 type testList []string
 
@@ -221,6 +227,16 @@ func run(ctx context.Context, args []string, env []string, stdout, stderr io.Wri
 		if count == "0" {
 			log.Info("land_nothing", "outcome", "nothing_to_land")
 			return 8
+		}
+		msg, err := l.git(top, "log", "-1", "--format=%B", "HEAD")
+		if err != nil {
+			return failed(err)
+		}
+		if missing := evidence.Missing(msg); len(missing) > 0 {
+			log.Warn("land_evidence_missing", "outcome", "evidence_missing", "missing", missing)
+			fmt.Fprintf(stderr, "land: the tip commit's message lacks its evidence; nothing was pushed (skill landed-commit-evidence):\n  %s\n",
+				strings.Join(missing, "\n  "))
+			return exitEvidenceMissing
 		}
 		for _, c := range tests {
 			t0 := time.Now()

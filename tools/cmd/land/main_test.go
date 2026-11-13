@@ -14,6 +14,30 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
+// evidenceBody is the rest of a message that carries what "What a landed commit carries" lists.
+const evidenceBody = ` (Refs #1)
+
+## Search statement
+- ` + "`git grep -n x`" + `: one hit.
+
+## Siblings
+Shape: none; ` + "`git grep -n y`" + `: no other instance.
+
+## Symbols
+Edited: c.txt.
+
+## Commands and results
+- ` + "`go test`" + `: exit 0.
+
+## Mutants
+None: test fixture.
+
+## Platform parity
+Fixture.
+
+Co-Authored-By: T <t@example.org>
+`
+
 // repos is a bare origin, a main checkout and a linked worktree on branch work with two commits of its own.
 type repos struct {
 	t                      *testing.T
@@ -32,7 +56,7 @@ func setup(t *testing.T) *repos {
 	r.git(r.main, "push", "origin", "main")
 	r.git(r.main, "worktree", "add", "--no-track", "-b", "work", r.wt, "origin/main")
 	r.commit(r.wt, "b.txt", "feat: one")
-	r.commit(r.wt, "c.txt", "fix: two")
+	r.commit(r.wt, "c.txt", "fix: two"+evidenceBody)
 	return r
 }
 
@@ -116,7 +140,7 @@ func TestAMovedMainIsRebasedUnderEachCommitAndEveryMessageIsKept(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
 	subjects := r.git(r.root, "--git-dir", r.origin, "log", "--format=%s", "main")
-	if want := "fix: two\nfeat: one\ndocs: elsewhere\nchore: base"; subjects != want {
+	if want := "fix: two (Refs #1)\nfeat: one\ndocs: elsewhere\nchore: base"; subjects != want {
 		t.Fatalf("origin's history:\n%s\nwant:\n%s", subjects, want)
 	}
 	if merges := r.git(r.root, "--git-dir", r.origin, "rev-list", "--merges", "main"); merges != "" {
@@ -216,5 +240,22 @@ func TestARejectedPushLeavesOriginAloneAndSaysSo(t *testing.T) {
 	}
 	if r.last()["outcome"] != "push_rejected" {
 		t.Fatalf("last record %v", r.last())
+	}
+}
+
+// Planted violation: the tip commit has no evidence, so nothing is pushed and the refusal names what is missing.
+func TestPlantedTipWithoutEvidenceIsRefusedBeforeTheTests(t *testing.T) {
+	r := setup(t)
+	r.commit(r.wt, "e.txt", "fix: bare")
+	before := r.originMain()
+	code, errText := r.land(r.wt, "-test", "true")
+	if code != exitEvidenceMissing || !strings.Contains(errText, "## Search statement") || !strings.Contains(errText, "landed-commit-evidence") {
+		t.Fatalf("code %d: %s", code, errText)
+	}
+	if r.originMain() != before {
+		t.Fatal("a commit without evidence was pushed")
+	}
+	if got := r.last()["outcome"]; got != "evidence_missing" {
+		t.Fatalf("outcome %v", got)
 	}
 }

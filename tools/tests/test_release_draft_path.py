@@ -234,15 +234,14 @@ class ReleaseDraftPathTest(unittest.TestCase):
             self.assertEqual(jobs[name]["permissions"]["contents"], "read", name)
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
 
-    def test_the_release_steps_in_agents_md_have_unique_labels_and_every_reference_resolves(self):
-        text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-        section = text.split("Releases are built by CI from a tag", 1)[1].split("Build presets:", 1)[0]
-        labels = re.findall(r"#\s+(\d+)\.\s", section)
+    def test_the_release_steps_in_releasing_md_have_unique_labels_and_every_reference_resolves(self):
+        text = (REPO / "RELEASING.md").read_text(encoding="utf-8")
+        section = text.split("## The flow", 1)[1].split("## Names", 1)[0]
+        labels = re.findall(r"^\|\s*(\d+w?|\d+f)\s*\|", section, re.M)
         self.assertEqual(sorted(labels), sorted(set(labels)), f"a step number is used twice: {labels}")
-        self.assertTrue({"1", "2", "3", "4", "5"} <= set(labels), labels)
-        for ref in re.findall(r"\(step (\d+)(?:, or (D\d+))?\)", section):
-            for label in filter(None, ref):
-                self.assertIn(label, labels)
+        self.assertTrue({"0", "1", "2", "3", "4", "5", "7"} <= set(labels), labels)
+        for ref in re.findall(r"\bstep (\d+)\b", section):
+            self.assertIn(ref, labels)
 
     def test_a_draft_dispatch_builds_the_same_files_as_a_release_event(self):
         jobs = load()["jobs"]

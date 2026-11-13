@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -174,4 +175,59 @@ func (e *envList) get(key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// RunLogRecords returns the records of tool's run log (internal/runlog) under the XDG_STATE_HOME of env, one map for
+// each JSON line, and fails the test when the file is missing or a line is not JSON. A test that runs a tool with env
+// reads what the run wrote here, never the real user log.
+func RunLogRecords(t T, env []string, tool string) []map[string]any {
+	t.Helper()
+	path := filepath.Join(Getenv(env)("XDG_STATE_HOME"), "nevr-runtime", tool+".jsonl")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the run log of %s: %v", tool, err)
+	}
+	var recs []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("a line of %s is not JSON: %q", path, line)
+		}
+		recs = append(recs, m)
+	}
+	return recs
+}
+
+// invocationRecords is what one run of runlog.Invocation writes: an "invoked" and a "finished" record.
+const invocationRecords = 2
+
+// RequireRunRecorded fails the test unless the last two records of tool's run log (see RunLogRecords) are the pair
+// internal/runlog.Invocation writes for one run: "invoked" with the tool's name and exactly wantArgs, then "finished"
+// with exit code wantExit and the outcome that code means (ok for 0, failed otherwise).
+func RequireRunRecorded(t T, env []string, tool string, wantExit int, wantArgs []string) {
+	t.Helper()
+	recs := RunLogRecords(t, env, tool)
+	if len(recs) < invocationRecords {
+		t.Fatalf("the run log of %s has %d record(s), want the invoked and finished pair", tool, len(recs))
+	}
+	start, end := recs[len(recs)-invocationRecords], recs[len(recs)-1]
+	var args []string
+	if raw, ok := start["args"].([]any); ok {
+		for _, a := range raw {
+			args = append(args, fmt.Sprint(a))
+		}
+	}
+	wantOutcome := "ok"
+	if wantExit != 0 {
+		wantOutcome = "failed"
+	}
+	if start["event"] != "invoked" || start["tool"] != tool || strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("the invoked record of %s is %v, want args %q", tool, start, wantArgs)
+	}
+	if end["event"] != "finished" || end["tool"] != tool || end["exit"] != float64(wantExit) || end["outcome"] != wantOutcome {
+		t.Fatalf("the finished record of %s is %v, want exit %d outcome %s", tool, end, wantExit, wantOutcome)
+	}
+	if _, ok := end["ms"].(float64); !ok {
+		t.Fatalf("the finished record of %s has no duration: %v", tool, end)
+	}
 }

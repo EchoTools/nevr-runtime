@@ -146,13 +146,20 @@ dump.rdb
 /modules/*
 !/modules/README.md
 
-# Local Claude Code assets: ignored, except the three tracked things below
-# (the merge-cleanup skill, the nevr-work skill and the engineer primer).
+# Local Claude Code assets: ignored, except the tracked things below
+# (the repo's skills and the engineer primer).
 .claude/*
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/merge-cleanup/
 !.claude/skills/nevr-work/
+!.claude/skills/settle-the-instructions/
+!.claude/skills/prose-to-guard/
+!.claude/skills/landed-commit-evidence/
+!.claude/skills/mutant-proof/
+!.claude/skills/run-on-a-copy/
+!.claude/skills/verify-published-release/
+!.claude/skills/file-or-close-issue/
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/nevr-runtime-engineer.md

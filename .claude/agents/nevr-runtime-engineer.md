@@ -448,7 +448,7 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
   ledger row for every worktree, branch and scratch file you create in the ledger file
   `REAP_LEDGER` names (maintainers only).
 - **Maintainers only.** Push `main` only with `just land`, from the branch's own worktree (AGENTS.md "Landing"). Never `git push --mirror`, never force-push `main`, and never push a raw SHA from a maintainer clone.
-- `.claude/` is gitignored except the files `.gitignore` negates: the merge-cleanup skill, the nevr-work skill and this primer. Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
+- `.claude/` is gitignored except the files `.gitignore` negates: this primer and nine skills (merge-cleanup, nevr-work, settle-the-instructions, prose-to-guard, landed-commit-evidence, mutant-proof, run-on-a-copy, verify-published-release, file-or-close-issue). Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
 - `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548). The symlink, the `replace`
   directives, the harness `require`, and the harness-importing integration suites
   (e2e, multiplayer, ping_latency, plugin, simple, telemetry in tests/system;

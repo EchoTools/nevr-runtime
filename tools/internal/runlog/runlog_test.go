@@ -443,3 +443,31 @@ func TestAFieldInsideAGroupKeepsItsName(t *testing.T) {
 		t.Errorf("record = %v", rec)
 	}
 }
+
+// invocationRecords is what one run of Invocation writes: "invoked" and "finished".
+const invocationRecords = 2
+
+var invokedArgs = []string{"-x", "y"}
+
+// Invocation writes one invoked and one finished record, with the arguments, the exit code and the outcome, and returns
+// the body's exit code.
+func TestInvocationRecordsTheArgumentsTheExitCodeAndTheOutcome(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	getenv := env(map[string]string{"XDG_STATE_HOME": state, "USER": "tester"})
+	const bodyExit = 7
+	code := Invocation("my-tool", invokedArgs, getenv, &bytes.Buffer{}, func(*slog.Logger) int { return bodyExit })
+	if code != bodyExit {
+		t.Fatalf("exit %d, want %d", code, bodyExit)
+	}
+	recs := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))
+	if len(recs) != invocationRecords || recs[0]["event"] != "invoked" || recs[1]["event"] != "finished" {
+		t.Fatalf("records %v", recs)
+	}
+	if args, _ := recs[0]["args"].([]any); len(args) != len(invokedArgs) || args[1] != "y" || recs[0]["user"] != "tester" {
+		t.Fatalf("invoked record %v", recs[0])
+	}
+	if recs[1]["exit"] != float64(bodyExit) || recs[1]["outcome"] != "failed" {
+		t.Fatalf("finished record %v", recs[1])
+	}
+}

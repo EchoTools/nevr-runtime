@@ -6,6 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
+)
+
+// File and directory modes of the files a test writes.
+const (
+	filePerm = 0o644
+	dirPerm  = 0o755
 )
 
 // tree writes files (path -> content) under a new directory and returns it. The directory holds no .git, so the
@@ -15,20 +23,20 @@ func tree(t *testing.T, files map[string]string) string {
 	root := t.TempDir()
 	for p, c := range files {
 		full := filepath.Join(root, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), dirPerm); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(c), filePerm); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return root
 }
 
-func one-home(t *testing.T, root string) (code int, out, errOut string) {
+func oneHome(t *testing.T, root string) (code int, out, errOut string) {
 	t.Helper()
 	var o, e bytes.Buffer
-	code = run([]string{"-root", root}, &o, &e)
+	code = execute([]string{"-root", root}, &o, &e)
 	return code, o.String(), e.String()
 }
 
@@ -41,7 +49,7 @@ func TestPlantedSecondCopyIsRefused(t *testing.T) {
 		"AGENTS.md":                          "Landing.\n3. git push origin HEAD:refs/heads/main\n",
 		"CONTRIBUTING.md":                    "Land it as AGENTS.md says.\n(4) `git push origin HEAD:refs/heads/main`, never forced\n",
 	})
-	code, out, _ := one-home(t, root)
+	code, out, _ := oneHome(t, root)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1; output: %q", code, out)
 	}
@@ -57,7 +65,7 @@ func TestOneHomePasses(t *testing.T) {
 		"AGENTS.md":                          "3. git push origin HEAD:refs/heads/main\n",
 		"CONTRIBUTING.md":                    "Land with `just land`; the steps are in AGENTS.md, \"Landing\".\n",
 	})
-	if code, out, errOut := one-home(t, root); code != 0 {
+	if code, out, errOut := oneHome(t, root); code != 0 {
 		t.Fatalf("exit %d, want 0; stdout %q stderr %q", code, out, errOut)
 	}
 }
@@ -69,8 +77,8 @@ func TestMarkerAbsentFromHomeIsAFailure(t *testing.T) {
 		"AGENTS.md":                          "Landing is described elsewhere.\n",
 		"CONTRIBUTING.md":                    "nothing here\n",
 	})
-	code, _, errOut := one-home(t, root)
-	if code != 2 || !strings.Contains(errOut, "matches no line of its home") {
+	code, _, errOut := oneHome(t, root)
+	if code != exitUsage || !strings.Contains(errOut, "matches no line of its home") {
 		t.Fatalf("exit %d stderr %q, want exit 2 naming the home", code, errOut)
 	}
 }
@@ -82,7 +90,7 @@ func TestAuditsAndRegistryAreExempt(t *testing.T) {
 		"AGENTS.md":                          "git push origin HEAD:refs/heads/main\n",
 		"docs/audits/old.md":                 "git push origin HEAD:refs/heads/main\n",
 	})
-	if code, out, errOut := one-home(t, root); code != 0 {
+	if code, out, errOut := oneHome(t, root); code != 0 {
 		t.Fatalf("exit %d, want 0; stdout %q stderr %q", code, out, errOut)
 	}
 }
@@ -93,7 +101,7 @@ func TestBadRegistryLine(t *testing.T) {
 		"docs/standards/procedure-homes.txt": "landing AGENTS.md no tabs\n",
 		"AGENTS.md":                          "x\n",
 	})
-	if code, _, _ := one-home(t, root); code != 2 {
+	if code, _, _ := oneHome(t, root); code != exitUsage {
 		t.Fatalf("exit %d, want 2", code)
 	}
 }
@@ -108,7 +116,24 @@ func TestRealTreeHasOneHomePerProcedure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, defaultRegistry)); err != nil {
 		t.Fatalf("the registry is missing: %v", err)
 	}
-	if code, out, errOut := one-home(t, root); code != 0 {
+	if code, out, errOut := oneHome(t, root); code != 0 {
 		t.Fatalf("exit %d: a procedure is written outside its home.\n%s%s", code, out, errOut)
 	}
+}
+
+// Planted violation of the logging rule: a run that leaves no record in the tools log fails here. The run is the real
+// command through its own entry point, on a state directory of the test's own.
+func TestARunIsRecordedInTheToolsLog(t *testing.T) {
+	env := testkit.Env(t)
+	root := tree(t, map[string]string{
+		"docs/standards/procedure-homes.txt": registry,
+		"AGENTS.md":                          "3. git push origin HEAD:refs/heads/main\n",
+	})
+	args := []string{"-root", root}
+	var o, e bytes.Buffer
+	code := run(args, testkit.Getenv(env), &o, &e)
+	if code != 0 {
+		t.Fatalf("exit %d: %s%s", code, o.String(), e.String())
+	}
+	testkit.RequireRunRecorded(t, env, "one-home", code, args)
 }

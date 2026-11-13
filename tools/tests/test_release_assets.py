@@ -86,19 +86,18 @@ class ReleaseAssetsTest(unittest.TestCase):
         for name in listed("X.Y.Z"):
             self.assertIn(f"`{name}`", text, f"RELEASING.md does not list {name}")
         agents = (REPO / "AGENTS.md").read_text()
-        self.assertIn("Every release follows RELEASING.md.", agents)
+        self.assertIn("Every release follows RELEASING.md:", agents)
 
-    def test_releasing_md_carries_the_preflight_and_the_one_step_publish_and_agents_md_carries_its_three_steps(self):
-        # RELEASING.md states the flow the release is going to: the preflight, then one `gh release create` that makes the
-        # tag, the release and its assets. KNOWN-WRONG #1865: AGENTS.md and the workflows still tag, cut a draft and
-        # dispatch the build by hand; when #1865 lands AGENTS.md follows RELEASING.md and the second half goes.
+    def test_releasing_md_carries_the_preflight_the_tag_and_the_one_step_publish_and_agents_md_points_at_it(self):
+        # RELEASING.md is the one home of the steps: the preflight, the annotated tag created by the publish, and one
+        # `gh release create` that makes the tag, the release and its assets. AGENTS.md names the recipe and points at it.
         releasing = (REPO / "RELEASING.md").read_text()
-        for step in ("just release-preflight", "gh release create vX.Y.Z --prerelease <staged files…>"):
+        for step in ("just release-preflight", 'git tag -a vX.Y.Z -m "X.Y.Z"',
+                     "gh release create vX.Y.Z --prerelease <staged files…>"):
             self.assertIn(step, releasing)
         agents = (REPO / "AGENTS.md").read_text()
-        for step in ("just release-preflight", 'git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>',
-                     "gh workflow run build.yml --ref v<x.y.z>"):
-            self.assertIn(step, agents)
+        self.assertIn("just release-preflight", agents)
+        self.assertIn("Every release follows RELEASING.md:", agents)
 
     def test_releasing_md_touches_nothing_public_before_the_publish_and_rehearses_nothing_on_actions(self):
         # Actions minutes are billed: no scratch tag, no rehearsal. The checks run on the staged set and the device and
@@ -137,16 +136,13 @@ class ReleaseAssetsTest(unittest.TestCase):
             self.assertNotIn("--draft", line, line)
         self.assertNotIn("gh release edit vX.Y.Z --draft=false", text)
 
-    def test_agents_md_still_cuts_a_titled_draft_and_publishes_from_it(self):
-        # KNOWN-WRONG #1865: AGENTS.md describes what the workflows do today (a titled draft, published by edit). It
-        # follows RELEASING.md when #1865 lands, and this test goes with it.
+    def test_agents_md_marks_the_draft_the_build_still_attaches_to_as_known_wrong(self):
+        # KNOWN-WRONG #1865: build.yml still attaches the signed files to a draft; RELEASING.md (the one home of the
+        # steps) says a release is never left a draft. AGENTS.md says so at the site, and this test goes with #1865.
         text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-        creates = [l for l in text.splitlines() if "&& gh release create " in l]
-        self.assertTrue(creates)
-        for line in creates:
-            self.assertRegex(line, r"--title v\S+ --draft --prerelease --verify-tag", line)
-        self.assertIn("gh release edit v", text)
-        self.assertIn("--draft=false", text)
+        self.assertIn("KNOWN-WRONG #1865", text)
+        self.assertIn("draft", text)
+        self.assertIn("never left as a draft", " ".join((REPO / "RELEASING.md").read_text().split()))
 
     def test_every_workflow_gh_release_create_is_a_draft_prerelease_with_a_verified_tag(self):
         # Release immutability is on: a release created as published is locked before any file is attached, so a

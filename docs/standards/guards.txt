@@ -1,0 +1,9 @@
+# Guards that prove themselves (tools/cmd/guard-proof).
+# name<TAB>directory under tools/cmd<TAB>the step that runs it, as AGENTS.md names it.
+one-home	one-home	just test-tools
+guard-proof	guard-proof	just test-tools
+commit-evidence	commit-evidence	just test-tools
+mutant-proof	mutant-proof	just test-tools
+run-copy	run-copy	just test-tools
+release-verify	release-verify	just test-tools
+issue-prose	issue-prose	just test-tools

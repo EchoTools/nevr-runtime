@@ -209,6 +209,24 @@ func Run(tool string, getenv func(string) string, stderr io.Writer, body func(lo
 	return code
 }
 
+// Invocation is Run for a command-line tool whose work is one pass over its arguments: it writes an "invoked" record
+// (who, from $USER, and the arguments) before body and a "finished" record after it (outcome ok when body returned 0,
+// failed otherwise, the exit code and the duration in milliseconds), so the log shows every run of the tool and how it
+// ended. A tool's arguments are paths and flags; a tool that takes a secret as an argument must not use it.
+func Invocation(tool string, args []string, getenv func(string) string, stderr io.Writer, body func(log *slog.Logger) int) int {
+	return Run(tool, getenv, stderr, func(log *slog.Logger) int {
+		started := time.Now()
+		log.Info("invoked", "user", getenv("USER"), "args", args)
+		code := body(log)
+		outcome := "ok"
+		if code != 0 {
+			outcome = "failed"
+		}
+		log.Info("finished", "outcome", outcome, "exit", code, "ms", time.Since(started).Milliseconds())
+		return code
+	})
+}
+
 // failureWriter remembers the first error of the writer it wraps, and keeps passing writes on.
 type failureWriter struct {
 	w  io.Writer

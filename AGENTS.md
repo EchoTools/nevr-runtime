@@ -22,6 +22,23 @@ The logging standard below is part of this contract:
 
 @docs/standards/logging.md
 
+## Skills
+
+Each skill in `.claude/skills/<name>/SKILL.md` is the procedure for the moment in its trigger. When you reach that
+moment, load the skill and follow it; where another step in this file or in another document says "see `<name>`", that
+step points to the skill and does not repeat it. Each skill has a Go consumer in `tools/cmd/`, proven by its own tests
+(`just test-tools`; registry `docs/standards/guards.txt`, checked by `tools/cmd/guard-proof`).
+
+- `settle-the-instructions`: instruction files, docs or ADRs may disagree, or one procedure is written in more than one file (consumer `one-home`).
+- `prose-to-guard`: a rule exists only as prose, or the text says "no check enforces this" (consumer `guard-proof`).
+- `landed-commit-evidence`: the quick check passed and the final commit message is being written (consumer `commit-evidence`).
+- `mutant-proof`: a test or fix must be shown to fail without the change (consumer `mutant-proof`).
+- `run-on-a-copy`: before any launch script, scenario run or Go system suite that starts the game (consumer `run-copy`).
+- `verify-published-release`: a release is published and its bytes must be proven before anyone tests it (consumer `release-verify`).
+- `file-or-close-issue`: a defect is found and not fixed in the same turn, or an issue is being closed (consumer `issue-prose`).
+
+`merge-cleanup` and `nevr-work` are skills too (after a landing; at the start of any task) and have no consumer of this kind.
+
 ## How an agent works here
 
 These seven rules come before every other rule in this file. Each carries its reason, so it can be checked and not only obeyed.
@@ -183,7 +200,7 @@ size check, removing `_local/config.*`, every `.credentials.json*` and `plugins/
 
 ### What a landed commit carries
 
-The message of the commit that lands carries the items below; it is the evidence ("Review, verification and landing").
+The message of the commit that lands carries the items below; it is the evidence ("Review, verification and landing"). The procedure for writing it, and its check, is the skill `landed-commit-evidence`.
 
 - **A search statement.** Before adding anything, show that nothing in the tree or its history already does it. State
   the commands and what they found, over files *and* history:
@@ -215,7 +232,7 @@ The message of the commit that lands carries the items below; it is the evidence
   Edited: nevr::ReaderGate (Scope, WaitIdle, Enter (new)); test_reader_gate.cpp.
   Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
   ```
-- **A mutant for every changed line of behaviour.** This is stricter than "A test must fail without the change" under
+- **A mutant for every changed line of behaviour** (the procedure and its check: the skill `mutant-proof`). This is stricter than "A test must fail without the change" under
   "Review, verification and landing", which every PR meets; a contributor's PR commit meets; a contributor's commit meets this as well. For every line
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
@@ -838,7 +855,7 @@ your seat name, for example `claude-main` or `codex`.
 
 > The rules hold everywhere. Contributors: see also "For contributors", "Your game install".
 
-- **No agent runs a deploy script or writes into the owner's install.** The main checkout's
+- **No agent runs a deploy script or writes into the owner's install.** Before any run, follow the skill `run-on-a-copy`. The main checkout's
   `echovr/` may be a symlink to the owner's install (`echovr` is git-ignored and untracked, so the repo does not
   guarantee what it is). The install and `echovr/**` in the main checkout are never a deploy target. Each writer below writes into the tree it is
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
@@ -962,7 +979,7 @@ your seat name, for example `claude-main` or `codex`.
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The commit message is the evidence.** The message of the branch's last commit carries what "What a landed commit carries" lists: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`; a commit cannot name its own SHA) and its result, the mutants, what was not run, and the issue. When the content changes before landing, amend it (the branch is unpushed); a content change after a MERGE verdict gets a new review before it lands.
 - **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
-- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test '<command>'` once for each test recipe that covers the change. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
+- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test '<command>'` once for each test recipe that covers the change. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 10 (the tip commit's message lacks its evidence: `tools/cmd/commit-evidence`'s check, skill `landed-commit-evidence`), exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
 - **Verification before landing.** A runtime change is tested by its author before it lands (and its covering tests once more after Landing's rebase): the
   quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
   (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after a rebase. A red PC login run or a red `just verify` on main is a
@@ -1041,7 +1058,7 @@ your seat name, for example `claude-main` or `codex`.
 - **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
   current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
   retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
-- **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
+- **Fix it or file it, in the same turn** (the procedure and its text check: the skill `file-or-close-issue`). A defect you find that you do not fix gets a GitHub issue
   with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
 
 ### Dispatching agents

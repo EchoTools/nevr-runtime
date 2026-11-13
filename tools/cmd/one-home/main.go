@@ -25,13 +25,25 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 )
+
+// A registry line has registryFields tab-separated fields: name, home and the marker pattern (at fieldPattern).
+const (
+	registryFields = 3
+	fieldPattern   = 2
+)
+
+// clipWidth is how many bytes of a matching line are printed.
+const clipWidth = 120
 
 const defaultRegistry = "docs/standards/procedure-homes.txt"
 
@@ -45,25 +57,35 @@ type marker struct {
 	src        string
 }
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+// exitUsage is the exit code of a bad flag, an unreadable or malformed registry, or a marker that matches nothing in its
+// home.
+const exitUsage = 2
 
-func run(args []string, stdout, stderr io.Writer) int {
+func main() { os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr)) }
+
+// run is execute with the tool's run log: one "invoked" and one "finished" record in $XDG_STATE_HOME/nevr-runtime/one-home.jsonl
+// (internal/runlog). A log that cannot be written is exit 74, never a run without its record.
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	return runlog.Invocation("one-home", args, getenv, stderr, func(*slog.Logger) int { return execute(args, stdout, stderr) })
+}
+
+func execute(args []string, stdout, stderr io.Writer) int {
 	fl := flag.NewFlagSet("one-home", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	root := fl.String("root", ".", "repository root")
 	registry := fl.String("registry", defaultRegistry, "registry file, relative to -root")
 	if err := fl.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 	markers, err := readRegistry(filepath.Join(*root, *registry))
 	if err != nil {
 		fmt.Fprintf(stderr, "one-home: %v\n", err)
-		return 2
+		return exitUsage
 	}
 	files, err := markdownFiles(*root)
 	if err != nil {
 		fmt.Fprintf(stderr, "one-home: %v\n", err)
-		return 2
+		return exitUsage
 	}
 	registryRel := filepath.ToSlash(filepath.Clean(*registry))
 	lines := map[string][]string{}
@@ -71,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		b, err := os.ReadFile(filepath.Join(*root, f))
 		if err != nil {
 			fmt.Fprintf(stderr, "one-home: %v\n", err)
-			return 2
+			return exitUsage
 		}
 		lines[f] = strings.Split(string(b), "\n")
 	}
@@ -104,7 +126,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "one-home:", s)
 	}
 	if len(broken) > 0 {
-		return 2
+		return exitUsage
 	}
 	for _, s := range found {
 		fmt.Fprintln(stdout, s)
@@ -136,8 +158,8 @@ func exempt(f string) bool {
 
 func clip(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 120 {
-		return s[:120] + "..."
+	if len(s) > clipWidth {
+		return s[:clipWidth] + "..."
 	}
 	return s
 }
@@ -156,14 +178,14 @@ func readRegistry(path string) ([]marker, error) {
 			continue
 		}
 		parts := strings.Split(line, "\t")
-		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		if len(parts) != registryFields || parts[0] == "" || parts[1] == "" || parts[fieldPattern] == "" {
 			return nil, fmt.Errorf("registry line %d: want name, home and regular expression separated by tabs", n)
 		}
-		re, err := regexp.Compile(parts[2])
+		re, err := regexp.Compile(parts[fieldPattern])
 		if err != nil {
 			return nil, fmt.Errorf("registry line %d: %w", n, err)
 		}
-		out = append(out, marker{name: parts[0], home: parts[1], re: re, src: parts[2]})
+		out = append(out, marker{name: parts[0], home: parts[1], re: re, src: parts[fieldPattern]})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("registry: %w", err)
