@@ -130,8 +130,6 @@ std::uint64_t MaxManifestFrameBytes(std::uint64_t declared_bytes) noexcept;
 
 ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Manifest* out);
 
-// "0x" followed by 1 to 16 hex digits.
-bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept;
-bool IsSha256Hex(std::string_view text) noexcept;
+// ParseHex64 and IsSha256Hex are cargo_format.h's.
 
 }  // namespace nevr_cargo

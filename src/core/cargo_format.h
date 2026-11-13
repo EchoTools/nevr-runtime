@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace nevr_cargo {
 
@@ -41,6 +43,44 @@ inline bool HexDigitValue(char c, unsigned* value) noexcept {
     return true;
   }
   return false;
+}
+
+// "0x" followed by 1 to 16 lowercase hex digits: a type or a name as the manifests write it.
+inline bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept {
+  if (text.size() <= kHexPrefixChars || text.size() > kHexPrefixChars + kSymbolHexDigits || text[0] != '0' || text[1] != 'x') return false;
+  std::uint64_t v = 0;
+  for (std::size_t i = kHexPrefixChars; i < text.size(); ++i) {
+    unsigned d = 0;
+    if (!HexDigitValue(text[i], &d)) return false;
+    v = (v << kHexDigitBits) | d;
+  }
+  *out = v;
+  return true;
+}
+
+// A SHA-256 digest as text: exactly 64 lowercase hex characters.
+inline bool IsSha256Hex(std::string_view text) noexcept {
+  if (text.size() != kSha256HexChars) return false;
+  for (const char c : text) {
+    unsigned ignored = 0;
+    if (!HexDigitValue(c, &ignored)) return false;
+  }
+  return true;
+}
+
+// "0x" and the value in lowercase hex without leading zeros (the form the manifest and the log use for a type or a name).
+inline std::string FormatHex64(std::uint64_t v) {
+  std::string out = "0x";
+  bool started = false;
+  for (unsigned shift = static_cast<unsigned>(kSymbolBits - kHexDigitBits);; shift -= kHexDigitBits) {
+    const unsigned d = static_cast<unsigned>((v >> shift) & kHexDigitMask);
+    if (d != 0 || started || shift == 0) {
+      out.push_back(kHexDigits[d]);
+      started = true;
+    }
+    if (shift == 0) break;
+  }
+  return out;
 }
 
 // CRC-32 (ISO 3309, the one zlib computes): the reflected polynomial, the all-ones start and end, a table of 256 entries.

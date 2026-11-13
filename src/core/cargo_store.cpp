@@ -48,20 +48,6 @@ void IndexHeader(unsigned char* out) noexcept {
 
 }  // namespace
 
-std::string FormatHex64(std::uint64_t v) {
-  std::string out = "0x";
-  bool started = false;
-  for (unsigned shift = static_cast<unsigned>(kSymbolBits - kHexDigitBits);; shift -= kHexDigitBits) {
-    const unsigned d = static_cast<unsigned>((v >> shift) & kHexDigitMask);
-    if (d != 0 || started || shift == 0) {
-      out.push_back(kHexDigits[d]);
-      started = true;
-    }
-    if (shift == 0) break;
-  }
-  return out;
-}
-
 std::string StoreFilePath(const std::string& dir, std::uint32_t file) { return dir + "/store-" + std::to_string(file) + ".pack"; }
 std::string IndexPath(const std::string& dir) { return dir + "/blobs.idx"; }
 std::string ManifestCopyPath(const std::string& dir) { return dir + "/manifest.json.zst"; }
