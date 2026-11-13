@@ -1,5 +1,10 @@
 #include "core/device_memory.h"
 
+#ifdef _WIN32
+#include <winsock2.h>  // before windows.h (tools/tests/test_header_include_order.py)
+#include <windows.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -44,6 +49,17 @@ bool ParseMemAvailable(const char* meminfo_text, std::uint64_t* bytes) noexcept 
   return false;
 }
 
+#ifdef _WIN32
+// Windows has no /proc/meminfo: the same figure is GlobalMemoryStatusEx's available physical memory, the memory a process can still
+// be given without the system paging out.
+bool MemoryAvailable(std::uint64_t* bytes) noexcept {
+  MEMORYSTATUSEX status = {};
+  status.dwLength = sizeof(status);
+  if (!GlobalMemoryStatusEx(&status)) return false;
+  *bytes = status.ullAvailPhys;
+  return true;
+}
+#else
 bool MemoryAvailable(std::uint64_t* bytes) noexcept {
   std::FILE* f = std::fopen(kMemInfoPath, "r");
   if (f == nullptr) return false;
@@ -58,5 +74,6 @@ bool MemoryAvailable(std::uint64_t* bytes) noexcept {
   std::fclose(f);
   return found;
 }
+#endif
 
 }  // namespace nevr_device

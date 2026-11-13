@@ -138,6 +138,8 @@ set(PATCHES_SOURCES
     "patch/plugin_assets.cpp"
     # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
     "patch/resource_sets.cpp"
+    # docs/adr/0048: the PC's half of the two file seams the map channel's core runs on (nevr_cargo::Env, nevr_maps::MapFs).
+    "cargo/win_env.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
     "compat/ws_bridge.cpp"
@@ -1582,6 +1584,17 @@ if(BUILD_TESTING)
     add_dependencies(test_service_config
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
+
+    # docs/adr/0048: the PC's nevr_cargo::Env and nevr_maps::MapFs (cargo/win_env.cpp), driven for real: Win32 files in a temp
+    # folder, the portable SHA-256, libcurl against the scripted loopback server. The test defines Log() to read the event lines, so it
+    # compiles the two core files the env calls instead of linking nevr_core.
+    set(_win_env_test_sources tests/win_env_test.cpp cargo/win_env.cpp "${CMAKE_SOURCE_DIR}/src/core/device_memory.cpp"
+      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp")
+    add_executable(test_win_env ${_win_env_test_sources})
+    set_source_files_properties(${_win_env_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_win_env PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_win_env PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
+    gtest_discover_tests(test_win_env DISCOVERY_MODE PRE_TEST)
 
     # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
     add_executable(test_asset_cache

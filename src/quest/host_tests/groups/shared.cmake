@@ -105,3 +105,9 @@ nevr_ht_test(symbol_hash_test GROUP shared SRC src/quest/tests/symbol_hash_test.
 # The same file with plain char unsigned, as under the NDK: it runs the loop with an unsigned char, which the NDK compile in
 # test-android only parses. A bare static_cast<uint64_t>(c) fails to compile here.
 nevr_ht_test(symbol_hash_test_uchar GROUP shared COPTS -funsigned-char SRC src/quest/tests/symbol_hash_test.cpp)
+
+# The map channel's file seam on the Quest (quest/cargo/posix_map_fs.h; docs/adr/0048): the stamp, a held file, the listing, the
+# removal and the rename, on real files under the group's own build folder.
+set(_shared_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/shared)
+nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
+  SRC src/quest/cargo/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
