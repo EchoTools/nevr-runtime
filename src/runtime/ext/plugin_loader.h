@@ -104,6 +104,8 @@ size_t TestHook_LoadFilterVerifiedCount();
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 // Called by StageOne between a staged plugin's check and its load, with the path the entry names (null clears it).
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged));
+// Called on the loader thread after the late-load filter let the loader's own staged load through and before the load maps the file (null clears it).
+void TestHook_SetAfterStagedLoadFiltered(void (*hook)());
 // Makes the query for the path of the file a staged plugin's check holds fail.
 void TestHook_FailNamingTheHeldFile(bool fail);
 // Called after a plugin (a staged one, or a later load the filter accepted) is checked and before the load that maps it (null clears it).

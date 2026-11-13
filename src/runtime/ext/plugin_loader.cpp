@@ -515,6 +515,8 @@ bool FinalPathOf(const std::wstring& path, std::wstring* out) {
 void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
 // Runs between a staged plugin's check and its load: where a test points the path somewhere else.
 void (*g_betweenCheckAndLoad)(const std::wstring& staged) = nullptr;
+// Runs on the loader thread once the late-load filter has let the loader's own staged load through.
+void (*g_afterStagedLoadFiltered)() = nullptr;
 // Makes the query for a held file's path fail, as the OS can (a handle to a file on a volume that cannot name it).
 bool g_failNamingHeldFile = false;
 // Runs after a late load's check has passed and before the filter returns: where a test points the name somewhere else.
@@ -580,9 +582,12 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   t_checkedAsked.clear();
   t_checkedFile.clear();
   if (lowerPath == nullptr) return false;
-  if (t_pinning) return false;  // this thread is loading a System32 library for the filter's own pin, holding f.mutex
+  if (t_pinning) return false;  // this thread is loading a System32 library for the filter's own pin: that load is not checked again
   FilterState& f = Filter();
-  std::lock_guard<std::mutex> lock(f.mutex);
+  // The lock covers the filter's own state only. It is released before the file is opened, checked and pinned: a
+  // staged plugin's DllMain holds the loader lock while it waits here, and the check and the pin load libraries,
+  // which need that lock (#784).
+  std::unique_lock<std::mutex> lock(f.mutex);
   if (f.dirLower.empty()) return false;
   // LoadLibrary appends ".dll" to a name with no extension: the file it maps is the one to check.
   const std::wstring p = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(lowerPath));
@@ -654,6 +659,8 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   }
 
   const std::string file = NarrowName(full);
+  const std::string pluginDirNarrow = f.dirNarrow;
+  lock.unlock();
 #ifdef NEVR_TEST_HOOKS
   if (g_betweenResolveAndOpen != nullptr) g_betweenResolveAndOpen(full);
 #endif
@@ -697,7 +704,7 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   } else {
     std::vector<std::string> system32Only;
     const nevr_plugin_tree::TreeVerdict t = nevr_plugin_tree::VerifyPluginTree(
-        f.dirNarrow, h, nevr_plugin_trust::ActivePolicy(), now, &entry->deps, &system32Only);
+        pluginDirNarrow, h, nevr_plugin_trust::ActivePolicy(), now, &entry->deps, &system32Only);
     if (!t.accepted) {
       refusal = "dependency " + t.Describe();
       RecordRefusal(t.file);
@@ -720,7 +727,10 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
 #endif
     entry->pins.KeepForTheLifeOfTheProcess();
     NoteCheckedFile(lowerPath, p, entry->loadPath, bare, enforcing);
-    f.verified[full] = std::move(entry);
+    lock.lock();
+    // Two threads can check the same file at once; the first record stays and the other's handle is closed.
+    const auto recorded = f.verified.try_emplace(full, nullptr);
+    if (recorded.second) recorded.first->second = std::move(entry);
 #ifdef NEVR_TEST_HOOKS
     if (g_afterLateLoadAccepted != nullptr) g_afterLateLoadAccepted(full);
 #endif
@@ -746,6 +756,11 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
 // The hook asks this right after the filters, for a load none of them refused: the file the filter just checked, if
 // the text it was given is not already that file's path (#1177).
 bool PluginLoadRewriter(const wchar_t* lowerPath, std::wstring* loadPath) {
+#ifdef NEVR_TEST_HOOKS
+  // On the loader's own staged load this runs after the filter let it through and before the load maps the file,
+  // so before the plugin's DllMain takes the loader lock: where a test starts a thread that enters the filter.
+  if (g_afterStagedLoadFiltered != nullptr && !t_stagedPath.empty()) g_afterStagedLoadFiltered();
+#endif
   if (lowerPath == nullptr || t_checkedFile.empty() || t_checkedAsked != lowerPath) return false;
   *loadPath = t_checkedFile;
   t_checkedFile.clear();
@@ -1672,6 +1687,7 @@ bool TestHook_PinSystemLibraries(const std::vector<std::string>& names, std::str
 }
 
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
+void TestHook_SetAfterStagedLoadFiltered(void (*hook)()) { g_afterStagedLoadFiltered = hook; }
 
 void TestHook_FailNamingTheHeldFile(bool fail) { g_failNamingHeldFile = fail; }
 void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked)) { g_afterLateLoadAccepted = hook; }

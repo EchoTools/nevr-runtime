@@ -1231,6 +1231,98 @@ TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedT
   EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
 }
 
+// #784: a thread that is inside the late-load filter (between resolving a name and opening it, where the filter has
+// released its lock) must not leave a staged plugin's DllMain, which holds the loader lock, waiting on that lock while
+// the thread waits for the loader lock to verify the file. The holder sleeps inside the filter while the staged load's
+// DllMain enters it. With the filter's lock held across that sleep (the defect), the DllMain waits for it and the holder
+// then needs the loader lock the DllMain holds: neither can go on.
+std::atomic<DWORD> g_filterHolderThreadId{0};  // read by the loader and DllMain threads while the holder sets it
+std::atomic<bool> g_filterHolderSleeping{false};
+std::atomic<bool> g_otherLoadMetTheHolder{false};  // a load on another thread entered the filter during the holder's sleep
+std::promise<void>* g_filterHolderEntered = nullptr;
+std::thread g_filterHolder;
+std::atomic<bool> g_filterHolderBlocked{false};
+std::function<bool()> g_filterHolderAsk;
+bool g_filterHolderStartFailed = false;
+constexpr std::chrono::milliseconds kFilterHoldTime{3000};
+constexpr std::chrono::seconds kFilterDeadlockWait{20};
+constexpr std::chrono::seconds kLoaderDeadlockWait{40};  // the whole staged load: its own steps and the holder's wait
+constexpr UINT kFilterDeadlockExitCode = 3;
+
+void HoldTheFilterOnTheHolderThread(const std::wstring&) {
+  if (GetCurrentThreadId() != g_filterHolderThreadId) {
+    if (g_filterHolderSleeping) g_otherLoadMetTheHolder = true;
+    return;
+  }
+  if (g_filterHolderEntered == nullptr) return;
+  g_filterHolderEntered->set_value();
+  g_filterHolderEntered = nullptr;
+  g_filterHolderSleeping = true;
+  std::this_thread::sleep_for(kFilterHoldTime);
+  g_filterHolderSleeping = false;
+}
+
+// Runs on the loader thread after the filter let the staged load through and before the load maps the plugin: the
+// holder enters the filter here and stays inside it while the DllMain, holding the loader lock, asks for it.
+void StartTheHolderBeforeTheStagedLoad() {
+  if (g_filterHolderEntered == nullptr || g_filterHolder.joinable()) return;
+  std::future<void> entered = g_filterHolderEntered->get_future();
+  g_filterHolder = std::thread([] {
+    g_filterHolderThreadId = GetCurrentThreadId();
+    g_filterHolderBlocked = g_filterHolderAsk();
+  });
+  if (entered.wait_for(kFilterDeadlockWait) != std::future_status::ready) g_filterHolderStartFailed = true;
+}
+
+TEST_F(PluginDllMainLoadTest, AFilterHeldByAnotherThreadDoesNotDeadlockAStagedPluginsDllMainLoad) {
+  Plan("dllmain_victim.dll", "unsigned");  // the file the staged plugin's DllMain loads
+  // The name the holder thread asks for: a signed plugin whose one import is a System32 library, so that once the
+  // holder's check passes it calls LoadLibrary (the pin), and that call needs the loader lock the staged plugin's
+  // DllMain holds.
+  ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is already loaded in this process: nothing for the pin to load";
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  PlanTree("dllmain_load");
+  const std::wstring victim = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_victim.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", victim.c_str()));
+  TestHook_InstallPluginLoadFilter(pluginsDir_);  // the holder asks the filter directly: it has to be registered first
+  TestHook_SetBetweenResolveAndOpen(&HoldTheFilterOnTheHolderThread);
+  TestHook_SetAfterStagedLoadFiltered(&StartTheHolderBeforeTheStagedLoad);
+
+  std::promise<void> entered;
+  g_filterHolderEntered = &entered;
+  g_filterHolderBlocked = false;
+  g_filterHolderStartFailed = false;
+  g_filterHolderThreadId = 0;
+  g_filterHolderSleeping = false;
+  g_otherLoadMetTheHolder = false;
+  g_filterHolderAsk = [this] { return Blocked("sysimporter.dll"); };
+
+  std::promise<bool> loadDone;
+  std::future<bool> loadDoneSeen = loadDone.get_future();
+  std::thread loader([this, &loadDone] { loadDone.set_value(LoadPluginsWithTheRealHooks()); });
+  if (loadDoneSeen.wait_for(kLoaderDeadlockWait) != std::future_status::ready) {
+    // The staged load and the holder wait on each other, so neither can be unwound: the failure is the report.
+    std::fprintf(stderr, "[  FAILED  ] the staged plugin's DllMain load and the filter holder deadlocked (#784)\n");
+    std::fflush(stderr);
+    TerminateProcess(GetCurrentProcess(), kFilterDeadlockExitCode);  // ExitProcess and abort take the loader lock, which is the one held
+  }
+  const bool hooksInstalled = loadDoneSeen.get();
+  loader.join();
+  if (g_filterHolder.joinable()) g_filterHolder.join();
+  TestHook_SetBetweenResolveAndOpen(nullptr);
+  TestHook_SetAfterStagedLoadFiltered(nullptr);
+  SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+  ASSERT_TRUE(hooksInstalled) << "the LoadLibrary hooks did not install";
+  EXPECT_FALSE(g_filterHolderStartFailed) << "the holder never reached the filter";
+  EXPECT_TRUE(g_otherLoadMetTheHolder) << "the DllMain's load did not enter the filter while the holder was inside it: the test did not overlap the two";
+  EXPECT_FALSE(g_filterHolderBlocked) << "the holder's signed late load was refused";
+  EXPECT_EQ(GetModuleHandleA("dllmain_victim.dll"), nullptr) << "the file loaded from the DllMain was mapped unchecked";
+  while (HMODULE m = GetModuleHandleA("hid.dll")) {  // the holder's pin loaded it
+    if (!FreeLibrary(m)) break;
+  }
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
