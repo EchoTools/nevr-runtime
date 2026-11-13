@@ -480,6 +480,22 @@ TEST(NevrConfig, AcceptsGraphicsSection) {
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
 }
 
+// `maps` is the custom-map channel's section (docs/adr/0047): a config.yaml that configures the channel loads, and every
+// key the PC or the Quest reads from it is known. A cache-size key is not a key (docs/adr/0045, decision 8: the cap is
+// a share of the device's facts), and no local list chooses a player's or a host's maps (clients and servers follow
+// their guilds), so `cap_mib`, `subscribed` and `server_allow` count as unknown.
+TEST(NevrConfig, AcceptsMapsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "maps:\n  base_url: \"https://maps.example.org/\"\n  official_keys: []\n"
+      "  trusted_keys: []\n  channel: echo\n  boot_budget_ms: 2000\n");
+  ASSERT_TRUE(cfg.GetString("maps.base_url").has_value());
+  EXPECT_EQ(*cfg.GetString("maps.base_url"), "https://maps.example.org/");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  const auto unknown =
+      nevr::NevrConfig::LoadFromString("maps:\n  subscribed: [arena1]\n  cap_mib: 512\n  server_allow: [arena1]\n");
+  EXPECT_EQ(unknown.UnknownKeyCount(), 3u);
+}
+
 // Kind tells "set to something that is not a value" from "not set": the typed getters give nullopt for both.
 TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
   using nevr::NodeKind;
