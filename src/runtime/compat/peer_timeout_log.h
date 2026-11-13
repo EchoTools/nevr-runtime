@@ -10,7 +10,7 @@
 // for kNoSendWarnMicros logs one Warning, once per silence.
 //
 // This file is pure: no Windows call, no game memory, no clock read. The caller passes every time in, so the rules are
-// tested with fixed numbers (test_peer_timeout_log.cpp). The per-binary hooks live in patch/peer_timeout_log_hook.h.
+// tested with fixed numbers (peer_timeout_log_test.cpp). The per-binary hooks live in patch/peer_timeout_log_hook.h.
 
 #pragma once
 

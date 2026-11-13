@@ -1194,16 +1194,16 @@ if(BUILD_TESTING)
 
     # Peer timeout logging (compat/peer_timeout_log.h): the server's communication-timeout line and the client's
     # in-game send state and no-send warning. Pure rules, no game memory.
-    add_executable(test_peer_timeout_log tests/test_peer_timeout_log.cpp compat/peer_timeout_log.cpp)
-    set_source_files_properties(tests/test_peer_timeout_log.cpp compat/peer_timeout_log.cpp
+    add_executable(test_peer_timeout_log tests/peer_timeout_log_test.cpp compat/peer_timeout_log.cpp)
+    set_source_files_properties(tests/peer_timeout_log_test.cpp compat/peer_timeout_log.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_peer_timeout_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_peer_timeout_log PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_peer_timeout_log DISCOVERY_MODE PRE_TEST)
 
     # The communication-timeout call site per binary (patch/peer_timeout_call_site.h): the table's bytes decode to its addresses.
-    add_executable(test_peer_timeout_call_site tests/test_peer_timeout_call_site.cpp)
-    set_source_files_properties(tests/test_peer_timeout_call_site.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    add_executable(test_peer_timeout_call_site tests/peer_timeout_call_site_test.cpp)
+    set_source_files_properties(tests/peer_timeout_call_site_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_peer_timeout_call_site PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_peer_timeout_call_site PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_peer_timeout_call_site DISCOVERY_MODE PRE_TEST)

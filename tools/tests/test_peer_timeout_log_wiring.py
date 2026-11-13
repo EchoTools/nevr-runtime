@@ -1,7 +1,7 @@
 """Peer timeout logging: the PC hooks and their call sites (source sensors, rank 3).
 
 The detours run inside echovr.exe, so no test target in this tree drives them. The pure rules are GTest
-(src/runtime/tests/test_peer_timeout_log.cpp). These sensors check what the hook file and its callers say:
+(src/runtime/tests/peer_timeout_log_test.cpp). These sensors check what the hook file and its callers say:
 
   - the server hook sits on CBroadcaster::DestroyPeer and writes its Warning only for the communication-timeout reason;
   - the hook reads the peer record with the game's own offsets and forwards every argument to the original;
