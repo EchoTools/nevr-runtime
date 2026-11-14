@@ -93,9 +93,15 @@ struct ParsedPackage {
   std::string reason;  // "" when accepted
 };
 
-// `bytes` must be the blob `entry.index` pins (size and sha256 are checked here too).
+// How ParsePackageIndex holds `bytes` to the pin `entry.index`. kHash hashes them: the fetch, and a worker's re-hash. kStamped hashes
+// nothing: the caller read the bytes through a handle whose file stamp equals the one the cache index recorded when the bytes were
+// hashed at fetch (ADR 0048 decision 4). The mount, which may run on the boot thread, uses kStamped, so it hashes nothing there
+// (ADR 0045 decision 7). Both check the size.
+enum class IndexPin { kHash, kStamped };
+
+// `bytes` must be the blob `entry.index` pins: its size is checked here, and with IndexPin::kHash its sha256 too (index_pin).
 ParsedPackage ParsePackageIndex(std::string_view bytes, const std::string& id, const std::string& platform,
-                                const PlatformEntry& entry, std::uint64_t document_bytes);
+                                const PlatformEntry& entry, std::uint64_t document_bytes, IndexPin pin = IndexPin::kHash);
 
 // Dotted numerics, 1 to 4 parts of 1 to 9 digits with no leading zero ("1.2.0"); a missing part is 0. An invalid version
 // is below every valid one. Returns <0, 0 or >0.

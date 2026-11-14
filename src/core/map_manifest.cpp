@@ -761,7 +761,7 @@ FloorBook AdvanceFloors(const FloorBook& floors, const std::string& base_url, co
 }
 
 ParsedPackage ParsePackageIndex(std::string_view bytes, const std::string& id, const std::string& platform,
-                                const PlatformEntry& entry, std::uint64_t document_bytes) {
+                                const PlatformEntry& entry, std::uint64_t document_bytes, IndexPin pin) {
   ParsedPackage out;
   if (document_bytes == 0) {
     out.reason = "no_memory";
@@ -771,7 +771,8 @@ ParsedPackage ParsePackageIndex(std::string_view bytes, const std::string& id, c
     out.reason = "too_large";
     return out;
   }
-  if (bytes.size() != entry.index.size || nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()) != entry.index.sha256) {
+  if (bytes.size() != entry.index.size ||
+      (pin == IndexPin::kHash && nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()) != entry.index.sha256)) {
     out.reason = "index_pin";
     return out;
   }

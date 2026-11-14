@@ -97,6 +97,7 @@ json MapToJson(const CachedMap& m) {
               {"dir", m.dir},
               {"pinned_serial", m.pinned_serial},
               {"stock_manifest_ok", m.stock_manifest_ok},
+              {"index_stamp", StampToJson(m.index_stamp)},
               {"files", std::move(files)},
               {"stock_stamps", std::move(stock)}};
 }
@@ -112,6 +113,8 @@ bool MapFromJson(const json& value, CachedMap* out) {
       !GetBool(value, "stock_manifest_ok", &out->stock_manifest_ok)) {
     return false;
   }
+  const auto index_stamp = value.find("index_stamp");
+  if (index_stamp == value.end() || !StampFromJson(*index_stamp, &out->index_stamp)) return false;
   const auto files = value.find("files");
   const auto stock = value.find("stock_stamps");
   if (files == value.end() || !files->is_array() || stock == value.end() || !stock->is_array()) return false;
@@ -250,6 +253,7 @@ bool CachedMap::operator==(const CachedMap& o) const {
   return id == o.id && platform == o.platform && version == o.version && index_sha256 == o.index_sha256 &&
          level_name == o.level_name && game_build == o.game_build && index_size == o.index_size && level == o.level &&
          dir == o.dir && pinned_serial == o.pinned_serial && stock_manifest_ok == o.stock_manifest_ok &&
+         index_stamp == o.index_stamp &&
          files == o.files;
 }
 

@@ -43,6 +43,9 @@ struct CachedMap {
   std::string dir;  // relative to the cache directory: "<id>/<platform>/<index sha12>"
   std::uint64_t pinned_serial = 0;
   bool stock_manifest_ok = false;
+  // The package index file's stamp, taken when its bytes were hashed against index_sha256 (the fetch, or a worker's re-hash): the
+  // mount reads the index by this stamp and hashes nothing (ADR 0048 decision 4).
+  FileStamp index_stamp;
   std::vector<CachedFile> files;
   std::vector<StockStamp> stock_stamps;  // the stock files the rebuild read
   bool operator==(const CachedMap& o) const;

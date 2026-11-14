@@ -1002,6 +1002,73 @@ TEST_F(MapRunTest, ARehashThatFindsOtherBytesDropsTheVersionAndRefetchesIt) {
   EXPECT_TRUE(Mounted(Boot(), "alpha"));
 }
 
+// ADR 0048 decision 4, ADR 0045 decision 7: the mount holds a package index to its pin by the stamp recorded when the fetch hashed it,
+// and hashes nothing. Bytes replaced under an unchanged stamp are read as the ones verified: a mount that hashed the index would
+// find index_pin and defer the map instead. No hasher the env makes is fed a byte.
+TEST_F(MapRunTest, TheMountHoldsThePackageIndexToItsPinByItsStampAndHashesNothing) {
+  channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
+  channel.Sign(1);
+  Fetch();
+  const std::string package = channel.VersionDir("alpha") + "/package.json";
+  std::string& bytes = env.fs_->files.at(package);
+  const std::string key = "\"source_sha256\":\"";
+  const std::size_t at = bytes.find(key);
+  ASSERT_NE(at, std::string::npos);
+  const std::size_t last = at + key.size() + 63;  // the source sha's last hex digit; the same size, so the same stamp
+  bytes[last] = bytes[last] == '0' ? '1' : '0';
+  const std::string replaced_source = bytes.substr(at + key.size(), 64);
+  env.hashed_bytes = 0;
+  const MountReport boot = Boot();
+  ASSERT_TRUE(Mounted(boot, "alpha")) << TokenOf(boot, "alpha");
+  EXPECT_EQ(boot.staged.at(0).source_sha256, replaced_source) << "the mount read the bytes on disk, held to the pin by the stamp";
+  EXPECT_EQ(env.hashed_bytes, 0u);
+  EXPECT_EQ(env.open_blobs(), Index().maps.at("alpha/windows-x86_64").files.size()) << "the index's handle is closed again";
+}
+
+// A package index whose stamp moved defers the map to the worker, which hashes the index again: equal bytes record the new stamp and
+// the next mount takes the map.
+TEST_F(MapRunTest, AMovedPackageIndexStampDefersTheMapAndTheRehashSettlesIt) {
+  channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
+  channel.Sign(1);
+  Fetch();
+  const std::string package = channel.VersionDir("alpha") + "/package.json";
+  fs.Touch(package);
+  const MountReport boot = Boot();
+  EXPECT_EQ(TokenOf(boot, "alpha"), "package_stamp");
+  EXPECT_TRUE(mounter.calls.empty());
+  Fetch(nullptr, boot.deferred);
+  EXPECT_NE(env.FindRecord("map_rehash", "result", "refreshed"), nullptr);
+  EXPECT_TRUE(Mounted(Boot(), "alpha"));
+}
+
+// An index entry whose package stamp was never taken (all zero) holds nothing to: the mount defers rather than trust the bytes.
+TEST_F(MapRunTest, ANeverStampedPackageIndexDefersTheMap) {
+  channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
+  channel.Sign(1);
+  Fetch();
+  CacheIndex index = Index();
+  index.maps.at("alpha/windows-x86_64").index_stamp = FileStamp();
+  ASSERT_TRUE(WriteCacheIndex(env, kDir, index));
+  EXPECT_EQ(TokenOf(Boot(), "alpha"), "package_stamp");
+}
+
+TEST_F(MapRunTest, APackageIndexWithOtherBytesIsDroppedByTheRehashAndFetchedAgain) {
+  channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
+  channel.Sign(1);
+  Fetch();
+  const std::string package = channel.VersionDir("alpha") + "/package.json";
+  std::string other = env.fs_->files.at(package);
+  other += " ";
+  fs.Put(package, other);
+  const MountReport boot = Boot();
+  EXPECT_EQ(TokenOf(boot, "alpha"), "package_stamp");  // other bytes move the stamp; the mount defers, it does not hash
+  const FetchReport repair = Fetch(nullptr, boot.deferred);
+  EXPECT_NE(env.FindRecord("map_rehash", "reason", "index_hash"), nullptr);
+  EXPECT_EQ(repair.maps_updated, 1u);
+  mounter.calls.clear();
+  EXPECT_TRUE(Mounted(Boot(), "alpha"));
+}
+
 // ADR 0045 decision 8: what a fetch adds to the disk is a share of the free space the device reports, never a constant.
 TEST_F(MapRunTest, AMapOverTheStorageShareIsSkippedAndTheOthersContinue) {
   channel.Publish("alpha", "1.0.0", MakeSet(10, 'a'));
