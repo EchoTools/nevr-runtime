@@ -137,6 +137,79 @@ func TestExportAllowlist(t *testing.T) {
 	}
 }
 
+// The Quest runtime library (src/quest/sentinel/CMakeLists.txt, target nevr_quest_runtime). NEVR_QUEST_RUNTIME_SO names another
+// copy of it: the justfile check passes the copy in its own build tree.
+const runtimeSoRelPath = "../../build/android-arm64/sentinel/libnevr_runtime.so"
+
+// runtimeSoPath is the runtime library the export allowlist reads: NEVR_QUEST_RUNTIME_SO when it is set, else the build
+// tree's copy. The file must exist: the test fails, it does not skip.
+func runtimeSoPath(t *testing.T) string {
+	t.Helper()
+	p := os.Getenv("NEVR_QUEST_RUNTIME_SO")
+	if p == "" {
+		p = runtimeSoRelPath
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatalf("resolve path: %v", err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("runtime library not found at %s (run `just build-android`, or set NEVR_QUEST_RUNTIME_SO): %v", abs, err)
+	}
+	return abs
+}
+
+// The runtime library's dynamic exports are NEVR_GetRuntimeApi, the one entry core/quest_runtime_abi.h names, and the EC script
+// libraries' page re33_ec_page (src/quest/sentinel/ec_page.h), and nothing else. It is the sentinel's sources built without the
+// sentinel's entry points (NEVR_QUEST_RUNTIME_LIBRARY), so its exports are checked here on their own.
+//
+// runtimeExportFaults is that rule on the names a library exports: each name outside the list, and a library without the entry.
+func runtimeExportFaults(exported []string) []string {
+	allowed := map[string]bool{"NEVR_GetRuntimeApi": true, "re33_ec_page": true}
+	var faults []string
+	seen := map[string]bool{}
+	for _, name := range exported {
+		seen[name] = true
+		if !allowed[name] {
+			faults = append(faults, "unexpected dynamic export "+strconv.Quote(name)+" (allowed: NEVR_GetRuntimeApi, re33_ec_page)")
+		}
+	}
+	if !seen["NEVR_GetRuntimeApi"] {
+		faults = append(faults, "NEVR_GetRuntimeApi is not a dynamic export")
+	}
+	return faults
+}
+
+// TestRuntimeExportAllowlist reads the runtime library's dynamic exports (nm -D --defined-only) and applies the rule.
+func TestRuntimeExportAllowlist(t *testing.T) {
+	p := runtimeSoPath(t)
+	dyn := run(t, "nm", "-D", "--defined-only", p)
+	var names []string
+	for _, line := range strings.Split(dyn, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			names = append(names, fields[len(fields)-1])
+		}
+	}
+	for _, fault := range runtimeExportFaults(names) {
+		t.Errorf("%s: %s", p, fault)
+	}
+}
+
+// TestRuntimeExportRule applies the same rule to names given in the test, with no library: the two names the list allows pass,
+// an export beyond the list is one fault, and a library without the entry is one fault.
+func TestRuntimeExportRule(t *testing.T) {
+	if faults := runtimeExportFaults([]string{"NEVR_GetRuntimeApi", "re33_ec_page"}); len(faults) != 0 {
+		t.Errorf("the two allowed names: want no fault, got %v", faults)
+	}
+	if faults := runtimeExportFaults([]string{"NEVR_GetRuntimeApi", "re33_ec_page", "leaked_symbol"}); len(faults) != 1 {
+		t.Errorf("an export beyond the list: want 1 fault, got %v", faults)
+	}
+	if faults := runtimeExportFaults([]string{"re33_ec_page"}); len(faults) != 1 {
+		t.Errorf("a library without the entry: want 1 fault, got %v", faults)
+	}
+}
+
 // The EC script libraries' page is exported as data: 4096 bytes in .bss (src/quest/sentinel/ec_page.h, #2187). A page that is
 // missing, or exported as a function or with another size, is a page the scripts cannot use as echovr.exe's image base.
 func TestEcPageIsAnExportedDataPage(t *testing.T) {

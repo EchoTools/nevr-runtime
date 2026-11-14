@@ -156,6 +156,32 @@ build-android: configure-android
 verbose-build-android: configure-android
     cmake --build build/android-arm64 -v
 
+# The Quest runtime library (libnevr_runtime.so, src/quest/sentinel/CMakeLists.txt, target nevr_quest_runtime) has no load-time
+# initializer beyond the two compiler-rt entries the --plugin check allows (docs/adr/0019-quest-plugin-loader.md, section 1),
+# and no text relocation (-z text makes one a link error; readelf -d is checked as well). Every undefined symbol is a link
+# error (-Wl,-z,defs in that file), so each one resolves against a library the link names. Its dynamic exports are checked by
+# TestRuntimeExportAllowlist (tests/quest/elf_groundtruth_test.go), the one list. Takes the build tree: build/android-arm64 or
+# build/android-dev.
+_check-quest-runtime-library build_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    llvm_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+    so="{{ build_dir }}/sentinel/libnevr_runtime.so"
+    # The assignment is the command, so a failed listing stops the recipe; an empty object list is a failure, not a pass.
+    objects=$(python3 tools/quest_link_objects.py "{{ build_dir }}" sentinel/libnevr_runtime.so)
+    [ -n "$objects" ] || { echo "check-quest-runtime-library: $so: an empty object list" >&2; exit 1; }
+    tools/check_quest_static_init.sh --plugin "$llvm_bin" "$so" $objects
+    dynamic=$("$llvm_bin/llvm-readelf" -d "$so")
+    if grep -qF TEXTREL <<<"$dynamic"; then
+        echo "check-quest-runtime-library: $so has a text relocation (TEXTREL)" >&2
+        exit 1
+    fi
+    # The export list is the Go test's, read from the path given here: it fails on any export but NEVR_GetRuntimeApi and
+    # re33_ec_page, and on a library without NEVR_GetRuntimeApi.
+    so_abs=$(realpath "$so")
+    (cd tests/quest && NEVR_QUEST_RUNTIME_SO="$so_abs" go test -count=1 -run '^TestRuntimeExportAllowlist$' ./...)
+    echo "check-quest-runtime-library: OK ($so: no initializer beyond compiler-rt, no TEXTREL, exports as TestRuntimeExportAllowlist requires)"
+
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
 check-android-static-init: build-android
     #!/usr/bin/env bash
@@ -165,6 +191,7 @@ check-android-static-init: build-android
     # the recipe (the assignment is the command), so an empty list can never pass the check.
     objects=$(python3 tools/quest_link_objects.py build/android-arm64 sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
+    just _check-quest-runtime-library build/android-arm64
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
@@ -547,6 +574,7 @@ _quest-apk store_apk: _build-guard _require-ndk
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    just _check-quest-runtime-library build/android-dev
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local

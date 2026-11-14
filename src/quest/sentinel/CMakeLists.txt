@@ -213,3 +213,50 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
           $<TARGET_FILE:ovrplatformloader>
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
+
+# ── Quest runtime library (libnevr_runtime.so) ──────────────────────────────────────────────────────
+# The runtime is what RunSentinelConstructor runs (integration/production_steps.cpp): the sentinel's sources and libraries,
+# built again as a second shared object that exports one entry point, NEVR_GetRuntimeApi (core/quest_runtime_abi.h,
+# runtime/runtime_entry.cpp). The sentinel is unchanged: it still runs its own copy in process, and nothing in this tree
+# loads libnevr_runtime.so.
+#
+# It runs the sentinel's whole constructor sequence (RunSentinelConstructor, in nevr_quest_integration): sentinel::Arm, the
+# crash-first and dlopen hooks, the sentinel log writer, the hook registry (sentinel::RegistrySnapshot) and the process-end
+# hook. A process must not map it while its sentinel is armed (sentinel::Arm has run). Who owns that sequence under the
+# host-as-entry design is held.
+#
+# The sources, libraries, include directories and compile options are read from the sentinel's target above, so the copy
+# cannot drift from it. nevr_quest_integration is the one library the sentinel gets from elsewhere
+# (integration/CMakeLists.txt attaches it to ovrplatformloader after this file runs), so it is named here.
+#
+# The copy has no load-time entry: NEVR_QUEST_RUNTIME_LIBRARY, set below, leaves nevr_sentinel_ctor, the marker and JNI_OnLoad
+# out of entry.cpp. tools/check_quest_static_init.sh --plugin (justfile, _check-quest-runtime-library) allows no initializer
+# but the two compiler-rt entries. -Wl,-z,text makes a text relocation a link error; --exclude-libs,ALL keeps the libraries'
+# symbols out of the export table, as it does for the sentinel.
+include("${NEVR_REPO_ROOT}/cmake/nevr_build_identity.cmake")
+# PROJECT_VERSION, GIT_COMMIT_HASH, GIT_COMMIT_HASH_FULL and GIT_DESCRIBE, in this directory's scope: the identity literal of
+# core/build_identity.cpp is compiled from them (nevr_build_identity_define below).
+set_project_version_from_git()
+
+get_target_property(NEVR_QUEST_RUNTIME_SOURCES ovrplatformloader SOURCES)
+get_target_property(NEVR_QUEST_RUNTIME_LIBRARIES ovrplatformloader LINK_LIBRARIES)
+get_target_property(NEVR_QUEST_RUNTIME_INCLUDES ovrplatformloader INCLUDE_DIRECTORIES)
+get_target_property(NEVR_QUEST_RUNTIME_OPTIONS ovrplatformloader COMPILE_OPTIONS)
+
+add_library(nevr_quest_runtime SHARED
+  ${NEVR_QUEST_RUNTIME_SOURCES}
+  ../runtime/runtime_entry.cpp
+  "${NEVR_REPO_ROOT}/src/core/build_identity.cpp")
+set_target_properties(nevr_quest_runtime PROPERTIES OUTPUT_NAME nevr_runtime)
+target_compile_definitions(nevr_quest_runtime PRIVATE NEVR_QUEST_RUNTIME_LIBRARY=1)
+target_include_directories(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_INCLUDES})
+target_compile_options(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_OPTIONS})
+target_link_libraries(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_LIBRARIES} nevr_quest_integration)
+# -Wl,-z,defs makes an undefined symbol a link error: every name the copy uses resolves against a library the link names.
+target_link_options(nevr_quest_runtime PRIVATE -Wl,--exclude-libs,ALL -Wl,-z,text -Wl,-z,defs)
+
+# The runtime's own NEVR-BUILD literal (core/build_identity.h): the version and the full commit, the same identity the PC
+# runtime embeds. A binary contains exactly one; the runtime's copy is the only one in this library.
+nevr_build_identity_define(TARGET nevr_quest_runtime
+  READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
+  SOURCES "${NEVR_REPO_ROOT}/src/core/build_identity.cpp")

@@ -32,7 +32,7 @@ nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
 nevr_ht_test(engine_start_steps_test GROUP shared HOST GTEST PTHREAD TIMEOUT 300
   SRC src/core/update/engine_start.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp src/quest/tests/engine_start_steps_test.cpp)
 nevr_ht_test(quest_runtime_abi_test GROUP shared TIMEOUT 60
-  SRC src/quest/tests/quest_runtime_abi_test.cpp)
+  SRC src/quest/tests/quest_runtime_abi_test.cpp src/quest/sentinel/build_variant.cpp)
 nevr_ht_test(elf_build_id_test GROUP shared TIMEOUT 120
   SRC src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp)
 nevr_ht_test(evr_codec_test GROUP shared HOST TIMEOUT 120
