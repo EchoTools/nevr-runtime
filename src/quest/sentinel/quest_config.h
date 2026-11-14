@@ -61,6 +61,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -273,6 +274,24 @@ struct LogEvent {
                         // graphics.texture_quality word, named when it is at most 32 printable ASCII characters
 };
 
+// The custom-map channel's `maps` section (docs/adr/0048). The core reads the values once for both platforms (core/map_channel.h
+// ReadSettings), so this carries them as the file gave them; the key rules (official and author keys never together, a key that does
+// not parse) are the core's. With no maps.base_url the channel does not run.
+//   maps.base_url        the channel's base URL; none means the channel does not run
+//   maps.channel         the channel name the base URL is bound to; empty: the first verified manifest's
+//   maps.boot_budget_ms  how long one boot mount may take; 0 = no limit
+//   maps.official_keys   a list of minisign public keys in official trust (never compiled in, ADR 0048 decision 7)
+//   maps.trusted_keys    a list of author minisign public keys
+// A key that is wrong is one Warning that names the key and never the value, and the default stands.
+struct MapsConfig {
+  std::string baseUrl;
+  std::string channel;
+  std::uint32_t bootBudgetMs = 0;
+  std::vector<std::string> officialKeys;
+  std::vector<std::string> trustedKeys;
+  Source source = Source::kAbsent;  // kFile: the file gave at least one maps key
+};
+
 struct ResolvedConfig {
   Value socketUri;
   Value httpUri;
@@ -283,6 +302,7 @@ struct ResolvedConfig {
   TextureChoice textureQuality;
   HandFlipChoice handFlip;
   AssetsChoice assets;
+  MapsConfig maps;
   CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).

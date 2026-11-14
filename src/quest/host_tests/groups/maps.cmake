@@ -35,3 +35,17 @@ nevr_ht_test(map_mount_rules_test GROUP shared HOST PTHREAD TIMEOUT 120
 # bounds, the one group fetched, the hold lifted by the mount or the deadline, the join composition and the signed-only rule.
 nevr_ht_test(map_server_hold_test GROUP shared NOEXC TIMEOUT 120 INCS src
   SRC src/core/tests/map_server_hold_test.cpp src/core/map_server_hold.cpp)
+
+# The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot's
+# no-network and no-hash rule, its idempotence, the worker's group plan and the worker's request gap. It links the core fetch and mount
+# (core/map_run.cpp) and their formats, over the shared fake Env and MapFs. Monocypher is the vendored one (UPSTREAM.txt): its warnings
+# are upstream's, so -w for those two C files only.
+set(_maps_channel_monocypher "${NEVR_REPO_ROOT}/third_party/monocypher/src")
+set_source_files_properties("${_maps_channel_monocypher}/monocypher.c" "${_maps_channel_monocypher}/monocypher-ed25519.c"
+  PROPERTIES COMPILE_OPTIONS "-w")
+nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD TIMEOUT 120 INCS sdk/include src third_party/monocypher/src
+  SRC src/core/tests/map_channel_test.cpp src/core/map_channel.cpp src/core/map_run.cpp src/core/map_local_precedence.cpp src/core/map_manifest.cpp
+      src/core/map_index.cpp src/core/minisign_verify.cpp src/core/map_derive.cpp src/core/map_set_tables.cpp
+      src/core/cargo_validate.cpp src/core/cargo_limits.cpp src/core/device_memory.cpp src/quest/data/sha256.cpp
+      src/core/script_image_rules.cpp src/core/script_image_rules_elf.cpp src/core/config_alias.cpp
+      third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)

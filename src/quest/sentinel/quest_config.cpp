@@ -7,6 +7,7 @@
 #include <array>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -450,6 +451,52 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.assets = std::move(a);
 }
 
+// maps.* (docs/adr/0048). Every key is optional; a wrong one is one Warning that names the key and never the value, and the default
+// stands. The key rules (official and author keys together, a key that does not parse) are the core's (core/map_channel.h).
+constexpr const char* kMapsBaseUrlKey = "maps.base_url";
+constexpr const char* kMapsChannelKey = "maps.channel";
+constexpr const char* kMapsBootBudgetKey = "maps.boot_budget_ms";
+constexpr const char* kMapsOfficialKeysKey = "maps.official_keys";
+constexpr const char* kMapsTrustedKeysKey = "maps.trusted_keys";
+
+void ReadMaps(const nevr::NevrConfig& cfg, LoadResult& r) {
+  MapsConfig m;
+  const auto text = [&](const char* key, std::string* out) {
+    if (cfg.Kind(key) == nevr::NodeKind::kAbsent) return;
+    const std::optional<std::string> value = cfg.GetString(key);
+    if (!value.has_value()) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_string (default stays)");
+      return;
+    }
+    *out = *value;
+    m.source = Source::kFile;
+  };
+  text(kMapsBaseUrlKey, &m.baseUrl);
+  text(kMapsChannelKey, &m.channel);
+  if (cfg.Kind(kMapsBootBudgetKey) != nevr::NodeKind::kAbsent) {
+    const std::optional<std::int64_t> value = cfg.GetInt(kMapsBootBudgetKey);
+    if (value.has_value() && *value >= 0 && *value <= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+      m.bootBudgetMs = static_cast<std::uint32_t>(*value);
+      m.source = Source::kFile;
+    } else {
+      Add(r, LogLevel::kWarn,
+          std::string("config file key=") + kMapsBootBudgetKey + " rejected reason=not_a_whole_number (default stays)");
+    }
+  }
+  const auto keys = [&](const char* key, std::vector<std::string>* out) {
+    if (cfg.Kind(key) == nevr::NodeKind::kAbsent) return;
+    if (cfg.Kind(key) != nevr::NodeKind::kSequence) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_list (default stays)");
+      return;
+    }
+    *out = cfg.GetStringList(key);
+    m.source = Source::kFile;
+  };
+  keys(kMapsOfficialKeysKey, &m.officialKeys);
+  keys(kMapsTrustedKeysKey, &m.trustedKeys);
+  r.config.maps = std::move(m);
+}
+
 // combat.force (#2170). Absent: not asked, from the default. A boolean: that value, from the file (false is the file's word too, so the
 // log line says `config`). Anything else: not asked, from the default, and ReadBool's one Warning that names the key.
 void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
@@ -558,6 +605,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
   ReadAssets(cfg, r);
+  ReadMaps(cfg, r);
   ReadCombatForce(cfg, r);
   r.config.combat.heaps = ReadCombatSwitch(cfg, kCombatHeapsKey, r);
   r.config.combat.memsys = ReadCombatSwitch(cfg, kCombatMemsysKey, r);

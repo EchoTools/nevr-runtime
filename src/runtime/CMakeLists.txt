@@ -113,6 +113,7 @@ set(PATCHES_SOURCES
     "content/config_alias_hook.cpp"
     # ADR 0048 decision 9: the session map pin's PC half (the pure part is core/map_session_pin.cpp, in nevr_core).
     "content/map_session_pin_game.cpp"
+    "content/map_channel.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     # #2336: the bullet spawn's one detour; PowerBoost's drop and DroneFix's tracer rule are filters on it.

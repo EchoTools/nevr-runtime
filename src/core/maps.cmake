@@ -70,6 +70,12 @@ target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp"
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
 
+# The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot and
+# its idempotence, the mount observer's decision (DecideMount) and the background worker. Platform-free: no PCH. Its tests are the Quest
+# host group's (src/quest/host_tests/groups/maps.cmake), which compile the same source.
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_channel.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_channel.cpp")
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
   find_package(zstd CONFIG QUIET)

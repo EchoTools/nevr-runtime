@@ -138,6 +138,8 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
 target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cargo nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache breakpad_client log dl)
+# The custom-map channel (docs/adr/0048): its core, the map sets, route B's map scripts and the production start (src/quest/cargo/maps.cmake).
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cargo/maps.cmake")
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see
@@ -215,9 +217,8 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
   VERBATIM)
 
 # ConfigAlias on Quest (docs/adr/0048 decision 5). The lookup hook is built without exceptions (callback_thunk.h refuses
-# otherwise); its levels file, which allocates and catches, is built with them. Nothing links this library yet: the Quest's
-# map mount is its consumer (src/quest/cargo), and that mount is not on this tree. core/config_alias.cpp is the same pure
-# half the PC links, compiled here for the Quest's own mount.
+# otherwise); its levels file, which allocates and catches, is built with them. The Quest's map mount (src/quest/cargo/map_mount.cpp,
+# in nevr_quest_maps, src/quest/cargo/maps.cmake) is its consumer. core/config_alias.cpp is the same pure half the PC links.
 add_library(nevr_quest_config_alias STATIC config_alias_hook.cpp config_alias_levels.cpp ../../core/config_alias.cpp)
 set_source_files_properties(config_alias_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(nevr_quest_config_alias PUBLIC nevr_quest_got_hook nevr::plugin_sdk)

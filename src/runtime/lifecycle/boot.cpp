@@ -1,5 +1,6 @@
 #include "runtime/combat/combat.h"
 #include "runtime/content/content_pack.h"
+#include "runtime/content/map_channel.h"
 #include "runtime/hook/script_resource_hook.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
@@ -934,9 +935,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
+  // The custom-map channel (docs/adr/0048): with maps.base_url unset it writes one Info record and nothing else. Otherwise its boot
+  // mount registers the cached groups' sets, scripts and aliases before the registry mounts. Once per process.
+  nevr_map_channel::pc::Boot(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
   // #2161: the resource sets the plugins registered are mounted once the game's manifest exists (now, or from the
   // per-frame tick when it is not built yet).
   nevr_resource_sets::MountWhenReady();
+  // The channel's background fetch starts after the mount; it mounts what arrives at the next launch (ADR 0045 decision 7).
+  nevr_map_channel::pc::StartFetch();
 
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();

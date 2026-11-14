@@ -54,7 +54,10 @@ struct Grant {
 class Mounter {
  public:
   virtual ~Mounter() = default;
-  virtual Grant Script(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string& sha256) = 0;
+  // `official`: the manifest that pins the script verified under a key compiled into this build (ADR 0048 decision 7). A provider
+  // under -require-signed-plugins refuses a script whose `official` is false.
+  virtual Grant Script(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string& sha256,
+                       bool official) = 0;
   virtual Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
                       const std::string& stock_sha256) = 0;
   virtual Grant Set(const std::string& owner, std::int64_t held, const std::string& label, const std::string& sha256,
@@ -65,7 +68,7 @@ class Mounter {
                              const std::vector<ConfigAlias>& aliases) = 0;
   // A rekeyed script the recipe rebuild made (non-empty edits).
   virtual Grant DerivedScript(const std::string& owner, std::uint64_t hash, std::int64_t held,
-                              const std::string& sha256, const std::string& stock_sha256) = 0;
+                              const std::string& sha256, const std::string& stock_sha256, bool official) = 0;
   virtual void Withdraw(const std::string& owner) = 0;  // undo every grant of `owner`
 };
 
