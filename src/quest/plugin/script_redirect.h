@@ -108,4 +108,55 @@ void SetClaimHeldForTest(bool held) noexcept;
 // Clears the registration, the per-load logging switch and the claim hook. Tests only.
 void ResetForTest() noexcept;
 
+// Map scripts (docs/adr/0048 decision 6). A map's script library ships inside the APK (the repack puts lib<hash16>.so in
+// lib/arm64-v8a); the channel's package pins its sha-256 in scripts[]. Register checks the packaged file against that pin and
+// the ELF rules (core/script_image_rules.h CheckElfScript) and then holds the hash for the map. The game's own bare
+// dlopen("lib<hash16>.so") already finds the packaged file, so a held map script is opened under the name the game asked for:
+// the table only answers Holds (the set gate's waiver) and records which held scripts the game has loaded.
+//
+// This table is separate from the one-per-process stock redirect above, which it never changes: a hash that registration
+// holds is refused here, and a load the redirect rewrites is not a map-script load. With nothing held, the dlopen handler's
+// extra work is one name parse.
+//
+// Entries are append-only (a withdrawn entry keeps its slot), so the dlopen handler reads them without a lock and never sees a
+// slot reused. kMaxMapScripts therefore counts every registration of the process, withdrawn ones included.
+namespace map_scripts {
+
+inline constexpr std::uint32_t kMaxMapScripts = 256;
+inline constexpr std::size_t kOwnerCapacity = 64;  // "map:" plus an id of at most 55 characters fits with its NUL
+
+// Admit's refusal tokens: bad_owner (null, empty or too long), bad_hash (0), then the shared claim order
+// (core/map_script_check.h ClaimRefusal): withdrawn (the owner was withdrawn this process), duplicate (another live entry
+// holds the hash), stock_hash (the stock redirect holds it); then table_full. nullptr when admitted. Called by Register after
+// the file checks; tests call it directly.
+const char* Admit(const char* owner, std::uint64_t hash) noexcept;
+
+// Drops every script `owner` holds and returns how many. Refuses (returns 0, logs map_script refused=withdraw_after_load) when
+// the game has loaded one of them: a library the game loaded is never pulled. A load that races the withdraw keeps that one
+// entry held (logged withdraw_raced_load). The owner is then barred from registering again.
+std::size_t Withdraw(const char* owner) noexcept;
+
+// True when `owner` holds `hash` and it is not withdrawn.
+bool Holds(const char* owner, std::uint64_t hash) noexcept;
+
+// Live (held or loaded) entries.
+std::uint32_t HeldCount() noexcept;
+
+// From the dlopen handler, before the open: when `name` is a held map script (and not a name the stock redirect rewrites),
+// records that the game loads it and logs map_script_served once per entry. No allocation, no lock.
+void NoteLoad(const char* name) noexcept;
+
+// Register (map_scripts.cpp, built apart so the stock redirect's host tests link without the hash and ELF code): `owner` is
+// map:<id>, `sha256` the package's 64-lowercase-hex pin for scripts/lib<hash16>.so. Checks, in order: bad_owner, bad_hash,
+// bad_sha256, no_library_dir (the sentinel's directory, as the stock registration finds it), missing (no regular file),
+// unreadable, bad_size (core/map_script_check.h SizeRefusal), sha_mismatch, an elf_* token, then Admit's tokens. One
+// map_script line per call; a refusal is a Warning. Returns nullptr when held, else the token.
+const char* Register(const char* owner, std::uint64_t hash, const char* sha256);
+const char* RegisterIn(const char* libraryDir, const char* owner, std::uint64_t hash, const char* sha256);
+
+// Clears the table. Tests only.
+void ResetForTest() noexcept;
+
+}  // namespace map_scripts
+
 }  // namespace nevr_quest::script_redirect
