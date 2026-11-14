@@ -2452,6 +2452,70 @@ TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) 
   EXPECT_EQ(manifest[1].at("loaded"), true);
 }
 
+// The external EchoCombat DLLs are refused by name before LoadLibrary, even when listed as required; the
+// record names the plugin, the reason and the built-in groups that replace it; the plugin after them still loads.
+TEST_F(PluginLoaderDiagnosticTest, ExternalEchoCombatDllsAreRefusedAsBuiltInAndTheNextOneLoads) {
+  g_testPluginLoadPlan.push_back({"dronefix", "DroneFix.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"powerboost", ".\\powerboost.DLL", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"veilnet", "VeilNet.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin_load plugin=DroneFix file=DroneFix.dll outcome=refused reason=built_in "
+                              "replaced_by=combat.drone required=true"));
+  EXPECT_TRUE(TestLogContains("plugin_load plugin=PowerBoost file=.\\powerboost.DLL outcome=refused "
+                              "reason=built_in replaced_by=combat.overcharge,combat.medigun required=false"));
+  EXPECT_TRUE(TestLogContains("plugin_load plugin=VeilNet file=VeilNet.dll outcome=refused reason=built_in "
+                              "replaced_by=combat.veil,combat.match_control,combat.clean_exit required=true"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 4u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[0].at("error"), "built_in: replaced by combat.drone");
+  EXPECT_EQ(manifest[1].at("error"), "built_in: replaced by combat.overcharge,combat.medigun");
+  EXPECT_EQ(manifest[2].at("error"), "built_in: replaced by combat.veil,combat.match_control,combat.clean_exit");
+  EXPECT_EQ(manifest[3].at("loaded"), true);
+}
+
+// The plugins the launcher marks required are refused by name with the reason `superseded`; the record names the
+// file and the reason and carries no replaced_by (no group replaces them yet); the next plugin still loads.
+class SupersededRefusal : public PluginLoaderDiagnosticTest {
+ protected:
+  void ExpectRefused(const char* plugin, const char* file) {  // plugin: the table's name, which the record carries, not the config entry name
+    g_testPluginLoadPlan.push_back({plugin, file, true, "", "{}"});
+    g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+    LoadPlugins();
+    ASSERT_EQ(GetLoadedPluginCount(), 1);
+    EXPECT_TRUE(TestLogContains(std::string("plugin_load plugin=") + plugin + " file=" + file +
+                                " outcome=refused reason=superseded required=true"));
+    EXPECT_FALSE(TestLogContains("replaced_by"));
+    const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+    ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+    EXPECT_EQ(manifest[0].at("loaded"), false);
+    EXPECT_EQ(manifest[0].at("error"), "superseded");
+    EXPECT_EQ(manifest[1].at("loaded"), true);
+  }
+};
+TEST_F(SupersededRefusal, NvrAssetPatches) { ExpectRefused("NvrAssetPatches", "NvrAssetPatches.dll"); }
+TEST_F(SupersededRefusal, NvrXmlHttpFix) { ExpectRefused("NvrXmlHttpFix", "nvrxmlhttpfix.dll"); }
+TEST_F(SupersededRefusal, NvrGpuRating) { ExpectRefused("NvrGpuRating", "NvrGpuRating.dll"); }
+
+// A plugin that is not one of the EchoCombat DLLs, including one whose name only contains theirs, is untouched.
+TEST_F(PluginLoaderDiagnosticTest, UnrelatedPluginIsNotRefusedAsBuiltIn) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"lookalike", "MyDroneFix.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("reason=built_in"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), true);
+  EXPECT_NE(manifest[1].at("error").get<std::string>().rfind("built_in", 0), 0u);
+}
+
 // The same DLL under another spelling of its path passes the file-name check, so
 // the loader's same-module check is what stops it.
 TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {

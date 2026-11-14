@@ -24,6 +24,7 @@
 #include "runtime/lifecycle/config.h"    // g_pGame
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
+#include "runtime/ext/builtin_plugin_table.h"
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
 #include "runtime/ext/plugin_log.h"             // #598: a plugin's log line, as the host writes it
 #include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
@@ -954,6 +955,7 @@ class PluginLoadRun {
       return;
     }
     if (SkipSuperseded(item, itemReport)) return;
+    if (SkipBuiltIn(item, itemReport)) return;
     if (SkipDuplicateEntry(planIndex)) return;
     if (pluginDir.empty()) {
       FailPluginLoad(item, "the plugin directory cannot be resolved (no LOCALAPPDATA)", itemReport);
@@ -1145,6 +1147,27 @@ class PluginLoadRun {
     }
   }
     return false;
+  }
+
+  // True when the entry is skipped. The plugins in builtin_plugin_table.h are refused before LoadLibrary: the
+  // built-in combat module owns the EchoCombat DLLs' hooks, and the rest are refused until integrated. Like
+  // SkipSuperseded it holds even for a required entry (a server must still start), and the record names the file and
+  // the reason, never who installed it.
+  bool SkipBuiltIn(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
+    const nevr_builtin_plugin::Entry* entry = nevr_builtin_plugin::Find(PluginFilename(item.file));
+    if (entry == nullptr) return false;
+    const std::string plugin(entry->plugin);
+    const std::string reason(entry->reason);
+    const std::string replacedBy(entry->replaced_by);
+    const std::string replacedField = replacedBy.empty() ? std::string() : " replaced_by=" + replacedBy;
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PLUGIN] plugin_load plugin=%s file=%s outcome=refused reason=%s%s required=%s — not loaded: the "
+        "runtime refuses this DLL by name (a built-in module hooks the same functions, or it awaits integration); "
+        "remove the entry from config.yaml",
+        plugin.c_str(), item.file.c_str(), reason.c_str(), replacedField.c_str(), item.required ? "true" : "false");
+    itemReport.loaded = false;
+    itemReport.error = reason + (replacedBy.empty() ? std::string() : ": replaced by " + replacedBy);
+    return true;
   }
 
   // True when the entry is skipped.

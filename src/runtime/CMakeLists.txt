@@ -297,6 +297,7 @@ set(PATCHES_HEADERS
     "patch/plugin_assets.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
+    "ext/builtin_plugin_table.h"
     "ext/plugin_load_plan.h"
     "ext/plugin_load_plan_build.h"
     "ext/plugin_manifest.h"
