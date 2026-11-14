@@ -20,6 +20,8 @@
 // handler's path calls only RewriteLoadName and the sentinel log.
 #pragma once
 
+#include "core/resource_set_registry.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -122,8 +124,16 @@ void ResetForTest() noexcept;
 // slot reused. kMaxMapScripts therefore counts every registration of the process, withdrawn ones included.
 namespace map_scripts {
 
+// The table's storage: one slot per registration of the process, withdrawn ones included, and one marker slot per withdrawn
+// owner that held nothing. KNOWN-WRONG #TBD: the slot count is a literal of this table with no record citation (AGENTS.md
+// "Limit source"); it is not derived from the device or from a record.
 inline constexpr std::uint32_t kMaxMapScripts = 256;
-inline constexpr std::size_t kOwnerCapacity = 64;  // "map:" plus an id of at most 55 characters fits with its NUL
+// The owner's bytes with the NUL: the registry's map owner bound plus one (nevr_resource_sets::kMaxMapOwnerBytes).
+inline constexpr std::size_t kOwnerCapacity = nevr_resource_sets::kMaxMapOwnerBytes + 1;
+
+// The largest file a map script may be: the device's share for a document (core/map_manifest.h MapDocumentBytes). The channel
+// sets it from the device fact; zero, the default, refuses every script not_configured.
+void SetByteLimit(std::uint64_t byte_limit) noexcept;
 
 // Admit's refusal tokens: bad_owner (null, empty or too long), bad_hash (0), then the shared claim order
 // (core/map_script_check.h ClaimRefusal): withdrawn (the owner was withdrawn this process), duplicate (another live entry
@@ -151,8 +161,9 @@ void NoteLoad(const char* name) noexcept;
 // bad_sha256, no_library_dir (the sentinel's directory, as the stock registration finds it), missing (no regular file),
 // unreadable, bad_size (core/map_script_check.h SizeRefusal), sha_mismatch, an elf_* token, then Admit's tokens. One
 // map_script line per call; a refusal is a Warning. Returns nullptr when held, else the token.
-const char* Register(const char* owner, std::uint64_t hash, const char* sha256);
-const char* RegisterIn(const char* libraryDir, const char* owner, std::uint64_t hash, const char* sha256);
+const char* Register(const char* owner, std::uint64_t hash, const char* sha256, std::uint64_t pinned_bytes = 0);
+const char* RegisterIn(const char* libraryDir, const char* owner, std::uint64_t hash, const char* sha256,
+                       std::uint64_t pinned_bytes = 0);
 
 // Clears the table. Tests only.
 void ResetForTest() noexcept;

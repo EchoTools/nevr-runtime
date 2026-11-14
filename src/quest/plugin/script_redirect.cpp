@@ -347,6 +347,11 @@ const char* Admit(const char* owner, std::uint64_t hash) noexcept {
   if (hash == 0) return "bad_hash";
   const std::lock_guard<std::mutex> lock(g_writers);
   nevr_map_script::ClaimFacts facts;
+  // KNOWN-WRONG #TBD: stock_hash is set only for the hashes the combat redirect rewrites (RedirectHolds), not for every stock
+  // library in the APK (465 in script_image_rules.h's Quest set), so a manifest that pins one of those is held. ADR 0048
+  // decision 6 refuses every stock hash; the PC provider (script_provider.cpp RegisterHeld/CheckClaimLocked) does.
+  // KNOWN-WRONG #TBD: facts.revoked is never set on Quest (no revoked set in this table), so a revoked digest is held here
+  // where the PC provider (SetRevoked) drops and refuses it. ADR 0048 decision 10.
   facts.stock = RedirectHolds(hash);
   const std::uint32_t used = g_used.load(std::memory_order_relaxed);
   for (std::uint32_t i = 0; i < used; ++i) {
@@ -367,7 +372,7 @@ const char* Admit(const char* owner, std::uint64_t hash) noexcept {
 }
 
 std::size_t Withdraw(const char* owner) noexcept {
-  if (owner == nullptr) return 0;
+  if (owner == nullptr || std::strlen(owner) >= kOwnerCapacity) return 0;
   const std::lock_guard<std::mutex> lock(g_writers);
   const std::uint32_t used = g_used.load(std::memory_order_relaxed);
   // Phase 1: every live entry of the owner goes Held -> Pulling. A loaded one refuses the whole withdraw.
@@ -401,7 +406,17 @@ std::size_t Withdraw(const char* owner) noexcept {
       any = true;
     }
   }
-  if (!any) return 0;
+  if (!any) {
+    // A set that failed before any of its scripts was held bars its owner all the same, as the PC provider does: a marker
+    // slot (hash 0, withdrawn) records it. A full table records nothing, and then Admit refuses every owner table_full.
+    if (used == kMaxMapScripts) return 0;
+    Slot& marker = g_slots[used];
+    marker.hash = 0;
+    std::memcpy(marker.owner, owner, std::strlen(owner) + 1);
+    marker.logged.store(false, std::memory_order_relaxed);
+    marker.state.store(kWithdrawn, std::memory_order_relaxed);
+    g_used.store(used + 1, std::memory_order_release);
+  }
   if (dropped != 0) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "map_script",
                         {{"op", "withdraw"}, {"owner", owner}, {"dropped", static_cast<long long>(dropped)}});

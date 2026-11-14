@@ -7,17 +7,26 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 
+#include "core/log_text.h"
 #include "core/logging.h"
 #include "core/map_script_check.h"
 #include "core/script_image_rules.h"
 #include "quest/data/sha256.h"
+#include "runtime/content/content_pack.h"
 
 namespace nevr_map_scripts {
 
 namespace {
 
+// The widths the log lines and the path handling use, named so no literal sits in a call.
+constexpr std::size_t kHash16Chars = 16;
+constexpr std::size_t kLogTextBytes = 300;        // the most of a text one log field carries; the rest is cut and counted
+constexpr std::size_t kFinalPathStartChars = 512;  // the first buffer for GetFinalPathNameByHandleW; grown when it is short
+constexpr std::wstring_view kVolumePrefix = L"\\\\?\\";
+constexpr std::wstring_view kUncPrefix = L"\\\\?\\UNC\\";
 
 struct Entry {
   std::string owner;
@@ -47,33 +56,21 @@ Outcome Refuse(const char* reason, std::string detail) {
 }
 
 std::string Hash16(std::uint64_t hash) {
-  char buf[17];
+  char buf[kHash16Chars + 1];
   std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(hash));
   return buf;
 }
 
-std::string Narrow(const std::wstring& wide) {
-  if (wide.empty()) return std::string();
-  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-  if (n <= 0) return std::string();
-  std::string out(static_cast<std::size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-  return out;
-}
-
-// Manifest text or a path, for a quoted log field: at most 300 bytes of printable ASCII; a quote or any other byte is '?'.
-std::string Printable(const std::string& text) {
-  std::string out;
-  for (const char c : text.substr(0, 300)) out += (c >= 0x20 && c <= 0x7e && c != '"') ? c : '?';
-  return out;
-}
+// A text from outside, made safe for one quoted log field (core/log_text.h: printable ASCII, '"' and '\\' written as '?').
+std::string Printable(const std::string& text) { return nevr_log_text::Printable(text.c_str(), kLogTextBytes); }
 
 // One record per Register or RegisterRekey: Info when the script is held, Warning with the token when it is refused.
 void LogOutcome(const char* kind, const std::string& owner, std::uint64_t hash, const Outcome& o, const std::wstring& path) {
   if (o.ok()) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.MAPS] map script held kind=%s owner=%s hash=%s file=\"%s\" (the game's loads of scripts\\%s.dll map this file)",
-        kind, Printable(owner).c_str(), Hash16(hash).c_str(), Printable(Narrow(path)).c_str(), Hash16(hash).c_str());
+        kind, Printable(owner).c_str(), Hash16(hash).c_str(), Printable(nevr_content::Narrow(path)).c_str(),
+        Hash16(hash).c_str());
     return;
   }
   Log(EchoVR::LogLevel::Warning,
@@ -82,21 +79,8 @@ void LogOutcome(const char* kind, const std::string& owner, std::uint64_t hash, 
       kind, Printable(owner).c_str(), Hash16(hash).c_str(), o.reason.c_str(), Printable(o.detail).c_str());
 }
 
-// The spelling content_pack.cpp compares: no `\\?\` prefix, a full path (backslashes, no "." or ".." parts), ASCII lower
-// case (the fold the LoadLibrary hooks hand their rewriters).
-std::wstring Canonical(std::wstring path) {
-  if (path.rfind(L"\\\\?\\", 0) == 0 && path.rfind(L"\\\\?\\UNC\\", 0) != 0) path.erase(0, 4);
-  wchar_t buf[MAX_PATH * 2];
-  const DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, buf, nullptr);
-  if (n > 0 && n < MAX_PATH * 2) path.assign(buf, n);
-  for (wchar_t& c : path) {
-    if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
-  }
-  return path;
-}
-
 bool FinalPathOfHandle(HANDLE file, std::wstring* out) {
-  std::wstring buf(512, L'\0');
+  std::wstring buf(kFinalPathStartChars, L'\0');
   for (;;) {
     const DWORD n = GetFinalPathNameByHandleW(file, buf.data(), static_cast<DWORD>(buf.size()),
                                               FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -107,20 +91,21 @@ bool FinalPathOfHandle(HANDLE file, std::wstring* out) {
     }
     buf.resize(static_cast<std::size_t>(n) + 1);
   }
-  if (buf.compare(0, 8, L"\\\\?\\UNC\\") == 0) {
-    buf = L"\\" + buf.substr(7);
-  } else if (buf.compare(0, 4, L"\\\\?\\") == 0) {
-    buf.erase(0, 4);
+  if (std::wstring_view(buf).substr(0, kUncPrefix.size()) == kUncPrefix) {
+    // "\\?\UNC\server\share" is the UNC path "\\server\share": the backslash that ends the UNC prefix stays.
+    buf = L"\\" + buf.substr(kUncPrefix.size() - 1);
+  } else if (std::wstring_view(buf).substr(0, kVolumePrefix.size()) == kVolumePrefix) {
+    buf.erase(0, kVolumePrefix.size());
   }
   *out = std::move(buf);
   return true;
 }
 
-// The whole file, from its start, through `file`.
-Outcome ReadAll(HANDLE file, std::vector<std::uint8_t>* bytes) {
+// The whole file, from its start, through `file`: its size must pass the bound and the pinned size (0: none pins it).
+Outcome ReadAll(HANDLE file, std::vector<std::uint8_t>* bytes, std::uint64_t pinned_bytes, std::uint64_t byte_limit) {
   LARGE_INTEGER size{};
   if (!GetFileSizeEx(file, &size)) return Refuse("unreadable", "size error=" + std::to_string(GetLastError()));
-  if (const char* token = nevr_map_script::SizeRefusal(static_cast<std::uint64_t>(size.QuadPart))) {
+  if (const char* token = nevr_map_script::SizeRefusal(static_cast<std::uint64_t>(size.QuadPart), pinned_bytes, byte_limit)) {
     return Refuse(token, std::to_string(size.QuadPart) + " bytes");
   }
   LARGE_INTEGER start{};
@@ -136,18 +121,20 @@ Outcome ReadAll(HANDLE file, std::vector<std::uint8_t>* bytes) {
   return Outcome{};
 }
 
-// The checks that need no file, under g_mutex: the run, the arguments, then the claim's facts in the order the shared rule
-// gives (nevr_map_script::ClaimRefusal). There is no allow list on any run: the manifest's signature is the channel's authority.
-Outcome CheckClaimLocked(const std::string& owner, std::uint64_t hash, const std::string& sha256) {
+// The checks that need no file, under g_mutex: the run, the device's limit, the arguments, then the claim's facts in the order
+// the shared rule gives (nevr_map_script::ClaimRefusal). `official` is the manifest's fact: a signed-only run refuses only a
+// script whose manifest is not official (ADR 0048 decision 7).
+Outcome CheckClaimLocked(const std::string& owner, std::uint64_t hash, const std::string& sha256, bool official) {
   const State& s = g_state;
   if (!s.configured) return Refuse("not_configured", "Configure was not called");
+  if (s.inputs.byte_limit == 0) return Refuse("not_configured", "no device fact gives the byte limit");
   if (const char* token = nevr_map_script::ArgumentRefusal(owner, hash, sha256)) {
     return Refuse(token, Printable(owner) + " " + Hash16(hash));
   }
   const std::wstring key = CanonicalScriptPath(s.inputs.exe_dir, hash);
   nevr_map_script::ClaimFacts facts;
   facts.withdrawn = s.withdrawn.count(owner) != 0;
-  facts.signed_only = s.inputs.signed_only;
+  facts.signed_only = s.inputs.signed_only && !official;
   facts.revoked = s.revoked.count(sha256) != 0;
   facts.duplicate = s.held.count(hash) != 0;
   facts.stock = GetFileAttributesW(key.c_str()) != INVALID_FILE_ATTRIBUTES;
@@ -157,9 +144,9 @@ Outcome CheckClaimLocked(const std::string& owner, std::uint64_t hash, const std
 }
 
 // Holds `file` under `hash`; the claim is checked again, since the file was read outside the lock.
-Outcome HoldLocked(const std::string& owner, std::uint64_t hash, const std::string& sha256, HANDLE file,
+Outcome HoldLocked(const std::string& owner, std::uint64_t hash, const std::string& sha256, bool official, HANDLE file,
                    std::wstring final_path) {
-  const Outcome again = CheckClaimLocked(owner, hash, sha256);
+  const Outcome again = CheckClaimLocked(owner, hash, sha256, official);
   if (!again.ok()) return again;
   const std::wstring key = CanonicalScriptPath(g_state.inputs.exe_dir, hash);
   g_state.held[hash] = Entry{owner, sha256, file, std::move(final_path)};
@@ -167,11 +154,13 @@ Outcome HoldLocked(const std::string& owner, std::uint64_t hash, const std::stri
   return Outcome{};
 }
 
+std::uint64_t ByteLimitLocked() { return g_state.inputs.byte_limit; }
+
 }  // namespace
 
 std::wstring CanonicalScriptPath(const std::wstring& exe_dir, std::uint64_t hash) {
   const std::string name = Hash16(hash);
-  return Canonical(exe_dir + L"\\scripts\\" + std::wstring(name.begin(), name.end()) + L".dll");
+  return nevr_content::Canonical(exe_dir + L"\\scripts\\" + std::wstring(name.begin(), name.end()) + L".dll");
 }
 
 void Configure(const Inputs& inputs) {
@@ -200,8 +189,7 @@ void SetRevoked(const std::vector<std::string>& revoked_sha256) {
 
 namespace {
 
-// The recipe rebuild writes a rebuilt script as <version dir>/scripts/<hash16>.dll (core/map_derive.h); the final path has
-// backslashes.
+// PC10 writes a rebuilt script as <version dir>/scripts/<hash16>.dll (core/map_derive.h); the final path has backslashes.
 bool IsRebuiltScriptPath(const std::wstring& final_path, std::uint64_t hash) {
   const std::string name = "\\scripts\\" + Hash16(hash) + ".dll";
   const std::wstring tail(name.begin(), name.end());
@@ -212,16 +200,18 @@ bool IsRebuiltScriptPath(const std::wstring& final_path, std::uint64_t hash) {
 }
 
 Outcome RegisterHeld(const std::string& owner, std::uint64_t hash, std::int64_t held_handle, const std::string& sha256,
-                     bool rehash, bool rebuilt, std::wstring* held_path) {
+                     bool rehash, bool rebuilt, std::uint64_t pinned_bytes, bool official, std::wstring* held_path) {
+  std::uint64_t byte_limit = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    const Outcome claim = CheckClaimLocked(owner, hash, sha256);
+    const Outcome claim = CheckClaimLocked(owner, hash, sha256, official);
     if (!claim.ok()) return claim;
+    byte_limit = ByteLimitLocked();
   }
   HANDLE file = reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(held_handle));
   if (file == INVALID_HANDLE_VALUE || file == nullptr) return Refuse("unreadable", "no handle");
   std::vector<std::uint8_t> bytes;
-  const Outcome read = ReadAll(file, &bytes);
+  const Outcome read = ReadAll(file, &bytes, pinned_bytes, byte_limit);
   if (!read.ok()) return read;
   if (rehash) {
     const std::string got = nevr_quest::data::Sha256Hex(bytes.data(), bytes.size());
@@ -233,20 +223,22 @@ Outcome RegisterHeld(const std::string& owner, std::uint64_t hash, std::int64_t 
   if (!verdict.ok()) return Refuse(nevr_map_script::ImageRefusalToken(verdict.reason), verdict.detail);
   std::wstring final_path;
   if (!FinalPathOfHandle(file, &final_path)) return Refuse("no_final_path", "error=" + std::to_string(GetLastError()));
-  if (rebuilt && !IsRebuiltScriptPath(final_path, hash)) return Refuse("derived_path", Narrow(final_path));
+  if (rebuilt && !IsRebuiltScriptPath(final_path, hash)) return Refuse("derived_path", nevr_content::Narrow(final_path));
   *held_path = final_path;
   std::lock_guard<std::mutex> lock(g_mutex);
-  return HoldLocked(owner, hash, sha256, file, std::move(final_path));
+  return HoldLocked(owner, hash, sha256, official, file, std::move(final_path));
 }
 
 Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256, std::wstring* held_path) {
+                      const std::string& stock_sha256, bool official, std::wstring* held_path) {
   std::wstring stock_path;
+  std::uint64_t byte_limit = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    const Outcome claim = CheckClaimLocked(owner, hash, stock_sha256);
+    const Outcome claim = CheckClaimLocked(owner, hash, stock_sha256, official);
     if (!claim.ok()) return claim;
     stock_path = CanonicalScriptPath(g_state.inputs.exe_dir, stock_source);
+    byte_limit = ByteLimitLocked();
   }
   HANDLE file = CreateFileW(stock_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                             FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -254,10 +246,15 @@ Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_
     return Refuse("stock_missing", Hash16(stock_source) + " error=" + std::to_string(GetLastError()));
   }
   std::vector<std::uint8_t> bytes;
-  Outcome result = ReadAll(file, &bytes);
+  Outcome result = ReadAll(file, &bytes, /*pinned_bytes=*/0, byte_limit);
   if (result.ok()) {
     const std::string got = nevr_quest::data::Sha256Hex(bytes.data(), bytes.size());
     if (got != stock_sha256) result = Refuse("stock_sha_mismatch", Hash16(stock_source) + " sha256=" + got);
+  }
+  if (result.ok()) {
+    // A rekeyed script passes the same image rules as a downloaded one (ADR 0048 decision 6).
+    const nevr_script_image::ImageVerdict verdict = nevr_script_image::CheckPeScript(bytes.data(), bytes.size());
+    if (!verdict.ok()) result = Refuse(nevr_map_script::ImageRefusalToken(verdict.reason), verdict.detail);
   }
   std::wstring final_path;
   if (result.ok() && !FinalPathOfHandle(file, &final_path)) {
@@ -266,7 +263,7 @@ Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_
   if (result.ok()) {
     *held_path = final_path;
     std::lock_guard<std::mutex> lock(g_mutex);
-    result = HoldLocked(owner, hash, stock_sha256, file, std::move(final_path));
+    result = HoldLocked(owner, hash, stock_sha256, official, file, std::move(final_path));
   }
   if (!result.ok()) CloseHandle(file);
   return result;
@@ -275,26 +272,27 @@ Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_
 }  // namespace
 
 Outcome Register(const std::string& owner, std::uint64_t hash, std::int64_t held_handle, const std::string& sha256,
-                 bool rehash) {
+                 bool rehash, std::uint64_t pinned_bytes, bool official) {
   std::wstring path;
-  const Outcome o = RegisterHeld(owner, hash, held_handle, sha256, rehash, false, &path);
+  const Outcome o = RegisterHeld(owner, hash, held_handle, sha256, rehash, false, pinned_bytes, official, &path);
   LogOutcome("map", owner, hash, o, path);
   return o;
 }
 
 Outcome RegisterDerived(const std::string& owner, std::uint64_t hash, std::int64_t held_handle, const std::string& sha256,
-                        const std::string& stock_sha256) {
+                        const std::string& stock_sha256, bool official) {
   std::wstring path;
-  const Outcome o = nevr_map_script::IsSha256Digest(stock_sha256) ? RegisterHeld(owner, hash, held_handle, sha256, true, true, &path)
-                                           : Refuse("bad_sha256", "stock " + stock_sha256);
+  const Outcome o = nevr_map_script::IsSha256Digest(stock_sha256)
+                        ? RegisterHeld(owner, hash, held_handle, sha256, true, true, 0, official, &path)
+                        : Refuse("bad_sha256", "stock " + stock_sha256);
   LogOutcome("derived", owner, hash, o, path);
   return o;
 }
 
 Outcome RegisterRekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256) {
+                      const std::string& stock_sha256, bool official) {
   std::wstring path;
-  const Outcome o = RegisterStock(owner, hash, stock_source, stock_sha256, &path);
+  const Outcome o = RegisterStock(owner, hash, stock_source, stock_sha256, official, &path);
   LogOutcome("rekey", owner, hash, o, path);
   return o;
 }
@@ -305,13 +303,14 @@ bool Holds(const std::string& owner, std::uint64_t name) {
   return it != g_state.held.end() && it->second.owner == owner;
 }
 
-bool Rewrite(const wchar_t* lower_path, std::wstring* load_path, std::string* owner, std::uint64_t* hash) {
+bool Rewrite(const wchar_t* lower_path, std::wstring* load_path, std::string* owner, std::uint64_t* hash, bool* first) {
   if (lower_path == nullptr || load_path == nullptr) return false;
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_state.by_path.empty()) return false;
-  const auto it = g_state.by_path.find(Canonical(lower_path));
+  const auto it = g_state.by_path.find(nevr_content::Canonical(lower_path));
   if (it == g_state.by_path.end()) return false;
   Entry& entry = g_state.held.at(it->second);
+  if (first != nullptr) *first = !entry.served;
   entry.served = true;
   *load_path = entry.final_path;
   if (owner != nullptr) *owner = entry.owner;
@@ -340,6 +339,7 @@ std::size_t Withdraw(const std::string& owner) {
     it = g_state.held.erase(it);
     ++dropped;
   }
+  // Recorded whether or not the owner held anything: a set that failed before its first script keeps its later ones out too.
   g_state.withdrawn.insert(owner);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.MAPS] map script withdrawn owner=%s dropped=%zu (the map did not mount; none of its scripts is served)",

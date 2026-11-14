@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 
+#include "core/log_text.h"
 #include "core/logging.h"
 #include "core/resource_set_registry.h"
 #include "runtime/content/content_pack.h"
@@ -17,47 +18,51 @@ namespace nevr_map_scripts {
 
 namespace {
 
-std::atomic<unsigned> g_servedUnderLoaderLock{0};
+constexpr std::size_t kExePathChars = MAX_PATH * 2;  // the executable's path: a Win32 path can be longer than MAX_PATH
+constexpr std::size_t kServeLogTextBytes = 300;      // the most of a path one served line carries; the rest is cut and counted
 
-std::string Narrow(const std::wstring& wide) {
-  if (wide.empty()) return std::string();
-  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-  if (n <= 0) return std::string();
-  std::string out(static_cast<std::size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-  return out;
-}
+// Loads served under the loader lock (a DllMain's load) are counted, not logged: a line there is not safe (the logger's rule).
+std::atomic<unsigned> g_servedUnderLoaderLock{0};
 
 bool RewriteMapScript(const wchar_t* lower_path, std::wstring* load_path) {
   std::string owner;
   std::uint64_t hash = 0;
-  if (!Rewrite(lower_path, load_path, &owner, &hash)) return false;
-  // A line here is safe outside the loader lock only; a load from a DllMain is served and counted, not logged.
+  bool first = false;
+  if (!Rewrite(lower_path, load_path, &owner, &hash, &first)) return false;
   if (nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
     g_servedUnderLoaderLock.fetch_add(1, std::memory_order_relaxed);
-  } else {
-    Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map script served owner=%s hash=%016llx game_path=%s file=%s served_in_dllmain=%u",
-        owner.c_str(), static_cast<unsigned long long>(hash), Narrow(lower_path).c_str(), Narrow(*load_path).c_str(),
-        g_servedUnderLoaderLock.load(std::memory_order_relaxed));
+    return true;
   }
+  // The first serve of a script is a summary at Info; the game loads it again after each free, and those are Debug.
+  const std::string file = nevr_content::Narrow(*load_path);
+  const EchoVR::LogLevel level = first ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug;
+  Log(level,
+      "[NEVR.MAPS] map script served owner=%s hash=%016llx file=\"%s\" file_len=%zu served_under_loader_lock_total=%u",
+      nevr_log_text::Printable(owner.c_str(), kServeLogTextBytes).c_str(), static_cast<unsigned long long>(hash),
+      nevr_log_text::Printable(file.c_str(), kServeLogTextBytes).c_str(), file.size(),
+      g_servedUnderLoaderLock.load(std::memory_order_relaxed));
   return true;
 }
 
 }  // namespace
 
-void SetPolicy(bool signed_only) {
+void SetPolicy(bool signed_only, std::uint64_t byte_limit) {
   Inputs in;
-  wchar_t exe[MAX_PATH * 2];
-  const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH * 2);
-  const std::wstring exe_path = (n > 0 && n < MAX_PATH * 2) ? std::wstring(exe, n) : std::wstring();
+  wchar_t exe[kExePathChars];
+  const DWORD n = GetModuleFileNameW(nullptr, exe, kExePathChars);
+  const std::wstring exe_path = (n > 0 && n < kExePathChars) ? std::wstring(exe, n) : std::wstring();
   in.exe_dir = exe_path.substr(0, exe_path.find_last_of(L"\\/"));
   in.signed_only = signed_only;
+  in.byte_limit = byte_limit;
   in.pack_carries = &nevr_content::CarriesScript;
   Configure(in);
   nevr_resource_sets::SetScriptWaiver(&Holds);
+  const std::string dir = nevr_content::Narrow(in.exe_dir);
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.MAPS] map script policy exe_dir=%s signed_only=%d (a map's script is served once the maps channel registers it)",
-      Narrow(in.exe_dir).c_str(), in.signed_only ? 1 : 0);
+      "[NEVR.MAPS] map script policy exe_dir=\"%s\" signed_only=%d byte_limit=%llu (a map's script is served once the maps "
+      "channel registers it)",
+      nevr_log_text::Printable(dir.c_str(), kServeLogTextBytes).c_str(), in.signed_only ? 1 : 0,
+      static_cast<unsigned long long>(in.byte_limit));
 }
 
 bool InstallMapScriptsRewriter() {

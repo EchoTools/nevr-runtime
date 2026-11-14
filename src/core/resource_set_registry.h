@@ -70,7 +70,11 @@ enum class Refusal {
 // The owner every map's file set is registered under: "map:<id>". Only AddMapFile applies the script waiver, so a
 // plugin's set (Add) never gets it, whatever the plugin's id.
 inline constexpr char kMapOwnerPrefix[] = "map:";
-bool IsMapOwner(const std::string& owner);
+// A map's set is owned by "map:" and its id; the id itself is checked by nevr_maps::IsValidMapId (map_manifest.h).
+inline bool IsMapOwner(const std::string& owner) {
+  constexpr std::size_t kPrefixLength = sizeof(kMapOwnerPrefix) - 1;
+  return owner.size() > kPrefixLength && owner.compare(0, kPrefixLength, kMapOwnerPrefix) == 0;
+}
 
 const char* RefusalName(Refusal refusal);
 

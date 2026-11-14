@@ -54,4 +54,15 @@ struct FileRange {
 // rebuild checks a rekeyed script's edits against them (core/map_derive.h, CheckRekeyEdits).
 std::vector<FileRange> ExecutableSectionFileRanges(const std::uint8_t* image, std::size_t size);
 
+// Every token the rules above can name a refusal by, in the order the list above gives them. The map channel
+// (core/map_script_check.h) reports a refusal by one of these, so this array is the one vocabulary.
+inline constexpr const char* kImageRuleTokens[] = {
+    "pe_truncated",        "pe_not_pe",          "pe_not_amd64",        "pe_not_pe32plus",     "pe_not_dll",
+    "pe_imports",          "pe_delay_imports",   "pe_bound_imports",    "pe_iat",              "pe_tls",
+    "pe_clr",              "pe_entry_point",     "pe_no_exports",       "pe_export_count",     "pe_export_name",
+    "pe_export_forwarded", "pe_export_not_code", "pe_section_name",     "pe_section_wx",       "elf_truncated",
+    "elf_not_elf",         "elf_not_64",         "elf_not_le",          "elf_not_dyn",         "elf_not_aarch64",
+    "elf_segment_wx",      "elf_no_dynamic",     "elf_textrel",         "elf_no_symbols",      "elf_needed",
+    "elf_init",            "elf_no_export",      "elf_export_not_code"};
+
 }  // namespace nevr_script_image

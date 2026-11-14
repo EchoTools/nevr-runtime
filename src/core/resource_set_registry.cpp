@@ -118,10 +118,6 @@ const char* RefusalName(Refusal refusal) {
   return "unknown";
 }
 
-bool IsMapOwner(const std::string& owner) {
-  constexpr std::size_t kPrefixLength = sizeof(kMapOwnerPrefix) - 1;
-  return owner.size() > kPrefixLength && owner.compare(0, kPrefixLength, kMapOwnerPrefix) == 0;
-}
 
 void SetScriptWaiver(bool (*holds)(const std::string& owner, std::uint64_t name)) { g_scriptWaiver.store(holds); }
 
