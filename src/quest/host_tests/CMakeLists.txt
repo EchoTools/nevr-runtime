@@ -30,10 +30,13 @@ set(NEVR_HOST_INCLUDE "${NEVR_HOST_PREFIX}/include")
 get_filename_component(NEVR_JSON_INCLUDE "${NEVR_HOST_JSON_INCLUDE}" ABSOLUTE BASE_DIR "${NEVR_REPO_ROOT}")
 find_library(NEVR_ZLIB_LIB NAMES libz.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
 find_library(NEVR_YAML_LIB NAMES libyaml-cpp.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
-foreach(dep ZLIB YAML)
+# gtest from the same manifest (tools/quest-host-deps): the GTEST flag of nevr_ht_test links libgtest.a and this tree's main.
+find_library(NEVR_GTEST_LIB NAMES libgtest.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
+foreach(dep ZLIB YAML GTEST)
   if(NOT NEVR_${dep}_LIB OR NOT EXISTS "${NEVR_JSON_INCLUDE}/nlohmann/json.hpp")
     message(FATAL_ERROR "quest host tests: the host dependency tree ${NEVR_HOST_PREFIX} is not installed "
-            "(libz.a, libyaml-cpp.a and nlohmann/json.hpp under ${NEVR_JSON_INCLUDE}); 'just _vcpkg-quest-host' installs it")
+            "(libz.a, libyaml-cpp.a and libgtest.a under ${NEVR_HOST_PREFIX}/lib, and nlohmann/json.hpp under ${NEVR_JSON_INCLUDE}); "
+            "'just _vcpkg-quest-host' installs it")
   endif()
 endforeach()
 
@@ -54,7 +57,7 @@ target_compile_options(nevr_ht_base INTERFACE -Wall -Wextra -Werror)
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # Paths of sources and include directories are given relative to the repository root, as the recipes' lines gave them.
-set(_NEVR_HT_BOOL NOEXC PTHREAD TSAN HOST CURL DL NO_TEST EXCLUDE_FROM_GROUP)
+set(_NEVR_HT_BOOL NOEXC PTHREAD TSAN HOST CURL DL NO_TEST EXCLUDE_FROM_GROUP GTEST)
 set(_NEVR_HT_ONE GROUP TIMEOUT OUTPUT_NAME FIXTURE_SETUP FIXTURE_REQUIRED RESOURCE_LOCK)
 set(_NEVR_HT_MULTI SRC OBJS DEFS INCS SYSINCS OPTS COPTS LOPTS LIBS ARGS ENV DEPENDS BUILD_RPATH)
 
@@ -86,6 +89,12 @@ function(_nevr_ht_apply tgt kind)
   endif()
   if(A_PTHREAD)
     target_compile_options(${tgt} PRIVATE -pthread)
+  endif()
+  if(A_GTEST)
+    # The vcpkg gtest port installs no gtest_main archive: its main is the one file of this tree, which every gtest program takes.
+    target_include_directories(${tgt} SYSTEM PRIVATE "${NEVR_HOST_INCLUDE}")
+    target_sources(${tgt} PRIVATE "${NEVR_REPO_ROOT}/src/quest/host_tests/gtest_main.cpp")
+    target_link_libraries(${tgt} PRIVATE "${NEVR_GTEST_LIB}")
   endif()
   if(A_TSAN)
     target_compile_options(${tgt} PRIVATE -fsanitize=thread -O1 -g)

@@ -264,7 +264,7 @@ class SwapRun {
     if (root_.empty() || !fs_.IsDirectory(update_)) return {StartAction::kNoUpdateFolder, nullptr, false};
     // update\ itself first: the lock is a file inside it, and a link is never followed, not even to take the lock.
     if (fs_.IsLink(update_)) {
-      Record("blocked", "reparse_point", {{"folder", "update"}});
+      Record("blocked", "reparse_point", {{"folder", names::kUpdateDir}});
       return Load();
     }
     if (!AcquireLock()) {
@@ -313,7 +313,7 @@ class SwapRun {
   StartResult RollBackNow(const char* reason) {
     if (root_.empty() || !fs_.IsDirectory(update_)) return Stop("no_previous");
     if (fs_.IsLink(update_)) {
-      Record("blocked", "reparse_point", {{"folder", "update"}});
+      Record("blocked", "reparse_point", {{"folder", names::kUpdateDir}});
       return Stop("reparse_point");
     }
     if (!AcquireLock()) {

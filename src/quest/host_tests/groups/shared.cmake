@@ -28,8 +28,8 @@ nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
 # static_asserts that restate every offset, the validators, and that the common header compiles with no <windows.h>.
 # The self-update start's steps on the Linux host (ADR 0024, sections 4 and 6): a kill at every step of a swap and of a rollback,
 # a journal outside the vocabulary, and a link in the update folders. The POSIX edge (fs_posix.cpp, ADR 0024 section 4) is one
-# of its sources.
-nevr_ht_test(engine_start_steps_test GROUP shared HOST TIMEOUT 300
+# of its sources. The cases are gtest cases (GTEST), run on the POSIX edge.
+nevr_ht_test(engine_start_steps_test GROUP shared HOST GTEST PTHREAD TIMEOUT 300
   SRC src/core/update/engine_start.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp src/quest/tests/engine_start_steps_test.cpp)
 nevr_ht_test(quest_runtime_abi_test GROUP shared TIMEOUT 60
   SRC src/quest/tests/quest_runtime_abi_test.cpp)
@@ -127,3 +127,13 @@ nevr_ht_test(symbol_hash_test_uchar GROUP shared COPTS -funsigned-char SRC src/q
 # Not in CORE_SOURCES: the file is POSIX only, and the PC build (MinGW) does not compile it.
 nevr_ht_test(fs_posix_test GROUP shared PTHREAD TIMEOUT 120
   SRC src/core/update/fs_posix.cpp src/quest/tests/fs_posix_test.cpp)
+
+# The worker and the check of the engine (ADR 0024, section 3) on the Linux host: the same gtest
+# cases as the PC build, against the POSIX fs (fs_posix.cpp) rooted in the system's temporary directory. gtest and nlohmann come from
+# the quest-host-deps manifest (HOST, GTEST).
+nevr_ht_test(test_update_worker GROUP shared HOST GTEST PTHREAD TIMEOUT 300
+  SRC src/runtime/tests/test_update_worker.cpp src/core/update/engine_check.cpp src/core/update/policy.cpp
+      src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp)
+# The pending decision (ADR 0024, section 6, R2) over a fake UpdateFs: no file system, the same cases as the PC build.
+nevr_ht_test(engine_pending_test GROUP shared HOST GTEST PTHREAD TIMEOUT 120
+  SRC src/runtime/tests/engine_pending_test.cpp src/core/update/engine_start.cpp src/core/update/names.cpp)

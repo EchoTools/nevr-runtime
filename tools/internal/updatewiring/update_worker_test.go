@@ -85,6 +85,7 @@ var jobFiles = []string{
 	"src/runtime/lifecycle/update_fs_win32.cpp",
 	"src/core/update/fs_posix.cpp",
 	"src/core/update/engine_check.cpp",
+	"src/core/update/engine_start.cpp",
 	"src/core/update/worker.cpp",
 	"src/core/update/policy.cpp",
 }
@@ -112,6 +113,13 @@ func TestEveryPathInTheJobsIsComposedFromTheRoot(t *testing.T) {
 			t.Errorf("update_run.cpp: a path literal that is not the root's: L%q", m[1])
 		}
 	}
+	// engine_check.cpp spells no path of its own: a narrow literal with a separator is a path part, and the only separators in it
+	// are in #include names.
+	for _, m := range regexp.MustCompile(`"([^"\n]*)"`).FindAllStringSubmatch(code(t, "src/core/update/engine_check.cpp"), -1) {
+		if strings.ContainsAny(m[1], `\/`) && !strings.HasSuffix(m[1], ".h") {
+			t.Errorf("engine_check.cpp: a path literal that is not the root's: %q", m[1])
+		}
+	}
 }
 
 // A path literal in the engine or in the PC fs is a separator, a glob, a temporary's suffix or a dot name: every other part of a
@@ -120,20 +128,36 @@ func TestEveryPathInTheJobsIsComposedFromTheRoot(t *testing.T) {
 var vocabulary = []string{"update", "lock", "staged.json", "swap.json", "pending.json", "state.json", "crashed", "staging", "previous",
 	"plugins", "nevr-runtime.dll"}
 
+// In these files a literal with no separator is a log word, a reason or a JSON key, not a path part.
+var logWordFiles = map[string]bool{
+	"src/runtime/lifecycle/update_run.cpp": true,
+	"src/core/update/engine_check.cpp":     true,
+	"src/core/update/engine_start.cpp":     true,
+}
+
+// "crashed" is also the reason a rollback records (ADR 0024, section 6: reason=crashed), a word of a record and not the path of the
+// marker, which is names.h's kCrashedFile. Only that literal of engine_start.cpp is left out of the vocabulary check.
+var reasonWords = map[string]map[string]bool{
+	"src/core/update/engine_start.cpp": {"crashed": true},
+}
+
 func TestNoPathPartIsSpelledOutInTheEngineOrItsPcFs(t *testing.T) {
 	allowed := map[string]bool{`\\`: true, `\\*`: true, `.`: true, `..`: true, `.tmp-`: true}
-	for _, f := range []string{"src/runtime/lifecycle/update_run.cpp", "src/runtime/lifecycle/update_fs_win32.cpp", "src/core/update/fs_posix.cpp"} {
+	for _, f := range []string{"src/runtime/lifecycle/update_run.cpp", "src/runtime/lifecycle/update_fs_win32.cpp", "src/core/update/fs_posix.cpp",
+		"src/core/update/engine_check.cpp", "src/core/update/engine_start.cpp"} {
 		for _, m := range regexp.MustCompile(`L?"([^"\n]*)"`).FindAllStringSubmatch(code(t, f), -1) {
 			lit := m[1]
-			for _, name := range vocabulary {
-				if lit == name {
-					t.Errorf("%s: %q is a name of the closed vocabulary and is spelled out; use core/update/names.h", f, lit)
+			if !reasonWords[f][lit] {
+				for _, name := range vocabulary {
+					if lit == name {
+						t.Errorf("%s: %q is a name of the closed vocabulary and is spelled out; use core/update/names.h", f, lit)
+					}
 				}
 			}
 			if !strings.ContainsAny(lit, `\/.`) || allowed[lit] || strings.HasSuffix(lit, ".h") { // an #include is not a path of the root
 				continue
 			}
-			if f == "src/runtime/lifecycle/update_run.cpp" && !strings.ContainsAny(lit, `\/`) {
+			if logWordFiles[f] && !strings.ContainsAny(lit, `\/`) {
 				continue // a log word, a reason or a JSON key with a dot in it is not a path
 			}
 			t.Errorf("%s: a literal that looks like a path part: %q", f, lit)
@@ -273,7 +297,7 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		}
 	}
 	just := read(t, "justfile")
-	for _, want := range []string{"--target test_update_worker --target test_update_fs_win32 --target test_update_core_link", "for name in test_update_worker test_update_fs_win32 test_update_core_link test_engine_pending; do"} {
+	for _, want := range []string{"--target test_update_worker --target test_update_fs_win32 --target test_update_core_link", "for name in test_update_worker test_update_fs_win32 test_update_core_link engine_pending_test; do"} {
 		if !strings.Contains(just, want) {
 			t.Errorf("justfile: no %q", want)
 		}

@@ -148,7 +148,7 @@ extra DLL for the plugin gate to verify. The runtime owns `staged.json` because 
 core's work and the publish, which takes the lock.
 
 **As built, the worker (#1200).** The runtime's half is `src/core/update/policy.cpp` (the decisions, pure),
-`src/core/update/engine_check.cpp` (the check and the confirmation, with every dependency passed in; every file operation on `update\` goes through `nevr_update::UpdateFs`, `src/core/update/fs.h`, whose Win32 implementation is `src/runtime/lifecycle/update_fs_win32.cpp`), `src/core/update/worker.cpp` (the threads) and
+`src/core/update/engine_check.cpp` (the check and the confirmation, with every dependency passed in; every file operation on `update\` goes through `nevr_update::UpdateFs`, `src/core/update/fs.h`, whose Win32 implementation is `src/runtime/lifecycle/update_fs_win32.cpp` and whose POSIX implementation is `src/core/update/fs_posix.cpp`, used by Quest and the Linux host tests), `src/core/update/edges.h` (the other platform edges: the artifact verifier, the in-use check, the rollback target, the runtime loader, the log and the clock), `src/core/update/worker.cpp` (the threads) and
 `src/runtime/lifecycle/update_process.cpp` (the binding to the core, the verifier, the log and the process); the names and the digest are the host's
 units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
 
@@ -158,8 +158,7 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
 - **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build`, `flag`, `config`,
   `host_cannot_swap`; the line is `update disabled reason=<word>`. A dev build and a host that cannot swap start no thread. A
   flag or a config key that is off starts the confirmation thread only.
-- **Two threads, independent.** The check thread runs `RunCheck` once and ends. The confirmation thread waits on an event the
-  per-frame dispatcher sets (`nevr_update::OnFrame`, one atomic compare per dispatch) 10 s after its first call, then runs
+- **Two threads, independent.** The check thread runs `RunCheck` once and ends. The confirmation thread waits, on a mutex and a condition variable (`src/core/update/worker.cpp`), for the mark that the per-frame dispatcher raises (`nevr_update::OnFrame`, one atomic compare per dispatch) 10 s after its first call, then runs
   `UpdateConfirm` once. A check stuck inside the core, which cannot be cancelled, never keeps a swapped release from being
   confirmed. The process's worker is never destroyed: a destructor at `DLL_PROCESS_DETACH` would join them under the loader lock.
 - **The bound.** The core's own timeouts are 20 s to connect and 60 s per read, and it has no cap on the whole stage. The
@@ -350,9 +349,10 @@ A swapped release is `pending` until the runtime says it started.
 - **No previous.** When `update\previous\<from>\` is missing or its runtime does not verify, the host does not load anything
   it cannot verify: it stops with the missing-runtime message of ADR 0012 (the installer is the recovery) and logs the cause.
 
-**As built (#2105).** The host's half of this section is `src/runtime/host/update_swap.cpp` (the decision, the rollback and
-its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the load and R1) and `CrashCapture::MarkUpdateCrashed`
-(`crash_capture.cpp`).
+**As built (#2105).** The host's half of this section is the start, `src/core/update/engine_start.cpp` (the decision, the rollback
+and its journal, reached through the platform edges of `src/core/update/edges.h`); its Win32 bindings are
+`src/runtime/host/update_swap.cpp`, and its POSIX edge is `src/core/update/fs_posix.cpp`. `RuntimeLoader::LoadAtStart`
+(`runtime_load.cpp`: the swap, the load and R1) and `CrashCapture::MarkUpdateCrashed` (`crash_capture.cpp`) are the rest.
 
 - **The order at a start** is: recover a journal, decide what to do with a pending release, and only when none is
   pending, swap a staged one. A staged release waits while one is pending (`update_swap outcome=deferred
