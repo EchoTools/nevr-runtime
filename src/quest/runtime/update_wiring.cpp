@@ -73,12 +73,17 @@ StartResult Start(Inputs inputs, const RegisterFrameWorkFn& register_frame_work)
     result.worker = worker;
     result.decision = worker->Start();
     result.outcome = StartOutcome::kStarted;
-    FrameContext* frame = new FrameContext{worker, std::move(now_ms)};  // NOLINT: held by the frame call for the process
+    FrameContext* frame = new (std::nothrow) FrameContext{worker, std::move(now_ms)};  // NOLINT: held by the frame call for the process
+    if (frame == nullptr) {  // the worker runs; only its frame call is missing
+      result.outcome = StartOutcome::kFrameWorkRefused;
+      if (log) log(nevr_update::kWarning, kFrameWorkRefusedLine);
+      return result;
+    }
     if (!register_frame_work || !register_frame_work(&OnFrame, frame)) {
       result.outcome = StartOutcome::kFrameWorkRefused;
       if (log) log(nevr_update::kWarning, kFrameWorkRefusedLine);
     }
-  } catch (const std::exception&) {  // out of memory: no worker, the game runs without an update
+  } catch (...) {  // out of memory: no worker, the game runs without an update
     result.outcome = StartOutcome::kCoreNotLinked;
     result.worker = nullptr;
   }

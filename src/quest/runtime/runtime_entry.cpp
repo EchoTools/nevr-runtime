@@ -137,8 +137,9 @@ void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
   in.host_can_swap = nevr_quest_runtime_abi::HostCanSwap(host);
   if (host->update_root != nullptr) in.root = host->update_root;
   // One file system for the life of the process: the worker's threads outlive this call.
-  static const std::unique_ptr<nevr_update::UpdateFs> fs = in.root.empty() ? nullptr : nevr_update::MakePosixUpdateFs(in.root);
-  in.fs = fs.get();
+  // Never destroyed: a static unique_ptr would free it at process exit under the worker threads that still use it.
+  static nevr_update::UpdateFs* const fs = in.root.empty() ? nullptr : nevr_update::MakePosixUpdateFs(in.root).release();
+  in.fs = fs;
   in.read_running = [](std::string* version, std::string* sha256, std::string* error) {
     return nevr_quest::update_wiring::ReadRunningRuntime(&kInThisLibrary, nevr_build::kVersion, version, sha256, error);
   };
