@@ -636,7 +636,7 @@ network:
   # bots_per_session: 0
   # A dedicated server's join hold: how long, in milliseconds, the service's accept of a joining player waits for the
   # session's levels to finish loading and be enabled before it is forwarded to the game (docs/reference/join-hold.md).
-  # 0 (the default) is off: no hook is installed and every accept is forwarded at once. Valid: 500-15000; 1-499 is
+  # 0 (the default) is off: no hook is installed and the levels hold holds nothing (a fetching group's maps hold is separate). Valid: 500-15000; 1-499 is
   # raised to 500 and above 15000 lowered to it, a value that is not a whole number is off, each with a warning in the
   # log. When the time runs out the accepts are forwarded anyway. Ignored by a client. Not a secret.
   # join_hold_ms: 0

@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/map_server_hold.h"
+
 namespace nevr_join_hold {
 
 /// How long after the last level-load activity the gate waits before it opens (a dated figure: the Enabling lines
@@ -99,13 +101,15 @@ class Gate {
     return dropped;
   }
 
-  /// The session ended or the server is shutting down: disarm and drop what is held. Returns how many were dropped.
+  /// The session ended or the server is shutting down: disarm and drop what is held, the maps hold included. Returns how many
+  /// were dropped.
   std::size_t Clear() {
     const std::size_t dropped = queue_.size();
     queue_.clear();
     armed_ = false;
     loadSeen_ = false;
     enabledSeen_ = false;
+    maps_.Clear();
     return dropped;
   }
 
@@ -129,9 +133,13 @@ class Gate {
     return true;
   }
 
-  /// Open: accepts are forwarded. Not armed is open.
-  bool Ready(std::uint64_t nowMs) const {
-    if (!armed_) return true;
+  /// Open: accepts are forwarded. Both holds must be open: the maps hold (a group's maps are not mounted yet) and the levels
+  /// hold (LevelsReady).
+  bool Ready(std::uint64_t nowMs) const { return !maps_.Holding() && LevelsReady(nowMs); }
+
+  /// The levels hold alone. Off (network.join_hold_ms 0) or not armed is open.
+  bool LevelsReady(std::uint64_t nowMs) const {
+    if (!Enabled() || !armed_) return true;
     return enabledSeen_ && pending_ == 0 && nowMs - lastActivityMs_ >= kSettleMs;
   }
 
@@ -143,27 +151,34 @@ class Gate {
     return true;
   }
 
-  /// What is due now: everything, in order, when the gate is open (settled) or when the front waited the timeout (the
-  /// timeout fails open: the load count is reset and the gate disarms, which also ends a count stuck by a load that
-  /// never returned).
+  /// What is due now: everything, in order, when no hold stands. A join waits for the maps hold and for the levels hold
+  /// (nevr_maps::ComposeJoinHold). The levels hold's timeout fails open: the load count is reset and the gate disarms,
+  /// which also ends a count stuck by a load that never returned. The maps hold's own deadline is polled by the caller
+  /// (join_hold.cpp, which also writes its Warning) before this runs, so the maps hold here is the one that stands.
   Release TakeDue(std::uint64_t nowMs) {
     Release out;
     if (queue_.empty()) return out;
-    if (Ready(nowMs)) {
-      out.reason = ReleaseReason::kSettled;
-    } else if (nowMs - queue_.front().arrivedMs >= timeoutMs_) {
+    const bool levelsTimedOut = Enabled() && nowMs - queue_.front().arrivedMs >= timeoutMs_;
+    const nevr_maps::JoinHold verdict =
+        nevr_maps::ComposeJoinHold(maps_.Holding(), Enabled(), LevelsReady(nowMs), levelsTimedOut);
+    if (verdict == nevr_maps::JoinHold::kHeld) return out;
+    if (verdict == nevr_maps::JoinHold::kTimeout) {
       out.reason = ReleaseReason::kTimeout;
       pending_ = 0;
       armed_ = false;
       loadSeen_ = false;
       enabledSeen_ = false;
     } else {
-      return out;
+      out.reason = ReleaseReason::kSettled;
     }
     out.accepts = std::move(queue_);
     queue_.clear();
     return out;
   }
+
+  /// The maps hold (ADR 0048 decision 17): one reason a join waits for, beside the levels hold above.
+  nevr_maps::ServerMapHold& Maps() { return maps_; }
+  const nevr_maps::ServerMapHold& Maps() const { return maps_; }
 
   bool Armed() const { return armed_; }
   std::size_t Pending() const { return pending_; }
@@ -179,6 +194,7 @@ class Gate {
   std::uint64_t armedMs_ = 0;
   std::uint64_t lastActivityMs_ = 0;
   std::vector<Held> queue_;
+  nevr_maps::ServerMapHold maps_;
 };
 
 /// A line the install writes (the server_bots form): the text and whether it is a Warning.
@@ -210,7 +226,7 @@ inline InstallPlan PlanInstall(bool isServer, const char* text) {
     const bool absent = text == nullptr || text[0] == '\0';
     out.lines.push_back({false, std::string("[NEVR.GAMESERVER] join hold off reason=") +
                                     (!problem.empty() ? "config_invalid" : (absent ? "absent" : "config_0")) +
-                                    " (accepts are forwarded at once)"});
+                                    " (the levels hold is off; a maps hold, if one is armed, still holds accepts)"});
     return out;
   }
   out.timeoutMs = ms;

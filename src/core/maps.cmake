@@ -64,6 +64,12 @@ target_sources(nevr_core PRIVATE ${_maps_run_sources})
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp")
 
+# The dedicated server's maps hold, pure (core/map_server_hold.h; ADR 0048 decisions 13, 17 and 18): the timeout from the set's
+# size and the measured rate, the one group a server fetches, the hold's state, the join composition and the signed-only rule.
+# Its PC glue is runtime/server/map_hold.cpp and join_hold.cpp. Platform-free: no PCH, no Log().
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
   find_package(zstd CONFIG QUIET)

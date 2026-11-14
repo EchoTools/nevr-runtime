@@ -15,7 +15,7 @@ Tags on the chain: **[R]** read in ReVault decompilation or bytes; **[I]** infer
 ## The hold
 
 `network.join_hold_ms` (config.yaml, section `network`) is the longest wait, in milliseconds. 0, the default, is off: no hook is
-installed and every accept is forwarded at once. A value from 1 to 499 is raised to 500 and one above 15000 is lowered to it, each with a
+installed and the levels hold holds nothing (the maps hold, below, is separate). A value from 1 to 499 is raised to 500 and one above 15000 is lowered to it, each with a
 Warning; text that is not a whole number is off with a Warning. A client never installs it.
 
 What is held is the server's forward of the service's accept (`LobbyAcceptPlayersSuccessV2`, `kLobbyEntrantsAccept` in
@@ -34,13 +34,23 @@ The gate (`src/runtime/server/join_hold_rules.h`, `Gate`):
 
 A session whose levels are already loaded calls no `LoadLevel`; its accepts wait for the timeout.
 
+## The maps hold
+
+A dedicated server with a custom-map channel (`maps.base_url`, ADR 0048) holds accepts for the group it is allocated for, while that
+group's maps are fetched and not yet mounted (`src/runtime/server/map_hold.cpp`, the rules in `src/core/map_server_hold.h`). It does not
+depend on `network.join_hold_ms`: a server with that key at 0 still holds. The hold's timeout comes from the set's size and the measured
+download rate, between a 5 s floor and a 120 s ceiling, and no config key sets it. The mount lifts it (an Info `map hold released`); the
+deadline lifts it with one Warning `map hold timeout` that names the group, the set's size, the bytes fetched, the timeout and the
+consequence: the session starts on stock content. A join waits for both holds: `nevr_maps::ComposeJoinHold` releases it when the maps hold
+is lifted and the levels hold is off, settled or timed out. Only the allocated group is fetched.
+
 Both prologues are checked before either detour goes in. A mismatch on either logs `join hold not armed ... reason=prologue_mismatch`
 (Warning, expected and actual bytes), attaches nothing and leaves the game untouched. If a detour then fails to attach after its prologue
 matched (`reason=detour_failed`), the detour that did go in is removed again (`PatchRetire`: the record in HookGuard first, then
 `MH_RemoveHook`, which writes the game's bytes back) and logs `join hold hook removed` (Info). If that removal fails, the Warning
 `join hold hook NOT removed` says the detour stays installed: it forwards to the game's own function, writes the `level_load` timing record, and feeds a gate no one
 uses (`g_active` is false), so the game behaves as stock, but its bytes are hooked. Either way the hold is not armed and accepts
-are forwarded at once. This is not `ServerFatal`: the hold is optional.
+the levels hold is off (a maps hold, if one is armed, still holds accepts). This is not `ServerFatal`: the hold is optional.
 
 Per accept, the `EnableGameSpaces` return and each release, `[NEVR.GAMESERVER] join hold ...` lines carry counts and the session id.
 A release logs `released accept` only when the accept was handed to the game. With no broadcaster or no send function it logs the
