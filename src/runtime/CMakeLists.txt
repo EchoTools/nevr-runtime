@@ -140,6 +140,9 @@ set(PATCHES_SOURCES
     "patch/resource_sets.cpp"
     # docs/adr/0048: the PC's half of the two file seams the map channel's core runs on (nevr_cargo::Env, nevr_maps::MapFs).
     "cargo/win_env.cpp"
+    # docs/adr/0048 (the recipes): the player's own stock, read for a map's recipe rebuild; the shared half is core/stock_source.cpp.
+    "cargo/stock_source.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/stock_source.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
     "compat/ws_bridge.cpp"
@@ -1595,6 +1598,17 @@ if(BUILD_TESTING)
     target_include_directories(test_win_env PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_win_env PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
     gtest_discover_tests(test_win_env DISCOVERY_MODE PRE_TEST)
+
+    # docs/adr/0048 (the recipes): the PC's stock source over a synthetic install in a temp folder, through the shared half
+    # (core/stock_source.cpp), the PC file seam's stamps (cargo/win_env.cpp) and the manifest folders installed_levels finds.
+    set(_stock_source_test_sources tests/stock_source_test.cpp cargo/stock_source.cpp cargo/win_env.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/stock_source.cpp" server/installed_levels.cpp)
+    add_executable(test_stock_source ${_stock_source_test_sources})
+    set_source_files_properties(${_stock_source_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_stock_source PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_stock_source PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk zstd::libzstd
+      CURL::libcurl ws2_32)
+    gtest_discover_tests(test_stock_source DISCOVERY_MODE PRE_TEST)
 
     # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
     add_executable(test_asset_cache

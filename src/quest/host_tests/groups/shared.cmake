@@ -118,3 +118,9 @@ nevr_ht_test(map_sets_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env} INC
   SRC src/quest/tests/map_sets_test.cpp src/quest/sentinel/map_sets.cpp src/core/resource_set_registry.cpp
       src/core/resource_shadow.cpp src/quest/sentinel/hook_log.cpp src/quest/data/sha256.cpp
   LIBS ${NEVR_ZSTD_LIB})
+# The Quest's stock source over a stock tree under the group's build folder (quest/cargo/stock_source.h; docs/adr/0048, the recipes),
+# and the shared half (core/stock_source.cpp, which the PC compiles) under a memory figure the test chooses.
+nevr_ht_test(stock_source_test GROUP shared HOST NOEXC TIMEOUT 120 ENV ${_shared_env} INCS sdk/include
+  SRC src/quest/tests/stock_source_test.cpp src/quest/cargo/stock_source.cpp src/core/stock_source.cpp
+      src/quest/cargo/posix_map_fs.cpp src/core/device_memory.cpp src/quest/data/zip.cpp
+  LIBS ${NEVR_ZSTD_LIB} ${NEVR_ZLIB_LIB})
