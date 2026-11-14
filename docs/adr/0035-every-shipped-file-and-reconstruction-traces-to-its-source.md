@@ -15,8 +15,12 @@ reconstruction in the tree (a hook, a build-time row, a replaced function).
 **Shipped files.** The release Quest APK is repacked from the pinned reference APK (`tools/quest_release_base.py`, which
 refuses any input whose sha256 is not `REFERENCE_APK_SHA256`). Its docstring names what that base contributes: about a
 hundred script libraries, `libassetpatch.so`, the reference runtime's `libvrapi.so` and `assets/afk_default_on.txt`. Some
-reach players byte for byte as another build made them (the script libraries, `afk_default_on.txt`). Others pass through
+reach players byte for byte as another build made them (the script libraries). Others pass through
 a recipe here first:
+
+- `assets/afk_default_on.txt`: the base's list is its QA trial's and is not shipped; the repack writes the list kept in this
+  repo (`tools/quest-afk-default-on.txt`), which holds no switch the reference source marks TEST ONLY
+  (`tools/cmd/quest-default-on`, `tools/internal/afkdefaulton`), and checks the signed APK carries exactly that list.
 
 - `libvrapi.so`: its libr15 checksum lists are rewritten on every build to the libr15 the APK carries
   (`tools/quest_runtime_pin.py`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the

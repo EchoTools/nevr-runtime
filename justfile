@@ -260,7 +260,7 @@ quest-reference-base apk out label="Echo VR":
 # `runtime` (the last parameter; quest-update piece shim-loads-baseline) is the baseline runtime, libnevr-runtime.so, that the shim maps
 # from the APK's native library folder at start. Empty, it is the file beside the shim, `$(dirname shim)/libnevr-runtime.so`, which the
 # sentinel's build writes; the repack refuses a missing one (tools/quest_repack_libs.py stage-runtime), since an APK without it starts with no runtime.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="": go-tools
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
@@ -432,6 +432,12 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
         stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
     fi
+    # 3d''. the default-on switch list (assets/afk_default_on.txt): the reference build's APK carries one, its QA trial's, which turns on
+    # switches its source marks TEST (pfxwarm.on alone hangs the GPU in the social lobby). The APK gets the list kept in this repo,
+    # tools/quest-afk-default-on.txt, over it, refused if it names a TEST-only switch; a source APK without the entry (the store's) gets none.
+    default_on_stage="$work/stage-default-on"
+    rm -rf "$default_on_stage"
+    build/go-tools/quest-default-on stage --apk "$apk" --list tools/quest-afk-default-on.txt --stage "$default_on_stage"
     # 3d'. the variant stamp, every APK: the word as the file's bytes, empty for a plain release (tools/quest_repack_libs.py).
     python3 -I tools/quest_repack_libs.py write-build-variant --stage "$work/stage" --variant "$variant"
     stage_libs+=("lib/arm64-v8a/libnevr_build_variant.so")
@@ -459,6 +465,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
     if [ "${#combat_libs[@]}" -gt 0 ]; then ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${combat_libs[@]}" ); fi
     ( cd "$work/stage" && zip -q -X "$unsigned" lib/arm64-v8a/libr15.so )
+    # The list replaces the source's entry of the same name (nothing was staged when the source has none).
+    if [ -f "$default_on_stage/assets/afk_default_on.txt" ]; then ( cd "$default_on_stage" && zip -q -X "$unsigned" assets/afk_default_on.txt ); fi
     # The pack's entries go in STORED (-0), like the libraries: the file names were checked plain by stage-pack.
     if [ -n "$pack" ]; then
         ( cd "$work/stage" && find assets -type f -print | LC_ALL=C sort | zip -q -0 -X "$unsigned" -@ )
@@ -494,6 +502,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # a reference runtime's libvrapi.so being the pin tool's output for the signed libr15.so, and every staged library is there as staged.
     python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
         --patcher "$patcher" --scratch "$work" ${extra[@]+"${extra[@]}"}
+    # The signed APK's switch list is the repository's, exactly when the source APK has one.
+    build/go-tools/quest-default-on check --apk "$signed" --source "$apk" --list tools/quest-afk-default-on.txt
     done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"

@@ -1,0 +1,27 @@
+# nevr-quest-default-on
+# The switch files a fresh Quest install turns on (assets/afk_default_on.txt, written by tools/cmd/quest-default-on). Kept here,
+# never taken from the reference APK: the reference list is its QA trial's and turns on switches its source marks TEST
+# (pfxwarm.on alone hangs the GPU in the social lobby). internal/afkdefaulton.TestOnly names each such switch and the source line.
+fxsndguard.on
+fxfireguard.on
+fxdecal.on
+fxoutlinefix2.on
+fxpool18.on
+fxsprite.on
+fxvfx.on
+g40guard.on
+hudmeter.on
+hzlobby90.on
+pfxlowq.off
+ffr.off
+drrc.on
+pvs.off
+pfxveillow.off
+drrlow.on
+sensorwd.on
+drrq2.on
+texresq2.on
+olnoteam.on
+drrhead.on
+hz72q2.on
+drrq3.on

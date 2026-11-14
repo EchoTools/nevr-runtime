@@ -229,6 +229,12 @@ APK repacked from it has no combat (#1994). From a clone whose HEAD is the relea
 just release-quest-reference-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
 ```
 
+The repack replaces the reference build's `assets/afk_default_on.txt`, its QA trial's switch list, with this repository's
+`tools/quest-afk-default-on.txt` (`build/go-tools/quest-default-on`): a switch its source marks TEST ONLY is never in it
+(`tools/internal/afkdefaulton`, each name with the source line), and the signed APK is checked to carry exactly that list.
+The runtime writes the list into `files/afk` only when no switch file is there yet, so an install that already took the reference
+build's list keeps those files after an update; clearing them is a step on the device, not in the APK.
+
 It compiles nothing: the loader in the APK is the release's own asset, so the asset and the APK carry one file. The recipe
 downloads the asset (the draft is enough; `gh` is `$GH_BIN`, default `gh`), checks its size and sha256 against what GitHub
 recorded for it and `gh attestation verify`, checks that it carries the tag's version and commit, repacks the reference base with
