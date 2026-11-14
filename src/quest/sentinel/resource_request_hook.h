@@ -57,6 +57,7 @@
 #include <cstdint>
 
 #include "core/cargo_store.h"
+#include "core/resource_shadow.h"
 #include "pinned_targets.h"
 
 namespace nevr_quest::resource_request {
@@ -113,6 +114,19 @@ inline constexpr unsigned kCargoSets = 16;
 void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept;
 // Requests filled from a cargo shadow so far.
 unsigned long long CargoServedCount() noexcept;
+
+// The downloaded maps' resource sets (map_sets.h; ADR 0045 decision 2, ADR 0048 decision 8). After cargo and before the overlay
+// and the game's manifest, a request whose (type, name) the published shadow holds and the game's manifest does not is filled by
+// the game's function with the shadow's manager: cargo's lookup runs first and is unchanged, and a name the game's manifest holds
+// stays the game's. With nothing published nothing changes. A later publish answers later requests; a shadow is never freed (a
+// request in flight may still read the one it found). A null shadow changes nothing.
+void PublishMapSets(const nevr_shadow::Shadow* shadow) noexcept;
+// Requests filled from the map sets' shadow so far.
+unsigned long long MapSetServedCount() noexcept;
+// The game's manifest as the map sets' mount reads it: that of the manager the first request was made to. GameManifestRecords is 0
+// until a request has been seen with a built manifest; GameManifestHolds is then the game's own binary search.
+std::uint64_t GameManifestRecords() noexcept;
+bool GameManifestHolds(std::uint64_t type, std::uint64_t name) noexcept;
 
 // Test support: arms the handler without touching a GOT slot, clears the key table, the line count and the flags.
 // `loadBase` is the base the caller address is made relative to; `logRequests` decides whether lines are written.

@@ -379,6 +379,91 @@ void AKeyThatIsNotCargoIsNotRecorded() {
   QCHECK(nevr_quest::cargo_read::TouchRead(kPoster + 1, 1) == 0);
 }
 
+// The map sets (resource_request_hook.h PublishMapSets; ADR 0045 decision 2, ADR 0048 decision 8): asked after cargo and before the
+// game's manifest, for a name the game's manifest does not hold. Their shadow holds a name only it has, a name cargo and stock also
+// hold, a name cargo holds and stock does not, and a name stock holds.
+constexpr std::uint64_t kMapOnly = 0x4444;
+constexpr std::int64_t kMapHandle = 51, kMapHandle2 = 52;
+
+std::unique_ptr<nevr_shadow::Shadow> MapSets(std::int64_t handle) {
+  return BuildShadow({{kPixType, kMapOnly, 0, 0, 512, 16, 0}, {kPixType, kBoth, 0, 0, 1024, 16, 0},
+                      {kPixType, kCargoOnly, 0, 0, 256, 16, 0}, {kStockOnly, 1, 0, 0, 64, 16, 0}},
+                     {{0, 0, 30, 2048}}, {handle});
+}
+
+void AMapSetKeyTheGameLacksIsFilledFromTheMapShadow() {
+  Reset();
+  rr::PublishCargo(g_cargoSet.get());
+  const std::unique_ptr<nevr_shadow::Shadow> sets = MapSets(kMapHandle);
+  rr::PublishMapSets(sets.get());
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kPixType, kMapOnly, 1, request) == 0);
+  QCHECK(g_fill.manager == sets->manager());
+  QCHECK(Get<std::int64_t>(request, layout::kPackageHandle) == kMapHandle);
+  QCHECK(Get<std::uint64_t>(request, layout::kSize) == 512);
+  QCHECK(rr::MapSetServedCount() == 1);
+  QCHECK(rr::CargoServedCount() == 0);
+  const std::vector<std::string> served = Lines("map_set_served");
+  QCHECK(served.size() == 1 && Field(served[0], "name") == "0x0000000000004444" && Field(served[0], "bytes") == "512");
+}
+
+void CargoIsAskedBeforeTheMapSets() {
+  Reset();
+  rr::PublishCargo(g_cargoSet.get());
+  const std::unique_ptr<nevr_shadow::Shadow> sets = MapSets(kMapHandle);
+  rr::PublishMapSets(sets.get());
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kPixType, kBoth, 0, request) == 0);  // cargo, the map sets and stock all hold it: cargo answers
+  QCHECK(g_fill.manager == g_cargoSet->shadow->manager() && Get<std::uint64_t>(request, layout::kSize) == 4096);
+  QCHECK(Call(kPixType, kCargoOnly, 0, request) == 0);  // cargo and the map sets hold it, stock does not: cargo still answers
+  QCHECK(g_fill.manager == g_cargoSet->shadow->manager() && Get<std::uint64_t>(request, layout::kSize) == 4096);
+  QCHECK(rr::MapSetServedCount() == 0);
+  QCHECK(Lines("map_set_served").empty());
+}
+
+void TheGamesManifestKeepsItsOwnNamesFromTheMapSets() {
+  Reset();
+  const std::unique_ptr<nevr_shadow::Shadow> sets = MapSets(kMapHandle);
+  rr::PublishMapSets(sets.get());
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kStockOnly, 1, 0, request) == 0);
+  QCHECK(g_fill.manager == Live() && Get<std::int64_t>(request, layout::kPackageHandle) == kStockHandle);
+  QCHECK(Call(kPixType, kBoth, 0, request) == 0);  // no cargo: stock, not the map sets
+  QCHECK(g_fill.manager == Live() && Get<std::uint64_t>(request, layout::kSize) == 777);
+  QCHECK(rr::MapSetServedCount() == 0);
+  QCHECK(Call(0x9999, 0x1, 0, request) == kMiss);  // a name nobody holds stays the game's miss
+}
+
+// A later shadow answers later requests: publishing is not a once-only step (the registry's one mount a run is; see
+// core/resource_set_registry.h). Nothing published and a null shadow change nothing.
+void ALaterPublishAnswersLaterRequests() {
+  Reset();
+  unsigned char request[layout::kRequestBytes] = {};
+  rr::PublishMapSets(nullptr);
+  QCHECK(Call(kPixType, kMapOnly, 1, request) == kMiss);
+  const std::unique_ptr<nevr_shadow::Shadow> first = MapSets(kMapHandle);
+  const std::unique_ptr<nevr_shadow::Shadow> second = MapSets(kMapHandle2);
+  rr::PublishMapSets(first.get());
+  QCHECK(Call(kPixType, kMapOnly, 1, request) == 0 && Get<std::int64_t>(request, layout::kPackageHandle) == kMapHandle);
+  rr::PublishMapSets(second.get());
+  QCHECK(Call(kPixType, kMapOnly, 1, request) == 0 && Get<std::int64_t>(request, layout::kPackageHandle) == kMapHandle2);
+  rr::PublishMapSets(nullptr);  // keeps the published shadow
+  QCHECK(Call(kPixType, kMapOnly, 1, request) == 0 && Get<std::int64_t>(request, layout::kPackageHandle) == kMapHandle2);
+}
+
+// The game's manifest as the map sets' mount reads it: none before a request, then the manager the first request was made to.
+void TheMapSetsMountReadsTheManifestOfTheFirstRequest() {
+  Reset();
+  QCHECK(rr::GameManifestRecords() == 0);
+  QCHECK(!rr::GameManifestHolds(kStockOnly, 1));
+  unsigned char request[layout::kRequestBytes] = {};
+  Call(kStockOnly, 1, 0, request);
+  QCHECK(rr::GameManifestRecords() == 5);  // the stock stand-in's five records
+  QCHECK(rr::GameManifestHolds(kStockOnly, 1));
+  QCHECK(rr::GameManifestHolds(kPixType, kPoster));
+  QCHECK(!rr::GameManifestHolds(kPixType, kMapOnly));
+}
+
 void TheCounterCountIsUnchanged() { QCHECK(rr::kCounterCount == 4); }
 
 }  // namespace
@@ -401,6 +486,11 @@ int main() {
   NothingPublishedChangesNothing();
   AServedKeyIsRecordedForTheReadCallbackAndAFailedOneIsNot();
   AKeyThatIsNotCargoIsNotRecorded();
+  AMapSetKeyTheGameLacksIsFilledFromTheMapShadow();
+  CargoIsAskedBeforeTheMapSets();
+  TheGamesManifestKeepsItsOwnNamesFromTheMapSets();
+  ALaterPublishAnswersLaterRequests();
+  TheMapSetsMountReadsTheManifestOfTheFirstRequest();
   TheCounterCountIsUnchanged();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
