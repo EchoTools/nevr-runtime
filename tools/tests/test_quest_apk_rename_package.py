@@ -33,6 +33,7 @@ JUSTFILE = REPO / "justfile"
 REFERENCE_LABEL, PROJECT_LABEL = "Echo Combat (port)", "Echo VR"
 OLD, NEW = rp.DEFAULT_FROM, rp.DEFAULT_TO
 LIBR15, ASSETPATCH = "lib/arm64-v8a/libr15.so", "lib/arm64-v8a/libassetpatch.so"
+VRAPI = "lib/arm64-v8a/libvrapi.so"
 REAL_LIBR15_SHA_PREFIX = "936aa6a3"  # kLibR15ReferenceSha256[0], src/quest/patch/libr15_patch_table.h
 REAL_APK = os.environ.get("NEVR_REFERENCE_APK")
 
@@ -61,7 +62,7 @@ def lib_with(old: str, count: int, salt: bytes) -> bytes:
     return body + b"\0tail" * 3
 
 
-def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, manifest: bytes = None, extra: dict = None) -> list:
+def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, ascii_in_vrapi: int = 1, manifest: bytes = None, extra: dict = None) -> list:
     """(name, data, compress_type) for a fixture reference APK, in a fixed order."""
     out = [
         ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n", zipfile.ZIP_DEFLATED),
@@ -71,7 +72,7 @@ def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, manifest: by
         ("classes.dex", b"dex\n035\0" + NEW.encode() + b"\0" + bytes(range(256)) * 4, zipfile.ZIP_DEFLATED),
         ("resources.arsc", b"arsc" + wide("Echo Combat (port)") + wide(NEW), zipfile.ZIP_STORED),
         (LIBR15, lib_with(OLD, ascii_in_libr15, b"\x7fELF-r15-") + NEW.encode(), zipfile.ZIP_DEFLATED),
-        ("lib/arm64-v8a/libvrapi.so", b"\x7fELF-vrapi" + NEW.encode() + b"\0" + NEW.encode(), zipfile.ZIP_DEFLATED),
+        (VRAPI, lib_with(OLD, ascii_in_vrapi, b"\x7fELF-vrapi-"), zipfile.ZIP_DEFLATED),
         (ASSETPATCH, lib_with(OLD, ascii_in_assetpatch, b"\x7fELF-ap-"), zipfile.ZIP_DEFLATED),
         ("assets/afk_default_on.txt", b"ecplayo.on\ndronekill2.on\n", zipfile.ZIP_STORED),
     ]
@@ -115,13 +116,13 @@ class FixtureTest(unittest.TestCase):
 
 
 class RenameTest(FixtureTest):
-    def test_renames_exactly_the_three_entries_with_their_counts(self):
+    def test_renames_exactly_the_four_entries_with_their_counts(self):
         items = self.make()
         record = rp.rename_apk(self.src, self.out)
         before, after = {n: d for n, d, _ in items}, read_apk(self.out)
         self.assertEqual(record["event"], "package_renamed")
-        self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0]})
-        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH})
+        self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [1, 0]})
+        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH, VRAPI})
         # manifest: the one UTF-16LE string, same length
         manifest = after["AndroidManifest.xml"][0]
         self.assertEqual(len(manifest), len(before["AndroidManifest.xml"]))
@@ -130,7 +131,7 @@ class RenameTest(FixtureTest):
         self.assertIn(NEW, rp._pool_strings(manifest))
         self.assertNotIn(OLD, rp._pool_strings(manifest))
         # libraries: every ASCII occurrence, nothing else moved
-        for name, n in ((LIBR15, 5), (ASSETPATCH, 2)):
+        for name, n in ((LIBR15, 5), (ASSETPATCH, 2), (VRAPI, 1)):
             data = after[name][0]
             self.assertEqual(len(data), len(before[name]), name)
             self.assertEqual(data.count(OLD.encode()), 0, name)
@@ -156,7 +157,7 @@ class RenameTest(FixtureTest):
             self.assertEqual(after[name][0], data, f"{name}: bytes")
             self.assertEqual(after[name][1], method, f"{name}: compression")
             self.assertEqual(after[name][2], (2026, 10, 30, 12, 0, 0), f"{name}: timestamp")
-        # the target string already in classes.dex, resources.arsc and libvrapi.so is not touched, and nothing is renamed there
+        # the target string already in classes.dex and resources.arsc is not touched, and nothing is renamed there
         self.assertEqual(after["classes.dex"][0].count(NEW.encode()), 1)
         self.assertEqual(after["resources.arsc"][0].count(wide(NEW)), 1)
 
@@ -181,6 +182,12 @@ class RefusalTest(FixtureTest):
         self.make(ascii_in_assetpatch=3)
         self.assertIn("expected (2, 0)", self.refused())
 
+    def test_refuses_a_libvrapi_count_that_differs(self):
+        for n in (0, 2):
+            with self.subTest(n=n):
+                self.make(ascii_in_vrapi=n)
+                self.assertIn(VRAPI, self.refused())
+
     def test_refuses_a_second_manifest_string(self):
         data = afk_manifest()
         # a second UTF-16LE copy of the package appended inside the chunk size is not a pool string, but it is a count of 2
@@ -195,8 +202,7 @@ class RefusalTest(FixtureTest):
 
     def test_refuses_a_source_string_in_an_entry_the_rename_does_not_name(self):
         for name, data, form in (("classes.dex", b"dex\0" + OLD.encode(), "ascii=1 utf16le=0"),
-                                 ("assets/other.bin", wide(OLD), "ascii=0 utf16le=1"),
-                                 ("lib/arm64-v8a/libvrapi.so", OLD.encode() * 2, "ascii=2 utf16le=0")):
+                                 ("assets/other.bin", wide(OLD), "ascii=0 utf16le=1")):
             with self.subTest(entry=name):
                 items = [(n, d, m) for n, d, m in entries() if n != name]
                 items.append((name, data, zipfile.ZIP_DEFLATED))
@@ -214,7 +220,7 @@ class RefusalTest(FixtureTest):
 
     def test_refuses_the_source_string_in_neither_form_when_the_target_is_not_there_either(self):
         items = [(n, d.replace(OLD.encode(), b"com.other.packageXXX") if n != "AndroidManifest.xml" else d.replace(wide(OLD), wide("com.other.packageXXX")), m)
-                 for n, d, m in entries() if n not in ("classes.dex", "resources.arsc", "lib/arm64-v8a/libvrapi.so")]
+                 for n, d, m in entries() if n not in ("classes.dex", "resources.arsc")]
         write_apk(self.src, items)
         self.assertIn("neither the source package string nor the target", self.refused())
 
@@ -336,7 +342,7 @@ class LabelTest(FixtureTest):
         for name in without:
             if name != "AndroidManifest.xml":
                 self.assertEqual(after[name], without[name], f"{name}: the label changed another entry")
-        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH})
+        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH, VRAPI})
         self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_in"], sha(source))
         self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_out"], sha(manifest))
         self.assertEqual(record["sha256_out"], sha(self.out.read_bytes()))
@@ -453,7 +459,7 @@ class RealReferenceApkTest(unittest.TestCase):
             record = rp.rename_apk(src, out)
             print("real-file record:", json.dumps(record, sort_keys=True))
             self.assertEqual(record["event"], "package_renamed")
-            self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0]})
+            self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [1, 0]})
             with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out) as zout:
                 self.assertEqual(zout.testzip(), None)
                 libr15 = zout.read(LIBR15)
@@ -461,6 +467,7 @@ class RealReferenceApkTest(unittest.TestCase):
                 self.assertEqual(sha(libr15), record["changed"][LIBR15]["sha256_out"])
                 self.assertEqual(zout.read(LIBR15).count(OLD.encode()), 0)
                 self.assertEqual(zout.read(ASSETPATCH).count(OLD.encode()), 0)
+                self.assertEqual(zout.read(VRAPI).count(OLD.encode()), 0)
                 self.assertEqual(zout.read("AndroidManifest.xml").count(wide(OLD)), 0)
                 self.assertIn(NEW, rp._pool_strings(zout.read("AndroidManifest.xml")))
                 source = [i for i in zin.infolist() if not i.filename.startswith("META-INF/")]

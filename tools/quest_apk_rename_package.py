@@ -14,6 +14,7 @@ expected count (a count that differs is a refusal, nothing is written):
     AndroidManifest.xml               1 occurrence, UTF-16LE (the manifest's string pool), 0 ASCII
     lib/arm64-v8a/libr15.so           5 occurrences, ASCII, 0 UTF-16LE
     lib/arm64-v8a/libassetpatch.so    2 occurrences, ASCII, 0 UTF-16LE
+    lib/arm64-v8a/libvrapi.so         1 occurrence, ASCII, 0 UTF-16LE (the wave-2 reference runtime)
 
 The two names have the same length, so no offset, size or string-pool index moves: the replacement is byte for byte
 in place, and the tool re-reads each result and checks its length and its remaining counts. The manifest is also
@@ -25,7 +26,7 @@ not carried; the repack realigns).
 The source package string is searched in every other entry, ASCII and UTF-16LE. A hit in an entry this list does not
 name is a refusal that lists the entries; the tool never renames what the list does not name.
 
-An input that is already renamed (the source string is nowhere, and the target string is in the three named entries at
+An input that is already renamed (the source string is nowhere, and the target string is in the four named entries at
 least as often as the source was expected) is reported as `package_already_renamed` and copied, META-INF dropped, so a
 second run over its own output writes the same entries again.
 
@@ -68,6 +69,8 @@ EXPECTED = {
     MANIFEST: (0, 1),
     "lib/arm64-v8a/libr15.so": (5, 0),
     "lib/arm64-v8a/libassetpatch.so": (2, 0),
+    # the wave-2 reference runtime holds the package once, as the fallback name of a file-existence check
+    "lib/arm64-v8a/libvrapi.so": (1, 0),
 }
 
 
