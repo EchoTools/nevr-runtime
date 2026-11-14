@@ -329,6 +329,28 @@ class MountRun {
     return true;
   }
 
+  // The package index at `path`, read through one held handle whose stamp equals `recorded`: "" with the bytes, or why not. A
+  // `recorded` never taken is all zero, which no stamp read from a file equals (its volume, id and size), so it counts as moved.
+  std::string ReadIndexByStamp(const std::string& path, const FileStamp& recorded, std::string* out) {
+    std::int64_t handle = 0;
+    std::uint64_t size = 0;
+    if (!fs_.OpenHeld(path, &handle, &size)) return "missing";
+    FileStamp stamp;
+    std::string why;
+    if (!fs_.StampOf(handle, &stamp)) {
+      why = "stamp_unsupported";
+    } else if (stamp != recorded) {
+      why = "package_stamp";
+    } else if (size > std::min(kMaxIndexBytes, document_bytes_)) {
+      why = "too_large";
+    } else {
+      out->assign(static_cast<std::size_t>(size), '\0');
+      if (size != 0 && !ReadExact(env_, handle, 0, &(*out)[0], out->size())) why = "missing";
+    }
+    env_.CloseBlob(handle);
+    return why;
+  }
+
   void CloseUngranted(const std::vector<Opened>& opened) {
     for (const Opened& o : opened) {
       if (!o.granted) env_.CloseBlob(o.handle);
@@ -370,14 +392,15 @@ class MountRun {
     const Listing selected = Choose(listings, cached.index_sha256);
     const std::string version_dir = Join(config_.dir, cached.dir);
 
-    // ParsePackageIndex checks the bytes against the pin the index recorded: index_pin means the file changed on disk.
+    // The package index is held to its pin by its stamp, never hashed here: while the file's stamp, read through the handle the
+    // bytes are read from, equals the one recorded when the fetch hashed them, they are those bytes (ADR 0048 decision 4). A moved
+    // stamp defers the map to the worker, which hashes the index again (Rehash).
     std::string package_bytes;
-    if (!env_.ReadSmallFile(Join(version_dir, kPackageFile), &package_bytes,
-                            static_cast<std::size_t>(std::min(kMaxIndexBytes, document_bytes_)))) {
-      return Defer(id, "missing");
-    }
-    const ParsedPackage parsed = ParsePackageIndex(package_bytes, id, config_.platform, EntryOf(cached), document_bytes_);
-    if (parsed.reason == "index_pin") return Defer(id, "package_hash");
+    const std::string unread = ReadIndexByStamp(Join(version_dir, kPackageFile), cached.index_stamp, &package_bytes);
+    if (unread == "too_large") return Refuse(id, unread);
+    if (!unread.empty()) return Defer(id, unread);
+    const ParsedPackage parsed =
+        ParsePackageIndex(package_bytes, id, config_.platform, EntryOf(cached), document_bytes_, IndexPin::kStamped);
     if (!parsed.reason.empty()) return Refuse(id, parsed.reason);
     const Package& package = parsed.package;
 
@@ -905,20 +928,27 @@ class FetchRun {
       if (found == index_.maps.end()) continue;
       CachedMap& cached = found->second;
       const std::string version_dir = Join(config_.dir, cached.dir);
-      bool equal = true;
+      // The package index first: its new stamp is what the next mount reads it by.
+      std::string unequal;
+      std::string sha;
+      FileStamp stamp;
+      if (!HashFile(Join(version_dir, kPackageFile), &sha, &stamp) || sha != cached.index_sha256) {
+        unequal = "index_hash";
+      } else {
+        cached.index_stamp = stamp;
+      }
       for (CachedFile& f : cached.files) {
-        std::string sha;
-        FileStamp stamp;
+        if (!unequal.empty()) break;
         if (!HashFile(Join(version_dir, f.path), &sha, &stamp) || sha != f.sha256) {
-          equal = false;
+          unequal = "member_hash";
           break;
         }
         f.stamp = stamp;
       }
       if (!keep_going_()) return;
       dirty_ = true;
-      if (!equal) {
-        env_.Event(EventLevel::kWarn, "map_rehash", {{"id", id}, {"result", "dropped"}, {"reason", "member_hash"}});
+      if (!unequal.empty()) {
+        env_.Event(EventLevel::kWarn, "map_rehash", {{"id", id}, {"result", "dropped"}, {"reason", unequal}});
         index_.maps.erase(found);
         continue;
       }
@@ -1404,6 +1434,7 @@ class FetchRun {
     for (CachedFile& f : cached.files) {
       if (!Stamp(Join(final_dir, f.path), &f.stamp)) return fail("map_ready", "stamp");
     }
+    if (!Stamp(Join(final_dir, kPackageFile), &cached.index_stamp)) return fail("map_ready", "stamp");
     AddToCatalog(final_dir, package, cached.files);
     index_.maps[key] = std::move(cached);
     dirty_ = true;

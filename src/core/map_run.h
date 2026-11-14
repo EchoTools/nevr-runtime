@@ -18,7 +18,9 @@
  * written last: it is the commit point.
  *
  * CacheMount::Mount reads the cache and grants what it holds: no network, and no hashing beyond the stored manifests' signatures
- * and each small package.json (ADR 0048 decision 3). It can be called again, after a fetch, to mount what arrived.
+ * (ADR 0048 decision 3). A package index is held to its pin by the stamp the cache index recorded when the fetch hashed it, and a
+ * moved stamp defers the map to the worker (decision 4), so the mount may run on the boot thread (ADR 0045 decision 7). It can
+ * be called again, after a fetch, to mount what arrived.
  *
  * Every outcome is a structured event (the env's tag is [NEVR.MAPS]): map_limits, map_mount_group, map_mounted, map_skipped,
  * map_deferred, map_summary in the mount; map_limits, map_index, map_gc, map_rehash, map_manifest, map_trust_changed, map_plan,
