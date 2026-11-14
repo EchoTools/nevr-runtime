@@ -552,7 +552,9 @@ constexpr uintptr_t NETGAME_STATE_OFFSET = 0;
 constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
 
 /// Offset within the net game of the client lobby pointer (CR15NetClientLobby *), which the owner-JSON calls go through:
-/// CR15NetGame::LoadMap (echovr.exe 0x14017a050) reads `MOV RCX,[RBX+0x40]`, then `ADD RCX,0x18` before CALL 0x14060d3d0.
+/// CR15NetGame::LoadMap (echovr.exe 0x14017a050) reads `MOV RCX,[RBX+0x40]`, then `ADD RCX,0x18` before CALL 0x14060d3d0;
+/// the same read is at 0x140181D86 (`MOV RCX,[RCX+0x40]` in 0x140181D80, followed by a virtual call). Also used by veilnet.cpp
+/// NetLobby (`*(netgame + 0x40)`) and by the session key of the alias hook, so a new client lobby means a new session.
 constexpr uintptr_t NETGAME_CLIENT_LOBBY_OFFSET = 0x40;
 
 /// Offset within the client lobby of the CNSLobby the owner-JSON calls take (the same LoadMap: `ADD RCX,0x18`).
@@ -900,11 +902,6 @@ constexpr uintptr_t GAME_SPACE_TABLE_OFFSET = 0x1F90;
 constexpr uintptr_t GAME_SPACE_TABLE_COUNT_OFFSET = 0x1FC0;
 constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_OFFSET = 0x1F50;
 constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_COUNT_OFFSET = 0x1F80;
-
-/// Offset within the net game of its client lobby pointer (CR15NetClientLobby*). Read in echovr.exe at 0x140181D86
-/// (`MOV RCX, [RCX + 0x40]` in 0x140181D80, followed by a virtual call). Used by veilnet.cpp NetLobby
-/// (`*(netgame + 0x40)`) and by the session key of the alias hook, so a new client lobby means a new session.
-constexpr uintptr_t NETGAME_CLIENT_LOBBY_OFFSET = 0x40;
 
 /// Address: NRadEngine::CGameLevelResource::Disable (0x1404EC900, 1069 bytes; ReVault name: none, the decompilation is
 /// raw). `int32 (resource*)`, 0 on success. Returns 0 at once when the flags at +0xC40 already read disabled (the sign
