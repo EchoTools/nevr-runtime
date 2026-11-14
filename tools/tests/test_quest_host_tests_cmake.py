@@ -257,6 +257,7 @@ PROGRAMS = {
         "symbol_hash_test",
         "symbol_hash_test_uchar",
         "tls_ca_test",
+        "update_root_test",
     ),
     "social": (
         "social_abi_test",
