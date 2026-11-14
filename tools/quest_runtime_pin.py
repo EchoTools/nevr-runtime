@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pins the reference runtime's libr15 checksum list to the libr15 the APK carries (#1737).
 
-WHY. The reference runtime (`lib/arm64-v8a/libvrapi.so` of the reference APK) holds thirteen modules that act only on a
+WHY. The reference runtime (`lib/arm64-v8a/libvrapi.so` of the reference APK) holds twelve or thirteen modules (by build) that act only on a
 libr15 whose md5 is on the list each module carries (custctx, memsys, voipdrop and others). The libr15 this project's
 APK carries is the reference file after the host patcher (quest_patch_libr15) and so has an md5 none of the lists
 names; every one of those modules logs "OFF: libr15.so md5 ... is none of ..." and changes nothing. The md5 of the
@@ -10,23 +10,24 @@ from the staged file on every build.
 
 WHAT THE LIST IS IN THE BINARY. The compare is not a string compare against a text in .rodata. Each module's
 `strcmp(hex, entry)` was compiled to four 64-bit XORs against constants built by `movz` + three `movk` instructions
-(sixteen instruction words per module for one entry), so one entry of the list is written in two forms: thirteen ASCII
-copies (they feed the `%.8s` of each module's OFF line) and thirteen sites of sixteen immediate words, one site per
-module. Replacing the ASCII copies alone changes nothing the gate reads. The tool replaces both forms of one entry,
+(sixteen instruction words per module for one entry), so one entry of the list is written in two forms: N ASCII
+copies (they feed the `%.8s` of each module's OFF line) and N sites of sixteen immediate words, one site per
+module. N is 12 or 13, the two runtimes this project knows (KNOWN_SITES): the 12-module runtime of the pinned reference APK and
+the 13-module wave-2 runtime. Replacing the ASCII copies alone changes nothing the gate reads. The tool replaces both forms of one entry,
 the entry at `--replace-index` of the table (the first list of consecutive 32-hex texts in the file; index 0
 holds `--expect-old-md5`, default `STOCK_ENTRY_MD5`, the md5 the reference runtime's list opens with and no build of
 this project carries). The position alone never picks the entry: the tool refuses, naming the md5 it expected and the
 one it found, unless the entry at the index is that md5 (or the md5 being pinned, a file already pinned) and that md5
-has its thirteen ASCII copies and its thirteen immediate sites. The other entries stay, so a libr15 that is the
+has N ASCII copies and N immediate sites, the same N. The other entries stay, so a libr15 that is the
 reference's own is still accepted.
 
     quest_runtime_pin.py pin --libvrapi IN --libr15 FINAL_LIBR15 --out OUT [--replace-index 0] [--expect-old-md5 MD5]
     quest_runtime_pin.py detect --libvrapi IN
 
-`pin` hashes FINAL_LIBR15 itself (the file the APK will carry), finds the thirteen ASCII copies and the thirteen sites (52
-runs, 208 words) of the entry, asserts those exact counts, rewrites both forms in place (the size does not change and
+`pin` hashes FINAL_LIBR15 itself (the file the APK will carry), finds the N ASCII copies and the N sites (4N
+runs, 16N words) of the entry, asserts that N is 12 or 13 and that both counts are N, rewrites both forms in place (the size does not change and
 only the imm16 field of each word and the 32 text bytes of each copy change), then re-reads the result and checks it:
-the new text has thirteen copies and thirteen sites at that index, the old text none, and no byte outside the copies and
+the new text has N copies and N sites at that index, the old text none, and no byte outside the copies and
 the imm16 fields differs. It is idempotent: the entry already holding the md5 is a no-op that writes a byte-identical
 file. It refuses (exit 1) any other count, an md5 that is already present anywhere else in the file, a file that is
 not an AArch64 ELF, and an OUT that is the input. `detect` says whether IN carries the table at all (exit 0) or is
@@ -44,11 +45,9 @@ import sys
 from pathlib import Path
 
 TAG = "NEVR.QUEST.RUNTIME_PIN"
-SITES = 13              # one per gated module
+KNOWN_SITES = (12, 13)  # one per gated module: 12 in the pinned reference APK's runtime, 13 in the wave-2 runtime
 CHUNKS = 4              # 32 hex characters = four 8-byte compare chunks
 WORDS_PER_RUN = 4       # movz + three movk
-RUNS = SITES * CHUNKS   # 52
-WORDS = RUNS * WORDS_PER_RUN  # 208
 LOOKAHEAD = 64          # words after a movz searched for the three movk of one register
 SITE_SPAN = 0x400       # the four runs of one site lie within this many bytes
 EM_AARCH64 = 0xB7
@@ -172,12 +171,12 @@ def chunks_of(text: bytes) -> list[int]:
 
 
 def carries_table(data: bytes) -> bool:
-    """True when `data` holds a checksum table, whole or not: some 32-hex text has exactly SITES copies. A library that
-    holds none is not the reference runtime (the store's own libvrapi.so is not)."""
+    """True when `data` holds a checksum table, whole or not: some 32-hex text has exactly as many copies as a known
+    runtime has sites (KNOWN_SITES). A library that holds none is not the reference runtime (the store's own libvrapi.so is not)."""
     counts: dict[bytes, int] = {}
     for match in _HEX32.finditer(data):
         counts[match.group(0)] = counts.get(match.group(0), 0) + 1
-    return SITES in counts.values()
+    return any(count in KNOWN_SITES for count in counts.values())
 
 
 def table(data: bytes) -> list[bytes]:
@@ -193,14 +192,14 @@ def table(data: bytes) -> list[bytes]:
     return texts
 
 
-def sites_of(scan: Scan, text: bytes) -> list[list[list[int]]]:
+def sites_of(scan: Scan, text: bytes, sites: int) -> list[list[list[int]]]:
     """The runs of `text` grouped by site: a list of sites, each a list of four runs (one per chunk, in chunk order).
 
-    PinError unless the runs are exactly SITES sites of one run per chunk within SITE_SPAN bytes."""
+    PinError unless the runs are exactly `sites` sites of one run per chunk within SITE_SPAN bytes."""
     per_chunk = [scan.runs(c) for c in chunks_of(text)]
     counts = [len(r) for r in per_chunk]
-    if counts != [SITES] * CHUNKS:
-        raise PinError(f"{text.decode()} has {sum(counts)} immediate runs ({counts} per chunk), not {RUNS} ({SITES} per chunk)")
+    if counts != [sites] * CHUNKS:
+        raise PinError(f"{text.decode()} has {sum(counts)} immediate runs ({counts} per chunk), not {sites * CHUNKS} ({sites} per chunk)")
     claimed: set[int] = set()
     for runs in per_chunk:
         for run in runs:
@@ -229,12 +228,12 @@ def pin_data(data: bytes, new_md5: str, replace_index: int = 0, expect_old_md5: 
     """`data` with the table entry at `replace_index` replaced by `new_md5` in both forms; (result, report).
 
     The entry at `replace_index` must be `expect_old_md5` (or `new_md5` itself, a file already pinned), found in the ASCII
-    table and with its thirteen copies and thirteen sites; else WrongEntry or PinError. PinError unless every rule in the
+    table and with as many ASCII copies as immediate sites, that number one of KNOWN_SITES; else WrongEntry or PinError. PinError unless every rule in the
     module docstring holds."""
     new, expected = check_md5(new_md5), check_md5(expect_old_md5)
     if not carries_table(data):
         raise PinError("the file holds no checksum table (no 32-hex text with exactly "
-                       f"{SITES} copies): it is not the reference runtime")
+                       f"{' or '.join(map(str, KNOWN_SITES))} copies): it is not the reference runtime")
     entries = table(data)
     if not 0 <= replace_index < len(entries):
         raise PinError(f"--replace-index {replace_index}: the table has {len(entries)} entries")
@@ -242,13 +241,13 @@ def pin_data(data: bytes, new_md5: str, replace_index: int = 0, expect_old_md5: 
     if old not in (expected, new):
         raise WrongEntry(replace_index, expect_old_md5, old.decode())
     old_copies = ascii_copies(data, old)
-    if len(old_copies) != SITES:
-        raise PinError(f"{old.decode()} has {len(old_copies)} ASCII copies, not {SITES}")
+    if len(old_copies) not in KNOWN_SITES:
+        raise PinError(f"{old.decode()} has {len(old_copies)} ASCII copies, not one of {KNOWN_SITES}")
     scan = Scan(data)
-    old_sites = sites_of(scan, old)
+    old_sites = sites_of(scan, old, len(old_copies))
     report = {"table": [text.decode() for text in entries], "replace_index": replace_index, "old_md5": old.decode(),
               "new_md5": new_md5, "ascii_copies": len(old_copies), "sites": len(old_sites),
-              "immediate_runs": sum(len(site) for site in old_sites), "immediate_words": WORDS}
+              "immediate_runs": sum(len(site) for site in old_sites), "immediate_words": len(old_sites) * CHUNKS * WORDS_PER_RUN}
     if new == old:
         report["changed_bytes"] = 0
         return data, report
@@ -293,7 +292,7 @@ def verify_pinned(before: bytes, after: bytes, new: bytes, old: bytes, index: in
     if ascii_copies(after, new) != old_copies:
         raise PinError("re-reading the result: the new entry's copies are not where the old ones were")
     scan = Scan(after)
-    sites_of(scan, new)
+    sites_of(scan, new, len(old_copies))
     if ascii_copies(after, old) or any(scan.runs(c) for c in chunks_of(old)):
         raise PinError(f"re-reading the result: {old.decode()} is still in the file")
     allowed_ascii = [(o, o + 32) for o in old_copies]

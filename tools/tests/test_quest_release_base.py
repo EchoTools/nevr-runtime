@@ -183,11 +183,14 @@ class CheckArena(unittest.TestCase):
 
     def test_the_reference_runtime_is_refused_and_the_stores_own_libvrapi_passes(self):
         """docs/adr/0047: the default Quest build carries no libvrapi.so from the reference build. The reference runtime is known by
-        its libr15 checksum table (twelve copies of one md5 text, quest_runtime_pin.carries_table); the store's own library has none."""
-        table = (pin.STOCK_ENTRY_MD5.encode() + b"\0") * pin.SITES
-        refusal = self.refused(self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF reference runtime\0" + table}))
-        self.assertEqual(refusal.event, "arena_has_combat_entries")
-        self.assertEqual(refusal.fields["entries"], [qb.RUNTIME_ENTRY])
+        its libr15 checksum table (as many copies of one md5 text as a known runtime has modules, pin.KNOWN_SITES, 12 or 13;
+        quest_runtime_pin.carries_table); the store's own library has none."""
+        for modules in pin.KNOWN_SITES:
+            with self.subTest(modules=modules):
+                table = (pin.STOCK_ENTRY_MD5.encode() + b"\0") * modules
+                refusal = self.refused(self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF reference runtime\0" + table}))
+                self.assertEqual(refusal.event, "arena_has_combat_entries")
+                self.assertEqual(refusal.fields["entries"], [qb.RUNTIME_ENTRY])
         store = self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF the store's VrApi\0" + pin.STOCK_ENTRY_MD5.encode() + b"\0"})
         self.assertEqual(qb.check_arena(store)["event"], "arena_has_no_combat")
 

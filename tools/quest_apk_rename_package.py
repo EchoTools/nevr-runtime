@@ -14,7 +14,7 @@ expected count (a count that differs is a refusal, nothing is written):
     AndroidManifest.xml               1 occurrence, UTF-16LE (the manifest's string pool), 0 ASCII
     lib/arm64-v8a/libr15.so           5 occurrences, ASCII, 0 UTF-16LE
     lib/arm64-v8a/libassetpatch.so    2 occurrences, ASCII, 0 UTF-16LE
-    lib/arm64-v8a/libvrapi.so         1 occurrence, ASCII, 0 UTF-16LE (the wave-2 reference runtime)
+    lib/arm64-v8a/libvrapi.so         0 or 1 occurrence, ASCII, 0 UTF-16LE (exactly the count of a runtime in KNOWN_RUNTIMES)
 
 The two names have the same length, so no offset, size or string-pool index moves: the replacement is byte for byte
 in place, and the tool re-reads each result and checks its length and its remaining counts. The manifest is also
@@ -26,7 +26,7 @@ not carried; the repack realigns).
 The source package string is searched in every other entry, ASCII and UTF-16LE. A hit in an entry this list does not
 name is a refusal that lists the entries; the tool never renames what the list does not name.
 
-An input that is already renamed (the source string is nowhere, and the target string is in the four named entries at
+An input that is already renamed (the source string is nowhere, and the target string is in the named entries at
 least as often as the source was expected) is reported as `package_already_renamed` and copied, META-INF dropped, so a
 second run over its own output writes the same entries again.
 
@@ -69,8 +69,17 @@ EXPECTED = {
     MANIFEST: (0, 1),
     "lib/arm64-v8a/libr15.so": (5, 0),
     "lib/arm64-v8a/libassetpatch.so": (2, 0),
-    # the wave-2 reference runtime holds the package once, as the fallback name of a file-existence check
-    "lib/arm64-v8a/libvrapi.so": (1, 0),
+}
+
+# The reference runtime. Its package-string count depends on the base it belongs to: a runtime in KNOWN_RUNTIMES (by the sha-256
+# of the library as the APK carries it) must hold exactly its count; any other libvrapi may hold RUNTIME_COUNTS and nothing else.
+RUNTIME_ENTRY = "lib/arm64-v8a/libvrapi.so"
+RUNTIME_COUNTS = ((0, 0), (1, 0))
+KNOWN_RUNTIMES = {
+    # the 12-module runtime of the pinned reference APK (tools/quest_release_base.py REFERENCE_APK_SHA256): no package string
+    "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839": (0, 0),
+    # the 13-module wave-2 runtime: the package once, as the fallback name of a file-existence check
+    "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a": (1, 0),
 }
 
 
@@ -162,6 +171,20 @@ def _in_meta_inf(name: str) -> bool:
     return name.startswith("META-INF/") or name == "META-INF"
 
 
+def _runtime_expected(data: bytes, found: tuple, old: str, new: str, renamed: bool) -> tuple:
+    """The (ASCII, UTF-16LE) count of `old` that the runtime in `data` must hold. A runtime in KNOWN_RUNTIMES has its table
+    count (an already-renamed input is looked up as it was before the rename, `new` put back to `old`); any other must hold one of
+    RUNTIME_COUNTS (`found` is what it holds), else RenameError."""
+    candidates = [data] + ([data.replace(new.encode("ascii"), old.encode("ascii"))] if renamed else [])
+    for candidate in candidates:
+        if _sha(candidate) in KNOWN_RUNTIMES:
+            return KNOWN_RUNTIMES[_sha(candidate)]
+    if renamed or found in RUNTIME_COUNTS:
+        return (0, 0) if renamed else found
+    raise RenameError(f"{RUNTIME_ENTRY} (sha256 {_sha(data)}) holds the source package string ascii/utf16le {found}, expected "
+                      f"one of {RUNTIME_COUNTS}; nothing written")
+
+
 def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT_TO, label: str | None = None) -> dict:
     """Write `dst` from `src`; returns the record the CLI logs. RenameError (nothing written) unless every rule in the
     module docstring holds. A `label` also sets the manifest's launcher label (see LABEL in the module docstring)."""
@@ -170,6 +193,7 @@ def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT
         raise RenameError("the output is the input file: the tool never edits an APK in place")
     found: dict = {}          # entry -> (ascii, utf16) of `old`, for every non-META-INF entry that has a hit
     target_found: dict = {}   # entry -> (ascii, utf16) of `new` for the named entries
+    runtime = None
     names = []
     with zipfile.ZipFile(src) as zin:
         infos = zin.infolist()
@@ -183,32 +207,35 @@ def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT
             hit = _counts(data, old)
             if any(hit):
                 found[info.filename] = hit
-            if info.filename in EXPECTED:
+            if info.filename in EXPECTED or info.filename == RUNTIME_ENTRY:
                 target_found[info.filename] = _counts(data, new)
-        missing = [n for n in EXPECTED if n not in names]
+            if info.filename == RUNTIME_ENTRY:
+                runtime = data
+        missing = [n for n in (*EXPECTED, RUNTIME_ENTRY) if n not in names]
         if missing:
             raise RenameError(f"the APK has no entry {', '.join(missing)}")
+        expected_all = {**EXPECTED, RUNTIME_ENTRY: _runtime_expected(runtime, found.get(RUNTIME_ENTRY, (0, 0)), old, new, renamed=not found)}
         record = {"tag": TAG, "apk": src.name, "out": dst.name, "from": old, "to": new,
                   "dropped_meta_inf": sum(1 for n in names if _in_meta_inf(n))}
-        unnamed = {n: c for n, c in found.items() if n not in EXPECTED}
+        unnamed = {n: c for n, c in found.items() if n not in expected_all}
         if unnamed:
             raise RenameError("the source package string is in entries the rename does not name (not renamed, "
                               "decide each): " + "; ".join(f"{n} ascii={a} utf16le={w}" for n, (a, w) in sorted(unnamed.items())))
         already = not found
         if already:
-            for entry, (want_ascii, want_wide) in EXPECTED.items():
+            for entry, (want_ascii, want_wide) in expected_all.items():
                 have = target_found[entry]
                 if have[0] < want_ascii or have[1] < want_wide:
                     raise RenameError(f"{entry} holds neither the source package string nor the target at least "
                                       f"{want_ascii} ASCII and {want_wide} UTF-16LE times (has ascii={have[0]} "
                                       f"utf16le={have[1]}): not a reference APK this tool knows")
-            record.update(event="package_already_renamed", counts={e: list(target_found[e]) for e in EXPECTED}, changed={})
+            record.update(event="package_already_renamed", counts={e: list(target_found[e]) for e in expected_all}, changed={})
         else:
-            for entry, expected in EXPECTED.items():
+            for entry, expected in expected_all.items():
                 if found.get(entry, (0, 0)) != expected:
                     raise RenameError(f"{entry} holds the source package string ascii/utf16le "
                                       f"{found.get(entry, (0, 0))}, expected {expected}; nothing written")
-            record.update(event="package_renamed", counts={e: list(found[e]) for e in EXPECTED}, changed={})
+            record.update(event="package_renamed", counts={e: list(found.get(e, (0, 0))) for e in expected_all}, changed={})
         tmp = dst.with_name(dst.name + ".part")
         try:
             with zipfile.ZipFile(tmp, "w", allowZip64=True) as zout:
@@ -216,7 +243,7 @@ def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT
                     if _in_meta_inf(info.filename):
                         continue
                     data = zin.read(info)
-                    if not already and info.filename in EXPECTED:
+                    if not already and info.filename in expected_all and expected_all[info.filename] != (0, 0):
                         out = rename_manifest(data, old, new) if info.filename == MANIFEST else rename_library(data, old, new)
                         left = _counts(out, old)
                         gained = _counts(out, new)[0 if info.filename != MANIFEST else 1]

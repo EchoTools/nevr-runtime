@@ -1,12 +1,12 @@
 """The runtime md5 pin (#1737): tools/quest_runtime_pin.py replaces the stock entry of the reference runtime's libr15
-checksum list, in both forms the binary holds it in (thirteen ASCII copies, thirteen sites of sixteen immediate words), with the
+checksum list, in both forms the binary holds it in (12 or 13 ASCII copies by runtime, as many sites of sixteen immediate words), with the
 md5 of the libr15 the APK carries.
 
-The fixture is a synthetic AArch64 ELF built here (`make_runtime`): an executable segment with thirteen sites per entry, each of
+The fixture is a synthetic AArch64 ELF built here (`make_runtime`): an executable segment with one site per module per entry, each of
 sixteen `movz`/`movk` words that build the four 8-byte chunks of the entry's text (interleaved over four registers, with
-unrelated instructions between), and a data segment with thirteen lists of three entries. A pin of the fixture must equal the
-fixture built for the new text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the wave-2 reference runtime's
-`libvrapi.so` (sha-256 below).
+unrelated instructions between), and a data segment with one list of three entries per module. A pin of the fixture must equal the
+fixture built for the new text, for the 12-module and the 13-module runtime. One real-file case runs only when
+NEVR_REFERENCE_LIBVRAPI names the `libvrapi.so` of either reference runtime (REAL_RUNTIMES, by sha-256).
 """
 from __future__ import annotations
 
@@ -33,8 +33,15 @@ NEW = hashlib.md5(b"a patched libr15").hexdigest()
 OTHER = hashlib.md5(b"another libr15").hexdigest()
 NOP = 0xD503201F
 MODULES = 13  # the modules wave 2 of the reference runtime gates on the list (its own notes say thirteen lists)
+PINNED_REFERENCE_MODULES = 12  # the modules the pinned reference APK's runtime (libvrapi sha-256 59a3cd20...) gates
 EOR_X8 = 0xCA090108  # eor x8, x8, x9: an instruction on register 8 that is neither movz nor movk
-REFERENCE_SHA256 = "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a"  # wave 2 runtime, libvrapi 8b7eab33
+# The two real runtimes: libvrapi sha-256 -> (modules, bytes a pin to LANE_PIN_MD5 changes, sha-256 of the pinned file).
+REAL_RUNTIMES = {
+    "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839":  # the pinned reference APK (d0b51a01...)
+        (PINNED_REFERENCE_MODULES, 828, "a266784959fcf2583a1ff88974a345a20999134719491dd334277433688d42c9"),
+    "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a":  # the wave-2 runtime, libvrapi 8b7eab33
+        (MODULES, 897, "f7af78d1ee00bd59650e4536a8b903c0776566909fb0f8034da9e8ee404318c1"),
+}
 LANE_PIN_MD5 = "3e89307b9eddca58aa4573953a4477b9"
 
 
@@ -73,19 +80,22 @@ def make_elf(code: bytes, data: bytes, machine: int = 0xB7) -> bytes:
     return bytes(image)
 
 
-def make_runtime(old: str = OLD, *, sites: int = MODULES, copies: int = MODULES, others: tuple[str, ...] = (SECOND, THIRD),
-                 decoy: bool = False, extra: bytes = b"") -> bytes:
-    """A runtime fixture whose list is `old` then `others`. `sites` sites and `copies` ASCII copies of `old` (MODULES in the
-    reference runtime); the others always have MODULES of each. `decoy` adds a run of `old` in the non-executable segment."""
+def make_runtime(old: str = OLD, *, modules: int = MODULES, sites: int | None = None, copies: int | None = None,
+                 others: tuple[str, ...] = (SECOND, THIRD), decoy: bool = False, extra: bytes = b"") -> bytes:
+    """A runtime fixture of `modules` gated modules whose list is `old` then `others`. `sites` sites and `copies` ASCII copies
+    of `old` (`modules` each unless given); the others always have `modules` of each. `decoy` adds a run of `old` in the
+    non-executable segment."""
+    sites = modules if sites is None else sites
+    copies = modules if copies is None else copies
     code = bytearray()
-    for m in range(max(sites, MODULES)):
-        for text, wanted in [(old, sites)] + [(o, MODULES) for o in others]:
+    for m in range(max(sites, modules)):
+        for text, wanted in [(old, sites)] + [(o, modules) for o in others]:
             if m < wanted:
                 code += b"".join(struct.pack("<I", w) for w in site_words(text))
                 code += struct.pack("<I", NOP) * 12
     data = bytearray()
-    for m in range(max(copies, MODULES)):
-        for text, wanted in [(old, copies)] + [(o, MODULES) for o in others]:
+    for m in range(max(copies, modules)):
+        for text, wanted in [(old, copies)] + [(o, modules) for o in others]:
             if m < wanted:
                 data += text.encode() + b"\0"
         data += b"module %d: %%.8s is none of the known builds\0" % m
@@ -97,6 +107,33 @@ def make_runtime(old: str = OLD, *, sites: int = MODULES, copies: int = MODULES,
 
 
 class PinDataTest(unittest.TestCase):
+    def test_each_known_runtime_pins_with_its_own_number_of_modules(self):
+        self.assertEqual(pin.KNOWN_SITES, (PINNED_REFERENCE_MODULES, MODULES))
+        for modules in pin.KNOWN_SITES:
+            with self.subTest(modules=modules):
+                runtime = make_runtime(modules=modules)
+                self.assertTrue(pin.carries_table(runtime))
+                result, report = pin.pin_data(runtime, NEW)
+                self.assertEqual(result, make_runtime(NEW, modules=modules))
+                self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]),
+                                 (modules, modules, 4 * modules, 16 * modules))
+                again, _ = pin.pin_data(result, NEW)
+                self.assertEqual(again, result)
+
+    def test_a_runtime_of_another_number_of_modules_is_not_a_runtime_and_is_refused(self):
+        for modules in (PINNED_REFERENCE_MODULES - 1, MODULES + 1):
+            with self.subTest(modules=modules):
+                runtime = make_runtime(modules=modules)
+                self.assertFalse(pin.carries_table(runtime))
+                with self.assertRaisesRegex(pin.PinError, "holds no checksum table"):
+                    pin.pin_data(runtime, NEW)
+
+    def test_copies_and_sites_of_two_known_counts_do_not_mix(self):
+        for copies, sites in ((PINNED_REFERENCE_MODULES, MODULES), (MODULES, PINNED_REFERENCE_MODULES)):
+            with self.subTest(copies=copies, sites=sites):
+                with self.assertRaisesRegex(pin.PinError, f"has {4 * sites} immediate runs .* not {4 * copies}"):
+                    pin.pin_data(make_runtime(copies=copies, sites=sites), NEW)
+
     def test_the_pinned_runtime_is_the_runtime_built_for_the_new_md5(self):
         result, report = pin.pin_data(make_runtime(), NEW)
         self.assertEqual(result, make_runtime(NEW))
@@ -156,7 +193,7 @@ class PinDataTest(unittest.TestCase):
         self.assertEqual(len(pin.Scan(before).runs(pin.chunks_of(OLD.encode())[0])), MODULES)
         self.assertTrue(result.endswith(decoy))  # not an executable segment: left as it was
 
-    def test_twelve_sites_are_refused(self):
+    def test_twelve_sites_against_thirteen_copies_are_refused(self):
         with self.assertRaisesRegex(pin.PinError, "has 48 immediate runs"):
             pin.pin_data(make_runtime(sites=12), NEW)
 
@@ -164,9 +201,9 @@ class PinDataTest(unittest.TestCase):
         with self.assertRaisesRegex(pin.PinError, "has 56 immediate runs"):
             pin.pin_data(make_runtime(sites=14), NEW)
 
-    def test_twelve_ascii_copies_are_refused(self):
-        with self.assertRaisesRegex(pin.PinError, "has 12 ASCII copies, not 13"):
-            pin.pin_data(make_runtime(copies=12), NEW)
+    def test_eleven_ascii_copies_are_refused(self):
+        with self.assertRaisesRegex(pin.PinError, r"has 11 ASCII copies, not one of \(12, 13\)"):
+            pin.pin_data(make_runtime(copies=11), NEW)
 
     def test_a_text_inside_a_longer_hex_string_is_not_a_copy_and_is_left_alone(self):
         for extra in (b"0" + OLD.encode() + b"\0", OLD.encode() + b"0\0"):
@@ -352,15 +389,19 @@ class PinCommandTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.environ.get("NEVR_REFERENCE_LIBVRAPI"),
-                     "set NEVR_REFERENCE_LIBVRAPI to the reference APK's lib/arm64-v8a/libvrapi.so")
+                     "set NEVR_REFERENCE_LIBVRAPI to a reference runtime's lib/arm64-v8a/libvrapi.so (REAL_RUNTIMES)")
 class RealReferenceRuntimeTest(unittest.TestCase):
-    def test_the_wave_2_runtime_pins_with_thirteen_copies_and_thirteen_sites(self):
+    def test_the_real_runtime_pins_with_its_modules_and_to_the_known_bytes(self):
         data = pathlib.Path(os.environ["NEVR_REFERENCE_LIBVRAPI"]).read_bytes()
-        self.assertEqual(hashlib.sha256(data).hexdigest(), REFERENCE_SHA256)
+        digest = hashlib.sha256(data).hexdigest()
+        self.assertIn(digest, REAL_RUNTIMES)
+        modules, changed, pinned = REAL_RUNTIMES[digest]
         self.assertEqual(pin.table(data), [OLD.encode(), SECOND.encode(), THIRD.encode()])
         result, report = pin.pin_data(data, LANE_PIN_MD5)
-        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]), (13, 13, 52, 208))
-        self.assertEqual(report["changed_bytes"], 897)
+        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]),
+                         (modules, modules, 4 * modules, 16 * modules))
+        self.assertEqual(report["changed_bytes"], changed)
+        self.assertEqual(hashlib.sha256(result).hexdigest(), pinned)
         again, _ = pin.pin_data(result, LANE_PIN_MD5)
         self.assertEqual(again, result)
 

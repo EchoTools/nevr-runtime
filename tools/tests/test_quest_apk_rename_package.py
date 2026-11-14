@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
@@ -116,6 +117,24 @@ class FixtureTest(unittest.TestCase):
 
 
 class RenameTest(FixtureTest):
+    def test_each_known_runtime_renames_with_its_own_count_and_renames_again_as_already_renamed(self):
+        # the pinned reference APK's runtime holds the package 0 times, the wave-2 runtime once
+        for n in (0, 1):
+            with self.subTest(ascii_in_vrapi=n):
+                self.make(ascii_in_vrapi=n)
+                record = rp.rename_apk(self.src, self.out)
+                self.assertEqual(record["event"], "package_renamed")
+                self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [n, 0]})
+                self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH} | ({VRAPI} if n else set()))
+                self.assertEqual(read_apk(self.out)[VRAPI][0].count(OLD.encode()), 0)
+                again = self.dir / "again.apk"
+                second = rp.rename_apk(self.out, again)
+                self.assertEqual(second["event"], "package_already_renamed")
+                self.assertEqual(second["counts"][VRAPI], [n, 0])
+
+    def test_the_table_names_the_runtime_of_the_pinned_reference_apk_and_the_wave_2_runtime(self):
+        self.assertEqual(sorted(rp.KNOWN_RUNTIMES.values()), [(0, 0), (1, 0)])
+
     def test_renames_exactly_the_four_entries_with_their_counts(self):
         items = self.make()
         record = rp.rename_apk(self.src, self.out)
@@ -151,7 +170,7 @@ class RenameTest(FixtureTest):
         kept = [(n, d, m) for n, d, m in items if not n.startswith("META-INF")]
         self.assertEqual(list(after), [n for n, _, _ in kept], "entry order")
         for name, data, method in kept:
-            if name in rp.EXPECTED:
+            if name in rp.EXPECTED or name == VRAPI:
                 self.assertEqual(after[name][1], method, f"{name}: compression")
                 continue
             self.assertEqual(after[name][0], data, f"{name}: bytes")
@@ -182,11 +201,16 @@ class RefusalTest(FixtureTest):
         self.make(ascii_in_assetpatch=3)
         self.assertIn("expected (2, 0)", self.refused())
 
-    def test_refuses_a_libvrapi_count_that_differs(self):
-        for n in (0, 2):
-            with self.subTest(n=n):
-                self.make(ascii_in_vrapi=n)
-                self.assertIn(VRAPI, self.refused())
+    def test_refuses_an_unknown_libvrapi_with_a_count_other_than_zero_or_one(self):
+        self.make(ascii_in_vrapi=2)
+        self.assertIn(VRAPI, self.refused())
+
+    def test_a_known_runtime_must_hold_exactly_its_count(self):
+        # the table says this exact libvrapi holds the package once; the fixture's copy holds it 0 times
+        items = self.make(ascii_in_vrapi=0)
+        runtime = {name: data for name, data, _ in items}[VRAPI]
+        with mock.patch.dict(rp.KNOWN_RUNTIMES, {sha(runtime): (1, 0)}):
+            self.assertIn("expected (1, 0)", self.refused())
 
     def test_refuses_a_second_manifest_string(self):
         data = afk_manifest()
@@ -459,7 +483,9 @@ class RealReferenceApkTest(unittest.TestCase):
             record = rp.rename_apk(src, out)
             print("real-file record:", json.dumps(record, sort_keys=True))
             self.assertEqual(record["event"], "package_renamed")
-            self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [1, 0]})
+            with zipfile.ZipFile(src) as zsrc:
+                vrapi_count = rp.KNOWN_RUNTIMES[sha(zsrc.read(VRAPI))]
+            self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: list(vrapi_count)})
             with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out) as zout:
                 self.assertEqual(zout.testzip(), None)
                 libr15 = zout.read(LIBR15)
@@ -475,7 +501,7 @@ class RealReferenceApkTest(unittest.TestCase):
                 for info in source:
                     out_info = zout.getinfo(info.filename)
                     self.assertEqual(out_info.compress_type, info.compress_type, info.filename)
-                    if info.filename in rp.EXPECTED:
+                    if info.filename in rp.EXPECTED or info.filename == VRAPI:
                         continue
                     self.assertEqual(sha(zout.read(info.filename)), sha(zin.read(info)), info.filename)
             # a second run over the output reports and copies
