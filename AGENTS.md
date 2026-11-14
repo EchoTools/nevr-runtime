@@ -817,24 +817,17 @@ your seat name, for example `claude-main` or `codex`.
   the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
-- **A branch runs the quick check before it lands, not `just verify`.** The quick check is: the build (`just build`), the test
-  recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
-  `test-quest-*`, `test-android` for a change under `src/quest`, and so on). The PC login test is not part of it: it runs
-  on main after the release cut ("Verification before landing"). The GTest floor is not stored:
-  `python3 tools/verify_gtest_floor.py` counts `TEST(` / `TEST_F(` declarations in `src/runtime/tests/*.cpp` at HEAD
-  and at the merge-base with `origin/main` (on main, the parent commit) and fails when HEAD has fewer. A change that
-  removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. A change that touches `src/runtime/host/exports.def`, an
-  `NEVR_MODULE_API` function or `src/runtime/host/` also runs
-  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every change, whatever it touches, also runs
-  `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
-  first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` also runs the Go tests of `tools/`; one of them,
-  `tools/cmd/one-home`, fails when a procedure named in `docs/standards/procedure-homes.txt` (landing, releasing, headline files, running on a
-  copy, filing) is written in a Markdown file other than its home: a new copy of a step goes in the home and the other files link to it.
-  `just test-tools` keeps every run: its full output,
-  JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
-  `test-runs/tools-tests` in the work root, `~/src/nevr-runtime-work`). A failure is reported by the test ids that run's record
-  names, never by a count alone. Run the quick check on the branch's tip, in the build slice, and report each item with its exit code in
-  the commit message; an item not run is named as not run.
+- **A branch runs only the tests that cover what it changed, once, before it lands. No large-scale suites.** The quick check is:
+  the build (`just build`, incremental), then only the test targets that cover the files the branch touched: one GTest
+  binary with `--gtest_filter` for the touched tests (`just test-auth-unit`, `test-quest-*` and the rest name the
+  binaries), `go test` of the touched package under `tools/`, or the one pytest file touched. Never a whole suite after a
+  unit change: no full `just test-auth-unit`, no full `just test-tools`, no `verify_doc_paths.py`, unless the change is to
+  that suite or its runner itself. A change that touches `src/runtime/host/exports.def`, an `NEVR_MODULE_API` function or
+  `src/runtime/host/` also runs `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll
+  --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. A change that removes tests on purpose puts a
+  `GTest-Drop: <reason>` trailer on the commit that removes them. The whole suites run on main after the release cut
+  (`just verify`), and a red there is bisected and reverted (batch, then bisect). Report each command run with its exit
+  code in the commit message; anything not run is named as not run. The PC login test is not part of a branch's check.
   No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
 - **`just verify` runs only on main, after the release cut, once per cut.** A branch does not run it and the
   review does not ask for it. It is not run again for the same cut. Its log starts with
