@@ -1,5 +1,6 @@
 /* The CDN manifest: the JSON document, published as one zstd frame, that is on the CDN that lists the game's objects a client may fetch
- * (docs/adr/0045-cdn-texture-delivery.md). One document, `v1/manifest.json` (or the manifest a config names), keyed by label; every
+ * (docs/adr/0045-cdn-texture-delivery.md). One document, `v1/manifest.json.zst` (or the manifest a config names, whatever its name:
+ * ParseManifestBody reads a zstd frame or plain JSON by its bytes), keyed by label; every
  * entry is one on-disk record of one resource, of any on-disk type, named the way the game names it.
  *
  *   {"schema": "nevr-cargo-manifest", "schema_version": 1,
@@ -106,7 +107,8 @@ enum class ParseStatus {
   kBadFormat,     // a format other than "zstd-frame"
   kTooMany,       // more entries than Limits::max_entries
   kNoLimits,      // the limits are not ok: nothing is read
-  kNotZstd,       // a manifest frame that does not start with the zstd magic (plain JSON is not accepted: nothing uncompressed is published)
+  kNotZstd,       // a frame whose first bytes are not a zstd frame header: no magic (ParseManifestFrame only), or the magic with a
+                  // header no frame may have
   kNoContentSize, // a manifest frame whose header states no content size: its size cannot be held to the limits before it is decoded
   kDecompress,    // the decoder refused the frame, or it decoded to other than the size its header states
 };
@@ -129,6 +131,14 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
 std::uint64_t MaxManifestFrameBytes(std::uint64_t declared_bytes) noexcept;
 
 ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Manifest* out);
+
+// True when `body` begins with the zstd frame magic (28 B5 2F FD).
+bool StartsWithZstdMagic(std::string_view body) noexcept;
+
+// A manifest as it was fetched or saved, decoded by what its bytes are and never by its name: a body that begins with the zstd
+// frame magic is one frame (ParseManifestFrame); any other body is the JSON text itself (ParseManifest, held to
+// Limits::manifest_text_bytes). Both runtime reads of a manifest go through here: the fetch and the boot's saved copy (cdn_run.cpp).
+ParseResult ParseManifestBody(std::string_view body, const Limits& limits, Manifest* out);
 
 // "0x" followed by 1 to 16 hex digits.
 bool ParseHex64(std::string_view text, std::uint64_t* out) noexcept;

@@ -23,7 +23,9 @@
 namespace nevr_cdn {
 
 inline constexpr const char* kDefaultBaseUrl = "https://cargo.echo.taxi/";
-inline constexpr const char* kDefaultManifestPath = "v1/manifest.json.zst";  // one zstd frame: nothing uncompressed is published
+// The path the CDN publishes its manifest at. The CDN publishes it as one zstd frame; the client reads any manifest by its bytes
+// (cdn_manifest.h ParseManifestBody), so the name sets no format.
+inline constexpr const char* kDefaultManifestPath = "v1/manifest.json.zst";
 
 // What the config file said about the CDN (`assets.*`); an empty field means the code's default. Each runtime fills it from its own
 // config reader.

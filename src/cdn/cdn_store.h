@@ -6,7 +6,8 @@
  *   <dir>/blobs.idx        the blob index: a header, then one fixed 52-byte record per object, appended after the object's bytes
  *                          are durable:  sha256[32] | file u32 | offset u32 | size u32 | bytes u32 | crc32 u32  (little endian,
  *                          the crc covers the 48 bytes before it)
- *   <dir>/manifest.json.zst the last manifest a fetch read, as published (one zstd frame); the mount reads it to know which (type, name)
+ *   <dir>/manifest.json.zst the last manifest a fetch read, byte for byte as fetched (a zstd frame or JSON text: the mount reads it by its
+ *                          bytes, never by this name); the mount reads it to know which (type, name)
  *                          each object is
  *
  * Hashing happens once, while an object is downloaded (cdn_run.cpp), and never again at boot: Open() reads the index and
@@ -50,6 +51,8 @@ inline constexpr char kIndexMagic[kIndexMagicBytes + 1] = "NEVRCARG";  // the fi
 
 std::string StoreFilePath(const std::string& dir, std::uint32_t file);
 std::string IndexPath(const std::string& dir);
+// The manifest as it was last fetched, byte for byte (a zstd frame or JSON text: what it is is read from its bytes, never from this
+// name).
 std::string ManifestCopyPath(const std::string& dir);
 // "0x" and the value in lowercase hex without leading zeros (the form the manifest and the log use for a type or a name).
 std::string FormatHex64(std::uint64_t value);

@@ -356,11 +356,14 @@ bool NormalizeCdnBase(const std::string& in, std::string* out) {
   return true;
 }
 
-// A manifest path below the host: relative, plain characters, no "..", ending in .json.zst. The CDN publishes a manifest only as one
-// zstd frame (docs/adr/0045 decision 4; the code's default is v1/manifest.json.zst), and the core refuses any other body.
+// The longest manifest path a config file may name: a bound on a value read from a file, so a line of the file cannot make the URL
+// the core requests (and logs in cdn_manifest's `url`) arbitrarily long. Not a device or game limit.
+constexpr std::size_t kMaxManifestPathBytes = 128;
+
+// A manifest path below the host: relative, plain characters, no "..". Its name decides nothing: the core reads a zstd frame or plain
+// JSON by the body's own bytes (cdn_manifest.h ParseManifestBody).
 bool IsManifestPath(const std::string& p) {
-  static const std::string kSuffix = ".json.zst";
-  if (p.size() <= kSuffix.size() || p.size() > 128 || p[0] == '/' || p.compare(p.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) return false;
+  if (p.empty() || p.size() > kMaxManifestPathBytes || p[0] == '/') return false;
   if (p.find("..") != std::string::npos) return false;
   for (const char c : p) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '/';
@@ -397,7 +400,7 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
       a.manifest = *value;
       given = true;
     } else {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_json_zst_path (default stays)");
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_path (default stays)");
     }
   }
   if (cfg.Kind(kAssetsRequiredOnlyKey) != nevr::NodeKind::kAbsent) {

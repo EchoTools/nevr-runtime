@@ -341,4 +341,16 @@ ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Man
   return ParseManifest(text, limits, out);
 }
 
+bool StartsWithZstdMagic(std::string_view body) noexcept {
+  if (body.size() < kZstdMagicBytes) return false;
+  for (std::size_t i = 0; i < kZstdMagicBytes; ++i) {
+    if (static_cast<unsigned char>(body[i]) != kZstdMagic[i]) return false;
+  }
+  return true;
+}
+
+ParseResult ParseManifestBody(std::string_view body, const Limits& limits, Manifest* out) {
+  return StartsWithZstdMagic(body) ? ParseManifestFrame(body, limits, out) : ParseManifest(body, limits, out);
+}
+
 }  // namespace nevr_cdn

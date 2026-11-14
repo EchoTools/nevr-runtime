@@ -31,6 +31,10 @@ constexpr const char* kBase = "https://cargo.echo.taxi/";
 constexpr const char* kManifestPath = "v1/allassets/test/manifest.json.zst";
 constexpr const char* kDir = "/cache";
 constexpr const char* kArchive = "0x2a41cf1c1d9e5d32";
+// A device whose memory gives a manifest text limit of 20000 / (8 * 8) = 312 bytes, so a test can go over it.
+constexpr std::uint64_t kSmallDeviceMemory = 20000;
+// A set large enough that its manifest takes several 97-byte deliveries, so a refusal at the header leaves most of it unsent.
+constexpr int kManyObjects = 40;
 
 struct Obj {
   std::string frame;
@@ -569,7 +573,7 @@ void AManifestThatCannotBeFetchedChangesNothingAndWhatIsStoredStaysMounted() {
     w.Serve(env);
     Response& m = env.server[std::string(kBase) + kManifestPath];
     if (std::string(failure) == "404") m.status = 404;
-    if (std::string(failure) == "garbage") m.body = "<html>";  // not a zstd frame
+    if (std::string(failure) == "garbage") m.body = "<html>";  // not a manifest: neither a zstd frame nor the manifest's JSON
     if (std::string(failure) == "drop") m.drop_after = 10;
     Captured cap;
     const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
@@ -583,28 +587,108 @@ void AManifestThatCannotBeFetchedChangesNothingAndWhatIsStoredStaysMounted() {
   }
 }
 
-void AManifestOverTheComputedTextLimitIsRefusedByName() {
-  World w;
-  FakeEnv env;
-  w.Serve(env);
-  env.device.memory_available = 20000;  // text limit: 20000 / (8 * 8) = 312 bytes
-  Captured cap;
-  const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
-  QCHECK(!r.manifest_loaded && std::string(r.stopped) == "manifest_failed");
-  const auto events = env.EventsNamed("cdn_manifest");
-  QCHECK(events.size() == 1 && FakeEnv::Value(events[0], "reason") == "too_large");
+// The manifest is read by its bytes, never by its name: a path with no .json suffix that holds a zstd frame loads, and so does a
+// body of plain JSON; the plain body is saved as fetched and the next boot mounts from it.
+void AManifestIsReadByItsBytesNotByItsName() {
+  for (const bool zstd : {true, false}) {
+    World w;
+    w.config.manifest_path = zstd ? "v1/test/manifest" : "v1/test/plain";
+    FakeEnv env;
+    w.Serve(env);
+    const std::string text = w.ManifestText();
+    env.server[std::string(kBase) + w.config.manifest_path].body = zstd ? cdn_test::ZstdFrameOf(text) : text;  // the default answer: 200
+    Captured cap;
+    const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
+    QCHECK(r.manifest_loaded && r.fetched == w.objs.size() && r.failed == 0 && std::string(r.stopped).empty());
+    const auto loaded = env.EventsNamed("cdn_manifest");
+    QCHECK(loaded.size() == 1);
+    if (loaded.size() == 1) {
+      QCHECK(FakeEnv::Value(loaded[0], "result") == "loaded" && FakeEnv::Value(loaded[0], "format") == (zstd ? "zstd" : "json"));
+      QCHECK(FakeEnv::Value(loaded[0], "url") == std::string(kBase) + w.config.manifest_path);
+      QCHECK(FakeEnv::Value(loaded[0], "bytes") == std::to_string(text.size()));
+    }
+    QCHECK(env.fs_->files[nc::ManifestCopyPath(kDir)] == (zstd ? cdn_test::ZstdFrameOf(text) : text));  // saved as fetched
+    FakeEnv boot(env.fs_);
+    Captured atBoot;
+    QCHECK(nc::MountFromCache(boot, w.config, atBoot.Sink()));
+    QCHECK(atBoot.sets.size() == 1 && atBoot.sets[0]->records == w.objs.size() && atBoot.sets[0]->missing == 0);
+  }
 }
 
-void APlainJsonManifestIsRefusedByName() {
-  World w;
+// A plain body is held to the text limit as it arrives, just over it and far over it: the transfer ends at the limit as a failed
+// fetch (manifest_failed, too_large, as an oversized frame), the record names the limit, and nothing is mounted.
+void APlainManifestOverTheTextLimitEndsAtTheLimitAsItArrives() {
+  constexpr std::size_t kFarOver = 100000;        // a body many times the limit
+  for (const std::size_t extra : {std::size_t{1}, kFarOver}) {
+    World w;
+    FakeEnv env;
+    w.Serve(env);
+    env.device.memory_available = kSmallDeviceMemory;
+    nc::DeviceFacts facts;
+    env.QueryDevice(kDir, &facts);
+    const std::uint64_t limit = nc::ComputeLimits(facts, nc::ManifestEntryMemoryBytes()).manifest_text_bytes;
+    const std::string body(static_cast<std::size_t>(limit) + extra, '{');  // not the zstd magic: read as text
+    env.server[std::string(kBase) + kManifestPath].body = body;
+    Captured cap;
+    const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
+    QCHECK(!r.manifest_loaded && std::string(r.stopped) == "manifest_failed" && cap.sets.empty() && GetsOfBlobs(env) == 0);
+    const auto events = env.EventsNamed("cdn_manifest");
+    QCHECK(events.size() == 1);
+    if (events.size() == 1) {
+      QCHECK(FakeEnv::Value(events[0], "reason") == "too_large");
+      QCHECK(FakeEnv::Value(events[0], "limit_bytes") == std::to_string(limit));
+    }
+    if (extra == kFarOver) {  // far over: the transfer ended near the limit, the rest was never downloaded
+      QCHECK(!env.body_bytes_delivered.empty() && env.body_bytes_delivered[0] < body.size());
+    }
+  }
+}
+
+// A body with the zstd magic and a header no frame may have (the reserved descriptor bit set) is refused when its header arrives, as
+// a refused manifest, before the rest of it is downloaded.
+void AFrameWithABrokenHeaderIsRefusedBeforeTheBody() {
+  World w(kManyObjects);
   FakeEnv env;
   w.Serve(env);
-  env.server[std::string(kBase) + kManifestPath].body = w.ManifestText();  // nothing uncompressed is published, so none is read
+  std::string& body = env.server[std::string(kBase) + kManifestPath].body;
+  body[nc::kZstdDescriptorAt] = static_cast<char>(static_cast<unsigned char>(body[nc::kZstdDescriptorAt]) | nc::kZstdReservedBit);
   Captured cap;
   const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
   QCHECK(!r.manifest_loaded && std::string(r.stopped) == "manifest_refused" && GetsOfBlobs(env) == 0);
   const auto events = env.EventsNamed("cdn_manifest");
   QCHECK(events.size() == 1 && FakeEnv::Value(events[0], "reason") == "not_zstd");
+  QCHECK(!env.body_bytes_delivered.empty() && env.body_bytes_delivered[0] < body.size());
+}
+
+// A body shorter than the magic, or text that is not the manifest's JSON, is read as text and refused as no manifest; a body that is
+// the zstd magic alone, or the magic and the start of a header, is a frame with no whole header and is refused too.
+void AShortOrForeignBodyIsRefusedAsNoManifest() {
+  const std::string magic(reinterpret_cast<const char*>(nc::kZstdMagic), nc::kZstdMagicBytes);
+  const std::string magicAndDescriptor = magic + std::string(1, '\0');  // a descriptor that asks for more header than follows
+  for (const std::string& text : {std::string(), std::string("{}"), std::string("ab"), std::string("<html>not found</html>"), magic,
+                                  magicAndDescriptor}) {
+    World w;
+    FakeEnv env;
+    w.Serve(env);
+    env.server[std::string(kBase) + kManifestPath].body = text;
+    Captured cap;
+    const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
+    QCHECK(!r.manifest_loaded && std::string(r.stopped) == "manifest_refused" && GetsOfBlobs(env) == 0);
+    const auto events = env.EventsNamed("cdn_manifest");
+    QCHECK(events.size() == 1 && FakeEnv::Value(events[0], "result") == "refused");
+  }
+}
+
+void AManifestOverTheComputedTextLimitIsRefusedByName() {
+  World w;
+  FakeEnv env;
+  w.Serve(env);
+  env.device.memory_available = kSmallDeviceMemory;
+  Captured cap;
+  const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
+  QCHECK(!r.manifest_loaded && std::string(r.stopped) == "manifest_failed");
+  const auto events = env.EventsNamed("cdn_manifest");
+  QCHECK(events.size() == 1 && FakeEnv::Value(events[0], "reason") == "too_large");
 }
 
 void AFrameWithNoContentSizeIsRefusedByName() {
@@ -620,7 +704,7 @@ void AFrameWithNoContentSizeIsRefusedByName() {
 }
 
 void ACorruptFrameIsRefusedByName() {
-  World w(40);
+  World w(kManyObjects);
   FakeEnv env;
   w.Serve(env);
   std::string& body = env.server[std::string(kBase) + kManifestPath].body;
@@ -729,6 +813,10 @@ void AKillAfterAnyStepLeavesAnHonestStoreAndTheNextLaunchFinishes() {
 }  // namespace
 
 int main() {
+  AManifestIsReadByItsBytesNotByItsName();
+  APlainManifestOverTheTextLimitEndsAtTheLimitAsItArrives();
+  AFrameWithABrokenHeaderIsRefusedBeforeTheBody();
+  AShortOrForeignBodyIsRefusedAsNoManifest();
   TheFirstLaunchFetchesStoresSavesMountsAndPublishes();
   TheLogHasTheLimitsTheStoreThePlanTheObjectsAndTheOutcome();
   TheSecondLaunchMountsFromTheStoreWithNoRequestAndNoHash();
@@ -754,7 +842,6 @@ int main() {
   AFullDiskStopsTheRunWithTheReasonAndGivesTheBytesBack();
   AManifestThatCannotBeFetchedChangesNothingAndWhatIsStoredStaysMounted();
   AManifestOverTheComputedTextLimitIsRefusedByName();
-  APlainJsonManifestIsRefusedByName();
   AFrameWithNoContentSizeIsRefusedByName();
   ACorruptFrameIsRefusedByName();
   ADeclaredSizeOverTheMemoryLimitEndsTheDownloadAtTheHeader();

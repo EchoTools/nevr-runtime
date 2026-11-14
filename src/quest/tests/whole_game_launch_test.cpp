@@ -44,7 +44,8 @@ constexpr const char* kType = "0x489bb35d53ca50e9";  // the platform's payload t
 constexpr std::size_t kStoreAlign = 16;               // the alignment a manifest row states for a stored frame
 constexpr std::size_t kOtherFrameSize = 41;                   // stored bytes of a frame unlike the descriptor's 40
 constexpr std::size_t kSizeSkew = 16;                 // how far a row's stated size is from the frame's own
-constexpr std::size_t kNotAFramePageBytes = 4096;     // the body of a reachable URL that is not a zstd frame
+// A reachable URL's body that is no manifest (neither a zstd frame nor its JSON), under the text limit, so it is refused, not cut off.
+constexpr std::size_t kNotAManifestPageBytes = 4096;
 
 std::mutex g_mutex;
 std::vector<std::string> g_cdnLines;  // the sentinel's JSON lines (the CDN worker and the Quest env log through them)
@@ -333,14 +334,14 @@ void AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestSt
   }
 }
 
-void AManifestTheCdnAnswersThatIsNotAZstdFrameStillEndsTheLaunchOverACompleteCache() {
+void AnAnswerThatIsNoManifestStillEndsTheLaunchOverACompleteCache() {
   Launch launch;
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   QCHECK(qd::RunDataStep(launch.config, launch.transport).outcome == qd::StepOutcome::kStubbed);
   g_cdnLines.clear();
   g_published.clear();
   launch.stepEvents.clear();
-  launch.transport.server[std::string(kBase) + kManifestPath] = std::string(kNotAFramePageBytes, 'x');  // reachable, but not what the CDN publishes
+  launch.transport.server[std::string(kBase) + kManifestPath] = std::string(kNotAManifestPageBytes, 'x');  // read as text, refused
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);  // a refused manifest is not an offline launch
@@ -359,7 +360,7 @@ int main() {
   AnOfflineLaunchOverAnEmptyCacheStillEndsWithTheMessage();
   AnOfflineLaunchOverACacheMissingAnObjectOfItsSavedManifestStillEndsWithTheMessage();
   AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestStatesStillEndsWithTheMessage();
-  AManifestTheCdnAnswersThatIsNotAZstdFrameStillEndsTheLaunchOverACompleteCache();
+  AnAnswerThatIsNoManifestStillEndsTheLaunchOverACompleteCache();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "whole_game_launch_test: %d check(s) failed\n", quest_test::Failures());

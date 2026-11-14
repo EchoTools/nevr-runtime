@@ -47,7 +47,11 @@ process.
    any on-disk type, published as one zstd frame (`manifest.json.zst`) whose header states the content size. The client decodes it with
    the libzstd the runtime already links (not the game's `CSysCompression`, which needs the engine's allocator and function table
    before the engine runs) and holds the declared size to the device's memory before it decodes anything. A record of 0 bytes is
-   listed in the manifest's `empty` list. A blob is one stock-format chunk: one zstd frame whose decompressed bytes are the buffer.
+   listed in the manifest's `empty` list. The client decides how to read a manifest from its bytes, never from its name: a body that
+   begins with the zstd frame magic (`28 B5 2F FD`) is decoded as above, and any other body is read as the JSON text under the same
+   text limit (`src/cdn/cdn_manifest.h` ParseManifestBody). A path in `assets.manifest` is checked only as a path (relative, plain
+   characters, no `..`); its name says nothing about the format. A blob is one stock-format chunk: one zstd frame whose decompressed
+   bytes are the buffer.
    The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
    this decision (see Not claimed).
 5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json.zst` (kept by
@@ -70,8 +74,8 @@ process.
    store file, 32-bit sizes, an alignment that is a power of two of at most 4096). Every memory-based bound on every path, the CDN
    limits and the first-run data step's manifest read, goes through one reader and one function (`src/core/device_memory.h`). A resolver
    pin is thread-local, as the game keeps its own per-thread state (FillResourceFileRequest echovr.exe `0x140fa1fe0`: slot lookup `0x140fa2155`, `TlsGetValue` through `CPool::GetOrCreate` `0x140fa2171`, allocation `0x140fa218d`), so
-   no table size limits the threads that read resources. A manifest's decoded size is taken from its frame header, as the game takes a
-   manifest's decompressed length from its file header (libr15 `0x2b9dd10`); the game bounds a manifest only by its allocator
+   no table size limits the threads that read resources. A zstd manifest's decoded size is taken from its frame header, as the game takes a
+   manifest's decompressed length from its file header (libr15 `0x2b9dd10`), and a JSON manifest's size is the bytes received; the game bounds a manifest only by its allocator
    (`CSysCompression::DecompressAndReadFile` `0x2b9e0a0`), and here it is bounded by the share of the device's memory. A
    label is planned whole or skipped whole, with the reason named. A payload whose size differs from its stock buffer's still needs
    its descriptor (the per-binary pair table, `Platform::pairs`).

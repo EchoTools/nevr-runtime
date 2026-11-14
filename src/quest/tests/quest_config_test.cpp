@@ -28,6 +28,9 @@ using nevr_quest::LogLevel;
 using nevr_quest::Source;
 
 // Synthetic values; the secrets below must never appear in a log event.
+// quest_config.cpp's kMaxManifestPathBytes, the longest assets.manifest path accepted (an internal constant of that file, stated
+// here so the test pins its edge).
+constexpr std::size_t kMaxManifestPathBytesForTest = 128;
 constexpr const char* kEmbSocket = "wss://emb.example/nevr";
 constexpr const char* kEmbHttp = "https://emb.example:7350";
 constexpr const char* kEmbApiKey = "EMBEDDED-API-KEY-8841";
@@ -872,10 +875,22 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
       CHECK(EventsContain(b, "key=assets.cdn_url rejected"));
     }
   }
-  for (const char* bad : {"../escape.json.zst", "/absolute.json.zst", "plain.txt", "a b.json.zst", "a:b.json.zst", ".json.zst",
-                          "v1/manifest.json"}) {  // a plain .json is no manifest the CDN publishes
+  for (const char* bad : {"", "../escape.json.zst", "/absolute.json.zst", "a b.json.zst", "a:b.json.zst"}) {
     const LoadResult b = Load(Full(), std::string("assets:\n  manifest: \"") + bad + "\"\n");
-    CHECK(b.config.assets.manifest.empty() && EventsContain(b, "key=assets.manifest rejected reason=not_a_relative_json_zst_path"));
+    CHECK(b.config.assets.manifest.empty() && EventsContain(b, "key=assets.manifest rejected reason=not_a_relative_path"));
+  }
+  // The name decides nothing: the core reads a zstd frame or plain JSON by the body's bytes (cdn_manifest.h ParseManifestBody).
+  for (const char* any : {"v1/test/manifest", "plain.txt", "v1/manifest.json", "v1/manifest.json.zst", ".json.zst"}) {
+    const LoadResult b = Load(Full(), std::string("assets:\n  manifest: \"") + any + "\"\n");
+    CHECK(b.config.assets.manifest == any && !HasLevel(b, LogLevel::kWarn));
+  }
+  // The path's length bound (quest_config.cpp kMaxManifestPathBytes), at its edge: the longest accepted, one byte more refused.
+  {
+    const std::string longest(kMaxManifestPathBytesForTest, 'a');
+    const LoadResult at = Load(Full(), "assets:\n  manifest: \"" + longest + "\"\n");
+    CHECK(at.config.assets.manifest == longest && !HasLevel(at, LogLevel::kWarn));
+    const LoadResult over = Load(Full(), "assets:\n  manifest: \"" + longest + "a\"\n");
+    CHECK(over.config.assets.manifest.empty() && EventsContain(over, "key=assets.manifest rejected reason=not_a_relative_path"));
   }
   {
     const LoadResult r = rejected("assets:\n  required_only: maybe\n", "key=assets.required_only rejected reason=not_a_boolean", "maybe");

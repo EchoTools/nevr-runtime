@@ -48,7 +48,9 @@ struct RunConfig {
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.
 using Publish = std::function<void(std::unique_ptr<Mounted>)>;
 
-// RunResult::stopped when the manifest could not be had (a failed request, or a body over the size limit; a body that is not a zstd frame is "manifest_refused"): what the store holds stays mounted.
+// RunResult::stopped when the manifest could not be had (a failed request, or a body over the size limit): what the store holds stays
+// mounted. A body that was had but is no manifest (a zstd frame with a broken header or no content size, text that is not the manifest's
+// JSON) is "manifest_refused".
 inline constexpr const char* kStoppedManifestFailed = "manifest_failed";
 
 struct RunResult {

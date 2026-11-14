@@ -353,7 +353,7 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish) {
     return false;
   }
   Manifest manifest;
-  const ParseResult parsed = ParseManifestFrame(frame, limits, &manifest);
+  const ParseResult parsed = ParseManifestBody(frame, limits, &manifest);
   if (parsed.status != ParseStatus::kOk) {
     env.Event(EventLevel::kWarn, "cdn_manifest",
               {{"source", "saved"}, {"result", "refused"}, {"reason", ParseStatusName(parsed.status)},
@@ -401,13 +401,15 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
              {"labels", StatesText(config.policy, nullptr)},
              {"required_only", config.policy.required_only ? 1 : 0}});
 
-  // Step 1: the manifest, one zstd frame. Its header states the size of the text; that size is held to the device's memory as soon as the
-  // header has arrived, and the rest of the body is not downloaded when it does not fit.
+  // Step 1: the manifest, read by its bytes. A body that begins with the zstd magic is one frame: its header states the size of the
+  // text, that size is held to the device's memory as soon as the header has arrived, and the rest of the body is not downloaded when
+  // it does not fit or the header is one no frame may have. Any other body is the JSON text, held to the same text limit as it arrives.
   std::string body;
   long status = 0;
   const char* early = nullptr;  // a refusal made from the header alone
   std::uint64_t declared = 0;
   bool haveDeclared = false;
+  bool plain = false;  // the body is JSON text, not a zstd frame
   const std::uint64_t maxFrame = MaxManifestFrameBytes(limits.manifest_text_bytes);
   const std::string manifestUrl = config.base_url + config.manifest_path;  // every cdn_manifest record names what it asked for
   const HttpResult http = env.Get(manifestUrl,
@@ -423,6 +425,16 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                                     if (!haveDeclared) {
                                       const unsigned char* b = reinterpret_cast<const unsigned char*>(body.data());
                                       const std::size_t n = std::min<std::size_t>(body.size(), kMaxFrameHeaderBytes);
+                                      // The body says what it is, never the path: one that does not begin with the zstd magic is
+                                      // the JSON text itself, held to the text limit as it arrives.
+                                      if (!plain && body.size() >= kZstdMagicBytes && !StartsWithZstdMagic(body)) plain = true;
+                                      if (plain) {
+                                        if (body.size() > limits.manifest_text_bytes) {
+                                          early = "too_large";
+                                          return false;
+                                        }
+                                        return true;
+                                      }
                                       switch (FrameContentSize(b, n, &declared)) {
                                         case Rule::kNone:
                                           haveDeclared = true;
@@ -434,7 +446,9 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                                         case Rule::kContentSizeMissing:
                                           early = "no_content_size";
                                           return false;
-                                        default:  // not a frame start, or a header not all here yet
+                                        default:  // a frame header not all here yet, or one that breaks the format
+                                          // The magic says this is a frame, so a header no frame may have (a reserved bit set)
+                                          // is refused here, before the rest of the body is downloaded.
                                           if (n >= kZstdProbeBytes && FrameHeaderBytes(b, n) == 0) {
                                             early = "not_zstd";
                                             return false;
@@ -463,7 +477,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     std::vector<Field> fields = {{"result", "failed"}, {"reason", manifestFailure}, {"url", manifestUrl}, {"http_status", httpStatus},
                                  {"code", http.code}};
     if (haveDeclared) fields.push_back({"declared_bytes", declared});
-    if (haveDeclared && std::string(manifestFailure) == "too_large") fields.push_back({"limit_bytes", limits.manifest_text_bytes});
+    if ((haveDeclared || plain) && std::string(manifestFailure) == "too_large") fields.push_back({"limit_bytes", limits.manifest_text_bytes});
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
     env.Event(EventLevel::kWarn, "cdn_manifest", fields);
     const bool refused = std::string(manifestFailure) == "not_zstd" || std::string(manifestFailure) == "no_content_size";
@@ -472,7 +486,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     return result;
   }
   Manifest manifest;
-  const ParseResult parsed = ParseManifestFrame(body, limits, &manifest);
+  const ParseResult parsed = ParseManifestBody(body, limits, &manifest);
   if (parsed.status != ParseStatus::kOk) {
     std::vector<Field> fields = {{"result", "refused"}, {"reason", ParseStatusName(parsed.status)}, {"url", manifestUrl},
                                  {"http_status", httpStatus}};
@@ -501,8 +515,9 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
             {{"result", "loaded"},
              {"url", manifestUrl},
              {"http_status", httpStatus},
-             {"frame_bytes", body.size()},
-             {"bytes", declared},
+             {plain ? "body_bytes" : "frame_bytes", body.size()},
+             {"format", plain ? "json" : "zstd"},
+             {"bytes", plain ? static_cast<std::uint64_t>(body.size()) : declared},
              {"sha256", manifestSha},
              {"labels", manifest.labels.size()},
              {"entries", manifest.entries.size()},

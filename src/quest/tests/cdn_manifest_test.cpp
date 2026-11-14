@@ -247,7 +247,8 @@ void AManifestFrameDecodesAndParsesLikeItsText() {
   QCHECK(a.entries.size() == 300 && b.entries.size() == 300 && a.entries[299].name == b.entries[299].name && a.entries[299].size == b.entries[299].size);
 }
 
-void PlainJsonIsNotAManifest() {
+// ParseManifestFrame alone takes only a zstd frame; a manifest of plain JSON is read through ParseManifestBody (below).
+void TheFrameParserAloneTakesOnlyAFrame() {
   nc::Manifest m;
   const std::string text = Doc(json::array({Entry(kArchiveType, "0x1", 'a')}));
   QCHECK(ParseFrame(text, &m).status == nc::ParseStatus::kNotZstd);
@@ -255,6 +256,21 @@ void PlainJsonIsNotAManifest() {
   QCHECK(ParseFrame("abc", &m).status == nc::ParseStatus::kNotZstd);
   QCHECK(std::string(nc::ParseStatusName(nc::ParseStatus::kNotZstd)) == "not_zstd");
   QCHECK(m.entries.empty());
+}
+
+// The body decides, never a name: ParseManifestBody reads a zstd frame as a frame and anything else as the JSON text, under the same
+// limits; the frame parser alone still takes only a frame (above).
+void TheBodyIsReadAsAFrameOrAsTextByItsBytes() {
+  const std::string text = Doc(json::array({Entry(kArchiveType, "0x1", 'a')}));
+  nc::Manifest plain, frame;
+  QCHECK(!nc::StartsWithZstdMagic(text) && nc::StartsWithZstdMagic(cdn_test::ZstdFrameOf(text)));
+  QCHECK(nc::ParseManifestBody(text, Roomy(), &plain).status == nc::ParseStatus::kOk);
+  QCHECK(nc::ParseManifestBody(cdn_test::ZstdFrameOf(text), Roomy(), &frame).status == nc::ParseStatus::kOk);
+  QCHECK(plain.entries.size() == 1 && frame.entries.size() == 1 && plain.entries[0].sha256 == frame.entries[0].sha256);
+  nc::Limits small = Roomy();
+  small.manifest_text_bytes = text.size() - 1;
+  QCHECK(nc::ParseManifestBody(text, small, &plain).status == nc::ParseStatus::kTooLarge);
+  QCHECK(nc::ParseManifestBody("<html>", Roomy(), &plain).status == nc::ParseStatus::kNotJson);
 }
 
 void AFrameThatStatesNoContentSizeIsRefused() {
@@ -415,7 +431,8 @@ void AnotherPlatformsEntriesAreNotPlanned() {
 
 int main() {
   AManifestFrameDecodesAndParsesLikeItsText();
-  PlainJsonIsNotAManifest();
+  TheFrameParserAloneTakesOnlyAFrame();
+  TheBodyIsReadAsAFrameOrAsTextByItsBytes();
   AFrameThatStatesNoContentSizeIsRefused();
   TheDeclaredSizeIsHeldToTheLimitBeforeAnythingIsDecoded();
   AFrameTheDecoderRefusesOrThatDecodesToAnotherSizeIsRefused();
