@@ -1,4 +1,4 @@
-#include "quest/cargo/map_pin_game.h"
+#include "quest/cdn/map_pin_game.h"
 
 #include <time.h>
 
@@ -10,7 +10,7 @@
 
 #include "abi/game_level.h"
 #include "core/map_session_pin.h"
-#include "quest/cargo/map_pin_pure.h"
+#include "quest/cdn/map_pin_pure.h"
 #include "quest/invite/frame_dispatch.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"

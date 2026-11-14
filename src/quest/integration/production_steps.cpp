@@ -30,6 +30,7 @@
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/cdn/cdn_worker.h"
+#include "quest/cdn/map_service.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
@@ -667,6 +668,9 @@ class ProductionSteps final : public Steps {
     // fetch from here would append to the same store files with no lock between the two.
     const nevr_quest::AssetsChoice& assets = sentinel::ActiveConfig().assets;
     if (ok && !assets.wholeGame) nevr_quest::cdn::Start(assets);
+    // The custom-map channel (docs/adr/0048): runs only when maps.base_url is configured; otherwise it writes one Info record and
+    // nothing else (map_start.cpp).
+    if (ok) nevr_quest::maps::StartFromConfig(sentinel::ActiveConfig().maps);
     return ok;
   }
 

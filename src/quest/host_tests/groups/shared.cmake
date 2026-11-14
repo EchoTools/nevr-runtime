@@ -177,10 +177,10 @@ nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
 # client meets, the view's replacement and the empty-state gate, over a counting game.
 nevr_ht_test(map_session_pin_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
   SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp)
-# The Quest's libr15 half of the pin (quest/cargo/map_pin_game.cpp), compiled for the host: its layout, its pinned words and its
+# The Quest's libr15 half of the pin (quest/cdn/map_pin_game.cpp), compiled for the host: its layout, its pinned words and its
 # call into the core. It is not linked here (it needs the sentinel's libr15 image), so this is a compile check of the Quest half.
 nevr_ht_obj(o_map_pin_game GROUP shared NOEXC DEFS NEVR_QUEST_TESTING INCS ${_sentinel} sdk/include src
-  SRC src/quest/cargo/map_pin_game.cpp)
+  SRC src/quest/cdn/map_pin_game.cpp)
 # A map's set over a held descriptor on the Quest (quest/sentinel/map_sets.cpp; docs/adr/0048 decision 5): the shared registration
 # (core/resource_set_registry.cpp, the registry the PC compiles) with the Android types, its records read back as the sentinel log
 # writes them, and the file's mapping released before the registration returns.
@@ -188,9 +188,9 @@ nevr_ht_test(map_sets_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env} INC
   SRC src/quest/tests/map_sets_test.cpp src/quest/sentinel/map_sets.cpp src/core/resource_set_registry.cpp
       src/core/resource_shadow.cpp src/quest/sentinel/hook_log.cpp src/quest/data/sha256.cpp
   LIBS ${NEVR_ZSTD_LIB})
-# The Quest's stock source over a stock tree under the group's build folder (quest/cargo/stock_source.h; docs/adr/0048, the recipes),
+# The Quest's stock source over a stock tree under the group's build folder (quest/cdn/stock_source.h; docs/adr/0048, the recipes),
 # and the shared half (core/stock_source.cpp, which the PC compiles) under a memory figure the test chooses.
 nevr_ht_test(stock_source_test GROUP shared HOST NOEXC TIMEOUT 120 ENV ${_shared_env} INCS sdk/include
-  SRC src/quest/tests/stock_source_test.cpp src/quest/cargo/stock_source.cpp src/core/stock_source.cpp
+  SRC src/quest/tests/stock_source_test.cpp src/quest/cdn/stock_source.cpp src/core/stock_source.cpp
       src/cdn/posix_map_fs.cpp src/core/device_memory.cpp src/quest/data/zip.cpp
   LIBS ${NEVR_ZSTD_LIB} ${NEVR_ZLIB_LIB})

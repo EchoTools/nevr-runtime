@@ -1,4 +1,4 @@
-#include "quest/cargo/stock_source.h"
+#include "quest/cdn/stock_source.h"
 
 #include <dirent.h>
 #include <errno.h>

@@ -116,12 +116,14 @@ struct TestKey {
   std::uint8_t secret[64];
   PinnedKey pin;
 
-  explicit TestKey(std::uint8_t seed_byte, bool official = false) {
+  // `compiled`: the key is one compiled into the build (only those satisfy -require-signed-plugins; ADR 0048 decision 7).
+  explicit TestKey(std::uint8_t seed_byte, bool official = false, bool compiled = false) {
     std::uint8_t seed[32];
     std::memset(seed, seed_byte, sizeof seed);
     crypto_ed25519_key_pair(secret, pin.key.pk.data(), seed);
     for (std::size_t i = 0; i < pin.key.key_id.size(); ++i) pin.key.key_id[i] = static_cast<std::uint8_t>(0xA0 + seed_byte + i);
     pin.official = official;
+    pin.compiled = compiled;
   }
 
   std::string SignedObject(const std::string& body) const {
@@ -343,9 +345,11 @@ class FakeMounter : public Mounter {
   std::map<std::string, bool> verified;  // owner -> verified_stamp of its Set
   std::map<std::string, std::string> labels, set_sha;
   std::uint64_t set_cost_ms = 0;  // the clock moves this much per Set (the boot budget)
+  std::vector<bool> script_official;  // the `official` each Script call was given, in order
 
-  Grant Script(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string&) override {
+  Grant Script(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string&, bool official) override {
     calls.push_back("script " + owner + " " + std::to_string(hash));
+    script_official.push_back(official);
     return Take(owner, held, !refuse_scripts.count(hash), "pe_rules");
   }
   Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t, const std::string&) override {
@@ -367,7 +371,7 @@ class FakeMounter : public Mounter {
     return it == alias.end() ? Ok(true, "") : it->second;
   }
   Grant DerivedScript(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string&,
-                      const std::string&) override {
+                      const std::string&, bool) override {
     calls.push_back("derived " + owner + " " + std::to_string(hash));
     return Take(owner, held, !refuse_scripts.count(hash), "pe_rules");
   }

@@ -11,7 +11,7 @@
 // formats the events the tick emits:
 //   runtime/content/map_session_pin_game.cpp (PC): echovr.exe's owner-JSON calls (addresses.h), the error block, the return
 //     to lobby, and the Log() lines. Platform reason: the PC's addresses and its log are the PC's.
-//   quest/cargo/map_pin_game.cpp (Quest): libr15's owner-JSON call and return to lobby (pinned_targets.h), the frame
+//   quest/cdn/map_pin_game.cpp (Quest): libr15's owner-JSON call and return to lobby (pinned_targets.h), the frame
 //     dispatcher's tick and the sentinel log. Platform reason: libr15 is patched and proven on the Quest, and the Quest has no Log().
 
 #include <cstddef>

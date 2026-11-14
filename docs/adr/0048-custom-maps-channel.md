@@ -135,7 +135,7 @@ and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal o
 `src/quest/sentinel/config_alias_hook.cpp`, with the arena override's precedence line in
 `src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map. The session pin
 (decision 9) has its pure core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
-`quest/cargo/map_pin_game.cpp` on the Quest), and no caller yet: nothing calls the tick, the session level or the install,
+`quest/cdn/map_pin_game.cpp` on the Quest), and no caller yet: nothing calls the tick, the session level or the install,
 `RegistrationEntries` is not called and the Quest login's `map_report` is not set (`KNOWN-WRONG #TBD` at each site). Not built
 yet (#2733): the PC and Quest platform layers and the channel that starts them, including which keys they give the core as
 official (decision 7) and the `mixed_keys` check (decision 3); the local-copy precedence (decision 8); the wiring of the session

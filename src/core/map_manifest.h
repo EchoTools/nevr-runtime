@@ -40,9 +40,13 @@
 
 namespace nevr_maps {
 
+// A key the channel trusts. `official` is the trust group a manifest verified under (floors and grouping); `compiled` is true only
+// for a key compiled into the build (ADR 0048 decisions 7 and 12). A key set in maps.official_keys is official but not compiled, so
+// it never satisfies -require-signed-plugins.
 struct PinnedKey {
   nevr_minisign::PublicKey key;
   bool official = false;
+  bool compiled = false;
 };
 
 // The floors one signing key raised for one guild on one SIGNED channel name. An empty serial_sha256 is "no floor"; serials start
@@ -68,7 +72,8 @@ bool SplitSigned(std::string_view signed_object, std::string_view* minisig, std:
 struct ParsedManifest {
   Manifest manifest;
   std::string key_id, body_sha256, channel, guild;  // key_id as minisign prints it: 16 uppercase hex digits
-  bool official = false;
+  bool official = false;           // verified under an official-trust key (maps.official_keys or compiled-in)
+  bool compiled_official = false;  // verified under a key compiled into the build: the one fact -require-signed-plugins accepts
   std::string reason;                        // "" when accepted
   std::vector<std::pair<std::string, std::string>> dropped;  // ("<id>/<platform>", "version_down"); absent from `manifest`
   std::vector<std::string> untrusted_floor_keys;  // key ids with floors for this guild that the keys given do not trust

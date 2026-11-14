@@ -728,6 +728,11 @@ ParsedManifest ParseAndVerifyManifest(std::string_view signed_object, const std:
     return out;
   }
   out.key_id = KeyIdText(key_id);
+  // ADR 0048 decision 7: the verifying key must be an official key compiled into this build. A key from maps.official_keys
+  // verifies as official but is never compiled, so it does not count for -require-signed-plugins.
+  for (const PinnedKey& k : keys) {
+    if (k.official && k.compiled && KeyIdText(k.key.key_id) == out.key_id) out.compiled_official = out.official;
+  }
   out.body_sha256 = nevr_quest::data::Sha256Hex(body.data(), body.size());
   std::set<std::string> trusted_ids;
   for (const PinnedKey& k : keys) trusted_ids.insert(KeyIdText(k.key.key_id));

@@ -1,7 +1,7 @@
 /* The stock source's shared half (docs/adr/0048-custom-maps-channel.md, the recipes; core/map_derive.h StockSource): the player's own
  * stock bytes, read for the recipe rebuild. The game's package manifests (docs/reference/package-manifest-format.md) are parsed here,
  * once per file stamp, and a resource is decompressed here out of its chunk in a package file. Both platforms run this code; each
- * platform half (src/runtime/cargo/stock_source.h on the PC, src/quest/cargo/stock_source.h on the Quest) says only which manifests
+ * platform half (src/runtime/cargo/stock_source.h on the PC, src/quest/cdn/stock_source.h on the Quest) says only which manifests
  * the install has, how a stock file is opened and stamped, and where a stock script is.
  *
  * Every stock file is opened read-only and closed after the read: nothing is held and nothing is written. A manifest consulted is

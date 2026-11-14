@@ -199,7 +199,8 @@ struct Listing {
   std::string group;
   PlatformEntry entry;
   std::string title;
-  bool official = false;
+  bool official = false;           // the trust group the manifest verified under (logged)
+  bool compiled_official = false;  // verified under a compiled-in key: what -require-signed-plugins accepts (ADR 0048 decision 7)
   bool expired = false;
 };
 
@@ -285,6 +286,7 @@ class MountRun {
       l.entry = platform->second;
       l.title = map.title;
       l.official = parsed.official;
+      l.compiled_official = parsed.compiled_official;
       l.expired = expired;
       listings_[id].push_back(l);
     }
@@ -370,6 +372,7 @@ class MountRun {
     }
     Listing fallback = listings.front();
     fallback.official = false;
+    fallback.compiled_official = false;
     return fallback;
   }
 
@@ -417,7 +420,7 @@ class MountRun {
     if (!StockManifestOk(package, config_)) return Refuse(id, "stock_mismatch");
     const bool scripts = HasScripts(package);
     if (scripts && selected.expired) return Refuse(id, "expired");
-    if (scripts && config_.signed_only && !selected.official) return Refuse(id, "signed_only");
+    if (scripts && config_.signed_only && !selected.compiled_official) return Refuse(id, "signed_only");
     const bool derive = NeedsDerive(package);
     if ((derive || !cached.stock_stamps.empty()) && deriver_ == nullptr) return Refuse(id, "derived_unsupported");
     if (!cached.stock_stamps.empty() && !StockCurrent(cached.stock_stamps)) return Defer(id, "stock_changed");
@@ -495,9 +498,10 @@ class MountRun {
       if (is_rebuilt) {
         const auto pin = std::find_if(derived_scripts.begin(), derived_scripts.end(),
                                       [&](const RekeyPin* r) { return r->hash == o.file->script_hash; });
-        grant = mounter_.DerivedScript(owner, o.file->script_hash, o.handle, o.file->sha256, (*pin)->stock_sha256);
+        grant = mounter_.DerivedScript(owner, o.file->script_hash, o.handle, o.file->sha256, (*pin)->stock_sha256,
+                                       selected.compiled_official);
       } else {
-        grant = mounter_.Script(owner, o.file->script_hash, o.handle, o.file->sha256);
+        grant = mounter_.Script(owner, o.file->script_hash, o.handle, o.file->sha256, selected.compiled_official);
       }
       if (!grant.ok) return refuse_scripts(grant.reason);
       o.granted = true;
@@ -1333,7 +1337,7 @@ class FetchRun {
         plan("unsupported_game", EventLevel::kWarn);
         continue;
       }
-      if (entry.scripts > 0 && config_.signed_only && !parsed_.official) {
+      if (entry.scripts > 0 && config_.signed_only && !parsed_.compiled_official) {
         plan("signed_only", EventLevel::kWarn);
         continue;
       }

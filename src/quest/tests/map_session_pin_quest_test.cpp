@@ -11,7 +11,7 @@
 
 #include "core/map_session_pin.h"
 #include "nevr/symbol_hash.h"
-#include "quest/cargo/map_pin_pure.h"
+#include "quest/cdn/map_pin_pure.h"
 #include "quest/tests/test_check.h"
 #include "runtime/hook/addresses.h"
 

@@ -1,4 +1,4 @@
-// The Quest's stock source (quest/cargo/stock_source.h) over a stock tree written under NEVR_TEST_TMP, and the shared core
+// The Quest's stock source (quest/cdn/stock_source.h) over a stock tree written under NEVR_TEST_TMP, and the shared core
 // (core/stock_source.h) under a memory figure the test chooses: a manifest, a chunk or a script over the one-object share of the
 // device's memory is not read (docs/adr/0045 decision 8). No game file is read.
 #include <fcntl.h>
@@ -16,7 +16,7 @@
 #include "cdn/cdn_limits.h"
 #include "core/stock_source.h"
 #include "cdn/posix_map_fs.h"
-#include "quest/cargo/stock_source.h"
+#include "quest/cdn/stock_source.h"
 #include "quest/tests/test_check.h"
 
 namespace {

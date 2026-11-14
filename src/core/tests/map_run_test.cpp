@@ -174,11 +174,26 @@ TEST_F(MapRunTest, UnderSignedOnlyOnlyAnOfficialManifestsScriptsMount) {
   EXPECT_TRUE(Mounted(boot, "plain"));
   EXPECT_EQ(TokenOf(boot, "scripted"), "signed_only");
 
-  TestKey official{1, true};
+  TestKey official{1, true, true};
   config.keys = {official.pin};
   mounter.calls.clear();
   boot = Boot();
   EXPECT_TRUE(Mounted(boot, "scripted"));
+  ASSERT_FALSE(mounter.script_official.empty());
+  EXPECT_TRUE(mounter.script_official.front());
+}
+
+// ADR 0048 decision 7: a key set in maps.official_keys is official but not compiled in, so it never satisfies the flag, and its
+// manifest's scripts are refused signed_only.
+TEST_F(MapRunTest, AConfiguredOfficialKeyDoesNotSatisfySignedOnly) {
+  channel.Publish("scripted", "1.0.0", MakeSet(2, 'b'), {{1, "dll"}});
+  channel.Sign(1);
+  Fetch();
+  config.signed_only = true;
+  TestKey configured{1, true, false};
+  config.keys = {configured.pin};
+  EXPECT_EQ(TokenOf(Boot(), "scripted"), "signed_only");
+  EXPECT_TRUE(mounter.script_official.empty());
 }
 
 // A cached version no verified manifest pins any longer (its newer version is not stored yet) still mounts, but an official
