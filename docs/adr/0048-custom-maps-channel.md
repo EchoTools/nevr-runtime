@@ -41,8 +41,9 @@ session they are in is the lobby group id.
    trusted (test to official) holds nobody back, and a rollback under any trusted key is refused (`FloorBook`, `map_manifest.h`).
    One group's floors never hold another back. Official keys are compiled in or set in `maps.official_keys`, author keys in
    `maps.trusted_keys`; the two are never trusted for the same `base_url` (`mixed_keys`). Past `expires`, a map with scripts does
-   not mount; a script-free map still does. The mount re-verifies each stored manifest's signature and checks each map's package
-   index against its pin before anything mounts; it hashes no member file.
+   not mount; a script-free map still does. The mount re-verifies each stored manifest's signature and holds each map's package
+   index to its pin by the stamp recorded when the fetch hashed it (decision 4) before anything mounts; it hashes no index and no
+   member file.
 4. **Integrity at rest.** A member's bytes are hashed once, at fetch. At mount each file is opened share-read and held for the
    process (`MapFs::OpenHeld`), and its `FileStamp` (volume, 128-bit file id, size, last write), read through the held handle, must
    equal the cache index's. A changed stamp defers the map to a re-hash on the worker, never on the boot thread (ADR 0045

@@ -779,6 +779,28 @@ TEST(PackageIndex, TheManifestPinIsTheAuthority) {
   EXPECT_EQ(nevr_maps::ParsePackageIndex(bytes, "testmap", nevr_maps::kPlatformPc, EntryFor(bytes), 0).reason, "no_memory");
 }
 
+// IndexPin::kStamped: the caller held the bytes to the pin by their file's stamp (the mount), so nothing is hashed here; the size is
+// still checked, and every other rule still applies.
+TEST(PackageIndex, AStampedReadChecksTheSizeAndHashesNothing) {
+  const std::string bytes = BaseIndex().dump();
+  nevr_maps::PlatformEntry e = EntryFor(bytes);
+  e.index.sha256[0] = e.index.sha256[0] == '0' ? '1' : '0';
+  EXPECT_EQ(nevr_maps::ParsePackageIndex(bytes, "testmap", nevr_maps::kPlatformPc, e, kDeviceDocumentBytes,
+                                         nevr_maps::IndexPin::kStamped)
+                .reason,
+            "");
+  e.index.size += 1;
+  EXPECT_EQ(nevr_maps::ParsePackageIndex(bytes, "testmap", nevr_maps::kPlatformPc, e, kDeviceDocumentBytes,
+                                         nevr_maps::IndexPin::kStamped)
+                .reason,
+            "index_pin");
+  const std::string not_json = "{\"schema\":";
+  EXPECT_EQ(nevr_maps::ParsePackageIndex(not_json, "testmap", nevr_maps::kPlatformPc, EntryFor(not_json), kDeviceDocumentBytes,
+                                         nevr_maps::IndexPin::kStamped)
+                .reason,
+            "malformed");
+}
+
 TEST(PackageIndex, QuestPathsAndLevelName) {
   json doc = BaseIndex();
   doc["platform"] = nevr_maps::kPlatformQuest;
