@@ -227,13 +227,25 @@ pub fn commit(dir: &Path, v: &Verified) -> Result<()> {
 /// `state.json` names. No caller passes a manifest path. The pair is read under the state lock, so a run committing it
 /// at the same moment cannot make this read a half-written pair.
 pub fn stored(dir: &Path) -> Result<Value> {
+    read_stored(dir, false).map(|(m, _, _)| m)
+}
+
+/// `stored`, and the two files of the pair as bytes (manifest, then signature), read under the same lock: the proof a
+/// single-file artifact keeps beside it (`stage::Profile`), so a later check can run step 2 on exactly what listed the file.
+pub fn stored_pair(dir: &Path) -> Result<(Value, Vec<u8>, Vec<u8>)> {
+    read_stored(dir, true)
+}
+
+fn read_stored(dir: &Path, with_sig: bool) -> Result<(Value, Vec<u8>, Vec<u8>)> {
     let _lock = lock_state(dir).map_err(|e| Error::new(8, e.msg))?;
     let state = read_state(dir).map_err(|e| Error::new(8, e.msg))?;
     let bytes = fs::read(dir.join("manifest.json")).map_err(|e| Error::new(8, format!("no verified manifest in {}: {e}", dir.display())))?;
     if state.last_sha256.is_empty() || sha256_hex(&bytes) != state.last_sha256 {
         return Err(Error::new(8, "the stored manifest is not the one that passed step 2"));
     }
-    serde_json::from_slice(&bytes).map_err(|e| Error::new(8, format!("stored manifest: {e}")))
+    let sig = if with_sig { fs::read(dir.join("manifest.json.sig")).map_err(|e| Error::new(8, format!("no stored signature in {}: {e}", dir.display())))? } else { Vec::new() };
+    let value = serde_json::from_slice(&bytes).map_err(|e| Error::new(8, format!("stored manifest: {e}")))?;
+    Ok((value, bytes, sig))
 }
 
 /// Step 7: the version a channel names, which must be a key of `releases`.

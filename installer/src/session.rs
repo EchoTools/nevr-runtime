@@ -449,6 +449,22 @@ impl Session {
         Err(Error::new(9, why))
     }
 
+    /// The root a stage acts on: a PC session is held to the folder the host loads from (`check_nevr_root`); a Quest session
+    /// takes the update root its caller computed (the app's private files folder, `src/quest`), which must be an absolute path.
+    pub fn check_stage_root(&self, root: &Path) -> Result<()> {
+        if self.cfg.platform != "quest" {
+            return self.check_nevr_root(root);
+        }
+        let shown = root.display().to_string();
+        if !root.is_absolute() {
+            let why = format!("the update root {shown} is not an absolute path");
+            self.log.error("nevr_root", 9, json!({"ok": false, "root": shown, "target": "quest", "reason": why}))?;
+            return Err(Error::new(9, why));
+        }
+        self.log.info("nevr_root", 9, json!({"ok": true, "root": shown, "target": "quest", "canonical": false}))?;
+        Ok(())
+    }
+
     /// `pc uninstall` (#1497): the record and the files are its whole input. It fetches no manifest and reads no stdin;
     /// the launcher and root checks are `pc`'s, so a folder a launcher manages or a root the host does not load is refused
     /// before anything is read from the record.

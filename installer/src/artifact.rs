@@ -133,32 +133,46 @@ pub fn extract(zip_path: &Path, art: &Artifact, root: &Path) -> Result<Vec<PathB
     let mut written = Vec::new();
     for c in &art.contents {
         let mut entry = z.by_name(&c.path).map_err(|e| fail(format!("{}: {e}", c.path)))?;
-        let dest = root.join(&c.path);
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir).map_err(|e| fail(format!("{}: {e}", dir.display())))?;
-        }
-        // A temporary file of this writer's own, never a fixed name another run may also use (#1353). A failure removes it.
-        let (tmp, mut out) = crate::util::create_unique_temp(&dest).map_err(|e| fail(format!("{}: {e}", dest.display())))?;
-        let streamed = stream_entry(&mut entry, c, &mut out, &tmp);
-        drop(out);
-        let (n, digest) = match streamed {
-            Ok(done) => done,
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                return Err(e);
-            }
-        };
-        if n != c.size || digest != c.sha256 {
-            let _ = fs::remove_file(&tmp);
-            return Err(fail(format!("{} changed between the check and the extraction", c.path)));
-        }
-        if let Err(e) = fs::rename(&tmp, &dest) {
-            let _ = fs::remove_file(&tmp);
-            return Err(fail(format!("{}: {e}", dest.display())));
-        }
-        written.push(dest);
+        written.push(write_member(&mut entry, c, root)?);
     }
     Ok(written)
+}
+
+/// A single-file artifact (no zip): the downloaded file `src`, already checked against the manifest's `size` and `sha256` by
+/// `download`, is written to `root/<member>` the way a zip member is, and read back against the same two values. Returns the path.
+pub fn place_file(src: &Path, art: &Artifact, member: &str, root: &Path) -> Result<PathBuf> {
+    let mut file = File::open(src).map_err(|e| Error::new(9, format!("{}: {e}", src.display())))?;
+    write_member(&mut file, &crate::manifest::Content { path: member.to_string(), sha256: art.sha256.clone(), size: art.size }, root)
+}
+
+/// Writes the bytes of `entry` to `root/<c.path>` by a temporary file renamed into place, hashing as it writes: the file
+/// exists only when it has exactly `c.size` bytes and `c.sha256`.
+fn write_member<R: Read>(entry: &mut R, c: &crate::manifest::Content, root: &Path) -> Result<PathBuf> {
+    let fail = |m: String| Error::new(9, m);
+    let dest = root.join(&c.path);
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir).map_err(|e| fail(format!("{}: {e}", dir.display())))?;
+    }
+    // A temporary file of this writer's own, never a fixed name another run may also use (#1353). A failure removes it.
+    let (tmp, mut out) = crate::util::create_unique_temp(&dest).map_err(|e| fail(format!("{}: {e}", dest.display())))?;
+    let streamed = stream_entry(entry, c, &mut out, &tmp);
+    drop(out);
+    let (n, digest) = match streamed {
+        Ok(done) => done,
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
+    if n != c.size || digest != c.sha256 {
+        let _ = fs::remove_file(&tmp);
+        return Err(fail(format!("{} changed between the check and the extraction", c.path)));
+    }
+    if let Err(e) = fs::rename(&tmp, &dest) {
+        let _ = fs::remove_file(&tmp);
+        return Err(fail(format!("{}: {e}", dest.display())));
+    }
+    Ok(dest)
 }
 
 /// Copies one zip entry into `out` (the temporary file `tmp` names, for the messages) and returns the bytes copied and

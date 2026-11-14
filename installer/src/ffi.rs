@@ -5,6 +5,7 @@ use crate::error::Error;
 use crate::manifest::{self, Pins};
 use crate::quest::{self, DataRoots, Installed, Observed};
 use crate::session::{Config, Session};
+use crate::stage::Profile;
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -312,14 +313,40 @@ pub unsafe extern "C" fn NevrPcStage(s: *mut NevrSession, root_dir: *const c_cha
     with_session(s, |s| {
         // The root gets the rule the CLI's `pc stage` applies (#1383): refused unless the config says `dev_nevr_root`.
         s.check_nevr_root(std::path::Path::new(&root_dir))?;
-        let cur = match current {
-            Some(t) => crate::stage::Current::parse(&t)?,
-            None => crate::stage::Current::default(),
-        };
-        let (_reason, report) = s.pc_stage_body(None, std::path::Path::new(&root_dir), &cur)?;
-        out_string(&report, out).map_err(|e| Error::new(0, e))?;
-        Ok(NEVR_OK)
+        stage_report(s, &Profile::pc(), &root_dir, current, out)
     })
+}
+
+/// `NevrPcStage` for any profile: the artifact kind and the members come from `profile_json`
+/// (`{"kind": "windows-zip"|"quest-runtime", "members": [...]}`, `stage::Profile`; the two profiles are `PC_PROFILE` and
+/// `QUEST_PROFILE`). A single-file kind (`quest-runtime`) is checked against its artifact's own size and sha256 and keeps the
+/// stored manifest pair beside it in `<version>/proof/`. A PC session is held to the root the host loads from, a Quest session to
+/// an absolute one. Same `current_json` and result as `NevrPcStage`; a profile that names a kind the core does not stage is refused
+/// before anything is fetched.
+///
+/// # Safety
+/// String arguments are NUL-terminated UTF-8 (`current_json` may be null) and `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn NevrStage(s: *mut NevrSession, root_dir: *const c_char, profile_json: *const c_char, current_json: *const c_char, out: *mut *mut c_char) -> i32 {
+    let (root_dir, profile, current) = match (cstr(root_dir), cstr(profile_json), opt_cstr(current_json)) {
+        (Ok(a), Ok(b), Ok(c)) => (a.to_string(), b.to_string(), c.map(str::to_string)),
+        _ => return NEVR_BAD_ARGUMENT,
+    };
+    with_session(s, |s| {
+        let profile = Profile::parse(&profile)?;
+        s.check_stage_root(std::path::Path::new(&root_dir))?;
+        stage_report(s, &profile, &root_dir, current, out)
+    })
+}
+
+fn stage_report(s: &mut Session, profile: &Profile, root_dir: &str, current: Option<String>, out: *mut *mut c_char) -> Result<i32, Error> {
+    let cur = match current {
+        Some(t) => crate::stage::Current::parse(&t)?,
+        None => crate::stage::Current::default(),
+    };
+    let (_reason, report) = s.stage_body(profile, None, std::path::Path::new(root_dir), &cur)?;
+    out_string(&report, out).map_err(|e| Error::new(0, e))?;
+    Ok(NEVR_OK)
 }
 
 /// Records that the runtime refused the staged release (`version`, whose runtime has `runtime_sha256`) after its own Authenticode check:

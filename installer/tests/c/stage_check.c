@@ -29,6 +29,14 @@ int main(int argc, char **argv) {
   CHECK(NevrPcStage(s, argv[2], NULL, &res), NEVR_OK);
   if (strstr(res, "\"direction\":\"install\"") == NULL) { fprintf(stderr, "second stage: %s\n", res); return 1; }
   NevrStringFree(res);
+  /* NevrStage takes the artifact kind and the members from a profile; the PC profile is what NevrPcStage uses. */
+  const char *pc_profile = "{\"kind\":\"windows-zip\",\"members\":[\"nevr-runtime.dll\",\"plugins/*.dll\"]}";
+  CHECK(NevrStage(NULL, argv[2], pc_profile, argv[3], &res), NEVR_BAD_ARGUMENT);
+  CHECK(NevrStage(s, argv[2], NULL, argv[3], &res), NEVR_BAD_ARGUMENT);
+  CHECK(NevrStage(s, argv[2], "not json", argv[3], &res), NEVR_FAILED);
+  CHECK(NevrStage(s, argv[2], pc_profile, argv[3], &res), NEVR_OK);
+  if (strstr(res, "\"action\":\"staged\"") == NULL) { fprintf(stderr, "profile stage: %s\n", res); return 1; }
+  NevrStringFree(res);
   CHECK(NevrRunEnd(s, "unchanged", "stage check"), NEVR_OK);
   NevrClose(s);
   return 0;

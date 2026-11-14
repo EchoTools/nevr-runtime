@@ -7,8 +7,7 @@ use common::*;
 use nevr_install::util::sha256_hex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,36 +17,6 @@ const README: &[u8] = b"read me";
 const PLUGIN: &[u8] = b"a plugin dll";
 
 type Members<'a> = Vec<(&'a str, &'a [u8])>;
-
-/// Answers each request from `routes`; a path in `cut` announces its full length and sends only that many bytes.
-fn serve(routes: HashMap<String, Vec<u8>>, cut: Option<(String, usize)>) -> String {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
-    std::thread::spawn(move || {
-        for c in l.incoming() {
-            let Ok(mut c) = c else { continue };
-            let mut buf = [0u8; 4096];
-            let k = c.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..k]).to_string();
-            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-            match routes.get(&path) {
-                Some(body) => {
-                    let mut r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
-                    let n = match &cut {
-                        Some((p, n)) if *p == path => (*n).min(body.len()),
-                        _ => body.len(),
-                    };
-                    r.extend_from_slice(&body[..n]);
-                    let _ = c.write_all(&r);
-                }
-                None => {
-                    let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                }
-            }
-        }
-    });
-    base
-}
 
 fn zip_of(members: &Members) -> Vec<u8> {
     let mut buf = std::io::Cursor::new(Vec::new());

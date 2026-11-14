@@ -64,6 +64,22 @@ int NevrPlanBuild(NevrSession *s, const char *version, const char *observed_json
  *          "reason", "files": [{"path", "size", "sha256"}]}. Nothing is published unless every file passed its checks. */
 int NevrPcStage(NevrSession *s, const char *root_dir, const char *current_json, char **out_json);
 
+/* NevrPcStage for any profile (the Quest self-update stages its runtime library through this). profile_json:
+ *   {"kind": "windows-zip" | "quest-runtime", "members": ["<exact path of the runtime>", ...]}
+ * "windows-zip" is the channel's zip, from which the listed members are extracted, each checked against the artifact's `contents`;
+ * a member may be a directory, a slash, an asterisk and an extension (<dir>/<asterisk>.<ext>), which takes the plain names with
+ * that extension directly under <dir>. "quest-runtime" is one file with no zip: members is exactly its file name, it is checked
+ * against the artifact's own size and sha256, and the stored manifest.json and manifest.json.sig that listed it are kept in
+ * <root_dir>/update/staging/<version>/proof/, the manifest pair that listed the staged file. The first member names the runtime: the file
+ * the release is identified by for current_json and the quarantine. The two profiles are the constants PC_PROFILE (what
+ * NevrPcStage uses: the members "nevr-runtime.dll" and "plugins/<asterisk>.dll") and QUEST_PROFILE in installer/src/stage.rs:
+ *   Quest: {"kind":"quest-runtime","members":["libnevr_runtime.so"]}
+ * A kind the core does not stage, an unknown key, a member that is not a safe path: NEVR_FAILED, nothing fetched. A null
+ * profile_json is NEVR_BAD_ARGUMENT. A session opened with platform "pc" must name the root the host loads from (or the
+ * config's dev_nevr_root); one opened with platform "quest" takes any absolute root. Result and current_json as NevrPcStage;
+ * a release that lists no artifact of the kind is {"action": "blocked", "reason": "no_<kind>"} (no_windows_zip, no_quest_runtime). */
+int NevrStage(NevrSession *s, const char *root_dir, const char *profile_json, const char *current_json, char **out_json);
+
 /* Self-update: the runtime refused the release staged by NevrPcStage (its Authenticode check failed). Records `version` with its
  * `runtime_sha256` (64 lowercase hex) and a lowercase `reason` word; the next NevrPcStage answers {"action": "none", "reason": "discarded"}
  * for that release and fetches nothing. A rebuilt release under the same version has other bytes and is staged again. */

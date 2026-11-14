@@ -4,8 +4,42 @@
 #![allow(dead_code)]
 
 use nevr_install::manifest::Pins;
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Answers each request from `routes`; a path in `cut` announces its full length and sends only that many bytes.
+/// Returns the base URL of a server on a free local port.
+pub fn serve(routes: HashMap<String, Vec<u8>>, cut: Option<(String, usize)>) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            let mut buf = [0u8; 4096];
+            let k = c.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..k]).to_string();
+            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            match routes.get(&path) {
+                Some(body) => {
+                    let mut r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                    let n = match &cut {
+                        Some((p, n)) if *p == path => (*n).min(body.len()),
+                        _ => body.len(),
+                    };
+                    r.extend_from_slice(&body[..n]);
+                    let _ = c.write_all(&r);
+                }
+                None => {
+                    let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            }
+        }
+    });
+    base
+}
 
 pub const TEST_PINS: &str = "TEST RWTHthwA6C/csRKFPrZPxjAVZFImiwbgTWoK+P0qiEHQ4mnKdzhbzOqA\n";
 pub const TEST_KEY_ID: &str = "c7b61c00e82fdcb1";
