@@ -251,6 +251,7 @@ PROGRAMS = {
         "login_standin_test",
         "nevr_config_set_test",
         "quest_config_test",
+        "quest_runtime_abi_test",
         "sentinel_host_test",
         "service_redirect_test",
         "symbol_hash_test",

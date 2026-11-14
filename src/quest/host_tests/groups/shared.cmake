@@ -24,6 +24,10 @@ nevr_ht_test(crash_report_quest_test GROUP shared DL TIMEOUT 120 INCS src/quest/
 # The load timing records (#2728): src/runtime/hook/load_timing_rules.h, the header the PC runtime compiles, seen from the Quest build.
 nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
   SRC src/quest/tests/load_timing_rules_test.cpp)
+# The shim <-> runtime ABI (core/quest_runtime_abi.h on core/runtime_abi_common.h): the AArch64 layout of both structs as
+# static_asserts that restate every offset, the validators, and that the common header compiles with no <windows.h>.
+nevr_ht_test(quest_runtime_abi_test GROUP shared TIMEOUT 60
+  SRC src/quest/tests/quest_runtime_abi_test.cpp)
 nevr_ht_test(elf_build_id_test GROUP shared TIMEOUT 120
   SRC src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp)
 nevr_ht_test(evr_codec_test GROUP shared HOST TIMEOUT 120
