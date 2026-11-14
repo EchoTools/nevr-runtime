@@ -476,7 +476,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | core | `update_lock` | `ok`, `wait_ms`, `path`; on a failure `reason`, `detail`, `waited_ms` |
 | core | `update_clear` | `name`, `path`, `outcome` (`removed`, `absent`, `link_removed`, `failed`), `reason` on a failure; one per thing a baseline looks at |
 | core | `update_state` | `ok`, `channel`, `version`, `runtime_sha256`, `state_before` (`absent`, `read`, `rebuilt`), `rebuilt_reason`, `owned`, `quarantine`, `lock_wait_ms`; on a failure `reason` and `detail` |
-| host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
+| host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`, `skipped`), `reason` (`skipped` has `root_unconvertible`: the runtime's root has no UTF-8 spelling and the start does no update work), `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
 | host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |

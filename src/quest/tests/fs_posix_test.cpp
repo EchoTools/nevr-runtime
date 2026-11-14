@@ -14,6 +14,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -21,8 +22,11 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "core/update/fs.h"
 #include "core/update/names.h"
@@ -51,6 +55,12 @@ constexpr std::size_t kMapLineBytes = 64;
 bool Present(const std::string& path) {
   struct stat st{};
   return ::lstat(path.c_str(), &st) == 0;
+}
+
+// Whether a folder itself (not a link to one) is at `path`.
+bool IsFolder(const std::string& path) {
+  struct stat st{};
+  return ::lstat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 // The entries of a folder, `.` and `..` excluded.
@@ -102,8 +112,11 @@ void RemoveAll(const std::string& path) {
 class Root {
  public:
   Root() {
-    char templ[] = "/tmp/nevr-update-fs-posix-XXXXXX";
-    const char* made = ::mkdtemp(templ);
+    const char* tmp = std::getenv("TMPDIR");
+    std::string templ_text = std::string(tmp != nullptr && *tmp != '\0' ? tmp : "/tmp") + "/nevr-update-fs-posix-XXXXXX";
+    std::vector<char> templ(templ_text.begin(), templ_text.end());
+    templ.push_back('\0');
+    const char* made = ::mkdtemp(templ.data());
     QCHECK(made != nullptr);
     if (made != nullptr) path_ = made;
   }
@@ -192,6 +205,35 @@ void ReadRefusesALinkAtEachFolderAndAtTheFile() {
   QCHECK(fs->ReadSmallFile(root.At("d1/d2/leaf.json"), &text) == ReadResult::kUnreadable);
 }
 
+void ListFolderRefusesALinkAtTheFolderAndListsAFolder() {
+  Root root;
+  root.Mkdir("real");
+  root.Write("real/x.json", "x");
+  root.Mkdir("real/sub");
+  root.Link("real", "linkdir");
+  const std::unique_ptr<UpdateFs> fs = MakeFs(root);
+  std::vector<nevr_update::DirEntry> listed;
+  QCHECK(fs->ListFolder(root.At("real"), &listed));
+  QCHECK(listed.size() == kTwoEntries);
+  // is_dir tells a folder from a file: the engine's generation clearing reads it (engine_start.cpp, ClearGenerations).
+  bool file_seen = false;
+  bool folder_seen = false;
+  for (const nevr_update::DirEntry& entry : listed) {
+    if (entry.name == "x.json") {
+      file_seen = true;
+      QCHECK(!entry.is_dir);
+    }
+    if (entry.name == "sub") {
+      folder_seen = true;
+      QCHECK(entry.is_dir);
+    }
+  }
+  QCHECK(file_seen && folder_seen);
+  std::vector<nevr_update::DirEntry> through;
+  QCHECK(!fs->ListFolder(root.At("linkdir"), &through));  // a link at the folder: refused, nothing is listed through it
+  QCHECK(through.empty());
+}
+
 void WriteByRenameReplacesTheFileAndLeavesNoTemporary() {
   Root root;
   root.Mkdir("update");
@@ -276,6 +318,87 @@ void IsLinkAndExistsTellFilesFoldersLinksAndNothing() {
   QCHECK(!fs->IsLink(root.At("none")));
   QCHECK(fs->Exists(root.At("l/none")));  // a link on the way: something is there, so the engine waits
   QCHECK(fs->IsLink(root.At("l/none")));  // and writes through nothing
+}
+
+// MakeDir makes a new folder and answers true for one already there. A file where the folder goes, a link at the folder itself, and
+// a link on the way are each refused; nothing is made through the link, and LastOsError names the reason.
+void MakeDirMakesAFolderAndRefusesAFileALinkAndALinkOnTheWay() {
+  Root root;
+  root.Mkdir("update");
+  root.Write("update/plain", "x");
+  root.Mkdir("real");
+  root.Link("real", "update/alias");
+  root.Link("real", "linkdir");
+  auto fs = MakeFs(root);
+  QCHECK(fs->MakeDir(root.At("update/staging")));
+  QCHECK(IsFolder(root.At("update/staging")));
+  QCHECK(fs->MakeDir(root.At("update/staging")));  // already a folder: true
+  QCHECK(!fs->MakeDir(root.At("update/plain")));   // a file where the folder goes
+  QCHECK(fs->LastOsError() == EEXIST);
+  QCHECK(!fs->MakeDir(root.At("update/alias")));   // a link where the folder goes: not a folder, so refused
+  QCHECK(fs->LastOsError() == EEXIST);
+  QCHECK(!fs->MakeDir(root.At("linkdir/new")));    // through a link: refused
+  QCHECK(fs->LastOsError() == ELOOP);
+  QCHECK(!Present(root.At("real/new")));
+}
+
+// RemoveEmptyDir removes an empty folder. A folder with something in it, a link at the folder, a path through a link and an absent
+// name are each refused, with the reason in LastOsError, and nothing refused is removed.
+void RemoveEmptyDirRemovesOnlyAnEmptyFolder() {
+  Root root;
+  root.Mkdir("empty");
+  root.Mkdir("full");
+  root.Write("full/x", "x");
+  root.Mkdir("real");
+  root.Mkdir("real/zz");
+  root.Link("real", "lnk");
+  root.Link("real", "linkdir");
+  auto fs = MakeFs(root);
+  QCHECK(fs->RemoveEmptyDir(root.At("empty")));
+  QCHECK(!Present(root.At("empty")));
+  QCHECK(!fs->RemoveEmptyDir(root.At("full")));
+  QCHECK(fs->LastOsError() == ENOTEMPTY);
+  QCHECK(Slurp(root.At("full/x")) == "x");
+  QCHECK(!fs->RemoveEmptyDir(root.At("linkdir")));  // a link is not a folder: refused
+  QCHECK(fs->LastOsError() == ENOTDIR);
+  QCHECK(IsFolder(root.At("real")));
+  QCHECK(!fs->RemoveEmptyDir(root.At("lnk/zz")));   // through a link
+  QCHECK(fs->LastOsError() == ELOOP);
+  QCHECK(IsFolder(root.At("real/zz")));
+  QCHECK(!fs->RemoveEmptyDir(root.At("none")));
+  QCHECK(fs->LastOsError() == ENOENT);
+}
+
+// IsDirectory is true for a folder, and false for a file, a link to a folder, an absent name and a path through a link.
+void IsDirectoryTellsAFolderFromAFileAndALink() {
+  Root root;
+  root.Mkdir("d");
+  root.Write("f", "x");
+  root.Link("d", "l");
+  root.Mkdir("real");
+  root.Mkdir("real/inner");
+  root.Link("real", "lk");
+  auto fs = MakeFs(root);
+  QCHECK(fs->IsDirectory(root.At("d")));
+  QCHECK(!fs->IsDirectory(root.At("f")));
+  QCHECK(!fs->IsDirectory(root.At("l")));          // a link to a folder is not a folder here
+  QCHECK(!fs->IsDirectory(root.At("none")));
+  QCHECK(!fs->IsDirectory(root.At("lk/inner")));   // through a link: not reached
+  QCHECK(fs->IsDirectory(root.At("real/inner")));
+}
+
+// LastOsError names the errno of the last failed call: a read through a link fails with ELOOP, a read of an absent file with ENOENT.
+void LastOsErrorNamesTheLastFailedCall() {
+  Root root;
+  root.Mkdir("real");
+  root.Write("real/x.json", "{}");
+  root.Link("real", "link1");
+  auto fs = MakeFs(root);
+  std::string text;
+  QCHECK(fs->ReadSmallFile(root.At("link1/x.json"), &text) == ReadResult::kUnreadable);
+  QCHECK(fs->LastOsError() == ELOOP);
+  QCHECK(fs->ReadSmallFile(root.At("real/none.json"), &text) == ReadResult::kAbsent);
+  QCHECK(fs->LastOsError() == ENOENT);
 }
 
 // The update folder is a link: the lock is refused at once with ELOOP, not waited for until the timeout.
@@ -461,17 +584,71 @@ void EveryOperationRefusesAPathOutsideTheRoot() {
   QCHECK(fs->TakeLock(root.Path() + "x", kNoWaitMs, kTestLockStepMs, &error) == nullptr);
 }
 
+// Two parties meet once: each waits until both have arrived.
+class Rendezvous {
+ public:
+  void Arrive() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    ++arrived_;
+    if (arrived_ == kParties) {
+      released_.notify_all();
+      return;
+    }
+    released_.wait(lock, [this] { return arrived_ == kParties; });
+  }
+
+ private:
+  static constexpr int kParties = 2;
+  std::mutex mutex_;
+  std::condition_variable released_;
+  int arrived_ = 0;
+};
+
+// LastOsError is per thread (fs.h): two threads each make one failing call, both calls finish before either thread reads (the
+// rendezvous), and each reads the error of its own call. With one error kept by the object, whichever call finished last would
+// answer for both, and one of the two checks below fails.
+void LastOsErrorIsPerThread() {
+  Root root;
+  root.Mkdir("update");
+  root.Mkdir("update/full");
+  root.Write("update/full/x.json", "x");
+  const std::unique_ptr<UpdateFs> fs = MakeFs(root);
+  Rendezvous both_failed;
+  int read_by_reader = 0;
+  int read_by_remover = 0;
+  std::thread reader([&] {
+    std::string text;
+    static_cast<void>(fs->ReadSmallFile(root.At("update/none.json"), &text));  // ENOENT
+    both_failed.Arrive();
+    read_by_reader = fs->LastOsError();
+  });
+  std::thread remover([&] {
+    static_cast<void>(fs->RemoveEmptyDir(root.At("update/full")));  // ENOTEMPTY: the folder holds a file
+    both_failed.Arrive();
+    read_by_remover = fs->LastOsError();
+  });
+  reader.join();
+  remover.join();
+  QCHECK(read_by_reader == ENOENT);
+  QCHECK(read_by_remover == ENOTEMPTY);
+}
+
 }  // namespace
 
 int main() {
   ReadSmallFileTellsPresentAbsentAndTooBig();
   ReadSmallFileTellsAFileThatEndsEarlyAsDamaged();
   ReadRefusesALinkAtEachFolderAndAtTheFile();
+  ListFolderRefusesALinkAtTheFolderAndListsAFolder();
   WriteByRenameReplacesTheFileAndLeavesNoTemporary();
   WriteByRenameWritesNothingThroughALink();
   RemoveFileRemovesAFileAndNeverFollowsALink();
   RemoveTreeRemovesAFolderAndNeverEntersALink();
   IsLinkAndExistsTellFilesFoldersLinksAndNothing();
+  MakeDirMakesAFolderAndRefusesAFileALinkAndALinkOnTheWay();
+  RemoveEmptyDirRemovesOnlyAnEmptyFolder();
+  IsDirectoryTellsAFolderFromAFileAndALink();
+  LastOsErrorNamesTheLastFailedCall();
   ALockInALinkedUpdateFolderIsRefusedAtOnce();
   TheLockIsExclusiveAndLetGoByItsOwner();
   ALockHeldByAnotherProcessTimesOutAndIsRetried();
@@ -479,6 +656,7 @@ int main() {
   MoveRefusesALinkAtEachFolderAndMovesNothingThroughIt();
   MoveAcrossVolumesIsAFailedMoveWithExdev();
   EveryOperationRefusesAPathOutsideTheRoot();
+  LastOsErrorIsPerThread();
   if (quest_test::Failures() == 0) std::printf("fs_posix_test: all checks passed\n");
   return quest_test::Failures() == 0 ? kExitPassed : kExitFailed;
 }

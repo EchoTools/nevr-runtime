@@ -9,14 +9,21 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace nevr_update {
+
+/// One entry of a folder: its name (UTF-8, no path) and whether it is a folder. "." and ".." are never listed.
+struct DirEntry {
+  std::string name;
+  bool is_dir = false;
+};
 
 enum class ReadResult {
   kOk,
   kAbsent,      ///< no such file (or no such folder on the way to it)
   kUnreadable,  ///< it is there and cannot be opened or read: another program holds it, access is denied
-  kTooBig,      ///< larger than the cap (nevr_update_names::kMaxJsonBytes)
+  kTooBig,      ///< larger than the cap (nevr_update_names::kMaxJsonBytes), or a read that did not return the whole file
 };
 
 /// update/lock, held: exclusive, released when this object is destroyed. Whether the lock file remains after release is the
@@ -60,7 +67,8 @@ class UpdateFs {
 
   /// True when `path` is a link (a reparse point on Windows, a symbolic link elsewhere). False for a path that is absent. When the
   /// implementation cannot tell (out of memory), it answers true: the engine then refuses to write through the path instead of
-  /// writing through a link.
+  /// writing through a link. The PC host edge (HostFs, runtime/host/update_swap.cpp) also answers true for a path it cannot
+  /// convert; Win32UpdateFs (runtime/lifecycle/update_fs_win32.cpp) answers false for one.
   virtual bool IsLink(const std::string& path) const noexcept = 0;
 
   /// True when something (a file, a folder or a link) is at `path`. When the implementation cannot tell (out of memory), it
@@ -82,6 +90,30 @@ class UpdateFs {
     if (os_error != nullptr) *os_error = 0;
     return false;
   }
+
+  // The operations the start (engine_start.cpp, ADR 0024 section 4) needs beyond the list above. Each has a default that
+  // refuses, so an implementation that does not override one cannot make the start move, make or list anything: the
+  // default is the fail-closed answer. The PC host's edge overrides them all (runtime/host/update_swap.cpp), and so does the
+  // POSIX edge (fs_posix.cpp).
+
+  /// The OS error (GetLastError on Windows, errno elsewhere) of the last failed call this thread made through this object. The
+  /// POSIX edge keeps it per thread (fs_posix.cpp), so a thread that shares an object still reads the errors of its own calls;
+  /// the PC host keeps it per object. An implementation that keeps no error answers 0, and the records of the start then carry
+  /// no error code.
+  virtual int LastOsError() const noexcept { return 0; }
+
+  /// Creates one folder. True when it exists afterwards.
+  virtual bool MakeDir(const std::string& /*path*/) const noexcept { return false; }
+
+  /// Removes one empty folder. False when it is not removed (not empty, absent, or an error).
+  virtual bool RemoveEmptyDir(const std::string& /*path*/) const noexcept { return false; }
+
+  /// True when `path` is a folder (a link to one is not a folder for this purpose: it is checked with IsLink first). The PC host
+  /// answers true for a path it cannot convert or cannot tell (out of memory), so the engine inspects it instead of skipping it.
+  virtual bool IsDirectory(const std::string& /*path*/) const noexcept { return false; }
+
+  /// Lists a folder into `out`. False when it cannot be listed (an absent folder counts as false).
+  virtual bool ListFolder(const std::string& /*path*/, std::vector<DirEntry>* /*out*/) const noexcept { return false; }
 };
 
 /// The POSIX implementation (fs_posix.cpp), for Quest and the Linux host tests. Every path must lie under `root_dir` (the nevr

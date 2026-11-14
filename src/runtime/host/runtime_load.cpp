@@ -180,21 +180,30 @@ const char* RuntimeLoadResult::OutcomeName() const {
   return "unknown";
 }
 
-PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept {
+namespace {
+
+// The host's outcome in the engine's classes (core/update/engine_start.h).
+nevr_update::LoadClass LoadClassOf(RuntimeLoadOutcome outcome) noexcept {
   switch (outcome) {
+    case RuntimeLoadOutcome::kLoaded: return nevr_update::LoadClass::kLoaded;
     case RuntimeLoadOutcome::kRuntimeRefused:
     case RuntimeLoadOutcome::kRuntimeAbsent:
     case RuntimeLoadOutcome::kLoadFailed:
-    case RuntimeLoadOutcome::kDependencyLoadFailed: return PendingFailure::kNeverRan;
+    case RuntimeLoadOutcome::kDependencyLoadFailed: return nevr_update::LoadClass::kNeverRan;
     case RuntimeLoadOutcome::kMissingEntry:
     case RuntimeLoadOutcome::kNullDescriptor:
-    case RuntimeLoadOutcome::kAbiRejected:
-    case RuntimeLoadOutcome::kInitFailed: return PendingFailure::kMapped;
-    case RuntimeLoadOutcome::kLoaded:
+    case RuntimeLoadOutcome::kAbiRejected: return nevr_update::LoadClass::kEntryOnly;
+    case RuntimeLoadOutcome::kInitFailed: return nevr_update::LoadClass::kInitFailed;
     case RuntimeLoadOutcome::kNoPath:
-    case RuntimeLoadOutcome::kUpdateBlocked: return PendingFailure::kNone;
+    case RuntimeLoadOutcome::kUpdateBlocked: return nevr_update::LoadClass::kNotLoaded;
   }
-  return PendingFailure::kNone;
+  return nevr_update::LoadClass::kNotLoaded;
+}
+
+}  // namespace
+
+PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept {
+  return nevr_update::ClassifyPendingFailure(LoadClassOf(outcome), kPeCodeBeforeEntry);
 }
 
 const char* RuntimeLoadResult::DegradedAction() const {

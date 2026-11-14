@@ -1,23 +1,114 @@
 #pragma once
 
-// The decision a start makes about a pending release (docs/adr/0024-pc-self-update.md, section 6, R2), over the facts the
-// start reads through UpdateFs (fs.h). Platform-free: no Windows header and no I/O of its own. The facts the file
-// system cannot give are the edge's and are passed in: the digest of the root's runtime (UpdateFs reads files of at most
-// nevr_update_names::kMaxJsonBytes, and the runtime is larger), the answer to the in-use question, and whether this
-// start finished a swap's cleanup. The decision comes back as data. The edge carries it out: the removals, the count, the
-// rollback and the records, so every effect stays where it is until the journal moves into the engine.
+// The start of the self-update engine (docs/adr/0024-pc-self-update.md, sections 4 and 6): the journal and its recovery, the
+// pending decision, the swap and the rollback, written over the platform edges of edges.h and fs.h. The same code runs on
+// PC (runtime/host/update_swap.cpp binds it to Win32) and, once the Quest edges are written, on Quest. It includes no platform
+// header and holds no global state: everything it needs arrives in a StartContext.
+//
+// Every path the engine uses is composed from the nevr root and the closed vocabulary of names.h, with '/' inside the
+// relative part; the edge turns it into its own separator (UpdateFs::Separator).
 
+#include "core/update/edges.h"
 #include "core/update/fs.h"
-
-#include <nlohmann/json.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 
+#include <nlohmann/json.hpp>
+
 namespace nevr_update {
+
+/// Discards of one release after which it is quarantined (ADR 0024, section 4.3). The one definition: the host re-exports it.
+inline constexpr std::uint32_t kDiscardsToQuarantine = 3;
+
+/// What the host does after a start (the host's UpdateAction, runtime/host/update_swap.h).
+enum class StartAction : std::uint8_t {
+  kNoUpdateFolder,  ///< no update\: nothing was read or written
+  kLoad,            ///< load what is in the root now
+  kStop,            ///< the root may be half moved: nothing loads (`reason` says why)
+};
+
+struct StartResult {
+  StartAction action = StartAction::kNoUpdateFolder;
+  /// For kStop: lock_timeout, bad_journal, journal_unreadable, reparse_point, move_failed, internal_error, no_previous,
+  /// previous_unverified, runtime_in_use, runtime_not_writable, rollback_blocked, state_unreadable or pending_unreadable.
+  const char* reason = nullptr;
+  /// For kLoad: the release in the root is pending (just swapped in, or on its trial).
+  bool pending = false;
+};
+
+/// The outcome of a load, in the engine's three classes (ADR 0024, section 6). kNotLoaded is a stop that is not the
+/// release's doing, or a start with no path.
+enum class LoadClass : std::uint8_t { kLoaded, kNotLoaded, kNeverRan, kEntryOnly, kInitFailed };
+
+/// What a start does with a pending release whose load failed.
+enum class PendingFailure : std::uint8_t {
+  kNone,      ///< loaded, or a stop that is not the release's doing
+  kNeverRan,  ///< no line of the runtime ran: the previous release is put back in the same start
+  kMapped,    ///< the runtime was mapped and then failed: it stays mapped, so the next start puts the previous one back
+};
+
+/// R1's classification. `code_before_entry` is RuntimeLoaderEdge::CodeBeforeEntry(). PC answers true, and so an entry-only
+/// failure is kMapped, as it has always been. The false branch (a runtime with no constructors, which Quest would roll back
+/// in the same start) is the Quest edges' decision, not written in this tree (ADR 0023, section 7): until it is, both values answer kMapped, the
+/// stop that PC takes, never a load of a runtime nothing verified.
+PendingFailure ClassifyPendingFailure(LoadClass load, bool code_before_entry) noexcept;
+
+/// The two hooks a start consults, as function pointers so the engine holds no state of its own. Production passes nulls: no
+/// step ends a start and no move fails.
+struct StartHooks {
+  /// True when the start must end after its `step`-th change to the disk, as a kill would end it.
+  bool (*step_ends)(int step) = nullptr;
+  /// True, with `*os_error` set, when the `move`-th file move of a start must fail.
+  bool (*move_fails)(int move, int* os_error) = nullptr;
+};
+
+/// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1).
+struct LockTiming {
+  std::uint32_t timeout_ms = 0;
+  std::uint32_t step_ms = 0;
+};
+
+/// The edges one start uses. Every reference outlives the start.
+struct StartEdges {
+  const UpdateFs& fs;
+  const ArtifactVerifier& verifier;
+  const InUseCheck& in_use;
+  const RollbackTarget& rollback;
+  const RuntimeLoaderEdge& loader;
+  UpdateLog& log;
+  const UpdateClock& clock;
+};
+
+struct StartContext {
+  /// The nevr root (the folder the runtime sits in), in the edge's path form, without a trailing separator. Empty means no
+  /// root: the start does nothing.
+  std::string root;
+  StartEdges edges;
+  StartHooks hooks;
+  LockTiming lock_timing;
+  /// update\lock is taken into this slot and stays there when a start leaves it held (the load releases it). The slot is
+  /// the host's; a start that finds it held does not take it again.
+  std::unique_ptr<FsLock>* lock = nullptr;
+};
+
+/// The step ADR 0024 section 4 runs at every start. Never throws: an exception inside it is recorded and answered as
+/// the start's own (`internal_error`).
+StartResult RunStart(const StartContext& context) noexcept;
+
+/// R1, never ran (ADR 0024, section 6): the previous release is put back now, in this start. Takes the lock if it is not
+/// held. Never throws.
+StartResult RollBackNowIn(const StartContext& context, const char* reason) noexcept;
+
+/// R1, mapped (ADR 0024, section 6): writes `failed_reason` into update\pending.json under the lock. True when it is
+/// there afterwards. Never throws.
+bool MarkFailedIn(const StartContext& context, const char* reason) noexcept;
+
+// ---- The pending decision (ADR 0024, section 6, R2): pure, over the facts the edge reads ----
 
 /// Starts without the mark after which a pending release that has no recorded failure and no crash is rolled back at the
 /// next start (ADR 0024, section 6, R2). A new release gets one start fewer than this to reach the mark.
@@ -115,5 +206,6 @@ struct PendingDecision {
 /// ADR 0024, section 6, R2: the decision for the facts. `write_access` is asked at most once, and only after the record is
 /// judged not stale (so a record that is dropped or held never asks).
 PendingDecision DecidePending(const PendingFacts& facts, const std::function<WriteAccess()>& write_access);
+
 
 }  // namespace nevr_update

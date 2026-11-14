@@ -37,6 +37,8 @@ constexpr char kSeparator = '/';
 constexpr int kNoFd = -1;
 // The mode of a file the engine creates: its owner reads and writes it, nobody else.
 constexpr mode_t kNewFileMode = 0600;
+// The mode of a folder the engine creates: its owner only.
+constexpr mode_t kNewFolderMode = 0700;
 
 // A descriptor, closed when it goes out of scope. Closing keeps errno, so a cleanup never changes the reason of a failure.
 class Fd {
@@ -119,6 +121,24 @@ Fd OpenParentOf(const std::string& root, const std::string& path, std::string* l
     dir = std::move(next);
   }
   *leaf = parts.back();
+  return dir;
+}
+
+// The folder `path` names under the root, opened the way OpenParentOf opens a file's folder: every name on the way is a folder,
+// reached without following a link. A path that names nothing under the root is refused with EINVAL.
+Fd OpenFolderUnder(const std::string& root, const std::string& path) {
+  std::vector<std::string> parts;
+  if (!SplitBelow(root, path, &parts)) {
+    errno = EINVAL;
+    return Fd();
+  }
+  Fd dir(::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  if (!dir.ok()) return dir;
+  for (const std::string& part : parts) {
+    Fd next(::openat(dir.get(), part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    if (!next.ok()) return next;
+    dir = std::move(next);
+  }
   return dir;
 }
 
@@ -222,21 +242,41 @@ class PosixFs final : public UpdateFs {
 
   char Separator() const noexcept override { return kSeparator; }
 
+  // The errno of the last failed call this thread made through this object (the engine's records carry it, and a Move's is also
+  // its out parameter). Per thread: last_error_ is thread_local, so two threads that share this object each read their own error.
+  int LastOsError() const noexcept override { return last_error_; }
+
+  // The answer to a failed open of a file of update/: absent, or unreadable (a link, or a folder on the way that is not one).
+  ReadResult FailedRead(int err) const noexcept {
+    last_error_ = err;
+    return AbsentOnPath(err) ? ReadResult::kAbsent : ReadResult::kUnreadable;
+  }
+
   // A file of update/, at most the cap the engine applies. A link, a file that is not regular and a file another program holds are
   // unreadable, never absent.
   ReadResult ReadSmallFile(const std::string& path, std::string* out) const noexcept override {
     try {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
-      if (!dir.ok()) return AbsentOnPath(errno) ? ReadResult::kAbsent : ReadResult::kUnreadable;
+      if (!dir.ok()) return FailedRead(errno);
       Fd file(::openat(dir.get(), leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
-      if (!file.ok()) return AbsentOnPath(errno) ? ReadResult::kAbsent : ReadResult::kUnreadable;
+      if (!file.ok()) return FailedRead(errno);
       struct stat st{};
-      if (::fstat(file.get(), &st) != 0 || !S_ISREG(st.st_mode)) return ReadResult::kUnreadable;
+      if (::fstat(file.get(), &st) != 0) {
+        last_error_ = errno;
+        return ReadResult::kUnreadable;
+      }
+      if (!S_ISREG(st.st_mode)) {
+        last_error_ = EINVAL;
+        return ReadResult::kUnreadable;
+      }
       if (st.st_size < 0 || static_cast<unsigned long long>(st.st_size) > names::kMaxJsonBytes) return ReadResult::kTooBig;
       std::string text(static_cast<std::size_t>(st.st_size), '\0');
       const FillResult filled = ReadAll(file.get(), &text);
-      if (filled == FillResult::kReadError) return ReadResult::kUnreadable;
+      if (filled == FillResult::kReadError) {
+        last_error_ = errno;
+        return ReadResult::kUnreadable;
+      }
       if (filled == FillResult::kEndedEarly) return ReadResult::kTooBig;
       *out = std::move(text);
       return ReadResult::kOk;
@@ -251,17 +291,29 @@ class PosixFs final : public UpdateFs {
     try {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
-      if (!dir.ok()) return false;
+      if (!dir.ok()) {
+        last_error_ = errno;
+        return false;
+      }
       const std::string temporary = leaf + ".tmp-" + std::to_string(::getpid());
       Fd file(::openat(dir.get(), temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, kNewFileMode));
-      if (!file.ok()) return false;
+      if (!file.ok()) {
+        last_error_ = errno;
+        return false;
+      }
       const bool written = WriteAll(file.get(), text) && ::fsync(file.get()) == 0;
+      if (!written) last_error_ = errno;
       file.Close();
       if (!written || ::renameat(dir.get(), temporary.c_str(), dir.get(), leaf.c_str()) != 0) {
+        if (written) last_error_ = errno;
         static_cast<void>(::unlinkat(dir.get(), temporary.c_str(), 0));
         return false;
       }
-      return FlushFolder(dir.get());
+      if (!FlushFolder(dir.get())) {
+        last_error_ = errno;
+        return false;
+      }
+      return true;
     } catch (const std::bad_alloc&) {
       return false;
     }
@@ -272,9 +324,19 @@ class PosixFs final : public UpdateFs {
     try {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
-      if (!dir.ok()) return false;
-      if (::unlinkat(dir.get(), leaf.c_str(), 0) != 0) return false;
-      return FlushFolder(dir.get());
+      if (!dir.ok()) {
+        last_error_ = errno;
+        return false;
+      }
+      if (::unlinkat(dir.get(), leaf.c_str(), 0) != 0) {
+        last_error_ = errno;
+        return false;
+      }
+      if (!FlushFolder(dir.get())) {
+        last_error_ = errno;
+        return false;
+      }
+      return true;
     } catch (const std::bad_alloc&) {
       return false;
     }
@@ -381,6 +443,115 @@ class PosixFs final : public UpdateFs {
   // checked first; the caller holds update/lock for every write, ADR 0024, section 4, item 1). A move across volumes fails with
   // EXDEV, which the journal undoes.
   bool Move(const std::string& from, const std::string& to, int* os_error) const noexcept override {
+    int error = 0;
+    const bool moved = MoveWithin(from, to, &error);
+    if (!moved) last_error_ = error;
+    if (os_error != nullptr) *os_error = error;
+    return moved;
+  }
+
+  // Creates one folder under the root. True when it is a folder afterwards (created now, or already there).
+  bool MakeDir(const std::string& path) const noexcept override {
+    try {
+      std::string leaf;
+      Fd dir = OpenParentOf(root_, path, &leaf);
+      if (!dir.ok()) {
+        last_error_ = errno;
+        return false;
+      }
+      if (::mkdirat(dir.get(), leaf.c_str(), kNewFolderMode) != 0) {
+        const int err = errno;
+        struct stat st{};
+        if (err == EEXIST && ::fstatat(dir.get(), leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) return true;
+        last_error_ = err;
+        return false;
+      }
+      if (!FlushFolder(dir.get())) {
+        last_error_ = errno;
+        return false;
+      }
+      return true;
+    } catch (const std::bad_alloc&) {
+      last_error_ = ENOMEM;
+      return false;
+    }
+  }
+
+  // Removes one empty folder. False when it is not removed (not empty, absent, a link, or an error).
+  bool RemoveEmptyDir(const std::string& path) const noexcept override {
+    try {
+      std::string leaf;
+      Fd dir = OpenParentOf(root_, path, &leaf);
+      if (!dir.ok()) {
+        last_error_ = errno;
+        return false;
+      }
+      if (::unlinkat(dir.get(), leaf.c_str(), AT_REMOVEDIR) != 0) {
+        last_error_ = errno;
+        return false;
+      }
+      if (!FlushFolder(dir.get())) {
+        last_error_ = errno;
+        return false;
+      }
+      return true;
+    } catch (const std::bad_alloc&) {
+      last_error_ = ENOMEM;
+      return false;
+    }
+  }
+
+  // True when `path` is a folder itself. A link to one is not a folder for this purpose (the engine checks IsLink first).
+  bool IsDirectory(const std::string& path) const noexcept override {
+    try {
+      std::string leaf;
+      Fd dir = OpenParentOf(root_, path, &leaf);
+      if (!dir.ok()) return false;
+      struct stat st{};
+      return ::fstatat(dir.get(), leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode);
+    } catch (const std::bad_alloc&) {
+      return false;
+    }
+  }
+
+  // Every name in a folder, with whether it is a folder. The folder is reached without following a link; "." and ".." are not listed.
+  bool ListFolder(const std::string& path, std::vector<DirEntry>* out) const noexcept override {
+    try {
+      Fd dir = OpenFolderUnder(root_, path);
+      if (!dir.ok()) {
+        last_error_ = errno;
+        return false;
+      }
+      const int copy = ::dup(dir.get());
+      if (copy < 0) {
+        last_error_ = errno;
+        return false;
+      }
+      DIR* folder = ::fdopendir(copy);
+      if (folder == nullptr) {
+        last_error_ = errno;
+        static_cast<void>(::close(copy));
+        return false;
+      }
+      std::vector<DirEntry> entries;
+      while (const struct dirent* entry = ::readdir(folder)) {
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..") continue;
+        struct stat st{};
+        const bool is_dir = ::fstatat(::dirfd(folder), name.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode);
+        entries.push_back(DirEntry{name, is_dir});
+      }
+      static_cast<void>(::closedir(folder));
+      *out = std::move(entries);
+      return true;
+    } catch (const std::bad_alloc&) {
+      last_error_ = ENOMEM;
+      return false;
+    }
+  }
+
+ private:
+  bool MoveWithin(const std::string& from, const std::string& to, int* os_error) const noexcept {
     try {
       std::string from_leaf;
       Fd from_dir = OpenParentOf(root_, from, &from_leaf);
@@ -419,7 +590,12 @@ class PosixFs final : public UpdateFs {
 
  private:
   std::string root_;
+  // The errno of the last failed call of the calling thread (LastOsError). Static and thread_local: every operation writes it, and
+  // two threads that share one object must not share one error.
+  static thread_local int last_error_;
 };
+
+thread_local int PosixFs::last_error_ = 0;
 
 }  // namespace
 

@@ -11,6 +11,7 @@
 // every required entry (initialize and game_main).
 
 #include "core/runtime_abi.h"
+#include "core/update/engine_start.h"
 #include "runtime/host/bootstrap_diagnostics.h"
 #include "runtime/host/update_swap.h"
 #include "runtime/ext/plugin_signature.h"
@@ -102,12 +103,14 @@ struct RuntimeLoadResult {
 };
 
 /// What a failed load of the pending release asks of the host (ADR 0024, section 6).
-enum class PendingFailure : std::uint8_t {
-  kNone,      ///< loaded, or a stop that is not the release's doing
-  kNeverRan,  ///< refused, absent, or not loadable: no line of the runtime ran, so the previous one is put back at once
-  kMapped,    ///< mapped and then failed: it stays mapped, so the next start puts the previous one back
-};
+/// The PC load maps the DLL under the loader lock, so its DllMain has run before the load outcome is known (ADR 0024,
+/// section 6, R1): true. The host's RuntimeLoaderEdge answers the same (update_swap.cpp).
+inline constexpr bool kPeCodeBeforeEntry = true;
 
+/// The engine's classes (core/update/engine_start.h), named as the host always named them.
+using PendingFailure = nevr_update::PendingFailure;
+
+/// The engine classifies a load outcome (nevr_update::ClassifyPendingFailure); this maps the host's outcome to its class.
 PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept;
 
 /// What the host found when it looked for nevr-runtime.dll at the path ResolveRuntimePath returned.

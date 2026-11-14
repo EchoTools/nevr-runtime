@@ -26,6 +26,11 @@ nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
   SRC src/quest/tests/load_timing_rules_test.cpp)
 # The shim <-> runtime ABI (core/quest_runtime_abi.h on core/runtime_abi_common.h): the AArch64 layout of both structs as
 # static_asserts that restate every offset, the validators, and that the common header compiles with no <windows.h>.
+# The self-update start's steps on the Linux host (ADR 0024, sections 4 and 6): a kill at every step of a swap and of a rollback,
+# a journal outside the vocabulary, and a link in the update folders. The POSIX edge (fs_posix.cpp, ADR 0024 section 4) is one
+# of its sources.
+nevr_ht_test(engine_start_steps_test GROUP shared HOST TIMEOUT 300
+  SRC src/core/update/engine_start.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp src/quest/tests/engine_start_steps_test.cpp)
 nevr_ht_test(quest_runtime_abi_test GROUP shared TIMEOUT 60
   SRC src/quest/tests/quest_runtime_abi_test.cpp)
 nevr_ht_test(elf_build_id_test GROUP shared TIMEOUT 120

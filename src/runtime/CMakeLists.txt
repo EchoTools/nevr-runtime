@@ -26,11 +26,12 @@ set(NEVR_HOST_UNITS
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "host/stop_line.cpp"
-    # Self-update's swap at start (ADR 0024, section 4). The vocabulary is the core's (core/update/names.cpp, shared with Quest).
+    # Self-update's swap at start (ADR 0024, sections 4 and 6). The vocabulary is the core's (core/update/names.cpp, shared with Quest).
+    # The start itself is the engine's (core/update/engine_start.cpp, over the edges of core/update/edges.h); the host binds it to Win32.
     "../core/update/names.cpp"
-    # The start's decision over pending.json (ADR 0024, section 6), platform-free, and the Win32 UpdateFs the host reads it through.
+    # The start's decision, journal, swap and rollback (ADR 0024, sections 4 and 6), platform-free: the host binds them to Win32
+    # in host/update_swap.cpp. The runtime's Win32 UpdateFs (lifecycle/update_fs_win32.cpp) is not a host unit.
     "../core/update/engine_start.cpp"
-    "lifecycle/update_fs_win32.cpp"
     "host/update_seams.cpp"
     "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).

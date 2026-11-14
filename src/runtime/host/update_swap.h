@@ -38,15 +38,19 @@
 // folder), and a file the host cannot open is never taken for a damaged one.
 // Every outcome is one update_swap or update_rollback record in the run's main log (tag NEVR.HOST).
 
+#include "core/update/engine_start.h"
+#include "core/update/fs.h"
 #include "runtime/host/bootstrap_diagnostics.h"
 
 #include <windows.h>
 
 #include <cstdint>
+#include <memory>
 
 namespace nevr_host {
 
-/// update\lock: one holder at a time across every process that shares the nevr root (ADR 0024, section 4.1).
+/// update\lock: one holder at a time across every process that shares the nevr root (ADR 0024, section 4.1). The lock is
+/// the Win32 FsLock the start takes through the host's UpdateFs (update_swap.cpp).
 class UpdateLock {
  public:
   UpdateLock() = default;
@@ -54,36 +58,26 @@ class UpdateLock {
   UpdateLock& operator=(const UpdateLock&) = delete;
   ~UpdateLock();
 
-  /// Open `<update_dir>\lock` with share mode 0 and delete-on-close, trying every `step_ms` for up to `timeout_ms`.
+  /// Take `<update_dir>\lock` with share mode 0 and delete-on-close, trying every `step_ms` for up to `timeout_ms`.
   bool Acquire(const wchar_t* update_dir, DWORD timeout_ms, DWORD step_ms) noexcept;
   void Release() noexcept;
-  bool Held() const noexcept { return handle_ != INVALID_HANDLE_VALUE; }
+  bool Held() const noexcept { return lock_ != nullptr; }
+  /// The slot the engine takes the lock into (engine_start.h, StartContext::lock). Used by the start only.
+  std::unique_ptr<nevr_update::FsLock>* Slot() noexcept { return &lock_; }
 
  private:
-  HANDLE handle_ = INVALID_HANDLE_VALUE;
+  std::unique_ptr<nevr_update::FsLock> lock_;
 };
 
 /// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1).
 inline constexpr DWORD kUpdateLockTimeoutMs = 30000;
 inline constexpr DWORD kUpdateLockStepMs = 100;
-/// Discards of one release after which it is quarantined (ADR 0024, section 4.3).
-inline constexpr std::uint32_t kDiscardsToQuarantine = 3;
+/// Discards of one release after which it is quarantined (ADR 0024, section 4.3): the engine's definition.
+using nevr_update::kDiscardsToQuarantine;
 
-enum class UpdateAction {
-  kNoUpdateFolder,  ///< no update\: nothing was read or written
-  kLoad,            ///< load what is in the root now (the lock is held when it was taken)
-  kStop,            ///< the root may be half moved: the game must not load anything (reason says why)
-};
-
-struct UpdateResult {
-  UpdateAction action = UpdateAction::kNoUpdateFolder;
-  /// For kStop: lock_timeout, bad_journal, journal_unreadable, reparse_point, move_failed, internal_error, no_previous,
-  /// previous_unverified, runtime_in_use, runtime_not_writable, rollback_blocked, state_unreadable or pending_unreadable.
-  const char* reason = nullptr;
-  /// For kLoad: the release in the root is pending (just swapped in, or still on its trial). A load of it that fails is
-  /// the host's to handle (RollBackInProcess, MarkPendingFailed).
-  bool pending = false;
-};
+/// The host's names for the engine's start result (engine_start.h): the action, the reason and the pending flag.
+using UpdateAction = nevr_update::StartAction;
+using UpdateResult = nevr_update::StartResult;
 
 /// The step ADR 0024 section 4 runs at every start. `runtime_path` is the path RuntimeLoader::Load will probe
 /// (`<root>\nevr-runtime.dll`); its folder is the root. Writes its records through `diagnostics`. Never throws.
