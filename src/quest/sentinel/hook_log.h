@@ -54,7 +54,8 @@ struct LogField {
 };
 
 // "0x" + 16 hex digits into `buf`; returns `buf` so it can be passed as a value.
-const char* HexString(char (&buf)[19], std::uint64_t value);
+inline constexpr std::size_t kHexStringSize = 19;  // "0x" + 16 digits + NUL
+const char* HexString(char (&buf)[kHexStringSize], std::uint64_t value);
 
 // Emits one JSON line: ts_ms, level, event, then the fields in order.
 void LogFields(LogLevel level, const char* event, std::initializer_list<LogField> fields);

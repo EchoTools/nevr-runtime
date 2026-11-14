@@ -115,7 +115,7 @@ long long NowMs() {
 
 LogSink SetLogSink(LogSink sink) { return g_sink.exchange(sink, std::memory_order_acq_rel); }
 
-const char* HexString(char (&buf)[19], std::uint64_t value) {
+const char* HexString(char (&buf)[kHexStringSize], std::uint64_t value) {
   std::snprintf(buf, sizeof(buf), "0x%016llx", static_cast<unsigned long long>(value));
   return buf;
 }

@@ -41,8 +41,8 @@ void* Lookup(Original original, std::uint64_t key) noexcept {
   if (alias != key) {
     if (void* record = original(alias)) return record;
     if (!g_aliasMissLogged.exchange(true)) {
-      char keyHex[19];
-      char aliasHex[19];
+      char keyHex[sentinel::kHexStringSize];
+      char aliasHex[sentinel::kHexStringSize];
       sentinel::LogFields(sentinel::LogLevel::kWarn, "config_alias",
                           {{"reason", "alias_not_found"}, {"key", sentinel::HexString(keyHex, key)},
                            {"alias", sentinel::HexString(aliasHex, alias)},
@@ -73,14 +73,14 @@ bool InstallIfStaged() {
   const sentinel::GotStatus got = sentinel::InstallThunk<hook::LookupThunk>(hook::g_lookupHook, hook::BalanceLookup());
   if (got != sentinel::GotStatus::kOk) {
     hook::LookupThunk::Disarm();
-    sentinel::LogFields(sentinel::LogLevel::kError, "config_alias",
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "config_alias",
                         {{"status", "off"}, {"reason", "hook_refused"}, {"got", sentinel::GotStatusName(got)},
                          {"consequence", "maps read the stock arena rules on this headset"}});
     return false;
   }
   hook::g_installed.store(true, std::memory_order_release);
   const bool ticking = nevr_quest::invite::frame::RegisterFrameWork(&hook::ReconcileWork, nullptr);
-  char slotHex[19];
+  char slotHex[sentinel::kHexStringSize];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "config_alias",
                       {{"status", "installed"}, {"slot", sentinel::HexString(slotHex, sentinel::pinned::kBalanceLookupSlot)},
                        {"source", "game_space_tables"}, {"refresh", "unavailable"},

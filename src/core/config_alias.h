@@ -153,7 +153,7 @@ void SetLiveRecord(const void* record) noexcept;
 const void* LiveRecord() noexcept;
 
 #ifndef _WIN32
-// The Quest sentinel defines it (quest/sentinel/config_alias_hook.cpp): one Warning line from the table.
+// The Quest sentinel defines it (quest/sentinel/config_alias_levels.cpp): one Warning line from the table.
 void PlatformWarn(const char* line) noexcept;
 #endif
 

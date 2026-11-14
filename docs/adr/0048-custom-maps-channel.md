@@ -58,7 +58,9 @@ session they are in is the lobby group id.
    for the same key, because a host's round length is the operator's and a map must not change it unseen: the alias picks the
    record the game reads, the host's value replaces the value read for those three paths
    (`src/runtime/lifecycle/arena_rules_hook.cpp`), and each map's key is logged once per time its alias goes live, as an Info line
-   naming the map, the key, the map's value and config.yaml's value.
+   naming the map, the key and config.yaml's value, and saying that config.yaml overrides the alias for that key. The line
+   does not claim the replaced value came from the map's record; a Debug record of the record the game's read was made on
+   beside the record the lookup answered shows which it was.
 6. **Scripts.** A map's script DLLs are registered before its set, all or nothing, and only if each passes the PE rules
    (`src/core/script_image_rules.h`: PE32+ AMD64 DLL, no imports, TLS or CLR, entry point 0, exactly one unforwarded
    `setup_bindings` export in code, allowed sections only, no writable-and-executable section; the Quest twin checks the ELF shape

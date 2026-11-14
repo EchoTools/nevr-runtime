@@ -128,8 +128,9 @@ std::size_t Table::Arm(const OwnerLevels& mounted_owner_levels, HoldsFn holds, v
     armed_pairs += entry.pairs.size();
     armed[owner_levels.first] = std::move(entry);
   }
-  // Arming again with the same mount changes nothing: the generation stays, so a per-load record (the arena override's
-  // line) is not repeated when the mount observer calls Arm twice for one load.
+  // Arming again with the same mount changes nothing: the generation stays, so the hook's state stamp does not move and
+  // no reconcile runs for an Arm that armed nothing new. (The arena override's line follows LiveEpoch, which only a
+  // change of the published winners moves.)
   const bool unchanged = armed == armed_;
   armed_ = std::move(armed);
   DropStaleLocked();
