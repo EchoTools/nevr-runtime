@@ -27,6 +27,7 @@
 #include "splash_skip_hook.h"
 #include "ui_texture_mips.h"
 
+#include "core/map_session_pin.h"
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/cargo/cargo_service.h"
@@ -282,6 +283,8 @@ nevr_quest_login::BuildInfo ThisBuild() {
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;
   build.plugin_report = [] { return nevr_quest::plugin::LoginReport(); };
+  // The session map pins (ADR 0048 decision 9): empty until a channel mounts or stages a map, so a run with no maps sends today's login.
+  build.map_report = [] { return nevr_map_session_pin::LoginEntries(); };
   return build;
 }
 

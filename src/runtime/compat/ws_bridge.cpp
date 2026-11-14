@@ -4,6 +4,7 @@
 #include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/server_features.h"
 #include "runtime/compat/login_profile.h"
+#include "core/map_groups.h"
 #include "core/map_session_pin.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
@@ -667,6 +668,13 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
       case nevr_lobby_frame::Kind::Success:
         g_lobbyJoin.OnSuccess(state.lobby);
         ClearServerFeaturesOnNewLobby(state.lobby);
+        // ADR 0048 decision 16: a client asks for the session's group on every success, whatever the limiter below writes. A
+        // dedicated server takes its group from its own session (the server hold), not from this frame.
+        if (!g_isServer) {
+          std::string group;
+          const nevr_maps::SessionGroupRequest asked = nevr_maps::RequestSessionGroup(nevr_lobby_frame::FormatGuid(state.group), &group);
+          Log(EchoVR::LogLevel::Info, "%s", nevr_maps::SessionGroupRecord(asked, group).c_str());
+        }
         break;
       case nevr_lobby_frame::Kind::Failure:
         g_lobbyJoin.OnFailure(request.sent && request.kind == nevr_lobby_frame::Kind::Join);

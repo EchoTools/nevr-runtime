@@ -10,6 +10,7 @@
 #include "core/cargo_format.h"
 #include "core/cargo_limits.h"
 #include "core/device_memory.h"
+#include "core/map_groups.h"
 #include "core/map_index.h"
 #include "core/map_set_tables.h"
 #include "nevr/symbol_hash.h"
@@ -709,47 +710,35 @@ class FetchRun {
     progress_fn_(p);
   }
 
-  // The requested group becomes the latest the index keeps.
+  // The requested group becomes the latest the index keeps (core/map_groups.h).
   void RememberGroup() {
-    auto& groups = index_.groups;
-    const auto it = std::find_if(groups.begin(), groups.end(), [&](const CachedGroup& g) { return g.id == group_; });
-    CachedGroup group;
-    group.id = group_;
-    if (it != groups.end()) {
-      group = *it;
-      groups.erase(it);
-    }
-    groups.insert(groups.begin(), group);
+    RememberLatestGroup(index_.groups, group_);
     dirty_ = true;
   }
 
   // The groups kept are as many, the latest first, as the cache's bytes and the device's storage share hold (ADR 0045 decision
-  // 8): what the cache holds now plus what it may still add. The latest group is always kept. A map two groups list counts for
-  // each, so the bound errs toward keeping fewer.
+  // 8): what the cache holds now plus what it may still add. The rule is core/map_groups.h's KeptGroupCount over each group's
+  // cost, its stored manifest plus its index record, so a group whose manifest never arrived still counts. A map two groups list
+  // counts for each, so the bound errs toward keeping fewer.
   void BoundGroups() {
     std::uint64_t cached = 0;
     for (const auto& [key, map] : index_.maps) {
       for (const CachedFile& f : map.files) cached += f.size;
     }
     const std::uint64_t budget = cached + limits_.storage_budget;
-    std::uint64_t total = 0;
-    bool full = false;
-    std::vector<CachedGroup> kept;
-    for (std::size_t i = 0; i < index_.groups.size(); ++i) {
+    std::vector<std::uint64_t> cost;
+    cost.reserve(index_.groups.size());
+    for (const CachedGroup& g : index_.groups) cost.push_back(g.bytes + GroupRecordBytes(g.id, g.maps));
+    const std::size_t kept = KeptGroupCount(cost, budget);
+    // The oldest go first: each group past the kept count is one the cache no longer keeps.
+    for (std::size_t i = kept; i < index_.groups.size(); ++i) {
       const CachedGroup& g = index_.groups[i];
-      // The oldest go first: once a group does not fit, no older one is kept.
-      full = full || (i != 0 && g.bytes > budget - std::min(total, budget));
-      if (!full) {
-        total += g.bytes;
-        kept.push_back(g);
-        continue;
-      }
       env_.Event(EventLevel::kInfo, "map_gc",
                  {{"group", g.id}, {"reason", "storage"}, {"bytes", g.bytes}, {"budget", budget},
                   {"consequence", "the group's maps that no kept group lists are removed"}});
     }
-    if (kept.size() != index_.groups.size()) {
-      index_.groups = std::move(kept);
+    if (kept != index_.groups.size()) {
+      index_.groups.resize(kept);
       dirty_ = true;
     }
   }

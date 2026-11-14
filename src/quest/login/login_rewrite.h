@@ -91,7 +91,7 @@ struct BuildInfo {
   std::function<std::vector<PluginManifestEntry>()> plugin_report;
   // The session map pins (`nevr_maps`, ADR 0048 decision 9): the core's nevr_map_session_pin::LoginEntries() on the Quest, a JSON
   // array. Unset or empty: no `nevr_maps` (a run with no maps config sends today's login).
-  // KNOWN-WRONG #TBD: nothing sets this yet, so the Quest login carries no `nevr_maps`. The channel's start wires it.
+  // The Quest's production build sets it (quest/integration/production_steps.cpp, ThisBuild).
   std::function<nlohmann::json()> map_report;
 };
 

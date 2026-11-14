@@ -39,6 +39,7 @@ constexpr std::uint64_t kPinOfNothing = 0x55;
 class CountingGame final : public sp::GameAccess {
  public:
   bool callable = true;
+  int callable_calls = 0;  // the game's own bytes are proved through Callable: a run with no map must not ask
   std::uint64_t lobby = 0x7000;
   std::int32_t state = 9;
   std::uint64_t owner_level = 0;
@@ -46,7 +47,10 @@ class CountingGame final : public sp::GameAccess {
   int game_calls = 0;
   int schedule_calls = 0;
   int skews = 0;
-  bool Callable() override { return callable; }
+  bool Callable() override {
+    ++callable_calls;
+    return callable;
+  }
   bool IsServer() override {
     ++game_calls;
     return false;
@@ -136,6 +140,14 @@ void TheEmptyStateMakesNoGameCall() {
   for (int i = 0; i < 20; ++i) sp::TickWith(game);
   QCHECK(game.game_calls == 0);
   QCHECK(game.schedule_calls == 0);
+  QCHECK(game.callable_calls == 0);  // nothing listed or mounted: the game is not even asked to prove its bytes
+  // The counter is not vacuous: with a map listed, the same tick does ask.
+  sp::ChannelView view;
+  view.listed = {{sp::SessionLevelOf("arena2"), "arena2"}};
+  sp::SetChannelView(view);
+  sp::TickWith(game);
+  QCHECK(game.callable_calls > 0);  // the tick asks (ClientTick's SessionLevelWith asks again: two in all)
+  sp::ResetForTest();
 }
 
 void ALeaveIsDecidedOnceAndScheduled() {

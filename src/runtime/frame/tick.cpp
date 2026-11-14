@@ -39,6 +39,7 @@
 #include "runtime/compat/peer_message.h"  // Poll
 #include "runtime/compat/self_check.h"  // Flush
 #include "runtime/ext/module_loader.h"    // TickModules
+#include "runtime/content/map_session_pin_game.h"  // nevr_map_session_pin::Tick (ADR 0048 decision 9)
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/hook_liveness.h"
@@ -176,6 +177,10 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // ADR 0048 decision 9: the session map pin's tick, on the game thread every frame. It makes no game call while no map is listed
+    // or mounted (nevr_map_session_pin::TickWith), so a run without maps does nothing here.
+    nevr_map_session_pin::Tick();
 
     // Peer timeout log: a client silent to its host for the threshold logs one Warning (runtime/patch/peer_timeout_log_rules.h).
     nevr_peer_timeout_log::CheckNoSend();

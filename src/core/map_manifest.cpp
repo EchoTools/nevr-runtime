@@ -817,12 +817,6 @@ bool IsValidChannel(std::string_view channel) {
   return std::all_of(channel.begin(), channel.end(), [&](char c) { return lower_digit(c) || c == '.' || c == '-'; });
 }
 
-bool IsPathSafeGroupId(std::string_view group) {
-  if (group.empty() || group.size() > kGroupIdMaxBytes) return false;
-  return std::all_of(group.begin(), group.end(),
-                     [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
-}
-
 bool IsValidUtc(std::string_view t) {
   if (t.size() != kUtcChars || t[kUtcTAt] != 'T' || t[kUtcZAt] != 'Z') return false;
   for (const std::size_t at : kUtcDateDashes) {

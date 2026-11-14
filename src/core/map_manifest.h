@@ -121,9 +121,6 @@ inline bool IsValidMapId(std::string_view id) {
   return true;
 }
 bool IsValidChannel(std::string_view channel); // [a-z0-9][a-z0-9.-]{0,63}
-// A lobby group id held as an opaque string: 1 to kGroupIdMaxBytes characters of [0-9a-z-], safe as a URL path segment and a
-// directory name. Never parsed as a UUID.
-bool IsPathSafeGroupId(std::string_view group);
 bool IsValidUtc(std::string_view text);        // YYYY-MM-DDTHH:MM:SSZ, a real calendar date
 
 // True when `now_utc` is at or past `expires`, and also when either is not valid UTC (fails closed).

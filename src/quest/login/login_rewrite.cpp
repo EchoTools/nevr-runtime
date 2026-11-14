@@ -120,7 +120,6 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   }
 
   // The maps the same way as the plugins: a report that cannot be built is an empty one.
-  // KNOWN-WRONG #TBD: map_report is not set by any caller yet (login_rewrite.h), so this branch does not run in a game.
   try {
     if (build.map_report) inputs.maps = build.map_report();
   } catch (const std::exception&) {

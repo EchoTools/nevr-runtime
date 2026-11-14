@@ -126,6 +126,10 @@ nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
 # client meets, the view's replacement and the empty-state gate, over a counting game.
 nevr_ht_test(map_session_pin_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
   SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp)
+# The session's group and the groups the cache keeps (core/map_groups.h; ADR 0048 decisions 15 and 16; ADR 0045 decision 8): the group
+# id of a session's game text, the nil group, the bound over each group's record, the latest-first order and the request hook.
+nevr_ht_test(map_groups_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
+  SRC src/quest/tests/map_groups_quest_test.cpp)
 # The Quest's libr15 half of the pin (quest/cargo/map_pin_game.cpp), compiled for the host: its layout, its pinned words and its
 # call into the core. It is not linked here (it needs the sentinel's libr15 image), so this is a compile check of the Quest half.
 nevr_ht_obj(o_map_pin_game GROUP shared NOEXC DEFS NEVR_QUEST_TESTING INCS ${_sentinel} sdk/include src
