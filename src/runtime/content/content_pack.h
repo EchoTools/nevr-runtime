@@ -33,6 +33,11 @@
 
 namespace nevr_content {
 
+// The one UTF-8 spelling of a wide text (the logs and the map script provider), and the one spelling of a full path that
+// the content pack and the map script provider compare: no \\?\ prefix, backslashes, no "." or ".." parts, ASCII lower case.
+std::string Narrow(const std::wstring& wide);
+std::wstring Canonical(std::wstring path);
+
 enum class Outcome {
   kNone,     // no pack is installed
   kServed,   // the pack is checked and its files are served

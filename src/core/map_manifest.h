@@ -107,7 +107,14 @@ ParsedPackage ParsePackageIndex(std::string_view bytes, const std::string& id, c
 // is below every valid one. Returns <0, 0 or >0.
 int CompareVersions(std::string_view a, std::string_view b);
 bool IsValidVersion(std::string_view version);
-bool IsValidMapId(std::string_view id);        // [a-z][a-z0-9_]{0,54}
+// A map id: a lowercase letter, then lowercase letters, digits or '_', at most kMaxMapIdChars bytes.
+inline bool IsValidMapId(std::string_view id) {
+  if (id.empty() || id.size() > kMaxMapIdChars || id[0] < 'a' || id[0] > 'z') return false;
+  for (const char c : id) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+  }
+  return true;
+}
 bool IsValidChannel(std::string_view channel); // [a-z0-9][a-z0-9.-]{0,63}
 // A lobby group id held as an opaque string: 1 to kGroupIdMaxBytes characters of [0-9a-z-], safe as a URL path segment and a
 // directory name. Never parsed as a UUID.

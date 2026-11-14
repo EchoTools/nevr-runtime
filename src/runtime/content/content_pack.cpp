@@ -61,27 +61,7 @@ std::wstring Widen(const std::string& utf8) {
   return out;
 }
 
-std::string Narrow(const std::wstring& wide) {
-  if (wide.empty()) return std::string();
-  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-  if (n <= 0) return std::string();
-  std::string out(static_cast<std::size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-  return out;
-}
 
-// One spelling of a full path: no `\\?\` prefix, backslashes and no "." or ".." parts (GetFullPathNameW makes both), ASCII
-// lower case (the fold the LoadLibrary hooks hand their filters, so both sides of a comparison are folded the same way).
-std::wstring Canonical(std::wstring path) {
-  if (path.rfind(L"\\\\?\\", 0) == 0 && path.rfind(L"\\\\?\\UNC\\", 0) != 0) path.erase(0, 4);
-  wchar_t buf[MAX_PATH * 2];
-  const DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, buf, nullptr);
-  if (n > 0 && n < MAX_PATH * 2) path.assign(buf, n);
-  for (wchar_t& c : path) {
-    if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
-  }
-  return path;
-}
 
 std::wstring Under(const std::wstring& dir, const std::string& relative) {
   std::wstring out = dir;
@@ -175,6 +155,29 @@ const Served* FindOpen(const char* game_path, std::uint32_t flags) {
 }
 
 }  // namespace
+
+std::string Narrow(const std::wstring& wide) {
+  if (wide.empty()) return std::string();
+  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) return std::string();
+  std::string out(static_cast<std::size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
+  return out;
+}
+
+// One spelling of a full path: no `\\?\` prefix, backslashes and no "." or ".." parts (GetFullPathNameW makes both), ASCII
+// lower case (the fold the LoadLibrary hooks hand their filters, so both sides of a comparison are folded the same way).
+std::wstring Canonical(std::wstring path) {
+  if (path.rfind(L"\\\\?\\", 0) == 0 && path.rfind(L"\\\\?\\UNC\\", 0) != 0) path.erase(0, 4);
+  wchar_t buf[MAX_PATH * 2];
+  const DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, buf, nullptr);
+  if (n > 0 && n < MAX_PATH * 2) path.assign(buf, n);
+  for (wchar_t& c : path) {
+    if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
+  }
+  return path;
+}
+
 
 std::string StreamSha256(HANDLE file, std::size_t chunk_bytes) {
   if (file == INVALID_HANDLE_VALUE || chunk_bytes == 0 || chunk_bytes > 0x7fffffff) return std::string();

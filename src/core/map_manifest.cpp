@@ -804,11 +804,6 @@ bool IsValidVersion(std::string_view version) {
   return VersionParts(version, &parts);
 }
 
-bool IsValidMapId(std::string_view id) {
-  if (id.empty() || id.size() > kMaxMapIdChars || id[0] < 'a' || id[0] > 'z') return false;
-  return std::all_of(id.begin(), id.end(),
-                     [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
-}
 
 bool IsValidChannel(std::string_view channel) {
   if (channel.empty() || channel.size() > kMaxChannelChars) return false;

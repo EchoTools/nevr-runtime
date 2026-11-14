@@ -34,6 +34,7 @@
 #include <nlohmann/json.hpp>
 
 #include "abi/echovr_functions.h"
+#include "core/log_text.h"
 #include "core/logging.h"
 #include "nevr/resource_set.h"
 #include "runtime/patch/image_file_range.h"
@@ -184,25 +185,9 @@ bool LabelOk(const char* label) {
   return true;
 }
 
-// Text from outside (a plugin id, a label not yet checked, another registry's label) made safe for a quoted log
-// field: printable ASCII but '"' and '\\', every other byte as '?', at most kMaxLabel bytes. It is written into `out`,
-// so a line on an out-of-memory path, where nothing may allocate, shows the text as every other line does.
-const char* PrintableInto(const char* text, char (&out)[kMaxLabel + 1]) {
-  std::size_t n = 0;
-  for (; text != nullptr && text[n] != '\0' && n < kMaxLabel; ++n) {
-    const unsigned char c = static_cast<unsigned char>(text[n]);
-    out[n] = (c < 0x20 || c > 0x7e || c == '"' || c == '\\') ? '?' : static_cast<char>(c);
-  }
-  out[n] = '\0';
-  return out;
-}
-
 }  // namespace
 
-std::string Printable(const char* text) {
-  char out[kMaxLabel + 1];
-  return PrintableInto(text, out);
-}
+std::string Printable(const char* text) { return nevr_log_text::Printable(text, kMaxLabel); }
 
 namespace {
 
@@ -606,11 +591,11 @@ int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* des
     Log(EchoVR::LogLevel::Error,
         "[NEVR.RESOURCE] resource set refused plugin=%s reason=out_of_memory (registration ran out of memory; nothing "
         "was registered)",
-        PrintableInto(pluginId, id));
+        nevr_log_text::PrintableInto(pluginId, id));
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.RESOURCE] resource set refused plugin=%s reason=exception (registration threw; nothing was registered)",
-        PrintableInto(pluginId, id));
+        nevr_log_text::PrintableInto(pluginId, id));
   }
   return NEVR_RESOURCES_BAD_FORMAT;
 }

@@ -34,14 +34,6 @@ std::uint64_t CFileOpenHook(const char* path, std::uint32_t flags, HANDLE* out) 
   return OpenThrough(g_cfileOpen, path, flags, out);
 }
 
-std::string Narrow(const std::wstring& wide) {
-  if (wide.empty()) return std::string();
-  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-  if (n <= 0) return std::string();
-  std::string out(static_cast<std::size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-  return out;
-}
 
 // Text from content.json or a path, for a quoted log field: at most 300 bytes of printable ASCII; a quote or any other byte is '?'.
 std::string Printable(const std::string& text) {
