@@ -11,7 +11,7 @@ namespace nevr_map_session_pin {
 // Game thread only. Not wired to a caller yet: the channel's start (a later piece) installs it.
 std::uint64_t SessionLevel();
 
-// One tick of the pin on the game thread. Not wired to a caller yet (see SessionLevel).
+// One tick of the pin on the game thread. The per-frame dispatcher calls it (runtime/frame/tick.cpp, ADR 0048 decision 9).
 void Tick();
 
 }  // namespace nevr_map_session_pin

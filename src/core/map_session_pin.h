@@ -157,7 +157,9 @@ void TickWith(GameAccess& game);
 nlohmann::json LoginEntries();
 
 // The registration's entries (one JSON object each, without "mounted"): the mounted maps, then the staged maps not yet mounted.
-// KNOWN-WRONG #TBD: nothing calls this yet, so a registration carries no pins. The channel's start wires it (ADR 0048 decision 9).
+// KNOWN-WRONG #TBD: nothing calls this, and the registration message has no field to carry it: GameServerRegistrationMessage
+// (gen/cpp/gameservice/v1/gameservice.pb.h) has installed_levels, guilds and features only. The field is a schema change in the
+// BSR proto, then `just proto` (ADR 0048 decision 9).
 std::vector<std::string> RegistrationEntries();
 
 // Forgets the view, the mounted pins, the fetch request and the tick state. For tests.

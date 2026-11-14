@@ -7,6 +7,7 @@
 #include <exception>
 #include <utility>
 
+#include "core/map_groups.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/server_features.h"
 #include "runtime/compat/service_frames.h"
@@ -234,9 +235,16 @@ void Router::LobbyAnswersLocked(const std::string& frame, int connIdx, Effects& 
     if (*kind == nevr_lobby_frame::Kind::Success) {
       nevr_lobby_frame::Decoded success;
       bool wasOpen = false;
-      if (nevr_lobby_frame::Decode(*kind, message.payload, static_cast<std::size_t>(message.length), &success) &&
-          nevr_server_features::Client().ClearForLobby(success.lobby, &wasOpen)) {
-        Log(fx, LogLevel::Info, nevr_server_features::FormatCleared(nevr_lobby_frame::FormatGuidOrNone(success.lobby), wasOpen));
+      if (nevr_lobby_frame::Decode(*kind, message.payload, static_cast<std::size_t>(message.length), &success)) {
+        if (nevr_server_features::Client().ClearForLobby(success.lobby, &wasOpen)) {
+          Log(fx, LogLevel::Info, nevr_server_features::FormatCleared(nevr_lobby_frame::FormatGuidOrNone(success.lobby), wasOpen));
+        }
+        // The session's group is asked for on every success, whether or not the limiter below writes its record (ADR 0048
+        // decision 16; core/map_groups.h decides the id and the record).
+        std::string group;
+        const nevr_maps::SessionGroupRequest request =
+            nevr_maps::RequestSessionGroup(nevr_lobby_frame::FormatGuid(success.group), &group);
+        Log(fx, LogLevel::Info, nevr_maps::SessionGroupRecord(request, group));
       }
     }
     const nevr_lobby_frame::ClientLobbyRecords::Admission admission = clientRecords_.Admit(*kind, now);

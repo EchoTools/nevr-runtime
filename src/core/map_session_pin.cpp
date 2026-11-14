@@ -395,13 +395,14 @@ std::uint64_t SessionLevelWith(GameAccess& game) {
 }
 
 void TickWith(GameAccess& game) {
-  if (!game.Callable()) return;
   {
-    // Nothing listed, nothing mounted, nothing to clear and no leave pending: no decision and no write can follow, so the
-    // game is not called (the tick runs every frame once it is wired).
+    // Nothing listed, nothing mounted, nothing to clear and no leave pending: no decision and no write can follow, so the game is
+    // not called at all, not even to prove its own bytes (Callable reads them and logs a mismatch). The tick runs every frame once
+    // it is wired, so a run with no maps does nothing here.
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_view.listed.empty() && g_mounted.empty() && g_tick.server_set == 0 && !g_tick.leave_pending) return;
   }
+  if (!game.Callable()) return;
   const std::uint64_t lobby = game.Lobby();
   if (game.IsServer())
     ServerTick(game, lobby);

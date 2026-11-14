@@ -25,6 +25,7 @@
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/server_features.h"
+#include "core/map_groups.h"
 #include "runtime/compat/session_router.h"
 #include "runtime/tests/lobby_record_golden.h"
 
@@ -3445,6 +3446,25 @@ RemoteId OpenSessionWithMatchmaker(Rig& rig) {
 // A find and the success and the failure that answer it: each record is the golden bytes, and the find writes no record
 // of its own. Both answers still reach the game. Failure caught: a record missing or in the wrong place, a field guessed,
 // or a request written as if it were an answer.
+// The groups the channel was asked for, by a session success (core/map_groups.h). A request is recorded here, not made.
+std::vector<std::string> g_requestedGroups;
+void RecordGroupRequest(const std::string& group) { g_requestedGroups.push_back(group); }
+
+// A session success asks the channel for its group, and the record says so: one request, one record, the group as its lower-case
+// id. Failure caught: the request missing from the success path (the channel never hears of the session's group).
+void TestASessionSuccessAsksForItsGroup() {
+  const CaseScope scope("session success asks for its group");
+  namespace golden = lobby_record_golden;
+  g_requestedGroups.clear();
+  nevr_maps::SetSessionGroupRequest(&RecordGroupRequest);
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, golden::SuccessPayload()), true);
+  nevr_maps::SetSessionGroupRequest(nullptr);
+  QCHECK(g_requestedGroups == std::vector<std::string>{"44332211-6655-8877-99aa-bbccddeeffb0"});
+  QCHECK(RecordLines(rig.logs, "[NEVR.MAPS] session group requested").size() == 1);
+}
+
 void TestAnswerRecordsMatchTheGoldenLines() {
   const CaseScope scope("lobby records golden");
   namespace golden = lobby_record_golden;
@@ -3830,6 +3850,7 @@ int main() {
   TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap();
   TestRelabelToMatchmakerChecksTheCap();
   TestAnswerRecordsMatchTheGoldenLines();
+  TestASessionSuccessAsksForItsGroup();
   TestNoRecordsWithoutTheOption();
   TestServiceFramesLineIsWrittenOncePerRemote();
   TestServiceFramesLineNamesAFrameWithoutTheMarkerUnknown();

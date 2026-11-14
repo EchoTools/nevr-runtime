@@ -76,6 +76,15 @@ inline constexpr std::size_t kMaxChannelChars = 64;
 // leaves room for both forms an id has had or may take: a canonical UUID is 36 characters and a 64-bit snowflake at most 20
 // digits; 64 holds either with room to spare and stays far below a path component's limit (255 bytes on NTFS and ext4).
 inline constexpr std::size_t kGroupIdMaxBytes = 64;
+// A lobby group id held as an opaque string: 1 to kGroupIdMaxBytes characters of [0-9a-z-], safe as a URL path segment and a
+// directory name. Never parsed as a UUID. Here, not in map_manifest.cpp, so the group rules (core/map_groups.h) need no manifest parser.
+inline bool IsPathSafeGroupId(std::string_view group) {
+  if (group.empty() || group.size() > kGroupIdMaxBytes) return false;
+  for (const char c : group) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return false;
+  }
+  return true;
+}
 // A map id: [a-z][a-z0-9_]{0,54}. The Quest level name is the id and kQuestLevelSuffix, and a level name is at most
 // kMaxSymbolNameChars, so an id leaves room for the suffix.
 inline constexpr const char* kQuestLevelSuffix = "_lowspec";
