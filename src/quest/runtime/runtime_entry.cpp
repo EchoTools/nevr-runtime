@@ -1,4 +1,4 @@
-// The Quest runtime's entry: the one export of libnevr_runtime.so, NEVR_GetRuntimeApi (core/quest_runtime_abi.h), and the
+// The Quest runtime's entry: the one export of libnevr-runtime.so, NEVR_GetRuntimeApi (core/quest_runtime_abi.h), and the
 // initialize it returns. initialize runs the constructor sequence, RunSentinelConstructor (integration/production_steps.cpp),
 // over this library's own copy of the sentinel's sources (sentinel/CMakeLists.txt, target nevr_quest_runtime). That copy has
 // no load-time entry: entry.cpp leaves its constructor, marker and JNI_OnLoad out when NEVR_QUEST_RUNTIME_LIBRARY is defined,

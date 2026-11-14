@@ -89,20 +89,20 @@ TEST(UpdateNames, AMemberIsTheRuntimeOrOnePluginAndNothingElse) {
 }
 
 TEST(UpdateNames, TheQuestRuntimeIsAMemberOfTheVocabulary) {
-  EXPECT_TRUE(core_names::IsQuestRuntimeMember("libnevr_runtime.so"));
-  EXPECT_STREQ(core_names::kQuestRuntimeMember, "libnevr_runtime.so");
+  EXPECT_TRUE(core_names::IsQuestRuntimeMember("libnevr-runtime.so"));
+  EXPECT_STREQ(core_names::kQuestRuntimeMember, "libnevr-runtime.so");
 }
 
 TEST(UpdateNames, NothingElseIsTheQuestMember) {
-  for (const char* bad : {"../x.so", "lib/x.so", "x.so", "../libnevr_runtime.so", "lib/libnevr_runtime.so",
-                          "libnevr_runtime.so/", "libnevr_runtime.so ", "LIBNEVR_RUNTIME.SO", "nevr-runtime.dll", ""}) {
+  for (const char* bad : {"../x.so", "lib/x.so", "x.so", "../libnevr-runtime.so", "lib/libnevr-runtime.so",
+                          "libnevr-runtime.so/", "libnevr-runtime.so ", "LIBNEVR_RUNTIME.SO", "nevr-runtime.dll", ""}) {
     EXPECT_FALSE(core_names::IsQuestRuntimeMember(bad)) << bad;
   }
 }
 
 TEST(UpdateNames, PcStillRefusesTheQuestMember) {
   core_names::Member member;
-  EXPECT_FALSE(core_names::ParseMember("libnevr_runtime.so", &member));
+  EXPECT_FALSE(core_names::ParseMember("libnevr-runtime.so", &member));
 }
 
 // ---- files ---------------------------------------------------------------------------------------------------------

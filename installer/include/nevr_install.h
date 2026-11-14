@@ -73,7 +73,7 @@ int NevrPcStage(NevrSession *s, const char *root_dir, const char *current_json, 
  * <root_dir>/update/staging/<version>/proof/, the manifest pair that listed the staged file. The first member names the runtime: the file
  * the release is identified by for current_json and the quarantine. The two profiles are the constants PC_PROFILE (what
  * NevrPcStage uses: the members "nevr-runtime.dll" and "plugins/<asterisk>.dll") and QUEST_PROFILE in installer/src/stage.rs:
- *   Quest: {"kind":"quest-runtime","members":["libnevr_runtime.so"]}
+ *   Quest: {"kind":"quest-runtime","members":["libnevr-runtime.so"]}
  * A kind the core does not stage, an unknown key, a member that is not a safe path: NEVR_FAILED, nothing fetched. A null
  * profile_json is NEVR_BAD_ARGUMENT. A session opened with platform "pc" must name the root the host loads from (or the
  * config's dev_nevr_root); one opened with platform "quest" takes any absolute root. Result and current_json as NevrPcStage;

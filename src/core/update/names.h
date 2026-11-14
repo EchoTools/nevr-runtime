@@ -19,7 +19,7 @@
 // paths: "nevr-runtime.dll" or "plugins/<name>.dll", the spelling of the core's NevrPcStage result
 // (installer/src/stage.rs, staged_member).
 //
-// The Quest member, "libnevr_runtime.so", is a member of the vocabulary and is not a ParseMember member: ParseMember is
+// The Quest member, "libnevr-runtime.so", is a member of the vocabulary and is not a ParseMember member: ParseMember is
 // the PC rule and still refuses it, so a PC staged.json or swap.json naming the .so is refused as before. Its own
 // predicate is IsQuestRuntimeMember.
 
@@ -42,7 +42,7 @@ inline constexpr char kFailedDir[] = "failed";
 inline constexpr char kPluginsDir[] = "plugins";
 inline constexpr char kRuntimeFile[] = "nevr-runtime.dll";
 inline constexpr char kRuntimeMember[] = "nevr-runtime.dll";
-inline constexpr char kQuestRuntimeMember[] = "libnevr_runtime.so";
+inline constexpr char kQuestRuntimeMember[] = "libnevr-runtime.so";
 inline constexpr char kPluginPrefix[] = "plugins/";
 inline constexpr char kPluginSuffix[] = ".dll";
 inline constexpr std::size_t kMaxNameLength = 64;
@@ -71,7 +71,7 @@ struct Member {
 /// separator, a backslash, a drive, "..", an absolute path, another extension, and the Quest member.
 bool ParseMember(std::string_view path, Member* out) noexcept;
 
-/// True only for "libnevr_runtime.so", the Quest runtime's member, compared exactly.
+/// True only for "libnevr-runtime.so", the Quest runtime's member, compared exactly.
 bool IsQuestRuntimeMember(std::string_view path) noexcept;
 
 /// The member's path as the files spell it ("nevr-runtime.dll", "plugins/<name>.dll").

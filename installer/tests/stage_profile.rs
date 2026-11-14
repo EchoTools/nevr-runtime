@@ -13,9 +13,9 @@ use std::ffi::{c_char, CStr, CString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const QUEST_PROFILE: &str = r#"{"kind":"quest-runtime","members":["libnevr_runtime.so"]}"#;
+const QUEST_PROFILE: &str = r#"{"kind":"quest-runtime","members":["libnevr-runtime.so"]}"#;
 const PC_PROFILE: &str = r#"{"kind":"windows-zip","members":["nevr-runtime.dll","plugins/*.dll"]}"#;
-const MEMBER: &str = "libnevr_runtime.so";
+const MEMBER: &str = "libnevr-runtime.so";
 /// The most members a profile may list; one more is refused.
 const MAX_MEMBERS: usize = 16;
 const SO: &[u8] = b"\x7fELF a runtime shared object with some bytes in it";
@@ -172,7 +172,7 @@ fn a_quest_runtime_is_staged_as_one_file_with_the_stored_manifest_pair_beside_it
     assert_eq!(std::fs::read(dir.join(MEMBER)).unwrap(), SO);
     assert_eq!(std::fs::read(dir.join("proof/manifest.json")).unwrap(), w.manifest, "the pair that passed step 2 is kept beside the file");
     assert_eq!(std::fs::read(dir.join("proof/manifest.json.sig")).unwrap(), w.sig);
-    assert_eq!(tree(&staging(w.root.path())), vec!["1.0.0", "1.0.0/libnevr_runtime.so", "1.0.0/proof", "1.0.0/proof/manifest.json", "1.0.0/proof/manifest.json.sig"], "no partial folder, no other file");
+    assert_eq!(tree(&staging(w.root.path())), vec!["1.0.0", "1.0.0/libnevr-runtime.so", "1.0.0/proof", "1.0.0/proof/manifest.json", "1.0.0/proof/manifest.json.sig"], "no partial folder, no other file");
     let work: Vec<_> = std::fs::read_dir(w.root.path().join("update/work")).map(|d| d.map(|e| e.unwrap().file_name()).collect()).unwrap_or_default();
     assert!(work.is_empty(), "the download is removed once staged: {work:?}");
     let fetch = log(w.root.path()).into_iter().find(|r| r["event"] == "artifact_fetch").unwrap();
@@ -258,8 +258,8 @@ fn a_profile_that_is_not_well_formed_is_refused_and_writes_nothing() {
         json!({"kind": "quest-runtime"}).to_string(),
         json!({"kind": "quest-runtime", "members": []}).to_string(),
         json!({"kind": "quest-runtime", "members": [MEMBER, "other.so"]}).to_string(),
-        json!({"kind": "quest-runtime", "members": ["../libnevr_runtime.so"]}).to_string(),
-        json!({"kind": "quest-runtime", "members": ["lib/libnevr_runtime.so"]}).to_string(),
+        json!({"kind": "quest-runtime", "members": ["../libnevr-runtime.so"]}).to_string(),
+        json!({"kind": "quest-runtime", "members": ["lib/libnevr-runtime.so"]}).to_string(),
         json!({"kind": "quest-runtime", "members": ["*.so"]}).to_string(),
         json!({"kind": "quest-runtime", "members": [7]}).to_string(),
         json!({"kind": "quest-runtime", "members": [MEMBER], "extra": true}).to_string(),
