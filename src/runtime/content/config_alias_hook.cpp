@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/config_alias.h"
+#include "core/hex_bytes.h"
 #include "core/logging.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/config.h"
@@ -31,6 +32,9 @@ namespace addr = nevr_patch_addresses;
 
 // More levels than this is not a table this code understands: it reads as unreadable.
 constexpr std::uint64_t kMaxGameSpaces = 1024;
+// A level table entry is two 8-byte words: the level symbol, then the level resource.
+constexpr std::uint64_t kEntryWords = 2;
+constexpr std::uint64_t kEntryResourceWord = 1;
 // splitmix64 constants (the finaliser Mix folds with) and its shifts.
 constexpr std::uint64_t kMixIncrement = 0x9e3779b97f4a7c15ull;
 constexpr std::uint64_t kMixMultiplierA = 0xbf58476d1ce4e5b9ull;
@@ -125,7 +129,7 @@ bool ReadsEnabledAs(const void* resource, std::uint64_t level) {
 bool Lists(const LevelTable& table, const void* resource, std::uint64_t level) {
   const auto value = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(resource));
   for (std::uint64_t i = 0; i < table.count; ++i) {
-    if (table.entries[2 * i] == level && table.entries[2 * i + 1] == value) return true;
+    if (table.entries[kEntryWords * i] == level && table.entries[kEntryWords * i + kEntryResourceWord] == value) return true;
   }
   return false;
 }
@@ -146,7 +150,7 @@ bool StillEnabled(void* ctx, const void* resource, std::uint64_t level) {
 
 void AppendLoaded(const LevelTable& table, std::vector<std::uint64_t>* levels) {
   for (std::uint64_t i = 0; i < table.count; ++i) {
-    if (table.entries[2 * i + 1] != 0) levels->push_back(table.entries[2 * i]);
+    if (table.entries[kEntryWords * i + kEntryResourceWord] != 0) levels->push_back(table.entries[kEntryWords * i]);
   }
 }
 
@@ -159,7 +163,7 @@ std::uint64_t Mix(std::uint64_t h, std::uint64_t value) {
 
 std::uint64_t MixTable(std::uint64_t h, const LevelTable& table) {
   h = Mix(h, table.count);
-  for (std::uint64_t i = 0; i < 2 * table.count; ++i) h = Mix(h, table.entries[i]);
+  for (std::uint64_t i = 0; i < kEntryWords * table.count; ++i) h = Mix(h, table.entries[i]);
   return h;
 }
 
@@ -370,28 +374,18 @@ constexpr std::uint64_t kRefreshVa = nevr::ECHOVR_DEFAULT_IMAGE_BASE + addr::NET
 constexpr std::uint8_t kRefreshPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74,
                                              0x24, 0x20, 0x55, 0x57, 0x41, 0x56, 0x48, 0x8d};
 
-std::string Hex(const std::uint8_t* bytes, std::size_t size) {
-  static const char kHex[] = "0123456789abcdef";
-  std::string out;
-  for (std::size_t i = 0; i < size; ++i) {
-    out += kHex[bytes[i] >> 4];
-    out += kHex[bytes[i] & 15];
-  }
-  return out;
-}
-
 // The game function at `va` when its first bytes are `prologue`; null, logged with `consequence`, otherwise.
 void* PinnedTarget(std::uint64_t va, const std::uint8_t* prologue, std::size_t size, const char* what,
                    const char* consequence) {
   void* target = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), va);
   if (target != nullptr && nevr::ValidatePrologue(target, prologue, size)) return target;
   const std::string actual = target != nullptr && nevr_crash_recovery::IsReadableMemory(target, size)
-                                 ? Hex(static_cast<const std::uint8_t*>(target), size)
+                                 ? nevr_hex::Bytes(static_cast<const std::uint8_t*>(target), size)
                                  : std::string("unreadable");
   Log(EchoVR::LogLevel::Warning,
       "[NEVR.MAPS] config_alias %s not pinned va=0x%llx expected=%s actual=%s (the game build is not the one this "
       "hook was written against, so %s)",
-      what, static_cast<unsigned long long>(va), Hex(prologue, size).c_str(), actual.c_str(), consequence);
+      what, static_cast<unsigned long long>(va), nevr_hex::Bytes(prologue, size).c_str(), actual.c_str(), consequence);
   return nullptr;
 }
 

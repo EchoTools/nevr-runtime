@@ -8,6 +8,8 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -57,12 +59,23 @@ namespace {
 using nevr_config_alias::kArenaRulesKey;
 
 constexpr std::uint64_t kAlias = 0x6216cd74aba74633ull;  // rad_hash("m1_arena_rules")
-constexpr std::uint64_t kMain = 0x1000, kSub = 0x1001, kStock = 0x9000, kOtherKey = 0x4242;
+constexpr std::uint64_t kMain = 0x1000, kSub = 0x1001, kStock = 0x9000, kOtherKey = 0x4242, kUnaskedKey = 0x5555;
+constexpr std::uint64_t kResourceBase = 0x7700;  // a non-null level resource per level in the fake tables
+constexpr std::uintptr_t kLobbyFirst = 0xc1000, kLobbySecond = 0xc2000;
+constexpr std::uint64_t kUnreadableTableCount = 5000;  // over the reader's bound: the tables read as unreadable
+constexpr std::int64_t kLevelFailure = 7;              // a nonzero Enable or Disable result
+constexpr FLOAT kStockRoundTime = 300.0f, kAliasRoundTime = 200.0f, kConfigRoundTime = 240.0f, kOtherRoundTime = 1.0f;
+constexpr FLOAT kMercyConfigured = 7.0f;
+constexpr std::size_t kPointerTextBytes = 19;  // "0x" + 16 hex digits + NUL
+constexpr std::size_t kContextBytes = 0x8600;  // the game context's size up to the net game pointer
+constexpr std::size_t kNetGameBytes = 0x100;   // the net game's size up to the client lobby pointer
+constexpr std::size_t kGameObjectBytes = 0x2000;  // the game object's size up to its level tables
+constexpr std::size_t kLevelEntryWords = 2;       // {level symbol, level resource}
 
 struct Record {
   FLOAT round_time;
 };
-Record g_stockRules{300.0f}, g_aliasRules{200.0f}, g_otherRecord{1.0f};
+Record g_stockRules{kStockRoundTime}, g_aliasRules{kAliasRoundTime}, g_otherRecord{kOtherRoundTime};
 
 bool g_aliasRecordPresent = true;
 std::vector<std::uint64_t> g_keysAsked;
@@ -86,10 +99,10 @@ VOID CaptureLog(EchoVR::LogLevel, const CHAR* message) { g_lines.emplace_back(me
 bool HoldsAll(void*, const std::string&, std::uint64_t) { return true; }
 
 // The game context holds the net game at CONTEXT_NETGAME_OFFSET; the net game holds the game object at +8 and the
-// client lobby at +0x40; the game object holds the two level tables. Nothing else is read.
-std::vector<unsigned char> g_context(0x8600, 0);
-std::vector<unsigned char> g_netGame(0x100, 0);
-std::vector<unsigned char> g_gameObject(0x2000, 0);
+// client lobby at NETGAME_CLIENT_LOBBY_OFFSET; the game object holds the two level tables. Nothing else is read.
+std::vector<unsigned char> g_context(kContextBytes, 0);
+std::vector<unsigned char> g_netGame(kNetGameBytes, 0);
+std::vector<unsigned char> g_gameObject(kGameObjectBytes, 0);
 std::vector<std::uint64_t> g_disabledSpaces;  // {level symbol, level resource} pairs
 std::vector<std::uint64_t> g_enabledSpaces;
 
@@ -98,12 +111,12 @@ void Put(std::vector<unsigned char>* bytes, std::uintptr_t offset, T value) {
   std::memcpy(bytes->data() + offset, &value, sizeof(value));
 }
 
-void SetClientLobby(std::uintptr_t lobby) { Put(&g_netGame, 0x40, lobby); }
+void SetClientLobby(std::uintptr_t lobby) { Put(&g_netGame, nevr_patch_addresses::NETGAME_CLIENT_LOBBY_OFFSET, lobby); }
 
 void WriteTable(const std::vector<std::uint64_t>& pairs, std::uintptr_t data_offset, std::uintptr_t count_offset) {
   const std::uint64_t* entries = pairs.empty() ? nullptr : pairs.data();
   Put(&g_gameObject, data_offset, entries);
-  Put(&g_gameObject, count_offset, static_cast<std::uint64_t>(pairs.size() / 2));
+  Put(&g_gameObject, count_offset, static_cast<std::uint64_t>(pairs.size() / kLevelEntryWords));
 }
 
 // The loaded levels that are not enabled (game object +0x1F90).
@@ -111,7 +124,7 @@ void SetLoadedLevels(const std::vector<std::uint64_t>& levels) {
   g_disabledSpaces.clear();
   for (const std::uint64_t level : levels) {
     g_disabledSpaces.push_back(level);
-    g_disabledSpaces.push_back(0x7700 + level);  // a non-null resource
+    g_disabledSpaces.push_back(kResourceBase + level);  // a non-null resource
   }
   WriteTable(g_disabledSpaces, nevr_patch_addresses::GAME_SPACE_TABLE_OFFSET,
              nevr_patch_addresses::GAME_SPACE_TABLE_COUNT_OFFSET);
@@ -129,14 +142,15 @@ void SetEnabledSpaces(const std::vector<std::pair<std::uint64_t, const void*>>& 
 
 // A count no level table has: the game's tables read as unreadable and source B decides.
 void BreakTheTables() {
-  static const std::uint64_t kSomewhere[2] = {kStock, 0x7700};
+  static const std::uint64_t kSomewhere[kLevelEntryWords] = {kStock, kResourceBase};
   Put(&g_gameObject, nevr_patch_addresses::GAME_SPACE_TABLE_OFFSET, &kSomewhere[0]);
-  Put(&g_gameObject, nevr_patch_addresses::GAME_SPACE_TABLE_COUNT_OFFSET, std::uint64_t{5000});
+  Put(&g_gameObject, nevr_patch_addresses::GAME_SPACE_TABLE_COUNT_OFFSET, kUnreadableTableCount);
 }
 
-// A level resource: its level symbol at +0x58 and its flags at +0xC40.
+// A level resource: its level symbol at LEVEL_RESOURCE_LEVEL_OFFSET and its flags dword at LEVEL_RESOURCE_FLAGS_OFFSET.
 struct FakeResource {
-  std::vector<unsigned char> bytes = std::vector<unsigned char>(0xC48, 0);
+  std::vector<unsigned char> bytes =
+      std::vector<unsigned char>(nevr_patch_addresses::LEVEL_RESOURCE_FLAGS_OFFSET + sizeof(std::uint32_t), 0);
   explicit FakeResource(std::uint64_t level) { Put(&bytes, nevr_patch_addresses::LEVEL_RESOURCE_LEVEL_OFFSET, level); }
   void* get() { return bytes.data(); }
   void SetDisabled() {
@@ -166,7 +180,7 @@ class ConfigAliasHookTest : public ::testing::Test {
     nevr_config_alias::Unstage("owner-m1");
     Put(&g_context, nevr_patch_addresses::CONTEXT_NETGAME_OFFSET, static_cast<void*>(g_netGame.data()));
     Put(&g_netGame, nevr_patch_addresses::NETGAME_GAME_OFFSET, static_cast<void*>(g_gameObject.data()));
-    SetClientLobby(0xc1000);
+    SetClientLobby(kLobbyFirst);
     g_pGame = g_context.data();
     SetLoadedLevels({});
     SetEnabledSpaces({});
@@ -201,8 +215,8 @@ TEST_F(ConfigAliasHookTest, WithNoAliasEveryLookupIsTheGamesOwn) {
   SetLoadedLevels({kStock});
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_stockRules);
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kOtherKey), &g_otherRecord);
-  EXPECT_EQ(nevr_config_alias_hook::LookupDetour(0x5555), nullptr);
-  EXPECT_EQ(g_keysAsked, (std::vector<std::uint64_t>{kArenaRulesKey, kOtherKey, 0x5555}));
+  EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kUnaskedKey), nullptr);
+  EXPECT_EQ(g_keysAsked, (std::vector<std::uint64_t>{kArenaRulesKey, kOtherKey, kUnaskedKey}));
   EXPECT_TRUE(g_lines.empty());
 }
 
@@ -282,9 +296,9 @@ TEST_F(ConfigAliasHookTest, ConfiguredRoundTimeWinsOverAnActiveAlias) {
   PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
   ASSERT_EQ(root, &g_aliasRules);
   g_arenaRoundTime = 0.0f;
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 200.0f);
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kAliasRoundTime);
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
   g_arenaRoundTime = 0.0f;
 }
 
@@ -324,13 +338,13 @@ TEST_F(ConfigAliasHookTest, AFailedEnableOrDisableIsReturnedAndNotRecorded) {
   StageAndArm();
   BreakTheTables();
   FakeResource sub(kSub);
-  g_levelResult = 7;
-  EXPECT_EQ(nevr_config_alias_hook::EnableDetour(sub.get()), 7);
+  g_levelResult = kLevelFailure;
+  EXPECT_EQ(nevr_config_alias_hook::EnableDetour(sub.get()), kLevelFailure);
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_stockRules);
   g_levelResult = 0;
   nevr_config_alias_hook::EnableDetour(sub.get());
-  g_levelResult = 7;
-  EXPECT_EQ(nevr_config_alias_hook::DisableDetour(sub.get()), 7);
+  g_levelResult = kLevelFailure;
+  EXPECT_EQ(nevr_config_alias_hook::DisableDetour(sub.get()), kLevelFailure);
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_aliasRules);
 }
 
@@ -356,9 +370,9 @@ TEST_F(ConfigAliasHookTest, ASessionChangeClearsTheLevelEvents) {
   FakeResource sub(kSub);
   nevr_config_alias_hook::EnableDetour(sub.get());
   ASSERT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_aliasRules);
-  SetClientLobby(0xc2000);
+  SetClientLobby(kLobbySecond);
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_stockRules);
-  SetClientLobby(0xc1000);
+  SetClientLobby(kLobbyFirst);
   EXPECT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_stockRules);
 }
 
@@ -398,12 +412,33 @@ TEST_F(ConfigAliasHookTest, AnAliasLiveOverrideLogsOncePerLoadAndReturnsTheConfi
   nevr_config_alias_hook::ReconcileIfFrameMoved();
   PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
   ASSERT_EQ(root, &g_aliasRules);
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
-  EXPECT_EQ(LinesWith("[NEVR.MAPS] config_alias override key=round_time map=m1 map_value=200.000 config_value=240.000"),
-            1u);
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_EQ(LinesWith("[NEVR.MAPS] config_alias override key=round_time map=m1 config_value=240.000"), 1u);
+  EXPECT_EQ(LinesWith("map_value"), 0u);  // the line does not say what the map's record held
   EXPECT_EQ(LinesWith("config_alias override"), 1u);
+  g_arenaRoundTime = 0.0f;
+}
+
+// The override line is written inside the game's CJson_GetFloat: a failed allocation there must not unwind into the game.
+// The value is still config.yaml's, the line is skipped, one Warning is written for the process, and the next call logs.
+TEST_F(ConfigAliasHookTest, AFailedAllocationInTheOverrideLineStillReturnsTheConfigValueAndWarnsOnce) {
+  EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
+  StageAndArm();
+  SetLoadedLevels({kSub});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();
+  PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
+  ASSERT_EQ(root, &g_aliasRules);
+  g_arenaRoundTime = kConfigRoundTime;
+  g_failNextAllocation = true;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_FALSE(g_failNextAllocation.load());
+  EXPECT_EQ(LinesWith("config_alias override"), 0u);
+  EXPECT_EQ(LinesWith("[NEVR.MAPS] config_alias reason=override_log_failed key=round_time"), 1u);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_EQ(LinesWith("config_alias override key=round_time map=m1"), 1u);
+  EXPECT_EQ(LinesWith("reason=override_log_failed"), 1u);
   g_arenaRoundTime = 0.0f;
 }
 
@@ -414,12 +449,12 @@ TEST_F(ConfigAliasHookTest, AnOverrideIsLoggedAgainInANewLoad) {
   SetLoadedLevels({kSub});
   nevr_config_alias_hook::ReconcileIfFrameMoved();
   PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
-  StageAndArm();  // the next load: a new generation of the alias table
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
+  StageAndArm();  // the next load: Stage drops the published set, so the alias goes live again in a new epoch
   nevr_config_alias_hook::ReconcileIfFrameMoved();
   root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
   EXPECT_EQ(LinesWith("config_alias override key=round_time map=m1"), 2u);
   g_arenaRoundTime = 0.0f;
 }
@@ -432,43 +467,78 @@ TEST_F(ConfigAliasHookTest, AReloadedSublevelLogsTheOverrideAgainWithoutAStage) 
   SetLoadedLevels({kSub});
   nevr_config_alias_hook::ReconcileIfFrameMoved();
   PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
   SetLoadedLevels({});
   nevr_config_alias_hook::ReconcileIfFrameMoved();  // the alias is not live
   SetLoadedLevels({kSub});
   nevr_config_alias_hook::ReconcileIfFrameMoved();  // live again, no Stage, no Arm
   root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
   ASSERT_EQ(root, &g_aliasRules);
-  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), kConfigRoundTime);
   EXPECT_EQ(LinesWith("config_alias override key=round_time map=m1"), 2u);
   g_arenaRoundTime = 0.0f;
 }
 
-// A read of another record under the same path while the alias is live returns config.yaml's value, and is not reported as
-// the map's: the line is written only for the aliased record the lookup answered.
-TEST_F(ConfigAliasHookTest, AReadOfAnotherRecordWhileTheAliasIsLiveIsNotReportedAsTheMaps) {
+// The line does not depend on which record the game read: with an alias live, a read of an unrelated record under one of the
+// three keys is overridden and logged (it says config.yaml overrode the alias for the key, nothing about the record), and a
+// read of any other path is neither overridden nor logged.
+TEST_F(ConfigAliasHookTest, AnUnrelatedRecordLogsOnlyForTheThreeKeys) {
   EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
   StageAndArm();
   SetLoadedLevels({kSub});
   nevr_config_alias_hook::ReconcileIfFrameMoved();
   ASSERT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_aliasRules);
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), 240.0f);
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(&g_otherRecord, "other_setting", 0.0f, 0), kOtherRoundTime);
   EXPECT_EQ(LinesWith("config_alias override"), 0u);
+  EXPECT_EQ(CJsonGetFloatHook(&g_otherRecord, "rules|arena|round_time_private", 0.0f, 0), kOtherRoundTime);
+  EXPECT_EQ(LinesWith("config_alias override"), 0u);
+  EXPECT_EQ(CJsonGetFloatHook(&g_otherRecord, "rules|arena|round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_EQ(LinesWith("config_alias override key=round_time map=m1 config_value=240.000"), 1u);
   g_arenaRoundTime = 0.0f;
+}
+
+// The Debug record carries the record the game's read was made on beside the record the lookup answered, and whether they
+// are the same, once per map and key per live epoch, so one live run shows which record the arena values are read from.
+TEST_F(ConfigAliasHookTest, TheRootCheckRecordCarriesBothPointersOncePerMapAndKey) {
+  EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
+  StageAndArm();
+  SetLoadedLevels({kSub});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();
+  ASSERT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_aliasRules);
+  g_arenaRoundTime = kConfigRoundTime;
+  const auto text = [](const void* p) {
+    char buffer[kPointerTextBytes];
+    std::snprintf(buffer, sizeof buffer, "0x%llx", static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(p)));
+    return std::string(buffer);
+  };
+  EXPECT_EQ(CJsonGetFloatHook(&g_otherRecord, "round_time", 0.0f, 0), kConfigRoundTime);
+  EXPECT_EQ(LinesWith("config_alias root_check key=round_time map=m1 root=" + text(&g_otherRecord) +
+                      " live_record=" + text(&g_aliasRules) + " equal=false"),
+            1u);
+  EXPECT_EQ(CJsonGetFloatHook(&g_aliasRules, "round_time", 0.0f, 0), kConfigRoundTime);  // same map and key: no second record
+  EXPECT_EQ(LinesWith("config_alias root_check"), 1u);
+  EXPECT_EQ(CJsonGetFloatHook(&g_aliasRules, "mercy_win_point_spread", 0.0f, 0), kAliasRoundTime);  // not configured: the game's read stands
+  g_arenaMercyScore = kMercyConfigured;
+  EXPECT_EQ(CJsonGetFloatHook(&g_aliasRules, "mercy_win_point_spread", 0.0f, 0), kMercyConfigured);
+  EXPECT_EQ(LinesWith("config_alias root_check key=mercy_win_point_spread map=m1 root=" + text(&g_aliasRules) +
+                      " live_record=" + text(&g_aliasRules) + " equal=true"),
+            1u);
+  g_arenaRoundTime = 0.0f;
+  g_arenaMercyScore = 0.0f;
 }
 
 // With no alias live the override still applies config.yaml's value, and nothing is logged about a map.
 TEST_F(ConfigAliasHookTest, WithNoAliasLiveTheOverrideIsTheConfigValueAndNoLine) {
   EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
-  g_arenaRoundTime = 240.0f;
-  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), 240.0f);
+  g_arenaRoundTime = kConfigRoundTime;
+  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), kConfigRoundTime);
   EXPECT_TRUE(g_lines.empty());
   StageAndArm();
   SetLoadedLevels({});  // staged and armed, but no level of the map is loaded: the alias is not live
   nevr_config_alias_hook::ReconcileIfFrameMoved();
-  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), kConfigRoundTime);
   EXPECT_EQ(LinesWith("config_alias override"), 0u);
   g_arenaRoundTime = 0.0f;
 }

@@ -123,7 +123,7 @@ bool ForwardRecordToHost(LogLevel level, const char* event, const LogField* fiel
   return sink != nullptr && sink(level, event, fields, count);
 }
 
-const char* HexString(char (&buf)[19], std::uint64_t value) {
+const char* HexString(char (&buf)[kHexStringSize], std::uint64_t value) {
   std::snprintf(buf, sizeof(buf), "0x%016llx", static_cast<unsigned long long>(value));
   return buf;
 }
