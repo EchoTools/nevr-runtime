@@ -16,6 +16,7 @@
 #include <type_traits>
 
 #include "core/quest_runtime_abi.h"
+#include "quest/sentinel/build_variant.h"
 
 #ifdef _WIN32
 #error "core/quest_runtime_abi.h must not pull in <windows.h>; this file is compiled for Linux and Android"
@@ -196,6 +197,17 @@ void TestCommonHeader() {
          "the entry is one name on both platforms");
 }
 
+// The variant word the runtime accepts ends at build_variant::kLastVariantWord (runtime_entry.cpp refuses a larger one). That
+// word names a variant, and the word after it has no name in VariantName (its fallback is "none"), so an enumerator added after
+// kArena fails here until kLastVariantWord follows it.
+void TestVariantWord() {
+  namespace bv = nevr_quest::build_variant;
+  Expect(std::string_view(bv::VariantName(static_cast<bv::Variant>(bv::kLastVariantWord))) != "none",
+         "the last variant word names a variant");
+  Expect(std::string_view(bv::VariantName(static_cast<bv::Variant>(bv::kLastVariantWord + 1))) == "none",
+         "the word after the last variant word names no variant");
+}
+
 }  // namespace
 
 int main() {
@@ -203,6 +215,7 @@ int main() {
   TestHostContext();
   TestCapabilities();
   TestCommonHeader();
+  TestVariantWord();
   if (g_failures != 0) return 1;
   std::printf("quest_runtime_abi_test: layout pinned (host context %zu bytes, runtime api %zu bytes) and validators pass\n",
               sizeof(NevrQuestHostContext), sizeof(NevrQuestRuntimeApi));

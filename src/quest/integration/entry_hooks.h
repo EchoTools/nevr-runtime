@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "quest/sentinel/got_hook.h"
+#include "quest/sentinel/quest_config.h"
 #include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest::integration {

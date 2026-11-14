@@ -25,6 +25,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace nevr_quest::build_variant {
 
@@ -35,6 +36,11 @@ inline constexpr std::size_t kMaxStampBytes = 32;
 
 enum class Variant { kNone, kQ15t, kCombat, kPerfProbe, kArena };
 enum class StampSource { kStamp, kAbsent, kUnreadable, kInvalid };
+
+// The highest variant word a host may hand over (NevrQuestHostContext::variant, core/quest_runtime_abi.h): Variant's last value,
+// in the enum's order. The runtime refuses a larger word, it does not read it as "none". quest_runtime_abi_test pins it: the
+// word after it has no name in VariantName, so an enumerator added after kArena fails that test until this constant follows it.
+inline constexpr std::uint32_t kLastVariantWord = static_cast<std::uint32_t>(Variant::kArena);
 
 struct Stamp {
   Variant variant = Variant::kNone;

@@ -27,7 +27,7 @@ nevr_ht_test(load_timing_rules_test GROUP shared HOST TIMEOUT 120
 # The shim <-> runtime ABI (core/quest_runtime_abi.h on core/runtime_abi_common.h): the AArch64 layout of both structs as
 # static_asserts that restate every offset, the validators, and that the common header compiles with no <windows.h>.
 nevr_ht_test(quest_runtime_abi_test GROUP shared TIMEOUT 60
-  SRC src/quest/tests/quest_runtime_abi_test.cpp)
+  SRC src/quest/tests/quest_runtime_abi_test.cpp src/quest/sentinel/build_variant.cpp)
 nevr_ht_test(elf_build_id_test GROUP shared TIMEOUT 120
   SRC src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp)
 nevr_ht_test(evr_codec_test GROUP shared HOST TIMEOUT 120

@@ -324,6 +324,10 @@ sentinel::GotStatus InstallLoginTitleHook() noexcept { return nevr_quest::login_
 
 }  // namespace nevr_quest::integration
 
+// The load-time entry (the ELF constructor, the marker and JNI_OnLoad) belongs to the sentinel alone. libnevr_runtime.so is built
+// from these sources with NEVR_QUEST_RUNTIME_LIBRARY defined (sentinel/CMakeLists.txt, nevr_quest_runtime); it has no load-time
+// entry, so this block is left out of it.
+#ifndef NEVR_QUEST_RUNTIME_LIBRARY
 extern "C" {
 
 // Ground-truth marker export: proves our code is in the artifact (BAC-2).
@@ -369,3 +373,4 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
 }
 
 }  // extern "C"
+#endif  // NEVR_QUEST_RUNTIME_LIBRARY
