@@ -86,6 +86,14 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_link_libraries(test_script_image_rules PRIVATE GTest::gtest GTest::gtest_main)
   gtest_discover_tests(test_script_image_rules DISCOVERY_MODE PRE_TEST)
 
+  # The shared decisions of a map's script claim (ADR 0048 decisions 6, 7 and 10): the argument, size, digest and claim refusals
+  # in their order, and the token each image-rule refusal reports. Header-only and pure; no file, no Win32, no Log().
+  add_executable(test_map_script_check "${CMAKE_CURRENT_LIST_DIR}/tests/map_script_check_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_script_check_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_script_check PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_map_script_check PRIVATE GTest::gtest GTest::gtest_main)
+  gtest_discover_tests(test_map_script_check DISCOVERY_MODE PRE_TEST)
+
   # The manifest, the package index and the minisign verifier: manifests signed at run time with fixed-seed test keys, and one
   # signature the minisign tool made with a key made for the test (tests/vectors/maps/minisign). Reads only tests/vectors/maps;
   # no network, no game file.

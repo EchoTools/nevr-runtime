@@ -336,6 +336,12 @@ bool RewriteScript(const wchar_t* lower_path, std::wstring* load_path) {
   return true;
 }
 
+bool CarriesScript(const wchar_t* lower_path) {
+  const Pack* pack = g_pack;
+  if (pack == nullptr || lower_path == nullptr) return false;
+  return pack->scripts.count(Canonical(lower_path)) != 0;
+}
+
 std::uint64_t OpenThrough(CFileOpenFn original, const char* path, std::uint32_t flags, HANDLE* out) {
   const Served* served = FindOpen(path, flags);
   if (served == nullptr) return original(path, flags, out);
