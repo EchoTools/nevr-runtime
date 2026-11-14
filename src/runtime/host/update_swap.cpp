@@ -1,10 +1,12 @@
 #include "runtime/host/update_swap.h"
 
+#include "core/update/engine_start.h"
 #include "runtime/ext/plugin_signature.h"
 #include "runtime/host/file_digest.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/update_names.h"
 #include "runtime/host/update_seams.h"
+#include "runtime/lifecycle/update_fs_win32.h"
 
 #include <nlohmann/json.hpp>
 
@@ -13,6 +15,7 @@
 #include <cstdio>
 #include <ctime>
 #include <exception>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <string>
@@ -24,6 +27,12 @@ namespace {
 
 namespace names = update_names;
 using nlohmann::json;
+// The decision over pending.json (ADR 0024, section 6) lives in the engine; these are its vocabulary, shared with the
+// journal and state readers of this file.
+using nevr_update::IsReasonToken;
+using nevr_update::IsSha256Hex;
+using nevr_update::ParsePending;
+using nevr_update::Pending;
 
 std::wstring Widen(std::string_view ascii) {
   std::wstring out;
@@ -45,12 +54,13 @@ bool IsReparsePoint(const std::wstring& path) {
   return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
-bool IsSha256Hex(const std::string& text) {
-  if (text.size() != 64) return false;
-  for (const char c : text) {
-    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-  }
-  return true;
+// The folder as the UTF-8 UpdateFs takes (strict: text that does not convert names nothing). False when it does not convert.
+bool WideToUtf8(const std::wstring& wide, std::string* out) {
+  const int length = static_cast<int>(wide.size());
+  const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.c_str(), length, nullptr, 0, nullptr, nullptr);
+  if (bytes <= 0) return false;
+  out->assign(static_cast<std::size_t>(bytes), '\0');
+  return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.c_str(), length, out->data(), bytes, nullptr, nullptr) == bytes;
 }
 
 std::string UtcNow() {
@@ -76,33 +86,6 @@ bool SameName(const std::string& a, const std::string& b) {
 // damage, and never treated as damage (logging.md Rule 10; ADR 0024, section 4.6). kBad is a file read whole that is
 // not usable: too large, too deep, or not JSON.
 enum class JsonRead { kAbsent, kUnreadable, kBad, kOk };
-
-// True when the text's arrays and objects, outside strings, nest at most `max` deep. nlohmann's parser builds a tree
-// without recursion, but copying or writing one recurses once per level, so a file nested tens of thousands deep would
-// end the process; the text is measured before it is parsed.
-bool NestedAtMost(std::string_view text, std::size_t max) {
-  std::size_t depth = 0;
-  bool in_string = false;
-  bool escaped = false;
-  for (const char c : text) {
-    if (in_string) {
-      if (escaped) {
-        escaped = false;
-      } else if (c == '\\') {
-        escaped = true;
-      } else if (c == '"') {
-        in_string = false;
-      }
-    } else if (c == '"') {
-      in_string = true;
-    } else if (c == '[' || c == '{') {
-      if (++depth > max) return false;
-    } else if ((c == ']' || c == '}') && depth > 0) {
-      --depth;
-    }
-  }
-  return true;
-}
 
 // A JSON file of update\, at most names::kMaxJsonBytes and names::kMaxJsonDepth (ADR 0024, section 4.3). `error` is the
 // Win32 error of a kUnreadable result.
@@ -133,9 +116,8 @@ JsonRead ReadJsonFile(const std::wstring& path, json* out, DWORD* error) {
     return JsonRead::kUnreadable;
   }
   CloseHandle(file);
-  if (read != text.size() || !NestedAtMost(text, names::kMaxJsonDepth)) return JsonRead::kBad;
-  *out = json::parse(text, nullptr, false);
-  return out->is_discarded() ? JsonRead::kBad : JsonRead::kOk;
+  if (read != text.size() || !nevr_update::ParseJsonText(text, out)) return JsonRead::kBad;
+  return JsonRead::kOk;
 }
 
 // The bytes, sha256 and NEVR-BUILD version of a file in the root. Empty fields when it cannot be read.
@@ -252,15 +234,6 @@ bool ParseMembers(const json& list, std::vector<names::Member>* out) {
   return true;
 }
 
-// A reason word: what a load outcome, a failure or the host calls a cause. Lower case, digits and '_', at most 40.
-bool IsReasonToken(const std::string& text) {
-  if (text.empty() || text.size() > 40) return false;
-  for (const char c : text) {
-    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
-  }
-  return true;
-}
-
 bool ParseJournal(const json& doc, Journal* out) {
   if (!doc.is_object()) return false;
   for (const char* key : {"kind", "from", "to", "phase"}) {
@@ -315,48 +288,6 @@ json JournalJson(const Journal& journal) {
     doc["in_sha256"] = shas;
   }
   return doc;
-}
-
-// pending.json (ADR 0024, section 2): {"to": {"version", "sha256"}, "from": {"version", "sha256"} or null,
-// "boot_attempts", "failed_reason": null or a reason word}. `from` is null when the swap found no previous runtime.
-struct Pending {
-  std::string to_version;
-  std::string to_sha256;
-  bool has_from = false;
-  std::string from_version;
-  std::string from_sha256;
-  std::uint64_t boot_attempts = 0;
-  std::string failed_reason;  // empty: null
-};
-
-bool ParsePending(const json& doc, Pending* out) {
-  if (!doc.is_object() || !doc.contains("to") || !doc["to"].is_object() || !doc.contains("boot_attempts") ||
-      !doc["boot_attempts"].is_number_unsigned()) {
-    return false;
-  }
-  const json& to = doc["to"];
-  if (!to.contains("version") || !to["version"].is_string() || !to.contains("sha256") || !to["sha256"].is_string()) return false;
-  out->to_version = to["version"].get<std::string>();
-  out->to_sha256 = to["sha256"].get<std::string>();
-  if (!names::IsVersionName(out->to_version) || !IsSha256Hex(out->to_sha256)) return false;
-  out->boot_attempts = doc["boot_attempts"].get<std::uint64_t>();
-  if (doc.contains("from") && !doc["from"].is_null()) {
-    const json& from = doc["from"];
-    if (!from.is_object() || !from.contains("version") || !from["version"].is_string() || !from.contains("sha256") ||
-        !from["sha256"].is_string()) {
-      return false;
-    }
-    out->from_version = from["version"].get<std::string>();
-    out->from_sha256 = from["sha256"].get<std::string>();
-    if (!names::IsVersionName(out->from_version) || !IsSha256Hex(out->from_sha256)) return false;
-    out->has_from = true;
-  }
-  if (doc.contains("failed_reason") && !doc["failed_reason"].is_null()) {
-    if (!doc["failed_reason"].is_string()) return false;
-    out->failed_reason = doc["failed_reason"].get<std::string>();
-    if (!IsReasonToken(out->failed_reason)) return false;
-  }
-  return true;
 }
 
 // state.json (ADR 0024, section 2): an object; "owned", when present, a list of {"path", "sha256"} in the vocabulary;
@@ -463,6 +394,7 @@ class SwapRun {
   bool Quarantined(const Staged& staged) const;
   UpdateResult Discard(const Staged& staged, const std::string& why);
   DWORD RuntimeWriteError() const;
+  nevr_update::WriteAccess WriteAccessOfRuntime() const;
   bool ClearGenerations(const wchar_t* folder, std::string* linked);
   UpdateResult Swap(const Staged& staged, const std::string& from, const std::string& from_sha256,
                     const std::vector<names::Member>& out);
@@ -915,6 +847,15 @@ DWORD SwapRun::RuntimeWriteError() const {
   return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? 0 : error;
 }
 
+// The in-use question as the engine asks it: a sharing violation is another process mapping the runtime; any other refusal
+// keeps its own error.
+nevr_update::WriteAccess SwapRun::WriteAccessOfRuntime() const {
+  const DWORD error = RuntimeWriteError();
+  if (error == 0) return {nevr_update::WriteAccess::Kind::kWritable, 0};
+  if (error == ERROR_SHARING_VIOLATION) return {nevr_update::WriteAccess::Kind::kInUse, 0};
+  return {nevr_update::WriteAccess::Kind::kNotWritable, error};
+}
+
 UpdateResult SwapRun::SwapStaged() {
   json doc;
   Staged staged;
@@ -1354,76 +1295,88 @@ SwapRun::RollbackEnd SwapRun::DoRollback(const Pending& pending, const std::stri
   return RollbackEnd::kDone;
 }
 
-// ADR 0024, section 6, R2: what a start does with a release that is pending.
+// ADR 0024, section 6, R2: what a start does with a release that is pending. The decision is nevr_update::DecidePending
+// over the facts read here through UpdateFs (the Win32 implementation); this method carries it out: the removals, the
+// count, the rollback and the records, in the order the decision names.
 SwapRun::PendingStep SwapRun::DecidePending(UpdateResult* stop) {
-  json doc;
-  DWORD error = 0;
-  const JsonRead read = ReadJsonFile(UpdateFile(names::kPendingJson), &doc, &error);
-  if (read == JsonRead::kAbsent) return PendingStep::kNone;
-  if (read == JsonRead::kUnreadable) {
-    // Not damage: the record is there and something keeps this start from it. Nothing is judged, counted or swapped.
-    RecordRollback("deferred", "pending_unreadable", {{"win32_error", error}});
-    return PendingStep::kHold;
-  }
-  Pending pending;
-  if (read != JsonRead::kOk || !ParsePending(doc, &pending)) {
-    // A record the host did not write: it names nothing the host can put back. The release in the root is verified at
-    // every load, so it is treated as started and the record and its marker go.
-    const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
-    if (killed_) return PendingStep::kHold;
-    RecordRollback("discarded", "bad_pending", {{"removed", removed}});
-    return PendingStep::kNone;
-  }
-  const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
-  if (runtime.present && !runtime.sha256.empty() && runtime.sha256 != pending.to_sha256) {
-    // The root holds a runtime this record is not about: the host moves no file it did not place (section 4.7).
-    const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
-    if (killed_) return PendingStep::kHold;
-    RecordRollback("discarded", "pending_stale", {{"from", pending.to_version}, {"removed", removed}});
-    return PendingStep::kNone;
-  }
-  std::string reason = pending.failed_reason;
-  if (reason.empty() && Exists(UpdateFile(names::kCrashedFile))) reason = "crashed";
-  if (reason.empty() && pending.boot_attempts >= 2) reason = "unconfirmed";
-  const DWORD write_error = RuntimeWriteError();
-  json common = {{"mode", "next_start"}, {"from", pending.to_version}, {"boot_attempts", pending.boot_attempts}};
-  if (pending.has_from) common["to"] = pending.from_version;
-  if (!reason.empty()) {
-    if (write_error == ERROR_SHARING_VIOLATION) {
-      // Another process runs the pending release, perhaps inside its ten seconds: it is not condemned (R2).
-      common["cause"] = reason;
-      RecordRollback("deferred", "runtime_in_use", common);
-      return PendingStep::kTrial;
-    }
-    if (write_error != 0) {
-      common["cause"] = reason;
-      common["win32_error"] = write_error;
-      RecordRollback("blocked", "runtime_not_writable", common);
-      return PendingStep::kTrial;
-    }
-    const RollbackEnd end = DoRollback(pending, reason, "next_start", stop);
-    if (killed_) return PendingStep::kHold;
-    if (end == RollbackEnd::kStop) return PendingStep::kStop;
-    return end == RollbackEnd::kDone ? PendingStep::kNone : PendingStep::kTrial;
-  }
-  // One more try. A start beside a running one is not a try (the first one's trial is the trial), and neither is the
-  // load that follows a swap whose cleanup this start finished: the swap's own start never got to load. Each says so.
-  if (write_error == ERROR_SHARING_VIOLATION) {
-    RecordTrial("not_counted", "runtime_in_use", pending, pending.boot_attempts);
-  } else if (write_error != 0) {
-    RecordTrial("not_counted", "runtime_not_writable", pending, pending.boot_attempts, {{"win32_error", write_error}});
-  } else if (finished_swap_) {
-    RecordTrial("not_counted", "swap_finished", pending, pending.boot_attempts);
+  nevr_update::PendingFacts facts;
+  std::string update_utf8;
+  if (WideToUtf8(update_, &update_utf8)) {
+    facts = nevr_update::ReadPendingFacts(nevr_update::Win32UpdateFs(), update_utf8,
+                                          FactsOf(Join(root_, names::kRuntimeFile)).sha256, finished_swap_);
   } else {
-    json counted = doc;
-    counted["boot_attempts"] = pending.boot_attempts + 1;
-    if (WriteJson(UpdateFile(names::kPendingJson), counted)) {
-      RecordTrial("counted", "try", pending, pending.boot_attempts + 1);
-    } else {
+    // The folder does not convert to the UTF-8 UpdateFs takes: the record cannot be read, so it is held, never skipped.
+    facts.pending_read = nevr_update::ReadResult::kUnreadable;
+  }
+  const std::function<nevr_update::WriteAccess()> write_access = [this]() { return WriteAccessOfRuntime(); };
+  const nevr_update::PendingDecision decision = nevr_update::DecidePending(facts, write_access);
+  const Pending& pending = decision.pending;
+  // The fields every rollback record of this decision carries.
+  const auto common = [&pending]() {
+    json fields = {{"mode", "next_start"}, {"from", pending.to_version}, {"boot_attempts", pending.boot_attempts}};
+    if (pending.has_from) fields["to"] = pending.from_version;
+    return fields;
+  };
+  switch (decision.action) {
+    case nevr_update::PendingAction::kNone:
+      return PendingStep::kNone;
+    case nevr_update::PendingAction::kUnreadable:
+      // Not damage: the record is there and something keeps this start from it. Nothing is judged, counted or swapped.
+      RecordRollback("deferred", "pending_unreadable", {{"win32_error", decision.os_error}});
+      return PendingStep::kHold;
+    case nevr_update::PendingAction::kDamaged: {
+      // A record the host did not write: it names nothing the host can put back. The release in the root is verified at
+      // every load, so it is treated as started and the record and its marker go.
+      const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
       if (killed_) return PendingStep::kHold;
-      RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
-      RecordTrial("not_counted", "pending_write_failed", pending, pending.boot_attempts, {{"win32_error", last_error_}});
+      RecordRollback("discarded", "bad_pending", {{"removed", removed}});
+      return PendingStep::kNone;
     }
+    case nevr_update::PendingAction::kStale: {
+      // The root holds a runtime this record is not about: the host moves no file it did not place (section 4.7).
+      const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
+      if (killed_) return PendingStep::kHold;
+      RecordRollback("discarded", "pending_stale", {{"from", pending.to_version}, {"removed", removed}});
+      return PendingStep::kNone;
+    }
+    case nevr_update::PendingAction::kRollBack: {
+      const RollbackEnd end = DoRollback(pending, decision.reason, "next_start", stop);
+      if (killed_) return PendingStep::kHold;
+      if (end == RollbackEnd::kStop) return PendingStep::kStop;
+      return end == RollbackEnd::kDone ? PendingStep::kNone : PendingStep::kTrial;
+    }
+    case nevr_update::PendingAction::kDeferredInUse: {
+      // Another process runs the pending release, perhaps inside its ten seconds: it is not condemned (R2).
+      json fields = common();
+      fields["cause"] = decision.reason;
+      RecordRollback("deferred", "runtime_in_use", fields);
+      return PendingStep::kTrial;
+    }
+    case nevr_update::PendingAction::kBlockedNotWritable: {
+      json fields = common();
+      fields["cause"] = decision.reason;
+      fields["win32_error"] = decision.os_error;
+      RecordRollback("blocked", "runtime_not_writable", fields);
+      return PendingStep::kTrial;
+    }
+    case nevr_update::PendingAction::kNotCountedInUse:
+      RecordTrial("not_counted", "runtime_in_use", pending, pending.boot_attempts);
+      return PendingStep::kTrial;
+    case nevr_update::PendingAction::kNotCountedNotWritable:
+      RecordTrial("not_counted", "runtime_not_writable", pending, pending.boot_attempts, {{"win32_error", decision.os_error}});
+      return PendingStep::kTrial;
+    case nevr_update::PendingAction::kNotCountedSwapFinished:
+      RecordTrial("not_counted", "swap_finished", pending, pending.boot_attempts);
+      return PendingStep::kTrial;
+    case nevr_update::PendingAction::kCountTry:
+      if (WriteJson(UpdateFile(names::kPendingJson), decision.counted)) {
+        RecordTrial("counted", "try", pending, pending.boot_attempts + 1);
+      } else {
+        if (killed_) return PendingStep::kHold;
+        RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
+        RecordTrial("not_counted", "pending_write_failed", pending, pending.boot_attempts, {{"win32_error", last_error_}});
+      }
+      return PendingStep::kTrial;
   }
   return PendingStep::kTrial;
 }

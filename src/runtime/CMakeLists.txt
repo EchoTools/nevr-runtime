@@ -28,6 +28,9 @@ set(NEVR_HOST_UNITS
     "host/stop_line.cpp"
     # Self-update's swap at start (ADR 0024, section 4). The vocabulary is the core's (core/update/names.cpp, shared with Quest).
     "../core/update/names.cpp"
+    # The start's decision over pending.json (ADR 0024, section 6), platform-free, and the Win32 UpdateFs the host reads it through.
+    "../core/update/engine_start.cpp"
+    "lifecycle/update_fs_win32.cpp"
     "host/update_seams.cpp"
     "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
@@ -2345,6 +2348,19 @@ if(BUILD_TESTING)
     target_include_directories(test_update_fs_win32 PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_update_fs_win32 PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_update_fs_win32 DISCOVERY_MODE PRE_TEST)
+
+    # The start's decision over pending.json (ADR 0024, section 6, R2) as the engine states it: the cases of F10 to F12 and
+    # the start beside a running one, over a fake UpdateFs and no Windows header, so it builds and runs on the Linux host too.
+    add_executable(engine_pending_test
+      tests/engine_pending_test.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp)
+    set_source_files_properties(tests/engine_pending_test.cpp ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(engine_pending_test PRIVATE -Werror)
+    target_include_directories(engine_pending_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(engine_pending_test PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(engine_pending_test DISCOVERY_MODE PRE_TEST)
 
     # The Rust core linked into a MinGW C++ binary and called from a worker thread (ADR 0024, "What is not known"): the same staticlib and
     # system libraries nevr-runtime.dll links.
