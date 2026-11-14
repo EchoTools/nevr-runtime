@@ -15,10 +15,11 @@
 // The CJson_GetFloat detour that overrides the Arena rules the game reads (celebration time, round time, mercy
 // score). It lives apart from config.cpp so a test links it without the config loader (tests/test_arena_rules_hook.cpp).
 //
-// Precedence (docs/adr/0048 decision 5, decided): config.yaml's arena value wins over a map's aliased rule. The alias
-// picks which record the game reads (runtime/content/config_alias_hook.cpp); this detour then replaces the value it read
-// by its path. While a map's alias for the arena rules is live, the first override of each key per map and per load is
-// logged at Info, so the operator sees that the host's value replaced the map's.
+// Precedence (docs/adr/0048 decision 5): config.yaml's arena value wins over a map's aliased rule. The alias picks which
+// record the game reads (runtime/content/config_alias_hook.cpp); this detour then replaces the value it read by its path.
+// While a map's alias is live, each override is logged at Info once per map and key each time that alias goes live. The
+// line is written only when the value came from the aliased record the lookup answered, not from another record under the
+// same path.
 
 namespace {
 
@@ -28,18 +29,20 @@ constexpr const char* kRoundTimeKey = "round_time";
 constexpr const char* kMercyKey = "mercy_win_point_spread";
 
 std::mutex g_overrideMutex;
-std::uint64_t g_overrideGeneration = 0;  // the alias table's generation the set below was built in
-std::set<std::string> g_overrideLogged;  // "<map id> <key>" logged in that generation
+std::uint64_t g_overrideEpoch = 0;       // the arena alias's live epoch the set below was built in
+std::set<std::string> g_overrideLogged;  // "<map id> <key>" logged in that epoch
 
-// The override replaced a value the game read (`mapValue`) with config.yaml's (`configValue`). Logs one line per map and
-// key per load; a load is one generation of the alias table (Stage, Unstage and Arm bump it on each mount).
-void NoteAliasOverride(const char* key, FLOAT mapValue, FLOAT configValue) {
+// The override replaced the value the game read (`mapValue`) with config.yaml's (`configValue`), on the record `root`. Logs
+// one line per map and key per epoch of the alias going live (nevr_config_alias::LiveEpoch): a level unloaded and loaded
+// again is a new epoch even under one mount. Nothing is logged unless `root` is the aliased record the lookup answered.
+void NoteAliasOverride(const void* root, const char* key, FLOAT mapValue, FLOAT configValue) {
+  if (root == nullptr || root != nevr_config_alias::LiveRecord()) return;
   const std::string map = nevr_config_alias::LiveMapId(nevr_config_alias::kArenaRulesKey);
   if (map.empty()) return;  // no alias is live: the game read the stock record, and nothing is replaced from a map
-  const std::uint64_t generation = nevr_config_alias::Global().Generation();
+  const std::uint64_t epoch = nevr_config_alias::LiveEpoch(nevr_config_alias::kArenaRulesKey);
   std::lock_guard<std::mutex> lock(g_overrideMutex);
-  if (generation != g_overrideGeneration) {
-    g_overrideGeneration = generation;
+  if (epoch != g_overrideEpoch) {
+    g_overrideEpoch = epoch;
     g_overrideLogged.clear();
   }
   if (!g_overrideLogged.insert(map + " " + key).second) return;
@@ -49,8 +52,8 @@ void NoteAliasOverride(const char* key, FLOAT mapValue, FLOAT configValue) {
       key, map.c_str(), static_cast<double>(mapValue), static_cast<double>(configValue));
 }
 
-FLOAT Configured(const char* key, FLOAT mapValue, FLOAT configValue) {
-  NoteAliasOverride(key, mapValue, configValue);
+FLOAT Configured(const void* root, const char* key, FLOAT mapValue, FLOAT configValue) {
+  NoteAliasOverride(root, key, mapValue, configValue);
   return configValue;
 }
 
@@ -67,17 +70,17 @@ FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 
     // point_score_celebration_time (but not the _private variant)
     if (g_arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
         strstr(path, "_private") == NULL) {
-      return Configured(kCelebrationKey, result, g_arenaCelebrationTime);
+      return Configured(root, kCelebrationKey, result, g_arenaCelebrationTime);
     }
     // round_time (but not round_time_private)
     if (g_arenaRoundTime > 0.0f && strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
         strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
-      return Configured(kRoundTimeKey, result, g_arenaRoundTime);
+      return Configured(root, kRoundTimeKey, result, g_arenaRoundTime);
     }
     // mercy_win_point_spread (but not the _private variant)
     if (g_arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
         strstr(path, "_private") == NULL) {
-      return Configured(kMercyKey, result, g_arenaMercyScore);
+      return Configured(root, kMercyKey, result, g_arenaMercyScore);
     }
   }
 

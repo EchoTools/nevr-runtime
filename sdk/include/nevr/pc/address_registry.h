@@ -14,6 +14,9 @@ namespace nevr::addresses {
 static constexpr uint64_t VA_BALANCE_CONFIG = 0x1420d3450;
 
 // Source: src/NRadEngine/Game/CR15NetCombatHelpers.cpp in echovr-reconstruction
+// The runtime detours this address for its config-alias lookup (runtime/content/config_alias_hook.cpp) while a mounted map
+// stages an alias. A plugin that needs the lookup calls it through the game's own pointer; it does not hook this address,
+// because a plugin that re-hooks an address the runtime owns is a fatal error on a server (N84).
 static constexpr uint64_t VA_RESOLVE_CONFIG_HASH = 0x140d0b170;
 
 // Source: src/NRadEngine/Game/CR15NetCombatAccessors5.cpp in echovr-reconstruction

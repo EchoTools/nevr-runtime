@@ -53,7 +53,12 @@ session they are in is the lobby group id.
    (`src/core/config_alias.h`): a map may alias at most `kMaxConfigAliases` (4) allowlisted keys (v1: `mp_arena_rules`) to its own
    `<id>_<suffix>` records. An alias is live while any level of its map is loaded, and membership is a set, never a count. When two
    loaded maps alias one key, the main level's map wins, otherwise the lowest map id; the result depends only on which maps are
-   loaded. A map whose aliases cannot all be staged keeps nothing it registered.
+   loaded. A map whose aliases cannot all be staged keeps nothing it registered. config.yaml's arena values
+   (`arena.round_time`, `arena.point_score_celebration_time`, `arena.mercy_win_point_spread`) win over a live map's aliased rule
+   for the same key, because a host's round length is the operator's and a map must not change it unseen: the alias picks the
+   record the game reads, the host's value replaces the value read for those three paths
+   (`src/runtime/lifecycle/arena_rules_hook.cpp`), and each map's key is logged once per time its alias goes live, as an Info line
+   naming the map, the key, the map's value and config.yaml's value.
 6. **Scripts.** A map's script DLLs are registered before its set, all or nothing, and only if each passes the PE rules
    (`src/core/script_image_rules.h`: PE32+ AMD64 DLL, no imports, TLS or CLR, entry point 0, exactly one unforwarded
    `setup_bindings` export in code, allowed sections only, no writable-and-executable section; the Quest twin checks the ELF shape

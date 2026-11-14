@@ -1196,6 +1196,11 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15GetInputTrackingState(), "libr15 vrapi_GetInputTrackingState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CR15GameC1(), "libr15 CR15Game::CR15Game (C1) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CR15GameC2(), "libr15 CR15Game::CR15Game (C2) JUMP_SLOT");
+  // The balance-config lookup the ConfigAlias hook replaces (docs/adr/0048 decision 5): its JUMP_SLOT in the stock libr15.
+  CheckTarget(r15,
+              GotTarget{pinned::kLibR15, pinned::kBalanceLookupSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId,
+                        pinned::kBalanceLookupSlot},
+              "libr15 CR15NetBalanceSettingsCS::Json JUMP_SLOT");
   // The equipment re-fire (#2121, combat/equip_refire.h): each of the three setters is held by both a JUMP_SLOT and a GLOB_DAT word, so
   // the symbol alone names a slot of each kind (CheckTarget would expect the other kind to be absent). Each word resolves at its pin
   // and alone, a pin off by one slot is refused, the setter is the symbol the .dynsym defines at its address, and the code the wrappers'

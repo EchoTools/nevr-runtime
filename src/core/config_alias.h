@@ -81,9 +81,18 @@ class Table {
   std::string LiveMapId(std::uint64_t key) const;
 
   // Bumped by every Stage and Unstage, and by an Arm that changes the armed maps, so a caller that skips Reconcile while
-  // its inputs are unchanged still reconciles after the armed maps change. It is one load's identity (the arena
-  // override's once-per-load line keys on it).
+  // its inputs are unchanged still reconciles after the armed maps change.
   std::uint64_t Generation() const noexcept { return generation_.load(std::memory_order_acquire); }
+
+  // Counts how many times `key`'s alias has gone live: a Reconcile that publishes a winner for it when the last published
+  // set had none. A map's level unloaded and loaded again, with no Stage, moves it; a Reconcile that changes nothing does not.
+  // Takes the lock: for a log line's dedupe, never for a lookup.
+  std::uint64_t LiveEpoch(std::uint64_t key) const;
+
+  // The record the lookup last answered for an allowed key while its alias was live, or null. Set by the lookup hook, read by
+  // the arena override to check that the value it logs was read from the aliased record (not from another record).
+  void SetLiveRecord(const void* record) noexcept { live_record_.store(record, std::memory_order_release); }
+  const void* LiveRecord() const noexcept { return live_record_.load(std::memory_order_acquire); }
 
  private:
   struct Snapshot {
@@ -121,6 +130,8 @@ class Table {
   bool cap_logged_ = false;
   std::atomic<const Snapshot*> live_{nullptr};
   std::atomic<std::uint64_t> generation_{0};
+  std::atomic<const void*> live_record_{nullptr};
+  std::map<std::uint64_t, std::uint64_t> live_epochs_;  // guarded by mutex_
 };
 
 // The process's table. It is never destroyed, so a lookup on a game thread at exit still reads a live snapshot.
@@ -137,6 +148,9 @@ std::vector<Winner> Decide(std::uint64_t main_level, const std::vector<std::uint
 void Reconcile(std::uint64_t main_level, const std::vector<std::uint64_t>& loaded_levels);
 std::uint64_t Resolve(std::uint64_t key) noexcept;
 std::string LiveMapId(std::uint64_t key);
+std::uint64_t LiveEpoch(std::uint64_t key);
+void SetLiveRecord(const void* record) noexcept;
+const void* LiveRecord() noexcept;
 
 #ifndef _WIN32
 // The Quest sentinel defines it (quest/sentinel/config_alias_hook.cpp): one Warning line from the table.

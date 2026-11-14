@@ -20,15 +20,17 @@ namespace nevr_quest::config_alias_hook {
 
 namespace {
 
-// The game object's game-space tables: the offsets are in sentinel::pinned::game_layout (pinned_targets.h). Entries are
+// The game object's game-space tables: the offsets are in sentinel::pinned::game_layout (game_space_layout.h). Entries are
 // {CSymbol64 level, CncaGameSpace* space}, 16 bytes.
 constexpr std::size_t kEnabledTableOffset = sentinel::pinned::game_layout::kEnabledSpaceTableOffset;
 constexpr std::size_t kEnabledCountOffset = sentinel::pinned::game_layout::kEnabledSpaceCountOffset;
 constexpr std::size_t kLoadedTableOffset = sentinel::pinned::game_layout::kLoadedSpaceTableOffset;
 constexpr std::size_t kLoadedCountOffset = sentinel::pinned::game_layout::kLoadedSpaceCountOffset;
 constexpr std::size_t kEntryBytes = 16;
-constexpr std::uint64_t kMaxTableCount = 1024;  // the bound the PC hook uses: more reads as a table that is not one
-constexpr int kMaxLevels = 2 * static_cast<int>(kMaxTableCount);
+constexpr std::size_t kEntryResourceOffset = 8;  // the resource follows the level symbol in an entry
+constexpr std::uint64_t kMaxTableCount = 1024;   // the bound the PC hook uses: more reads as a table that is not one
+constexpr int kLevelTables = 2;                  // the enabled table and the loaded table
+constexpr int kMaxLevels = kLevelTables * static_cast<int>(kMaxTableCount);
 
 std::atomic<std::uint64_t (*)() noexcept> g_mainLevelSource{nullptr};
 std::atomic<bool> g_failureLogged{false};
@@ -98,7 +100,7 @@ int ReadLoadedLevels(const void* game, std::uint64_t* out, int cap) noexcept {
     if (entries == nullptr || count > kMaxTableCount) return -1;
     for (std::uint64_t i = 0; i < count && written < cap; ++i) {
       const auto level = ReadAt<std::uint64_t>(entries, i * kEntryBytes);
-      if (level != 0 && ReadAt<const void*>(entries, i * kEntryBytes + 8) != nullptr) out[written++] = level;
+      if (level != 0 && ReadAt<const void*>(entries, i * kEntryBytes + kEntryResourceOffset) != nullptr) out[written++] = level;
     }
   }
   return written;

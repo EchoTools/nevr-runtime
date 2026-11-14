@@ -651,6 +651,8 @@ inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineByte
 // the stub at 0xFD60D0 (disassembly VA, the file vaddr 0xED60D0): `adrp x16, 0x37c2000; ldr x17, [x16, #0x750]; br x17`, so
 // the slot is 0x37C2750 at the disassembly VA, 0x36C2750 at the file vaddr (ReVault, project echovr, binary libr15.so).
 inline constexpr std::uint64_t kBalanceLookupSlot = 0x36c2750ULL;
+// The mangled name of that function (the JUMP_SLOT's symbol in libr15).
+inline constexpr char kBalanceLookupSymbol[] = "_ZN10NRadEngine8NRadGame24CR15NetBalanceSettingsCS4JsonENS_9CSymbol64E";
 
 // SNSConfigRequestv24Send(CTcpBroadcaster&, char const*, char const*): the
 // mangling encodes the parameters but not the return type, and no caller has
