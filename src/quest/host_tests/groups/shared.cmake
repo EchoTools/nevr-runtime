@@ -143,6 +143,12 @@ nevr_ht_test(fs_posix_test GROUP shared PTHREAD TIMEOUT 120
 nevr_ht_test(test_update_worker GROUP shared HOST GTEST PTHREAD TIMEOUT 300
   SRC src/runtime/tests/test_update_worker.cpp src/core/update/engine_check.cpp src/core/update/policy.cpp
       src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp)
+# The Quest runtime's start of the update worker (runtime/update_wiring.h): the worker's inputs, the start with a fake core, the frame
+# call that reaches the confirmation, and the read of the running runtime.
+nevr_ht_test(update_wiring_test GROUP shared HOST DL PTHREAD TIMEOUT 120
+  SRC src/quest/tests/update_wiring_test.cpp src/quest/runtime/update_wiring.cpp src/core/update/engine_check.cpp
+      src/core/update/policy.cpp src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp
+      src/quest/data/sha256.cpp)
 # The pending decision (ADR 0024, section 6, R2) over a fake UpdateFs: no file system, the same cases as the PC build.
 nevr_ht_test(engine_pending_test GROUP shared HOST GTEST PTHREAD TIMEOUT 120
   SRC src/runtime/tests/engine_pending_test.cpp src/core/update/engine_start.cpp src/core/update/names.cpp)

@@ -247,8 +247,25 @@ get_target_property(NEVR_QUEST_RUNTIME_OPTIONS ovrplatformloader COMPILE_OPTIONS
 add_library(nevr_quest_runtime SHARED
   ${NEVR_QUEST_RUNTIME_SOURCES}
   ../runtime/runtime_entry.cpp
+  ../runtime/update_wiring.cpp
+  # The update worker's engine (core/update, the same sources the PC runtime compiles) and the POSIX edge it runs on.
+  "${NEVR_REPO_ROOT}/src/core/update/policy.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/engine_check.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/worker.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp"
   "${NEVR_REPO_ROOT}/src/core/build_identity.cpp")
 set_target_properties(nevr_quest_runtime PROPERTIES OUTPUT_NAME nevr-runtime)
+# The target takes the sentinel's -fno-exceptions (the device build of the hook sources). The update worker and the engine it runs are
+# the PC's sources, written with try/catch (a thread of ours must never end the game's process), so those files are built with exceptions.
+set_source_files_properties(
+  ../runtime/update_wiring.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/policy.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/engine_check.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/worker.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp"
+  PROPERTIES COMPILE_OPTIONS -fexceptions)
 target_compile_definitions(nevr_quest_runtime PRIVATE NEVR_QUEST_RUNTIME_LIBRARY=1)
 target_include_directories(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_INCLUDES})
 target_compile_options(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_OPTIONS})

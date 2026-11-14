@@ -11,18 +11,26 @@
 // this copy's records (sentinel::SetHostRecordSink), and a shim with no log leaves them on logcat alone. What the sequence reads
 // from the shim reaches it here: the variant, the login identity and the UI looper.
 
+#include <time.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include "core/build_identity.h"
 #include "core/quest_runtime_abi.h"
+#include "core/update/fs.h"
 #include "generated/nevr_build_info.h"
 #include "quest/combat/combat_active.h"
 #include "quest/integration/entry_hooks.h"
+#include "quest/invite/frame_dispatch.h"
+#include "quest/runtime/update_wiring.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/sentinel/build_variant.h"
 #include "quest/sentinel/hook_log.h"
@@ -101,6 +109,50 @@ bool ForwardToHost(sentinel::LogLevel level, const char* event, const sentinel::
 
 std::int32_t Initialize(const NevrQuestHostContext* host) noexcept;
 
+// An address inside this library, for the read of the running runtime (update_wiring.h, ReadRunningRuntime).
+constexpr char kInThisLibrary = 0;
+
+// The sentinel level of an update engine level (core/update/engine_check.h: 0 debug, 1 info, 2 warning, 3 error).
+sentinel::LogLevel UpdateLevel(int level) noexcept {
+  switch (level) {
+    case nevr_update::kDebug: return sentinel::LogLevel::kDebug;
+    case nevr_update::kWarning: return sentinel::LogLevel::kWarn;
+    case nevr_update::kError: return sentinel::LogLevel::kError;
+    default: break;
+  }
+  return sentinel::LogLevel::kInfo;
+}
+
+// Starts the update worker once the constructor sequence has run, so the frame dispatcher exists (update_wiring.h). The inputs are the
+// runtime's own: the build, the host's capability bit and update root. Two are not there yet: the Rust
+// core and the verifier are not linked into this build (the Android build of the core is a held piece), so Start does not start the
+// worker and says so in one record. The host's capability bit is also 0 until the shim can swap, which would disable the update anyway.
+void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
+  nevr_quest::update_wiring::Inputs in;
+  in.dev_build = nevr_build::kIsDev;
+  // `update.enabled` and `update.channel` stay unset: the config parser (core/nevr_config.cpp, AllowedTopLevelKeys) rejects a file with
+  // an `update:` section as a whole, on PC as on Quest, so there is no value to read yet.
+  in.host_can_swap = nevr_quest_runtime_abi::HostCanSwap(host);
+  if (host->update_root != nullptr) in.root = host->update_root;
+  // One file system for the life of the process: the worker's threads outlive this call.
+  static const std::unique_ptr<nevr_update::UpdateFs> fs = in.root.empty() ? nullptr : nevr_update::MakePosixUpdateFs(in.root);
+  in.fs = fs.get();
+  in.read_running = [](std::string* version, std::string* sha256, std::string* error) {
+    return nevr_quest::update_wiring::ReadRunningRuntime(&kInThisLibrary, nevr_build::kVersion, version, sha256, error);
+  };
+  in.log = [](int level, const std::string& line) {
+    sentinel::LogFields(UpdateLevel(level), "update", {{"tag", "NEVR.UPDATE"}, {"message", line.c_str()}});
+  };
+  in.now_ms = [] {
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return static_cast<std::uint64_t>(now.tv_sec) * 1000u + static_cast<std::uint64_t>(now.tv_nsec) / 1000000u;
+  };
+  nevr_quest::update_wiring::Start(std::move(in), [](nevr_quest::update_wiring::FrameWorkFn work, void* context) {
+    return nevr_quest::invite::frame::RegisterFrameWork(work, context);
+  });
+}
+
 // The descriptor is constant data: the header is the v1 size and the major and minor of nevr_quest_runtime_abi.
 constexpr NevrQuestRuntimeApi kRuntimeApi = {
     {nevr_quest_runtime_abi::kRuntimeApiV1Size, nevr_quest_runtime_abi::kMajor, nevr_quest_runtime_abi::kMinor, 0},
@@ -151,6 +203,7 @@ std::int32_t Initialize(const NevrQuestHostContext* host) noexcept {
                        {"kind", kind},
                        {"host_log", host->log != nullptr ? "shim" : "logcat_only"}});
   nevr_quest::integration::RunSentinelConstructor();
+  StartUpdateWorker(host);
   return 0;
 }
 
