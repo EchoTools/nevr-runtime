@@ -231,26 +231,46 @@ void ExpectLockFree(const Root& root) {
   EXPECT_NE(again, nullptr) << "the lock is released (error " << err << ")";
 }
 
+// The lines the worker's threads write. The check thread, the confirmation thread and the test's own thread all use it, so every
+// access is under one mutex: the log function is called from several threads (worker.h, Deps::log).
 struct Lines {
-  std::vector<std::string> all;
-  std::vector<int> levels;  // the level each line was written at, in step with `all`
   LogFn Fn() {
     return [this](int level, const std::string& line) {
-      all.push_back(line);
-      levels.push_back(level);
+      std::lock_guard<std::mutex> lock(mu_);
+      all_.push_back(line);
+      levels_.push_back(level);
     };
   }
   /// The level of the line Find would return, or -1 when there is none.
   int LevelOf(const std::string& event, const std::vector<std::string>& fields = {}) const {
-    const std::string line = Find(event, fields);
-    for (std::size_t i = 0; i < all.size(); ++i) {
-      if (all[i] == line) return levels[i];
+    std::lock_guard<std::mutex> lock(mu_);
+    const std::string line = FindLocked(event, fields);
+    for (std::size_t i = 0; i < all_.size(); ++i) {
+      if (all_[i] == line) return levels_[i];
     }
     return -1;
   }
   /// The first line that starts with `[NEVR.UPDATE] <event>` and holds every `key=value` word in `fields`.
   std::string Find(const std::string& event, const std::vector<std::string>& fields = {}) const {
-    for (const std::string& line : all) {
+    std::lock_guard<std::mutex> lock(mu_);
+    return FindLocked(event, fields);
+  }
+  int Count(const std::string& event) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    int n = 0;
+    for (const std::string& line : all_) n += line.rfind("[NEVR.UPDATE] " + event, 0) == 0 ? 1 : 0;
+    return n;
+  }
+  std::string Dump() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    std::string s;
+    for (const std::string& l : all_) s += l + "\n";
+    return s;
+  }
+
+ private:
+  std::string FindLocked(const std::string& event, const std::vector<std::string>& fields) const {
+    for (const std::string& line : all_) {
       if (line.rfind("[NEVR.UPDATE] " + event, 0) != 0) continue;
       if (line.size() > 14 + event.size() && line[14 + event.size()] != ' ') continue;
       bool ok = true;
@@ -259,16 +279,10 @@ struct Lines {
     }
     return "";
   }
-  int Count(const std::string& event) const {
-    int n = 0;
-    for (const std::string& line : all) n += line.rfind("[NEVR.UPDATE] " + event, 0) == 0 ? 1 : 0;
-    return n;
-  }
-  std::string Dump() const {
-    std::string s;
-    for (const std::string& l : all) s += l + "\n";
-    return s;
-  }
+
+  mutable std::mutex mu_;
+  std::vector<std::string> all_;
+  std::vector<int> levels_;  // the level each line was written at, in step with `all_`
 };
 
 // The core as a test sees it: stage() writes the files a real stage would and answers with the result the real one gives.
@@ -1299,4 +1313,23 @@ TEST(UpdateWorker, ARuntimeThatIsNotThePendingOneDoesNotConfirmAtTheMark) {
   EXPECT_EQ(f.lines.Count("update confirmed"), 0);
   EXPECT_NE(f.lines.Find("update confirm skipped", {"reason=not_the_pending_release"}), "") << f.lines.Dump();
   w.Stop(2000);
+}
+
+// The worker calls Deps::log from its check thread and its confirmation thread at the same time (worker.cpp, CheckMain and ConfirmMain),
+// so the capture the tests give it must hold every line from both.
+TEST(UpdateWorker, TheLogCaptureTakesLinesFromTwoThreadsAtOnce) {
+  constexpr int kLinesPerThread = 2000;
+  Lines lines;
+  const LogFn log = lines.Fn();
+  std::atomic<bool> go{false};
+  const auto writer = [&] {
+    while (!go.load()) std::this_thread::yield();
+    for (int i = 0; i < kLinesPerThread; ++i) log(kInfo, "[NEVR.UPDATE] update check n=" + std::to_string(i));
+  };
+  std::thread first(writer);
+  std::thread second(writer);
+  go.store(true);
+  first.join();
+  second.join();
+  EXPECT_EQ(lines.Count("update check"), 2 * kLinesPerThread);
 }

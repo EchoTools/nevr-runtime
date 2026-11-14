@@ -41,7 +41,7 @@ struct Deps {
   std::function<bool(std::string* version, std::string* sha256, std::string* error)> read_running;
   Core core;
   std::function<VerifyOutcome(const std::string& path)> verify;
-  LogFn log;
+  LogFn log;  ///< called from the check thread, the confirmation thread and the caller's thread, so it must be thread-safe
   std::function<std::uint64_t()> now_ms;
   const UpdateFs* fs = nullptr;  ///< every file operation on update\ goes through this; required
 };
