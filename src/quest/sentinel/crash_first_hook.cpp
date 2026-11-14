@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <sys/syscall.h>
 #include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -196,6 +197,85 @@ bool ChainToGame(int index, int signo, siginfo_t* info, void* ucontext) {
 
 std::uint32_t DisplacedFor(int index) noexcept { return g_displaced[index].load(std::memory_order_relaxed); }
 
+// ---- was the fault recovered (the self-update's crash marker, ADR 0024 section 6) ----
+
+// The words of the faulting thread's registers that a handler fixes up to recover: the general registers, the stack pointer, the
+// program counter and the flags. On AArch64 that is x0..x30, sp, pc and pstate (34 words); on x86-64 (the host tests) the 23
+// words of gregs. A word array, not the whole ucontext: the vector state that follows the registers is thousands of bytes and
+// is not what a recovery changes. Each count is derived from the platform's own array, and lives in its own branch, so the
+// build of the other CPU declares no unused constant.
+#if defined(__aarch64__)
+constexpr std::size_t kGeneralRegisters = sizeof(mcontext_t::regs) / sizeof(mcontext_t::regs[0]);
+constexpr std::size_t kSpSlot = kGeneralRegisters;
+constexpr std::size_t kPcSlot = kSpSlot + 1;
+constexpr std::size_t kPstateSlot = kPcSlot + 1;
+constexpr std::size_t kContextWords = kPstateSlot + 1;
+#elif defined(__x86_64__)
+constexpr std::size_t kContextWords = NGREG;
+#else
+constexpr std::size_t kContextWords = 1;  // no CPU this file reads: the count stays 0
+#endif
+
+struct ContextWords {
+  std::uint64_t word[kContextWords];
+  std::size_t count;  // 0: the context cannot be read on this CPU, or none was given
+};
+
+ContextWords ReadContext(const void* ucontext) noexcept {
+  ContextWords out;
+  out.count = 0;
+  if (ucontext == nullptr) return out;
+  const ucontext_t* context = static_cast<const ucontext_t*>(ucontext);
+#if defined(__aarch64__)
+  for (std::size_t i = 0; i < kGeneralRegisters; ++i) out.word[i] = context->uc_mcontext.regs[i];
+  out.word[kSpSlot] = context->uc_mcontext.sp;
+  out.word[kPcSlot] = context->uc_mcontext.pc;
+  out.word[kPstateSlot] = context->uc_mcontext.pstate;
+  out.count = kContextWords;
+#elif defined(__x86_64__)
+  for (std::size_t i = 0; i < kContextWords; ++i) out.word[i] = static_cast<std::uint64_t>(context->uc_mcontext.gregs[i]);
+  out.count = kContextWords;
+#else
+  (void)context;
+#endif
+  return out;
+}
+
+bool SameContext(const ContextWords& before, const ContextWords& after) noexcept {
+  if (before.count != after.count) return false;
+  for (std::size_t i = 0; i < before.count; ++i) {
+    if (before.word[i] != after.word[i]) return false;
+  }
+  return true;
+}
+
+// Whether the game's handler recovered the fault it was called for, once it has returned. A fault the kernel raised (si_code > 0,
+// not SIGABRT) is run again when the handler returns: with the faulting context as it was, the same instruction faults again and
+// the system's handler, which is back, ends the process; with the context changed, execution goes on elsewhere. A handler that
+// never returns (it jumps out, the game's own crash recovery) never gets here, and that is a recovery too. A signal a process
+// sent is re-raised by OnSignal whatever the handler did, and a context that could not be read proves nothing: neither is a
+// recovery. A fault that the handler recovers without touching the context (it mapped the page it faulted on) is not seen.
+bool FaultRecovered(int signo, const siginfo_t* info, const ContextWords& before, const ContextWords& after) noexcept {
+  if (info == nullptr || info->si_code <= 0 || signo == SIGABRT) return false;
+  return !SameContext(before, after);  // two contexts that could not be read are equal: not a recovery
+}
+
+// Our handler on every guarded signal, on the alternate stack, with the guarded signals blocked while it runs. Returns how many
+// signals took it. InstallHandlers and the return of a recovered fault both come here.
+int ArmSignals() noexcept {
+  struct sigaction action;
+  std::memset(&action, 0, sizeof(action));
+  sigemptyset(&action.sa_mask);
+  for (int i = 0; i < kGuardedCount; ++i) sigaddset(&action.sa_mask, kGuardedSignals[i]);  // none of them interrupts the handler
+  action.sa_sigaction = &OnSignal;
+  action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  int handled = 0;
+  for (int i = 0; i < kGuardedCount; ++i) {
+    if (sigaction(kGuardedSignals[i], &action, nullptr) == 0) ++handled;
+  }
+  return handled;
+}
+
 }  // namespace
 
 int GuardedIndex(int signo) noexcept {
@@ -220,7 +300,18 @@ void OnSignal(int signo, siginfo_t* info, void* ucontext) {
   // The system's handler goes back before the game's runs: a game handler that aborts, or that returns for a fault it
   // cannot fix, then reaches the system's handler and not this one again.
   RestoreHandlers();
+  const ContextWords before = ReadContext(ucontext);
   const bool chained = index >= 0 && ChainToGame(index, signo, info, ucontext);
+  // The self-update's crash marker: only for a fault that was not recovered, so it runs here and not with the report. The game's
+  // handler may recover the fault by jumping out (nothing below runs, and our handlers stay restored), hang, fault inside itself
+  // or end the process (the marker is not written; a release that never reaches its confirmation is rolled back after two
+  // starts all the same, ADR 0024 section 6, R2).
+  if (FaultRecovered(signo, info, before, ReadContext(ucontext))) {
+    // The handler returned and the process goes on: our handlers go back, so the next fatal fault reaches OnSignal again.
+    ArmSignals();
+  } else if (g_actions.unrecovered != nullptr) {
+    g_actions.unrecovered(signo, info, ucontext);
+  }
   if (g_actions.note != nullptr) g_actions.note(signo, chained, index >= 0 ? DisplacedFor(index) : 0U);
   errno = savedErrno;
   g_crashPath.fetch_sub(1, std::memory_order_acq_rel);
@@ -252,16 +343,7 @@ int InstallHandlers(const Actions& actions) noexcept {
     altStack = sigaltstack(&ours, nullptr) == 0;
   }
 
-  struct sigaction action;
-  std::memset(&action, 0, sizeof(action));
-  sigemptyset(&action.sa_mask);
-  for (int i = 0; i < kGuardedCount; ++i) sigaddset(&action.sa_mask, kGuardedSignals[i]);  // none of them interrupts the handler
-  action.sa_sigaction = &OnSignal;
-  action.sa_flags = SA_SIGINFO | SA_ONSTACK;
-  int handled = 0;
-  for (int i = 0; i < kGuardedCount; ++i) {
-    if (sigaction(kGuardedSignals[i], &action, nullptr) == 0) ++handled;
-  }
+  const int handled = ArmSignals();
   sentinel::LogFields(handled == kGuardedCount ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "crash_first_arm",
                       {{"handled", handled}, {"of", kGuardedCount}, {"alt_stack", altStack ? "installed" : "kept_existing"}});
   return handled;

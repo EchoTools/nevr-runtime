@@ -204,6 +204,14 @@ endforeach()
 nevr_ht_test(crash_first_hook_test GROUP hooks ${_hf} TIMEOUT 120 ARGS "${_fx_dir}"
   DEPENDS hooks_cffx_consumer hooks_cffx_pnsrad hooks_cffx_pnsradmatchmaking hooks_cffx_pnsovr OBJS ${_core} ${_ident}
   SRC src/quest/tests/crash_first_hook_test.cpp src/quest/sentinel/crash_first_hook.cpp)
+# The self-update's crash marker through the real crash path (ADR 0024, section 6): a fault the game's handler recovers writes no
+# update/crashed. The test includes crash_report_quest.cpp itself, as update_crash_marker_test does. The sentinel log, the build-id
+# reader and the report writer use exceptions, so they are objects of their own beside the test, which is built without.
+nevr_ht_obj(o_hooks_marker_support GROUP hooks INCS ${_sent} src/quest/tests/stub
+  SRC src/core/crash_report.cpp src/quest/sentinel/elf_build_id.cpp src/quest/sentinel/sentinel_log.cpp)
+nevr_ht_test(update_crash_marker_recovery_test GROUP hooks ${_hf} INCS src/quest/tests/stub TIMEOUT 120 ARGS "${_fx_dir}"
+  DEPENDS hooks_cffx_consumer OBJS ${_core} ${_ident} o_hooks_marker_support
+  SRC src/quest/tests/update_crash_marker_recovery_test.cpp src/quest/sentinel/crash_first_hook.cpp)
 # The game waits for the storage permission it just asked for (#640): the real handler through the thunk entry, against a stand-in
 # for RequestPermissions and a model of CheckPermission.
 nevr_ht_test(permission_wait_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}

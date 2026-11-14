@@ -50,7 +50,17 @@ class CrashHandlerIsOurs(unittest.TestCase):
         sentinel = code("sentinel/sentinel.cpp")
         self.assertIn("nevr_crash::WriteReport(crash)", body(sentinel, "void ReportAction("))
         self.assertIn("g_handler->HandleSignal(", body(sentinel, "void DumpAction("))
-        self.assertIn("InstallHandlers({&ReportAction, &DumpAction, &NoteAction})", sentinel)
+        self.assertIn("InstallHandlers({&ReportAction, &DumpAction, &NoteAction, &MarkAction})", sentinel)
+
+    def test_the_update_crash_marker_is_written_only_for_a_fault_that_is_not_recovered(self):
+        # The marker is the `unrecovered` action: after the game's handler (which may recover the fault), never with the report.
+        sentinel = code("sentinel/sentinel.cpp")
+        self.assertNotIn("MarkUpdateCrashed", body(sentinel, "void ReportAction("))
+        self.assertIn("MarkUpdateCrashed()", body(sentinel, "void MarkAction("))
+        on_signal = body(code("sentinel/crash_first_hook.cpp"), "void OnSignal(")
+        order = [on_signal.index(token) for token in ("ChainToGame(", "g_actions.unrecovered(", "g_actions.note(")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("FaultRecovered(", on_signal)
 
     def test_disarm_puts_the_system_handlers_back(self):
         self.assertIn("crash_first::RestoreHandlers()", body(code("sentinel/sentinel.cpp"), "void Disarm()"))

@@ -23,10 +23,12 @@ int GuardedIndex(int signo) noexcept;
 // `displaced` how many times the game asked to install one of the guarded signals' handlers.
 using ActionFn = void (*)(int signo, siginfo_t* info, void* ucontext) noexcept;
 using NoteFn = void (*)(int signo, bool chained, std::uint32_t displaced) noexcept;
+// `unrecovered` runs after the game's handler, and only for a fault that was not recovered (OnSignal decides, in crash_first_hook.cpp). Null: skipped.
 struct Actions {
   ActionFn report;
   ActionFn dump;
   NoteFn note;
+  ActionFn unrecovered = nullptr;
 };
 
 // Installs our handler for the guarded signals through libc, on an alternate stack for the calling thread when it has none,

@@ -124,9 +124,6 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 
 // The report: the signal's facts and its ucontext, handed to the shared writer (core/crash_report.h).
 void ReportAction(int signo, siginfo_t* info, void* ucontext) noexcept {
-    // The self-update's crash marker goes first: it is the one thing a crash must leave, whatever the report and the dump do
-    // (docs/adr/0024-pc-self-update.md, section 6).
-    MarkUpdateCrashed();
     nevr_crash::CrashInfo crash{};
     crash.code = signo;
     crash.fault_code = info != nullptr ? info->si_code : 0;
@@ -147,6 +144,11 @@ void ReportAction(int signo, siginfo_t* info, void* ucontext) noexcept {
 void DumpAction(int signo, siginfo_t* info, void* ucontext) noexcept {
     if (g_handler != nullptr) g_handler->HandleSignal(signo, info, ucontext);
 }
+
+// The self-update's crash marker (docs/adr/0024-pc-self-update.md, section 6). It runs after the game's handler and only for a
+// fault the game did not recover (crash_first_arm.h, Actions::unrecovered): a fault the game's own crash recovery handles writes
+// nothing, so a release that only ever hit recovered faults is not rolled back.
+void MarkAction(int /*signo*/, siginfo_t* /*info*/, void* /*ucontext*/) noexcept { MarkUpdateCrashed(); }
 
 // One logcat line after the game's handler returned: whether the game had a handler of its own to run after ours, and how
 // many times it asked to install one (each of those would have displaced ours).
@@ -194,7 +196,7 @@ void Arm() {
             /*context=*/nullptr,
             /*install_handler=*/false,
             /*server_fd=*/-1);
-        nevr_quest::crash_first::InstallHandlers({&ReportAction, &DumpAction, &NoteAction});
+        nevr_quest::crash_first::InstallHandlers({&ReportAction, &DumpAction, &NoteAction, &MarkAction});
         __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
                             "armed: breakpad ExceptionHandler, dumps -> %s",
                             DumpDirStorage().c_str());

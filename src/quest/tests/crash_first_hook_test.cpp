@@ -9,8 +9,10 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -96,7 +98,12 @@ void NoteAction(int, bool chained, std::uint32_t displaced) noexcept {
   g_noteDisplaced.store(displaced);
   Event("note");
 }
-cf::Actions TestActions() { return {&ReportAction, &DumpAction, &NoteAction}; }
+// The self-update's crash marker (sentinel.cpp: MarkAction) is the `unrecovered` action: an event here.
+void UnrecoveredAction(int, siginfo_t*, void*) noexcept { Event("unrecovered"); }
+bool g_withUnrecovered = false;  // the tests of the recovered-fault rule set it; every other test runs the three actions it was written for
+cf::Actions TestActions() {
+  return {&ReportAction, &DumpAction, &NoteAction, g_withUnrecovered ? &UnrecoveredAction : nullptr};
+}
 
 void SystemHandler(int, siginfo_t*, void*) { Event("system"); }
 void GameSiginfoHandler(int, siginfo_t*, void*) { Event("game"); }
@@ -332,6 +339,147 @@ void ASecondThreadWaitsForTheFirstThreadsReportAndDump() {
   int reports = 0;
   for (const std::string& e : events) if (e == "report") ++reports;
   QCHECK(reports == 1);  // one report per process
+}
+
+// ---- the recovered-fault rule (the self-update's crash marker, ADR 0024 section 6) ---------------------------------
+//
+// The marker is written only for a fault that is not recovered. A kernel fault (si_code > 0) is recovered when the game's handler
+// either never returns (it jumps out) or returns with the faulting context changed, so the instruction that faulted is not run
+// again. A signal a process sent (raise, kill, abort) is re-raised by the handler whatever the game's handler did, and a fault
+// whose context the handler cannot compare is not proven recovered: both write the marker.
+
+constexpr std::uint64_t kPerturbBit = 1;  // the bit a recovering game handler flips in one register of the faulting context
+
+// What a game handler that recovers a fault by fixing up the faulting context does: one register of the context changes.
+void PerturbContext(void* ucontext) {
+  ucontext_t* context = static_cast<ucontext_t*>(ucontext);
+#if defined(__aarch64__)
+  context->uc_mcontext.regs[0] ^= kPerturbBit;
+#else
+  context->uc_mcontext.gregs[REG_RAX] ^= static_cast<greg_t>(kPerturbBit);
+#endif
+}
+
+void GameRecoveringHandler(int, siginfo_t*, void* ucontext) {
+  Event("game");
+  PerturbContext(ucontext);
+}
+
+sigjmp_buf g_jumpOut;
+void GameJumpingHandler(int, siginfo_t*, void*) {
+  Event("game");
+  siglongjmp(g_jumpOut, 1);
+}
+
+// A fault the kernel raised, delivered by calling the handler with a real context: a signal the test raises is sent by a process
+// (si_code <= 0), which the handler never counts as recovered.
+void DeliverKernelFault(int signo, bool withContext = true, int code = SEGV_MAPERR) {
+  siginfo_t info;
+  std::memset(&info, 0, sizeof(info));
+  info.si_signo = signo;
+  info.si_code = code;
+  ucontext_t context;
+  QCHECK(getcontext(&context) == 0);
+  cf::OnSignal(signo, &info, withContext ? &context : nullptr);
+}
+
+void ArmWithTheUnrecoveredAction() {
+  g_withUnrecovered = true;
+  ArmOverSystemHandlers();
+}
+
+void AFaultTheGamesHandlerRecoversLeavesNoMarker() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameRecoveringHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  DeliverKernelFault(SIGSEGV);
+  const std::vector<std::string> want = {"report", "dump", "game", "note"};
+  QCHECK(Events() == want);  // no "unrecovered": the marker action did not run
+  // The process goes on, so our handler is back for the next fatal fault; after a fault that is not recovered it stays restored.
+  QCHECK(KernelHandler(SIGSEGV) == reinterpret_cast<void*>(&cf::OnSignal));
+  g_withUnrecovered = false;
+}
+
+void AFaultLeftAsItWasLeavesTheSystemsHandlerInPlace() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  DeliverKernelFault(SIGSEGV);
+  QCHECK(KernelHandler(SIGSEGV) == reinterpret_cast<void*>(&SystemHandler));
+  g_withUnrecovered = false;
+}
+
+// SI_USER (0) is a signal a process sent with kill(): re-raised by the handler like raise()'s, so never a recovery.
+void AKillSentSignalIsNeverRecovered() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameRecoveringHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  DeliverKernelFault(SIGSEGV, /*withContext=*/true, SI_USER);
+  const std::vector<std::string> want = {"report", "dump", "game", "unrecovered", "note", "system"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
+}
+
+void AGameHandlerThatJumpsOutRecoversAndLeavesNoMarker() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameJumpingHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  if (sigsetjmp(g_jumpOut, 1) == 0) {
+    DeliverKernelFault(SIGSEGV);
+    QCHECK(false);  // the handler jumped out: this line is not reached
+  }
+  const std::vector<std::string> want = {"report", "dump", "game"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
+}
+
+void AGameHandlerThatLeavesTheFaultAsItWasIsNotARecovery() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  DeliverKernelFault(SIGSEGV);
+  const std::vector<std::string> want = {"report", "dump", "game", "unrecovered", "note"};
+  QCHECK(Events() == want);  // after the game's handler, before the note
+  g_withUnrecovered = false;
+}
+
+void WithoutAGameHandlerAKernelFaultIsNotRecovered() {
+  ArmWithTheUnrecoveredAction();
+  DeliverKernelFault(SIGSEGV);
+  const std::vector<std::string> want = {"report", "dump", "unrecovered", "note"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
+}
+
+void AFaultWhoseContextCannotBeComparedIsNotProvenRecovered() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  DeliverKernelFault(SIGSEGV, /*withContext=*/false);
+  const std::vector<std::string> want = {"report", "dump", "game", "unrecovered", "note"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
+}
+
+void ASignalAProcessSentIsNeverRecovered() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameRecoveringHandler);
+  QCHECK(g_gameSigaction(SIGFPE, &game, nullptr) == 0);
+  raise(SIGFPE);  // the handler re-raises it for the system's handler whatever the game's handler changed
+  const std::vector<std::string> want = {"report", "dump", "game", "unrecovered", "note", "system"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
+}
+
+// OnSignal re-raises an abort whatever the game's handler did, so a changed context does not recover it.
+void AnAbortIsNeverRecovered() {
+  ArmWithTheUnrecoveredAction();
+  const struct sigaction game = SiginfoAction(&GameRecoveringHandler);
+  QCHECK(g_gameSigaction(SIGABRT, &game, nullptr) == 0);
+  DeliverKernelFault(SIGABRT);
+  const std::vector<std::string> want = {"report", "dump", "game", "unrecovered", "note", "system"};
+  QCHECK(Events() == want);
+  g_withUnrecovered = false;
 }
 
 // ---- the install --------------------------------------------------------------------------------------------
@@ -635,6 +783,15 @@ int main(int argc, char** argv) {
   WithoutAGameHandlerOursRunsAndTheSystemsFollows();
   AGameHandlerOfIgnoreOrDefaultIsNotCalled();
   ASecondThreadWaitsForTheFirstThreadsReportAndDump();
+  AFaultTheGamesHandlerRecoversLeavesNoMarker();
+  AGameHandlerThatJumpsOutRecoversAndLeavesNoMarker();
+  AGameHandlerThatLeavesTheFaultAsItWasIsNotARecovery();
+  WithoutAGameHandlerAKernelFaultIsNotRecovered();
+  AFaultWhoseContextCannotBeComparedIsNotProvenRecovered();
+  ASignalAProcessSentIsNeverRecovered();
+  AnAbortIsNeverRecovered();
+  AFaultLeftAsItWasLeavesTheSystemsHandlerInPlace();
+  AKillSentSignalIsNeverRecovered();
   ARefusedInstallSaysSo();
   TheFirstKeptRequestForASignalWritesOneLineNamingHowItWasMade();
   TheFirstKeptDefaultOrIgnoreRequestSaysSoOnItsLine();

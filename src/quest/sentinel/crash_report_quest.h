@@ -27,8 +27,9 @@ void RegisterCrashReportPlatform();
 // Returns false when no report exists afterwards. `report_path` (`capacity` bytes) is empty on false.
 bool FinishCrashReport(const char* dump_path, char* report_path, unsigned long capacity);
 
-// The self-update's crash marker (docs/adr/0024-pc-self-update.md, section 6). A crash that happens while update/pending.json
-// exists leaves update/crashed, so the next start rolls the pending release back. ArmUpdateCrashMarker builds the two paths
+// The self-update's crash marker (docs/adr/0024-pc-self-update.md, section 6). A crash that the game does not recover from, while
+// update/pending.json exists, leaves update/crashed (the crash handler asks for it after the game's
+// handler, crash_first_arm.h), so the next start rolls the pending release back. ArmUpdateCrashMarker builds the two paths
 // once, from the nevr root (the folder that holds update/, NUL-terminated; nullptr or "" disarms the marker), and returns
 // false when the root leaves no room for them. Call it at arm time, before a crash can arrive.
 //

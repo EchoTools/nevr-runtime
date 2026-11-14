@@ -406,6 +406,18 @@ and its journal, reached through the platform edges of `src/core/update/edges.h`
   `GetFileAttributesW` on `pending.json`, and only when it is there one `CreateFileW` of the empty `crashed`, then one
   `crash_marker` record (`outcome` `written` or `failed` with `win32_error`). A crash with no `pending.json` makes no
   folder and no file.
+- **Only a fault that is not recovered leaves the marker.** A fault the game recovers from writes nothing. On PC the game's
+  crash recovery handles a recovered fault before the game's crash reporter is called, and `Capture` runs from that reporter,
+  so the rule holds there as written. On Quest the signal handler (`crash_first_hook.cpp`, `OnSignal`) runs the marker after
+  the game's handler and not before it, through `Actions::unrecovered`: a game handler that never returns (it jumps out) or
+  that returns with the faulting context changed has recovered the fault, and nothing is written; a fault left as it was, a
+  signal a process sent, a context that could not be read, and a signal with no game handler write it. A handler that
+  returned with the context changed also puts the sentinel's handlers back, so the next fatal fault reaches it. Not seen: a
+  recovery that leaves the registers as they were (the handler mapped the page that faulted) writes the marker. A game
+  handler that returned also leaves the process's one crash claim used, so a later fatal fault gets the marker but no report and
+  no dump. A game handler that ends the process, hangs, or faults inside itself writes none, so that release reaches the R2 count
+  (`boot_attempts`) instead. A game handler that recovers by jumping out never returns to the sentinel, which leaves its
+  handlers restored: a later fatal fault in that process writes no marker either, and reaches R2 the same way.
 - **What the open questions settled.** Q1: the host skips the swap while a release is pending (above); the runtime should
   not publish `staged.json` while one is pending either (step 4). Q2: the swap writes `owned` at `done`, and the rollback
   rewrites it. Q3: a root runtime with no `NEVR-BUILD` version blocks the swap (section 4, item 9). Q4: a rollback
