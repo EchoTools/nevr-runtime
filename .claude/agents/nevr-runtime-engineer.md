@@ -62,20 +62,10 @@ feels risky":
    procedure; this primer is the repo knowledge it operates on. Passing a gate
    without its verification action is skipping the gate.
 
-**The gate before landing is the quick check, not `just verify`.** AGENTS.md "Builds" defines it:
-
-> **A branch runs the quick check before it lands, not `just verify`.** The quick check is: the build (`just build`), the test
-> recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
-> `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test runs on main after the release cut, not on a branch. The GTest floor is not stored:
-> `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
-> when HEAD has fewer. [...] Every change, whatever it touches, also runs
-> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the branch's tip, as the plain recipe (no job count, slice or MemoryMax), and report each item with its exit code in
-> the commit message; an item not run is named as not run.
-
-The build item is `just build` and its exit code, which is nonzero when the build
-fails (the recipe is a plain `cmake --build`).
-`just verify` runs only on main, after the release cut, once per cut; a branch does
-not run it and the review does not ask for it (AGENTS.md "Builds", next bullet).
+**The gate before landing is `just test-changed`, and nothing else.** AGENTS.md "Builds" defines it: the command
+runs the tests `tools/test_map.json` gives for the paths the branch changed, each with its exit code, and fails on a
+changed path the map does not cover. An agent never picks tests and never runs a whole suite (`just verify`,
+`just test-full`, `just test-tools` with no file, `just test-auth-unit` with no binary); a review does not ask for one.
 A runtime or auth change's PC login runs on main after the release cut, never on a branch (below, and AGENTS.md
 "Verification before landing" / "Client login test mechanics"), on a
 throwaway copy of the install, nested display. A `ninja -t inputs` / `-t deps` proof

@@ -99,6 +99,21 @@ func TestCopyOutsideWorkRootIsRefused(t *testing.T) {
 	}
 }
 
+// Without -work-root the work root is $NEVR_WORK_ROOT (runlog.WorkRoot). Not parallel: execute reads the process's
+// environment, which only t.Setenv can set, and t.Setenv forbids t.Parallel.
+func TestWithoutTheFlagTheWorkRootIsNevrWorkRoot(t *testing.T) {
+	work, c, s := fixture(t)
+	var o, e bytes.Buffer
+	t.Setenv("NEVR_WORK_ROOT", work)
+	if code := execute([]string{"-copy", c, "-src", s}, &o, &e); code != 0 {
+		t.Fatalf("a copy under $NEVR_WORK_ROOT: code %d: %s%s", code, o.String(), e.String())
+	}
+	t.Setenv("NEVR_WORK_ROOT", t.TempDir())
+	if code := execute([]string{"-copy", c, "-src", s}, &o, &e); code != 1 || !strings.Contains(o.String()+e.String(), "work root") {
+		t.Fatalf("a copy outside $NEVR_WORK_ROOT: code %d: %s%s", code, o.String(), e.String())
+	}
+}
+
 func TestBadFlag(t *testing.T) {
 	var o, e bytes.Buffer
 	if execute(nil, &o, &e) != exitUsage {

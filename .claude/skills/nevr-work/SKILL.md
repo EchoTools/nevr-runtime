@@ -90,26 +90,13 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 
 ### 6. Prove it: the quick check, by area
 
-The gate before landing is "A branch runs the quick check before it lands, not `just verify`" in `AGENTS.md` "Builds"; `just verify` runs only on main
-after the release cut. `just --list` is the authority for recipe names. Run what covers the code you changed, as the plain recipe
-(no job count, slice or MemoryMax), on the branch's tip, and report each item with its exit code in the commit message; an item not run is
-named as not run.
-
-| You changed | Run (in addition to `just build`) |
-| --- | --- |
-| `src/runtime`, `src/core`, `src/abi`, `src/modules` | `just test-auth-unit`; `python3 tools/verify_gtest_floor.py`; with `src/runtime/host/`, `exports.def` or an `NEVR_MODULE_API` function also `tools/verify_pe_contract.py` as "Builds" gives it |
-| `src/runtime/server` | the above; a server outcome is read from the run's own log, on a game copy (`verify-server.sh`, "The game install") |
-| `sdk/`, `src/runtime/ext` | `just test-auth-unit`; `just test-plugins-groundtruth` |
-| `src/scripting` | `just test-scripting` (needs `extern/luau`) |
-| `src/quest` | `just test-android` and the `test-quest-*` recipe for the subdirectory (`shared`, `redirect`, `social`, `integration`, `data`, `invite`, `router`, `plugins`, `combat`, `autopilot`, `patcher`, `hooks`); the `*-pinned` variants need the store APK; `just check-android-static-init` |
-| `installer/` | `just test-installer` |
-| `tools/`, any doc | `just test-tools`; `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree) |
-| `tests/` Go modules | `go vet ./...` in the module; the system suites write into `$EVR_GAME_DIR`, so only on a game copy |
-| Release or packaging | `just release-preflight` before a tag; `tools/package_release.py` and the `test_release_*` tests via `just test-tools` |
-
-Every change also runs `just test-tools` and `python3 tools/verify_doc_paths.py`. A runtime or auth change's PC login runs on
-main after the release cut ("Verification before landing", "Client login test mechanics"). Behavior only a headset or a
-live game shows is named as not run unless you ran it (the evidence ladder is `docs/standards/verification.md`).
+The gate before landing is "A branch runs `just test-changed`, once, before it lands, and nothing else" in `AGENTS.md`
+"Builds": the command picks the tests from `tools/test_map.json`, so no agent picks them, and no agent runs a whole suite.
+Run it as the plain recipe on the branch's tip and quote its output in the commit message. A path it reports as not
+covered gets a map entry in the same branch. A server outcome is read from the run's own log, on a game copy
+(`verify-server.sh`, "The game install"). A runtime or auth change's PC login runs on main after the release cut
+("Verification before landing", "Client login test mechanics"). Behavior only a headset or a live game shows is named
+as not run unless you ran it (the evidence ladder is `docs/standards/verification.md`).
 
 ### 7. Land
 

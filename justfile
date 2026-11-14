@@ -861,9 +861,45 @@ quest-install *args: build-installer
 # command after `--`, then `go test -json` in tools/ (-C tools) with a hermetic environment, keeps its stream as <stem>-go.jsonl beside the
 # run's log, appends go_start and go_end to runs.jsonl, and ends with one line naming each failed half. ARGS go to the
 # Python runner only; the Go half always runs the module.
+# With no ARGS it is the whole suite, which records the run and alerts the owner when an agent started it
+# (build/go-tools/suite-run; AGENTS.md "Builds": no agent runs a whole suite).
 [positional-arguments]
 test-tools *ARGS: go-tools
-    build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ $# -eq 0 && "${NEVR_SUITE_RECIPE:-}" != test-tools ]]; then
+        exec build/go-tools/suite-run -recipe test-tools -- just test-tools
+    fi
+    exec build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
+
+# The tests that cover this branch's change, and nothing else: every path `git diff --name-only $(git merge-base
+# origin/main HEAD)` names is looked up in tools/test_map.json, and the tests of the components that own them run one at a
+# time, the build first, each printed with its exit code (tools/cmd/test-changed). A path the map does not cover fails
+# the run before anything starts, naming it. This is a branch's whole check before it lands (AGENTS.md, "Builds"); -n
+# prints the plan and runs nothing.
+[positional-arguments]
+test-changed *ARGS: go-tools
+    build/go-tools/test-changed "$@"
+
+# The full suite, run only by the owner, never by an agent (AGENTS.md, "Builds"): `just verify`, then the suites verify
+# does not run that need no game, headset, VM, network or release input. Each runs whatever the one before it did; the
+# last line names every one that failed. The run is recorded, and an agent's run alerts the owner (build/go-tools/suite-run).
+test-full: go-tools
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [[ "${NEVR_SUITE_RECIPE:-}" != test-full ]]; then
+        exec build/go-tools/suite-run -recipe test-full -- just preset={{ preset }} test-full
+    fi
+    failed=()
+    for recipe in verify test-quest-invite-transport test-quest-patcher test-installer test-plugins-groundtruth test-system-short; do
+        echo "test-full: $recipe"
+        just preset={{ preset }} "$recipe" || failed+=("$recipe (exit $?)")
+    done
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        echo "test-full: FAIL — ${failed[*]}" >&2
+        exit 1
+    fi
+    echo "test-full: OK"
 
 # Build the Go tools of tools/go.mod (ADR 0044) into build/go-tools/; a recipe that runs one depends on this and runs
 # build/go-tools/<name>.
@@ -947,9 +983,19 @@ test-auth-groundtruth:
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
 # target with -DBUILD_TESTING=ON (the default presets do not enable it). Add new
 # GTest executables here as they land.
-test-auth-unit: go-tools
+# With binaries named (`just test-auth-unit test_hooking test_messages`) it builds and runs only those, with the same
+# fixtures, and prints each with its result: that is how `just test-changed` runs a GTest. With none named and no
+# GTEST_FILTER it is the whole suite, which records the run and alerts the owner when an agent started it
+# (build/go-tools/suite-run; AGENTS.md "Builds": no agent runs a whole suite). It makes the build's inputs first, as
+# `configure` does (vcpkg, gen/), so it configures in a fresh worktree too.
+[positional-arguments]
+test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _proto-current _build-inputs
     #!/usr/bin/env bash
     set -euo pipefail
+    names=("$@")
+    if [[ ${#names[@]} -eq 0 && -z "${GTEST_FILTER:-}" && "${NEVR_SUITE_RECIPE:-}" != test-auth-unit ]]; then
+        exec build/go-tools/suite-run -recipe test-auth-unit -- just preset={{ preset }} test-auth-unit
+    fi
     unset VCPKG_ROOT
     # A test binary that hangs or runs away must fail the gate, not block it or exhaust the machine:
     # 124 is timeout's "timed out" status and 137 is a process killed by the memory cap. The cap
@@ -983,6 +1029,14 @@ test-auth-unit: go-tools
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
+    if [[ ${#names[@]} -gt 0 ]]; then
+        named_targets=()
+        for name in "${names[@]}"; do named_targets+=(--target "$name"); done
+        # The named binaries, and the inputs of the signature fixtures made below (gen_plugin_signature_fixtures.py's
+        # --dll-dir and --plugin-dll files), which the full run builds as part of its list.
+        cmake --build --preset {{ preset }} "${named_targets[@]}" --target test_plugin_onframe \
+            --target test_rendezvous_runtime_good --target test_rendezvous_runtime_reenter
+    else
     cmake --build --preset {{ preset }} --target test_xpid_patch --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_server_features --target test_peer_message_rules --target test_lobby_settings_hook --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_server_frame_wait --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_new_unlocks_clear --target test_dronemuzzle_rules --target test_powerboost_rules --target test_dronekill_rules --target test_ec_rules --target test_ecfx_rules --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_invite_answer_text --target test_invite_transport --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_resource_sets --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_script_hooks --target test_script_guard --target test_team_ready --target test_station_cells --target test_dot_script --target test_shared_magazine --target test_server_bots --target test_join_hold --target test_deadlock_monitor --target test_arena_rules_hook --target test_cmdline_waiver --target test_broadcaster_allow_incoming --target test_loading_tips --target test_combat_write_gate --target test_combat_bullet_spawn --target test_combat_settings --target test_content_pack --target test_combat_match_type --target test_combat_shipped_settings --target test_orb_pause --target test_rules_button --target test_clock_pause --target test_point_rate --target test_capture_scores --target test_capture_time --target test_unlock_time --target test_load_timing_rules --target test_config_alias --target test_script_image_rules --target test_map_manifest --target test_map_index --target test_map_derive --target test_map_run --target test_windows_map_fs --target test_stock_source --target test_map_scripts --target test_map_script_check --target test_config_alias_hook --target test_map_session_pin --target test_map_session_pin_core
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
@@ -994,6 +1048,7 @@ test-auth-unit: go-tools
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
     cmake --build --preset {{ preset }} --target test_export_trace
+    fi
     # Signed fixtures for the plugin signature gate (ADR 0010, #741), made once for test_plugin_signature and the
     # gate tests in test_behavioral: a throwaway PKI and osslsigncode, offline, over the real test plugin. A
     # missing tool or a failed generation fails the recipe; the tests fail, never skip, without the directory.
@@ -1024,6 +1079,31 @@ test-auth-unit: go-tools
     else
         NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
         export NEVR_REAL_SIGNED_DLL
+    fi
+    # The named run: each binary under bin/, or one directory below it (the bootstrap-attach, host-crash and rendezvous
+    # harnesses), run as the full run runs it; one line per binary, then the summary.
+    if [[ ${#names[@]} -gt 0 ]]; then
+        for name in "${names[@]}"; do
+            bin="build/{{ preset }}/bin/$name.exe"
+            if [[ ! -f "$bin" ]]; then
+                for cand in "build/{{ preset }}/bin/"*/"$name.exe"; do
+                    if [[ -f "$cand" ]]; then bin="$cand"; fi
+                done
+            fi
+            if [[ ! -f "$bin" ]]; then
+                echo "ERROR: GTest binary not found: $name (built by --target $name, looked for build/{{ preset }}/bin/$name.exe and build/{{ preset }}/bin/*/$name.exe)" >&2
+                exit 1
+            fi
+            before=${#test_failures[@]}
+            run_test "$bin"
+            if [[ ${#test_failures[@]} -eq "$before" ]]; then echo "test-auth-unit: $name passed"; fi
+        done
+        if [[ "${#test_failures[@]}" -gt 0 ]]; then
+            echo "test-auth-unit: FAIL — ${#test_failures[@]} of ${#names[@]} named binary(ies) failed: ${test_failures[*]}" >&2
+            exit 1
+        fi
+        echo "test-auth-unit: all ${#names[@]} named binary(ies) passed"
+        exit 0
     fi
     # #1414: the invite service's host tests (patch/invite_service.cpp against a loopback server). Built and run here
     # because no other line of this recipe names them.
@@ -2446,9 +2526,14 @@ test-scripting:
 # Success derives from the real compiler/linker + test artifacts, not a proxy
 # [day-one-kit §5]. EXCLUDES the Go integration suites — the evr-test-harness
 # dependency is excised (no extern/evr-test-harness in the tree).
-verify:
+# A whole suite, run only by the owner (AGENTS.md, "Builds"): the run is recorded, and an agent's run alerts the owner
+# (build/go-tools/suite-run).
+verify: go-tools
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "${NEVR_SUITE_RECIPE:-}" != verify ]]; then
+        exec build/go-tools/suite-run -recipe verify -- just preset={{ preset }} verify
+    fi
     unset VCPKG_ROOT
     # The log names what it tested, so a pass is never re-run to prove it.
     echo "verify: HEAD $(git rev-parse HEAD)"

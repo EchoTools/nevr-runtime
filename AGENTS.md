@@ -539,6 +539,16 @@ its objects carry no checkout path and are shared across worktrees.
 
 ## Testing
 
+A branch's check is `just test-changed` and nothing else ("Builds"); the recipes below are what its map runs, and the
+whole suites among them (`just test-full`, `just verify`, `just test-tools` with no file, `just test-auth-unit` with no
+binary) are the owner's alone.
+
+```sh
+just test-changed             # The tests that cover this branch's change, from tools/test_map.json (-n: the plan only)
+just test-full                # The full suite: verify and the suites verify does not run (owner only)
+just test-auth-unit test_x    # Build and run the named GTest binaries only
+```
+
 Go-based system tests in `tests/system/` and `tests/plugins/`:
 
 ```sh
@@ -828,24 +838,28 @@ your seat name, for example `claude-main` or `codex`.
   the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
-- **A branch runs only the tests that cover what it changed, once, before it lands. No large-scale suites.** The quick check is:
-  the build (`just build`, incremental), then only the test targets that cover the files the branch touched: one GTest
-  binary with `--gtest_filter` for the touched tests (`just test-auth-unit`, `test-quest-*` and the rest name the
-  binaries), `go test` of the touched package under `tools/`, or the one pytest file touched. Never a whole suite after a
-  unit change: no full `just test-auth-unit`, no full `just test-tools`, no `verify_doc_paths.py`, unless the change is to
-  that suite or its runner itself. A change that touches `src/runtime/host/exports.def`, an `NEVR_MODULE_API` function or
-  `src/runtime/host/` also runs `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll
-  --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. A change that removes tests on purpose puts a
-  `GTest-Drop: <reason>` trailer on the commit that removes them. The whole suites run on main after the release cut
-  (`just verify`), and a red there is bisected and reverted (batch, then bisect). Report each command run with its exit
-  code in the commit message; anything not run is named as not run. The PC login test is not part of a branch's check.
-  No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
-- **`just verify` runs only on main, after the release cut, once per cut.** A branch does not run it and the
-  review does not ask for it. It is not run again for the same cut. Its log starts with
-  `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
-  `verify: OK` is the proof: the review reads that log and does read that log; do not run verify again. A missing HEAD line is
-  checked in seconds (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time),
-  never by a re-run. Run verify again only for a later release cut.
+- **A branch runs `just test-changed`, once, before it lands, and nothing else. An agent never picks tests.** The quick
+  check is `systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env -u DISPLAY -u WAYLAND_DISPLAY just
+  test-changed` on the branch's tip. It reads `git diff --name-only $(git merge-base origin/main HEAD)`, looks each path up
+  in `tools/test_map.json` (path, then the component that owns it, then that component's tests: the build, the GTest
+  binaries that compile it, the Quest and scripting groups, the Go packages and pytest files that read it, and the
+  checks such as `verify_pe_contract.py` for `src/runtime/host/`), and runs exactly those, one at a time, each printed with
+  its exit code (`tools/cmd/test-changed`). Quote its output, the plan lines and the summary, in the commit message. A
+  changed path the map does not cover fails the command, naming the path: the fix is an entry in the map, in the same
+  branch, for the component whose tests cover the path, and the map's own test (`tools/internal/testmap`) fails on a
+  tracked file with no entry. A change that removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit
+  that removes them. The PC login test is not part of a branch's check. No workflow runs on a push to `main` except
+  `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
+- **No agent runs the full suite or any whole suite.** The whole suites are `just test-full` (`just verify` and the
+  suites it does not run), `just verify`, `just test-tools` with no file and `just test-auth-unit` with no binary and no
+  `GTEST_FILTER`; only the owner runs them, at the owner's choice. Each run of one is recorded in
+  `<work root>/test-runs/suite-runs.jsonl` (the time, the process, the agent session it came from and its directory, the
+  command, the exit code; `tools/cmd/suite-run`), and an agent's run calls the alert hook: the program
+  `NEVR_SUITE_ALERT` names, as `$NEVR_SUITE_ALERT --from nevr-runtime "<session directory> ran <recipe>"`, unless the
+  session directory is one of `NEVR_SUITE_ALERT_EXEMPT` (colon-separated). Both are empty unless a machine sets them, so a
+  clone elsewhere alerts nobody. A red whole suite on main is bisected and reverted (batch, then bisect). `just verify`'s
+  log starts with `verify: HEAD <sha>` and `verify: tree clean|DIRTY`; a log with the tip's sha and `tree clean` that ends
+  `verify: OK` is the proof for that tip, and nobody runs verify again for it.
 
 ### Git
 
@@ -984,10 +998,10 @@ your seat name, for example `claude-main` or `codex`.
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The commit message is the evidence.** The message of the branch's last commit carries what "What a landed commit carries" lists: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`; a commit cannot name its own SHA) and its result, the mutants, what was not run, and the issue. When the content changes before landing, amend it (the branch is unpushed); a content change after a MERGE verdict gets a new review before it lands.
 - **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
-- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test '<command>'` once for each test recipe that covers the change. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 10 (the tip commit's message lacks its evidence: `tools/cmd/commit-evidence`'s check, skill `landed-commit-evidence`), exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
-- **Verification before landing.** A runtime change is tested by its author before it lands (and its covering tests once more after Landing's rebase): the
+- **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test 'just test-changed'`. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 10 (the tip commit's message lacks its evidence: `tools/cmd/commit-evidence`'s check, skill `landed-commit-evidence`), exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
+- **Verification before landing.** A runtime change is tested by its author before it lands (and `just test-changed` once more after Landing's rebase): the
   quick check on the tip, run as the plain recipe (see "Builds"). After the release cut, main runs the PC login test
-  (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after a rebase. A red PC login run or a red `just verify` on main is a
+  (the mechanics under "Client login test mechanics"), and the owner runs `just verify` at the owner's choice. A branch never runs either, before or after a rebase. A red PC login run or a red `just verify` on main is a
   red main. A red main is bisected, and the culprit is reverted or fixed by a landed commit. Landing does not stop while main is
   red. Main always builds. The PC login run's log shows all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
@@ -1176,8 +1190,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `~/src/nevr-runtime-work/` (see "Working practices"), never `/tmp` and never in the
   repo.
-- **Verify entry point.** `just verify` is the single closed-loop gate, run on main after the release cut (a branch
-  runs the quick check, see "Builds"):
+- **Verify entry point.** `just verify` is the single closed-loop gate, run on main by the owner (a branch
+  runs `just test-changed`, see "Builds"):
   `just build` (a plain `cmake --build`, so it exits nonzero when the build fails), then `test-auth-unit` and
   `test-quest-shared`, the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.

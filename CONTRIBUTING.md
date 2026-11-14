@@ -20,12 +20,12 @@ Presets are `mingw-debug`, `mingw-release` (Linux default), `debug` and `release
 
 ## Verify
 
-A branch runs the quick check before it lands: the build (`just build`), the test recipe(s) that cover the changed code
-(`just --list` names them), `just test-tools` and `python3 tools/verify_doc_paths.py`. Put each command and its exit
-code in the commit message. The PC login test runs on main after the release cut, not on a branch.
+A branch runs `just test-changed` before it lands, and nothing else: it runs the tests `tools/test_map.json` gives for
+the paths the branch changed, each with its exit code (`AGENTS.md`, "Builds"). Quote its output in the commit message.
+The PC login test runs on main after the release cut, not on a branch.
 
 `just verify` is the full gate. It builds, runs the C++ tests under Wine, then runs the source-invariant sensors. It
-fails closed. It runs only on main, after the release cut, once per cut; a branch does not run it.
+fails closed. It and the other whole suites are run by the maintainers, never on a branch (`AGENTS.md`, "Builds").
 
 Neither is sufficient. They do not catch wire-format bugs, login failures or rendering regressions; for a
 change to runtime code, also run the game against a server (`NEVR_GAME_ROOT=<copy of the install> ./launch-client.sh`, see "The game install" in `AGENTS.md`) and check the program's own log.
