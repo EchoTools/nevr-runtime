@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/config_alias.h"
+#include "core/game_space_table.h"
 #include "core/logging.h"
 
 namespace {
@@ -357,6 +358,49 @@ TEST_F(ConfigAliasTest, LiveEpochCountsEachTimeTheAliasGoesLive) {
   EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), first + 1u);
   t.Reconcile(kMainB, {kSubA});  // beta wins over alpha while both are live: a switch, not a new epoch
   EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), first + 1u);
+}
+
+// The one rule for which game-space table entry is a loaded level, shared by the PC and Quest readers
+// (core/game_space_table.h): a level key other than 0 with a resource. A zero key and a null resource are not listed.
+constexpr std::uint64_t kLevelKeyA = 0x2001, kLevelKeyB = 0x2002, kResourceA = 0x7001, kResourceB = 0x7002;
+constexpr std::uint64_t kNoKey = 0, kNoResource = 0;
+
+TEST(GameSpaceTable, AnEntryIsListedOnlyWithANonZeroKeyAndAResource) {
+  using nevr_game_space_table::Listed;
+  EXPECT_TRUE(Listed(kLevelKeyA, kResourceA));
+  EXPECT_FALSE(Listed(kNoKey, kResourceA));
+  EXPECT_FALSE(Listed(kLevelKeyA, kNoResource));
+  EXPECT_FALSE(Listed(kNoKey, kNoResource));
+}
+
+TEST(GameSpaceTable, TheWalkListsInOrderSkipsUnlistedEntriesAndStopsWhenTheSinkSaysSo) {
+  const std::uint64_t entries[] = {kLevelKeyA, kResourceA, kNoKey,    kResourceA, kLevelKeyB, kNoResource,
+                                   kLevelKeyB, kResourceB, kLevelKeyA, kResourceB};
+  const std::uint64_t count = sizeof(entries) / nevr_game_space_table::kEntryBytes;
+  std::vector<std::uint64_t> seen;
+  EXPECT_TRUE(nevr_game_space_table::ForEachListed(reinterpret_cast<const unsigned char*>(entries), count,
+                                                   [&](std::uint64_t level) {
+                                                     seen.push_back(level);
+                                                     return true;
+                                                   }));
+  EXPECT_EQ(seen, (std::vector<std::uint64_t>{kLevelKeyA, kLevelKeyB, kLevelKeyA}));
+  seen.clear();
+  EXPECT_FALSE(nevr_game_space_table::ForEachListed(reinterpret_cast<const unsigned char*>(entries), count,
+                                                    [&](std::uint64_t level) {
+                                                      seen.push_back(level);
+                                                      return false;
+                                                    }));
+  EXPECT_EQ(seen, (std::vector<std::uint64_t>{kLevelKeyA}));
+}
+
+TEST(GameSpaceTable, ATableIsReadableOnlyWithinItsOwnCapacity) {
+  using nevr_game_space_table::Readable;
+  constexpr std::uint64_t kCapacity = 2;
+  const std::uint64_t someEntries[kCapacity] = {};
+  EXPECT_TRUE(Readable(nullptr, 0, 0));
+  EXPECT_TRUE(Readable(someEntries, kCapacity, kCapacity));
+  EXPECT_FALSE(Readable(someEntries, kCapacity + 1, kCapacity));
+  EXPECT_FALSE(Readable(nullptr, 1, kCapacity));
 }
 
 }  // namespace

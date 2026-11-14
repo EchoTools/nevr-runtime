@@ -29,8 +29,6 @@ constexpr std::size_t kLoadedTableOffset = sentinel::pinned::game_layout::kLoade
 constexpr std::size_t kLoadedCountOffset = sentinel::pinned::game_layout::kLoadedSpaceCountOffset;
 // The entry shape and the bound on a table's count are the shared ones (core/game_space_table.h): the bound is the table's
 // own capacity word, one word before its count.
-constexpr std::size_t kEntryBytes = nevr_game_space_table::kEntryBytes;
-constexpr std::size_t kEntryResourceOffset = nevr_game_space_table::kResourceWord * sizeof(std::uint64_t);
 constexpr std::size_t kCapacityBytesBeforeCount = nevr_game_space_table::kCapacityBytesBeforeCount;
 
 std::atomic<std::uint64_t (*)() noexcept> g_mainLevelSource{nullptr};
@@ -125,10 +123,11 @@ int ReadLoadedLevels(const void* game, std::uint64_t* out, int cap) noexcept {
     if (!TableReadable(game, table)) return -1;
     const auto* entries = ReadAt<const unsigned char*>(game, table.first);
     const auto count = ReadAt<std::uint64_t>(game, table.second);
-    for (std::uint64_t i = 0; i < count && written < cap; ++i) {
-      const auto level = ReadAt<std::uint64_t>(entries, i * kEntryBytes);
-      if (level != 0 && ReadAt<const void*>(entries, i * kEntryBytes + kEntryResourceOffset) != nullptr) out[written++] = level;
-    }
+    nevr_game_space_table::ForEachListed(entries, count, [&](std::uint64_t level) {
+      if (written >= cap) return false;
+      out[written++] = level;
+      return true;
+    });
   }
   return written;
 }
