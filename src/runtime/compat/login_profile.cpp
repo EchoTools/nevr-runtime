@@ -50,7 +50,7 @@ std::string BuildLoginProfileJson(const LoginProfileInputs& inputs) {
   // The resource sets those plugins carry (#2161): their levels, so the game service can send a client only to a
   // level it carries. Absent when there are none, so a login with no resource set is unchanged on the wire.
   if (inputs.resources.is_array() && !inputs.resources.empty()) profile["nevr_resources"] = inputs.resources;
-  // The channel maps this client holds, each with its version and source (docs/adr/0047), so the game service can match
+  // The channel maps this client holds, each with its version and source (docs/adr/0048), so the game service can match
   // a client only into a session whose map version it has. Absent when there are none.
   if (inputs.maps.is_array() && !inputs.maps.empty()) profile["nevr_maps"] = inputs.maps;
 

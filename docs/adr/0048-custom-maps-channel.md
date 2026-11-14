@@ -76,6 +76,15 @@ session they are in is the lobby group id.
 9. **Version pin.** Players match only on the same map version: the pin is `id@version`, with `source_sha256` (the map document
    the export read) tying the PC and Quest packages of one version together. nevr reports its pins at registration and login, and
    a client whose version differs from the session's pin leaves before loading.
+   Two cases do not leave, and the decision table (`map_session_pin.h`) keeps both:
+   - **`kUnpinned`.** A session whose owner JSON states no pin (`nevr_map_pin` 0) is logged as `map_unpinned` and the client stays.
+     The client has no version to compare, and a server that states none has nothing to match; leaving would split the players of
+     every server that does not write a pin. What would change it: every server writing a pin, which the channel's start makes true
+     for the groups a server hosts.
+   - **`kLocal` (PC only).** A client that holds a local copy of the session's map (a hand-installed level file, decision 8) stays
+     in the session and logs `local_map` once, as a Warning. The copy is the player's own file, and leaving would stop every session
+     of that map for a player who keeps it. What would change it: a rule that a hand-installed copy never plays a channel session;
+     then `kLocal` leaves like any other mismatch.
 10. **Revocation.** `revoked_ids`, an id missing from the manifest, or a listed sha256 (index, member or piece) drops the map at
     the next mount that sees it. A DLL already loaded is not unloaded mid-session (not defended).
 11. **Refused in v1:** `submode` and `engine_limits` (they write game data) and new sound banks (an unmeasured event-id
@@ -122,12 +131,15 @@ The core is built into `nevr_core` and tested by its GTests (`src/core/maps.cmak
 (decisions 1, 3, 11, 14, 15), the fetch, the resume, the recipe rebuild and the cached mount over main's `nevr_cargo::Env`
 (decisions 2, 4, 10, and the cache index of decision 16), the registry's map entry points and the script image rules (decisions 5
 and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal of a map whose manifest is not official (decision
-7), and the request queue (`map_fetch_queue.h`). Not built yet (#2733): the PC and Quest platform layers and the channel that
-starts them, including which keys they give the core as official (decision 7) and the `mixed_keys` check (decision 3); the
-local-copy precedence (decision 8); the session pin (decision 9); the server's group fetch and its join hold (decisions 13
-and 17); and the server mount (decision 18). The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`,
+7), and the request queue (`map_fetch_queue.h`). The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`,
 `src/quest/sentinel/config_alias_hook.cpp`, with the arena override's precedence line in
-`src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map.
+`src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map. The session pin
+(decision 9) has its pure core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
+`quest/cargo/map_pin_game.cpp` on the Quest), and no caller yet: nothing calls the tick, the session level or the install,
+`RegistrationEntries` is not called and the Quest login's `map_report` is not set (`KNOWN-WRONG #TBD` at each site). Not built
+yet (#2733): the PC and Quest platform layers and the channel that starts them, including which keys they give the core as
+official (decision 7) and the `mixed_keys` check (decision 3); the local-copy precedence (decision 8); the wiring of the session
+pin; the server's group fetch and its join hold (decisions 13 and 17); and the server mount (decision 18).
 
 ## Consequences
 

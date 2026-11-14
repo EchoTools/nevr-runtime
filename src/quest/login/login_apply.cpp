@@ -318,8 +318,10 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      Num("map_fields", static_cast<long long>(plan.map_fields.size())),
                      Num("maps_written", maps_written),
                      Text("maps_refused_path", maps_failed.c_str())};
-  // The map members only when there were maps, so a run with no maps config logs today's record.
-  const std::size_t count = sizeof(d) / sizeof(d[0]) - (plan.map_fields.empty() ? 3 : 0);
+  // The map members only when there were maps, so a run with no maps config logs today's record. They are the last three
+  // members of d: map_fields, maps_written and maps_refused_path.
+  constexpr std::size_t kMapMembers = 3;
+  const std::size_t count = sizeof(d) / sizeof(d[0]) - (plan.map_fields.empty() ? kMapMembers : 0);
   EmitLoginRecord(log, Level::Info, Outcome::Rewritten, d, count);
   return Outcome::Rewritten;
 }

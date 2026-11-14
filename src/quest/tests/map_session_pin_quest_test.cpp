@@ -2,14 +2,18 @@
 // core GTest holds (the level names and the pin value the Quest's own maps were tested against), the decision row a Quest client
 // meets (no local source), the view's replacement, the empty-state gate, and the login entries. The Quest compiles the same core
 // source the PC does; this file is the Quest's own check that it builds and decides the same on the NDK-free host.
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "core/map_session_pin.h"
 #include "nevr/symbol_hash.h"
+#include "quest/cargo/map_pin_pure.h"
 #include "quest/tests/test_check.h"
+#include "runtime/hook/addresses.h"
 
 namespace {
 
@@ -166,6 +170,57 @@ void TheLoginCarriesTheEntriesWithAMountedFlag() {
   sp::ResetForTest();
 }
 
+// The leave is scheduled only when the game's call queue exists (#730). The net game and its game object are built in buffers at
+// the offsets the game's own layout gives (addresses.h); the queue storage is the only pointer the check reads past the object.
+void TheLeaveIsScheduledOnlyWhenTheQueueExists() {
+  constexpr std::size_t kNetGameBytes = nevr_patch_addresses::NETGAME_GAME_OFFSET + sizeof(void*);
+  constexpr std::size_t kGameBytes = nevr_patch_addresses::GAME_CALL_QUEUE_OFFSET + sizeof(void*);
+  unsigned char netBytes[kNetGameBytes] = {};
+  unsigned char gameBytes[kGameBytes] = {};
+  unsigned char storage[sizeof(void*)] = {};
+  void* netGame = netBytes;
+  int calls = 0;
+  void* seen = nullptr;
+  auto schedule = [&calls, &seen](void* n) {
+    ++calls;
+    seen = n;
+  };
+  // No game object: nothing is called.
+  QCHECK(!nevr_quest::maps::pin::ScheduleWhenQueueReady(netGame, schedule));
+  QCHECK(calls == 0);
+  // A game object whose call queue is not allocated: nothing is called (the game's function would fault).
+  void* game = gameBytes;
+  std::memcpy(netBytes + nevr_patch_addresses::NETGAME_GAME_OFFSET, &game, sizeof(game));
+  QCHECK(!nevr_quest::maps::pin::ScheduleWhenQueueReady(netGame, schedule));
+  QCHECK(calls == 0);
+  // The queue is allocated: the game's function is called once, with the net game.
+  void* queue = storage;
+  std::memcpy(gameBytes + nevr_patch_addresses::GAME_CALL_QUEUE_OFFSET, &queue, sizeof(queue));
+  QCHECK(nevr_quest::maps::pin::ScheduleWhenQueueReady(netGame, schedule));
+  QCHECK(calls == 1);
+  QCHECK(seen == netGame);
+}
+
+// The libr15 bytes are checked at image+vaddr, exactly; a difference names the reason, the function, the VA and both byte runs.
+void TheLibr15BytesAreCheckedAtTheirVirtualAddress() {
+  constexpr std::uint64_t kVaddr = 0x20;
+  constexpr std::size_t kWords = 4;
+  unsigned char image[0x40] = {};
+  const unsigned char expected[kWords] = {0x11, 0x22, 0x33, 0x44};
+  std::memcpy(image + kVaddr, expected, sizeof(expected));
+  sp::PinFields refusal;
+  QCHECK(nevr_quest::maps::pin::CheckLibr15Entry(image, kVaddr, expected, kWords, "owner_symbol_mismatch", "fn", refusal));
+  QCHECK(refusal.empty());
+  image[kVaddr + 2] = 0x99;
+  QCHECK(!nevr_quest::maps::pin::CheckLibr15Entry(image, kVaddr, expected, kWords, "owner_symbol_mismatch", "fn", refusal));
+  QCHECK(refusal.size() == 7);
+  QCHECK(refusal[1].second == "owner_symbol_mismatch");
+  QCHECK(refusal[2].second == "fn");
+  QCHECK(refusal[3].second == sp::HexText(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(image + kVaddr))));
+  QCHECK(refusal[4].second == "11223344");
+  QCHECK(refusal[5].second == "11229944");
+}
+
 }  // namespace
 
 int main() {
@@ -175,5 +230,7 @@ int main() {
   TheEmptyStateMakesNoGameCall();
   ALeaveIsDecidedOnceAndScheduled();
   TheLoginCarriesTheEntriesWithAMountedFlag();
+  TheLeaveIsScheduledOnlyWhenTheQueueExists();
+  TheLibr15BytesAreCheckedAtTheirVirtualAddress();
   return quest_test::Failures() == 0 ? 0 : 1;
 }

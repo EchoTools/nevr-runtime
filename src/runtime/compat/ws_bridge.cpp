@@ -1202,7 +1202,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   if (resources.is_discarded() || !resources.is_array()) resources = nlohmann::json::array();
   Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_resources count=%zu", resources.size());
   profileInputs.resources = std::move(resources);
-  // docs/adr/0047: the channel maps staged or mounted. With none the key and this line are absent, as before.
+  // docs/adr/0048: the channel maps staged or mounted. With none the key and this line are absent, as before.
   nlohmann::json maps = nevr_map_session_pin::LoginEntries();
   if (!maps.empty()) Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_maps count=%zu", maps.size());
   profileInputs.maps = std::move(maps);

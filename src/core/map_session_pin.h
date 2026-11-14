@@ -33,7 +33,9 @@ inline constexpr const char* kNoticeTitle = "Map version mismatch";
 inline constexpr std::size_t kNoticeLineMax = 63;  // the game's error block keeps 63 bytes of a line (WriteErrorBlock)
 // A leave the game refuses is retried for this long (the session pin's retry window).
 inline constexpr std::uint64_t kLeaveRetryMs = 10000;
-// The game states of a client in a session: ServerLoading (6) to InGame (9). Outside them the client decides nothing.
+// The game states of a client in a session: EchoVR::NetGameState ServerLoading (6) to InGame (9), src/abi/echovr.h:364-367.
+// The values are written here and not included: echovr.h includes windows.h, which this pure part does not have on the Quest
+// (src/quest/host_tests/groups/shared.cmake compiles it there). Outside them the client decides nothing.
 inline constexpr std::int32_t kFirstSessionState = 6;
 inline constexpr std::int32_t kLastSessionState = 9;
 
@@ -47,9 +49,34 @@ struct MapPin {
 std::uint64_t PinValue(const MapPin& pin);
 
 // The two names one map's level goes by in a session: rad_hash(<id>) (the owner-JSON name a PC server publishes) and
-// rad_hash(<id>_lowspec) (the name the Quest's own main level carries: CR15Game::LoadLevelName appends it).
+// rad_hash(<id> + nevr_maps::kQuestLevelSuffix) (the name the Quest's own main level carries: CR15Game::LoadLevelName appends it).
 std::uint64_t SessionLevelOf(const std::string& id);
 std::uint64_t LowspecLevelOf(const std::string& id);
+
+// "0x" and sixteen hex digits: how the logs and the login spell a level or a pin. Both platforms format their records with it.
+std::string HexText(std::uint64_t value);
+// Lowercase hex of `n` bytes, two digits each, no separators: the expected and the actual bytes of a prologue check (logging.md
+// Rule 6). Both platforms format their records with it.
+std::string HexBytesText(const std::uint8_t* bytes, std::size_t n);
+
+// The fields of a `map_pin status=off` record (logging.md [NEVR.MAPS]), as (key, value) text in the order they are written. With
+// `name` null the record gives the reason only (a module or build check); with it, the record also names the function, its VA and
+// the expected and the actual bytes (logging.md Rule 6). The consequence is the same words on both platforms.
+using PinField = std::pair<std::string, std::string>;
+using PinFields = std::vector<PinField>;
+PinFields PinOffFields(const char* reason, const char* name, std::uint64_t va, const std::uint8_t* expected,
+                       const std::uint8_t* actual, std::size_t n);
+
+// True when the n bytes at `at` agree with `expected` (the caller's rule). A byte rule that accepts a hook's jmp is passed as `same`.
+using SameBytesFn = bool (*)(const std::uint8_t* at, const std::uint8_t* expected, std::size_t n);
+bool SameBytesExact(const std::uint8_t* at, const std::uint8_t* expected, std::size_t n);
+// True when the bytes at `at` (the game function at virtual address `va`) agree under `same`. Otherwise `refusal` receives the
+// record's fields for `reason` and `name`, and the function returns false.
+bool CheckGameBytes(const std::uint8_t* at, std::uint64_t va, const std::uint8_t* expected, std::size_t n, SameBytesFn same,
+                    const char* reason, const char* name, PinFields& refusal);
+
+// The fields as the text one log line carries: `key=value` separated by spaces, a value with a space in double quotes.
+std::string FormatFields(const PinFields& fields);
 
 // What this run's channel holds, as the session pin reads it. Replaced whole by SetChannelView.
 struct ChannelView {
@@ -130,6 +157,7 @@ void TickWith(GameAccess& game);
 nlohmann::json LoginEntries();
 
 // The registration's entries (one JSON object each, without "mounted"): the mounted maps, then the staged maps not yet mounted.
+// KNOWN-WRONG #TBD: nothing calls this yet, so a registration carries no pins. The channel's start wires it (ADR 0048 decision 9).
 std::vector<std::string> RegistrationEntries();
 
 // Forgets the view, the mounted pins, the fetch request and the tick state. For tests.

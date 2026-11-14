@@ -35,7 +35,7 @@ struct LoginProfileInputs {
   // A JSON array of the resource sets the loaded plugins carry, mounted (#2161); the key is sent only when this is
   // non-empty.
   nlohmann::json resources = nlohmann::json::array();
-  // A JSON array of the channel maps staged or mounted (docs/adr/0047, the session map pin); the key is sent only when
+  // A JSON array of the channel maps staged or mounted (docs/adr/0048, the session map pin); the key is sent only when
   // this is non-empty.
   nlohmann::json maps = nlohmann::json::array();
 };

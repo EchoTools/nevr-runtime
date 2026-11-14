@@ -74,6 +74,8 @@
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
+#include "runtime/hook/addresses.h"       // the owner-JSON setter and getter, and the net game's client lobby offsets
+#include "runtime/hook/prologue_head.h"   // the one EntryOk (the stock head, or a hook's jmp in front of it)
 #include "runtime/patch/ec_rules.h"  // nEVR port (#2358): the EC network rules, shared with the Quest
 #include "core/burst_then_count.h"   // nEVR port (#2358): the past-cap count's budget, as dronefix.cpp's (#2349)
 #include <winsock2.h>
@@ -668,7 +670,8 @@ constexpr uintptr_t FIND_ACTOR_RVA = 0x4FF1A0;
 const uint8_t kFindActorHead[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x4c, 0x8b, 0x99, 0x70, 0x03};
 using find_actor_fn = uint64_t(__fastcall *)(uint64_t, uint64_t, uint64_t *);
 volatile LONG g_map_grey = 0;                    // client: grey the map buttons (game thread)
-constexpr uintptr_t OWNER_SET_SYMBOL_RVA = 0x615E60, OWNER_GET_SYMBOL_RVA = 0x60D3D0, OWNER_GET_BOOL_RVA = 0x60D050;
+constexpr uintptr_t OWNER_SET_SYMBOL_RVA = nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_SET,
+                    OWNER_GET_SYMBOL_RVA = nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_GET, OWNER_GET_BOOL_RVA = 0x60D050;
 constexpr uintptr_t SESSION_STARTED_RVA = 0x17D8A0, SET_GAME_STATE_RVA = 0x1B8650;
 // PopLevelSet(game space) (+0x114C20): what CR15NetGame::LeaveGame does before a new session, when
 // bit 37 of *(netgame+2DA0h) (set by LoadMap: a level is loaded) is set; it clears the bit after.
@@ -712,9 +715,6 @@ volatile ULONGLONG g_map_popup_at = 0;           // client: raise the popup even
 volatile ULONGLONG g_map_client_unload_at = 0;   // client: unload check time (0 none)
 volatile LONG g_map_leaving = 0;                 // server: map index + 1 waiting out MAP_LEAVE_MS
 volatile ULONGLONG g_map_leave_at = 0;
-const uint8_t kOwnerSetSymbolHead[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20,
-                                       0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xe9, 0x49, 0x8b, 0xd8, 0x48, 0x81, 0xc1, 0x10, 0x03};
-const uint8_t kOwnerGetSymbolHead[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x81, 0xc1, 0x10, 0x03, 0x00, 0x00};
 const uint8_t kOwnerGetBoolHead[] = {0x48, 0x81, 0xc1, 0x10, 0x03, 0x00, 0x00, 0x45, 0x33, 0xc9, 0xe9};
 const uint8_t kSessionStartedHead[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56};
 const uint8_t kSetGameStateHead[] = {0x40, 0x55, 0x57, 0x41, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x80, 0xfc, 0xff, 0xff, 0x48, 0x81, 0xec, 0x80, 0x04};
@@ -734,14 +734,14 @@ volatile ULONGLONG g_map_asked_at = 0;           // client: last ask (one per pr
 // The stock entry bytes, or a hook's jmp there (another plugin hooks SetGameState: calling the
 // entry then goes through that hook, as the game's own calls do). Its tail must still be stock.
 bool EntryOk(uintptr_t rva, const uint8_t *head, size_t n) {
-    const uint8_t *e = g_base + rva;
-    if (!memcmp(e, head, n)) return true;
-    return e[0] == 0xe9 && n > 8 && !memcmp(e + 5, head + 5, n - 5);
+    return nevr_prologue_head::EntryOk(g_base + rva, head, n);
 }
 bool MapSwitchCallable() {
     static bool said = false;
-    const char *bad = !EntryOk(OWNER_SET_SYMBOL_RVA, kOwnerSetSymbolHead, sizeof(kOwnerSetSymbolHead)) ? "owner setter"
-                    : !EntryOk(OWNER_GET_SYMBOL_RVA, kOwnerGetSymbolHead, sizeof(kOwnerGetSymbolHead)) ? "owner symbol getter"
+    const char *bad = !EntryOk(OWNER_SET_SYMBOL_RVA, nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE,
+                               sizeof(nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE)) ? "owner setter"
+                    : !EntryOk(OWNER_GET_SYMBOL_RVA, nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE,
+                               sizeof(nevr_patch_addresses::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE)) ? "owner symbol getter"
                     : !EntryOk(OWNER_GET_BOOL_RVA, kOwnerGetBoolHead, sizeof(kOwnerGetBoolHead)) ? "owner bool getter"
                     : !EntryOk(SESSION_STARTED_RVA, kSessionStartedHead, sizeof(kSessionStartedHead)) ? "session started"
                     : !EntryOk(SET_GAME_STATE_RVA, kSetGameStateHead, sizeof(kSetGameStateHead)) ? "SetGameState"
@@ -754,8 +754,8 @@ bool MapSwitchCallable() {
 
 // The lobby (CNSLobby) of the net game: CR15NetClientLobby *(netgame+40h), +18h.
 uint64_t NetLobby(uint64_t netgame) {
-    uint64_t client_lobby = netgame ? *(uint64_t *)(netgame + 0x40) : 0;
-    return client_lobby ? client_lobby + 0x18 : 0;
+    uint64_t client_lobby = netgame ? *(uint64_t *)(netgame + nevr_patch_addresses::NETGAME_CLIENT_LOBBY_OFFSET) : 0;
+    return client_lobby ? client_lobby + nevr_patch_addresses::CLIENT_LOBBY_LOBBY_OFFSET : 0;
 }
 
 void SendToServer(uint8_t type, uint32_t id);

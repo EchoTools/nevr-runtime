@@ -337,6 +337,66 @@ void TestMapsAreIndexedMembersAndAbsentWithoutMaps() {
   QCHECK(id && level && mounted);
 }
 
+// Whether a login record the rewrite wrote carries `needle` (a ` key=value` text).
+bool LoginRecordHas(const std::string& needle) {
+  for (const std::string& line : g_log) {
+    if (line.rfind("quest_login ", 0) == 0 && line.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+// nevr_maps written by the rewrite: the members are in the login and counted on the record (ADR 0048 decision 9).
+void TestNevrMapsAreWrittenAndCountedOnTheRecord() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  nevr_quest_login::BuildInfo build = MakeBuild();
+  build.map_report = &OneMap;
+  g_log.clear();
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, build, &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+  QCHECK(json.TypeOf("nevr_maps") == JsonType::Array);
+  QCHECK(json.ToJson()["nevr_maps"][0]["id"] == "arena2");
+  QCHECK(LoginRecordHas(" maps_written=1"));
+  QCHECK(LoginRecordHas(" map_fields="));
+  QCHECK(LoginRecordHas(" maps_refused_path="));
+}
+
+// A refused nevr_maps write is rolled back as a whole: no nevr_maps key is left, the record says 0 and names the refused path. The
+// identity still goes out (the maps are best effort).
+void TestRefusedNevrMapsWriteLeavesNoMapsKey() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  json.refuse_path = "nevr_maps[0]|version";
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  nevr_quest_login::BuildInfo build = MakeBuild();
+  build.map_report = &OneMap;
+  g_log.clear();
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, build, &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+  QCHECK(json.TypeOf("nevr_maps") == JsonType::Absent);
+  QCHECK(json.TypeOf("accountid") != JsonType::Absent);
+  QCHECK(LoginRecordHas(" maps_written=0"));
+  QCHECK(LoginRecordHas(" maps_refused_path=nevr_maps[0]|version"));
+}
+
+// A login with no maps config writes today's record: no map member on it.
+void TestNoMapsRecordIsTodaysRecord() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  g_log.clear();
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+  QCHECK(json.TypeOf("nevr_maps") == JsonType::Absent);
+  QCHECK(!LoginRecordHas(" map_fields="));
+  QCHECK(!LoginRecordHas(" maps_written="));
+  QCHECK(!LoginRecordHas(" maps_refused_path="));
+}
+
 void TestComposedProfileMatchesPcvrBuilder() {
   nevr_quest_login::Identity id = MakeIdentity();
   id.social_level = nevr_social_party::kSocialLevel;  // a source with the social facade installed
@@ -981,33 +1041,34 @@ void TestDeclineRecordSaysWhetherTheOculusIdWasRestored() {
   QCHECK(g_log[0].find("5551234") == std::string::npos && g_log[0].find("987654321012345") == std::string::npos);
 }
 
-// The quest_login cap (#1549): a record with ten details and a tail is over kMaxLoginFields, so it keeps its first
-// nine fields and the overflow record names the event and the count (12). A record that fits keeps every field.
+// The quest_login cap (#1549): kMaxLoginFields is 13, the outcome included. Twelve details and a tail make 14 fields, so the record
+// keeps its first 13 (the outcome and the twelve details) and the overflow record names the event and the count (14). Eleven
+// details and a tail make 13: a record that fits keeps every field.
 void TestLoginRecordCapNamesItsOverflow() {
-  static const char* const kNames[10] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"};
-  nevr_quest_login::LogKv details[10];
-  for (int i = 0; i < 10; ++i) details[i] = nevr_quest_login::LogKv{kNames[i], nullptr, i};
+  static const char* const kNames[12] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11"};
+  nevr_quest_login::LogKv details[12];
+  for (int i = 0; i < 12; ++i) details[i] = nevr_quest_login::LogKv{kNames[i], nullptr, i};
   const nevr_quest_login::LogKv restored{"restored", nullptr, 1};
 
   g_log.clear();
   nevr_quest_login::EmitLoginRecord(&CaptureLog, nevr_quest_login::Level::Error, nevr_quest_login::Outcome::Rewritten,
-                                    details, 10, &restored, 1);
+                                    details, 12, &restored, 1);
   QCHECK(g_log.size() == 2U);  // the overflow record, then the call's own record
   if (g_log.size() == 2U) {
     QCHECK(g_log[0].find("quest_login_log_overflow") == 0);
     QCHECK(g_log[0].find("overflowed_event=quest_login") != std::string::npos);
-    QCHECK(g_log[0].find("fields=12") != std::string::npos);
+    QCHECK(g_log[0].find("fields=14") != std::string::npos);
     QCHECK(g_log[1].find("quest_login outcome=") == 0);
-    QCHECK(g_log[1].find(" k8=8") != std::string::npos && g_log[1].find(" k9=") == std::string::npos);
+    QCHECK(g_log[1].find(" k11=11") != std::string::npos);
     QCHECK(g_log[1].find("restored=") == std::string::npos);
   }
 
   g_log.clear();
   nevr_quest_login::EmitLoginRecord(&CaptureLog, nevr_quest_login::Level::Error, nevr_quest_login::Outcome::Rewritten,
-                                    details, 8, &restored, 1);
-  QCHECK(g_log.size() == 1U);  // ten fields in all: no overflow record
+                                    details, 11, &restored, 1);
+  QCHECK(g_log.size() == 1U);  // thirteen fields in all: no overflow record
   QCHECK(g_log.size() == 1U && g_log[0].find("quest_login_log_overflow") == std::string::npos);
-  QCHECK(g_log.size() == 1U && g_log[0].find(" k7=7") != std::string::npos);
+  QCHECK(g_log.size() == 1U && g_log[0].find(" k10=10") != std::string::npos);
   QCHECK(g_log.size() == 1U && g_log[0].find("restored=1") != std::string::npos);
 }
 
@@ -1608,6 +1669,9 @@ int main() {
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestMapsAreIndexedMembersAndAbsentWithoutMaps();
+  TestNevrMapsAreWrittenAndCountedOnTheRecord();
+  TestRefusedNevrMapsWriteLeavesNoMapsKey();
+  TestNoMapsRecordIsTodaysRecord();
   TestSerialRelay();
   TestSocialLevelFollowsTheIdentitySource();
   TestRewriteCarriesNevrIdentityToTheWire();

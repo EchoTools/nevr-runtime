@@ -91,6 +91,7 @@ struct BuildInfo {
   std::function<std::vector<PluginManifestEntry>()> plugin_report;
   // The session map pins (`nevr_maps`, ADR 0048 decision 9): the core's nevr_map_session_pin::LoginEntries() on the Quest, a JSON
   // array. Unset or empty: no `nevr_maps` (a run with no maps config sends today's login).
+  // KNOWN-WRONG #TBD: nothing sets this yet, so the Quest login carries no `nevr_maps`. The channel's start wires it.
   std::function<nlohmann::json()> map_report;
 };
 
@@ -342,8 +343,10 @@ enum class Outcome {
 
 const char* OutcomeName(Outcome outcome);
 
-// The most fields one quest_login record carries, the outcome included (#1549).
-constexpr std::size_t kMaxLoginFields = 10;
+// The most fields one quest_login record carries, the outcome included (#1549). The Rewritten record is the largest: the outcome,
+// nine details, and with a maps config the three map members (ADR 0048 decision 9), so 13. A record over this cap is cut and
+// says so (quest_login_log_overflow).
+constexpr std::size_t kMaxLoginFields = 13;
 // Writes one quest_login record: `outcome`, then `details`, then `tail`. A record over kMaxLoginFields keeps
 // its first fields and is preceded by quest_login_log_overflow, which names the event and the field count.
 void EmitLoginRecord(LogFn log, Level level, Outcome outcome, const LogKv* details, std::size_t n,
