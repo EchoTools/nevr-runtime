@@ -61,6 +61,10 @@ nevr_ht_test(sentinel_host_test GROUP shared HOST FIXTURE_REQUIRED sentinel_file
       src/core/crash_report.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp
       src/runtime/lifecycle/service_redirect.cpp)
 
+# The Quest update root's pure rules (quest/auth/app_files_rules.h, quest/shim/update_root_rules.h) and no other source.
+nevr_ht_test(update_root_test GROUP shared HOST
+  SRC src/quest/tests/update_root_test.cpp)
+
 # The platform-neutral token-auth core and the Quest session, under a fake HTTP server and a fake clock. Same sources the NDK
 # build compiles (src/quest/CMakeLists.txt).
 nevr_ht_test(auth_core_test GROUP shared HOST PTHREAD

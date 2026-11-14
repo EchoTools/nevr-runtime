@@ -1,5 +1,6 @@
 #include "quest/auth/file_store.h"
 
+#include "quest/auth/app_files_rules.h"
 #include "quest/auth/atomic_write.h"
 
 #include "core/device_auth_flow.h"
@@ -57,17 +58,7 @@ bool ReadNoFollow(const std::string& path, std::string& out, bool& missing, std:
 }  // namespace
 
 std::string AppInternalFilesDirFromCmdline(const std::string& cmdline, unsigned uid) {
-  const std::string name = cmdline.substr(0, cmdline.find('\0'));
-  // A Java package name: dotted identifiers, at least two segments, no ':' process suffix.
-  if (name.size() < 3 || name.size() > 128 || name.front() == '.' || name.back() == '.') return "";
-  bool dot = false;
-  for (const char c : name) {
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.';
-    if (!ok) return "";
-    if (c == '.') dot = true;
-  }
-  if (!dot || name.find("..") != std::string::npos) return "";
-  return "/data/user/" + std::to_string(uid / 100000) + "/" + name + "/files";
+  return ::nevr_quest::app_files::FilesDirFromCmdline(cmdline, uid);
 }
 
 std::string AppInternalFilesDir() {
