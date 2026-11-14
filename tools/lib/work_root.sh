@@ -1,6 +1,6 @@
 # The work root for the shell tools: $NEVR_WORK_ROOT, else src/nevr-runtime-work under the home directory.
 # Source it; it defines NEVR_WORK_ROOT and `work_dir`, and has no other side effect. The Python tools use
-# tools/work_root.py; tools/tests/test_work_dir_contract.py holds the two to the same answer.
+# tools/work_root.py; nothing ties the two to the same answer yet (no test compares them).
 #
 # work_dir <dir> <what it is for> <when it is removed>
 #   Makes <dir>. When <dir> is the root or under it, it also writes README.md (what it is for, whose it is,

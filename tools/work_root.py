@@ -2,7 +2,7 @@
 
 The root is $NEVR_WORK_ROOT, else `src/nevr-runtime-work` under the user's home directory. Every
 Python tool takes its default from here and spells no path of its own; the shell side is
-tools/lib/work_root.sh and tools/tests/test_work_dir_contract.py holds the two to the same answer.
+tools/lib/work_root.sh and nothing ties the two to the same answer yet (no test compares them).
 
 A directory a tool creates under the root carries a README.md saying what it is for, whose it is and
 when it is removed (AGENTS.md, "Working practices for every agent"). `ensure_dir` makes the

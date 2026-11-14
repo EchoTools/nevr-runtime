@@ -55,6 +55,7 @@ import (
 	"unsafe"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
@@ -166,13 +167,26 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 		log.Error("no stream", "dir", dir, "error", err.Error())
 		return exitSetup
 	}
-	scratch, err := os.MkdirTemp("", "test-go-tools-")
+	// The run root is made under the work root and removed once when this run ends (internal/runroot). Its removal is
+	// not fatal: a run root left behind is reported, and the run's own result stands.
+	wr, err := runroot.WorkRoot(getenv)
 	if err != nil {
 		stream.Close()
-		fmt.Fprintf(stderr, "test-tools: FAIL cannot make a scratch directory for go test: %v\n", err)
+		fmt.Fprintf(stderr, "test-tools: FAIL %v\n", err)
 		return exitSetup
 	}
-	defer os.RemoveAll(scratch)
+	scratch, err := runroot.Make(wr, "test-go-tools", time.Now().UTC(), os.Getpid())
+	if err != nil {
+		stream.Close()
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot make a run root for go test: %v\n", err)
+		return exitSetup
+	}
+	defer func() {
+		if err := runroot.Remove(wr, scratch); err != nil {
+			fmt.Fprintf(stderr, "test-tools: WARN run root not removed: %v\n", err)
+			log.Warn("run root not removed", "error", err.Error())
+		}
+	}()
 	env, err := testkit.EnvAt(scratch, getenv, goPath)
 	if err != nil {
 		stream.Close()
