@@ -8,7 +8,9 @@
 #include <memory>
 #include <set>
 
+#include "core/owned_remove_rules.h"
 #include "quest/data/sha256.h"
+#include "quest/data/staging.h"
 #include "quest/obb/byte_source.h"
 #include "quest/obb/fat16.h"
 #include "quest/obb/obb_cipher.h"
@@ -27,14 +29,18 @@ double MillisSince(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
-// Removes a directory when it goes out of scope unless it was released: a refused or failed extraction leaves nothing behind.
+// Removes, by its manifest, the item an extraction made when it goes out of scope unless it was released: a refused or failed
+// extraction leaves nothing behind that it recorded. Anything the manifest does not name stays, and is logged.
 class RemoveOnExit {
  public:
-  explicit RemoveOnExit(fs::path path) : path_(std::move(path)) {}
+  RemoveOnExit(fs::path path, BuildLog& log, std::vector<std::string> pinned)
+      : path_(std::move(path)), log_(log), pinned_(std::move(pinned)) {}
   ~RemoveOnExit() {
     if (armed_) {
-      std::error_code ec;
-      fs::remove_all(path_, ec);
+      const nevr_quest::data::ItemRemoval r = nevr_quest::data::RemoveUnionRecord(path_.string(), pinned_);
+      if (!r.removed) {
+        log_.Error("cache_left", {{"directory", path_.generic_string()}, {"outcome", r.outcome}, {"entry", r.entry}});
+      }
     }
   }
   RemoveOnExit(const RemoveOnExit&) = delete;
@@ -44,8 +50,38 @@ class RemoveOnExit {
 
  private:
   fs::path path_;
+  BuildLog& log_;
+  std::vector<std::string> pinned_;
   bool armed_ = false;
 };
+
+// Every name the stock data writes for these pins: each pinned file, the folders above it, and the cache's manifest. The build before
+// manifests wrote no marker for its cache or its partial, so these pins are the record of what it made.
+std::vector<std::string> PinnedMembers(const StockPins& pins) {
+  std::set<std::string> names;
+  for (const PinnedFile& p : pins.files) {
+    for (std::size_t slash = p.path.find('/'); slash != std::string::npos; slash = p.path.find('/', slash + 1)) {
+      names.insert(p.path.substr(0, slash));
+    }
+    names.insert(p.path);
+  }
+  names.insert(std::string(kStockDataManifestName));
+  return std::vector<std::string>(names.begin(), names.end());
+}
+
+// Removes an item this extraction made. With a marker, by its manifest; without one (the build before manifests), by the pinned names
+// alone, and the folder only when it is then empty. Anything that stops the removal is a failure, and the item stays.
+Status RemoveMade(const fs::path& item, BuildLog& log, const std::vector<std::string>& pinned) {
+  std::error_code ec;
+  const bool marked = fs::exists(fs::symlink_status(nevr_quest::data::OwnerMarkerPath(item.string()), ec));
+  const nevr_quest::data::ItemRemoval r = nevr_quest::data::RemoveUnionRecord(item.string(), pinned);
+  if (r.removed) {
+    if (!marked && r.had_item) log.Info("legacy_removed", {{"directory", item.generic_string()}, {"names", pinned.size()}});
+    return Status::Ok();
+  }
+  log.Error("cache_refused", {{"directory", item.generic_string()}, {"outcome", r.outcome}, {"entry", r.entry}});
+  return Status::Fail("cache_unwritable", "cannot remove '" + item.string() + "': " + r.outcome + " at '" + r.entry + "'");
+}
 
 Status ReadText(const std::string& path, std::string* text, const char* code) {
   std::ifstream in(path, std::ios::binary);
@@ -157,8 +193,21 @@ Status Extract(const StockDataOptions& options, const fs::path& partial, BuildLo
   if (ec) return Status::Fail("cache_unwritable", "cannot create '" + partial.string() + "': " + ec.message());
 
   std::set<std::string> written;
+  // Every member is in the partial's manifest before it is made: its folders above it, as create_directories makes them, and
+  // the entry itself. A folder is recorded once.
+  std::set<std::string> recorded;
   return volume->Walk([&](const std::string& path, const FatEntry& entry) -> Status {
     if (!written.insert(path).second) return Status::Fail("fat_duplicate_name", "the image names '" + path + "' twice");
+    if (!nevr_owned::ValidEntry(path)) return Status::Fail("fat_unsafe_name", "the image names '" + path + "', which is not a plain path");
+    std::vector<std::string> members;
+    for (std::size_t slash = path.find('/'); slash != std::string::npos; slash = path.find('/', slash + 1)) {
+      const std::string folder = path.substr(0, slash);
+      if (recorded.insert(folder).second) members.push_back(folder);
+    }
+    if (recorded.insert(path).second) members.push_back(path);
+    if (!nevr_quest::data::RecordOwned(partial.string(), members)) {
+      return Status::Fail("cache_write_failed", "recording '" + path + "' in the manifest of '" + partial.string() + "' failed");
+    }
     const fs::path target = partial / path;
     std::error_code e;
     if (entry.is_directory) {
@@ -193,6 +242,7 @@ Status Run(const StockDataOptions& options, BuildLog& log, StockDataResult* resu
   if (Status s = ReadText(options.pins_path, &pins_text, "pins_unreadable"); !s.ok) return s;
   StockPins pins;
   if (Status s = ParseStockPins(pins_text, &pins); !s.ok) return s;
+  const std::vector<std::string> pinned_names = PinnedMembers(pins);
   log.Info("pins_loaded", {{"pins", options.pins_path}, {"obb_sha256", pins.obb_sha256}, {"obb_bytes", pins.obb_size}, {"files", pins.files.size()}});
 
   const auto hash_start = std::chrono::steady_clock::now();
@@ -215,21 +265,25 @@ Status Run(const StockDataOptions& options, BuildLog& log, StockDataResult* resu
       return Status::Ok();
     }
     log.Warning("cache_invalid", {{"directory", result->directory}, {"reason", why}});
-    fs::remove_all(dir, ec);
-    if (ec) return Status::Fail("cache_unwritable", "cannot remove the invalid cache '" + dir.string() + "': " + ec.message());
+    if (Status s = RemoveMade(dir, log, pinned_names); !s.ok) return s;
   } else {
     log.Info("cache_miss", {{"directory", result->directory}});
+    if (Status s = RemoveMade(dir, log, pinned_names); !s.ok) return s;  // a marker whose folder is gone: nothing else is there
   }
 
   fs::create_directories(options.cache_root, ec);
   if (ec) return Status::Fail("cache_unwritable", "cannot create '" + options.cache_root + "': " + ec.message());
+  // The cache root's ledger names every cache and partial this run made; the names that are gone are pruned here, so it cannot grow
+  // past its cap.
+  nevr_quest::data::CleanLeftovers(options.cache_root, nullptr);
   const fs::path partial = fs::path(options.cache_root) / (obb_sha + ".partial");
-  if (fs::exists(partial, ec)) {
-    fs::remove_all(partial, ec);
-    if (ec) return Status::Fail("cache_unwritable", "cannot remove '" + partial.string() + "': " + ec.message());
-    log.Warning("partial_removed", {{"directory", partial.generic_string()}});
+  if (fs::exists(partial, ec)) log.Warning("partial_removed", {{"directory", partial.generic_string()}});
+  if (Status s = RemoveMade(partial, log, pinned_names); !s.ok) return s;
+  // The marker is made before the folder: every member is then recorded in it before the member is made.
+  if (!nevr_quest::data::MarkOwned(partial.string())) {
+    return Status::Fail("cache_unwritable", "cannot mark '" + partial.string() + "'");
   }
-  RemoveOnExit cleanup(partial);
+  RemoveOnExit cleanup(partial, log, pinned_names);
   cleanup.Arm();
   result->files.clear();
   const auto extract_start = std::chrono::steady_clock::now();
@@ -237,15 +291,33 @@ Status Run(const StockDataOptions& options, BuildLog& log, StockDataResult* resu
   if (Status s = CheckTreeAgainstPins(pins, result->files); !s.ok) return s;
 
   const Json manifest = {{"schema", 1}, {"obb_sha256", obb_sha}, {"obb_bytes", obb_size}, {"files", FilesJson(result->files)}};
+  if (!nevr_quest::data::RecordOwned(partial.string(), {kStockDataManifestName})) {
+    return Status::Fail("cache_write_failed", "recording the manifest of '" + partial.string() + "' failed");
+  }
   {
     std::ofstream out(partial / kStockDataManifestName, std::ios::binary | std::ios::trunc);
     out << manifest.dump(2) << "\n";
     out.close();
     if (!out) return Status::Fail("cache_write_failed", "writing the manifest of '" + partial.string() + "' failed");
   }
+  // The cache's own marker carries the same members, and is made before the folder moves: a crash between the two leaves a
+  // marked partial (removed by its manifest) or a marked cache with no folder (its marker removed), never an unmarked cache.
+  std::vector<std::string> members;
+  if (!nevr_quest::data::ReadOwnerManifest(partial.string(), &members)) {
+    return Status::Fail("cache_write_failed", "the manifest of '" + partial.string() + "' does not read back");
+  }
+  if (!nevr_quest::data::MarkOwned(dir.string()) || !nevr_quest::data::RecordOwned(dir.string(), members)) {
+    return Status::Fail("cache_unwritable", "cannot mark '" + dir.string() + "'");
+  }
   fs::rename(partial, dir, ec);
-  if (ec) return Status::Fail("cache_unwritable", "cannot move '" + partial.string() + "' to '" + dir.string() + "': " + ec.message());
+  if (ec) {
+    if (Status s = RemoveMade(dir, log, pinned_names); !s.ok) return s;
+    return Status::Fail("cache_unwritable", "cannot move '" + partial.string() + "' to '" + dir.string() + "': " + ec.message());
+  }
   cleanup.Release();
+  // The folder moved, so the cache is complete: only the partial's marker is left, and a refusal there is logged, not fatal.
+  const nevr_quest::data::ItemRemoval left = nevr_quest::data::RemoveUnionRecord(partial.string(), pinned_names);
+  if (!left.removed) log.Warning("partial_marker_left", {{"directory", partial.generic_string()}, {"outcome", left.outcome}, {"entry", left.entry}});
   std::uint64_t total = 0;
   for (const MeasuredFile& f : result->files) total += f.size;
   log.Info("stock_data_ready", {{"directory", result->directory}, {"files", FilesJson(result->files)}, {"cache_hit", false}, {"bytes", total},

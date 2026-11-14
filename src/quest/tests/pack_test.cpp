@@ -158,7 +158,7 @@ std::vector<std::string> Names(const std::string& dir) {
   if (DIR* d = ::opendir(dir.c_str())) {
     while (const dirent* e = ::readdir(d)) {
       const std::string n = e->d_name;
-      if (n != "." && n != "..") out.push_back(n);
+      if (n != "." && n != ".." && n != kLedgerName && n != kLedgerTmpName) out.push_back(n);  // the ledgers are ours, not the pack's
     }
     ::closedir(d);
   }
@@ -590,12 +590,44 @@ TEST(ATemporaryWithNoMarkerIsNotOursAndIsNotDeleted) {
   CHECK_EQ(ReadFile(rig.ManifestPath()), kStockManifest);
 }
 
+// A temporary the build before manifests left, beside a file that is already in place (so the pack writes nothing this run), is named
+// by the pack's own file list and is removed. A file with the same suffix that the pack does not name is left.
+TEST(ALegacyTemporaryNamedByThePacksFileListIsRemovedWhenItsFileIsCurrent) {
+  Rig rig;
+  rig.BuildApk();
+  CHECK(rig.Run().outcome == PackOutcome::kPlaced);
+  const std::string tmp = rig.PackagePath() + kPackTmpSuffix;
+  WriteFile(tmp, "the build before manifests' temporary");
+  WriteFile(OwnerMarkerPath(tmp), "");
+  const std::string stranger = rig.android + "/packages/stranger" + kPackTmpSuffix;
+  WriteFile(stranger, "not the pack's");
+  WriteFile(OwnerMarkerPath(stranger), "");
+  const PackResult again = rig.Run();
+  CHECK(again.outcome == PackOutcome::kCurrent);
+  CHECK(!Exists(tmp) && !Exists(OwnerMarkerPath(tmp)));
+  CHECK_EQ(ReadFile(stranger), std::string("not the pack's"));
+  CHECK(Exists(OwnerMarkerPath(stranger)));
+}
+
+// A file of the same name as the backup's temporary, with no marker, is not ours: the backup fails and the file survives.
+TEST(AStrangerAtTheStockBackupTemporaryNameIsLeftAndTheBackupFails) {
+  Rig rig;
+  rig.BuildApk();
+  const std::string tmp = rig.ManifestPath() + ".stock" + kPackTmpSuffix;
+  WriteFile(tmp, "not the pack's");
+  const PackResult r = rig.Run();
+  CHECK(r.status == PackStatus::kBackupFailed);
+  CHECK_EQ(ReadFile(tmp), std::string("not the pack's"));
+  CHECK(!Exists(OwnerMarkerPath(tmp)));
+}
+
 // ---------------- the cleanup routine the data step shares ----------------
 
 TEST(CleanLeftoversCoversThePackToo) {
   Rig rig;
   const std::string tmp = rig.PackagePath() + kPackTmpSuffix;
   WriteFile(tmp, "half a package");
+  CHECK(RecordPackDirectories(rig.root, std::string("_data/") + kVersionDir + "/rad15/android"));
   CHECK(MarkOwned(tmp));
   int failed = 0;
   CHECK_EQ(CleanLeftovers(rig.root, &failed), 1);
@@ -622,6 +654,7 @@ TEST(CleanPackLeftoversKeepsEverythingThatIsNotAMarkedPackTemporary) {
 
 TEST(CleanPackLeftoversRemovesMarkersWhoseItemIsGone) {
   Rig rig;
+  CHECK(RecordPackDirectories(rig.root, std::string("_data/") + kVersionDir + "/rad15/android"));
   CHECK(MarkOwned(rig.ManifestPath() + ".stock"));                  // killed between the marker and the rename
   CHECK(MarkOwned(rig.PackagePath() + kPackTmpSuffix));            // a temporary that was removed by hand
   CHECK_EQ(CleanPackLeftovers(rig.root, nullptr), 0);

@@ -5,7 +5,12 @@
 if(NEVR_QUEST_OBB_EXTRACT)
   # ── obb ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
   nevr_ht_group(obb)
-  set(_obb_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/obb)
+  # NEVR_TEST_TMP is read at configure time (see data.cmake): the recipe sets it to its run root; unset, the build tree's obb/.
+  if(DEFINED ENV{NEVR_TEST_TMP})
+    set(_obb_env NEVR_TEST_TMP=$ENV{NEVR_TEST_TMP})
+  else()
+    set(_obb_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/obb)
+  endif()
   nevr_ht_test(obb_footer_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_footer_test.cpp)
   nevr_ht_test(obb_key_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_key_test.cpp)
   nevr_ht_test(obb_cipher_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_cipher_test.cpp)

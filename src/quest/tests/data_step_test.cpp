@@ -298,6 +298,7 @@ void CrashedReplace(const std::string& root) {
   MakeTree(aside, std::string(kManifestRel).substr(std::string("_data/").size()), "manifest");
   const std::string staging = root + "/_data.staging-0123456789ab";
   CHECK(MarkOwned(staging));
+  CHECK(RecordOwned(staging, {"half"}));  // the manifest names the one member the crash left
   ::mkdir(staging.c_str(), 0755);
   WriteFile(staging + "/half", "half");
 }

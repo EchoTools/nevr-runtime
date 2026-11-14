@@ -332,14 +332,29 @@ void PutLeftoversRight(const StepConfig& config) {
   for (const std::string& root : RecoveryRootsFor(config)) {
     std::string restored_from;
     const bool recovered = RecoverReplaced(root, &restored_from);
+    // The staging the build before manifests left (an empty marker) is cleared by the members of its zip, the verified part kept
+    // until the swap. Nothing else is named: a legacy staging with no part to list is left and reported.
+    std::string legacy_detail;
+    const ItemRemoval legacy = ClearLegacyStaging(StagingPath(root, kZipSha256), root + "/" + kPartName,
+                                                  config.fetch.zip_limits, &legacy_detail, /*pinned=*/true);
+    if (config.on_step && legacy.had_item) {
+      config.on_step({"data_recover", {{"root", root},
+                                       {"legacy_staging", legacy.removed ? "cleared" : legacy.outcome},
+                                       {"entry", legacy.entry},
+                                       {"detail", legacy_detail}}});
+    }
     int failed = 0;
-    const int cleaned = CleanLeftovers(root, &failed);
+    std::vector<std::string> left;
+    const int cleaned = CleanLeftovers(root, &failed, &left);
     if (config.on_step && (recovered || cleaned != 0 || failed != 0)) {
       config.on_step({"data_recover",
                       {{"root", root},
                        {"recovered", recovered ? restored_from : std::string()},
                        {"cleaned", std::to_string(cleaned)},
                        {"failed", std::to_string(failed)}}});
+    }
+    for (const std::string& item : left) {
+      if (config.on_step) config.on_step({"data_recover", {{"root", root}, {"left", item}}});
     }
   }
 }
@@ -356,7 +371,7 @@ data_root::Resolution ResolveMediaOnly(data_root::ExistsFn exists) noexcept {
 void RemoveUsedPart(const StepConfig& config, const std::string& root) {
   const std::string part = root + "/" + kPartName;
   if (!IsOwned(part)) return;
-  const bool removed = RemoveTree(part) && RemoveTree(OwnerMarkerPath(part));
+  const bool removed = RemoveItem(part).removed;
   if (config.on_step) config.on_step({"data_cleanup", {{"part", part}, {"removed", removed ? "true" : "false"}}});
 }
 

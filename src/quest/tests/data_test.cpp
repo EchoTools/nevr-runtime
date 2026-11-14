@@ -496,6 +496,7 @@ TEST(CleanLeftoversRemovesOnlyAMarkedStagingDirectory) {
   Scratch s;
   const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
   CHECK(MarkOwned(staging));
+  CHECK(RecordOwned(staging, {"f"}));  // the manifest names the one file the item holds
   CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
   WriteFile(staging + "/f", "x");
   CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
@@ -572,6 +573,7 @@ TEST(ACrashBetweenTheTwoRenamesIsRecoveredOnTheNextLaunch) {
   WriteFile(replaced + "/old", "old");
   const std::string staging = StagingPath(s.dir, kZipSha256);
   CHECK(MarkOwned(staging));
+  CHECK(RecordOwned(staging, {"new"}));
   CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
   WriteFile(staging + "/new", "new");
   std::string from;
@@ -705,13 +707,13 @@ TEST(MarkOwnedNeverTruncatesOrFollowsWhatIsAlreadyAtTheMarkerName) {
   CHECK(!MarkOwned(item));
   CHECK_EQ(ReadFile(marker), std::string("the player's notes"));
   CHECK(!IsOwned(item));
-  CHECK(RemoveTree(marker));
+  CHECK_EQ(::unlink(marker.c_str()), 0);
 
   WriteFile(s.Path("target"), "user file");  // a link there is refused and its target is untouched
   CHECK_EQ(::symlink(Absolute(s.Path("target")).c_str(), marker.c_str()), 0);
   CHECK(!MarkOwned(item));
   CHECK_EQ(ReadFile(s.Path("target")), std::string("user file"));
-  CHECK(RemoveTree(marker));
+  CHECK_EQ(::unlink(marker.c_str()), 0);
 
   CHECK(MarkOwned(item));  // an empty file of ours is accepted again, as a resume does
   CHECK(MarkOwned(item));
@@ -724,14 +726,14 @@ TEST(IsOwnedNeedsAnEmptyRegularFile) {
   const std::string marker = OwnerMarkerPath(item);
   CHECK_EQ(::mkdir(marker.c_str(), 0755), 0);  // a directory
   CHECK(!IsOwned(item));
-  CHECK(RemoveTree(marker));
+  CHECK_EQ(::rmdir(marker.c_str()), 0);
   WriteFile(s.Path("empty"), "");
   CHECK_EQ(::symlink(Absolute(s.Path("empty")).c_str(), marker.c_str()), 0);  // a link to an empty file
   CHECK(!IsOwned(item));
-  CHECK(RemoveTree(marker));
+  CHECK_EQ(::unlink(marker.c_str()), 0);
   WriteFile(marker, "content");  // a file with content
   CHECK(!IsOwned(item));
-  CHECK(RemoveTree(marker));
+  CHECK_EQ(::unlink(marker.c_str()), 0);
   WriteFile(marker, "");
   CHECK(IsOwned(item));
 }
@@ -743,6 +745,40 @@ TEST(CleanLeftoversKeepsAFileWithContentThatOnlyLooksLikeAnOrphanMarker) {
   int failed = 0;
   CHECK_EQ(CleanLeftovers(s.dir, &failed), 0);
   CHECK_EQ(ReadFile(file), std::string("mine"));
+}
+
+// Case (a): a leftover that holds a link to a canary folder outside the root. The item never recorded that link, so cleanup
+// must refuse the item: the link, the item and its marker stay, and the canary keeps its file.
+TEST(CleanLeftoversNeverWalksAnItemIntoALinkedCanary) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("canary").c_str(), 0755), 0);
+  WriteFile(s.Path("canary/keep"), "k");
+  const std::string item = s.Path("_data.staging-cccccccccccc");
+  CHECK(MarkOwned(item));
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  char* abs = ::realpath(s.Path("canary").c_str(), nullptr);
+  CHECK(abs != nullptr);
+  CHECK_EQ(::symlink(abs, (item + "/sub").c_str()), 0);
+  std::free(abs);
+  int failed = -1;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 0);
+  CHECK(Exists(item + "/sub"));
+  CHECK(Exists(item));
+  CHECK(Exists(OwnerMarkerPath(item)));
+  CHECK_EQ(ReadFile(s.Path("canary/keep")), std::string("k"));
+}
+
+// Case (d): an item on disk that the ledger does not name is not touched, even with a marker that holds nothing. The
+// marker here is written by hand, so no ledger line of ours names the item.
+TEST(CleanLeftoversNeverTouchesAnItemTheLedgerDoesNotName) {
+  Scratch s;
+  const std::string item = s.Path("_data.staging-dddddddddddd");
+  WriteFile(OwnerMarkerPath(item), "");
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  WriteFile(item + "/f", "x");
+  CHECK_EQ(CleanLeftovers(s.dir, nullptr), 0);
+  CHECK_EQ(ReadFile(item + "/f"), std::string("x"));
+  CHECK(IsOwned(item));
 }
 
 TEST(RecoverReplacedNeverTakesALinkEvenWithAMarker) {
@@ -757,19 +793,315 @@ TEST(RecoverReplacedNeverTakesALinkEvenWithAMarker) {
   CHECK_EQ(ReadFile(s.Path("userdir/keep")), std::string("k"));
 }
 
-TEST(RemoveTreeDoesNotFollowLinks) {
-  Scratch s;
-  CHECK_EQ(::mkdir(s.Path("outside").c_str(), 0755), 0);
-  WriteFile(s.Path("outside/keep"), "k");
-  CHECK_EQ(::mkdir(s.Path("tree").c_str(), 0755), 0);
-  char* abs = ::realpath(s.Path("outside").c_str(), nullptr);  // a link's target is relative to the link's directory
+// Appends raw bytes to a file, for the cases a test makes by hand (a manifest line the grammar refuses).
+void AppendRaw(const std::string& path, const std::string& bytes) {
+  const int fd = ::open(path.c_str(), O_WRONLY | O_APPEND);
+  CHECK(fd >= 0);
+  CHECK_EQ(::write(fd, bytes.data(), bytes.size()), static_cast<ssize_t>(bytes.size()));
+  ::close(fd);
+}
+
+bool IsLink(const std::string& path) {
+  struct stat st;
+  return ::lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+}
+
+// The canary: a folder outside the item, with a file that must survive every case below.
+void MakeCanary(const Scratch& s) {
+  CHECK_EQ(::mkdir(s.Path("canary").c_str(), 0755), 0);
+  WriteFile(s.Path("canary/keep"), "k");
+}
+
+std::string LinkToCanary(const Scratch& s, const std::string& at) {
+  char* abs = ::realpath(s.Path("canary").c_str(), nullptr);
   CHECK(abs != nullptr);
-  CHECK_EQ(::symlink(abs, s.Path("tree/link").c_str()), 0);
+  CHECK_EQ(::symlink(abs, at.c_str()), 0);
   std::free(abs);
-  CHECK(RemoveTree(s.Path("tree")));
-  CHECK(!Exists(s.Path("tree")));
-  CHECK_EQ(ReadFile(s.Path("outside/keep")), std::string("k"));
-  CHECK(RemoveTree(s.Path("never-existed")));
+  return at;
+}
+
+// Case (b): a folder holding a file its manifest does not name keeps its folder and that file.
+TEST(RemoveItemKeepsAnItemThatHoldsAFileItsManifestDoesNotName) {
+  Scratch s;
+  const std::string item = s.Path("_data.staging-eeeeeeeeeeee");
+  CHECK(MarkOwned(item));
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  CHECK(RecordOwned(item, {"listed.txt"}));
+  WriteFile(item + "/listed.txt", "a");
+  WriteFile(item + "/unlisted.txt", "b");
+  const ItemRemoval r = RemoveItem(item);
+  CHECK(!r.removed);
+  CHECK(r.had_item);
+  CHECK_EQ(r.outcome, std::string("not_empty"));
+  CHECK_EQ(r.entry, std::string("_data.staging-eeeeeeeeeeee"));
+  CHECK(!Exists(item + "/listed.txt"));
+  CHECK_EQ(ReadFile(item + "/unlisted.txt"), std::string("b"));
+  CHECK(Exists(item));
+  CHECK(Exists(OwnerMarkerPath(item)));
+}
+
+// Case (a), with the member recorded: the member's parent is a link to the canary. The guard refuses it; the link, the item and
+// the marker stay, and the canary keeps its file.
+TEST(RemoveItemRefusesAMemberWhoseParentIsALinkToACanary) {
+  Scratch s;
+  MakeCanary(s);
+  const std::string item = s.Path("_data.staging-ffffffffffff");
+  CHECK(MarkOwned(item));
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  CHECK(RecordOwned(item, {"sub/keep"}));
+  LinkToCanary(s, item + "/sub");
+  const ItemRemoval r = RemoveItem(item);
+  CHECK(!r.removed);
+  CHECK_EQ(r.outcome, std::string("refused_link"));
+  CHECK_EQ(r.entry, std::string("sub/keep"));
+  CHECK(IsLink(item + "/sub"));
+  CHECK(Exists(item));
+  CHECK(Exists(OwnerMarkerPath(item)));
+  CHECK_EQ(ReadFile(s.Path("canary/keep")), std::string("k"));
+}
+
+// Case (c): the ledger names an item that is a link to the canary. The link is refused and left; the canary keeps its file.
+TEST(CleanLeftoversRefusesALedgeredItemThatIsALink) {
+  Scratch s;
+  MakeCanary(s);
+  const std::string item = s.Path("_data.staging-gggggggggggg");
+  CHECK(MarkOwned(item));
+  LinkToCanary(s, item);
+  int failed = 0;
+  std::vector<std::string> left;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed, &left), 0);
+  CHECK_EQ(failed, 1);
+  CHECK_EQ(left.size(), 1u);
+  CHECK_EQ(left.at(0), std::string("refused_link _data.staging-gggggggggggg"));
+  CHECK(IsLink(item));
+  CHECK(Exists(OwnerMarkerPath(item)));
+  CHECK_EQ(ReadFile(s.Path("canary/keep")), std::string("k"));
+}
+
+// Case (e): a marker with a line the grammar refuses (a parent step, a NUL byte, an absolute path) makes the item someone else's.
+TEST(ABadManifestLineMakesTheWholeItemSomeoneElses) {
+  Scratch s;
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"bad-parent", "../x\n"}, {"bad-nul", std::string("a\0b\n", 4)}, {"bad-absolute", "/abs\n"}};
+  for (const auto& c : cases) {
+    const std::string item = s.Path("_data.staging-" + c.first);
+    CHECK(MarkOwned(item));
+    CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+    WriteFile(item + "/ok", "x");
+    AppendRaw(OwnerMarkerPath(item), c.second);
+    CHECK(!IsOwned(item));
+    const ItemRemoval r = RemoveItem(item);
+    CHECK(!r.removed);
+    CHECK_EQ(r.outcome, std::string("not_owned"));
+    CHECK_EQ(ReadFile(item + "/ok"), std::string("x"));
+  }
+  int failed = -1;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 0);
+  CHECK_EQ(failed, 3);
+  for (const auto& c : cases) CHECK(Exists(s.Path("_data.staging-" + c.first)));
+}
+
+// A manifest over kMaxOwnerManifestBytes is someone else's, and no member is recorded past the cap.
+TEST(AManifestOverTheCapIsSomeoneElses) {
+  Scratch s;
+  const std::string item = s.Path("_data.staging-oversize");
+  CHECK(MarkOwned(item));
+  std::string big;
+  while (big.size() <= kMaxOwnerManifestBytes) big += "m\n";
+  WriteFile(OwnerMarkerPath(item), big);
+  CHECK(!IsOwned(item));
+  CHECK(!RecordOwned(item, {"one"}));
+}
+
+// Case (f): a crash midway through an item's members. Cleanup removes every member the item recorded, then the folders, the
+// ledger's name and the marker, and nothing beside the item.
+TEST(ACrashedStagingItemIsRemovedWhollyAndNothingElse) {
+  Scratch s;
+  WriteFile(s.Path("stranger.txt"), "keep");
+  const std::string item = s.Path("_data.staging-iiiiiiiiiiii");
+  CHECK(MarkOwned(item));
+  CHECK(RecordOwned(item, {"a.txt", "sub", "sub/b.txt", "sub/c.txt"}));  // the whole set, before the first member
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  WriteFile(item + "/a.txt", "a");
+  CHECK_EQ(::mkdir((item + "/sub").c_str(), 0755), 0);
+  WriteFile(item + "/sub/b.txt", "b");
+  // The crash comes here: sub/c.txt was never made.
+  int failed = -1;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 1);
+  CHECK_EQ(failed, 0);
+  CHECK(!Exists(item));
+  CHECK(!Exists(OwnerMarkerPath(item)));
+  CHECK_EQ(ReadFile(s.Path("stranger.txt")), std::string("keep"));
+  CHECK(ReadFile(s.Path(kLedgerName)).find("_data.staging-iiiiiiiiiiii") == std::string::npos);
+}
+
+// A file item (a download, a pack temporary) is removed by its name and its marker; a link at the name is refused.
+TEST(AFileItemIsRemovedWithItsMarkerOnly) {
+  Scratch s;
+  const std::string item = s.Path("_data.zip.part");
+  CHECK(MarkOwned(item));
+  WriteFile(item, "bytes");
+  const ItemRemoval r = RemoveItem(item);
+  CHECK(r.removed);
+  CHECK(r.had_item);
+  CHECK(!Exists(item));
+  CHECK(!Exists(OwnerMarkerPath(item)));
+}
+
+// A link the manifest names as a member is the link the item made: the guard unlinks it by name and never follows it, so the
+// item goes and the canary keeps its file.
+TEST(RemoveItemUnlinksARecordedLinkByNameAndNeverFollowsIt) {
+  Scratch s;
+  MakeCanary(s);
+  const std::string item = s.Path("_data.staging-jjjjjjjjjjjj");
+  CHECK(MarkOwned(item));
+  CHECK_EQ(::mkdir(item.c_str(), 0755), 0);
+  CHECK(RecordOwned(item, {"link"}));
+  LinkToCanary(s, item + "/link");
+  const ItemRemoval r = RemoveItem(item);
+  CHECK(r.removed);
+  CHECK(!Exists(item));
+  CHECK(!Exists(OwnerMarkerPath(item)));
+  CHECK_EQ(ReadFile(s.Path("canary/keep")), std::string("k"));
+}
+
+// The build before manifests wrote an empty marker for its staging directory. Its zip is the record of what it made: a legacy staging
+// is cleared by exactly those members, and the folder only when it is then empty.
+TEST(ALegacyStagingWithExactlyItsZipMembersIsCleared) {
+  Scratch s;
+  const std::string part = s.Path("_data.zip.part");
+  WriteFile(part, BuildZip({SrcEntry("_data/a.bin", "AAAA"), SrcEntry("_data/sub/b.bin", "BBBB")}));
+  const std::string staging = s.Path("_data.staging-kkkkkkkkkkkk");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  CHECK_EQ(::mkdir((staging + "/sub").c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  WriteFile(staging + "/sub/b.bin", "BBBB");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, part, ZipLimits(), &detail);
+  CHECK(r.removed);
+  CHECK(r.had_item);
+  CHECK(!Exists(staging));
+  CHECK(!Exists(OwnerMarkerPath(staging)));
+  CHECK(Exists(part));
+}
+
+// With a stranger in one of its folders, a legacy staging keeps that folder and the stranger; what the zip names is removed.
+TEST(ALegacyStagingWithAStrangerIsRefusedAndTheStrangerSurvives) {
+  Scratch s;
+  const std::string part = s.Path("_data.zip.part");
+  WriteFile(part, BuildZip({SrcEntry("_data/a.bin", "AAAA"), SrcEntry("_data/sub/b.bin", "BBBB")}));
+  const std::string staging = s.Path("_data.staging-llllllllllll");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  CHECK_EQ(::mkdir((staging + "/sub").c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  WriteFile(staging + "/sub/b.bin", "BBBB");
+  WriteFile(staging + "/sub/stranger.txt", "mine");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, part, ZipLimits(), &detail);
+  CHECK(!r.removed);
+  CHECK_EQ(r.outcome, std::string("not_empty"));
+  CHECK_EQ(r.entry, std::string("sub"));
+  CHECK_EQ(ReadFile(staging + "/sub/stranger.txt"), std::string("mine"));
+  CHECK(!Exists(staging + "/a.bin"));
+  CHECK(Exists(staging));
+  CHECK(Exists(OwnerMarkerPath(staging)));
+}
+
+// A legacy staging whose zip is no longer there names nothing: it is left, and the reason says so.
+TEST(ALegacyStagingWhoseZipIsGoneIsLeftAndNamed) {
+  Scratch s;
+  const std::string staging = s.Path("_data.staging-mmmmmmmmmmmm");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, s.Path("_data.zip.part"), ZipLimits(), &detail);
+  CHECK(!r.removed);
+  CHECK_EQ(r.outcome, std::string("legacy_no_listing"));
+  CHECK(Exists(staging + "/a.bin"));
+}
+
+// A torn tail of the ledger (the last line cut short) must not stop the cleanup of the lines before it.
+TEST(ATornLedgerTailStillCleansTheRestOfTheLedger) {
+  Scratch s;
+  const std::string a = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK(MarkOwned(a));
+  CHECK_EQ(::mkdir(a.c_str(), 0755), 0);
+  const std::string b = s.Path("_data.staging-bbbbbbbbbbbb");
+  CHECK(MarkOwned(b));
+  const std::string ledger = s.Path(kLedgerName);
+  const std::string text = ReadFile(ledger);
+  WriteFile(ledger, text.substr(0, text.size() - 2));
+  int failed = -1;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 1);
+  CHECK_EQ(failed, 0);
+  CHECK(!Exists(a));
+}
+
+// RecoverReplaced chooses from the ledger: a marked replaced directory that no ledger names is not renamed back, however it looks.
+TEST(ARecoverReplacedDoesNotChooseAMarkedDirThatTheLedgerDoesNotName) {
+  Scratch s;
+  const std::string replaced = s.Path("_data.replaced-20261022T000000Z");
+  WriteFile(OwnerMarkerPath(replaced), "");  // a marker written by hand: no ledger line names this directory
+  CHECK_EQ(::mkdir(replaced.c_str(), 0755), 0);
+  WriteFile(replaced + "/old", "old");
+  CHECK(!RecoverReplaced(s.dir, nullptr));
+  CHECK(!Exists(s.Path("_data")));
+  CHECK_EQ(ReadFile(replaced + "/old"), std::string("old"));
+}
+
+// A marker at a name that is NOT pinned is only ours when its text is a torn prefix of a member the zip lists. Anything else is a stranger's:
+// it is left, its bytes are kept, and nothing is removed.
+TEST(ALegacyStagingWithAStrangerMarkerIsLeftAsNotOwned) {
+  Scratch s;
+  const std::string part = s.Path("_data.zip.part");
+  WriteFile(part, BuildZip({SrcEntry("_data/a.bin", "AAAA")}));
+  const std::string staging = s.Path("_data.staging-nnnnnnnnnnnn");
+  WriteFile(OwnerMarkerPath(staging), "the player's notes");
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, part, ZipLimits(), &detail);
+  CHECK(!r.removed);
+  CHECK_EQ(r.outcome, std::string("not_owned"));
+  CHECK_EQ(ReadFile(OwnerMarkerPath(staging)), std::string("the player's notes"));
+  CHECK(!Exists(OwnerMarkerPath(staging) + ".bad"));
+  CHECK_EQ(ReadFile(staging + "/a.bin"), std::string("AAAA"));
+}
+
+// The pinned name: a garbage marker is moved aside and the staging is cleared by its zip's names (the pinned flag).
+TEST(ALegacyStagingWithAGarbageMarkerOnThePinnedNameIsMovedAsideAndCleared) {
+  Scratch s;
+  const std::string part = s.Path("_data.zip.part");
+  WriteFile(part, BuildZip({SrcEntry("_data/a.bin", "AAAA")}));
+  const std::string staging = s.Path("_data.staging-pppppppppppp");
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(OwnerMarkerPath(staging), garbage);
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, part, ZipLimits(), &detail, /*pinned=*/true);
+  CHECK(r.removed);
+  CHECK_EQ(ReadFile(OwnerMarkerPath(staging) + ".bad"), garbage);
+  CHECK(!Exists(staging));
+}
+
+// A torn first line of our record for a legacy staging is moved aside, and the staging is then cleared by its zip's listing.
+TEST(ALegacyStagingWithATornFirstLineIsMovedAsideAndClearedByItsZip) {
+  Scratch s;
+  const std::string part = s.Path("_data.zip.part");
+  WriteFile(part, BuildZip({SrcEntry("_data/a.bin", "AAAA")}));
+  const std::string staging = s.Path("_data.staging-oooooooooooo");
+  WriteFile(OwnerMarkerPath(staging), "a.b");
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/a.bin", "AAAA");
+  std::string detail;
+  const ItemRemoval r = ClearLegacyStaging(staging, part, ZipLimits(), &detail);
+  CHECK(r.removed);
+  CHECK_EQ(ReadFile(OwnerMarkerPath(staging) + ".bad"), std::string("a.b"));
+  CHECK(!Exists(staging));
 }
 
 TEST(CheckSpaceComparesAgainstTheFreeBytes) {

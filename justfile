@@ -1423,13 +1423,40 @@ _vcpkg-quest-host:
 # Host tests for the Quest first-run data step's core (src/quest/data: sha256, the zip extractor, the pins and decision, the
 # staging swap; docs/adr/0011-quest-game-data-first-run.md). zlib comes from the tools/quest-host-deps manifest for the
 # x64-linux triplet, never a system package. Fail-close: a compile error, a missing library or any failed check exits nonzero.
-test-quest-data: _vcpkg-quest-host
+test-quest-data: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
-    cd src/quest
-    cmake --preset quest-host-data
-    cmake --build --preset quest-host-data
-    ctest --preset quest-host-data
+    # One run root per run (ORDER.md item 2). The EXIT trap removes it once, whatever ends the recipe: a failed step, a failed check, or a
+    # signal (INT and TERM exit through it). A failed removal fails the recipe, and the recipe's own exit code is kept otherwise.
+    tool="$PWD/build/go-tools/run-root"
+    root=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$root" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$root"; then
+          echo "test-quest-data: run-root remove failed for $root" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    root="$("$tool" make quest-data)"
+    [ -d "$root" ] || { echo "test-quest-data: run-root make named no directory" >&2; exit 1; }
+    # The steps are chained with && (a set -e inside a subshell that is the left side of || does not stop it): a failed configure or
+    # build keeps its exit and ctest never runs on old binaries.
+    ( export NEVR_TEST_TMP="$root"; cd src/quest && cmake --preset quest-host-data && cmake --build --preset quest-host-data && ctest --preset quest-host-data )
+
+# The run-root tool (ADR 0044, P0b): build/go-tools/run-root makes one run root per test run and removes it once.
+_run-root-tool:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p build/go-tools
+    go -C tools build -trimpath -o ../build/go-tools/ ./cmd/run-root
 
 # The data fetch over real HTTP (src/quest/data/curl_transport.cpp and fetch.cpp against src/quest/tests/range_server.py):
 # explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
@@ -1781,13 +1808,33 @@ quest-store-install *args:
 # The store OBB extractor's units on the host (src/quest/obb, docs/adr/0042): the footer, the key, the Twofish-CBC plain-IV cipher, the
 # FAT16 reader and the pins, over images built in the test, and the whole stock-data step over a synthetic OBB (extraction, cache hit,
 # every refusal). No game file, no device. Fail-close.
-test-quest-obb: _vcpkg-quest-host
+test-quest-obb: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
-    cd src/quest
-    cmake --preset quest-host-obb
-    cmake --build --preset quest-host-obb
-    ctest --preset quest-host-obb
+    # One run root per run (ORDER.md item 2). The EXIT trap removes it once, whatever ends the recipe: a failed step, a failed check, or a
+    # signal (INT and TERM exit through it). A failed removal fails the recipe, and the recipe's own exit code is kept otherwise.
+    tool="$PWD/build/go-tools/run-root"
+    root=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$root" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$root"; then
+          echo "test-quest-obb: run-root remove failed for $root" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    root="$("$tool" make quest-obb)"
+    [ -d "$root" ] || { echo "test-quest-obb: run-root make named no directory" >&2; exit 1; }
+    # The steps are chained with && (a set -e inside a subshell that is the left side of || does not stop it): a failed configure or
+    # build keeps its exit and ctest never runs on old binaries.
+    ( export NEVR_TEST_TMP="$root"; cd src/quest && cmake --preset quest-host-obb && cmake --build --preset quest-host-obb && ctest --preset quest-host-obb )
 
 # The extractor on the real store OBB (`obb`, default $NEVR_STORE_OBB): the footer, the extraction to a scratch cache and the
 # digests of the four files, written out in src/quest/tests/obb_pinned_test.cpp from the measurements in #2081. Stops, naming the

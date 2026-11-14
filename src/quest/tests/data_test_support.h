@@ -1,4 +1,4 @@
-/* Test helpers shared by the data-step tests: a scratch directory that removes itself, small file helpers, and a zip
+/* Test helpers shared by the data-step tests: a scratch directory, small file helpers, and a zip
  * writer with one knob per rule the reader enforces, so each rule is exercised by an archive that breaks only it. */
 #pragma once
 
@@ -20,7 +20,7 @@
 
 namespace data_test {
 
-// ---- a scratch directory that removes itself ----
+// ---- a scratch directory (no destructor: its tree is not recorded by any deleter, so it is left for the run root) ----
 struct Scratch {
   std::string dir;
   Scratch() {
@@ -34,9 +34,8 @@ struct Scratch {
     }
     dir = made;
   }
-  ~Scratch() {
-    if (!dir.empty()) nevr_quest::data::RemoveTree(dir);
-  }
+  // The directory is left in place: the guard removes only what a deleter recorded, and a test tree is not recorded. Its removal
+  // belongs to the recipe's run root (ORDER.md item 2), not to this helper.
   std::string Path(const std::string& rel) const { return dir + "/" + rel; }
 };
 

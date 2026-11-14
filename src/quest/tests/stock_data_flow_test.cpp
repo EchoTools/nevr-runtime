@@ -3,7 +3,9 @@
 // extraction, the cache hit that does nothing, and every refusal that must leave no cache directory behind.
 
 #include <sys/stat.h>
+#include <unistd.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -12,7 +14,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/data/plan.h"
 #include "quest/data/sha256.h"
+#include "quest/data/staging.h"
 #include "quest/obb/stock_data.h"
 #include "quest/tests/mini_test.h"
 #include "quest/tests/obb_test_support.h"
@@ -104,10 +108,18 @@ int Count(const Rig& r, const std::string& event) {
   return n;
 }
 bool Exists(const std::string& p) { return fs::exists(p); }
+// The items in the cache root: a marker (`<item>.nevr-owned`) and the directory's ledger are bookkeeping, not items.
 std::vector<std::string> CacheEntries(const Rig& r) {
   std::vector<std::string> out;
   if (!fs::exists(r.cache_root)) return out;
-  for (const auto& e : fs::directory_iterator(r.cache_root)) out.push_back(e.path().filename().string());
+  for (const auto& e : fs::directory_iterator(r.cache_root)) {
+    const std::string name = e.path().filename().string();
+    const bool marker = name.size() > 11 && name.compare(name.size() - 11, 11, ".nevr-owned") == 0;
+    if (name == nevr_quest::data::kLedgerName || marker) {
+      continue;
+    }
+    out.push_back(name);
+  }
   return out;
 }
 
@@ -278,14 +290,68 @@ TEST(ACacheWithAFileOfAnotherSizeIsExtractedAgain) {
   CHECK_EQ(fs::file_size(path), 3000u);
 }
 
-TEST(ACacheWithAnExtraFileIsExtractedAgain) {
+// A file the manifest does not name is not ours: the cache is refused (its folder is kNotEmpty), and the file stays.
+TEST(ACacheWithAnExtraFileIsRefusedAndTheFileStays) {
   Rig r = MakeRig("extrafile");
   CHECK(Run(r, Options(r)).ok);
   Spit(r.cache_root + "/" + r.obb_sha + "/_data/stray.bin", "x");
-  StockDataResult result;
-  CHECK(Run(r, Options(r), &result).ok);
-  CHECK(!result.cache_hit);
-  CHECK(!Exists(r.cache_root + "/" + r.obb_sha + "/_data/stray.bin"));
+  const Status s = Run(r, Options(r));
+  CHECK(!s.ok);
+  CHECK_EQ(s.code, std::string("cache_unwritable"));
+  CHECK_EQ(Slurp(r.cache_root + "/" + r.obb_sha + "/_data/stray.bin"), std::string("x"));
+  CHECK(Exists(r.cache_root + "/" + r.obb_sha));
+}
+
+// (a) of the removal rule, on the stock side: a cache folder whose member's parent became a link to a canary outside the cache is
+// refused at the link. The canary keeps its file, and the cache stays.
+TEST(ACachedMemberWhoseParentIsALinkToACanaryIsNotFollowed) {
+  Rig r = MakeRig("linkcanary");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string cache = r.cache_root + "/" + r.obb_sha;
+  const fs::path canary = r.dir / "canary";
+  fs::create_directories(canary);
+  Spit((canary / "keep").string(), "k");
+  // The real `_data` moves aside (a rename inside the cache), and a link named `_data` takes its place.
+  fs::rename(cache + "/_data", cache + "/_data_moved");
+  char* abs = ::realpath(canary.c_str(), nullptr);
+  CHECK(abs != nullptr);
+  CHECK_EQ(::symlink(abs, (cache + "/_data").c_str()), 0);
+  std::free(abs);
+  const Status s = Run(r, Options(r));
+  CHECK(!s.ok);
+  CHECK_EQ(s.code, std::string("cache_unwritable"));
+  CHECK_EQ(Slurp((canary / "keep").string()), std::string("k"));
+  CHECK(Exists(cache));
+  CHECK(Exists(cache + "/_data_moved"));
+}
+
+// (g), the crash midway: a marked partial with its members recorded, some of them made. The next run removes exactly what the
+// manifest names, and a stranger beside the partial is left.
+TEST(AMarkedPartialWithItsMembersRecordedIsRemovedByItsManifest) {
+  Rig r = MakeRig("markedpartial");
+  const std::string partial = r.cache_root + "/" + r.obb_sha + ".partial";
+  fs::create_directories(r.cache_root);
+  Spit(r.cache_root + "/stranger.txt", "keep");
+  CHECK(nevr_quest::data::MarkOwned(partial));
+  CHECK(nevr_quest::data::RecordOwned(partial, {"_data", "_data/junk", "_data/never-made"}));
+  fs::create_directories(partial + "/_data");
+  Spit(partial + "/_data/junk", "junk");
+  CHECK(Run(r, Options(r)).ok);
+  CHECK_EQ(Count(r, "partial_removed"), 1);
+  CHECK(!Exists(partial));
+  CHECK(!Exists(partial + nevr_quest::data::kOwnerSuffix));
+  CHECK_EQ(Slurp(r.cache_root + "/stranger.txt"), std::string("keep"));
+}
+
+// A partial with no marker is not ours: it is refused, and nothing in it is removed.
+TEST(AStalePartialWithoutAMarkerIsRefusedAndKept) {
+  Rig r = MakeRig("unmarkedpartial");
+  fs::create_directories(r.cache_root + "/" + r.obb_sha + ".partial/_data");
+  Spit(r.cache_root + "/" + r.obb_sha + ".partial/_data/junk", "junk");
+  const Status s = Run(r, Options(r));
+  CHECK(!s.ok);
+  CHECK_EQ(s.code, std::string("cache_unwritable"));
+  CHECK_EQ(Slurp(r.cache_root + "/" + r.obb_sha + ".partial/_data/junk"), std::string("junk"));
 }
 
 TEST(RehashFindsAChangeThatKeepsTheSize) {
@@ -321,12 +387,73 @@ TEST(RehashOfAGoodCacheIsAHit) {
 
 TEST(AStalePartialDirectoryIsRemoved) {
   Rig r = MakeRig("partial");
-  fs::create_directories(r.cache_root + "/" + r.obb_sha + ".partial/_data");
-  Spit(r.cache_root + "/" + r.obb_sha + ".partial/_data/junk", "junk");
+  const std::string partial = r.cache_root + "/" + r.obb_sha + ".partial";
+  fs::create_directories(r.cache_root);
+  CHECK(nevr_quest::data::MarkOwned(partial));
+  CHECK(nevr_quest::data::RecordOwned(partial, {"_data", "_data/junk"}));
+  fs::create_directories(partial + "/_data");
+  Spit(partial + "/_data/junk", "junk");
   CHECK(Run(r, Options(r)).ok);
   CHECK_EQ(Count(r, "partial_removed"), 1);
-  CHECK(!Exists(r.cache_root + "/" + r.obb_sha + ".partial"));
+  CHECK(!Exists(partial));
   CHECK(!Exists(r.cache_root + "/" + r.obb_sha + "/_data/junk"));
+}
+
+// The build before manifests wrote no marker for its cache. A cache that no longer checks is cleared by exactly the names the pins give,
+// and the cache is then rebuilt.
+TEST(ALegacyCacheWithExactlyItsPinnedFilesIsClearedAndRebuilt) {
+  Rig r = MakeRig("legacycache");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string cache = r.cache_root + "/" + r.obb_sha;
+  CHECK_EQ(::unlink(nevr_quest::data::OwnerMarkerPath(cache).c_str()), 0);
+  Spit(cache + "/" + r.files[0].first, "short");  // a size that does not check
+  StockDataResult result;
+  const Status s = Run(r, Options(r), &result);
+  CHECK(s.ok);
+  CHECK(!result.cache_hit);
+  CHECK_EQ(Count(r, "legacy_removed"), 1);
+  CHECK(nevr_quest::data::IsOwned(cache));
+}
+
+// A legacy cache with a stranger in it: the pinned names go, the folder that holds the stranger stays, and the stranger survives.
+TEST(ALegacyCacheWithAStrangerIsRefusedAndTheStrangerSurvives) {
+  Rig r = MakeRig("legacystranger");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string cache = r.cache_root + "/" + r.obb_sha;
+  CHECK_EQ(::unlink(nevr_quest::data::OwnerMarkerPath(cache).c_str()), 0);
+  Spit(cache + "/_data/stranger.bin", "mine");
+  const Status s = Run(r, Options(r));
+  CHECK(!s.ok);
+  CHECK_EQ(s.code, std::string("cache_unwritable"));
+  CHECK_EQ(Slurp(cache + "/_data/stranger.bin"), std::string("mine"));
+  CHECK(Exists(cache));
+}
+
+// A legacy partial with exactly its pinned files is cleared by those names, and the run then extracts.
+TEST(ALegacyPartialWithExactlyItsPinnedFilesIsCleared) {
+  Rig r = MakeRig("legacypartial");
+  const std::string partial = r.cache_root + "/" + r.obb_sha + ".partial";
+  fs::create_directories(r.cache_root);
+  for (const auto& f : r.files) {
+    fs::create_directories(fs::path(partial + "/" + f.first).parent_path());
+    Spit(partial + "/" + f.first, std::string(f.second.begin(), f.second.end()));
+  }
+  Spit(partial + "/" + kStockDataManifestName, "{}");
+  CHECK(Run(r, Options(r)).ok);
+  CHECK(!Exists(partial));
+  CHECK_EQ(Count(r, "legacy_removed"), 1);
+}
+
+// A torn tail of a cache's marker must not wedge the next run: the cache is cleared by its record and rebuilt.
+TEST(ATornCacheMarkerDoesNotWedgeTheNextRun) {
+  Rig r = MakeRig("tornmarker");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string cache = r.cache_root + "/" + r.obb_sha;
+  const std::string marker = nevr_quest::data::OwnerMarkerPath(cache);
+  const std::string text = Slurp(marker);
+  Spit(marker, text.substr(0, text.size() - 3));
+  Spit(cache + "/" + r.files[0].first, "short");  // a size that does not check
+  CHECK(Run(r, Options(r)).ok);
 }
 
 TEST(HashFileMatchesTheDigestOfItsBytes) {

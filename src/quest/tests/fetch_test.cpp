@@ -352,6 +352,22 @@ TEST(AHostileArchiveWithTheRightDigestLeavesNoData) {
   CHECK(!Exists(rig.Part()));
 }
 
+// Case 4: a link at the part's name is never written through. The canary it names keeps its bytes, and the download fails.
+TEST(ALinkAtThePartNameIsNeverWrittenThrough) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string canary = rig.scratch.Path("canary.bin");
+  WriteFile(canary, "keep");
+  char* abs = ::realpath(canary.c_str(), nullptr);
+  CHECK(abs != nullptr);
+  CHECK_EQ(::symlink(abs, rig.Part().c_str()), 0);
+  std::free(abs);
+  ScriptedTransport net(rig.zip, {Step{}});
+  const FetchResult r = RunFetch(rig.config, net);
+  CHECK(r.status != FetchStatus::kOk);
+  CHECK_EQ(ReadFile(canary), std::string("keep"));
+}
+
 TEST(AnEntryThatFailsMidExtractionLeavesNoStagingAndNoData) {
   SrcEntry bad{"_data/b", Pattern(5000), 8};
   bad.crc_delta = 1;
@@ -363,6 +379,199 @@ TEST(AnEntryThatFailsMidExtractionLeavesNoStagingAndNoData) {
   CHECK(!Exists(StagingPath(rig.config.root, rig.config.sha256)));
   CHECK(!Exists(OwnerMarkerPath(StagingPath(rig.config.root, rig.config.sha256))));
   CHECK(!Exists(rig.config.root + "/_data"));
+}
+
+// A torn record of the pinned staging (a kill, a power loss or a full disk cut the record short). Nothing was made under it: the record
+// is fsynced before the first member. The next fetch must clear it and proceed; it must never refuse the name.
+TEST(ATornRecordWithACutLastLineDoesNotWedgeTheNextFetch) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  CHECK(MarkOwned(staging));
+  CHECK(RecordOwned(staging, {"_data/a.bin", "_data/b.bin"}));
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string text = ReadFile(marker);
+  WriteFile(marker, text.substr(0, text.size() - 4));
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+}
+
+TEST(ATornRecordWithANulTailDoesNotWedgeTheNextFetch) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  CHECK(MarkOwned(staging));
+  CHECK(RecordOwned(staging, {"_data/a.bin"}));
+  const std::string marker = OwnerMarkerPath(staging);
+  WriteFile(marker, ReadFile(marker) + std::string(16, '\0'));  // the size grew before the data landed
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+}
+
+// A marker at the pinned staging name that does not read, of any kind, is moved aside to its literal `.bad` (its bytes survive there), and
+// the fetch proceeds: the item is then legacy, cleared only by the zip's own names.
+TEST(AGarbageRecordOnThePinnedStagingDoesNotWedgeTheNextFetch) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(OwnerMarkerPath(staging), garbage);
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(OwnerMarkerPath(staging) + ".bad"), garbage);
+}
+
+// Text that is not a record at the pinned name is moved aside too (nothing is destroyed), and the fetch proceeds.
+TEST(AStrangerTextOnThePinnedStagingIsMovedAsideNotDestroyed) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  WriteFile(OwnerMarkerPath(staging), "the player's notes");
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(OwnerMarkerPath(staging) + ".bad"), std::string("the player's notes"));
+}
+
+// A NUL-only marker at the pinned staging name is a torn record of ours (an empty write that the size grew before): it is moved aside to
+// its literal `.bad` name, never truncated, and the fetch proceeds.
+TEST(ANulOnlyMarkerOnThePinnedStagingIsMovedAsideAndTheFetchProceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  WriteFile(marker, std::string(8, '\0'));
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), std::string(8, '\0'));
+}
+
+// A torn first line of our own record (the cut falls inside the first member this zip lists) is moved aside the same way.
+TEST(ATornFirstLineOfOurRecordIsMovedAsideAndTheFetchProceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  WriteFile(marker, "5932");  // a prefix of "5932408047", the zip's first top-level folder
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), std::string("5932"));
+}
+
+// The reset of a pinned marker never leaves the name absent. Each obstacle below stops it before the marker is replaced: the old marker
+// stays exactly as it was, the fetch reports not_owned, and the next run (the obstacle gone) succeeds.
+TEST(AFreshMarkerThatCannotBeMadeLeavesTheOldMarkerAndTheNextFetchSucceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(marker, garbage);
+  CHECK_EQ(::mkdir((marker + ".new").c_str(), 0755), 0);  // the fresh marker's temporary name is taken
+  ScriptedTransport first(rig.zip, {Step{}});
+  const FetchResult r1 = RunFetch(rig.config, first);
+  CHECK(r1.status == FetchStatus::kExtractFailed);
+  CHECK_EQ(r1.detail, std::string("not_owned"));
+  CHECK_EQ(ReadFile(marker), garbage);
+  CHECK(!Exists(marker + ".bad"));
+  CHECK_EQ(::rmdir((marker + ".new").c_str()), 0);
+  ScriptedTransport second(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, second).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), garbage);
+}
+
+// A `.bad` that cannot be made (a directory is at its name) stops the reset before the marker is replaced: the old marker keeps its
+// bytes, and no temporary is left behind.
+TEST(ABackupNameThatIsADirectoryLeavesTheOldMarkerAndTheNextFetchSucceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(marker, garbage);
+  CHECK_EQ(::mkdir((marker + ".bad").c_str(), 0755), 0);
+  ScriptedTransport first(rig.zip, {Step{}});
+  const FetchResult r1 = RunFetch(rig.config, first);
+  CHECK(r1.status == FetchStatus::kExtractFailed);
+  CHECK_EQ(r1.detail, std::string("not_owned"));
+  CHECK_EQ(ReadFile(marker), garbage);
+  CHECK(!Exists(marker + ".new"));
+  CHECK_EQ(::rmdir((marker + ".bad").c_str()), 0);
+  ScriptedTransport second(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, second).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), garbage);
+}
+
+// A leftover `.new` from a crash (a regular file) is unlinked by name, and the reset completes.
+TEST(ALeftoverFreshMarkerFromACrashIsUnlinkedAndTheFetchSucceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(marker, garbage);
+  WriteFile(marker + ".new", "junk from a crash");
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), garbage);
+}
+
+// Shared storage may refuse hard links, so the reset copies the old bytes to `.bad` and never links them. A directory at the copy's
+// temporary name (`.bad.new`) leaves the marker, any earlier `.bad` and the temporaries exactly as they were, and the next run succeeds
+// once the directory is gone.
+TEST(ADirectoryAtTheBackupCopyNameLeavesEverythingAndTheNextFetchSucceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(marker, garbage);
+  CHECK_EQ(::mkdir((marker + ".bad.new").c_str(), 0755), 0);
+  ScriptedTransport first(rig.zip, {Step{}});
+  const FetchResult r1 = RunFetch(rig.config, first);
+  CHECK(r1.status == FetchStatus::kExtractFailed);
+  CHECK_EQ(r1.detail, std::string("not_owned"));
+  CHECK_EQ(ReadFile(marker), garbage);
+  CHECK(!Exists(marker + ".bad"));
+  CHECK(!Exists(marker + ".new"));
+  CHECK_EQ(::rmdir((marker + ".bad.new").c_str()), 0);
+  ScriptedTransport second(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, second).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), garbage);
+  CHECK(!Exists(marker + ".bad.new"));
+}
+
+// An earlier `.bad` is replaced only once the copy is complete: a failed copy leaves it with its bytes.
+TEST(AnEarlierBackupSurvivesAFailedCopy) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  const std::string garbage = std::string("../escape\n\x01garbage\n", 19);
+  WriteFile(marker, garbage);
+  WriteFile(marker + ".bad", "old backup");
+  CHECK_EQ(::mkdir((marker + ".bad.new").c_str(), 0755), 0);
+  ScriptedTransport first(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, first).detail, std::string("not_owned"));
+  CHECK_EQ(ReadFile(marker + ".bad"), std::string("old backup"));
+  CHECK_EQ(ReadFile(marker), garbage);
+  CHECK_EQ(::rmdir((marker + ".bad.new").c_str()), 0);
+  ScriptedTransport second(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, second).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad"), garbage);
+}
+
+// A pinned marker bigger than the manifest cap is kept as its first kMaxOwnerManifestBytes bytes (the rest is not kept), the truncation
+// is reported, and the fetch proceeds.
+TEST(AnOversizePinnedMarkerIsKeptAsItsFirstBytesAndTheFetchProceeds) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  const std::string marker = OwnerMarkerPath(staging);
+  WriteFile(marker, std::string(kMaxOwnerManifestBytes + 100, 'x'));
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(marker + ".bad").size(), kMaxOwnerManifestBytes);
+  CHECK(rig.HasEvent("data_extract outcome=marker_truncated"));
 }
 
 TEST(CancelledBeforeTheStartMakesNoRequest) {

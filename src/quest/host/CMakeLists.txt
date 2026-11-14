@@ -71,14 +71,17 @@ if(NEVR_QUEST_OBB_EXTRACT)
     ../obb/stock_pins.cpp
     ../obb/build_log.cpp
     ../obb/stock_data.cpp
-    ../data/sha256.cpp)
+    ../data/sha256.cpp
+    ../data/staging.cpp
+    ../data/zip.cpp
+    ../../core/owned_remove_posix.cpp)
   target_include_directories(nevr_quest_obb PUBLIC "${NEVR_REPO_ROOT}/src")
   # -isystem puts the pinned nettle ahead of any system copy. _GLIBCXX_ASSERTIONS: the tool reads a file it did not write; an
   # out-of-range operator[] aborts instead of reading past the buffer.
   target_include_directories(nevr_quest_obb SYSTEM PUBLIC "${NEVR_HOST_PREFIX}/include" "${NEVR_HOST_JSON_INCLUDE}")
   target_compile_definitions(nevr_quest_obb PUBLIC _GLIBCXX_ASSERTIONS)
   target_compile_options(nevr_quest_obb PRIVATE -O2 -Wall -Wextra -Werror)
-  target_link_libraries(nevr_quest_obb PUBLIC "${NEVR_NETTLE_LIB}")
+  target_link_libraries(nevr_quest_obb PUBLIC "${NEVR_NETTLE_LIB}" "${NEVR_HOST_PREFIX}/lib/libz.a")
 
   add_executable(nevr_quest_obb_extract ../obb/obb_extract_main.cpp)
   target_link_libraries(nevr_quest_obb_extract PRIVATE nevr_quest_obb)

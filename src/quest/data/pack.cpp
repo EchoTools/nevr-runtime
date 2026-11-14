@@ -178,7 +178,10 @@ PackStatus WriteTemporary(const std::string& apk_path, const ZipEntry& entry, co
       *detail = "temporary name taken";
       return PackStatus::kWriteFailed;
     }
-    RemoveTree(tmp);
+    if (!RemoveItem(tmp).removed) {
+      *detail = "temporary not removable";
+      return PackStatus::kWriteFailed;
+    }
   }
   if (!MarkOwned(tmp)) {
     *detail = "marker";
@@ -187,7 +190,7 @@ PackStatus WriteTemporary(const std::string& apk_path, const ZipEntry& entry, co
   const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
   if (fd < 0) {
     *detail = std::string("open errno=") + std::to_string(errno);
-    RemoveTree(OwnerMarkerPath(tmp));
+    RemoveItem(tmp);
     return PackStatus::kWriteFailed;
   }
   Sha256 sha;
@@ -220,10 +223,7 @@ PackStatus WriteTemporary(const std::string& apk_path, const ZipEntry& entry, co
     *detail = "sha256";
     status = PackStatus::kHashMismatch;
   }
-  if (status != PackStatus::kOk) {
-    RemoveTree(tmp);
-    RemoveTree(OwnerMarkerPath(tmp));
-  }
+  if (status != PackStatus::kOk) RemoveItem(tmp);
   return status;
 }
 
@@ -236,7 +236,18 @@ PackStatus KeepStockManifest(const std::string& dest, const std::string& stock_s
     return PackStatus::kOk;
   }
   const std::string tmp = backup + kPackTmpSuffix;
-  RemoveTree(tmp);
+  // A leftover of ours is removed. A file with this name and no marker is not ours, and is left before anything is marked beside it
+  // (WriteTemporary's rule): nothing is then marked or removed under its name.
+  if (Lexists(tmp)) {
+    if (!IsOwned(tmp)) {
+      *detail = "temporary name taken";
+      return PackStatus::kBackupFailed;
+    }
+    if (!RemoveItem(tmp).removed) {
+      *detail = "temporary not removable";
+      return PackStatus::kBackupFailed;
+    }
+  }
   if (!MarkOwned(backup) || !MarkOwned(tmp)) {
     *detail = "marker";
     return PackStatus::kBackupFailed;
@@ -274,9 +285,8 @@ PackStatus KeepStockManifest(const std::string& dest, const std::string& stock_s
   if (ok && ::rename(tmp.c_str(), backup.c_str()) != 0) ok = false;
   if (!ok) {
     if (detail->empty()) *detail = "copy errno=" + std::to_string(errno);
-    RemoveTree(tmp);
-    RemoveTree(OwnerMarkerPath(tmp));
-    RemoveTree(OwnerMarkerPath(backup));
+    RemoveItem(tmp);
+    RemoveItem(backup);
     return PackStatus::kBackupFailed;
   }
   SyncDir(DirOf(backup));
@@ -509,10 +519,14 @@ PackResult RunPackStep(const PackConfig& config) {
 
   // The root is written below only after the leftovers of an interrupted run are gone.
   int clean_failed = 0;
-  const int cleaned = CleanPackLeftovers(config.root, &clean_failed);
+  std::vector<std::string> clean_left;
+  const int cleaned = CleanPackLeftovers(config.root, &clean_failed, &clean_left);
   if (cleaned != 0 || clean_failed != 0) {
     step.Emit(EventLevel::kInfo, "data_recover",
               {{"root", config.root}, {"cleaned", std::to_string(cleaned)}, {"failed", std::to_string(clean_failed)}});
+  }
+  for (const std::string& item : clean_left) {
+    step.Emit(EventLevel::kError, "data_recover", {{"root", config.root}, {"left", item}});
   }
 
   const std::string android_rel = std::string(data_root::kMarker) + "/" + pack.stock_data_version + "/rad15/android";
@@ -550,6 +564,18 @@ PackResult RunPackStep(const PackConfig& config) {
   }
   for (std::size_t i = 0; i < pack.files.size(); ++i) {
     if (pack.files[i].path == pack.manifest_path) order.push_back(i);
+  }
+  // A temporary the build before manifests left (an empty marker, on no ledger) is named by the pack's own file list: it goes here,
+  // whether or not its file is placed this run (an all-current pack returns below).
+  for (const PackFile& file : pack.files) {
+    const std::string tmp = android + "/" + file.path + kPackTmpSuffix;
+    if (!Lexists(tmp) || !IsOwned(tmp)) continue;
+    const ItemRemoval removed = RemoveItem(tmp);
+    if (removed.had_item && removed.removed) {
+      step.Emit(EventLevel::kInfo, "data_recover", {{"root", config.root}, {"legacy_temporary", file.path}});
+    } else if (!removed.removed) {
+      step.Emit(EventLevel::kError, "data_recover", {{"root", config.root}, {"left", removed.outcome + " " + removed.entry}});
+    }
   }
   std::vector<bool> current(pack.files.size(), false);
   std::uint64_t needed = 0;
@@ -603,6 +629,10 @@ PackResult RunPackStep(const PackConfig& config) {
                {"free_bytes", std::to_string(available)}, {"needed_bytes", std::to_string(needed)}});
     return fail(PackStatus::kNoSpace, "no_space", needed, available);
   }
+  if (!RecordPackDirectories(config.root, android_rel)) {
+    step.Emit(EventLevel::kError, "pack_place", {{"path", android}, {"result", "failed"}, {"detail", "record_directories"}});
+    return fail(PackStatus::kBadRoot, "record " + android, needed, available);
+  }
   if (!MakeDirsBelow(config.root, android_rel + "/" + kManifestsDir) ||
       !MakeDirsBelow(config.root, android_rel + "/" + kPackagesDir)) {
     step.Emit(EventLevel::kError, "pack_place", {{"path", android}, {"result", "failed"}, {"detail", "mkdir"}});
@@ -631,16 +661,12 @@ PackResult RunPackStep(const PackConfig& config) {
     std::string backup = "none";
     if (status == PackStatus::kOk && file.path == pack.manifest_path) {
       status = KeepStockManifest(dest, stock_sha256, &why, &backup);
-      if (status != PackStatus::kOk) {
-        RemoveTree(tmp);
-        RemoveTree(OwnerMarkerPath(tmp));
-      }
+      if (status != PackStatus::kOk) RemoveItem(tmp);
     }
     if (status == PackStatus::kOk) {
       if (::rename(tmp.c_str(), dest.c_str()) != 0) {
         why = "rename errno=" + std::to_string(errno);
-        RemoveTree(tmp);
-        RemoveTree(OwnerMarkerPath(tmp));
+        RemoveItem(tmp);
         status = PackStatus::kWriteFailed;
       } else {
         SyncDir(DirOf(dest));

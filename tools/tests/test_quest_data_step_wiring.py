@@ -399,8 +399,12 @@ class TheBundledPackRunsAfterTheDataStep(unittest.TestCase):
 
     def test_the_data_steps_cleanup_routine_covers_the_pack_and_the_pack_step_runs_it_before_any_write(self):
         staging = (ROOT / "src/quest/data/staging.cpp").read_text()
-        clean = extract_braced_function(staging, "int CleanLeftovers(const std::string& root, int* failed) noexcept {")
-        self.assertIn("CleanPackLeftovers(root", clean)
+        clean = extract_braced_function(
+            staging, "int CleanLeftovers(const std::string& root, int* failed, std::vector<std::string>* left) noexcept {"
+        )
+        # CleanLeftovers covers the pack by running the same root pass with the pack directories on (staging.cpp, CleanRoot). The
+        # extractor drops comments, so the call reads CleanRoot(root, staging, packs, ...): the packs argument is true.
+        self.assertRegex(clean, r"CleanRoot\(root,\s*true,\s*true,")
         pack = (ROOT / "src/quest/data/pack.cpp").read_text()
         run = extract_braced_function(pack, "PackResult RunPackStep(const PackConfig& config) {")
         self.assertLess(run.index("CleanPackLeftovers(config.root"), run.index("WriteTemporary("))

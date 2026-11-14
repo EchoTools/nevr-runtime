@@ -8,25 +8,16 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <set>
 
+#include "core/owned_remove_rules.h"
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
+#include "quest/data/zip.h"
 
 namespace nevr_quest::data {
 
 namespace {
-
-// The download and its marker.
-void DropPart(const std::string& part) {
-  ::unlink(part.c_str());
-  ::unlink(OwnerMarkerPath(part).c_str());
-}
-
-// Our own staging directory and its marker.
-void DropStaging(const std::string& staging) {
-  RemoveTree(staging);
-  ::unlink(OwnerMarkerPath(staging).c_str());
-}
 
 class Fd {
  public:
@@ -52,11 +43,37 @@ void Emit(const FetchConfig& c, const char* name, std::vector<std::pair<std::str
 
 std::string Num(std::uint64_t v) { return std::to_string(v); }
 
+// The download and its marker. A refusal is reported, and what the refusal kept stays.
+void DropPart(const FetchConfig& c, const std::string& part) {
+  const ItemRemoval r = RemoveItem(part);
+  if (!r.removed) Emit(c, "data_fetch", {{"step", "drop_part"}, {"outcome", r.outcome}, {"entry", r.entry}});
+}
+
+// Our own staging directory and its marker, with the members it recorded. A refusal is reported.
+void DropStaging(const FetchConfig& c, const std::string& staging) {
+  const ItemRemoval r = RemoveItem(staging);
+  if (!r.removed) Emit(c, "data_extract", {{"step", "drop_staging"}, {"outcome", r.outcome}, {"entry", r.entry}});
+}
+
+// The members the zip's extraction makes below the staging directory: every entry under the prefix, with each folder above it. Read
+// from the central directory before the first member is made, so the marker holds them all before anything is created. False
+// with `detail` when the listing is refused or an entry name is not a plain relative path.
+bool PlanStagingMembers(const FetchConfig& c, const std::string& part, std::vector<std::string>* members, std::string* detail) {
+  std::vector<ZipEntry> entries;
+  const ZipStatus zs = ReadZipListing(part, c.zip_limits, &entries, detail);
+  if (zs != ZipStatus::kOk) {
+    *detail = std::string(ZipStatusName(zs)) + (detail->empty() ? "" : ":" + *detail);
+    return false;
+  }
+  return PlanZipMembers(entries, members, detail);
+}
+
 bool Cancelled(const FetchConfig& c) { return c.keep_going && !c.keep_going(); }
 
+// The part's size, read without following a link: a link at the part's name is not the download.
 std::uint64_t PartSize(const std::string& part) {
   struct stat st;
-  return ::stat(part.c_str(), &st) == 0 && S_ISREG(st.st_mode) ? static_cast<std::uint64_t>(st.st_size) : 0;
+  return ::lstat(part.c_str(), &st) == 0 && S_ISREG(st.st_mode) ? static_cast<std::uint64_t>(st.st_size) : 0;
 }
 
 std::uint64_t FreeBytes(const FetchConfig& c) {
@@ -114,7 +131,7 @@ enum class Download { kDone, kFailed, kCancelled };
 Download DownloadOnce(const FetchConfig& c, Transport& transport, const std::string& part, std::string* why) {
   std::uint64_t have = PartSize(part);
   if (have > c.bytes) {  // longer than the pin: nothing in it can be trusted
-    DropPart(part);
+    DropPart(c, part);
     have = 0;
   }
   if (have == c.bytes) return Download::kDone;
@@ -124,7 +141,8 @@ Download DownloadOnce(const FetchConfig& c, Transport& transport, const std::str
     *why = "mark_part_failed";
     return Download::kFailed;
   }
-  Fd out(::open(part.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644));
+  // O_NOFOLLOW: a link at the part's name is never written through (its target is not ours).
+  Fd out(::open(part.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0644));
   if (out.get() < 0) {
     *why = "open_part_failed";
     return Download::kFailed;
@@ -254,11 +272,13 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
     Emit(c, "data_fetch", {{"step", "recover"}, {"restored_from", recovered_from}});
   }
   int failed_cleanups = 0;
-  const int cleaned = CleanLeftovers(c.root, &failed_cleanups);
+  std::vector<std::string> left;
+  const int cleaned = CleanLeftovers(c.root, &failed_cleanups, &left);
   if (cleaned != 0 || failed_cleanups != 0) {
     Emit(c, "data_fetch", {{"step", "cleanup"}, {"removed", Num(static_cast<std::uint64_t>(cleaned))},
                            {"failed", Num(static_cast<std::uint64_t>(failed_cleanups))}});
   }
+  for (const std::string& item : left) Emit(c, "data_fetch", {{"step", "cleanup_left"}, {"item", item}});
 
   const std::string part = c.root + "/" + kPartName;
   if (!MarkOwned(part)) {
@@ -313,7 +333,7 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
       continue;
     }
     if (digest != c.sha256) {
-      DropPart(part);  // a mismatch deletes the part: the next attempt starts from zero
+      DropPart(c, part);  // a mismatch deletes the part: the next attempt starts from zero
       last_why = "sha256_mismatch";
       Emit(c, "data_fetch", {{"outcome", "attempt_failed"}, {"attempt", Num(static_cast<std::uint64_t>(attempt))},
                              {"reason", last_why}, {"actual", digest}, {"expected", c.sha256}});
@@ -331,6 +351,26 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
                          {"bytes", Num(c.bytes)}});
 
   const std::string staging = StagingPath(c.root, c.sha256);
+  // The members the zip's extraction would make, from its verified listing, before anything is removed or made.
+  std::vector<std::string> planned;
+  std::string plan_detail;
+  if (!PlanStagingMembers(c, part, &planned, &plan_detail)) {
+    DropPart(c, part);  // a zip whose listing is refused does not extract, as a refused extraction does not
+    result.status = FetchStatus::kExtractFailed;
+    result.detail = plan_detail;
+    Emit(c, "data_extract", {{"outcome", "zip_listing"}, {"entry", plan_detail}});
+    return result;
+  }
+  // A record at the pinned name that does not read: a torn record of ours is moved aside; anything else is not ours. It is left, and
+  // the fetch stops with not_owned (logged): never truncated, never deleted.
+  bool marker_truncated = false;
+  if (!ResetUnreadableMarker(staging, planned, /*pinned=*/true, &marker_truncated)) {
+    result.status = FetchStatus::kExtractFailed;
+    result.detail = "not_owned";
+    Emit(c, "data_extract", {{"outcome", "not_owned"}, {"entry", staging}});
+    return result;
+  }
+  if (marker_truncated) Emit(c, "data_extract", {{"outcome", "marker_truncated"}, {"entry", staging}});
   struct stat staging_stat;
   if (::lstat(staging.c_str(), &staging_stat) == 0 && !IsOwned(staging)) {
     // Our name, not our directory: it is never deleted.
@@ -339,21 +379,36 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
     Emit(c, "data_extract", {{"outcome", "staging_not_ours"}});
     return result;
   }
+  // A marked leftover of an earlier attempt goes first, marker and all. The build before manifests wrote an empty marker for it:
+  // its members are the ones this zip lists, and they are removed by name (RemoveItem's legacy record).
+  const ItemRemoval old = RemoveUnionRecord(staging, planned);
+  if (!old.removed) {
+    result.status = FetchStatus::kExtractFailed;
+    result.detail = "staging_not_removed:" + old.outcome;
+    Emit(c, "data_extract", {{"outcome", "staging_not_removed"}, {"reason", old.outcome}, {"entry", old.entry}});
+    return result;
+  }
   if (!MarkOwned(staging)) {
     result.status = FetchStatus::kBadRoot;
     result.detail = "cannot write in the data root";
     Emit(c, "data_extract", {{"outcome", "bad_root"}, {"step", "mark_staging"}});
     return result;
   }
-  RemoveTree(staging);  // a marked leftover of an earlier attempt
+  if (!RecordOwned(staging, planned)) {
+    DropStaging(c, staging);
+    result.status = FetchStatus::kBadRoot;
+    result.detail = "cannot record the staging members";
+    Emit(c, "data_extract", {{"outcome", "bad_root"}, {"step", "record_members"}});
+    return result;
+  }
   std::uint64_t extracted = 0;
   std::string detail;
   const ZipStatus zs = ExtractZip(part, staging, kZipPrefix, c.zip_limits, &extracted, &detail);
   if (zs != ZipStatus::kOk) {
-    DropStaging(staging);
+    DropStaging(c, staging);
     // A verified zip that does not extract is a bad pin or a failing disk. Keep the zip only when the disk was the
     // reason, so the next run does not download it again.
-    if (zs != ZipStatus::kWriteFailed) DropPart(part);
+    if (zs != ZipStatus::kWriteFailed) DropPart(c, part);
     result.status = FetchStatus::kExtractFailed;
     result.detail = std::string(ZipStatusName(zs)) + (detail.empty() ? "" : ":" + detail);
     Emit(c, "data_extract", {{"outcome", ZipStatusName(zs)}, {"entry", detail}});
@@ -363,13 +418,13 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
 
   const StageStatus ss = InstallStaged(c.root, staging, c.utc_stamp, &result.replaced_to);
   if (ss != StageStatus::kOk) {
-    DropStaging(staging);
+    DropStaging(c, staging);
     result.status = FetchStatus::kSwapFailed;
     result.detail = StageStatusName(ss);
     Emit(c, "data_swap", {{"outcome", StageStatusName(ss)}});
     return result;
   }
-  DropPart(part);
+  DropPart(c, part);
   Emit(c, "data_swap", {{"outcome", "ok"}, {"replaced_to", result.replaced_to}});
   result.status = FetchStatus::kOk;
   return result;

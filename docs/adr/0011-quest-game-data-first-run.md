@@ -113,7 +113,7 @@ build, what to do) is not optional.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
   creates in the root (the `.part`, the staging directory, a kept `_data.replaced-<utc stamp>`) has a marker file beside it,
-  `<item>.nevr-owned`, an empty regular file created before the item. A crash or kill leaves the staging directory, its marker
+  `<item>.nevr-owned`, a regular file created before the item whose lines name the item's members (the manifest; `src/quest/data/staging.h`). A crash or kill leaves the staging directory, its marker
   and the `.part`. The next launch first runs the recovery step: when `_data` is missing and a marked
   `_data.replaced-*` directory exists (the crash fell between the two renames), the newest one is renamed back to `_data`.
   Then it deletes the staging directory that has its marker, and starts the extract again from the verified zip. It never
