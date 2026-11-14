@@ -78,6 +78,13 @@ std::atomic<std::uint64_t> g_cargoServed{0};
 constexpr unsigned kCargoSlots = 256;
 KeySlot g_cargoSeen[kCargoSlots];
 
+// The map sets (PublishMapSets): the shadow published last answers later requests. g_seenManager is the manager of the first
+// request, whose manifest the map sets' mount checks for stock keys (GameManifestHolds).
+std::atomic<const nevr_shadow::Shadow*> g_mapSets{nullptr};
+std::atomic<std::uint64_t> g_mapSetServed{0};
+KeySlot g_mapSetSeen[kCargoSlots];
+std::atomic<const CResourceManagerOpaque*> g_seenManager{nullptr};
+
 constexpr std::uint64_t Mix(std::uint64_t x) noexcept {
   x ^= x >> 30;
   x *= 0xbf58476d1ce4e5b9ULL;
@@ -115,11 +122,12 @@ void CountUnlogged() noexcept {
   if ((count & (count - 1)) == 0) sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_unlogged", {{"count", count}});
 }
 
-// The same as Touch for the cargo keys: how many times this key has been served, or 0 when it found no slot.
-std::uint64_t TouchCargo(std::uint64_t key) noexcept {
-  const std::size_t home = static_cast<std::size_t>(key % kCargoSlots);
+// The same as Touch for a serve table (cargo's, the map sets'): how many times this key has been served, or 0 when it found no slot.
+template <std::size_t kSlots>
+std::uint64_t TouchServed(KeySlot (&table)[kSlots], std::uint64_t key) noexcept {
+  const std::size_t home = static_cast<std::size_t>(key % kSlots);
   for (unsigned probe = 0; probe < kProbeLimit; ++probe) {
-    KeySlot& slot = g_cargoSeen[(home + probe) % kCargoSlots];
+    KeySlot& slot = table[(home + probe) % kSlots];
     std::uint64_t held = slot.key.load(std::memory_order_acquire);
     if (held == 0 && slot.key.compare_exchange_strong(held, key, std::memory_order_acq_rel)) held = key;
     if (held != key) continue;
@@ -127,6 +135,8 @@ std::uint64_t TouchCargo(std::uint64_t key) noexcept {
   }
   return 0;
 }
+
+std::uint64_t TouchCargo(std::uint64_t key) noexcept { return TouchServed(g_cargoSeen, key); }
 
 long long ThreadId() noexcept { return static_cast<long long>(::syscall(SYS_gettid)); }
 
@@ -328,6 +338,27 @@ void NoteCargo(const nevr_shadow::Shadow* shadow, std::uint32_t user, std::uint6
                        {"tid", ThreadId()}});
 }
 
+// The same as NoteCargo for a request filled from the map sets' shadow: `map_set_served` (or `map_set_failed`) at the key's 1st,
+// 2nd, 4th, 8th ... serve.
+void NoteMapSet(std::uint64_t ret, std::uint64_t type, std::uint64_t name, std::uint64_t index, std::uint32_t bytes,
+                const void* caller) noexcept {
+  g_mapSetServed.fetch_add(1, std::memory_order_relaxed);
+  const std::uint64_t seen = TouchServed(g_mapSetSeen, KeyOf(type, name, index));
+  if (seen == 0 || (seen & (seen - 1)) != 0) return;
+  const std::uint64_t pinnedCaller =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(caller)) - g_loadBase.load(std::memory_order_relaxed);
+  char typeHex[19], nameHex[19];
+  sentinel::LogFields(ret == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+                      ret == 0 ? "map_set_served" : "map_set_failed",
+                      {{"type", sentinel::HexString(typeHex, type)},
+                       {"name", sentinel::HexString(nameHex, name)},
+                       {"index", index},
+                       {"bytes", bytes},
+                       {"seen", seen},
+                       {"site", SiteName(pinnedCaller)},
+                       {"tid", ThreadId()}});
+}
+
 // True when the manifest the manager holds has no record for (type, name): the same binary search the game runs
 // (0x2543a30-0x2543a90), with signed 64-bit keys and an unsigned count. A null manager or manifest answers false, so the
 // game's function runs and decides.
@@ -481,7 +512,17 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
   nevr_shadow::Found found;
   std::uint32_t user = 0;
   const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);
-  if (!fromCargo && request != nullptr) {
+  if (manager != nullptr && g_seenManager.load(std::memory_order_relaxed) == nullptr) {
+    g_seenManager.store(manager, std::memory_order_release);
+  }
+  // The map sets after cargo: a key their shadow holds and the game's manifest does not (a set naming a stock key is refused at
+  // the mount; this keeps a manifest the game grows later in charge of its own keys).
+  const nevr_shadow::Shadow* const mapSets = fromCargo ? nullptr : g_mapSets.load(std::memory_order_acquire);
+  nevr_shadow::Found setFound;
+  std::uint32_t setUser = 0;
+  const bool fromMapSets = mapSets != nullptr && mapSets->Find(type, name, &setFound, &setUser) &&
+                           ManifestMisses(manager, type, name);
+  if (!fromCargo && !fromMapSets && request != nullptr) {
     const GameFns* const fns = g_fns.load(std::memory_order_acquire);
     if (fns != nullptr && ManifestMisses(manager, type, name)) {
       const Served served = ServeLoose(*fns, manager, type, name, allocator, owner, index, request);
@@ -491,9 +532,12 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
     }
   }
   CResourceManagerOpaque* const filledFrom =
-      fromCargo ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(cargo->manager())) : manager;
+      fromCargo     ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(cargo->manager()))
+      : fromMapSets ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(mapSets->manager()))
+                    : manager;
   const std::uint64_t ret = original(filledFrom, type, name, unused, allocator, owner, index, request);
   if (fromCargo) NoteCargo(cargo, user, ret, type, name, index, found.size, caller);
+  if (fromMapSets) NoteMapSet(ret, type, name, index, setFound.size, caller);
   if (g_logRequests.load(std::memory_order_relaxed)) {
     Note(type, name, index, owner, allocator, ret, caller, request);
   } else if (ret != 0) {
@@ -593,6 +637,26 @@ void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept {
 
 unsigned long long CargoServedCount() noexcept { return g_cargoServed.load(std::memory_order_relaxed); }
 
+void PublishMapSets(const nevr_shadow::Shadow* shadow) noexcept {
+  if (shadow == nullptr) return;
+  g_mapSets.store(shadow, std::memory_order_release);
+}
+
+unsigned long long MapSetServedCount() noexcept { return g_mapSetServed.load(std::memory_order_relaxed); }
+
+std::uint64_t GameManifestRecords() noexcept {
+  const auto* const manager = reinterpret_cast<const unsigned char*>(g_seenManager.load(std::memory_order_acquire));
+  if (manager == nullptr) return 0;
+  const unsigned char* const table = LoadPointer(manager, manifest::kManagerManifest);
+  if (table == nullptr || LoadPointer(table, manifest::kManifestRecords) == nullptr) return 0;
+  return LoadWord(table, manifest::kManifestCount);
+}
+
+bool GameManifestHolds(std::uint64_t type, std::uint64_t name) noexcept {
+  if (GameManifestRecords() == 0) return false;
+  return !ManifestMisses(g_seenManager.load(std::memory_order_acquire), type, name);
+}
+
 const char* ResolveGameFnsForTest(std::uint64_t base, SymbolLookup lookup, GameFns* out) noexcept {
   struct Want {
     const char* symbol;
@@ -665,6 +729,13 @@ void ResetForTest() noexcept {
   g_setCount.store(0, std::memory_order_relaxed);
   g_cargoServed.store(0, std::memory_order_relaxed);
   for (KeySlot& slot : g_cargoSeen) {
+    slot.key.store(0, std::memory_order_relaxed);
+    slot.seen.store(0, std::memory_order_relaxed);
+  }
+  g_mapSets.store(nullptr, std::memory_order_relaxed);
+  g_mapSetServed.store(0, std::memory_order_relaxed);
+  g_seenManager.store(nullptr, std::memory_order_relaxed);
+  for (KeySlot& slot : g_mapSetSeen) {
     slot.key.store(0, std::memory_order_relaxed);
     slot.seen.store(0, std::memory_order_relaxed);
   }
