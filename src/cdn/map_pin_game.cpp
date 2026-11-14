@@ -2,17 +2,20 @@
 
 #include <time.h>
 
-#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "abi/game_level.h"
 #include "core/map_session_pin.h"
+#include "quest/cargo/map_pin_pure.h"
 #include "quest/invite/frame_dispatch.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
+#include "runtime/patch/lobby_failure_message_rules.h"
 
 namespace nevr_quest::maps::pin {
 namespace {
@@ -25,10 +28,13 @@ namespace core = nevr_map_session_pin;
 constexpr std::uint64_t kMsPerSecond = 1000;
 constexpr std::uint64_t kNsPerMs = 1000000;
 
-// CR15NetGame::LoadMap: ldr x8, [x19, #0x40]; add x0, x8, #0x18 before OwnerSymbol(lobby, "level", -1). The offsets are the PC's
-// (map_session_pin_game.cpp) on the same CR15NetGame and CNSLobby layout.
-constexpr std::size_t kNetGameClientLobbyOffset = 0x40;
-constexpr std::size_t kClientLobbyLobbyOffset = 0x18;
+// The consequence of a leave the game refuses past its retry window (the same words the PC's record carries).
+constexpr const char* kLeaveFailedConsequence = "stays in a session whose map version differs";
+
+// The notice is written with the lobby failure message's error-block writer, so the two layouts must be the same bytes.
+static_assert(layout::kErrorBlockOffset == nevr_lobby_failure_message::kErrorBlockOffset, "the error block offset is one value");
+static_assert(layout::kErrorLineBytes == nevr_lobby_failure_message::kErrorLineBytes, "the error line size is one value");
+static_assert(layout::kErrorLines == nevr_lobby_failure_message::kErrorLines, "the error line count is one value");
 
 using OwnerSymbolFn = std::uint64_t (*)(const void* lobby, const char* key, std::uint64_t fallback);
 using ScheduleReturnToLobbyFn = void (*)(void* netGame);
@@ -45,20 +51,32 @@ Fn FunctionAt(std::uintptr_t base, std::uint64_t vaddr) {
   return fn;
 }
 
-const char* Resolve() noexcept {
+// The pin is off for a module or build reason: the record gives the reason and the consequence only.
+void Refuse(core::PinFields& refusal, const char* reason) {
+  refusal = core::PinOffFields(reason, nullptr, 0, nullptr, nullptr, 0);
+}
+
+// Proves this libr15 is the pinned build. An empty `refusal` means every check passed.
+void Resolve(core::PinFields& refusal) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
+  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return Refuse(refusal, "module_not_loaded");
   char id[64] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
-  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return "build_id_mismatch";
-  const auto* owner_bytes = reinterpret_cast<const unsigned char*>(image.base + owner::kOwnerSymbolVaddr);
-  if (std::memcmp(owner_bytes, owner::kOwnerSymbolCode, sizeof(owner::kOwnerSymbolCode)) != 0) return "owner_symbol_mismatch";
-  const auto* leave = reinterpret_cast<const unsigned char*>(image.base + owner::kScheduleReturnToLobbyVaddr);
-  if (std::memcmp(leave, owner::kScheduleReturnToLobbyCode, sizeof(owner::kScheduleReturnToLobbyCode)) != 0)
-    return "return_to_lobby_mismatch";
+  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return Refuse(refusal, "no_build_id");
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return Refuse(refusal, "build_id_mismatch");
+  const auto* base = reinterpret_cast<const unsigned char*>(image.base);
+  const auto* owner_expected = reinterpret_cast<const unsigned char*>(owner::kOwnerSymbolCode);
+  if (!nevr_quest::maps::pin::CheckLibr15Entry(base, owner::kOwnerSymbolVaddr, owner_expected, sizeof(owner::kOwnerSymbolCode),
+                                               "owner_symbol_mismatch", "CNSLobby::OwnerSymbol", refusal)) {
+    return;
+  }
+  const auto* leave_expected = reinterpret_cast<const unsigned char*>(owner::kScheduleReturnToLobbyCode);
+  if (!nevr_quest::maps::pin::CheckLibr15Entry(base, owner::kScheduleReturnToLobbyVaddr, leave_expected,
+                                               sizeof(owner::kScheduleReturnToLobbyCode), "return_to_lobby_mismatch",
+                                               "CR15NetGame::ScheduleReturnToLobby", refusal)) {
+    return;
+  }
   g_owner_symbol = FunctionAt<OwnerSymbolFn>(image.base, owner::kOwnerSymbolVaddr);
   g_schedule_return = FunctionAt<ScheduleReturnToLobbyFn>(image.base, owner::kScheduleReturnToLobbyVaddr);
-  return nullptr;
 }
 
 const void* PointerAt(const void* object, std::size_t offset) noexcept {
@@ -67,21 +85,11 @@ const void* PointerAt(const void* object, std::size_t offset) noexcept {
   return value;
 }
 
-// SetErrorMessage(4 args)'s layout: the byte before the lines is 1, four 64-byte lines, each NUL-terminated.
-void LayOutNotice(unsigned char* block, const char* title, const char* line) noexcept {
-  std::memset(block, 0, layout::kErrorBlockBytes);
-  block[0] = 1;
-  const char* lines[2] = {title, line};
-  for (std::size_t n = 0; n < 2; ++n) {
-    const std::size_t len = std::min(std::strlen(lines[n]), layout::kErrorLineBytes - 1);
-    std::memcpy(block + 1 + n * layout::kErrorLineBytes, lines[n], len);
-  }
-}
-
-// One record the core emitted, in the sentinel log. Every kind is written; none is dropped.
+// One record the core emitted, in the sentinel log. The shape is the PC's (docs/standards/logging.md [NEVR.MAPS]): the same
+// keys for the same reason. Every kind is written; none is dropped.
 void WriteEvent(const core::PinEvent& e) {
-  const std::string level = std::to_string(e.level);
-  const std::string pin = std::to_string(e.pin);
+  const std::string level = core::HexText(e.level);
+  const std::string pin = core::HexText(e.pin);
   switch (e.kind) {
     case core::PinEventKind::kUnpinned:
       sentinel::LogFields(sentinel::LogLevel::kInfo, "map_skew",
@@ -90,20 +98,26 @@ void WriteEvent(const core::PinEvent& e) {
     case core::PinEventKind::kSkew:
       sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew",
                           {{"reason", e.reason.c_str()}, {"id", e.id.c_str()}, {"level", level.c_str()}, {"pin", pin.c_str()},
-                           {"fetch", e.fetch ? "1" : "0"}, {"notice", e.notice.c_str()}});
+                           {"fetch", e.fetch ? "true" : "false"}, {"notice", e.notice.c_str()}});
       return;
     case core::PinEventKind::kLeaveScheduled:
       sentinel::LogFields(sentinel::LogLevel::kInfo, "map_skew", {{"reason", "leave_scheduled"}, {"id", e.id.c_str()}});
       return;
     case core::PinEventKind::kLeaveFailed:
-      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew", {{"reason", "leave_failed"}, {"id", e.id.c_str()}});
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew",
+                          {{"reason", "leave_failed"},
+                           {"id", e.id.c_str()},
+                           {"retry_ms", core::kLeaveRetryMs},
+                           {"consequence", kLeaveFailedConsequence}});
       return;
     case core::PinEventKind::kNoticeNotWritten:
       sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew", {{"reason", "notice_not_written"}, {"id", e.id.c_str()}});
       return;
     case core::PinEventKind::kLocalMap:
       // The Quest has no local source (the view never lists one), so this is not reached; it is logged if it ever is.
-      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew", {{"reason", "local_map"}, {"id", e.id.c_str()}});
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_skew",
+                          {{"reason", "local_map"}, {"id", e.id.c_str()}, {"level", level.c_str()}, {"pin", pin.c_str()},
+                           {"local", e.local_path.c_str()}});
       return;
     case core::PinEventKind::kServerSet:
     case core::PinEventKind::kServerCleared:
@@ -120,8 +134,8 @@ class QuestGameAccess final : public core::GameAccess {
   bool IsServer() override { return false; }
 
   std::uint64_t Lobby() override {
-    const void* clientLobby = PointerAt(invite::frame::NetGame(), kNetGameClientLobbyOffset);
-    return clientLobby == nullptr ? 0 : reinterpret_cast<std::uint64_t>(clientLobby) + kClientLobbyLobbyOffset;
+    const void* clientLobby = PointerAt(invite::frame::NetGame(), layout::kNetGameClientLobbyOffset);
+    return clientLobby == nullptr ? 0 : reinterpret_cast<std::uint64_t>(clientLobby) + layout::kClientLobbyLobbyOffset;
   }
 
   std::int32_t NetState() override {
@@ -143,15 +157,15 @@ class QuestGameAccess final : public core::GameAccess {
                                        EchoVR::kQuestMainLevelSymbolOffset);
   }
 
+  // The notice goes into the net game's error block, through the writer the PC and the Quest's lobby failure page share.
   bool WriteNotice(const char* title, const char* line) override {
-    LayOutNotice(static_cast<unsigned char*>(invite::frame::NetGame()) + layout::kErrorBlockOffset, title, line);
-    return true;
+    return nevr_lobby_failure_message::WriteErrorBlock(static_cast<std::uint8_t*>(invite::frame::NetGame()), title, line,
+                                                       std::strlen(line) + 1);
   }
 
-  bool ScheduleLeave() override {
-    g_schedule_return(invite::frame::NetGame());
-    return true;
-  }
+  // The game's call queue must exist (#730): the game's function faults without it. A refusal is retried by the core, then
+  // reported as leave_failed, as on the PC.
+  bool ScheduleLeave() override { return ScheduleWhenQueueReady(invite::frame::NetGame(), g_schedule_return); }
 
   std::uint64_t NowMs() override {
     timespec now{};
@@ -169,15 +183,23 @@ bool TickWork(void* /*context*/) noexcept {
   return true;
 }
 
+// The `map_pin` record for the fields of a pin that is off (or on): the same keys the PC's line carries.
+void LogPinFields(sentinel::LogLevel level, const core::PinFields& fields) {
+  std::vector<sentinel::LogField> list;
+  list.reserve(fields.size());
+  for (const core::PinField& field : fields) list.emplace_back(field.first.c_str(), field.second.c_str());
+  sentinel::LogFieldList(level, "map_pin", list.data(), list.size());
+}
+
 }  // namespace
 
 bool InstallTick() noexcept {
   static const bool installed = [] {
-    const char* refused = Resolve();
-    if (refused == nullptr && !invite::frame::RegisterFrameWork(&TickWork, nullptr)) refused = "frame_work_full";
-    if (refused != nullptr) {
-      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_pin",
-                          {{"status", "off"}, {"reason", refused}, {"consequence", "a mismatched server is not left"}});
+    core::PinFields refusal;
+    Resolve(refusal);
+    if (refusal.empty() && !invite::frame::RegisterFrameWork(&TickWork, nullptr)) Refuse(refusal, "frame_work_full");
+    if (!refusal.empty()) {
+      LogPinFields(sentinel::LogLevel::kWarn, refusal);
       return false;
     }
     sentinel::LogFields(sentinel::LogLevel::kInfo, "map_pin", {{"status", "on"}});

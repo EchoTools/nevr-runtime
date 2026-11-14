@@ -633,6 +633,10 @@ namespace game_layout {
 inline constexpr std::size_t kStateOffset = 0;
 // The game space QuitOnError sends its event to: *(*(self + 8) + 0x7af0) (null before the game space exists). The
 // game object's offset (kGameOffset = 8) and the game-space tables are in game_space_layout.h, which this file includes.
+// CR15NetGame's client lobby pointer and the CNSLobby in it, read before the owner JSON calls (the Quest's LoadMap: `ldr x8,
+// [x19, #0x40]; add x0, x8, #0x18`; the PC's is the same shape, runtime/hook/addresses.h NETGAME_CLIENT_LOBBY_OFFSET).
+inline constexpr std::size_t kNetGameClientLobbyOffset = 0x40;
+inline constexpr std::size_t kClientLobbyLobbyOffset = 0x18;
 inline constexpr std::size_t kGameSpaceOffset = 0x7af0;
 inline constexpr std::int32_t kStateLoggingIn = 2;      // "logging in"
 inline constexpr std::int32_t kStateLoginFailed = -94;  // "login failed"

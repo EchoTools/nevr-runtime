@@ -551,6 +551,13 @@ constexpr uintptr_t NETGAME_STATE_OFFSET = 0;
 /// Offset within the net game of the game object: its second field.
 constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
 
+/// Offset within the net game of the client lobby pointer (CR15NetClientLobby *), which the owner-JSON calls go through:
+/// CR15NetGame::LoadMap (echovr.exe 0x14017a050) reads `MOV RCX,[RBX+0x40]`, then `ADD RCX,0x18` before CALL 0x14060d3d0.
+constexpr uintptr_t NETGAME_CLIENT_LOBBY_OFFSET = 0x40;
+
+/// Offset within the client lobby of the CNSLobby the owner-JSON calls take (the same LoadMap: `ADD RCX,0x18`).
+constexpr uintptr_t CLIENT_LOBBY_LOBBY_OFFSET = 0x18;
+
 /// Offset within the game object of the game thread's call queue, what QueueGameThreadCall takes as
 /// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
 constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;

@@ -13,6 +13,7 @@
 #include "runtime/compat/lobby_join_state.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/boot_log_tee.h"
@@ -50,7 +51,7 @@ constexpr std::size_t kNetGamePartyOffset = 0x647C8;
 constexpr std::uint64_t kCanFollowPartyVA = 0x1401A74C0;
 constexpr std::array<std::uint8_t, 9> kCanFollowPartyPrologue = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
 using CanFollowPartyFn = int (*)(void* netGame);
-constexpr std::size_t kNetGameLobbyClientOffset = 0x40;
+constexpr std::size_t kNetGameLobbyClientOffset = nevr_patch_addresses::NETGAME_CLIENT_LOBBY_OFFSET;
 
 constexpr std::size_t kLobbyStatusOffset = 0x448;  // the callback's own gate: status - 4 < 3 (unsigned)
 constexpr std::size_t kLobbyGameOffset = 0x8;      // *(lobbyClient + 8) is the CR15NetGame the error block lives in

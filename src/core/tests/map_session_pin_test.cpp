@@ -588,4 +588,45 @@ TEST_F(MapSessionPin, LoginAndRegistrationEntriesAreSafeDuringSetMountedPins) {
   EXPECT_EQ(torn, 0u);
 }
 
+// The fields of a record for a pin that is off. A module or build check names only the reason; a byte check names the function, its
+// VA, then the expected and the actual bytes, in that order (logging.md Rule 6).
+TEST(MapSessionPinRecord, AModuleCheckStatesOnlyTheReasonAndTheConsequence) {
+  const sp::PinFields fields = sp::PinOffFields("no_game_module", nullptr, 0, nullptr, nullptr, 0);
+  ASSERT_EQ(fields.size(), 3u);
+  EXPECT_EQ(fields[0], (sp::PinField{"status", "off"}));
+  EXPECT_EQ(fields[1], (sp::PinField{"reason", "no_game_module"}));
+  EXPECT_EQ(fields[2].first, "consequence");
+}
+
+TEST(MapSessionPinRecord, AByteCheckNamesTheFunctionTheVaAndBothByteRunsInOrder) {
+  const std::uint8_t expected[] = {0x01, 0x02};
+  const std::uint8_t actual[] = {0xab, 0xcd};
+  const sp::PinFields fields = sp::PinOffFields("owner_getter_mismatch", "fn", 0x1234, expected, actual, 2);
+  ASSERT_EQ(fields.size(), 7u);
+  EXPECT_EQ(fields[2], (sp::PinField{"name", "fn"}));
+  EXPECT_EQ(fields[3], (sp::PinField{"va", "0x0000000000001234"}));
+  EXPECT_EQ(fields[4], (sp::PinField{"expected", "0102"}));
+  EXPECT_EQ(fields[5], (sp::PinField{"actual", "abcd"}));
+  EXPECT_EQ(fields[6].first, "consequence");
+}
+
+TEST(MapSessionPinRecord, ACheckPassesOnAgreementAndFillsTheRefusalOnDisagreement) {
+  const std::uint8_t want[] = {0x10, 0x20};
+  std::uint8_t at[] = {0x10, 0x20};
+  sp::PinFields refusal;
+  EXPECT_TRUE(sp::CheckGameBytes(at, 0x99, want, 2, sp::SameBytesExact, "r", "n", refusal));
+  EXPECT_TRUE(refusal.empty());
+  at[1] = 0x21;
+  EXPECT_FALSE(sp::CheckGameBytes(at, 0x99, want, 2, sp::SameBytesExact, "r", "n", refusal));
+  ASSERT_EQ(refusal.size(), 7u);
+  EXPECT_EQ(refusal[1].second, "r");
+  EXPECT_EQ(refusal[4].second, "1020");  // expected
+  EXPECT_EQ(refusal[5].second, "1021");  // actual
+}
+
+TEST(MapSessionPinRecord, TheLineQuotesTheConsequenceAndNothingElse) {
+  const sp::PinFields fields = sp::PinOffFields("no_game_module", nullptr, 0, nullptr, nullptr, 0);
+  EXPECT_EQ(sp::FormatFields(fields), "status=off reason=no_game_module consequence=\"a mismatched server is not left\"");
+}
+
 }  // namespace

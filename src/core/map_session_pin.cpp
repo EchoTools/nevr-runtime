@@ -1,17 +1,20 @@
 #include "core/map_session_pin.h"
 
+#include <cstring>
 #include <mutex>
 
+#include "core/map_format.h"
 #include "nevr/symbol_hash.h"
 
 namespace nevr_map_session_pin {
+
+// The consequence a record states for a pin that is off (the words both platforms write).
+constexpr const char* kPinOffConsequence = "a mismatched server is not left";
 
 namespace {
 
 // The source hash prefix the identity uses (ADR 0048 decision 9): 16 hex characters.
 constexpr std::size_t kSourcePrefixChars = 16;
-// The `_lowspec` suffix the Quest's own level name carries.
-constexpr const char* kLowspecSuffix = "_lowspec";
 // A cut field keeps its text but two bytes shorter, plus one '~' that marks the cut.
 constexpr std::size_t kCutBytes = 2;
 constexpr char kCutMark = '~';
@@ -89,24 +92,12 @@ std::string FitLine(std::vector<Part> parts) {
   return line;
 }
 
-std::string LevelText(std::uint64_t level) {
-  // "0x" and sixteen hex digits, as the login and the logs spell a level.
-  constexpr std::size_t kLevelTextBytes = 19;
-  constexpr int kHexDigitBits = 4;
-  constexpr std::uint64_t kHexDigitMask = 0xF;
-  constexpr const char* kHexDigits = "0123456789abcdef";
-  constexpr std::size_t kLevelDigits = 16;
-  std::string text = "0x";
-  text.reserve(kLevelTextBytes);
-  for (std::size_t i = 0; i < kLevelDigits; ++i) {
-    const int shift = static_cast<int>((kLevelDigits - 1 - i) * kHexDigitBits);
-    text += kHexDigits[(level >> shift) & kHexDigitMask];
-  }
-  return text;
-}
+constexpr const char* kHexDigits = "0123456789abcdef";
+constexpr int kHexDigitBits = 4;
+constexpr unsigned kHexDigitMask = 0xF;
 
 nlohmann::json EntryJson(const MapPin& pin) {
-  return {{"level", LevelText(pin.level)},
+  return {{"level", HexText(pin.level)},
           {"id", pin.id},
           {"version", pin.version},
           {"index_sha256", pin.index_sha256},
@@ -240,9 +231,71 @@ std::uint64_t PinValue(const MapPin& pin) {
   return EchoVR::CSymbol64Hash(identity.c_str());
 }
 
+std::string HexText(std::uint64_t value) {
+  // "0x" and sixteen hex digits: 2 + 16 bytes.
+  constexpr std::size_t kHexDigitsPerU64 = 16;
+  constexpr std::size_t kHexTextBytes = 2 + kHexDigitsPerU64;
+  std::string text = "0x";
+  text.reserve(kHexTextBytes);
+  for (std::size_t i = 0; i < kHexDigitsPerU64; ++i) {
+    const int shift = static_cast<int>((kHexDigitsPerU64 - 1 - i) * kHexDigitBits);
+    text += kHexDigits[(value >> shift) & kHexDigitMask];
+  }
+  return text;
+}
+
+std::string HexBytesText(const std::uint8_t* bytes, std::size_t n) {
+  constexpr std::size_t kHexDigitsPerByte = 2;
+  std::string text;
+  text.reserve(n * kHexDigitsPerByte);
+  for (std::size_t i = 0; i < n; ++i) {
+    text += kHexDigits[(bytes[i] >> kHexDigitBits) & kHexDigitMask];
+    text += kHexDigits[bytes[i] & kHexDigitMask];
+  }
+  return text;
+}
+
+PinFields PinOffFields(const char* reason, const char* name, std::uint64_t va, const std::uint8_t* expected,
+                       const std::uint8_t* actual, std::size_t n) {
+  PinFields fields;
+  fields.push_back({"status", "off"});
+  fields.push_back({"reason", reason});
+  if (name != nullptr) {
+    fields.push_back({"name", name});
+    fields.push_back({"va", HexText(va)});
+    fields.push_back({"expected", HexBytesText(expected, n)});
+    fields.push_back({"actual", HexBytesText(actual, n)});
+  }
+  fields.push_back({"consequence", kPinOffConsequence});
+  return fields;
+}
+
+bool SameBytesExact(const std::uint8_t* at, const std::uint8_t* expected, std::size_t n) {
+  return std::memcmp(at, expected, n) == 0;
+}
+
+bool CheckGameBytes(const std::uint8_t* at, std::uint64_t va, const std::uint8_t* expected, std::size_t n, SameBytesFn same,
+                    const char* reason, const char* name, PinFields& refusal) {
+  if (same(at, expected, n)) return true;
+  refusal = PinOffFields(reason, name, va, expected, at, n);
+  return false;
+}
+
+std::string FormatFields(const PinFields& fields) {
+  std::string line;
+  for (const PinField& field : fields) {
+    if (!line.empty()) line += ' ';
+    const bool quoted = field.second.find(' ') != std::string::npos;
+    line += field.first + "=" + (quoted ? "\"" + field.second + "\"" : field.second);
+  }
+  return line;
+}
+
 std::uint64_t SessionLevelOf(const std::string& id) { return EchoVR::CSymbol64Hash(id.c_str()); }
 
-std::uint64_t LowspecLevelOf(const std::string& id) { return EchoVR::CSymbol64Hash((id + kLowspecSuffix).c_str()); }
+std::uint64_t LowspecLevelOf(const std::string& id) {
+  return EchoVR::CSymbol64Hash((id + nevr_maps::kQuestLevelSuffix).c_str());
+}
 
 ChannelView ViewFromMount(const nevr_maps::MountReport& report) {
   ChannelView view;
