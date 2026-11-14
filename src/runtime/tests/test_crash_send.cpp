@@ -6,6 +6,7 @@
 #include "core/crash_send.h"
 
 #include <gtest/gtest.h>
+#include "runtime/tests/run_root.h"
 
 #include <cstdint>
 #include <cstring>
@@ -220,20 +221,13 @@ const nevr_crash_send::Files TestFiles = {&TestList, &TestRead, &TestWrite, &Tes
 class CrashSend : public ::testing::Test {
  protected:
   void SetUp() override {
-    dir_ = fs::temp_directory_path() / ("nevr-crash-send-test-" + std::to_string(NEVR_TEST_PID) + "-" +
-                                        ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::error_code ec;
-    fs::remove_all(dir_, ec);
-    fs::create_directories(dir_);
+    dir_ = fs::path(nevr_test::NewDir(L"crash-send"));
+    ASSERT_FALSE(dir_.empty());
     g_posted = Posted{};
     g_answers.clear();
     g_events.clear();
     g_randomWorks = true;
     g_randomCalls = 0;
-  }
-  void TearDown() override {
-    std::error_code ec;
-    fs::remove_all(dir_, ec);  // exactly the directory SetUp made
   }
   nevr_crash_send::Config Config() const {
     nevr_crash_send::Config c;

@@ -16,6 +16,7 @@
 #include "runtime/content/content_pack.h"
 #include "runtime/content/pack_rules.h"
 #include "runtime/host/file_digest.h"
+#include "runtime/tests/run_root.h"
 
 namespace {
 
@@ -52,15 +53,13 @@ void WriteFileBytes(const std::wstring& path, const std::string& bytes) {
   CloseHandle(h);
 }
 
-// One fake install and one content folder, removed at the end of the test.
+// One fake install and one content folder, under the run root (the harness removes it).
 class ContentPack : public ::testing::Test {
  protected:
   void SetUp() override {
     nevr_content::Forget();
-    wchar_t tmp[MAX_PATH];
-    ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
-    base_ = std::wstring(tmp) + L"nevr-content-pack-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-            std::to_wstring(GetTickCount64());
+    base_ = nevr_test::NewDir(L"content-pack");
+    ASSERT_FALSE(base_.empty());
     game_ = base_ + L"\\echovr";
     exe_dir_ = game_ + L"\\bin\\win10";
     content_ = base_ + L"\\root\\content";
@@ -73,27 +72,7 @@ class ContentPack : public ::testing::Test {
   }
 
   void TearDown() override {
-    nevr_content::Forget();  // closes the held files so the folder can go
-    Remove(base_);
-  }
-
-  static void Remove(const std::wstring& dir) {
-    WIN32_FIND_DATAW f;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
-    if (h != INVALID_HANDLE_VALUE) {
-      do {
-        const std::wstring name = f.cFileName;
-        if (name == L"." || name == L"..") continue;
-        const std::wstring path = dir + L"\\" + name;
-        if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-          Remove(path);
-        } else {
-          DeleteFileW(path.c_str());
-        }
-      } while (FindNextFileW(h, &f));
-      FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
+    nevr_content::Forget();  // closes the held files; nothing is removed here
   }
 
   // A pack folder with a manifest, one added package and one script, and its content.json; `edit` changes the JSON first.
@@ -344,7 +323,9 @@ TEST_F(ContentPack, ASignedOnlyRunRefusesAPackWithScriptsAndServesOneWithout) {
   Decision d = Decide(in);
   EXPECT_EQ(d.outcome, Outcome::kRefused);
   EXPECT_EQ(d.reason, "signed_only");
-  Remove(content_ + L"\\testpack");
+  content_ = base_ + L"\\root\\after";  // the second pack goes in a folder of its own: the first one stays where it is
+  MakeDirs(content_);
+  in.content_dir = content_;
   MakePack("datapack", /*with_script=*/false);
   d = Decide(in);
   EXPECT_EQ(d.outcome, Outcome::kServed) << d.reason;
@@ -358,7 +339,9 @@ TEST_F(ContentPack, ScriptsOnAnotherGameBuildAreRefusedAndDataStillServes) {
   Decision d = Decide(in);
   EXPECT_EQ(d.outcome, Outcome::kRefused);
   EXPECT_EQ(d.reason, "unsupported_game");
-  Remove(content_ + L"\\testpack");
+  content_ = base_ + L"\\root\\after";  // the second pack goes in a folder of its own: the first one stays where it is
+  MakeDirs(content_);
+  in.content_dir = content_;
   MakePack("datapack", /*with_script=*/false);
   EXPECT_EQ(Decide(in).outcome, Outcome::kServed);
 }

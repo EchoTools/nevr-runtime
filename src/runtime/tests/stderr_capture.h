@@ -9,18 +9,14 @@
 #include <cstdio>
 #include <string>
 
+#include "runtime/tests/run_root.h"
+
 namespace nevr_test {
 
 class StderrCapture {
  public:
   StderrCapture() {
-    wchar_t base[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, base);
-    static LONG counter = 0;
-    wchar_t name[MAX_PATH] = {};
-    swprintf(name, MAX_PATH, L"%lsnevr-stderr-%lu-%llu-%ld.txt", base, static_cast<unsigned long>(GetCurrentProcessId()),
-             static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(InterlockedIncrement(&counter)));
-    path_ = name;
+    path_ = NewDir(L"stderr") + L"\\capture.txt";  // under the run root; the harness removes it
     previous_ = GetStdHandle(STD_ERROR_HANDLE);
     file_ = CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -29,7 +25,6 @@ class StderrCapture {
   ~StderrCapture() {
     SetStdHandle(STD_ERROR_HANDLE, previous_);
     if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
-    DeleteFileW(path_.c_str());
   }
   StderrCapture(const StderrCapture&) = delete;
   StderrCapture& operator=(const StderrCapture&) = delete;

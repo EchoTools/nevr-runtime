@@ -2409,6 +2409,7 @@ if(BUILD_TESTING)
     # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
+      ../core/owned_remove_win32.cpp
       tests/test_resource_override.cpp
       # the provider-name redirect's detour (CNSProvider::LoadByName), driven through MinHook on a stand-in.
       tests/test_provider_name_redirect.cpp
@@ -2634,6 +2635,8 @@ if(BUILD_TESTING)
       test_plugin_level test_plugin_resources
       test_plugin_nevr_exports test_plugin_deprecated_exports)
 
+    # The guard the test uses to remove its own copies (RemoveCopies), on the Win32 implementation.
+    set_source_files_properties(../core/owned_remove_win32.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
     # CachedAuthToken claim parsing is header-only production code. Keep it in

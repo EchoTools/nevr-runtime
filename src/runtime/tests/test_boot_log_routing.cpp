@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
+#include <sys/stat.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -16,6 +17,8 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+
+#include "runtime/tests/run_root.h"
 
 #include <filesystem>
 #include <vector>
@@ -63,22 +66,17 @@ std::string ReadFrom(const std::string& path, std::streamoff start) {
 // Runs `fn` with the process's stderr (fd 2) pointed at a scratch file and returns what it wrote.
 template <typename Fn>
 std::string CaptureStderr(Fn fn) {
-  char dir[MAX_PATH];
-  char path[MAX_PATH];
-  GetTempPathA(sizeof(dir), dir);
-  GetTempFileNameA(dir, "tee", 0, path);
+  const std::string path = nevr_test::AnsiPath(nevr_test::NewDir(L"stderr-capture")) + "\\tee.txt";  // under the run root
   std::fflush(stderr);
   const int saved = _dup(2);
-  const int fd = _open(path, _O_WRONLY | _O_TRUNC | _O_BINARY);
+  const int fd = _open(path.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IWRITE);  // the folder is new: create the file
   _dup2(fd, 2);
   _close(fd);
   fn();
   std::fflush(stderr);
   _dup2(saved, 2);
   _close(saved);
-  const std::string out = ReadFrom(path, 0);
-  DeleteFileA(path);
-  return out;
+  return ReadFrom(path, 0);
 }
 
 // The boot phase writes into the process's one main log, <root>\logs\nevr-<creation time>.jsonl (docs/standards/logging.md, "One log"),
@@ -87,11 +85,8 @@ class BootLogRouting : public ::testing::Test {
  protected:
   void SetUp() override {
     saved_ = GetEnv();
-    root_ = std::filesystem::temp_directory_path() /
-            ("nevr-boot-routing-" + std::to_string(GetCurrentProcessId()) + "-" +
-             ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::filesystem::remove_all(root_);
-    std::filesystem::create_directories(root_);
+    root_ = nevr_test::NewDir(L"boot-routing");  // a folder under the run root, not the temp folder
+    ASSERT_FALSE(root_.empty());
     SetEnvironmentVariableW(L"LOCALAPPDATA", root_.wstring().c_str());
     nevr_run_log_writer::Close();
     exe_boot_file_ = ExeDirBootFile();
@@ -100,8 +95,6 @@ class BootLogRouting : public ::testing::Test {
   void TearDown() override {
     nevr_run_log_writer::Close();
     SetEnvironmentVariableW(L"LOCALAPPDATA", saved_.empty() ? nullptr : saved_.c_str());
-    std::error_code ignored;
-    std::filesystem::remove_all(root_, ignored);
   }
 
   std::filesystem::path LogsDir() const { return root_ / "nevr" / "echovr" / "logs"; }

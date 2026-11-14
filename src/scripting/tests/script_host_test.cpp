@@ -98,15 +98,12 @@ struct Env {
     return ok;
   }();
 
+  // A folder of this run, named with the time so no earlier run's files can be in it. Nothing is removed here.
   explicit Env(const char* test) {
     const char* base = std::getenv("NEVR_TEST_TMPDIR");
-    dir = (base ? fs::path(base) : fs::temp_directory_path()) / (std::string("nevr_script_host_") + test);
-    fs::remove_all(dir);
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    dir = (base ? fs::path(base) : fs::temp_directory_path()) / (std::string("nevr_script_host_") + test + "-" + std::to_string(stamp));
     fs::create_directories(dir);
-  }
-  ~Env() {
-    std::error_code ec;
-    fs::remove_all(dir, ec);
   }
   std::string Write(const char* name, const std::string& text) {
     const fs::path p = dir / name;

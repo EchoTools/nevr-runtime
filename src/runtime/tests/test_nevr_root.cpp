@@ -6,6 +6,8 @@
 #include <winsock2.h>  // before windows.h: core/credential_write.h reaches core/logging.h, which pulls it in
 #include <windows.h>
 
+#include "runtime/tests/run_root.h"
+
 #include <filesystem>
 #include <fstream>
 #include <atomic>
@@ -57,12 +59,15 @@ unsigned Count(const std::vector<move::Event>& events, Outcome outcome) {
 class NevrRootMove : public ::testing::Test {
  protected:
   void SetUp() override {
-    wchar_t tmp[MAX_PATH];
-    ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
     const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    base_ = std::wstring(tmp) + L"nevr-root-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-            std::wstring(test.begin(), test.end()) + Suffix();
-    Wipe();
+    const std::wstring label = L"nevr-root-" + std::wstring(test.begin(), test.end()) + Suffix();
+    base_ = nevr_test::NewDir(label.c_str());  // a folder under the run root, which the harness removes
+    ASSERT_FALSE(base_.empty());
+    Layout(base_);
+  }
+  // The folders of one test under `base`, a folder from NewDir: a test that needs fresh folders calls this again.
+  void Layout(const std::wstring& base) {
+    base_ = base;
     install_local_ = base_ + L"\\game\\bin\\win10\\_local";
     local_ = {install_local_, base_ + L"\\game\\bin\\_local", base_ + L"\\game\\_local"};
     legacy_logs_ = base_ + L"\\appdata\\EchoVR\\logs";
@@ -70,14 +75,8 @@ class NevrRootMove : public ::testing::Test {
     legacy_plugins_ = base_ + L"\\game\\bin\\win10\\plugins";
     root_ = nevr_root::RootUnder(base_ + L"\\appdata");
   }
-  void TearDown() override { Wipe(); }
   // UTF-16 on purpose; the sign-in cache's tests use plain ASCII (the credential writer takes ANSI paths).
   virtual std::wstring Suffix() const { return L"-\u00e9\u4e2d"; }
-
-  void Wipe() {
-    std::error_code ec;
-    std::filesystem::remove_all(std::filesystem::path(base_), ec);
-  }
 
   move::Inputs Inputs() const {
     move::Inputs in;
@@ -151,18 +150,14 @@ TEST(NevrRootPaths, TheNamesNEVRWritesAreRecognisedAndNothingElseIs) {
 }
 
 TEST(NevrRootPaths, EnsureDirectoryTreeMakesEveryParentAndRefusesAFile) {
-  wchar_t tmp[MAX_PATH];
-  ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
-  const std::wstring base = std::wstring(tmp) + L"nevr-root-test-tree-" + std::to_wstring(GetCurrentProcessId());
-  std::error_code ec;
-  std::filesystem::remove_all(std::filesystem::path(base), ec);
+  const std::wstring base = nevr_test::NewDir(L"nevr-root-tree");  // under the run root
+  ASSERT_FALSE(base.empty());
   EXPECT_TRUE(nevr_root::EnsureDirectoryTree(base + L"\\a\\b\\c"));
   EXPECT_TRUE(Exists(base + L"\\a\\b\\c"));
   EXPECT_TRUE(nevr_root::EnsureDirectoryTree(base + L"\\a\\b\\c")) << "an existing tree is fine";
   Write(base + L"\\file", "x");
   EXPECT_FALSE(nevr_root::EnsureDirectoryTree(base + L"\\file\\child")) << "a file where a folder is needed";
   EXPECT_FALSE(nevr_root::EnsureDirectoryTree(std::wstring()));
-  std::filesystem::remove_all(std::filesystem::path(base), ec);
 }
 
 TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndLeavesNoNoteBehind) {
@@ -522,7 +517,8 @@ TEST_F(NevrRootConcurrentMove, ACopyThatFailsItsCheckIsNeverInstalled) {
 
 TEST_F(NevrRootConcurrentMove, TwoMovesAtOnceInstallOneCacheAndLeaveTheOtherSource) {
   for (int round = 0; round < 5; ++round) {
-    Wipe();
+    Layout(nevr_test::NewDir(L"round"));  // fresh folders for each round, under the run root
+    g_hookCache = Cache(root_);
     Write(Cache(local_[0]), "a");
     Write(Cache(local_[1]), "b");
     move::Inputs a = Inputs();

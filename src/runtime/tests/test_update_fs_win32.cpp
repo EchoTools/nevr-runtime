@@ -14,6 +14,7 @@
 #include "core/update/fs.h"
 #include "core/update/names.h"
 #include "runtime/lifecycle/update_fs_win32.h"
+#include "runtime/tests/run_root.h"
 
 namespace {
 
@@ -33,15 +34,8 @@ std::string Utf8(const std::wstring& w) {
 
 class Dir {
  public:
-  Dir() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    static std::atomic<int> n{0};
-    wide_ = std::wstring(temp) + L"nevr-update-fs-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-            std::to_wstring(n.fetch_add(1));
-    CreateDirectoryW(wide_.c_str(), nullptr);
-  }
-  ~Dir() { Remove(wide_); }
+  // A folder under the run root (run_root.h); the harness removes the run root, so nothing is removed here.
+  Dir() : wide_(nevr_test::NewDir(L"update-fs")) {}
   std::string Path(const std::string& rel = std::string()) const {
     return rel.empty() ? Utf8(wide_) : Utf8(wide_) + "\\" + rel;
   }
@@ -59,20 +53,6 @@ class Dir {
   bool Exists(const std::wstring& rel) const { return GetFileAttributesW(Wide(rel).c_str()) != INVALID_FILE_ATTRIBUTES; }
 
  private:
-  static void Remove(const std::wstring& dir) {
-    WIN32_FIND_DATAW f;
-    const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
-    if (h != INVALID_HANDLE_VALUE) {
-      do {
-        const std::wstring name = f.cFileName;
-        if (name == L"." || name == L"..") continue;
-        if ((f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) Remove(dir + L"\\" + name);
-        else DeleteFileW((dir + L"\\" + name).c_str());
-      } while (FindNextFileW(h, &f) != FALSE);
-      FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
-  }
   std::wstring wide_;
 };
 

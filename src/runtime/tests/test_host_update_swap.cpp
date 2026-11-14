@@ -19,6 +19,8 @@
 #include <windows.h>
 #include <wincrypt.h>
 
+#include "runtime/tests/run_root.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -115,7 +117,7 @@ std::string Narrow(const std::wstring& text) {
   return out;
 }
 
-// A Unix path as Wine takes it from a Windows API.
+// A Unix path as Wine takes it from a Windows API. The Z: mapping goes when nevr-wine exists (DESIGN.md section 5).
 std::wstring WinPath(const std::string& unix_path) {
   if (unix_path.empty() || unix_path[0] != '/') return Widen(unix_path);
   std::wstring out = L"Z:";
@@ -228,29 +230,6 @@ std::map<std::string, std::string> Tree(const std::wstring& dir) {
   return out;
 }
 
-void RemoveTree(const std::wstring& dir) {
-  WIN32_FIND_DATAW data;
-  const HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &data);
-  if (find != INVALID_HANDLE_VALUE) {
-    do {
-      const std::wstring name = data.cFileName;
-      if (name == L"." || name == L"..") continue;
-      const std::wstring path = dir + L"\\" + name;
-      if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        RemoveDirectoryW(path.c_str());
-        DeleteFileW(path.c_str());
-      } else if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        RemoveTree(path);
-      } else {
-        SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
-        DeleteFileW(path.c_str());
-      }
-    } while (FindNextFileW(find, &data) != FALSE);
-    FindClose(find);
-  }
-  RemoveDirectoryW(dir.c_str());
-}
-
 // ---- records -------------------------------------------------------------------------------------------------------
 
 std::mutex g_records_mutex;
@@ -311,20 +290,7 @@ class HostUpdateSwap : public ::testing::Test {
     policy_.rootDer.assign(root_der.begin(), root_der.end());
     policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
 
-    wchar_t base[MAX_PATH] = {};
-    ASSERT_GT(GetTempPathW(MAX_PATH, base), 0u);
-    static LONG counter = 0;
-    wchar_t dir_name[MAX_PATH] = {};
-    swprintf(dir_name, MAX_PATH, L"%ls\\nevr-update-%lu-%llu-%ld", base, static_cast<unsigned long>(GetCurrentProcessId()),
-             static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(InterlockedIncrement(&counter)));
-    scratch_ = dir_name;
-    ASSERT_NE(CreateDirectoryW(scratch_.c_str(), nullptr), FALSE);
-    root_ = scratch_ + L"\\nevr-root";
-    local_ = scratch_ + L"\\local";
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
-    ASSERT_NE(CreateDirectoryW(local_.c_str(), nullptr), FALSE);
-    update_ = root_ + L"\\update";
-    runtime_path_ = root_ + L"\\nevr-runtime.dll";
+    FreshCase();
 
     new_runtime_ = Fixture("nevr-runtime.signed");
     old_runtime_ = Fixture("nevr-runtime.unsigned");
@@ -349,8 +315,22 @@ class HostUpdateSwap : public ::testing::Test {
     nevr_host::SetUpdateLockTimingForTest(0, 0);
     nevr_host::SetUpdateStepHookForTest(nullptr);
     nevr_host::SetUpdateMoveFailureForTest(0, 0);
-    // Only this test's own scratch folder, by its exact path.
-    RemoveTree(scratch_);
+    for (const std::wstring& sentinel : canaries_) {
+      EXPECT_EQ(ReadAll(sentinel), std::string(kCanaryBytes)) << "the canary behind a link was changed or removed";
+    }
+  }
+
+  // The folders of one case: a scratch folder of its own under the run root (the harness removes it), with an empty root and
+  // local folder in it. A case that needs an empty root calls this again.
+  void FreshCase() {
+    scratch_ = nevr_test::NewDir(L"update-swap");
+    ASSERT_FALSE(scratch_.empty());
+    root_ = scratch_ + L"\\nevr-root";
+    local_ = scratch_ + L"\\local";
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    ASSERT_NE(CreateDirectoryW(local_.c_str(), nullptr), FALSE);
+    update_ = root_ + L"\\update";
+    runtime_path_ = root_ + L"\\nevr-runtime.dll";
   }
 
   std::string Fixture(const char* key) const {
@@ -423,13 +403,28 @@ class HostUpdateSwap : public ::testing::Test {
   // Move the real folder `relative` (to the root) aside and put a directory link where it was. Returns the folder the
   // link points at, or empty (with a failure) when this system cannot make one.
   std::wstring LinkAway(const std::wstring& relative) {
-    static LONG counter = 0;
     const std::wstring path = root_ + L"\\" + relative;
-    const std::wstring elsewhere = scratch_ + L"\\elsewhere-" + std::to_wstring(InterlockedIncrement(&counter));
+    // The canary: a folder of its own, outside the case folder. The real folder is moved into it and the link points there.
+    // This test cannot create Wine's unflagged symlink (CreateSymbolicLinkW sets the directory flag), so it guards the
+    // product's link handling, not the 11-13 shape. The 11-13 guarantee is the removal of this test's RemoveTree and the sandbox.
+    const std::wstring canary = nevr_test::NewDir(L"canary");
+    if (canary.empty()) return {};
+    const std::wstring elsewhere = canary + L"\\moved";
     if (MoveFileExW(path.c_str(), elsewhere.c_str(), 0) == FALSE) {
       ADD_FAILURE() << "move " << Narrow(path) << ": " << GetLastError();
       return {};
     }
+    // The sentinel: known bytes inside the moved folder, which nothing in the case may change through the link.
+    const std::wstring sentinel = elsewhere + L"\\sentinel.txt";
+    HANDLE file = CreateFileW(sentinel.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      ADD_FAILURE() << "sentinel " << Narrow(sentinel) << ": " << GetLastError();
+      return {};
+    }
+    DWORD written = 0;
+    WriteFile(file, kCanaryBytes, static_cast<DWORD>(sizeof(kCanaryBytes) - 1), &written, nullptr);
+    CloseHandle(file);
+    canaries_.push_back(sentinel);
     if (CreateSymbolicLinkW(path.c_str(), elsewhere.c_str(),
                             SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) == FALSE) {
       ADD_FAILURE() << "link " << Narrow(path) << ": " << GetLastError();
@@ -445,8 +440,7 @@ class HostUpdateSwap : public ::testing::Test {
   // A fresh root with the usual release staged, a swap of it ended after step `kill`, and the journal's phase then
   // ("" when the kill left no journal).
   std::string KilledSwap(int kill) {
-    RemoveTree(root_);
-    CreateDirectoryW(root_.c_str(), nullptr);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     g_kill_at.store(kill);
     RunStart();
@@ -492,6 +486,9 @@ class HostUpdateSwap : public ::testing::Test {
   nlohmann::json manifest_;
   nevr_plugin_signature::Policy policy_;
   std::wstring scratch_, root_, local_, update_, runtime_path_;
+  // What LinkAway plants in each canary: the case must leave these bytes as they were.
+  static constexpr char kCanaryBytes[] = "canary bytes: a link into the canary must never reach these";
+  std::vector<std::wstring> canaries_;  // the sentinel file of each canary, checked in TearDown
   std::string new_runtime_, old_runtime_, new_plugin_, old_plugin_;
 };
 
@@ -625,8 +622,7 @@ TEST_F(HostUpdateSwap, F7_AKillAfterAnyStepIsRecoveredAndTheNextStartEndsWithOne
   bool saw_recovery_of_a_move = false;
   for (int kill = 1; kill <= steps; ++kill) {
     SCOPED_TRACE(kill);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     g_kill_at.store(kill);
     RunStart();
@@ -816,8 +812,7 @@ TEST_F(HostUpdateSwap, F17_ARefusedRuntimeReleasesTheLockToo) {
 TEST_F(HostUpdateSwap, F18_AForeignFileWhereAStagedFileGoesBlocksTheWholeSwap) {
   for (const bool listed_with_other_bytes : {false, true}) {
     SCOPED_TRACE(listed_with_other_bytes);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     Put(L"nevr-runtime.dll", old_runtime_);
     Put(L"plugins\\example.dll", "a plugin the player put here");
     WriteState({{"owned", listed_with_other_bytes
@@ -881,8 +876,7 @@ TEST_F(HostUpdateSwap, F22_AStagedJsonOutsideTheVocabularyIsNotUsedAndNothingOut
   };
   for (const Case& c : cases) {
     SCOPED_TRACE(c.label);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     Put(L"nevr-runtime.dll", old_runtime_);
     // Where a careless join of each name would read from.
     Put(L"update\\nevr-runtime.dll", new_runtime_);
@@ -913,8 +907,7 @@ TEST_F(HostUpdateSwap, F22_AJournalThisHostCannotReadStopsTheStartAndIsNotExecut
   };
   for (const std::string& journal : journals) {
     SCOPED_TRACE(journal.substr(0, 60));
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     Put(L"update\\swap.json", journal);
     const auto before = Tree(root_);
@@ -945,8 +938,7 @@ TEST_F(HostUpdateSwap, F22_AReparsePointInTheUpdateFoldersBlocksTheSwap) {
                         Case{L"update\\previous\\0.0.1", "update/previous/0.0.1"},
                         Case{L"update\\previous\\0.0.1\\plugins", "update/previous/0.0.1/plugins"}}) {
     SCOPED_TRACE(c.folder);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     Put(L"update\\previous\\0.0.1\\nevr-runtime.dll", "an older generation");
     Put(L"update\\previous\\0.0.1\\plugins\\older.dll", "an older generation's plugin");
@@ -1043,8 +1035,7 @@ TEST_F(HostUpdateSwap, F22_ARecoveryNeverMovesFilesThroughALinkedFolder) {
 TEST_F(HostUpdateSwap, F22_ALinkedOlderGenerationIsNotClearedThroughTheLink) {
   for (const wchar_t* linked : {L"update\\previous\\0.0.1", L"update\\previous\\0.0.1\\plugins"}) {
     SCOPED_TRACE(Narrow(linked));
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     Put(L"update\\previous\\0.0.1\\nevr-runtime.dll", "a file outside the root");
     Put(L"update\\previous\\0.0.1\\plugins\\anything.dll", "a plugin outside the root");
@@ -1067,8 +1058,7 @@ TEST_F(HostUpdateSwap, F22_ALinkedOlderGenerationIsNotClearedThroughTheLink) {
 TEST_F(HostUpdateSwap, F22_AMoveThatFailsIsUndoneAndTheRootIsAsItWas) {
   for (int failing = 1; failing <= 4; ++failing) {
     SCOPED_TRACE(failing);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     auto before = Tree(root_);
     nevr_host::SetUpdateMoveFailureForTest(failing, ERROR_NOT_SAME_DEVICE);
@@ -1121,9 +1111,7 @@ TEST_F(HostUpdateSwap, B1_ARootRuntimeVersionOutsideTheVocabularyBlocksTheSwapAn
   for (const std::string& version : {std::string("..\\..\\..\\escaped"), std::string("9.9.9_x"), std::string("CON"),
                                      std::string("a/b"), std::string("\xff\xfe")}) {
     SCOPED_TRACE(version);
-    RemoveTree(root_);
-    RemoveTree(scratch_ + L"\\escaped");
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     Put(L"nevr-runtime.dll", RuntimeNamed(version));
     const auto before = Tree(root_);
@@ -1150,8 +1138,7 @@ TEST_F(HostUpdateSwap, B1_ARootRuntimeVersionOutsideTheVocabularyBlocksTheSwapAn
 TEST_F(HostUpdateSwap, B1_ARebuiltStateNamesNoCurrentReleaseWhoseVersionIsOutsideTheVocabulary) {
   for (const std::string& version : {std::string("..\\x"), std::string("\xff")}) {
     SCOPED_TRACE(version);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     const std::string runtime = RuntimeNamed(version);
     Put(L"nevr-runtime.dll", runtime);
     Put(L"update\\state.json", "{\"owned\": [");
@@ -1279,8 +1266,7 @@ TEST_F(HostUpdateSwap, AJsonFileNestedPastTheCapIsDamagedAndOneAtTheCapIsNot) {
     SCOPED_TRACE(depth);
     const bool deep = depth > cap;
     // state.json: one object holding `depth - 1` arrays.
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     Put(L"nevr-runtime.dll", old_runtime_);
     Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}});
     Put(L"update\\state.json", "{\"channel\": \"beta\", \"x\": " + Arrays(depth - 1) + "}");
@@ -1290,8 +1276,7 @@ TEST_F(HostUpdateSwap, AJsonFileNestedPastTheCapIsDamagedAndOneAtTheCapIsNot) {
     EXPECT_EQ(ReadJson(update_ + L"\\state.json").value("channel", ""), deep ? "" : "beta");
     if (depth > cap + 1) continue;  // staged.json and swap.json at 32,000 are the same reader
     // staged.json: valid, plus a key holding `depth - 1` arrays.
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     Put(L"nevr-runtime.dll", old_runtime_);
     Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}});
     Put(L"update\\staged.json",
@@ -1303,8 +1288,7 @@ TEST_F(HostUpdateSwap, AJsonFileNestedPastTheCapIsDamagedAndOneAtTheCapIsNot) {
     ASSERT_EQ(records.size(), 1u);
     EXPECT_EQ(records[0].value("reason", ""), deep ? "bad_staged" : "");
     // swap.json: a phase-out journal, plus a key holding `depth - 1` arrays.
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     OldReleaseInTheRootAndANewOneStaged();
     Put(L"update\\swap.json", Journal("out", ", \"x\": " + Arrays(depth - 1)));
     start = RunStart();
@@ -1414,8 +1398,7 @@ TEST_F(HostUpdateSwap, F22_ABadStagedJsonOrAStateJsonTheHostCannotReplaceIsRepor
     EXPECT_EQ(records[0].value("staged_removed", true), false);
     EXPECT_EQ(records[0].value("staged_win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
   }
-  RemoveTree(root_);
-  ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+  FreshCase();
   OldReleaseInTheRootAndANewOneStaged();
   std::string changed = new_runtime_;
   changed[100] ^= 0x01;
@@ -1626,8 +1609,7 @@ TEST_F(HostUpdateRollback, ASwapLeavesTheReleasePendingAndTellsTheLoaderSo) {
   EXPECT_EQ(start.result.action, UpdateAction::kLoad);
   EXPECT_TRUE(start.result.pending) << "a load of the swapped-in release that fails is the host's to handle";
   const Start quiet = [&] {
-    RemoveTree(root_);
-    CreateDirectoryW(root_.c_str(), nullptr);
+    FreshCase();
     Put(L"nevr-runtime.dll", old_runtime_);
     MakeDirs(update_);
     return RunStart();
@@ -1731,8 +1713,7 @@ TEST_F(HostUpdateRollback, ASecondStartInsideTheFirstOnesTrialDoesNotRollBackAnd
 TEST_F(HostUpdateRollback, F13_ARollbackWithNothingToRestoreStopsAndLeavesTheRootAsItWas) {
   for (const char* why : {"no_runtime", "no_pending_from", "unsigned"}) {
     SCOPED_TRACE(why);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     SwappedIn();
     MarkCrashed();
     if (std::string(why) == "no_runtime") DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
@@ -1767,8 +1748,7 @@ TEST_F(HostUpdateRollback, F20_AnInterruptedRollbackIsCompletedByTheNextStartAnd
   bool saw_a_journal = false;
   for (int kill = 1; kill <= steps; ++kill) {
     SCOPED_TRACE(kill);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     SwappedIn();
     MarkCrashed();
     g_kill_at.store(kill);
@@ -1898,8 +1878,7 @@ TEST_F(HostUpdateRollback, APendingRecordTheHostCannotParseIsDroppedAndOneItCann
   EXPECT_EQ(records[0].value("reason", ""), "bad_pending");
   EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "nothing moved";
 
-  RemoveTree(root_);
-  ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+  FreshCase();
   SwappedIn();
   MarkCrashed();
   auto before = Tree(root_);
@@ -2177,8 +2156,7 @@ TEST_F(HostUpdateRollback, APluginHeldWhileTheSwapFinishesIsStillOwned) {
 TEST_F(HostUpdateRollback, AnInProcessRollbackThatStopsMarksTheFailedRelease) {
   for (const char* why : {"no_previous", "previous_unverified", "rollback_blocked"}) {
     SCOPED_TRACE(why);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     PendingReleaseThatTheVerifierRefuses();
     if (std::string(why) == "no_previous") DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
     if (std::string(why) == "previous_unverified") Put(L"update\\previous\\7.7.7\\nevr-runtime.dll", bad_runtime_);
@@ -2310,8 +2288,7 @@ TEST_F(HostUpdateRollbackRefusals, AFolderTheRollbackWorksInThatIsALinkRefusesTh
                         {"failed plugins", L"update\\failed\\1.2.3\\plugins", true, "update/failed/1.2.3/plugins"}};
   for (const Case& c : cases) {
     SCOPED_TRACE(c.label);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     SwappedIn();
     MarkCrashed();
     if (c.make_real_first) {
@@ -2348,8 +2325,7 @@ TEST_F(HostUpdateRollbackRefusals, AStrangersFileWhereARestoredPluginGoesRefuses
 TEST_F(HostUpdateRollbackRefusals, AnInterruptedRollbackWhoseFolderBecameALinkIsNotCompletedThroughIt) {
   for (const char* phase : {"out", "in", "done"}) {
     SCOPED_TRACE(phase);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     SwappedIn();
     nlohmann::json journal = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", phase},
                               {"out", {"nevr-runtime.dll", "plugins/example.dll"}},
@@ -2569,8 +2545,7 @@ TEST_F(HostUpdateRollbackRefusals, ALockAnotherStartHoldsStopsTheInProcessRollba
 TEST_F(HostUpdateRollbackRefusals, AnInProcessRollbackThatCannotReadTheStateOrThePendingRecordStopsWithThatCause) {
   for (const char* what : {"state.json", "pending.json"}) {
     SCOPED_TRACE(what);
-    RemoveTree(root_);
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    FreshCase();
     PendingReleaseThatTheVerifierRefuses();
     BootstrapDiagnostics diagnostics;
     const std::wstring host_dir = scratch_ + L"\\";

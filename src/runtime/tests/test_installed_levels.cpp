@@ -6,6 +6,7 @@
 // of the install). It skips when the variable is unset; a skip is not evidence for the stock count.
 
 #include <gtest/gtest.h>
+#include "runtime/tests/run_root.h"
 #include <zstd.h>
 
 #include <cstdint>
@@ -73,15 +74,8 @@ std::vector<uint8_t> MakeManifest(const std::vector<Record>& records, uint64_t r
 
 class ScratchDir {
  public:
-  ScratchDir() {
-    std::mt19937_64 gen(std::random_device{}());
-    path_ = std::filesystem::temp_directory_path() / ("installed-levels-" + std::to_string(gen()));
-    std::filesystem::create_directories(path_);
-  }
-  ~ScratchDir() {
-    std::error_code ignored;
-    std::filesystem::remove_all(path_, ignored);
-  }
+  // A folder under the run root, which the harness removes; nothing is removed here.
+  ScratchDir() : path_(nevr_test::NewDir(L"installed-levels")) {}
   const std::filesystem::path& Path() const { return path_; }
 
  private:

@@ -8,6 +8,7 @@
 #include "runtime/host/crash_send_files.h"
 
 #include <gtest/gtest.h>
+#include "runtime/tests/run_root.h"
 
 #include <windows.h>
 
@@ -44,16 +45,9 @@ std::uint64_t ThisModuleBase() { return static_cast<std::uint64_t>(reinterpret_c
 class HostCrashReport : public ::testing::Test {
  protected:
   void SetUp() override {
-    root_ = fs::temp_directory_path() / ("nevr-host-crash-report-test-" + std::to_string(GetCurrentProcessId()) + "-" +
-                                         ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::error_code ec;
-    fs::remove_all(root_, ec);
-    fs::create_directories(root_);
+    root_ = fs::path(nevr_test::NewDir(L"host-crash-report"));
+    ASSERT_FALSE(root_.empty());
     SetEnvironmentVariableW(L"LOCALAPPDATA", root_.wstring().c_str());
-  }
-  void TearDown() override {
-    std::error_code ec;
-    fs::remove_all(root_, ec);  // exactly the directory SetUp made
   }
   fs::path CrashDir() const { return root_ / "nevr" / "echovr" / "crashes"; }
   std::vector<fs::path> Reports() const {

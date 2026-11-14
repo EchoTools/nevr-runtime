@@ -35,6 +35,7 @@
 
 #include "runtime/lifecycle/update_fs_win32.h"
 #include "runtime/lifecycle/update_run.h"
+#include "runtime/tests/run_root.h"
 #else
 #include <unistd.h>
 
@@ -85,25 +86,6 @@ void MakeDirsOfWide(const std::wstring& file) {
     if (file[i] == L'\\') CreateDirectoryW(file.substr(0, i).c_str(), nullptr);
   }
 }
-void RemoveTreeWide(const std::wstring& dir) {
-  WIN32_FIND_DATAW f;
-  HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
-  if (h != INVALID_HANDLE_VALUE) {
-    do {
-      const std::wstring name = f.cFileName;
-      if (name == L"." || name == L"..") continue;
-      const std::wstring p = dir + L"\\" + name;
-      if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-        RemoveTreeWide(p);
-      } else {
-        SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-        DeleteFileW(p.c_str());
-      }
-    } while (FindNextFileW(h, &f));
-    FindClose(h);
-  }
-  RemoveDirectoryW(dir.c_str());
-}
 void WalkWide(const std::wstring& base, const std::wstring& rel, std::vector<std::string>* out) {
   WIN32_FIND_DATAW f;
   HANDLE h = FindFirstFileW((base + (rel.empty() ? L"" : L"\\" + rel) + L"\\*").c_str(), &f);
@@ -148,16 +130,16 @@ std::string Native(std::string rel) {
 // A nevr root in a temp folder, removed with the fixture. Paths are UTF-8.
 class Root {
  public:
+  // Win32: a fresh folder under NEVR_TEST_RUN_ROOT (run_root.h), which the test never removes.
   explicit Root(const char* suffix = "") {
-    static std::atomic<int> n{0};
 #if defined(_WIN32)
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    std::string temp_utf8;
-    RootToUtf8(temp, &temp_utf8);
-    path_ = temp_utf8 + "nevr-update-test-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(n.fetch_add(1)) + suffix;
-    CreateDirectoryW(WideOf(path_).c_str(), nullptr);
+    std::wstring label = L"nevr-update-test";
+    for (const char* p = suffix; *p != '\0'; ++p) label += static_cast<wchar_t>(*p);
+    const std::wstring dir = nevr_test::NewDir(label.c_str());
+    if (dir.empty()) std::abort();
+    RootToUtf8(dir.c_str(), &path_);
 #else
+    static std::atomic<int> n{0};
     path_ = (std::filesystem::temp_directory_path() /
              ("nevr-update-test-" + std::to_string(::getpid()) + "-" + std::to_string(n.fetch_add(1)) + suffix))
                 .string();
@@ -165,9 +147,7 @@ class Root {
 #endif
   }
   ~Root() {
-#if defined(_WIN32)
-    RemoveTreeWide(WideOf(path_));
-#else
+#if !defined(_WIN32)
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);
 #endif

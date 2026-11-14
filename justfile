@@ -979,7 +979,11 @@ test-auth-unit:
     work_dir "$NEVR_WORK_ROOT/test-scratch" "Temporary directories of the tests; each test removes its own when it ends." \
         "a directory in here left behind by an interrupted test run can be removed at any time; this directory when no test run is live."
     sigfix="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-plugin-signature.XXXXXX")"
-    trap 'rm -rf "$sigfix"' EXIT
+    # The run root of the Win32 test binaries (src/runtime/tests/run_root.h): one fresh absolute folder per recipe run,
+    # named to Wine as a Windows path. Every test makes its folders under it; the exit trap removes it with the sigfix folder.
+    runroot="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-run-root.XXXXXX")"
+    export NEVR_TEST_RUN_ROOT="$(winepath -w "$runroot")"
+    trap 'rm -rf "$sigfix" "$runroot"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
     # The unsigned DLLs the fixtures are made from are CMake targets (src/runtime/tests/sigfix, ADR 0041); the script signs and damages them.

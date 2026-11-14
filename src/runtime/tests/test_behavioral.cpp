@@ -341,6 +341,8 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/tests/lobby_record_golden.h"
+#include "core/owned_remove.h"
+#include "runtime/tests/run_root.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 
@@ -386,8 +388,17 @@ class N68_PluginTickTest : public ::testing::Test {
 // makes its real OnFrame callback observable.
 // ============================================================================
 
+// Removes the copies a test put into a plugins folder, each by its name in its own folder, through the guard (never a tree).
+inline void RemoveCopies(const std::vector<std::string>& copies) {
+  for (const std::string& file : copies) {
+    const std::size_t cut = file.find_last_of('\\');
+    if (cut == std::string::npos) continue;
+    nevr_owned::RemoveEntry(file.substr(0, cut), file.substr(cut + 1));
+  }
+}
+
 // The plugin directory of a run is <root>\\plugins, the root under %LOCALAPPDATA% (#856, ADR 0012), never the folder of the game
-// executable. A test gives the process a LOCALAPPDATA of its own, a folder it removes afterwards, and starts that root's
+// executable. A test gives the process a LOCALAPPDATA of its own, a folder under the run root, and starts that root's
 // plugins\\ with the plugins the build put next to the test executable (the fixture DLLs the loader tests plan by name).
 class TestNevrRoot {
  public:
@@ -397,9 +408,8 @@ class TestNevrRoot {
     std::string exeDir(exePath);
     exeDir.resize(exeDir.find_last_of("\\/") + 1);
     builtPluginsDir_ = exeDir + "plugins\\";
-    static std::atomic<unsigned> counter{0};
-    localAppData_ = exeDir + "nevr-test-localappdata-" + std::to_string(GetCurrentProcessId()) + "-" +
-                    std::to_string(counter.fetch_add(1));
+    localAppData_ = nevr_test::AnsiPath(nevr_test::NewDir(L"localappdata"));  // a folder under the run root
+    EXPECT_FALSE(localAppData_.empty());
     char saved[MAX_PATH * 2] = {};
     const DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", saved, static_cast<DWORD>(sizeof(saved)));
     hadLocalAppData_ = n != 0 && n < sizeof(saved);
@@ -421,11 +431,9 @@ class TestNevrRoot {
     } else {
       SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
     }
-    // The run log is a file of this folder, held open by the writer: let go of it before the folder is removed, or the removal
-    // finds the file delete-pending and never finishes. The next record resolves the log again under the restored folder.
+    // The run log is a file of this folder, held open by the writer: let go of it, so the harness's removal of the run root
+    // finds nothing open. The next record resolves the log again under the restored folder. Nothing is removed here.
     nevr_run_log_writer::Close();
-    std::error_code ec;
-    std::filesystem::remove_all(localAppData_, ec);
   }
   TestNevrRoot(const TestNevrRoot&) = delete;
   TestNevrRoot& operator=(const TestNevrRoot&) = delete;
@@ -494,7 +502,7 @@ class PluginSignatureGateTest : public PluginLoaderDiagnosticTest {
 
   void TearDown() override {
     UnloadPlugins();
-    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    RemoveCopies(copies_);
     PluginLoaderDiagnosticTest::TearDown();
   }
 
@@ -945,9 +953,6 @@ TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
   // The ANSI hooks hand the filter the path through the code page: the same wide spelling.
   const std::wstring viaHook = nevr_dll_load_hook::AnsiPathToLowerWide(narrow);
   TestHook_ResetPluginLoadFilter();
-  DeleteFileW(target.c_str());
-  RemoveDirectoryW(plugins.c_str());
-  RemoveDirectoryW(root.c_str());
   EXPECT_TRUE(blocked);
   std::wstring expected = plugins;
   for (wchar_t& c : expected) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
@@ -1809,7 +1814,7 @@ class PluginRunModeTest : public ::testing::Test {
 
   void TearDown() override {
     UnloadPlugins();
-    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    RemoveCopies(copies_);
     g_testPluginLoadPlan.clear();
     ClearTestLogs();
     TestHook_ResetPluginLoadFilter();

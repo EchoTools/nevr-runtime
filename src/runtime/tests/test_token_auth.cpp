@@ -24,6 +24,7 @@
 #include "core/system_info.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
+#include "runtime/tests/run_root.h"
 #include "extension/module_interface.h"
 #include "off_thread_wait.h"
 #include "token_auth.h"
@@ -52,8 +53,7 @@ NevrModuleContext MakeModuleContext(uint32_t flags) {
 class ExecutableCredentialCacheFixture {
  public:
   explicit ExecutableCredentialCacheFixture(const nlohmann::json& credentials) {
-    directory_ = std::filesystem::temp_directory_path() / ("nevr-token-auth-cache-" + std::to_string(GetCurrentProcessId()) + "-" +
-                                                           std::to_string(GetTickCount64()));
+    directory_ = std::filesystem::path(nevr_test::NewDir(L"token-auth-cache"));  // under the run root; the harness removes it
     cache_directory_ = directory_ / "nevr" / "echovr";
     std::filesystem::create_directories(cache_directory_);
     saved_ = CurrentLocalAppData();
@@ -77,11 +77,7 @@ class ExecutableCredentialCacheFixture {
     const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0])));
     return n != 0 && n < sizeof(buffer) / sizeof(buffer[0]) ? std::wstring(buffer, n) : std::wstring();
   }
-  void Restore() noexcept {
-    SetEnvironmentVariableW(L"LOCALAPPDATA", saved_.empty() ? nullptr : saved_.c_str());
-    std::error_code ignored;
-    std::filesystem::remove_all(directory_, ignored);
-  }
+  void Restore() noexcept { SetEnvironmentVariableW(L"LOCALAPPDATA", saved_.empty() ? nullptr : saved_.c_str()); }
 
   std::filesystem::path directory_;
   std::filesystem::path cache_directory_;
@@ -1471,17 +1467,14 @@ class ScopedLocalAppData {
 class CredentialsDirFixture : public ::testing::Test {
  protected:
   void SetUp() override {
-    root_ = std::filesystem::temp_directory_path() /
-            ("nevr-i21-" + std::to_string(GetCurrentProcessId()) + "-" +
-             ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::filesystem::remove_all(root_);
+    root_ = std::filesystem::path(nevr_test::NewDir(L"nevr-i21"));  // under the run root, which the harness removes
+    ASSERT_FALSE(root_.empty());
     std::filesystem::create_directories(root_ / "bin" / "win10");
     // The cache is the nevr root's (ADR 0012): %LOCALAPPDATA% is a folder of this test's own.
     SetEnvironmentVariableW(L"LOCALAPPDATA", (root_ / "appdata").wstring().c_str());
   }
   void TearDown() override {
     SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
-    std::filesystem::remove_all(root_);
   }
 
   std::filesystem::path CachePath() const { return root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"; }

@@ -18,6 +18,9 @@
 #include <vector>
 #include <windows.h>
 
+#include "core/owned_remove.h"
+#include "runtime/tests/run_root.h"
+
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
@@ -406,11 +409,17 @@ TEST(PluginAssetLabel, ALabelOutsideTheRuleIsRefusedAndNoLineCarriesItsBytes) {
   EXPECT_EQ(nevr::assets::Global().Count(), registeredBefore);
 }
 
+// A file path of its own under the run root (run_root.h), spelled for the A-suffixed calls. The harness removes the run root.
+bool RunRootFileA(const char* name, char* out, std::size_t size) {
+  const std::string folder = nevr_test::AnsiPath(nevr_test::NewDir(L"resource-override"));
+  if (folder.empty()) return false;
+  std::snprintf(out, size, "%s\\%s", folder.c_str(), name);
+  return true;
+}
+
 TEST(ResourceOverride, AFileOverrideWithALabelOutsideTheRuleIsRefusedAndItsFileIsNotLoaded) {
-  char directory[MAX_PATH] = {};
   char path[MAX_PATH] = {};
-  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
-  ASSERT_NE(GetTempFileNameA(directory, "nvr", 0, path), 0u);
+  ASSERT_TRUE(RunRootFileA("nvr.bin", path, sizeof(path)));
   {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     file << "owned";
@@ -423,7 +432,6 @@ TEST(ResourceOverride, AFileOverrideWithALabelOutsideTheRuleIsRefusedAndItsFileI
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
   TestHook_SetOriginal(nullptr);
   TestHook_CloseResourceOverrides();
-  DeleteFileA(path);
 }
 
 TEST(ResourceOverride, ALabelInsideTheRuleIsAccepted) {
@@ -469,10 +477,8 @@ TEST(ResourceOverride, ShutdownWithNoHookReleasesTheRegistry) {
 }
 
 TEST(ResourceOverride, ShutdownReportsOwnedBuffersKeptByLiveHook) {
-  char directory[MAX_PATH] = {};
   char path[MAX_PATH] = {};
-  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
-  ASSERT_NE(GetTempFileNameA(directory, "nvr", 0, path), 0u);
+  ASSERT_TRUE(RunRootFileA("nvr.bin", path, sizeof(path)));
   {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     file << "owned";
@@ -583,12 +589,10 @@ class CachedOverrides : public ::testing::Test {
     // test_behavioral.cpp defaults g_isServer to TRUE for its binary; the splash is a client's, so these tests run as one.
     wasServer_ = g_isServer;
     g_isServer = FALSE;
-    wchar_t tmp[MAX_PATH];
-    ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
     const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    dir_ = std::wstring(tmp) + L"nevr-cached-overrides-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-           std::wstring(test.begin(), test.end());
-    Wipe();
+    const std::wstring folder = nevr_test::NewDir((L"cached-overrides-" + std::wstring(test.begin(), test.end())).c_str());
+    ASSERT_FALSE(folder.empty());
+    dir_ = folder + L"\\cache";  // under the run root, not created: the tests make it as they need it
     TestHook_InitResourceOverrides(&RecordingOriginal);
     InstallFakeHeap();
     ClearTestLogs();
@@ -596,19 +600,7 @@ class CachedOverrides : public ::testing::Test {
   void TearDown() override {
     TestHook_CloseResourceOverrides();
     RemoveFakeHeap();
-    Wipe();
     g_isServer = wasServer_;
-  }
-  void Wipe() {
-    WIN32_FIND_DATAW fd;
-    HANDLE find = FindFirstFileW((dir_ + L"\\*").c_str(), &fd);
-    if (find != INVALID_HANDLE_VALUE) {
-      do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) DeleteFileW((dir_ + L"\\" + fd.cFileName).c_str());
-      } while (FindNextFileW(find, &fd) != 0);
-      FindClose(find);
-    }
-    RemoveDirectoryW(dir_.c_str());
   }
   // Puts `data` in the cache and names it in the index for (type, name).
   std::string Cache(const std::vector<std::uint8_t>& data, std::uint64_t type, std::uint64_t name, const char* label) {
@@ -752,10 +744,8 @@ TEST_F(CachedOverrides, AnIndexEntryWithALabelOutsideTheRuleIsRefusedAndItsBytes
 
 // The _overrides/ scan labels a file by its parsed hashes, so a player's file is never refused over its name.
 TEST(ResourceOverride, AnOverrideFileWithALongOrNonAsciiNameStillInstalls) {
-  char tmp[MAX_PATH] = {};
-  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
-  const std::string dir = std::string(tmp) + "nevr-override-files-" + std::to_string(GetCurrentProcessId());
-  CreateDirectoryA(dir.c_str(), nullptr);
+  const std::string dir = nevr_test::AnsiPath(nevr_test::NewDir(L"override-files"));  // under the run root
+  ASSERT_FALSE(dir.empty());
   const std::vector<std::string> names = {
       "0x00000000000000aa.0x00000000000000bb.caf\xc3\xa9" + std::string(70, 'n') + ".bin",  // long and non-ASCII
       "0x00000000000000cc.bin",                                                               // plain
@@ -774,8 +764,6 @@ TEST(ResourceOverride, AnOverrideFileWithALongOrNonAsciiNameStillInstalls) {
   EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
   TestHook_SetOriginal(nullptr);
   TestHook_CloseResourceOverrides();
-  for (const std::string& name : names) DeleteFileA((dir + "\\" + name).c_str());
-  RemoveDirectoryA(dir.c_str());
 }
 
 TEST_F(CachedOverrides, AnIndexedBlobThatIsNotInTheCacheIsReportedMissing) {
@@ -835,9 +823,7 @@ TEST_F(CachedOverrides, TheCacheSizeIsLoggedEveryRunAndAnOverCapStateIsAWarning)
 // resource: for a file found by the _overrides/ scan that buffer was a stack struct long gone (#703).
 TEST_F(CachedOverrides, TheLabelIsCopiedSoACallersBufferMayBeReusedBeforeTheGameLoadsTheResource) {
   char path[MAX_PATH] = {};
-  char directory[MAX_PATH] = {};
-  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
-  ASSERT_NE(GetTempFileNameA(directory, "nvl", 0, path), 0u);
+  ASSERT_TRUE(RunRootFileA("nvl.bin", path, sizeof(path)));
   HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   ASSERT_NE(f, INVALID_HANDLE_VALUE);
   DWORD put = 0;
@@ -1826,9 +1812,9 @@ TEST_F(TexturePayloads, AnOverridesFileNamedForBufferOneReplacesThePayloadAndAnO
   EXPECT_FALSE(ParseOverrideFileName("0x0", &unused, &unused));
   EXPECT_FALSE(ParseOverrideFileName("0xbeac1969cb7b8861.0x0", &unused, &unused));
 
-  char tmp[MAX_PATH];
-  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
-  const std::string stem = std::string(tmp) + "nevr-overrides-" + std::to_string(GetCurrentProcessId());
+  const std::string folder = nevr_test::AnsiPath(nevr_test::NewDir(L"overrides"));  // under the run root
+  ASSERT_FALSE(folder.empty());
+  const std::string stem = folder + "\\nevr-overrides";
   const std::string payloadPath = stem + "-0xbeac1969cb7b8861.0xa240a2bc051b2f23";
   const std::string oldPath = stem + "-0xa240a2bc051b2f23";
   const std::vector<std::uint8_t> payload = Image(8, 3);
@@ -1841,8 +1827,9 @@ TEST_F(TexturePayloads, AnOverridesFileNamedForBufferOneReplacesThePayloadAndAnO
   }
   RegisterResourceOverrideFromFile(payloadType, payloadName, payloadPath.c_str(), "file_payload");
   RegisterResourceOverrideFromFile(oldType, oldName, oldPath.c_str(), "file_old_form");
-  std::remove(payloadPath.c_str());
-  std::remove(oldPath.c_str());
+  EXPECT_EQ(nevr_owned::RemoveEntry(folder, "nevr-overrides-0xbeac1969cb7b8861.0xa240a2bc051b2f23").outcome,
+            nevr_owned::Outcome::kRemoved);
+  EXPECT_EQ(nevr_owned::RemoveEntry(folder, "nevr-overrides-0xa240a2bc051b2f23").outcome, nevr_owned::Outcome::kRemoved);
 
   std::vector<std::uint8_t> gameBuffer(8, 0);
   GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer.data(), gameBuffer.size());

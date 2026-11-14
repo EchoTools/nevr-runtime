@@ -25,6 +25,7 @@
 #include "runtime/lifecycle/config_yaml_choice.h"
 #include "runtime/lifecycle/config_yaml_source.h"
 #include "runtime/lifecycle/service_config.h"
+#include "runtime/tests/run_root.h"
 
 namespace {
 
@@ -328,12 +329,10 @@ std::string Joined() {
 class ConfigYamlFiles : public ::testing::Test {
  protected:
   void SetUp() override {
-    wchar_t tmp[MAX_PATH];
-    ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
     const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    base_ = U(std::wstring(tmp)) + "nevr-1255-" + std::to_string(GetCurrentProcessId()) + "-\xC3\xA9\xE4\xB8\xAD-" + test;
-    std::error_code ec;
-    std::filesystem::remove_all(std::filesystem::path(W(base_)), ec);
+    const std::wstring label = L"nevr-1255-\u00e9\u4e2d-" + std::wstring(test.begin(), test.end());
+    base_ = U(nevr_test::NewDir(label.c_str()));  // a folder of this run, under the run root
+    ASSERT_FALSE(base_.empty());
     module_dir_ = base_ + "\\game\\bin\\win10\\";
     root_ = nevr_root::RootUnder(base_ + "\\appdata");
     root_yaml_ = nevr_root::ConfigYamlPath(root_);
@@ -344,8 +343,6 @@ class ConfigYamlFiles : public ::testing::Test {
   }
   void TearDown() override {
     SetBootLogSink(nullptr);
-    std::error_code ec;
-    std::filesystem::remove_all(std::filesystem::path(W(base_)), ec);
   }
   cy::Inputs Inputs() const {
     cy::Inputs in;
@@ -499,11 +496,10 @@ TEST(ConfigYamlProcessPaths, TheRootAndTheLegacyCandidatesComeFromTheEnvironment
 
 // A throwaway LOCALAPPDATA with a root config.yaml, fixed by test name so the child finds what the parent wrote.
 std::string AppDataFor(const char* name, const char* yaml) {
-  wchar_t tmp[MAX_PATH];
-  GetTempPathW(MAX_PATH, tmp);
-  const std::string appdata = U(std::wstring(tmp)) + "nevr-1255-wiring-" + name;
+  // The child process runs this same binary under the same run root, and finds this folder by its name.
+  const std::wstring label = L"nevr-1255-wiring-" + std::wstring(name, name + std::strlen(name));
+  const std::string appdata = U(nevr_test::NamedDir(label));
   std::error_code ec;
-  std::filesystem::remove_all(std::filesystem::path(W(appdata)), ec);
   if (yaml != nullptr) WriteText(nevr_root::ConfigYamlPath(nevr_root::RootUnder(appdata)), yaml);
   else std::filesystem::create_directories(std::filesystem::path(W(appdata)));
   return appdata;

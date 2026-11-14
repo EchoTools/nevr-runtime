@@ -20,6 +20,7 @@
 #include "runtime/host/stop_line.h"
 #include "runtime/host/stop_notice.h"
 #include "runtime/tests/stderr_capture.h"
+#include "runtime/tests/run_root.h"
 
 #include <gtest/gtest.h>
 
@@ -381,14 +382,8 @@ class HostRuntimeVerify : public ::testing::Test {
     policy_.rootDer.assign(root.begin(), root.end());
     policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
 
-    wchar_t base[MAX_PATH] = {};
-    ASSERT_GT(GetTempPathW(MAX_PATH, base), 0u);
-    static LONG counter = 0;
-    wchar_t dir_name[MAX_PATH] = {};
-    swprintf(dir_name, MAX_PATH, L"%ls\\nevr-verify-%lu-%llu-%ld", base, static_cast<unsigned long>(GetCurrentProcessId()),
-             static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(InterlockedIncrement(&counter)));
-    root_ = dir_name;
-    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    root_ = nevr_test::NewDir(L"verify");  // a folder under the run root; the harness removes it
+    ASSERT_FALSE(root_.empty());
     install_ = root_ + L"\\install";
     local_ = root_ + L"\\local";
     ASSERT_NE(CreateDirectoryW(install_.c_str(), nullptr), FALSE);
@@ -432,13 +427,6 @@ class HostRuntimeVerify : public ::testing::Test {
     nevr_host::SetRuntimeDirForTest(nullptr);
     RuntimeRendezvous::Seams() = RuntimeRendezvous::TestSeams{};
     if (host_ != nullptr) FreeLibrary(host_);
-    // Best effort: the staged files of this test, by exact path.
-    DeleteFileW(runtime_path_.c_str());
-    DeleteFileW((install_ + L"\\nevr-runtime.dll").c_str());
-    RemoveDirectoryW(nevr_root_.c_str());
-    DeleteFileW((install_ + L"\\BugSplat64.dll").c_str());
-    RemoveDirectoryW(install_.c_str());
-    DeleteFileW((nevr_test::HostLogPath(local_)).c_str());
   }
 
   std::wstring FixtureFile(const char* key) const {
@@ -539,7 +527,6 @@ TEST_F(HostRuntimeVerify, ARuntimeLeftBesideTheHostIsNotFoundAndTheGameStopsNami
   ASSERT_TRUE(CopyFileW(FixtureFile("nevr-runtime.signed").c_str(), stale.c_str(), FALSE));
   const Outcome outcome = Run();
   const bool stale_mapped = GetModuleHandleW(stale.c_str()) != nullptr;
-  DeleteFileW(stale.c_str());
 
   EXPECT_EQ(g_events, (std::vector<std::string>{"notice", "stop"}));
   EXPECT_EQ(g_stop_code, 78u);
@@ -762,18 +749,6 @@ TEST_F(HostRuntimeVerify, AServerIsRefusedTheSameWayWithTheRecordsAndNoDialog) {
 
 // Self-update (docs/adr/0024-pc-self-update.md, section 4; #2104), through the detour: the swap runs before the verdict,
 // the file the verdict accepts and the load maps is the swapped one, and update_swap comes before versions (section 8).
-// The test's own update\ files are removed by exact path at its end.
-void RemoveUpdateFiles(const std::wstring& nevr_root) {
-  for (const wchar_t* file : {L"\\update\\previous\\7.7.7\\nevr-runtime.dll", L"\\update\\staging\\1.2.3\\nevr-runtime.dll",
-                              L"\\update\\staged.json", L"\\update\\swap.json", L"\\update\\pending.json", L"\\update\\state.json"}) {
-    DeleteFileW((nevr_root + file).c_str());
-  }
-  for (const wchar_t* dir : {L"\\update\\previous\\7.7.7", L"\\update\\previous", L"\\update\\staging\\1.2.3",
-                             L"\\update\\staging", L"\\update"}) {
-    RemoveDirectoryW((nevr_root + dir).c_str());
-  }
-}
-
 TEST_F(HostRuntimeVerify, AStagedReleaseIsSwappedInBeforeTheVerdictAndIsWhatLoads) {
   StageCopy("nevr-runtime.unsigned");  // the release in the root, which the swap moves out unchecked
   const std::vector<unsigned char> staged = ReadBytes(FixtureFile("nevr-runtime.signed"));
@@ -789,7 +764,6 @@ TEST_F(HostRuntimeVerify, AStagedReleaseIsSwappedInBeforeTheVerdictAndIsWhatLoad
   WriteBytes(update + L"\\staged.json", std::vector<unsigned char>(text.begin(), text.end()));
 
   const Outcome outcome = Run();
-  RemoveUpdateFiles(nevr_root_);
 
   EXPECT_EQ(outcome.result, kOriginalResult) << "the swapped runtime was loaded and its game_main ran";
   EXPECT_TRUE(g_events.empty());
@@ -811,7 +785,6 @@ TEST_F(HostRuntimeVerify, AJournalTheHostCannotReadStopsTheGameBeforeAnyLoad) {
   WriteBytes(update + L"\\swap.json", std::vector<unsigned char>(journal.begin(), journal.end()));
 
   const Outcome outcome = Run();
-  RemoveUpdateFiles(nevr_root_);
 
   EXPECT_FALSE(outcome.runtime_mapped) << "nothing is loaded from a root the journal says may be half moved";
   EXPECT_EQ(g_before_load_calls.load(), 0);

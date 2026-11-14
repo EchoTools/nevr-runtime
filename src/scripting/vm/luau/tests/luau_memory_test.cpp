@@ -1,5 +1,6 @@
 // Luau-only memory tests: paths that depend on Luau having no emergency
 // collection in the allocator, which a VM with one never takes.
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -155,7 +156,8 @@ TEST(setup_thunks_refuse_arguments_the_binding_did_not_pass) {
 // kept string has its own length: Luau interns strings, so equal ones are one.
 TEST(breached_script_comes_back_on_dev_reload_through_the_binding) {
   const char* base = std::getenv("NEVR_TEST_TMPDIR");
-  const fs::path dir = (base ? fs::path(base) : fs::temp_directory_path()) / "nevr_luau_breach_reload";
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();  // this run's folder; nothing is removed
+  const fs::path dir = (base ? fs::path(base) : fs::temp_directory_path()) / ("nevr_luau_breach_reload-" + std::to_string(stamp));
   const std::string head = "--[[nevr\n{\"name\": \"breacher\", \"version\": \"1.0.0\", \"api\": 1, "
                            "\"overrides\": [\"k\"], \"hooks\": [\"test.a\"]}\n]]\n";
   struct Breach {
@@ -171,9 +173,9 @@ TEST(breached_script_comes_back_on_dev_reload_through_the_binding) {
   for (const Breach& breach : breaches) {
     for (const bool dev : {true, false}) {
       const int failures_before = mini_test::Failures();
-      fs::remove_all(dir);
-      fs::create_directories(dir);
-      const std::string path = (dir / "breacher.lua").string();
+      const fs::path round = dir / (std::string(breach.name) + (dev ? "-dev" : "-prod"));  // a folder of its own for each case
+      fs::create_directories(round);
+      const std::string path = (round / "breacher.lua").string();
       std::ofstream(path, std::ios::binary) << head << "nevr.override('k', 1)\n" << breach.source;
       std::vector<Captured> log;
       Registry reg([&log](const LogRecord& r) { log.push_back({r.event, r.detail}); });
@@ -215,7 +217,6 @@ TEST(breached_script_comes_back_on_dev_reload_through_the_binding) {
       }
     }
   }
-  fs::remove_all(dir);
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv, std::chrono::seconds(10)); }

@@ -9,6 +9,7 @@
 #include "runtime/host/runtime_rendezvous.h"
 #include "runtime/host/stop_notice.h"
 #include "runtime/tests/stderr_capture.h"
+#include "runtime/tests/run_root.h"
 
 #include <gtest/gtest.h>
 
@@ -36,11 +37,11 @@ using nevr_host::RuntimeRendezvous;
 // sequence in the name keeps two calls made in one tick on two directories.
 std::wstring MakeTempDirWithTick(ULONGLONG tick) {
   static LONG sequence = 0;
-  wchar_t base[MAX_PATH] = {};
-  EXPECT_GT(GetTempPathW(MAX_PATH, base), 0u);
+  const std::wstring base = nevr_test::RunRoot();  // under the run root; the harness removes it
+  EXPECT_FALSE(base.empty());
   const LONG n = InterlockedIncrement(&sequence);
   wchar_t dir[MAX_PATH] = {};
-  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu-%ld", base,
+  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu-%ld", base.c_str(),
            static_cast<unsigned long>(GetCurrentProcessId()),
            static_cast<unsigned long long>(tick), n);
   const BOOL created = CreateDirectoryW(dir, nullptr);
@@ -102,7 +103,6 @@ TEST(HostRendezvous, TempDirsMadeInOneTickAreDistinctAndAllCreated) {
   EXPECT_NE(dirs[0], dirs[1]);
   EXPECT_NE(dirs[0], dirs[2]);
   EXPECT_NE(dirs[1], dirs[2]);
-  for (const std::wstring& dir : dirs) RemoveDirectoryW(dir.c_str());
 }
 
 TEST(HostRendezvous, ThePinnedPrologueMatchesAndEveryChangedByteDoesNot) {

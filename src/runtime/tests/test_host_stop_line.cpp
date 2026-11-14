@@ -10,6 +10,7 @@
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/stop_notice.h"
 #include "runtime/tests/stderr_capture.h"
+#include "runtime/tests/run_root.h"
 
 #include <gtest/gtest.h>
 
@@ -40,13 +41,12 @@ using nevr_test::StderrCapture;
 constexpr std::uint32_t kImageGuardExitCode = 0xE0420003u;
 
 std::wstring MakeTempDir(const wchar_t* tag) {
-  wchar_t base[MAX_PATH] = {};
-  const DWORD base_len = GetTempPathW(MAX_PATH, base);
-  EXPECT_GT(base_len, 0u);
+  const std::wstring base = nevr_test::RunRoot();  // under the run root; the harness removes it
+  EXPECT_FALSE(base.empty());
   static LONG counter = 0;
   const LONG sequence = InterlockedIncrement(&counter);
   wchar_t dir[MAX_PATH] = {};
-  const int n = swprintf(dir, MAX_PATH, L"%ls\\nevr-stop-%ls-%lu-%llu-%ld", base, tag,
+  const int n = swprintf(dir, MAX_PATH, L"%ls\\nevr-stop-%ls-%lu-%llu-%ld", base.c_str(), tag,
                          static_cast<unsigned long>(GetCurrentProcessId()),
                          static_cast<unsigned long long>(GetTickCount64()), static_cast<long>(sequence));
   EXPECT_GT(n, 0);
@@ -370,9 +370,6 @@ TEST(StopLineRuntime, ALegacyRuntimeBesideTheHostIsNamedWhenTheRuntimeIsAbsentFr
   EXPECT_NE(detail.find("move it to " + Utf8(root)), std::string::npos) << detail;
   EXPECT_EQ(detail.find("nevr-runtime.dll is missing; path=" + Utf8(root) + "\\nevr-runtime.dll"), 0u) << detail;
 
-  DeleteFileW((host_dir + L"nevr-runtime.dll").c_str());
-  RemoveDirectoryW(host_dir.c_str());
-  RemoveDirectoryW(root.c_str());
 }
 
 TEST(StopLineRuntime, NoLegacySentenceWhenNothingIsBesideTheHost) {
@@ -381,7 +378,6 @@ TEST(StopLineRuntime, NoLegacySentenceWhenNothingIsBesideTheHost) {
   diagnostics.PrepareForTest(nullptr, host_dir.c_str());
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
   EXPECT_EQ(DetailOf(diagnostics, result).find("beside"), std::string::npos);
-  RemoveDirectoryW(host_dir.c_str());
 }
 
 TEST(StopLineRuntime, ALegacyFileIsNotMentionedForAnOutcomeThatIsNotAbsent) {
@@ -394,8 +390,6 @@ TEST(StopLineRuntime, ALegacyFileIsNotMentionedForAnOutcomeThatIsNotAbsent) {
   EXPECT_EQ(DetailOf(diagnostics, refused).find("beside"), std::string::npos);
   EXPECT_EQ(DetailOf(diagnostics, Result(RuntimeLoadOutcome::kLoadFailed, L"C:\\nevr\\nevr-runtime.dll")).find("beside"),
             std::string::npos);
-  DeleteFileW((host_dir + L"nevr-runtime.dll").c_str());
-  RemoveDirectoryW(host_dir.c_str());
 }
 
 TEST(StopLineRuntime, TheLogFieldIsThePathOfTheLogTheHostWrites) {
@@ -503,8 +497,6 @@ TEST(StopLineRuntime, ADetailWithThreePathsKeepsEveryPathAndASmallerOneStaysWhol
   const std::string detail = DetailOf(diagnostics, result);
   EXPECT_NE(detail.find("move it to " + Utf8(root)), std::string::npos) << "the destination of the move is missing";
   EXPECT_EQ(detail.find(nevr_host::kStopDetailIncompleteSuffix), std::string::npos) << detail;
-  DeleteFileW((host_dir + L"nevr-runtime.dll").c_str());
-  RemoveDirectoryW(host_dir.c_str());
 }
 
 TEST(StopLineRuntime, ADetailThatCannotHoldAPieceSaysSoInsteadOfEndingMidSentence) {
@@ -520,8 +512,6 @@ TEST(StopLineRuntime, ADetailThatCannotHoldAPieceSaysSoInsteadOfEndingMidSentenc
   EXPECT_LT(detail.size(), nevr_host::kStopDetailBytes);
   EXPECT_EQ(detail.find("wwww"), std::string::npos) << "a piece that does not fit is left out whole";
   EXPECT_NE(detail.find(nevr_host::kStopDetailIncompleteSuffix), std::string::npos) << detail;
-  DeleteFileW((host_dir + L"nevr-runtime.dll").c_str());
-  RemoveDirectoryW(host_dir.c_str());
 }
 
 TEST(StopLineAttach, EachFailedStepHasItsOwnDetailThatSaysTheGameRunsWithoutTheRuntime) {
@@ -690,16 +680,12 @@ TEST(RuntimeFileBeside, FindsAFileNamedNevrRuntimeDllInTheDirectory) {
   EXPECT_FALSE(nevr_host::RuntimeFileBeside(nullptr));
   EXPECT_FALSE(nevr_host::RuntimeFileBeside(L""));
   EXPECT_FALSE(nevr_host::RuntimeFileBeside((dir + L"\\missing").c_str()));
-  DeleteFileW((dir + L"\\nevr-runtime.dll").c_str());
-  RemoveDirectoryW(dir.c_str());
 }
 
 TEST(RuntimeFileBeside, ADirectoryOfThatNameIsNotARuntime) {
   const std::wstring dir = MakeTempDir(L"beside");
   ASSERT_NE(CreateDirectoryW((dir + L"\\nevr-runtime.dll").c_str(), nullptr), FALSE);
   EXPECT_FALSE(nevr_host::RuntimeFileBeside(dir.c_str()));
-  RemoveDirectoryW((dir + L"\\nevr-runtime.dll").c_str());
-  RemoveDirectoryW(dir.c_str());
 }
 
 // The words in the dialog a client sees: the sentence for the cause, then which build and which log, so a screenshot

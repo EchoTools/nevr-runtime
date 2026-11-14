@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "runtime/patch/asset_cache.h"
+#include "runtime/tests/run_root.h"
 
 namespace {
 
@@ -24,29 +25,14 @@ std::vector<std::uint8_t> Filler(std::size_t n, std::uint8_t seed) {
   return v;
 }
 
-// A fresh directory per test; UTF-16 on purpose ("é", a CJK character): the user name in %LOCALAPPDATA% may not be ASCII.
+// A fresh directory per test, under the run root (run_root.h); UTF-16 on purpose ("é", a CJK character): the user name in
+// %LOCALAPPDATA% may not be ASCII. The run root is removed by the harness, not here.
 class AssetCache : public ::testing::Test {
  protected:
   void SetUp() override {
-    wchar_t tmp[MAX_PATH];
-    ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
-    const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    dir_ = std::wstring(tmp) + L"nevr-asset-cache-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-           std::wstring(test.begin(), test.end()) + L"-\u00e9\u4e2d";
-    Wipe();
-  }
-  void TearDown() override { Wipe(); }
-
-  void Wipe() {
-    WIN32_FIND_DATAW fd;
-    HANDLE find = FindFirstFileW((dir_ + L"\\*").c_str(), &fd);
-    if (find != INVALID_HANDLE_VALUE) {
-      do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) DeleteFileW((dir_ + L"\\" + fd.cFileName).c_str());
-      } while (FindNextFileW(find, &fd) != 0);
-      FindClose(find);
-    }
-    RemoveDirectoryW(dir_.c_str());
+    const std::wstring folder = nevr_test::NewDir(L"asset-cache-\u00e9\u4e2d");
+    ASSERT_FALSE(folder.empty());
+    dir_ = folder + L"\\cache";  // not created: Store makes it, as a first run would
   }
 
   std::string StoreOk(const std::vector<std::uint8_t>& data) {

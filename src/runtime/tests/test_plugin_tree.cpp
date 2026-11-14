@@ -3,6 +3,7 @@
 // ListDependencies is checked on the unsigned DLLs the generator builds; VerifyPluginTree on the signed trees.
 
 #include "runtime/ext/plugin_tree.h"
+#include "runtime/tests/run_root.h"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -213,33 +214,21 @@ TEST(PluginTreeNames, AnApiSetNameAndALoadedModuleAreNotSystem32Only) {
   EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("no-such-library-anywhere.dll"));
 }
 
-// A directory the test makes in the temp directory and removes when it ends. Given to SuppliedBySystem32OnlyIn, it
+// A directory the test makes under the run root (the harness removes the run root). Given to SuppliedBySystem32OnlyIn, it
 // stands where System32 would be, so a file put in it is what the check sees (Wine's System32 holds no API-set file).
 class ScratchSystemDirectory {
  public:
-  ScratchSystemDirectory() {
-    char temp[MAX_PATH] = {};
-    char made[MAX_PATH] = {};
-    if (GetTempPathA(MAX_PATH, temp) == 0 || GetTempFileNameA(temp, "nsd", 0, made) == 0) return;
-    DeleteFileA(made);
-    if (CreateDirectoryA(made, nullptr)) path_ = made;
-  }
-  ~ScratchSystemDirectory() {
-    for (const std::string& name : files_) DeleteFileA((path_ + "\\" + name).c_str());
-    if (!path_.empty()) RemoveDirectoryA(path_.c_str());
-  }
+  ScratchSystemDirectory() { path_ = nevr_test::AnsiPath(nevr_test::NewDir(L"system32")); }
   const std::string& path() const { return path_; }
   void Plant(const std::string& name) {
     HANDLE h = CreateFileA((path_ + "\\" + name).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
                            nullptr);
     EXPECT_NE(h, INVALID_HANDLE_VALUE) << name << " error " << GetLastError();
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-    files_.push_back(name);
   }
 
  private:
   std::string path_;
-  std::vector<std::string> files_;
 };
 
 // #1193: an API-set or extension-set name is never a System32 file, even when a file of that name is in the System32

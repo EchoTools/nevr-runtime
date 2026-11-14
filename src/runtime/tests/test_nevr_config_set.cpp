@@ -5,6 +5,7 @@
 // The same cases run on the Quest build in src/quest/tests/nevr_config_set_test.cpp.
 
 #include <gtest/gtest.h>
+#include "runtime/tests/run_root.h"
 
 #include <atomic>
 #include <cerrno>
@@ -25,16 +26,8 @@ namespace fs = std::filesystem;
 
 class Dir {
  public:
-  Dir() {
-    static int counter = 0;
-    path_ = fs::temp_directory_path() / ("nevr_config_set_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "_" +
-                                         std::to_string(counter++));
-    fs::create_directories(path_);
-  }
-  ~Dir() {
-    std::error_code ec;
-    fs::remove_all(path_, ec);
-  }
+  // A folder under the run root, which the harness removes; nothing is removed here.
+  Dir() : path_(nevr_test::NewDir(L"nevr-config-set")) {}
   std::string File() const { return (path_ / "config.yaml").string(); }
   std::string Tmp() const { return File() + ".tmp"; }
   // The same file spelled another way (up one level and back down): one file, a different string.

@@ -5,6 +5,7 @@
 #include "core/log_send.h"
 
 #include <gtest/gtest.h>
+#include "runtime/tests/run_root.h"
 
 #include <cstdint>
 #include <cstring>
@@ -89,18 +90,11 @@ void WriteFile(const fs::path& path, const std::string& bytes) {
 class LogSend : public ::testing::Test {
  protected:
   void SetUp() override {
-    dir_ = fs::temp_directory_path() / ("nevr-log-send-test-" + std::to_string(NEVR_TEST_PID) + "-" +
-                                        ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::error_code ec;
-    fs::remove_all(dir_, ec);
-    fs::create_directories(dir_);
+    dir_ = fs::path(nevr_test::NewDir(L"log-send"));
+    ASSERT_FALSE(dir_.empty());
     g_posted = Posted{};
     g_answer = Accepted();
     g_lines.clear();
-  }
-  void TearDown() override {
-    std::error_code ec;
-    fs::remove_all(dir_, ec);  // exactly the directory SetUp made
   }
   // The current log "run.log" and the previous "run-prev.log", both written.
   ls::Config Config(const std::string& current = "current text\n", const std::string& previous = "previous text\n") {
