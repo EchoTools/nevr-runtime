@@ -60,6 +60,21 @@ std::string PreviousSessionLog();
 // tell this session's file from the previous one's. The file is in LogDir().
 const char* LogFileName();
 
+// The run id every record of this process carries (`run`: `<pid hex>-<start hex>`, as core/run_id.h), made together with
+// LogFileName() on first use and kept until ResetSessionForTest. `0-0` when it was not made. The pointer stays valid until
+// ResetSessionForTest.
+const char* LogRunId();
+
+// A descriptor for the crash path: this process's log file, LogDir()/LogFileName(), opened write-only with O_APPEND (and O_CREAT,
+// O_CLOEXEC, O_NOFOLLOW; mode 0600), so the crash path appends one record to the same file the log writes with a single write(2)
+// and opens nothing in a signal handler. The folder is the one the log writer chose; before it has chosen one, the first candidate
+// whose folder can be made and whose file opens, which is the choice the writer's first open would make. Nothing is written here
+// and the log writer's state (its descriptor, its open attempts, its failure reports) is not touched. The file must be a regular
+// file; a FIFO or a device is refused. Returns -1 and sets errno when no folder takes the file. The caller owns the descriptor.
+// A size rotation (kMaxDiskLogBytes) renames the file this descriptor names, so a record written after one lands in the rotated
+// archive of this run, beside the live file in LogDir().
+int OpenCrashRecordFile() noexcept;
+
 // Test seam: the next open behaves as the first open of a new process (it makes a new file name).
 void ResetSessionForTest();
 

@@ -14,7 +14,9 @@
 #include "sentinel.h"
 
 #include "quest/sentinel/crash_dir.h"
+#include "quest/auth/file_store.h"
 #include "quest/sentinel/crash_report_quest.h"
+#include "quest/shim/update_root_rules.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/sentinel_log.h"
 
@@ -122,6 +124,9 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 
 // The report: the signal's facts and its ucontext, handed to the shared writer (core/crash_report.h).
 void ReportAction(int signo, siginfo_t* info, void* ucontext) noexcept {
+    // The self-update's crash marker goes first: it is the one thing a crash must leave, whatever the report and the dump do
+    // (docs/adr/0024-pc-self-update.md, section 6).
+    MarkUpdateCrashed();
     nevr_crash::CrashInfo crash{};
     crash.code = signo;
     crash.fault_code = info != nullptr ? info->si_code : 0;
@@ -175,6 +180,10 @@ void Arm() {
         DumpDirStorage() = ResolveDumpDir();
         // The shared crash report's Quest platform, registered before any handler can reach it.
         RegisterCrashReportPlatform();
+        // The self-update's crash marker, armed with the nevr root: the folder that holds update/, below the app's internal files
+        // folder (shim/update_root_rules.h). It builds its paths and opens the log's record descriptor now, so the crash path
+        // opens nothing but the marker file.
+        ArmUpdateCrashMarker(nevr_quest::update_root::RootFromFilesDir(nevr::quest_auth::AppInternalFilesDir()).c_str());
         google_breakpad::MinidumpDescriptor descriptor(DumpDirStorage());
         // install_handler=false: the signal handlers are ours (crash_first_hook.cpp), so the game's later sigaction
         // cannot displace them, and they call breakpad's HandleSignal for the minidump.

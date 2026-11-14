@@ -259,6 +259,39 @@ int OpenLogFile(const std::string& dir) {
   return ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0644);
 }
 
+constexpr mode_t kCrashRecordFileMode = 0600;  // the crash record's descriptor creates the file readable by its owner only
+// `<folder>/<log name>` and its NUL: a folder of at most kMaxDirBytes, the separator, a name of at most kMaxNameBytes with its NUL.
+constexpr std::size_t kCrashRecordPathBytes = kMaxDirBytes + 1 + kMaxNameBytes;
+
+// g_mutex held, g_logName made. Opens `dir`/<this process's log name> for the crash path: write-only, appending, never following a
+// link. O_NONBLOCK keeps a FIFO at that path from stalling the open (it is then refused as not a regular file, as OpenDiskLog does)
+// and is cleared on a regular file, so a write cannot fail with EAGAIN.
+int OpenCrashRecordIn(const char* dir) {
+  char path[kCrashRecordPathBytes];
+  const int size = std::snprintf(path, sizeof(path), "%s/%s", dir, g_logName);
+  if (size < 0 || static_cast<std::size_t>(size) >= sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  const int fd = ::open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, kCrashRecordFileMode);
+  if (fd < 0) return -1;
+  struct stat st {};
+  if (::fstat(fd, &st) != 0) {
+    const int err = errno;
+    ::close(fd);
+    errno = err;
+    return -1;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    ::close(fd);
+    errno = EINVAL;
+    return -1;
+  }
+  const int flags = ::fcntl(fd, F_GETFL);
+  if (flags >= 0) ::fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+  return fd;
+}
+
 // One line about the log itself: logcat now, the disk when the log is open (the pending queue).
 void QueueLine(nevr_quest::LogLevel level, const nlohmann::json& line) {
   const std::string text = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
@@ -472,6 +505,30 @@ const char* LogFileName() {
   Lock lock;
   MakeLogName();
   return g_logName;
+}
+
+const char* LogRunId() {
+  Lock lock;
+  MakeLogName();
+  return g_runId[0] != '\0' ? g_runId : "0-0";
+}
+
+int OpenCrashRecordFile() noexcept {
+  Lock lock;
+  MakeLogName();
+  if (g_dirResolved) return OpenCrashRecordIn(g_logDir);
+  std::size_t count = 0;
+  const LogDirCandidate* list = Candidates(&count);
+  int err = ENOENT;  // no candidate at all
+  for (std::size_t i = 0; i < count; ++i) {
+    if (EnsureDirBelow(list[i])) {
+      const int fd = OpenCrashRecordIn(list[i].dir);
+      if (fd >= 0) return fd;
+    }
+    err = errno;
+  }
+  errno = err;
+  return -1;
 }
 
 void ResetSessionForTest() {
