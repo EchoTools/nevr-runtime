@@ -151,9 +151,11 @@ bool StillEnabled(void* ctx, const void* resource, std::uint64_t level) {
 }
 
 void AppendLoaded(const LevelTable& table, std::vector<std::uint64_t>* levels) {
-  for (std::uint64_t i = 0; i < table.count; ++i) {
-    if (table.entries[kEntryWords * i + kEntryResourceWord] != 0) levels->push_back(table.entries[kEntryWords * i]);
-  }
+  nevr_game_space_table::ForEachListed(reinterpret_cast<const unsigned char*>(table.entries), table.count,
+                                       [levels](std::uint64_t level) {
+                                         levels->push_back(level);
+                                         return true;
+                                       });
 }
 
 std::uint64_t Mix(std::uint64_t h, std::uint64_t value) {
