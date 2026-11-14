@@ -144,7 +144,8 @@ fn the_channels_release_is_staged_with_the_runtime_and_nothing_else() {
     assert!(!dir.join("BugSplat64.dll").exists(), "the host is never staged");
     assert!(!dir.join("README.txt").exists(), "only the runtime and plugin members are extracted");
     let names: Vec<String> = std::fs::read_dir(staging(&w)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
-    assert_eq!(names, vec!["1.0.0".to_string()], "no partial folder is left");
+    // The version folder and its manifest (`staging\<version>.files`, the record a removal reads); no partial folder is left.
+    assert_eq!(names, vec!["1.0.0".to_string(), "1.0.0.files".to_string()], "no partial folder is left");
     assert!(w.root.path().join("update/manifest/manifest.json").exists(), "the updater keeps its own manifest state");
     let ev = events(&w);
     for want in ["run_start", "manifest_check", "release_selected", "artifact_fetch", "stage_member", "stage_end", "run_end"] {
@@ -433,18 +434,27 @@ fn a_staging_folder_that_cannot_be_made_fails_with_nothing_published() {
 fn old_partial_folders_and_unpublished_staging_are_removed_and_a_fresh_partial_is_kept() {
     let w = world();
     let s = staging(&w);
+    // Each folder is recorded as the stage records it: `staging\<name>.files` lists its member, and the ledger names it.
+    // A folder with no record is left (P4: the installer removes only what it recorded making).
+    let mut names = Vec::new();
     for d in ["9.9.9.partial-1", "0.5.0", "7.7.7.partial-2"] {
         std::fs::create_dir_all(s.join(d)).unwrap();
-        std::fs::write(s.join(d).join("f"), b"x").unwrap();
+        std::fs::write(s.join(d).join("nevr-runtime.dll"), b"x").unwrap();
+        std::fs::write(s.join(format!("{d}.files")), json!({"entries": ["nevr-runtime.dll"]}).to_string()).unwrap();
+        names.push(d);
     }
+    std::fs::create_dir_all(s.join("5.5.5")).unwrap();
+    std::fs::write(s.join("5.5.5").join("f"), b"unrecorded").unwrap();
+    std::fs::write(w.root.path().join("update/stage-ledger.json"), json!({"names": names}).to_string()).unwrap();
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     std::fs::File::open(s.join("9.9.9.partial-1")).unwrap().set_modified(old).unwrap();
     let base = publish(&w, &Opts::new());
     let (code, out, _) = run(&w, &base, &current("0.9.0", b"old"), &[]);
     assert_eq!(code, 0, "{out}");
-    assert!(!s.join("9.9.9.partial-1").exists(), "a partial folder untouched for an hour is removed");
-    assert!(!s.join("0.5.0").exists(), "a staging folder no staged.json points at is removed");
+    assert!(!s.join("9.9.9.partial-1").exists(), "a recorded partial folder untouched for an hour is removed");
+    assert!(!s.join("0.5.0").exists(), "a recorded staging folder no staged.json points at is removed");
     assert!(s.join("7.7.7.partial-2").exists(), "a fresh partial folder may belong to a stage that is running");
+    assert_eq!(std::fs::read(s.join("5.5.5").join("f")).unwrap(), b"unrecorded", "a folder with no record is left");
     assert!(s.join("1.0.0/nevr-runtime.dll").exists());
 }
 
@@ -525,4 +535,244 @@ fn a_c_program_stages_through_nevr_pc_stage_and_ends_the_run_once() {
     let ev = events(&w);
     assert_eq!(ev.iter().filter(|e| *e == "run_end").count(), 1, "the caller ends the run, the stage does not: {ev:?}");
     assert!(ev.contains(&"stage_end".to_string()) && ev.contains(&"stage_member".to_string()), "{ev:?}");
+}
+
+#[test]
+fn an_unrecorded_folder_of_the_release_being_staged_with_only_its_members_is_cleared_and_restaged() {
+    // P4 (E2): installs from before the manifest left `staging\<version>` with no record. Its members are the signed
+    // release's, so the stage removes exactly those and stages again.
+    let w = world();
+    std::fs::create_dir_all(staging(&w).join("1.0.0")).unwrap();
+    std::fs::write(staging(&w).join("1.0.0/nevr-runtime.dll"), b"an old stage").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/nevr-runtime.dll")).unwrap(), RT, "restaged from the release");
+}
+
+#[test]
+fn an_unrecorded_folder_of_the_release_being_staged_with_a_stranger_file_is_set_aside_and_the_stage_succeeds() {
+    // Round 7: the folder is renamed aside to `<v>.unrecorded` (bytes moved, nothing deleted) and the stage goes on.
+    let w = world();
+    std::fs::create_dir_all(staging(&w).join("1.0.0")).unwrap();
+    std::fs::write(staging(&w).join("1.0.0/nevr-runtime.dll"), b"an old stage").unwrap();
+    std::fs::write(staging(&w).join("1.0.0/stranger.txt"), b"not ours").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0.unrecorded/stranger.txt")).unwrap(), b"not ours", "the stranger is set aside, not deleted");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/nevr-runtime.dll")).unwrap(), RT, "the release is staged");
+    assert!(log(&w).iter().any(|r| r["outcome"] == "set_aside" && r["left_entries"] == 1), "logged at error with the count");
+}
+
+#[test]
+fn an_unrecorded_folder_with_a_stranger_stops_only_when_its_aside_name_is_already_taken() {
+    let w = world();
+    std::fs::create_dir_all(staging(&w).join("1.0.0")).unwrap();
+    std::fs::write(staging(&w).join("1.0.0/nevr-runtime.dll"), b"an old stage").unwrap();
+    std::fs::write(staging(&w).join("1.0.0/stranger.txt"), b"not ours").unwrap();
+    std::fs::create_dir_all(staging(&w).join("1.0.0.unrecorded")).unwrap();
+    std::fs::write(staging(&w).join("1.0.0.unrecorded/earlier.txt"), b"an earlier aside").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, _) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/stranger.txt")).unwrap(), b"not ours", "the stranger stays where it is");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0.unrecorded/earlier.txt")).unwrap(), b"an earlier aside", "the earlier aside is untouched");
+    assert!(out["reason"].as_str().unwrap().contains("stage stops"), "{out}");
+}
+
+#[test]
+fn a_recorded_folder_that_still_holds_a_stranger_is_set_aside_and_the_stage_succeeds() {
+    // Round 7: the recorded path, when the record removes what it names and leaves a not-empty folder.
+    let w = world();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    std::fs::write(staging(&w).join("1.0.0/stranger.txt"), b"added later").unwrap();
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0.unrecorded/stranger.txt")).unwrap(), b"added later");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/nevr-runtime.dll")).unwrap(), RT);
+}
+
+/// Staging a release whose members cannot be recorded is refused before anything is made: no folder, no manifest, no
+/// ledger, no download (round 3, item 2).
+fn refused_before_anything_is_made(w: &World, base: &str) -> Value {
+    let (code, out, err) = run(w, base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 1, "{out} {err}");
+    assert!(staging_is_empty(w), "nothing is staged");
+    assert!(!w.root.path().join("update/work").exists(), "nothing is downloaded");
+    out
+}
+
+#[test]
+fn a_glob_matching_more_members_than_a_manifest_records_is_refused_cleanly() {
+    let w = world();
+    let names: Vec<String> = (0..65).map(|i| format!("plugins/p{i}.dll")).collect();
+    let mut members: Members = vec![("nevr-runtime.dll", RT)];
+    members.extend(names.iter().map(|n| (n.as_str(), PLUGIN)));
+    let base = publish(&w, &Opts { members, ..Opts::new() });
+    let out = refused_before_anything_is_made(&w, &base);
+    assert!(out["reason"].as_str().unwrap().contains("at most 64"), "{out}");
+}
+
+#[test]
+fn a_member_the_manifest_cannot_record_is_refused_cleanly_for_a_dot_led_name_and_a_device_name() {
+    for bad in ["plugins/.x.dll", "plugins/con.dll"] {
+        let w = world();
+        let base = publish(&w, &Opts { members: vec![("BugSplat64.dll", HOST), ("nevr-runtime.dll", RT), (bad, PLUGIN)], ..Opts::new() });
+        let out = refused_before_anything_is_made(&w, &base);
+        assert!(out["reason"].as_str().unwrap().contains("cannot be recorded"), "{bad}: {out}");
+    }
+}
+
+#[test]
+fn a_staging_folder_that_is_a_link_is_refused_and_the_link_target_is_untouched() {
+    let w = world();
+    let canary = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(w.root.path().join("update")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(canary.path(), staging(&w)).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(canary.path(), staging(&w)).unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 1, "{out} {err}");
+    assert!(out["reason"].as_str().unwrap().contains("is a link"), "{out}");
+    assert_eq!(std::fs::read_dir(canary.path()).unwrap().count(), 0, "nothing is written through the link");
+}
+
+/// A ledger that cannot be read as one is moved aside to `stage-ledger.json.bad` (replacing an earlier `.bad`), the stage
+/// starts a fresh ledger and succeeds, and nothing the bad ledger merely named is removed (round 4, item 1).
+#[test]
+fn a_garbage_then_an_over_cap_ledger_is_moved_aside_and_the_stage_succeeds() {
+    let w = world();
+    let update = w.root.path().join("update");
+    std::fs::create_dir_all(staging(&w).join("0.5.0")).unwrap();
+    std::fs::write(staging(&w).join("0.5.0/stranger.txt"), b"not recorded by anyone").unwrap();
+    let bad = update.join("stage-ledger.json.bad");
+    let base = publish(&w, &Opts::new());
+
+    std::fs::write(update.join("stage-ledger.json"), b"{{ not json").unwrap();
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(std::fs::read(&bad).unwrap(), b"{{ not json", "the garbage is moved aside");
+    assert_eq!(std::fs::read(staging(&w).join("0.5.0/stranger.txt")).unwrap(), b"not recorded by anyone", "nothing unrecorded is removed");
+
+    let names: Vec<String> = (0..=256).map(|i| format!("1.0.{i}")).collect();
+    std::fs::write(update.join("stage-ledger.json"), json!({"names": names}).to_string()).unwrap();
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    let moved = std::fs::read(&bad).unwrap();
+    assert!(moved.len() > 1000 && moved.starts_with(b"{\"names\""), "the earlier .bad is replaced by the over-cap ledger");
+    assert_eq!(std::fs::read(staging(&w).join("0.5.0/stranger.txt")).unwrap(), b"not recorded by anyone");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+}
+
+/// A leftover `stage-ledger.json.tmp` is this stage's, and is removed by name before the stage writes (round 4, item 2).
+#[test]
+fn a_leftover_ledger_temporary_is_removed_and_the_stage_succeeds() {
+    let w = world();
+    let update = w.root.path().join("update");
+    std::fs::create_dir_all(&update).unwrap();
+    std::fs::write(update.join("stage-ledger.json.tmp"), b"killed mid-write").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert!(!update.join("stage-ledger.json.tmp").exists(), "the leftover temporary is gone");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+}
+
+/// A link at `stage-ledger.json.tmp` is unlinked as a link (by its literal name, never followed): its target is intact and
+/// the stage succeeds (round 4, item 2).
+#[test]
+fn a_link_at_the_ledger_temporary_is_unlinked_and_its_target_is_untouched() {
+    let w = world();
+    let update = w.root.path().join("update");
+    std::fs::create_dir_all(&update).unwrap();
+    let canary = tempfile::tempdir().unwrap();
+    let victim = canary.path().join("victim.txt");
+    std::fs::write(&victim, b"canary").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&victim, update.join("stage-ledger.json.tmp")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&victim, update.join("stage-ledger.json.tmp")).unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert!(std::fs::symlink_metadata(update.join("stage-ledger.json.tmp")).is_err(), "the link is unlinked");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"canary", "the link's target is intact");
+}
+
+/// A version's manifest temporary left by a killed write is removed by name before the stage writes that manifest, so the
+/// stage succeeds (round 5).
+#[test]
+fn a_planted_version_manifest_temporary_does_not_block_the_stage() {
+    let w = world();
+    std::fs::create_dir_all(staging(&w)).unwrap();
+    std::fs::write(staging(&w).join("1.0.0.files.tmp"), b"killed mid-write").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert!(!staging(&w).join("1.0.0.files.tmp").exists(), "the leftover is removed by name");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+}
+
+/// A `.bad` that is a non-empty folder cannot be replaced by the move-aside: that is logged at error, a fresh ledger is written
+/// over the bad ledger file, the `.bad` folder is left alone, and the stage succeeds (round 5).
+#[test]
+fn a_bad_ledger_that_cannot_be_moved_aside_is_overwritten_and_the_stage_succeeds() {
+    let w = world();
+    let update = w.root.path().join("update");
+    std::fs::create_dir_all(update.join("stage-ledger.json.bad")).unwrap();
+    std::fs::write(update.join("stage-ledger.json.bad/keep.txt"), b"a player's").unwrap();
+    std::fs::write(update.join("stage-ledger.json"), b"{{ not json").unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(std::fs::read(update.join("stage-ledger.json.bad/keep.txt")).unwrap(), b"a player's", "the .bad folder is left alone");
+    let ledger: Value = serde_json::from_slice(&std::fs::read(update.join("stage-ledger.json")).unwrap()).unwrap();
+    assert!(ledger["names"].is_array(), "the ledger is a fresh, readable one: {ledger}");
+    assert!(log(&w).iter().any(|r| r["event"] == "stage_ledger" && r["outcome"] == "not_moved_aside"), "logged at error");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+}
+
+/// The old baseline removes `update\staging` whole, manifests included, but not `update\stage-ledger.json`. A ledger that
+/// names folders it has taken away is cleaned by the stage's start: the names are dropped, and the stage succeeds (round 6).
+#[test]
+fn a_ledger_naming_folders_a_baseline_removed_is_dropped_and_the_stage_succeeds() {
+    let w = world();
+    let update = w.root.path().join("update");
+    std::fs::create_dir_all(&update).unwrap();
+    std::fs::write(update.join("stage-ledger.json"), json!({"names": ["0.9.2", "0.9.1.partial-77"]}).to_string()).unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert_eq!(out["plan"]["action"].as_str(), Some("staged"), "{out}");
+    let ledger = std::fs::read(update.join("stage-ledger.json")).unwrap_or_default();
+    let names: Value = serde_json::from_slice::<Value>(&ledger).map(|v| v["names"].clone()).unwrap_or(json!([]));
+    assert!(!names.to_string().contains("0.9.2") && !names.to_string().contains("0.9.1.partial-77"), "the gone names are dropped: {names}");
+}
+
+/// A link to a canary inside `staging\<v>` is never followed: the folder it is in is set aside to `<v>.unrecorded` with the
+/// link inside it, the canary is intact, and the stage succeeds (round 8).
+#[test]
+fn a_link_to_a_canary_inside_the_staged_folder_is_set_aside_with_it_and_the_stage_succeeds() {
+    let w = world();
+    let canary = tempfile::tempdir().unwrap();
+    std::fs::write(canary.path().join("keep.txt"), b"canary").unwrap();
+    std::fs::create_dir_all(staging(&w).join("1.0.0")).unwrap();
+    std::fs::write(staging(&w).join("1.0.0/nevr-runtime.dll"), b"an old stage").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(canary.path(), staging(&w).join("1.0.0/extra")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(canary.path(), staging(&w).join("1.0.0/extra")).unwrap();
+    let base = publish(&w, &Opts::new());
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old runtime"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    assert!(std::fs::symlink_metadata(staging(&w).join("1.0.0.unrecorded/extra")).is_ok(), "the link moved with the folder");
+    assert_eq!(std::fs::read(canary.path().join("keep.txt")).unwrap(), b"canary", "the canary is intact");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/nevr-runtime.dll")).unwrap(), RT, "the release is staged");
 }

@@ -173,17 +173,197 @@ fn temp_name(path: &Path, pid: u32, n: u64) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// A file replaced whole: the bytes go to a temporary file of this writer's own (`create_unique_temp`), renamed over
-/// `path`, so a reader sees the old file or the new one and never half of it. A failed write removes its temporary file.
+/// A file replaced whole: the bytes go to a temporary file of this writer's own (`create_unique_temp`), synced, renamed over
+/// `path`, and then the folder is synced, so a reader sees the old file or the new one and never half of it, and the rename
+/// itself survives a power cut. A failed write removes its temporary file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let (tmp, mut f) = create_unique_temp(path)?;
     let written = f.write_all(bytes).and_then(|()| f.sync_all());
     drop(f);
-    let done = written.and_then(|()| fs::rename(&tmp, path));
+    let done = written.and_then(|()| fs::rename(&tmp, path)).and_then(|()| sync_parent_dir(path));
     if done.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     done
+}
+
+/// Like `write_atomic`, with the temporary at the literal name `<path><suffix>` (`.new` for a stage's member, `.tmp` for a
+/// manifest or the ledger). The temporary is created exclusively (`create_new`, which on unix is `O_CREAT|O_EXCL` and so
+/// never follows a link at that name): an existing file or link there is an error, never written through. The caller
+/// lists or removes that name beforehand, so an existing one is a leftover, not another writer's. A failed write removes
+/// the temporary by its name.
+pub fn write_with_literal_tmp(path: &Path, suffix: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(suffix);
+    let tmp = PathBuf::from(tmp_name);
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    drop(f);
+    let done = written.and_then(|()| fs::rename(&tmp, path)).and_then(|()| sync_parent_dir(path));
+    if done.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    done
+}
+
+/// `write_with_literal_tmp` with the `.new` temporary of a stage's member.
+pub fn write_literal_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_with_literal_tmp(path, ".new", bytes)
+}
+
+/// Syncs the folder that holds `path`, so a rename into it is on disk (unix: a folder can be opened and synced).
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::File::open(dir)?.sync_all()
+}
+
+/// Windows: no folder sync is made. std opens a folder with no flush, and a folder cannot be opened for
+/// `FlushFileBuffers` without a raw call this crate does not make. The file is synced before the rename; what a power cut
+/// does to a rename on NTFS is [UNVERIFIED].
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// True for a symbolic link, and on Windows for a junction or any other reparse point: nothing here moves through one.
+pub fn is_link(m: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        m.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        m.file_type().is_symlink()
+    }
+}
+
+/// What `remove_owned` / `remove_entry` did with one entry. The words are those of the C++ guard (`src/core/owned_remove.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Removed,
+    Absent,
+    NotEmpty,
+    RefusedName,
+    RefusedLink,
+    RefusedOutsideRoot,
+    Failed,
+}
+
+impl Outcome {
+    pub fn word(self) -> &'static str {
+        match self {
+            Outcome::Removed => "removed",
+            Outcome::Absent => "absent",
+            Outcome::NotEmpty => "not_empty",
+            Outcome::RefusedName => "refused_name",
+            Outcome::RefusedLink => "refused_link",
+            Outcome::RefusedOutsideRoot => "refused_outside_root",
+            Outcome::Failed => "failed",
+        }
+    }
+}
+
+/// The entry grammar of the C++ guard (`src/core/owned_remove_rules.h`, `ValidEntry`), ported exactly: non-empty, not
+/// absolute, no byte below 0x20 and no DEL (an embedded NUL included), no '\\' and no ':' anywhere, and every
+/// '/'-separated component non-empty and not "." or "..". A trailing '/' makes an empty last component, so it is refused.
+pub fn valid_entry(entry: &str) -> bool {
+    if entry.is_empty() || entry.starts_with('/') {
+        return false;
+    }
+    if entry.bytes().any(|b| b < 0x20 || b == 0x7f || b == b'\\' || b == b':') {
+        return false;
+    }
+    entry.split('/').all(|p| !p.is_empty() && p != "." && p != "..")
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+/// Removes the one entry `entry` (its grammar checked by `valid_entry`) under `root`, given the canonical form of `root`
+/// (`None` when it could not be taken). Walks each parent component with `symlink_metadata`: a link is refused; the
+/// canonical parent must then be the canonical root followed by those components, else the entry is outside the root.
+/// The last component is removed as itself: a link is unlinked and its target untouched, a folder only when empty.
+///
+/// Residual race: std has no `openat`, so a parent can be swapped for a link between the walk and the removal. The
+/// window is the time between two system calls, and it is the one the C++ POSIX guard closes with `openat`; this
+/// function is for the installer's own records, which a second party does not write.
+fn remove_within(root: &Path, canon_root: Option<&Path>, entry: &str) -> Outcome {
+    if !valid_entry(entry) {
+        return Outcome::RefusedName;
+    }
+    let Some(canon_root) = canon_root else {
+        // No root to take a real path of: an absent root holds no entry; anything else is a failure to look.
+        return match fs::symlink_metadata(root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Outcome::Absent,
+            _ => Outcome::Failed,
+        };
+    };
+    let mut parts: Vec<&str> = entry.split('/').collect();
+    let last = parts.pop().unwrap_or_default();
+    let mut parent = root.to_path_buf();
+    for part in &parts {
+        parent.push(part);
+        match fs::symlink_metadata(&parent) {
+            Ok(m) if is_link(&m) => return Outcome::RefusedLink,
+            Ok(m) if m.is_dir() => {}
+            // A file where a folder should be: the entry cannot be inside it.
+            Ok(_) => return Outcome::Absent,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Outcome::Absent,
+            Err(_) => return Outcome::Failed,
+        }
+    }
+    let expected = parts.iter().fold(canon_root.to_path_buf(), |p, s| p.join(s));
+    match fs::canonicalize(&parent) {
+        Ok(actual) if same_path(&actual, &expected) => {}
+        Ok(_) => return Outcome::RefusedOutsideRoot,
+        Err(_) => return Outcome::Failed,
+    }
+    let target = parent.join(last);
+    let meta = match fs::symlink_metadata(&target) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Outcome::Absent,
+        Err(_) => return Outcome::Failed,
+    };
+    if is_link(&meta) {
+        // A folder link is a folder to Windows and a file to unix: try the folder form first, so neither follows it.
+        return match fs::remove_dir(&target).or_else(|_| fs::remove_file(&target)) {
+            Ok(()) => Outcome::Removed,
+            Err(_) => Outcome::Failed,
+        };
+    }
+    if meta.is_dir() {
+        return match fs::remove_dir(&target) {
+            Ok(()) => Outcome::Removed,
+            Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => Outcome::NotEmpty,
+            Err(_) => Outcome::Failed,
+        };
+    }
+    match fs::remove_file(&target) {
+        Ok(()) => Outcome::Removed,
+        Err(_) => Outcome::Failed,
+    }
+}
+
+/// Removes each of `entries` under `root`, in the order given, one at a time, by name: the caller's record of what it made.
+/// Never recurses; never lists `root`. Every entry is tried and gets one result. A folder is removed only when empty.
+pub fn remove_owned(root: &Path, entries: &[String]) -> Vec<(String, Outcome)> {
+    let canon = fs::canonicalize(root).ok();
+    entries.iter().map(|e| (e.clone(), remove_within(root, canon.as_deref(), e))).collect()
+}
+
+/// Removes the one entry `entry` under `root` by the rules of `remove_owned`.
+pub fn remove_entry(root: &Path, entry: &str) -> Outcome {
+    remove_within(root, fs::canonicalize(root).ok().as_deref(), entry)
 }
 
 #[cfg(test)]
@@ -290,5 +470,88 @@ mod tests {
         }
         let (tmp, _f) = create_unique_temp(&target).unwrap();
         assert_eq!(std::fs::metadata(&tmp).unwrap().len(), 0, "the writer opened a file another writer holds: {}", tmp.display());
+    }
+
+    #[test]
+    fn the_entry_grammar_is_the_guards() {
+        for bad in ["..", "/abs", "a\\b", "C:x", "", "a//b", "a/./b", "a/", "..\0/x", "a/..", "x\u{1}y", "x\u{7f}", "a:b"] {
+            assert!(!valid_entry(bad), "{bad:?} must be refused");
+        }
+        for ok in ["a", "plugins/x.dll", "a b", "a/b.c", "a/.hidden", "\u{e9}"] {
+            assert!(valid_entry(ok), "{ok:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn refused_outside_root_is_reached_when_the_real_parent_is_not_where_the_root_says() {
+        // On Linux the walk alone (no link on the path) cannot make the canonical parent differ from the root joined with
+        // its components, except by a race that a test cannot make. So this drives `remove_within` with a canonical root
+        // that names another folder: the real parent `a` is then not `<other>/a`, and nothing may be removed.
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a")).unwrap();
+        fs::write(root.path().join("a").join("b"), b"kept").unwrap();
+        let canon_other = fs::canonicalize(other.path()).unwrap();
+        assert_eq!(remove_within(root.path(), Some(&canon_other), "a/b"), Outcome::RefusedOutsideRoot);
+        assert_eq!(fs::read(root.path().join("a").join("b")).unwrap(), b"kept", "nothing is removed");
+        // The same entry with the true root removes it.
+        let canon_root = fs::canonicalize(root.path()).unwrap();
+        assert_eq!(remove_within(root.path(), Some(&canon_root), "a/b"), Outcome::Removed);
+    }
+
+    #[test]
+    fn an_absent_root_holds_nothing_to_remove() {
+        let parent = tempfile::tempdir().unwrap();
+        let missing = parent.path().join("never-made");
+        assert_eq!(remove_entry(&missing, "x"), Outcome::Absent);
+        assert_eq!(remove_owned(&missing, &["x".to_string()])[0].1, Outcome::Absent);
+        assert_eq!(remove_entry(&missing, "..").word(), "refused_name", "the name is checked first");
+    }
+
+    #[test]
+    fn a_bad_name_is_refused_and_nothing_under_the_root_is_touched() {
+        let root = tempfile::tempdir().unwrap();
+        let canary = tempfile::tempdir().unwrap();
+        fs::write(canary.path().join("keep"), b"canary").unwrap();
+        for bad in ["..", "/abs", "a\\b", "C:x", "", "a//b", "a/./b", "a/", "..\0/x"] {
+            assert_eq!(remove_entry(root.path(), bad), Outcome::RefusedName, "{bad:?}");
+        }
+        assert_eq!(fs::read(canary.path().join("keep")).unwrap(), b"canary");
+    }
+
+    #[test]
+    fn the_normal_path_removes_each_named_entry_and_no_more() {
+        let root = tempfile::tempdir().unwrap();
+        let canary = tempfile::tempdir().unwrap();
+        fs::write(canary.path().join("keep"), b"canary").unwrap();
+        fs::create_dir_all(root.path().join("d").join("sub")).unwrap();
+        fs::write(root.path().join("d").join("f.dll"), b"f").unwrap();
+        fs::create_dir_all(root.path().join("empty")).unwrap();
+        fs::write(root.path().join("stranger"), b"s").unwrap();
+        let entries: Vec<String> = ["d/f.dll", "d/sub", "d", "empty", "missing"].iter().map(|s| s.to_string()).collect();
+        let got = remove_owned(root.path(), &entries);
+        assert_eq!(got.iter().map(|(_, o)| *o).collect::<Vec<_>>(), [Outcome::Removed, Outcome::Removed, Outcome::Removed, Outcome::Removed, Outcome::Absent]);
+        assert!(!root.path().join("d").exists() && !root.path().join("empty").exists());
+        assert_eq!(fs::read(root.path().join("stranger")).unwrap(), b"s", "a name not in the list is kept");
+        assert_eq!(remove_entry(root.path(), "stranger"), Outcome::Removed);
+        assert_eq!(fs::read(canary.path().join("keep")).unwrap(), b"canary");
+    }
+
+    #[test]
+    fn a_folder_with_an_unlisted_file_is_not_empty_and_a_link_is_unlinked_not_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let canary = tempfile::tempdir().unwrap();
+        fs::write(canary.path().join("keep"), b"canary").unwrap();
+        fs::create_dir_all(root.path().join("d")).unwrap();
+        fs::write(root.path().join("d").join("unlisted"), b"u").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(canary.path(), root.path().join("l")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(canary.path(), root.path().join("l")).unwrap();
+        assert_eq!(remove_entry(root.path(), "d"), Outcome::NotEmpty);
+        assert!(root.path().join("d").join("unlisted").is_file());
+        assert_eq!(remove_entry(root.path(), "l"), Outcome::Removed);
+        assert!(fs::symlink_metadata(root.path().join("l")).is_err(), "the link itself is gone");
+        assert_eq!(fs::read(canary.path().join("keep")).unwrap(), b"canary", "the link's target is intact");
     }
 }

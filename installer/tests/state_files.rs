@@ -82,7 +82,9 @@ fn a_failed_write_leaves_no_temp_file_behind() {
 }
 
 #[test]
-fn extract_never_touches_another_writers_temp_file() {
+fn extract_never_writes_through_another_writers_temp_file() {
+    // The temporary of a member is the literal `<member>.new` (round 3: the manifest lists it). A file already there is
+    // never written through: the extraction is refused, and the file is left as it was.
     let d = tempfile::tempdir().unwrap();
     let entries: &[(&str, &[u8])] = &[("x/a.bin", b"AAA")];
     let zip = d.path().join("a.zip");
@@ -90,8 +92,8 @@ fn extract_never_touches_another_writers_temp_file() {
     let root = d.path().join("root");
     std::fs::create_dir_all(root.join("x")).unwrap();
     std::fs::write(root.join("x/a.bin.new"), b"another writer's temp").unwrap();
-    artifact::extract(&zip, &zip_artifact(entries), &root).unwrap();
-    assert_eq!(std::fs::read(root.join("x/a.bin")).unwrap(), b"AAA");
+    assert!(artifact::extract(&zip, &zip_artifact(entries), &root).is_err());
+    assert!(!root.join("x/a.bin").exists());
     assert_eq!(std::fs::read(root.join("x/a.bin.new")).unwrap(), b"another writer's temp");
 }
 

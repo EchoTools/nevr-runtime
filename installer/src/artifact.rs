@@ -153,8 +153,11 @@ fn write_member<R: Read>(entry: &mut R, c: &crate::manifest::Content, root: &Pat
     if let Some(dir) = dest.parent() {
         fs::create_dir_all(dir).map_err(|e| fail(format!("{}: {e}", dir.display())))?;
     }
-    // A temporary file of this writer's own, never a fixed name another run may also use (#1353). A failure removes it.
-    let (tmp, mut out) = crate::util::create_unique_temp(&dest).map_err(|e| fail(format!("{}: {e}", dest.display())))?;
+    // The literal `<member>.new` temporary: the partial folder is one writer's (its name carries the pid), and the manifest
+    // lists this name (`stage::staged_entries`), so a killed extraction leaves nothing a cleanup cannot name. `create_new`
+    // refuses a name already there rather than writing through it.
+    let tmp = PathBuf::from(format!("{}.new", dest.display()));
+    let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
     let streamed = stream_entry(entry, c, &mut out, &tmp);
     drop(out);
     let (n, digest) = match streamed {

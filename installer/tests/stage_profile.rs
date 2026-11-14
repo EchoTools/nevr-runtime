@@ -172,7 +172,7 @@ fn a_quest_runtime_is_staged_as_one_file_with_the_stored_manifest_pair_beside_it
     assert_eq!(std::fs::read(dir.join(MEMBER)).unwrap(), SO);
     assert_eq!(std::fs::read(dir.join("proof/manifest.json")).unwrap(), w.manifest, "the pair that passed step 2 is kept beside the file");
     assert_eq!(std::fs::read(dir.join("proof/manifest.json.sig")).unwrap(), w.sig);
-    assert_eq!(tree(&staging(w.root.path())), vec!["1.0.0", "1.0.0/libnevr-runtime.so", "1.0.0/proof", "1.0.0/proof/manifest.json", "1.0.0/proof/manifest.json.sig"], "no partial folder, no other file");
+    assert_eq!(tree(&staging(w.root.path())), vec!["1.0.0", "1.0.0.files", "1.0.0/libnevr-runtime.so", "1.0.0/proof", "1.0.0/proof/manifest.json", "1.0.0/proof/manifest.json.sig"], "no partial folder, no other file: the version's manifest is the one record beside it");
     let work: Vec<_> = std::fs::read_dir(w.root.path().join("update/work")).map(|d| d.map(|e| e.unwrap().file_name()).collect()).unwrap_or_default();
     assert!(work.is_empty(), "the download is removed once staged: {work:?}");
     let fetch = log(w.root.path()).into_iter().find(|r| r["event"] == "artifact_fetch").unwrap();
