@@ -117,8 +117,10 @@ The core is built into `nevr_core` and tested by its GTests (`src/core/maps.cmak
 and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal of a map whose manifest is not official (decision
 7), and the request queue (`map_fetch_queue.h`). Not built yet (#2733): the PC and Quest platform layers and the channel that
 starts them, including which keys they give the core as official (decision 7) and the `mixed_keys` check (decision 3); the
-config-alias hooks; the local-copy precedence (decision 8); the session pin (decision 9); the server's group fetch and its join
-hold (decisions 13 and 17); and the server mount (decision 18).
+local-copy precedence (decision 8); the session pin (decision 9); the server's group fetch and its join hold (decisions 13
+and 17); and the server mount (decision 18). The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`,
+`src/quest/sentinel/config_alias_hook.cpp`, with the arena override's precedence line in
+`src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map.
 
 ## Consequences
 
@@ -130,7 +132,7 @@ hold (decisions 13 and 17); and the server mount (decision 18).
   in a staging directory, cuts back a failed piece's bytes with `Truncate`, and renames the directory into place. `nevr_maps::MapFs`
   (`map_types.h`) adds what only a map needs: a held share-read handle and its stamp, its final path, a directory listing, a
   removal and a rename of a whole directory. The hasher is the portable SHA-256 (`src/quest/data/sha256.h`): the Quest `Env`
-  (`src/quest/cargo/posix_env.cpp`) uses it today, and the PC `Env` the platform commit adds uses the same one, never BCrypt.
+  (`src/cdn/env_posix.cpp`) uses it today, and the PC `Env` the platform commit adds uses the same one, never BCrypt.
 - The limits are ADR 0045 decision 8's: one document's bytes, a recipe's buffers and the groups the cache keeps are shares of the
   device's memory and free space (`MapDocumentBytes`, `map_manifest.h`), never a constant. What a format defines stays constant in
   `map_format.h`, which cites the format.

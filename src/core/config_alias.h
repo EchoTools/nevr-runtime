@@ -76,8 +76,13 @@ class Table {
   // Any thread: one acquire load and at most kMaxPerMap compares. No lock, no allocation.
   std::uint64_t Resolve(std::uint64_t key) const noexcept;
 
-  // Bumped by every Stage, Unstage and Arm, so a caller that skips Reconcile while its inputs are unchanged still
-  // reconciles after the armed maps change.
+  // The id of the armed map whose alias for `key` is published now, or "" while none is live. Takes the lock and
+  // allocates: for a log line, never for a lookup.
+  std::string LiveMapId(std::uint64_t key) const;
+
+  // Bumped by every Stage and Unstage, and by an Arm that changes the armed maps, so a caller that skips Reconcile while
+  // its inputs are unchanged still reconciles after the armed maps change. It is one load's identity (the arena
+  // override's once-per-load line keys on it).
   std::uint64_t Generation() const noexcept { return generation_.load(std::memory_order_acquire); }
 
  private:
@@ -94,6 +99,7 @@ class Table {
     std::string id;
     std::vector<std::uint64_t> levels;  // sorted, the main level included
     std::vector<Pair> pairs;
+    bool operator==(const Armed& o) const { return id == o.id && levels == o.levels && pairs == o.pairs; }
   };
   struct Loser {
     std::uint64_t key;
@@ -130,6 +136,7 @@ std::size_t Arm(const OwnerLevels& mounted_owner_levels, HoldsFn holds, void* ct
 std::vector<Winner> Decide(std::uint64_t main_level, const std::vector<std::uint64_t>& loaded_levels);
 void Reconcile(std::uint64_t main_level, const std::vector<std::uint64_t>& loaded_levels);
 std::uint64_t Resolve(std::uint64_t key) noexcept;
+std::string LiveMapId(std::uint64_t key);
 
 #ifndef _WIN32
 // The Quest sentinel defines it (quest/sentinel/config_alias_hook.cpp): one Warning line from the table.

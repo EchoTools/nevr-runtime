@@ -157,6 +157,14 @@ nevr_ht_test(lobby_full_test GROUP hooks PTHREAD INCS ${_sent} TIMEOUT 60 SRC sr
 # skips without blocking. Built as the sentinel builds it (no exceptions).
 nevr_ht_test(frame_dispatch_test GROUP hooks NOEXC PTHREAD INCS ${_sent} TIMEOUT 60
   SRC src/quest/tests/frame_dispatch_test.cpp src/quest/invite/frame_dispatch.cpp src/quest/sentinel/hook_log.cpp)
+# ConfigAlias on Quest (docs/adr/0048 decision 5): the loaded levels read from a fake game object (both game-space tables, an
+# unreadable table, the cap) and the lookup with an alias applied over the core table. The lookup is built as the sentinel
+# builds it (no exceptions) and its levels file with them; the libr15 identity objects are linked for the pinned GOT slot.
+nevr_ht_obj(o_hooks_config_alias_hook GROUP hooks NOEXC INCS ${_sent} SRC src/quest/sentinel/config_alias_hook.cpp)
+nevr_ht_obj(o_hooks_config_alias_levels GROUP hooks INCS ${_sent} SRC src/quest/sentinel/config_alias_levels.cpp)
+nevr_ht_test(config_alias_hook_test GROUP hooks NOEXC PTHREAD DL INCS ${_sent} TIMEOUT 120
+  OBJS ${_core} ${_ident} o_hooks_config_alias_hook o_hooks_config_alias_levels
+  SRC src/quest/tests/config_alias_hook_test.cpp src/core/config_alias.cpp src/quest/invite/frame_dispatch.cpp)
 # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds them (no exceptions), driven
 # through the thunk entry.
 nevr_ht_test(login_prompt_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}

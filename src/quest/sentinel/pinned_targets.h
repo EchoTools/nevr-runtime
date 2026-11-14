@@ -22,6 +22,7 @@
 #include <cstdint>
 
 #include "callback_thunk.h"
+#include "game_space_layout.h"
 #include "got_hook.h"
 #include "libr15_identity.h"
 
@@ -630,8 +631,8 @@ namespace game_layout {
 // EState at offset 0: SwitchTo (0x125b8b4) compares `ldr w0, [x0]` with the new state and stores
 // it with `str w20, [x19]` (0x125b9f4). Names from GameStateString (0x124d478).
 inline constexpr std::size_t kStateOffset = 0;
-// The game space QuitOnError sends its event to: *(*(self + 8) + 0x7af0) (null before the game space exists).
-inline constexpr std::size_t kGameOffset = 8;
+// The game space QuitOnError sends its event to: *(*(self + 8) + 0x7af0) (null before the game space exists). The
+// game object's offset (kGameOffset = 8) and the game-space tables are in game_space_layout.h, which this file includes.
 inline constexpr std::size_t kGameSpaceOffset = 0x7af0;
 inline constexpr std::int32_t kStateLoggingIn = 2;      // "logging in"
 inline constexpr std::int32_t kStateLoginFailed = -94;  // "login failed"
@@ -645,6 +646,11 @@ inline constexpr std::size_t kErrorLineBytes = 0x40;
 inline constexpr std::size_t kErrorLines = 4;
 inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineBytes;
 }  // namespace game_layout
+
+// The GOT slot the PLT stub of CR15NetBalanceSettingsCS::Json (the balance lookup) loads: JUMP_SLOT 0x36C2750. ReVault reads
+// the stub at 0xFD60D0 (disassembly VA, the file vaddr 0xED60D0): `adrp x16, 0x37c2000; ldr x17, [x16, #0x750]; br x17`, so
+// the slot is 0x37C2750 at the disassembly VA, 0x36C2750 at the file vaddr (ReVault, project echovr, binary libr15.so).
+inline constexpr std::uint64_t kBalanceLookupSlot = 0x36c2750ULL;
 
 // SNSConfigRequestv24Send(CTcpBroadcaster&, char const*, char const*): the
 // mangling encodes the parameters but not the return type, and no caller has

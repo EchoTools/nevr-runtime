@@ -311,4 +311,34 @@ TEST(LevelInstancesTest, ASessionLeaveOrAMainLevelChangeClearsTheSet) {
   EXPECT_EQ(source.size(), 0u);
 }
 
+// The arena override's log names the map: LiveMapId answers the winning map while its alias is published, and nothing
+// otherwise.
+TEST_F(ConfigAliasTest, LiveMapIdNamesTheMapWhoseAliasIsPublished) {
+  Table t;
+  EXPECT_EQ(t.LiveMapId(kArenaRulesKey), "");
+  StageAndArmBoth(t);
+  EXPECT_EQ(t.LiveMapId(kArenaRulesKey), "");  // armed, not yet published
+  t.Reconcile(kMainB, {kSubA});
+  EXPECT_EQ(t.LiveMapId(kArenaRulesKey), "beta");
+  EXPECT_EQ(t.LiveMapId(0x1234), "");
+  t.Reconcile(kStock, {});
+  EXPECT_EQ(t.LiveMapId(kArenaRulesKey), "");
+}
+
+// A second Arm with the same mount is no new load: the generation stays, and the alias is answered as before.
+TEST_F(ConfigAliasTest, ArmingTheSameMountAgainChangesNothing) {
+  Table t;
+  StageAndArmBoth(t);
+  t.Reconcile(kStock, {kSubA});
+  const std::uint64_t generation = t.Generation();
+  const OwnerLevels mounted = {{"oa", {kMainA, kSubA}}, {"ob", {kMainB, kSubB}}};
+  EXPECT_EQ(t.Arm(mounted, &HoldsAll, nullptr), 2u);
+  EXPECT_EQ(t.Generation(), generation);
+  EXPECT_EQ(t.Resolve(kArenaRulesKey), kAliasA);
+  EXPECT_EQ(t.LiveMapId(kArenaRulesKey), "alpha");
+  // A changed mount is a new load: the generation moves.
+  EXPECT_EQ(t.Arm({{"oa", {kMainA}}, {"ob", {kMainB, kSubB}}}, &HoldsAll, nullptr), 2u);
+  EXPECT_NE(t.Generation(), generation);
+}
+
 }  // namespace
