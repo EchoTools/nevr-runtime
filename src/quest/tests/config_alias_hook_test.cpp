@@ -12,6 +12,7 @@
 
 #include "core/config_alias.h"
 #include "quest/sentinel/config_alias_hook.h"
+#include "core/game_space_table.h"
 #include "quest/sentinel/game_space_layout.h"
 #include "test_check.h"
 
@@ -23,12 +24,11 @@ namespace {
 // The game object's game-space tables, from the shared layout (game_space_layout.h).
 constexpr std::size_t kGameBytes = 0x2000;  // large enough for the highest table count offset in the layout
 
-// The table bound the reader holds to (config_alias_levels.cpp kMaxTableCount), and the cap of two tables read.
-constexpr std::size_t kTableBound = 1024;
+// A buffer for the two tables' levels the tests read, and the counts they use.
 constexpr std::size_t kLevelTables = 2;
-constexpr std::size_t kLevelCap = kLevelTables * kTableBound;
+constexpr std::size_t kLevelCap = 16;
 constexpr std::size_t kOneLevel = 1;
-constexpr std::size_t kOverBound = kTableBound + kOneLevel;
+constexpr std::size_t kOverCapacity = 2;  // a count past the table's own capacity word
 
 // rad_hash("m1_arena_rules"), the record a map's set carries for mp_arena_rules.
 constexpr std::uint64_t kAlias = 0x6216cd74aba74633ull;
@@ -62,6 +62,8 @@ void WriteTable(std::vector<unsigned char>* game, std::vector<std::uint64_t>* st
   }
   Put<const std::uint64_t*>(game, table, storage->empty() ? nullptr : storage->data());
   Put<std::uint64_t>(game, count, static_cast<std::uint64_t>(levels.size()));
+  Put<std::uint64_t>(game, count - nevr_game_space_table::kCapacityBytesBeforeCount,
+                     static_cast<std::uint64_t>(levels.size()));  // the table's own capacity
 }
 
 void ResetAlias() {
@@ -94,9 +96,16 @@ void TestLoadedLevels() {
   Put<std::uint64_t>(&game, loadedCount, kOneLevel);
   QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == -static_cast<int>(kOneLevel));
 
-  // A count over the table bound is not a table this code reads: -1.
-  Put<std::uint64_t>(&game, loadedCount, kOverBound);
+  // A count over the table's own capacity is not a table this code reads: -1, from the bound and from the reader.
+  WriteTable(&game, &loaded, {kMain}, loadedTable, loadedCount);
+  Put<std::uint64_t>(&game, loadedCount, kOverCapacity);
   QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == -static_cast<int>(kOneLevel));
+  QCHECK(hook::LoadedLevelUpperBound(game.data()) == -static_cast<int>(kOneLevel));
+
+  // The upper bound is the sum of the counts when both tables read.
+  WriteTable(&game, &enabled, {kSub}, enabledTable, enabledCount);
+  WriteTable(&game, &loaded, {kMain}, loadedTable, loadedCount);
+  QCHECK(hook::LoadedLevelUpperBound(game.data()) == static_cast<int>(kLevelTables));
 }
 
 void TestLookup() {

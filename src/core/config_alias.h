@@ -90,7 +90,7 @@ class Table {
   std::uint64_t LiveEpoch(std::uint64_t key) const;
 
   // The record the lookup last answered for an allowed key while its alias was live, or null. Set by the lookup hook, read by
-  // the arena override to check that the value it logs was read from the aliased record (not from another record).
+  // the arena override's Debug root_check record, which writes it beside the record the game read from. Nothing decides on it.
   void SetLiveRecord(const void* record) noexcept { live_record_.store(record, std::memory_order_release); }
   const void* LiveRecord() const noexcept { return live_record_.load(std::memory_order_acquire); }
 

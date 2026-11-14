@@ -887,7 +887,8 @@ constexpr uintptr_t CONFIG_BALANCE_LOOKUP = 0xD0B170;
 ///   the level there, calls Enable on its resource and moves the entry to the enabled table (the insert at 0x1404FA170).
 /// - GAME_ENABLED_SPACE_TABLE (+0x1F50, count +0x1F80): the enabled levels.
 /// Read from echovr.exe in EnableGameSpace (0x1404EF130: `param_1+0x3f2` data and `param_1[0x3f8]` count, `param_1+0x3ea`
-/// for the insert) and from the insert helper 0x1404FA170, whose count is `param_1[6]` on the table at `param_1`.
+/// for the insert) and from the insert helper 0x1404FA170, whose count is `param_1[6]` on the table at `param_1`. The
+/// capacity word is one word before the count (CTable::GrowBy 0x1400D6C50 reads it at +0x28); core/game_space_table.h.
 constexpr uintptr_t GAME_SPACE_TABLE_OFFSET = 0x1F90;
 constexpr uintptr_t GAME_SPACE_TABLE_COUNT_OFFSET = 0x1FC0;
 constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_OFFSET = 0x1F50;

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/config_alias.h"
+#include "core/game_space_table.h"
 #include "core/hex_bytes.h"
 #include "core/logging.h"
 #include "runtime/hook/addresses.h"
@@ -30,11 +31,10 @@ namespace {
 
 namespace addr = nevr_patch_addresses;
 
-// More levels than this is not a table this code understands: it reads as unreadable.
-constexpr std::uint64_t kMaxGameSpaces = 1024;
-// A level table entry is two 8-byte words: the level symbol, then the level resource.
-constexpr std::uint64_t kEntryWords = 2;
-constexpr std::uint64_t kEntryResourceWord = 1;
+// A level table entry is two 8-byte words: the level symbol, then the level resource (core/game_space_table.h, which also
+// says why the bound on a table's count is the table's own capacity).
+constexpr std::uint64_t kEntryWords = nevr_game_space_table::kEntryWords;
+constexpr std::uint64_t kEntryResourceWord = nevr_game_space_table::kResourceWord;
 // splitmix64 constants (the finaliser Mix folds with) and its shifts.
 constexpr std::uint64_t kMixIncrement = 0x9e3779b97f4a7c15ull;
 constexpr std::uint64_t kMixMultiplierA = 0xbf58476d1ce4e5b9ull;
@@ -83,11 +83,13 @@ bool ReadLevelTable(const unsigned char* game, std::uintptr_t data_offset, std::
   LevelTable table;
   std::memcpy(&table.entries, game + data_offset, sizeof(table.entries));
   std::memcpy(&table.count, game + count_offset, sizeof(table.count));
+  std::uint64_t capacity = 0;
+  std::memcpy(&capacity, game + count_offset - nevr_game_space_table::kCapacityBytesBeforeCount, sizeof(capacity));
+  if (!nevr_game_space_table::Readable(table.entries, table.count, capacity)) return false;
   if (table.count == 0) {
     *out = LevelTable{};
     return true;
   }
-  if (table.entries == nullptr || table.count > kMaxGameSpaces) return false;
   *out = table;
   return true;
 }

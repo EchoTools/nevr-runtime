@@ -75,7 +75,7 @@ void NoteAliasOverride(const void* root, const char* key, FLOAT configValue) noe
       const void* live = nevr_config_alias::LiveRecord();
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.MAPS] config_alias root_check key=%s map=%s root=0x%llx live_record=0x%llx equal=%s (the record the "
-          "game's read was made on, beside the record the lookup answered for the map)",
+          "game read from, beside the record the lookup answered for the map)",
           key, map.c_str(), static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(root)),
           static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(live)), root == live ? "true" : "false");
     }
