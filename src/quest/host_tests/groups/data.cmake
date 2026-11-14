@@ -14,7 +14,11 @@ nevr_ht_obj(o_core_owned_remove_posix GROUP data HOST SRC src/core/owned_remove_
 if(DEFINED ENV{NEVR_TEST_TMP})
   set(_data_env NEVR_TEST_TMP=$ENV{NEVR_TEST_TMP})
 else()
-  set(_data_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/data)
+string(TIMESTAMP _nevr_ht_stamp "%Y%m%dT%H%M%S" UTC)
+  string(RANDOM LENGTH 6 _nevr_ht_rand)
+  set(_data_dir "${CMAKE_BINARY_DIR}/data-${_nevr_ht_stamp}-${_nevr_ht_rand}")
+  file(MAKE_DIRECTORY "${_data_dir}")
+  set(_data_env NEVR_TEST_TMP=${_data_dir})
 endif()
 nevr_ht_test(data_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/data_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_core_owned_remove_posix LIBS ${NEVR_ZLIB_LIB})

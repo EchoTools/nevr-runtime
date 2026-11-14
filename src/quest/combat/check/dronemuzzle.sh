@@ -14,8 +14,21 @@ bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 cxx="$bin/aarch64-linux-android26-clang++"
 objdump="$bin/llvm-objdump"
 [ -x "$cxx" ] || { echo "dronemuzzle.sh: no NDK compiler at $cxx" >&2; exit 1; }
-scratch="$(mktemp -d)"
-trap 'rm -rf -- "$scratch"' EXIT
+# Scratch lives under the run root (ORDER.md item 2): the recipe's NEVR_TEST_TMP, or, run alone, a run root this script makes and
+# removes at exit (run-root remove, the one sanctioned removal). Nothing else is removed.
+rr="$root/build/go-tools/run-root"
+own=""
+if [ -n "${NEVR_TEST_TMP:-}" ]; then
+  scratch="$NEVR_TEST_TMP/dronemuzzle"
+else
+  [ -x "$rr" ] || { echo "dronemuzzle.sh: $rr is not built (just _run-root-tool)" >&2; exit 1; }
+  own="$("$rr" make dronemuzzle)"
+  scratch="$own/scratch"
+fi
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'if [ -n "$own" ]; then "$rr" remove "$own"; fi' EXIT
+mkdir -p "$scratch"
 program="$scratch/dronemuzzle_qemu"
 "$cxx" -O1 -fno-exceptions -fno-rtti -fno-stack-protector -Wall -Wextra -Werror -I "$root/src" -static -nostdlib -fuse-ld=lld \
   -o "$program" "$root/src/quest/tests/dronemuzzle_qemu.cpp"

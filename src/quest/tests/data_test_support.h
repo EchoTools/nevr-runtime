@@ -2,6 +2,7 @@
  * writer with one knob per rule the reader enforces, so each rule is exercised by an archive that breaks only it. */
 #pragma once
 
+#include "quest/tests/run_scratch.h"
 #include <zlib.h>
 
 #include <fcntl.h>
@@ -24,9 +25,7 @@ namespace data_test {
 struct Scratch {
   std::string dir;
   Scratch() {
-    // NEVR_TEST_TMP names the directory the scratch directories are made in (the recipes run from different directories).
-    const char* base = std::getenv("NEVR_TEST_TMP");
-    std::string tmpl = std::string(base != nullptr ? base : "build/quest-data-host") + "/work-XXXXXX";
+    std::string tmpl = nevr_test_scratch::Base("build/quest-data-host") + "/work-XXXXXX";
     const char* made = ::mkdtemp(&tmpl[0]);
     if (made == nullptr) {  // a scratch directory that is not there would send every test path to the filesystem root
       std::fprintf(stderr, "Scratch: mkdtemp(%s) failed\n", tmpl.c_str());

@@ -7,11 +7,18 @@
 # dereference in the patcher aborts the test that reached it, instead of reading past the buffer and passing.
 nevr_ht_group(patcher)
 set(_pf HOST PTHREAD DEFS _GLIBCXX_ASSERTIONS)
-set(_patcher_scratch "${CMAKE_BINARY_DIR}/test-scratch")
+# The scratch lives under NEVR_TEST_TMP, the recipe's run root (read at configure time, as data.cmake does); unset, the build
+# tree's test-scratch/. The fixture makes it new and refuses an existing one; no fixture removes it (the recipe removes the root).
+if(DEFINED ENV{NEVR_TEST_TMP})
+  set(_patcher_scratch "$ENV{NEVR_TEST_TMP}/patcher-scratch")
+else()
+  string(TIMESTAMP _nevr_ht_stamp "%Y%m%dT%H%M%S" UTC)
+  string(RANDOM LENGTH 6 _nevr_ht_rand)
+  set(_patcher_scratch "${CMAKE_BINARY_DIR}/test-scratch-${_nevr_ht_stamp}-${_nevr_ht_rand}")
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
 add_test(NAME patcher_scratch_fresh COMMAND ${CMAKE_COMMAND} -DDIR=${_patcher_scratch} -P ${NEVR_HT_DIR}/scripts/fresh_dir.cmake)
-add_test(NAME patcher_scratch_removed COMMAND ${CMAKE_COMMAND} -E remove_directory ${_patcher_scratch})
 set_tests_properties(patcher_scratch_fresh PROPERTIES FIXTURES_SETUP patcher_scratch LABELS patcher)
-set_tests_properties(patcher_scratch_removed PROPERTIES FIXTURES_CLEANUP patcher_scratch LABELS patcher)
 add_dependencies(host-tests-patcher nevr_quest_patch_libr15)
 nevr_ht_test(stub_codec_test GROUP patcher ${_pf} TIMEOUT 60 SRC src/quest/tests/stub_codec_test.cpp)
 nevr_ht_test(libr15_patch_table_test GROUP patcher ${_pf} TIMEOUT 60

@@ -11,6 +11,7 @@
 // a scope that cannot change refuses the install (`scope_not_live`). 18 one read of the combat level answer per call (the read seam counts them).
 //
 // Built and run by `just test-quest-combat`.
+#include "quest/tests/run_scratch.h"
 #include "quest/combat/aibots.h"
 
 #include <dirent.h>
@@ -154,13 +155,10 @@ void BuildWorld() {
 
 std::string g_dir;
 time_t g_mt = 1000000;
-void ClearDir() {
-  DIR* d = opendir(g_dir.c_str());
-  if (d == nullptr) return;
-  while (dirent* e = readdir(d)) {
-    if (e->d_name[0] != '.') unlink((g_dir + "/" + e->d_name).c_str());
-  }
-  closedir(d);
+// A folder of its own for each case: a new name under the run's scratch, so nothing is cleared (ORDER.md, the manifest rule).
+void NewCaseDir() {
+  g_dir = nevr_test_scratch::NewFolder("build/quest-host-combat/scratch", "case");
+  CHECK(!g_dir.empty(), "a folder for this case could not be made");
 }
 void WriteReq(const char* text) {
   const std::string p = g_dir + "/aibots.req";
@@ -180,7 +178,7 @@ ai::Fns Fns() {
 // The module as the install step leaves it, with the fake standing in for EnableScenario. `dev`: a development build (the request file is polled).
 nevr_quest::combat::ModuleResult Reset(bool dev = false, const char* scenario = nullptr, bool on = true, const char* request = nullptr) {
   g_lines.clear();
-  ClearDir();
+  NewCaseDir();
   if (request != nullptr) WriteReq(request);
   BuildWorld();
   g_calls.clear();
@@ -548,7 +546,7 @@ void TheScenarioKey() {  // 13
 }
 
 void AReleaseBuildReadsNoRequestFile() {  // 14
-  ClearDir();
+  NewCaseDir();
   WriteReq("scenario=3 delay=0.5\n");
   g_lines.clear();
   ai::Switches sw;
@@ -820,9 +818,6 @@ void TheCostOfALook() {  // 17: printed, not asserted (a host number; the module
 
 int main() {
   nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
-  char tmpl[] = "/tmp/combat-ai-XXXXXX";
-  if (mkdtemp(tmpl) == nullptr) return 2;
-  g_dir = tmpl;
   sentinel::SetLogSink(&Capture);
   TheDefaults();
   NoBots();
@@ -844,8 +839,7 @@ int main() {
   OneLookPerCall();
   TheInstallOnAnImage();
   TheCostOfALook();
-  ClearDir();
-  rmdir(g_dir.c_str());
+  NewCaseDir();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "aibots_test: %d check(s) failed\n", quest_test::Failures());

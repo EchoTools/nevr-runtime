@@ -17,6 +17,8 @@
 #include <thread>
 #include <vector>
 
+#include "quest/tests/run_scratch.h"
+
 namespace {
 
 int g_failures = 0;
@@ -59,8 +61,8 @@ void FieldShape() {
 }
 
 std::string MakeRoot() {
-  char tmpl[] = "/var/tmp/hwdump-test-XXXXXX";
-  const char* dir = ::mkdtemp(tmpl);
+  std::string tmpl = nevr_test_scratch::Base("/var/tmp") + "/hwdump-test-XXXXXX";
+  const char* dir = ::mkdtemp(&tmpl[0]);
   return dir != nullptr ? std::string(dir) : std::string();
 }
 
@@ -114,9 +116,6 @@ void ReadersAgainstAFakeRoot() {
   CHECK(hw::StatVfs(root, "/nonexistent").at("ok") == false);
 
   ::chmod((root + "/sys/cpu/secret").c_str(), 0600);
-  std::error_code ec;
-  std::filesystem::remove_all(root, ec);  // exactly the directory mkdtemp made above
-  CHECK(!ec);
 }
 
 Answer TextAnswer(const char* s) {
@@ -258,9 +257,6 @@ void OsSectionNeverOmitsAField() {
   CHECK(filled.at("/net/sys_class_net/entries/wlan0/address"_json_pointer).at("value") == "aa:bb:cc:dd:ee:ff");
   CHECK(filled.at("/thermal/zones/entries/thermal_zone0/temp"_json_pointer).at("value") == "41000");
   CHECK(filled.at("/battery/power_supply/entries/battery/capacity"_json_pointer).at("value") == "88");
-  std::error_code ec;
-  std::filesystem::remove_all(empty, ec);
-  std::filesystem::remove_all(full, ec);
 }
 
 // When the dump runs: 30 s after vrapi_Initialize, or 180 s after start when it never comes.

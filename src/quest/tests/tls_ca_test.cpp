@@ -44,6 +44,8 @@
 #include <thread>
 #include <utility>
 
+#include "quest/tests/run_scratch.h"
+
 namespace {
 
 using namespace mini_test;
@@ -111,12 +113,15 @@ std::string DerOf(X509* cert) {
 
 void WriteFile(const std::string& path, const std::string& data) { std::ofstream(path, std::ios::binary) << data; }
 
-std::string FreshDir(const std::string& name) {
-  const std::string dir = "build/quest-shared-host/scratch/" + name;
-  std::filesystem::remove_all(dir);
-  std::filesystem::create_directories(dir);
+// A folder of this run, under the run root (NEVR_TEST_TMP): new, never cleared. A folder already there is a failure.
+std::string NewDir(const std::string& name) {
+  const std::string dir = nevr_test_scratch::Base("build/quest-shared-host/scratch") + "/" + name;
+  std::error_code ec;
+  CHECK(std::filesystem::create_directories(dir, ec) && !ec);
   return dir;
 }
+
+std::string FreshDir(const std::string& name) { return NewDir(name); }
 
 size_t Count(const std::string& text, const std::string& needle) {
   size_t n = 0;
@@ -126,9 +131,7 @@ size_t Count(const std::string& text, const std::string& needle) {
 
 // An Android-style CA directory: `<old subject hash>.0`, PEM then a text dump.
 std::string MakeAndroidCaDir(const std::string& name, X509* ca) {
-  const std::string dir = "build/quest-shared-host/scratch/" + name;
-  std::filesystem::remove_all(dir);
-  std::filesystem::create_directories(dir);
+  const std::string dir = NewDir(name);
   char file[32];
   std::snprintf(file, sizeof(file), "%08lx.0", X509_NAME_hash_old(X509_get_subject_name(ca)));
   std::ofstream(dir + "/" + file) << PemOf(ca) << "Certificate:\n    Data:\n        Version: 3 (0x2)\n";
@@ -326,12 +329,10 @@ TEST(a_certificate_for_another_host_name_fails_verification) {
 }
 
 TEST(no_loadable_certificate_fails_closed_without_touching_the_network) {
-  const std::string empty = "build/quest-shared-host/scratch/empty-cacerts";
-  std::filesystem::remove_all(empty);
-  std::filesystem::create_directories(empty);
+  const std::string empty = NewDir("empty-cacerts");
   Server server(&Fix().leaf, 2);
   Logs logs;
-  CurlHttpClient client({empty, "build/quest-shared-host/scratch/does-not-exist"}, logs.Sink());
+  CurlHttpClient client({empty, nevr_test_scratch::Base("build/quest-shared-host/scratch") + "/does-not-exist"}, logs.Sink());
   const nevr::auth::HttpResponse r = client.PostJson(Url(server), "{}");
   CHECK(!r.transport_ok);
   CHECK_EQ(r.transport_code, CurlHttpClient::kNoTrustAnchors);

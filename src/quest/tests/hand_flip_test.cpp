@@ -6,6 +6,7 @@
 //
 // Built and run by `just test-quest-hooks`.
 
+#include "quest/tests/run_scratch.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -52,9 +53,8 @@ constexpr const char* kLeftoverName = "nevr_hand_flip.json";
 // A game directory with RAD/LoneEcho in it, and `leftover` as the earlier build's file when given. config.yaml is the directory's own
 // (the Quest's files directory), absent until `config` is given or the first save creates it.
 std::string MakeDirectory(const char* config, const char* leftover = nullptr) {
-  char dir[] = "/tmp/handflipXXXXXX";
-  if (mkdtemp(dir) == nullptr) return "";
-  const std::string root = dir;
+  const std::string root = nevr_test_scratch::NewFolder("build/quest-host-hooks/scratch", "handflip");
+  if (root.empty()) return "";
   const std::string rad = root + "/RAD";
   const std::string lone = rad + "/LoneEcho";
   if (mkdir(rad.c_str(), 0700) != 0 || mkdir(lone.c_str(), 0700) != 0) return "";
@@ -101,13 +101,6 @@ std::vector<std::string> Names(const std::string& directory) {
   return names;
 }
 
-void RemoveDirectory(const std::string& root) {
-  for (const std::string& name : Names(root + "/RAD/LoneEcho")) std::remove((root + "/RAD/LoneEcho/" + name).c_str());
-  for (const std::string& name : Names(root)) std::remove((root + "/" + name).c_str());
-  rmdir((root + "/RAD/LoneEcho").c_str());
-  rmdir((root + "/RAD").c_str());
-  rmdir(root.c_str());
-}
 
 // What the Quest's start does in production, before any hook can ask for the start: the file's path and what the reader found.
 void Configure(const std::string& root, bool fromConfig, bool flip) { hf::Configure(ConfigPath(root).c_str(), fromConfig, flip); }
@@ -167,7 +160,6 @@ void NoKeyMeansOffAndNothingIsWritten() {
   QCHECK(hf::Poll() == 0);        // once
   QCHECK(!ConfigExists(dir));     // a start, derived or default, is never saved
   QCHECK(Names(dir) == std::vector<std::string>{"RAD"});
-  RemoveDirectory(dir);
 }
 
 // The key the reader found is the player's choice, On or Off: the start says `config` for both, and does not write what it read.
@@ -190,7 +182,6 @@ void TheKeyIsThePlayersChoice() {
       QCHECK(Golden(g_lines[0]) == want);
     }
     QCHECK(ReadConfig(dir) == text);  // read, not rewritten
-    RemoveDirectory(dir);
   }
 }
 
@@ -210,7 +201,6 @@ void TheStartIsResolvedOnce() {
   Configure(dir, true, false);
   hf::Start();
   QCHECK(hf::Current() == 1);
-  RemoveDirectory(dir);
 }
 
 // The tracking handler's way in resolves the start from the configuration, once.
@@ -226,7 +216,6 @@ void EnsureStartedResolvesTheStartOnce() {
   hf::ResetForTest();
   hf::EnsureStarted();
   QCHECK(hf::Started() && !hf::Enabled());  // nothing configured: the default
-  RemoveDirectory(dir);
 }
 
 // A file an earlier build kept the choice in is not the configuration: nothing reads it, so the start is Off and from the default
@@ -250,7 +239,6 @@ void ALeftoverMarkerFileIsNeitherReadNorTouched() {
     QCHECK(ReadConfig(dir) == "graphics:\n  hand_flip: true\n");
     QCHECK(ReadLeftover(dir) == leftover);
     QCHECK(Names(dir + "/RAD/LoneEcho") == std::vector<std::string>{kLeftoverName});
-    RemoveDirectory(dir);
   }
 }
 
@@ -303,7 +291,6 @@ void AMenuChangeWritesTheKey() {
   Configure(dir, true, *reloaded.GetBool("graphics.hand_flip"));
   hf::Start();
   QCHECK(hf::Current() == 0 && hf::CurrentBy() == hf::kByConfig);
-  RemoveDirectory(dir);
 }
 
 // The key joins the file as it is: the other keys, the comments and the order stay.
@@ -317,7 +304,6 @@ void TheKeyIsSplicedIntoAnExistingFile() {
   hf::SetFromMenu(1);
   QCHECK(hf::Poll() == 1);
   QCHECK(ReadConfig(dir) == "# mine\ngraphics:\n  texture_quality: high   # chosen\n  hand_flip: true\n\nsocial:\n  facade: true\n");
-  RemoveDirectory(dir);
 }
 
 // A file that cannot be edited is loud, with the reason and the errno and what it costs; the choice still holds for this run.
@@ -329,7 +315,7 @@ void AChoiceThatCannotBeWrittenIsLoud() {
   hf::Start();
   hf::Poll();
   g_lines.clear();
-  RemoveDirectory(dir);  // the directory is gone: the temporary file cannot be made
+  std::rename(dir.c_str(), (dir + "-gone").c_str());  // the directory is gone from its name: the temporary file cannot be made
   hf::SetFromMenu(1);
   QCHECK(hf::Poll() == 1);
   QCHECK(hf::Enabled());
@@ -403,7 +389,6 @@ void AFailedSaveIsRetriedAtTheNextPollAndSaidOnce() {
   QCHECK(g_lines.size() == 1 && g_lines[0].find("\"result\":\"unchanged\"") != std::string::npos &&
          g_lines[0].find("\"flip\":1") != std::string::npos);  // the newer choice, not the one that failed (the file already holds it)
   QCHECK(ReadConfig(dir) == "graphics:\n  hand_flip: true\n");
-  RemoveDirectory(dir);
 }
 
 // The save runs on the poller thread, never on the game's call: SetFromMenu (the menu delivery's call) only queues it.
@@ -418,7 +403,6 @@ void TheGameCallNeverWritesAFile() {
   hf::SetFromMenu(1);
   QCHECK(!ConfigExists(dir) && g_lines.empty());  // no file, no line, until the poller runs
   QCHECK(hf::g_pendingSave.load() == 1);
-  RemoveDirectory(dir);
 }
 
 // The row is offered only when the hooks that roll, save and log it say so: the product starts not offered, and a start that is not
@@ -447,7 +431,6 @@ void ANotOfferedStartIgnoresTheConfiguredChoiceAndSaysSoOnce() {
   Configure(dir, true, true);
   hf::Start();
   QCHECK(hf::Enabled() && hf::CurrentBy() == hf::kByConfig && hf::PollRow() == 0 && g_lines.empty());
-  RemoveDirectory(dir);
 }
 
 // ---- the start and the threads that trust it ------------------------------------------------------------------------
@@ -505,7 +488,6 @@ void AnAwaitingThreadSeesTheFinishedStart() {
   QCHECK(wokeAfterMs < 2000);  // woken by the start, not by the 5 s timeout
   QCHECK(hf::g_startWaiters.load() == 0);
   hf::g_startSeam.store(nullptr);
-  RemoveDirectory(dir);
 }
 
 // A wait that gives up says so once, leaves the flag as it was and counts; the next ask, after the start, succeeds.
@@ -534,7 +516,6 @@ void AWaitThatTimesOutSaysSoAndTheNextAskSucceeds() {
   pthread_join(starter, nullptr);
   QCHECK(hf::AwaitStart() && hf::Enabled());
   hf::g_startSeam.store(nullptr);
-  RemoveDirectory(dir);
 }
 
 void TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer() {

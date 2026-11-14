@@ -43,6 +43,7 @@
 #include "quest/tests/mini_test.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
+#include "quest/tests/run_scratch.h"
 
 namespace {
 
@@ -367,9 +368,9 @@ std::string SelfSignedPem() {
 // One trust anchor loaded, so the production client's trust gate passes and the request reaches libcurl's protocol
 // restriction. Without an anchor the gate answers first (kNoTrustAnchors) and the restriction is never exercised.
 TEST(InviteQuestTransport_AnchoredProductionClientRefusesPlainHttpToLoopback) {
-  const std::string dir = "build/quest-invite-transport-host/scratch/one-anchor";
-  std::filesystem::remove_all(dir);
-  std::filesystem::create_directories(dir);
+  const std::string dir = nevr_test_scratch::Base("build/quest-invite-transport-host/scratch") + "/one-anchor";
+  std::error_code ec;
+  CHECK(std::filesystem::create_directories(dir, ec) && !ec);
   std::ofstream(dir + "/anchor.pem", std::ios::binary) << SelfSignedPem();
   Loopback server({{Response(200, "OK", "", "{}"), false}});
   nevr::quest_auth::CurlHttpClient client({dir});

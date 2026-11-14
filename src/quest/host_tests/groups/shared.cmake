@@ -64,14 +64,21 @@ nevr_ht_test(hwdump_handlers_test GROUP shared NOEXC TIMEOUT 120
   SRC src/quest/diag/hwdump_records.cpp src/quest/diag/hwdump_handlers.cpp src/quest/tests/hwdump_handlers_test.cpp)
 
 # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority 102, so it runs before
-# activation.cpp's static initializers whatever the link order. The files directory is removed before the test runs.
-set(_sentinel_files "${CMAKE_BINARY_DIR}/sentinel-files")
-add_test(NAME sentinel_files_clean COMMAND ${CMAKE_COMMAND} -E remove_directory "${_sentinel_files}")
-set_tests_properties(sentinel_files_clean PROPERTIES FIXTURES_SETUP sentinel_files LABELS shared)
+# activation.cpp's static initializers whatever the link order. The files directory is made new before the test runs (under the
+# recipe's run root, NEVR_TEST_TMP, read at configure time; unset, the build tree's sentinel-files/). An existing one is refused.
+if(DEFINED ENV{NEVR_TEST_TMP})
+  set(_sentinel_files "$ENV{NEVR_TEST_TMP}/sentinel-files")
+else()
+  string(TIMESTAMP _nevr_ht_stamp "%Y%m%dT%H%M%S" UTC)
+  string(RANDOM LENGTH 6 _nevr_ht_rand)
+  set(_sentinel_files "${CMAKE_BINARY_DIR}/sentinel-files-${_nevr_ht_stamp}-${_nevr_ht_rand}")
+endif()
+add_test(NAME sentinel_files_fresh COMMAND ${CMAKE_COMMAND} -DDIR=${_sentinel_files} -P ${NEVR_HT_DIR}/scripts/fresh_dir.cmake)
+set_tests_properties(sentinel_files_fresh PROPERTIES FIXTURES_SETUP sentinel_files LABELS shared)
 nevr_ht_test(sentinel_host_test GROUP shared HOST FIXTURE_REQUIRED sentinel_files LIBS ${NEVR_YAML_LIB}
   INCS src/quest/tests/stub src/quest/sentinel DEFS "NEVR_QUEST_FILES_DIR=\"${_sentinel_files}\""
   SRC src/quest/tests/sentinel_host_test.cpp src/quest/sentinel/activation.cpp src/quest/sentinel/sentinel_log.cpp
-      src/core/crash_report.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp
+      src/core/crash_report.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/core/owned_remove_posix.cpp
       src/runtime/lifecycle/service_redirect.cpp)
 
 # The Quest update root's pure rules (quest/auth/app_files_rules.h, quest/shim/update_root_rules.h) and no other source.

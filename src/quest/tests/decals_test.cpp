@@ -30,6 +30,7 @@
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/run_scratch.h"
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
@@ -1114,8 +1115,8 @@ void TestArenaScope(const std::string& dir) {
 int main() {
   StartCounting();
   sentinel::SetLogSink(&Capture);
-  char tmpl[] = "/tmp/combat-decals-XXXXXX";
-  if (mkdtemp(tmpl) == nullptr) return 2;
+  std::string tmpl = nevr_test_scratch::Base("/tmp") + "/combat-decals-XXXXXX";
+  if (mkdtemp(&tmpl[0]) == nullptr) return 2;
   const std::string dir = tmpl;
 
   CHECK(dc::kUpdateSlotVa == 0x370dbc8 && dc::kUpdateRealVa == 0x2124290 && dc::kShutdownSlotVa == 0x36933e8 && dc::kShutdownRealVa == 0x21226f0,
@@ -1128,8 +1129,6 @@ int main() {
   TestNoLevelYetIsThrottled(dir);
   TestEveryInstallLineNamesTheFlips(dir);
 
-  std::string cmd = "rm -rf " + dir;
-  if (std::system(cmd.c_str()) != 0) std::printf("note: could not remove %s\n", dir.c_str());
   if (g_fail != 0) {
     std::printf("decals_test: %d failure(s)\n", g_fail);
     return 1;

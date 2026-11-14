@@ -13,6 +13,7 @@
 // scope that cannot change refuses the install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
+#include "quest/tests/run_scratch.h"
 #include "quest/combat/weapon_arm.h"
 
 #include <dirent.h>
@@ -167,13 +168,10 @@ void BuildWorld(int direct, const char* level = "mpl_combat_dyson", const char* 
 }
 
 std::string g_dir;
-void ClearDir() {
-  DIR* d = opendir(g_dir.c_str());
-  if (d == nullptr) return;
-  while (dirent* e = readdir(d)) {
-    if (e->d_name[0] != '.') unlink((g_dir + "/" + e->d_name).c_str());
-  }
-  closedir(d);
+// A folder of its own for each case: a new name under the run's scratch, so nothing is cleared (ORDER.md, the manifest rule).
+void NewCaseDir() {
+  g_dir = nevr_test_scratch::NewFolder("build/quest-host-combat/scratch", "case");
+  CHECK(!g_dir.empty(), "a folder for this case could not be made");
 }
 bool FileExists(const char* name) { return access((g_dir + "/" + name).c_str(), F_OK) == 0; }
 std::string ReadFile(const char* name) {
@@ -203,7 +201,7 @@ wa::Fns Fns() {
 
 void Reset(int direct, std::uint32_t arm, long long profArm, const char* level = "mpl_combat_dyson", const char* second = nullptr) {
   g_lines.clear();
-  ClearDir();
+  NewCaseDir();
   BuildWorld(direct, level, second);
   g_arm = arm;
   g_profArm = profArm;
@@ -323,7 +321,7 @@ void AProfileThatIsNotRightIsSetAndOneThatIsRightIsNot() {
   // the marker is gone (a reinstall) for a profile of 1: the next launch writes the marker again and sets nothing
   Reset(1, 0, 1);
   for (int i = 0; i < 4; ++i) Pass();
-  ClearDir();
+  NewCaseDir();
   wa::ResetForTest();
   wa::SetClockForTest(&Clock);
   wa::SetLegacyDirForTest(g_dir.c_str());
@@ -424,7 +422,7 @@ void StartTheScope() {
 
 void NoLibrary() {  // 11. no game library loaded on the host: one ERROR, nothing runs (the scope's refresh is the one tick callback)
   g_lines.clear();
-  ClearDir();
+  NewCaseDir();
   StartTheScope();
   wa::ResetForTest();
   wa::SetClockForTest(&Clock);
@@ -714,9 +712,6 @@ void TheCostInArena() {  // 19: printed (a host number; the module's header says
 
 int main() {
   nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
-  char tmpl[] = "/tmp/combat-wa-XXXXXX";
-  if (mkdtemp(tmpl) == nullptr) return 2;
-  g_dir = tmpl;
   sentinel::SetLogSink(&Capture);
   TheGunOnTheLeft();
   TheDeferredRoute();
@@ -739,8 +734,7 @@ int main() {
   ArenaAndOtherLevelsAreLeftAlone();
   TheInstallOnAnImage();
   TheCostInArena();
-  ClearDir();
-  rmdir(g_dir.c_str());
+  NewCaseDir();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "weapon_arm_test: %d check(s) failed\n", quest_test::Failures());

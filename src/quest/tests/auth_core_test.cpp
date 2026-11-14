@@ -34,6 +34,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "quest/tests/run_scratch.h"
+
 namespace {
 
 using namespace nevr::auth;
@@ -907,7 +909,7 @@ TEST(session_a_code_no_mechanism_could_show_is_not_polled_and_a_new_one_is_tried
 // ---------------------------------------------------------------- file adapters
 std::string TempDir() {
   // Under the build tree (gitignored), never /tmp.
-  const std::string base = "build/quest-shared-host/scratch";
+  const std::string base = nevr_test_scratch::Base("build/quest-shared-host/scratch");
   std::error_code ec;
   std::filesystem::create_directories(base, ec);
   std::string tmpl = base + "/auth-XXXXXX";
@@ -928,7 +930,6 @@ TEST(file_store_round_trips_with_mode_0600_and_creates_the_directory) {
   CHECK_EQ(back.refresh_token, std::string("rt-file"));
   CHECK_EQ(back.username, std::string("name1"));
   CHECK(!std::filesystem::exists(path + ".tmp"));
-  std::filesystem::remove_all(dir);
 }
 
 TEST(file_store_failed_write_leaves_the_previous_file_whole) {
@@ -943,7 +944,6 @@ TEST(file_store_failed_write_leaves_the_previous_file_whole) {
   CHECK_EQ(store.Load(kT0).refresh_token, std::string("rt-keep"));
   CHECK(log.All().find("previous file unchanged") != std::string::npos);
   CHECK(log.All().find("rt-lost") == std::string::npos);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(file_store_missing_and_corrupt_files_read_as_empty) {
@@ -954,7 +954,6 @@ TEST(file_store_missing_and_corrupt_files_read_as_empty) {
   { std::ofstream(path) << "{{{"; }
   CHECK(store.Load(kT0).refresh_token.empty());
   CHECK(!store.Save(CachedAuthToken{}));  // no refresh token: nothing to persist
-  std::filesystem::remove_all(dir);
 }
 
 LoginPrompt SamplePrompt() {
@@ -1276,7 +1275,6 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"file","path")"), size_t(2));
   s.Stop();
   prompt_board::Withdraw();
-  std::filesystem::remove_all(dir);
 }
 
 TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_player_to_restart) {
@@ -1534,9 +1532,9 @@ TEST(refresh_log_wording_tells_bad_json_from_json_of_the_wrong_shape) {
 
 // ---------------------------------------------------------------- scratch helpers
 std::string ScratchDir(const std::string& name) {
-  const std::string dir = "build/quest-shared-host/scratch/" + name;
-  std::filesystem::remove_all(dir);
-  std::filesystem::create_directories(dir);
+  const std::string dir = nevr_test_scratch::Base("build/quest-shared-host/scratch") + "/" + name;
+  std::error_code ec;
+  CHECK(std::filesystem::create_directories(dir, ec) && !ec);
   return dir;
 }
 void WriteFile(const std::string& path, const std::string& data) {

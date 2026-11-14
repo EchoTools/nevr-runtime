@@ -49,8 +49,8 @@ TEST(TheStoreObbFooterIsTheMeasuredOne) {
 }
 
 TEST(TheStoreObbExtractsToThePinnedTree) {
-  fs::remove_all(g_scratch);
-  fs::create_directories(g_scratch);
+  std::error_code ec;
+  CHECK(fs::create_directories(g_scratch, ec) && !ec);
   StockDataOptions options;
   options.obb_path = g_obb;
   options.pins_path = g_pins;

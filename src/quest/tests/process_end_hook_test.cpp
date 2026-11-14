@@ -24,6 +24,7 @@
 #include "process_end_hook.h"
 #include "quest/auth/atomic_write.h"
 #include "quest/tests/test_check.h"
+#include "quest/tests/run_scratch.h"
 
 namespace {
 
@@ -185,8 +186,8 @@ void ChildEndsTheProcessUnderTheWriter(unsigned iteration) {
 }
 
 void ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter() {
-  char tmpl[] = "/tmp/process_end_test_XXXXXX";
-  const char* dir = mkdtemp(tmpl);
+  std::string tmpl = nevr_test_scratch::Base("/tmp") + "/process_end_test_XXXXXX";
+  const char* dir = mkdtemp(&tmpl[0]);
   QCHECK(dir != nullptr);
   if (dir == nullptr) return;
   g_path = std::string(dir) + "/.credentials.json";
@@ -208,8 +209,6 @@ void ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter() {
   std::string error, warning;
   QCHECK(nevr::quest_auth::AtomicWrite(g_path, g_payload[1], error, warning));
   QCHECK(ReadAll(g_path) == g_payload[1]);
-  std::string cleanup = "rm -rf '" + std::string(dir) + "'";
-  QCHECK(std::system(cleanup.c_str()) == 0);
 }
 
 // ---- the production install path ----------------------------------------------------------------------------

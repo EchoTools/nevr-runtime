@@ -6,7 +6,14 @@
 
 nevr_ht_group(autopilot)
 set(_ap HOST NOEXC PTHREAD)
-set(_ap_scratch "${CMAKE_BINARY_DIR}/scratch")
+# The scratch is under NEVR_TEST_TMP, the recipe's run root (read at configure time, as data.cmake does); unset, the build tree's scratch/.
+if(DEFINED ENV{NEVR_TEST_TMP})
+  set(_ap_scratch "$ENV{NEVR_TEST_TMP}/autopilot-scratch")
+else()
+  string(TIMESTAMP _nevr_ht_stamp "%Y%m%dT%H%M%S" UTC)
+  string(RANDOM LENGTH 6 _nevr_ht_rand)
+  set(_ap_scratch "${CMAKE_BINARY_DIR}/scratch-${_nevr_ht_stamp}-${_nevr_ht_rand}")
+endif()
 file(GLOB _routes RELATIVE "${NEVR_REPO_ROOT}" "${NEVR_REPO_ROOT}/tools/quest_autopilot_routes/*.txt")
 if(_routes)
   nevr_ht_test(autopilot_route_test GROUP autopilot ${_ap} TIMEOUT 60 ARGS ${_routes}

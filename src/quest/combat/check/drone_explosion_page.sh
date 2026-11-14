@@ -24,8 +24,21 @@ for tool in "$objdump" "$nm"; do
   [ -x "$tool" ] || { echo "drone_explosion_page.sh: no NDK tool at $tool" >&2; exit 1; }
 done
 [ -f "$lib" ] || { echo "drone_explosion_page.sh: $lib is not built; run: just build-quest-combat-libs (it needs NEVR_COMBAT_LIBSRC and NEVR_STORE_APK)" >&2; exit 1; }
-scratch="$(mktemp -d)"
-trap 'rm -rf -- "$scratch"' EXIT
+# Scratch lives under the run root (ORDER.md item 2): the recipe's NEVR_TEST_TMP, or, run alone, a run root this script makes and
+# removes at exit (run-root remove, the one sanctioned removal). Nothing else is removed.
+rr="$root/build/go-tools/run-root"
+own=""
+if [ -n "${NEVR_TEST_TMP:-}" ]; then
+  scratch="$NEVR_TEST_TMP/drone_explosion_page"
+else
+  [ -x "$rr" ] || { echo "drone_explosion_page.sh: $rr is not built (just _run-root-tool)" >&2; exit 1; }
+  own="$("$rr" make drone-explosion-page)"
+  scratch="$own/scratch"
+fi
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'if [ -n "$own" ]; then "$rr" remove "$own"; fi' EXIT
+mkdir -p "$scratch"
 
 cat > "$scratch/check.py" <<'PY'
 import re

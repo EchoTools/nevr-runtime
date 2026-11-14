@@ -13,6 +13,7 @@
 // cannot change refuses the install (`scope_not_live`).
 //
 // Built and run by `just test-quest-combat`.
+#include "quest/tests/run_scratch.h"
 #include "quest/combat/gunconnect.h"
 
 #include <dirent.h>
@@ -201,13 +202,10 @@ void BuildWorld(int ncs, const char* level = "mpl_combat_dyson") {
 }
 
 std::string g_dir;
-void ClearDir() {
-  DIR* d = opendir(g_dir.c_str());
-  if (d == nullptr) return;
-  while (dirent* e = readdir(d)) {
-    if (e->d_name[0] != '.') unlink((g_dir + "/" + e->d_name).c_str());
-  }
-  closedir(d);
+// A folder of its own for each case: a new name under the run's scratch, so nothing is cleared (ORDER.md, the manifest rule).
+void NewCaseDir() {
+  g_dir = nevr_test_scratch::NewFolder("build/quest-host-combat/scratch", "case");
+  CHECK(!g_dir.empty(), "a folder for this case could not be made");
 }
 
 gc::Fns Fns() {
@@ -221,7 +219,7 @@ gc::Fns Fns() {
 // The module as the install step leaves it, with the fakes standing in for the game's functions.
 void Reset(int ncs, const char* level = "mpl_combat_dyson") {
   g_lines.clear();
-  ClearDir();
+  NewCaseDir();
   BuildWorld(ncs, level);
   g_tagVal = true;
   g_connectWorks = true;
@@ -740,9 +738,6 @@ void TheCostInArena() {  // 19: printed, not asserted (a host number; the module
 
 int main() {
   nevr_quest::combat::SetReadCounterForTest(&g_safeReads);
-  char tmpl[] = "/tmp/combat-gc-XXXXXX";
-  if (mkdtemp(tmpl) == nullptr) return 2;
-  g_dir = tmpl;
   sentinel::SetLogSink(&Capture);
   TheFix();
   RetryAndGiveUp();
@@ -763,8 +758,7 @@ int main() {
   ArenaAndOtherLevelsAreLeftAlone();
   TheInstallOnAnImage();
   TheCostInArena();
-  ClearDir();
-  rmdir(g_dir.c_str());
+  NewCaseDir();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "gunconnect_test: %d check(s) failed\n", quest_test::Failures());

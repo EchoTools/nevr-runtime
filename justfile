@@ -1462,7 +1462,7 @@ _run-root-tool:
 # explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
 # plain http, and a whole fetch that resumes. Needs system libcurl, openssl, python3 and zlib development files, as
 # test-quest-tls does for libcurl; zlib comes from the host vcpkg install.
-test-quest-data-net: _vcpkg-quest-host
+test-quest-data-net: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     for tool in openssl python3 pkg-config; do
@@ -1477,9 +1477,31 @@ test-quest-data-net: _vcpkg-quest-host
     ninja -C build/quest-host-data-net -t targets all > build/quest-host-data-net/test-programs-targets.txt
     python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-data-net --targets build/quest-host-data-net/test-programs-targets.txt data-net/curl_transport_test data-net/data_wiring_test
     bin="$root/build/quest-host-data-net/data-net"
-    out="build/quest-host-data-net/run"
-    rm -rf "$out"
-    mkdir -p "$out"
+    # One run root per run (ORDER.md item 2): the EXIT trap stops the servers and removes the root once, whatever ends the recipe.
+    # A failed removal fails the recipe; the recipe's own exit code is kept otherwise.
+    tool="$root/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    servers=()
+    cleanup() {
+      status=$?
+      kill "${servers[@]+"${servers[@]}"}" 2>/dev/null || true
+      for p in "${servers[@]+"${servers[@]}"}"; do wait "$p" 2>/dev/null || true; done
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-data-net: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-data-net)"
+    [ -d "$runroot" ] || { echo "test-quest-data-net: run-root make named no directory" >&2; exit 1; }
+    out="$runroot"
     cd "$out"
     export NEVR_TEST_TMP="$PWD"
     # A throwaway CA and the leaves the HTTPS tests need: one valid, one expired, one for another host, one self-signed.
@@ -1496,14 +1518,12 @@ test-quest-data-net: _vcpkg-quest-host
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
     "$bin/curl_transport_test" write-zip payload.zip
     : > requests.log
-    servers=()
     start() {  # name, extra args: a server writes <name>.port and logs to <name>.log
         local name="$1"; shift
         : > "$name.log"
         python3 -I -W ignore "$root/src/quest/tests/range_server.py" "$name.port" "$name.log" payload.zip "$@" &
         servers+=("$!")
     }
-    trap 'kill "${servers[@]}" 2>/dev/null || true' EXIT
     start plain
     start good good.pem leaf.key
     start expired expired.pem leaf.key
@@ -1544,9 +1564,30 @@ test-quest-invite: _vcpkg-quest-host
 # shared source (src/runtime/lifecycle/service_redirect.cpp) with the host compiler,
 # through the quest-host-shared preset (src/quest/host_tests), and runs it with ctest.
 # No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
-test-quest-shared: _vcpkg-quest-host
+test-quest-shared: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-shared: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-shared)"
+    [ -d "$runroot" ] || { echo "test-quest-shared: run-root make named no directory" >&2; exit 1; }
+    export NEVR_TEST_TMP="$runroot"
     cd src/quest
     cmake --preset quest-host-shared
     cmake --build --preset quest-host-shared
@@ -1584,17 +1625,38 @@ test-quest-router: _vcpkg-quest-host
 # Quest transport, and the run's switch (the network.invite_codes feature). The link test of the shared service is test-quest-invite
 # above. Needs libcurl development files (pkg-config libcurl) and the nlohmann header of the quest-host install.
 # Fail-close: a missing tool or header exits nonzero.
-test-quest-invite-transport: _vcpkg-quest-host
+test-quest-invite-transport: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     pkg-config --exists libcurl || { echo "test-quest-invite-transport: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-invite-transport: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-invite-transport)"
+    [ -d "$runroot" ] || { echo "test-quest-invite-transport: run-root make named no directory" >&2; exit 1; }
+    export NEVR_TEST_TMP="$runroot"
     cd src/quest
     cmake --preset quest-host-invite-transport
     cmake --build --preset quest-host-invite-transport
     ctest --preset quest-host-invite-transport
     echo "test-quest-invite-transport: Quest invite transport and service seam tests pass on the host"
 
-test-quest-tls: _vcpkg-quest-host
+test-quest-tls: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     for tool in openssl python3 pkg-config; do
@@ -1607,9 +1669,31 @@ test-quest-tls: _vcpkg-quest-host
     ninja -C build/quest-host-tls -t targets all > build/quest-host-tls/test-programs-targets.txt
     python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-tls --targets build/quest-host-tls/test-programs-targets.txt tls/curl_ws_tls_test
     bin="$root/build/quest-host-tls/tls"
-    out="build/quest-host-tls/run"
-    rm -rf "$out"
-    mkdir -p "$out"
+    # One run root per run (ORDER.md item 2): the EXIT trap stops the servers and removes the root once, whatever ends the recipe.
+    # A failed removal fails the recipe; the recipe's own exit code is kept otherwise.
+    tool="$root/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    pids=()
+    cleanup() {
+      status=$?
+      for p in "${pids[@]+"${pids[@]}"}"; do kill "$p" 2>/dev/null || true; done
+      for p in "${pids[@]+"${pids[@]}"}"; do wait "$p" 2>/dev/null || true; done
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-tls: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-tls)"
+    [ -d "$runroot" ] || { echo "test-quest-tls: run-root make named no directory" >&2; exit 1; }
+    out="$runroot"
     cd "$out"
     mk_ca() { # name
         openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.pem" -subj "/CN=$1" -days 2 \
@@ -1628,9 +1712,6 @@ test-quest-tls: _vcpkg-quest-host
     cp nevr-test-ca.pem trust-good/nevr-test-ca.pem
     cp nevr-other-ca.pem trust-other/nevr-other-ca.pem
     : > plain.stats
-    pids=()
-    cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
-    trap cleanup EXIT
     server="$root/src/quest/tests/tls_ws_server.py"
     python3 -I "$server" tls server.pem server.key good.port & pids+=($!)
     python3 -I "$server" tls-delay server.pem server.key delay.port & pids+=($!)
@@ -1658,16 +1739,40 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     [ -n "$attach_json" ] || attach_json="build/quest-host-vcpkg/x64-linux/include"
     [ -f "$attach_json/nlohmann/json.hpp" ] || { echo "test-quest-hooks: FAIL - $attach_json/nlohmann/json.hpp not found; 'just _vcpkg-quest-host' installs it, or pass json_include" >&2; exit 1; }
     json_dir="$(cd "$attach_json" && pwd)"
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    # Built every run, as the _run-root-tool recipe does (the header stays as tools/tests/test_quest_attach_wiring.py pins it).
+    mkdir -p build/go-tools && go -C tools build -trimpath -o ../build/go-tools/ ./cmd/run-root
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-hooks: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-hooks)"
+    [ -d "$runroot" ] || { echo "test-quest-hooks: run-root make named no directory" >&2; exit 1; }
+    export NEVR_TEST_TMP="$runroot"
     (cd src/quest && cmake --preset quest-host-hooks -DNEVR_HOST_JSON_INCLUDE="$json_dir")
     (cd src/quest && cmake --build --preset quest-host-hooks && ctest --preset quest-host-hooks)
     # The checks that are not a test program: the generator and the configure step of the variant build's rows file
     # (docs/adr/0021 section 11). A file the patcher would refuse stops the Quest build at configure. The configure step is
     # cmake/libr15_extra_rows.cmake's nevr_libr15_extra_rows, run here in a project of its own under its own preset (the Android
     # project's own configure takes minutes and needs the NDK; this is the same function with the same arguments).
-    extra="build/quest-host-hooks/configure-checks"
-    rm -rf "$extra"; mkdir -p "$extra"
+    extra="$runroot/configure-checks"
+    mkdir -p "$extra"
     configure_extra() { # file expected-substring (empty: must succeed)
-        rm -rf build/quest-host-extra-rows-configure
+        # The generated source is the check of a configure: its old copy goes first (a literal file, not a folder).
+        rm -f -- build/quest-host-extra-rows-configure/generated.cpp
         if (cd src/quest/tests/extra_rows_configure && cmake --preset quest-host-extra-rows-configure -DNEVR_LIBR15_EXTRA_ROWS="$1" \
                 -DNEVR_JSON_INCLUDE="$json_dir") > "$extra/configure.log" 2>&1; then
             [ -z "$2" ] || { echo "test-quest-hooks: configure accepted $1, but must refuse it with '$2'" >&2; cat "$extra/configure.log" >&2; exit 1; }
@@ -1679,17 +1784,17 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     configure_extra "$PWD/src/quest/tests/fixtures/libr15_extra_rows_example.json" ""
     [ -f build/quest-host-extra-rows-configure/generated.cpp ] || { echo "test-quest-hooks: configure of the fixture generated no source" >&2; exit 1; }
     printf '{"format": ' > "$extra/malformed.json"
-    configure_extra "$PWD/$extra/malformed.json" "extra_rows_json"
+    configure_extra "$extra/malformed.json" "extra_rows_json"
     sed 's/"stock_build_id": "b2/"stock_build_id": "b3/' src/quest/tests/fixtures/libr15_extra_rows_example.json > "$extra/other_libr15.json"
-    configure_extra "$PWD/$extra/other_libr15.json" "extra_rows_stock_build_id"
+    configure_extra "$extra/other_libr15.json" "extra_rows_stock_build_id"
     sed 's/"kind": "word_patch"/"kind": "word_patch", "extra": 1/' src/quest/tests/fixtures/libr15_extra_rows_example.json > "$extra/unknown_field.json"
-    configure_extra "$PWD/$extra/unknown_field.json" "extra_rows_unknown_field"
-    configure_extra "$PWD/$extra/does_not_exist.json" "the file does not exist"
+    configure_extra "$extra/unknown_field.json" "extra_rows_unknown_field"
+    configure_extra "$extra/does_not_exist.json" "the file does not exist"
     : > "$extra/empty.json"
-    configure_extra "$PWD/$extra/empty.json" "extra_rows_json"
+    configure_extra "$extra/empty.json" "extra_rows_json"
     # The generator alone refuses an empty file too (a build must not embed nothing and call it a variant).
     empty_rc=0
-    cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/$extra/empty.json" -DNEVR_EXTRA_ROWS_OUT="$extra/empty_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake > "$extra/empty.log" 2>&1 || empty_rc=$?
+    cmake -DNEVR_EXTRA_ROWS_FILE="$extra/empty.json" -DNEVR_EXTRA_ROWS_OUT="$extra/empty_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake > "$extra/empty.log" 2>&1 || empty_rc=$?
     [ "$empty_rc" -ne 0 ] && grep -qF "the file is empty" "$extra/empty.log" || { echo "test-quest-hooks: FAIL - the generator did not refuse an empty extra-rows file" >&2; cat "$extra/empty.log" >&2; exit 1; }
     # The toast presenter and the permission request against a fake JNI (#807, #947): jni.h is the NDK's own; the recipe stops when
     # it is absent.
@@ -1714,14 +1819,34 @@ test-quest-redirect: _vcpkg-quest-host
 # src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
 # it is a 58 MB artifact that is not in the repository, so this is not part of
 # `just verify`.
-test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"): _vcpkg-quest-host
+test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"): _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     apk="{{ apk }}"; store_apk="{{ store_apk }}"
     [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
     [ -f "$store_apk" ] || { echo "test-quest-hooks-pinned: store APK not found: $store_apk" >&2; exit 1; }
-    out="build/quest-hooks-pinned"
-    rm -rf "$out"; mkdir -p "$out/lib"
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-hooks-pinned: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-hooks-pinned)"
+    [ -d "$runroot" ] || { echo "test-quest-hooks-pinned: run-root make named no directory" >&2; exit 1; }
+    out="$runroot/hooks-pinned"
+    mkdir -p "$out/lib"
     unzip -o -q "$apk" lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so lib/arm64-v8a/libpnsrad.so -d "$out/lib"
     # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
     unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
@@ -1839,19 +1964,38 @@ test-quest-obb: _vcpkg-quest-host _run-root-tool
 # The extractor on the real store OBB (`obb`, default $NEVR_STORE_OBB): the footer, the extraction to a scratch cache and the
 # digests of the four files, written out in src/quest/tests/obb_pinned_test.cpp from the measurements in #2081. Stops, naming the
 # variable, when no OBB is given.
-test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host
+test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     obb="{{ obb }}"
     [ -n "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB names no store OBB" >&2; exit 1; }
     [ -f "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB is not a file: $obb" >&2; exit 1; }
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-obb-pinned: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-obb-pinned)"
+    [ -d "$runroot" ] || { echo "test-quest-obb-pinned: run-root make named no directory" >&2; exit 1; }
     rm -f -- build/quest-host-obb-pinned/obb-pinned/obb_pinned_test
     (cd src/quest && cmake --preset quest-host-obb-pinned && cmake --build --preset quest-host-obb-pinned)
     ninja -C build/quest-host-obb-pinned -t targets all > build/quest-host-obb-pinned/test-programs-targets.txt
     python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-obb-pinned --targets build/quest-host-obb-pinned/test-programs-targets.txt obb-pinned/obb_pinned_test
-    scratch="build/quest-host-obb-pinned/scratch"
+    scratch="$runroot/obb-pinned-scratch"
     build/quest-host-obb-pinned/obb-pinned/obb_pinned_test "$obb" tools/quest_stock_data.pin "$scratch" | tee "build/quest-host-obb-pinned/run.log"
-    rm -rf "$scratch"
     grep -qx 'PASS TheStoreObbExtractsToThePinnedTree' build/quest-host-obb-pinned/run.log || { echo "test-quest-obb-pinned: the extraction test did not run and pass" >&2; exit 1; }
     echo "test-quest-obb-pinned: the real store OBB extracts to the pinned tree"
 
@@ -1884,9 +2028,31 @@ quest-patcher json_include="": _vcpkg-quest-host
 # ELF built in memory (the byte diff, every refusal with its row id, the extra-rows file, the command line).
 # The relocator window cases run in test-quest-hooks (arm64_reloc_test). No NDK, no device,
 # no real libr15. Fail-close.
-test-quest-patcher json_include="": _vcpkg-quest-host
+test-quest-patcher json_include="": _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-patcher: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-patcher)"
+    [ -d "$runroot" ] || { echo "test-quest-patcher: run-root make named no directory" >&2; exit 1; }
+    # The patcher's scratch folder is made under the run root (NEVR_TEST_TMP, read at configure time by patcher.cmake).
+    export NEVR_TEST_TMP="$runroot"
     # The tool the test runs is the nevr_quest_patch_libr15 target of the preset's own tree.
     json_arg=()
     if [ -n "{{ json_include }}" ]; then json_arg=(-DNEVR_HOST_JSON_INCLUDE="$(cd "{{ json_include }}" && pwd)"); fi
@@ -1898,7 +2064,7 @@ test-quest-patcher json_include="": _vcpkg-quest-host
 # runs the tool twice and checks the output against the file and readelf (build ID, exactly which byte ranges
 # differ, stubs and credits words decoded back to their slots, segments, sections and end symbols). The
 # libr15 is the store APK's 58 MB file: pass its path, it is not in the repository and nothing here copies it
-# in. The two patched copies are written under build/quest-patcher/pinned-scratch and removed at the end.
+# in. The two patched copies are written under the run root, which the recipe removes once at the end.
 # `signed_libr15` (docs/adr/0021 test 5): the lib/arm64-v8a/libr15.so extracted from the SIGNED APK of a repack; with it
 # SignedApkLibr15IsThePatchersOutput requires that file to equal the tool's output for the stock file byte for byte and to
 # carry the patched build ID. Without it that test is not run and the run says so by name.
@@ -1906,7 +2072,7 @@ test-quest-patcher json_include="": _vcpkg-quest-host
 # ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots patches each and requires its state words to stay clear of the
 # slot area. Without them that test is not run and the run says so by name.
 # Fail-close, including when the file is absent.
-test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr15s="": (quest-patcher json_include)
+test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr15s="": (quest-patcher json_include) _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     libr15="{{ libr15 }}"; signed_libr15="{{ signed_libr15 }}"
@@ -1921,9 +2087,28 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr
     done
     out="build/quest-patcher"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
-    scratch="$out/pinned-scratch"
-    rm -rf "$scratch"; mkdir -p "$scratch"
-    trap 'rm -rf "$scratch"' EXIT
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-patcher-pinned: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-patcher-pinned)"
+    [ -d "$runroot" ] || { echo "test-quest-patcher-pinned: run-root make named no directory" >&2; exit 1; }
+    scratch="$runroot/pinned-scratch"
+    mkdir -p "$scratch"
     rm -f -- build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test
     (cd src/quest && cmake --preset quest-host-patcher-pinned && cmake --build --preset quest-host-patcher-pinned)
     ninja -C build/quest-host-patcher-pinned -t targets all > build/quest-host-patcher-pinned/test-programs-targets.txt
@@ -1958,14 +2143,34 @@ test-quest-social: _vcpkg-quest-host
 # the recorded vtable (src/quest/tests/fixtures/cnsovrsocial_vtable.txt) is what the library holds.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
 # `just verify`.
-test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"): _vcpkg-quest-host
+test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"): _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     apk="{{ apk }}"; store_apk="{{ store_apk }}"
     [ -f "$apk" ] || { echo "test-quest-social-pinned: pinned APK not found: $apk" >&2; exit 1; }
     [ -f "$store_apk" ] || { echo "test-quest-social-pinned: store APK not found: $store_apk" >&2; exit 1; }
-    out="build/quest-social-pinned"
-    rm -rf "$out"; mkdir -p "$out/lib"
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-social-pinned: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-social-pinned)"
+    [ -d "$runroot" ] || { echo "test-quest-social-pinned: run-root make named no directory" >&2; exit 1; }
+    out="$runroot/social-pinned"
+    mkdir -p "$out/lib"
     unzip -o -q "$apk" lib/arm64-v8a/libpnsovr.so -d "$out/lib"
     # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
     unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
@@ -2016,10 +2221,31 @@ test-quest-plugins: _vcpkg-quest-host
 # test programs have its name in theirs: `just test-quest-combat <module>` runs those, then the module's arm64 checks. The arm64
 # checks are the scripts src/quest/combat/check/<module>.sh (the NDK, and qemu where a thunk is run); each stops with its own message
 # when what it needs is missing, and the recipe runs every script there is when no module is named. No headset. Fail-close.
-test-quest-combat module="": _vcpkg-quest-host
+test-quest-combat module="": _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     module="{{ module }}"
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-combat: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-combat)"
+    [ -d "$runroot" ] || { echo "test-quest-combat: run-root make named no directory" >&2; exit 1; }
+    export NEVR_TEST_TMP="$runroot"
     (cd src/quest && cmake --preset quest-host-combat && cmake --build --preset quest-host-combat)
     if [ -n "$module" ]; then
       (cd src/quest && ctest --preset quest-host-combat -R "$module")
@@ -2041,11 +2267,32 @@ test-quest-combat module="": _vcpkg-quest-host
 # exports against a fake host with a real route file and its real reporter thread; and every shipped route file
 # (tools/quest_autopilot_routes/) parses. The start-file case and the two stopped-run cases each run in their own process
 # (the plugin keeps one run per process). Built as the device builds it, without exceptions. Fail-close.
-test-quest-autopilot: _vcpkg-quest-host
+test-quest-autopilot: _vcpkg-quest-host _run-root-tool
     #!/usr/bin/env bash
     set -euo pipefail
     routes=(tools/quest_autopilot_routes/*.txt)
     [ -f "${routes[0]}" ] || { echo "test-quest-autopilot: no shipped route file" >&2; exit 1; }
+    # One run root per run (ORDER.md item 2): the EXIT trap removes it once, whatever ends the recipe. A failed removal fails the recipe.
+    tool="$PWD/build/go-tools/run-root"
+    runroot=""
+    removed=""
+    cleanup() {
+      status=$?
+      if [ -n "$runroot" ] && [ -z "$removed" ]; then
+        removed=1
+        if ! "$tool" remove "$runroot"; then
+          echo "test-quest-autopilot: run-root remove failed for $runroot" >&2
+          [ "$status" -ne 0 ] || status=1
+        fi
+      fi
+      exit "$status"
+    }
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap cleanup EXIT
+    runroot="$("$tool" make quest-autopilot)"
+    [ -d "$runroot" ] || { echo "test-quest-autopilot: run-root make named no directory" >&2; exit 1; }
+    export NEVR_TEST_TMP="$runroot"
     cd src/quest
     cmake --preset quest-host-autopilot
     cmake --build --preset quest-host-autopilot

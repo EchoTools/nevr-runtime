@@ -2,6 +2,7 @@
 // here (FAT16 image, Twofish-CBC, footer), pinned from the bytes that went in, and extracted into a scratch cache. Covers the
 // extraction, the cache hit that does nothing, and every refusal that must leave no cache directory behind.
 
+#include "quest/tests/run_scratch.h"
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -54,10 +55,9 @@ std::string FileLine(const std::string& path, const std::vector<std::uint8_t>& c
 
 Rig MakeRig(const std::string& name, const obb_test::ObbSpec& obb_spec = obb_test::ObbSpec(), bool duplicate_name = false) {
   Rig r;
-  const char* tmp = std::getenv("NEVR_TEST_TMP");
-  r.dir = fs::path(tmp ? tmp : ".") / ("obb-flow-" + name);
-  fs::remove_all(r.dir);
-  fs::create_directories(r.dir);
+  r.dir = fs::path(nevr_test_scratch::Base("build/quest-host-obb/scratch")) / ("obb-flow-" + name);
+  std::error_code ec;
+  CHECK(fs::create_directories(r.dir, ec) && !ec);
   r.obb_path = (r.dir / "store.obb").string();
   r.pins_path = (r.dir / "stock.pin").string();
   r.cache_root = (r.dir / "cache").string();

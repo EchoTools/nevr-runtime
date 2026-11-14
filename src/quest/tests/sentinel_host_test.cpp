@@ -1,14 +1,16 @@
 // Host test for the sentinel's configuration activation and logging (activation.cpp,
-// sentinel_log.cpp) against a stand-in for liblog. HostCtor has constructor priority 102, which
+// sentinel_log.cpp) against a stand-in for liblog. The test's constructor (priority 102) resolves the configuration, which
 // the loader runs before every default-priority static initializer, so it runs before
 // activation.cpp's regardless of link order, the same relation as entry.cpp's constructor to the
 // sentinel sources' initializers.
 //
-// Compile with -DNEVR_QUEST_FILES_DIR="<dir>" (a scratch directory this test creates and removes).
+// Compile with -DNEVR_QUEST_FILES_DIR="<dir>" (the scratch directory of the run: the fixture makes it new; nothing removes it,
+// the recipe's run root does).
 #include "activation.h"
 #include "sentinel_log.h"
 #include "quest/sentinel/crash_dir.h"
 #include "quest/sentinel/data_root.h"
+#include "core/owned_remove.h"
 
 #include <nlohmann/json.hpp>
 
@@ -127,18 +129,7 @@ __attribute__((constructor(101))) void ArmAlarm() {
 // Mirrors entry.cpp: the ELF constructor resolves the configuration before main.
 __attribute__((constructor(102))) void HostCtor() {
   ::mkdir(Dir().c_str(), 0755);
-  // Stale leftovers from an interrupted earlier run.
-  // Logs of an interrupted earlier run.
-  for (const char* dir : {"/nevr/logs", "/nevr"}) {
-    if (DIR* d = ::opendir((Dir() + dir).c_str())) {
-      while (const dirent* e = ::readdir(d)) {
-        if (std::strcmp(e->d_name, ".") != 0 && std::strcmp(e->d_name, "..") != 0) ::unlink((Dir() + dir + "/" + e->d_name).c_str());
-      }
-      ::closedir(d);
-    }
-  }
-  ::rmdir((Dir() + "/nevr/logs").c_str());
-  ::rmdir((Dir() + "/nevr").c_str());
+  // Dir() is new for this run (the fixture made it), so no log of an earlier run is in it to clear.
   for (const char* stale : {"/fifo-config", "/big.yaml", "/bad.yaml", "/locked.yaml", "/absent-dir/config.yaml"}) {
     ::unlink((Dir() + stale).c_str());
   }
@@ -362,6 +353,29 @@ long long g_fakeNow = 0;
 long long FakeNow() { return g_fakeNow; }
 
 
+// Removes entries this test made, by the names it made them under: each one by name, files first, then folders, children
+// before parents (ORDER.md, the manifest rule). Nothing is walked. Names are relative to Dir().
+void RemoveMade(const std::vector<std::string>& entries) {
+  for (const nevr_owned::Result& r : nevr_owned::RemoveOwned(Dir(), entries)) {
+    const bool ok = r.outcome == nevr_owned::Outcome::kRemoved || r.outcome == nevr_owned::Outcome::kAbsent;
+    if (!ok) std::fprintf(stderr, "RemoveMade: %s outcome %d errno %d\n", r.entry.c_str(), static_cast<int>(r.outcome), r.os_error);
+    CHECK(ok);
+  }
+}
+
+// A log folder this test made, with the files the sentinel put in it for this process: the log and its rotated archives (the
+// names the rotation gives). The log files go first, then the folder, then its parents.
+void RemoveMadeLogFolder(const std::string& folder, const std::vector<std::string>& parents) {
+  const std::string name = LogName();
+  const std::string stem = name.substr(0, name.size() - 6);  // without ".jsonl"
+  std::vector<std::string> entries = {folder + "/" + name, folder + "/" + stem + ".1.jsonl", folder + "/" + stem + ".2.jsonl", folder};
+  entries.insert(entries.end(), parents.begin(), parents.end());
+  RemoveMade(entries);
+}
+
+// The most archives a rotation keeps beside a log (sentinel_log.cpp rotates into .1 .. .N).
+constexpr int kMaxRotatedArchivesForClear = 8;
+
 std::vector<std::string> RotatedNames() {
   const std::string stem = LogName().substr(0, LogName().size() - std::strlen(".jsonl"));
   std::vector<std::string> names;
@@ -371,10 +385,15 @@ std::vector<std::string> RotatedNames() {
   return names;
 }
 
+// The log this process writes and its rotated archives, each by its literal name (the rotation gives .1, .2 ...): removed
+// one at a time, by RemoveOwned. Nothing is listed to choose a delete target.
 void ClearLogs() {
   sentinel::CloseDiskLog();
-  ::unlink(LogPath().c_str());
-  for (const std::string& name : RotatedNames()) ::unlink((LogsDir() + "/" + name).c_str());
+  const std::string name = LogName();
+  const std::string stem = name.substr(0, name.size() - std::strlen(".jsonl"));
+  std::vector<std::string> entries = {"nevr/logs/" + name};
+  for (int n = 1; n <= kMaxRotatedArchivesForClear; ++n) entries.push_back("nevr/logs/" + stem + "." + std::to_string(n) + ".jsonl");
+  RemoveMade(entries);
 }
 
 // The log folders are made again by the next open; the tests that take the files folder away first take these.
@@ -719,27 +738,6 @@ void UnopenablePathsAreRetriedAfterTheWindow() {
 
 // ---- the log folder (#1797): created below a trusted part, never through a link, chosen once ----
 
-// A folder tree of the test, removed bottom-up. Names are relative to Dir().
-void RemoveTree(const std::string& path) {
-  struct stat st {};
-  if (::lstat(path.c_str(), &st) != 0) return;
-  if (S_ISDIR(st.st_mode)) {
-    ::chmod(path.c_str(), 0700);
-    if (DIR* d = ::opendir(path.c_str())) {
-      std::vector<std::string> names;
-      while (const dirent* e = ::readdir(d)) {
-        const std::string n = e->d_name;
-        if (n != "." && n != "..") names.push_back(n);
-      }
-      ::closedir(d);
-      for (const std::string& n : names) RemoveTree(path + "/" + n);
-    }
-    ::rmdir(path.c_str());
-  } else {
-    ::unlink(path.c_str());
-  }
-}
-
 // The candidate strings live here for the whole test: the seam keeps pointers.
 struct Cands {
   std::vector<std::string> names, dirs, trusted;
@@ -784,7 +782,8 @@ bool IsDir(const std::string& path) {
 }
 
 void TheLogFolderChainIsCreatedAndReportedOnce() {
-  RemoveTree(Dir() + "/lf");
+  // Dir() is made new for this run (the recipe's run root), so the chain is absent here; nothing removes it (ORDER.md item 2).
+  CHECK(!IsDir(Dir() + "/lf"));
   g_fakeNow = 800000;
   Cands c;
   c.Add("first", Dir() + "/lf/a/b/files", Dir());  // lf, a and b do not exist
@@ -823,12 +822,10 @@ void TheLogFolderChainIsCreatedAndReportedOnce() {
   CHECK(Events("sentinel_log_dir").size() == 1);  // opening again after a rotation does not choose or name the folder again
 
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/lf");
 }
 
 void ALinkBelowTheTrustedPartIsNotFollowed() {
-  RemoveTree(Dir() + "/lk");
-  RemoveTree(Dir() + "/elsewhere");
+  // lk and elsewhere are made below, with mkdir, which fails on a folder that is already there.
   g_fakeNow = 810000;
   CHECK(::mkdir((Dir() + "/lk").c_str(), 0755) == 0);
   CHECK(::mkdir((Dir() + "/elsewhere").c_str(), 0755) == 0);
@@ -863,12 +860,9 @@ void ALinkBelowTheTrustedPartIsNotFollowed() {
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "trusted link followed");
   CHECK(IsDir(Dir() + "/elsewhere/made/files"));
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/lk");
-  RemoveTree(Dir() + "/elsewhere");
 }
 
 void AFirstCandidateThatCannotBeUsedFallsThrough() {
-  RemoveTree(Dir() + "/fb");
   g_fakeNow = 820000;
   CHECK(::mkdir((Dir() + "/fb").c_str(), 0755) == 0);
   WriteFile(Dir() + "/fb/blocker", "a file where the folder should be");
@@ -966,18 +960,17 @@ void AFirstCandidateThatCannotBeUsedFallsThrough() {
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "long candidate");
   CHECK(!IsDir(Dir() + "/fb/d"));
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/fb");
 }
 
 void TheFolderIsChosenAgainWhenItVanishes() {
-  RemoveTree(Dir() + "/vn");
+  CHECK(!IsDir(Dir() + "/vn"));  // made new for this case: nothing clears it
   g_fakeNow = 830000;
   Cands c;
   c.Add("only", Dir() + "/vn/a/files", Dir());
   c.Install();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "before");
   CHECK(IsDir(Dir() + "/vn/a/files"));
-  RemoveTree(Dir() + "/vn");  // the user cleared the app's files
+  RemoveMadeLogFolder("vn/a/files", {"vn/a", "vn"});  // the user cleared the app's files
   sentinel::CloseDiskLog();
   Captured().clear();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "gone");  // ENOENT: reported, throttled
@@ -989,7 +982,6 @@ void TheFolderIsChosenAgainWhenItVanishes() {
         Slurp(Dir() + "/vn/a/files/" + LogName()).find("back") != std::string::npos);
   CHECK(Events("sentinel_log_dir").size() == 1);  // chosen again: named again, once
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/vn");
 }
 
 
@@ -1013,7 +1005,7 @@ void TheShippedCandidatesAreMediaThenData() {
 // The folder line is not lost when the write that carried it failed, and a log at its size bound that
 // the folder line fills still takes the record that came with it.
 void TheFolderLineSurvivesAFailedWriteAndTheBound() {
-  RemoveTree(Dir() + "/an");
+  CHECK(!IsDir(Dir() + "/an"));  // made new for this case: nothing clears it
   g_fakeNow = 840000;
   Cands c;
   c.Add("only", Dir() + "/an/files", Dir());
@@ -1029,7 +1021,7 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
   CHECK(disk.find("\"event\":\"sentinel_log_dir\"", folder + 1) == std::string::npos);  // once
 
   // A log 20 bytes under the bound: the folder line fills it, the record is not dropped.
-  RemoveTree(Dir() + "/an");
+  RemoveMadeLogFolder("an/files", {"an"});
   g_fakeNow = 850000;
   c.Install();  // forgets the chosen folder
   CHECK(::mkdir((Dir() + "/an").c_str(), 0755) == 0);
@@ -1040,7 +1032,7 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
 
   // Two queued lines (a failure, then the winner) with the log 20 bytes under its bound: the first fills it and the
   // second, and the record, still land.
-  RemoveTree(Dir() + "/an");
+  RemoveMadeLogFolder("an/files", {"an"});
   g_fakeNow = 860000;
   WriteFile(Dir() + "/blocker2", "a file");
   Cands two;
@@ -1056,13 +1048,12 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
   CHECK(fresh.find("record after two queued lines") != std::string::npos);
   ::unlink((Dir() + "/blocker2").c_str());
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/an");
 }
 
 // Each time the folder is chosen the lines are news again and reach the disk, however many times that has happened
 // (the queue of lines waiting for the disk empties and is reused).
 void EveryChoiceOfTheFolderIsReportedAndWritten() {
-  RemoveTree(Dir() + "/rc");
+  CHECK(!IsDir(Dir() + "/rc"));  // made new for this case: nothing clears it
   g_fakeNow = 870000;
   WriteFile(Dir() + "/blocker3", "a file");
   Cands c;
@@ -1077,14 +1068,13 @@ void EveryChoiceOfTheFolderIsReportedAndWritten() {
     CHECK(disk.find("\"event\":\"sentinel_log_dir\"") != std::string::npos);
     CHECK(Events("sentinel_log_dir_failed").size() == static_cast<std::size_t>(cycle));
     CHECK(Events("sentinel_log_dir").size() == static_cast<std::size_t>(cycle));
-    RemoveTree(Dir() + "/rc");  // the user cleared the app's files
+    RemoveMadeLogFolder("rc/files", {"rc"});  // the user cleared the app's files
     sentinel::CloseDiskLog();
     sentinel::Emit(nevr_quest::LogLevel::kInfo, "gone " + std::to_string(cycle));  // ENOENT: choose again at the next try
     g_fakeNow += sentinel::kOpenRetryMs + 1;
   }
   ::unlink((Dir() + "/blocker3").c_str());
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/rc");
 }
 
 // ---- the crash folder (#1797): crash_dir.h, the one chooser behind the writer and the sender ----
@@ -1120,7 +1110,7 @@ void TheShippedCrashFoldersAreMediaFirst() {
 }
 
 void TheCrashFolderIsMadeBelowTheTrustedPart() {
-  RemoveTree(Dir() + "/cr");
+  CHECK(!IsDir(Dir() + "/cr"));  // made new for this case: nothing clears it
   Captured().clear();
   Cands c;
   c.Add("media", Dir() + "/cr/a/b/nevr-crashes", Dir());  // cr, a and b do not exist
@@ -1132,11 +1122,9 @@ void TheCrashFolderIsMadeBelowTheTrustedPart() {
   CHECK(!IsDir(Dir() + "/cr/other"));  // the first usable candidate wins; the rest are not made
   CHECK(UnusableLines().empty());
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/cr");
 }
 
 void ACrashFolderThatCannotBeUsedFallsThroughAndIsNamed() {
-  RemoveTree(Dir() + "/cf");
   CHECK(::mkdir((Dir() + "/cf").c_str(), 0755) == 0);
   WriteFile(Dir() + "/cf/blocker", "a file");
   Captured().clear();
@@ -1179,11 +1167,9 @@ void ACrashFolderThatCannotBeUsedFallsThroughAndIsNamed() {
   CHECK(sentinel::crash_dir::ChooseFrom(none.list.data(), none.list.size()).empty());
   CHECK(UnusableLines().size() == 2);
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/cf");
 }
 
 void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
-  RemoveTree(Dir() + "/ov");
   CHECK(::mkdir((Dir() + "/ov").c_str(), 0755) == 0);
   CHECK(sentinel::crash_dir::Choose((Dir() + "/ov").c_str()) == Dir() + "/ov");  // exists and writable: wins over every shipped folder
   // A build folder that is missing is not made: the choice moves on to the shipped list. On a host none of those can be made.
@@ -1192,7 +1178,7 @@ void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
   CHECK(!IsDir(Dir() + "/ov/missing"));
   CHECK(UnusableLines().size() >= 1 && UnusableLines()[0].find("candidate=override") != std::string::npos);
   // The build's folder missing: the list that follows is used, and the override is named as the one that failed.
-  RemoveTree(Dir() + "/ov");
+  RemoveMade({"ov"});
   CHECK(::mkdir((Dir() + "/ov").c_str(), 0755) == 0);
   Cands list;
   list.Add("media", Dir() + "/ov/list/nevr-crashes", Dir() + "/ov");
@@ -1208,7 +1194,6 @@ void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
   CHECK(UnusableLines().empty());
   CHECK(sentinel::crash_dir::Choose(nullptr, list.list.data(), list.list.size()) == Dir() + "/ov/list/nevr-crashes");
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/ov");
 }
 
 // ---- one file for each process; the previous session's log is the file before this one ----
@@ -1320,7 +1305,7 @@ void AFolderAtTheLogPathIsNotOpenedAsALog() {
 }
 
 void ThePreviousSessionIsInTheLogFolder() {
-  RemoveTree(Dir() + "/ps");
+  CHECK(!IsDir(Dir() + "/ps"));  // made new for this case: nothing clears it
   sentinel::ResetSessionForTest();
   g_fakeNow = 950000;
   Cands c;
@@ -1338,7 +1323,6 @@ void ThePreviousSessionIsInTheLogFolder() {
   CHECK(!ReadAll(sentinel::LogDir() + "/" + LogName()).empty());
   CHECK(access((Dir() + "/" + firstName).c_str(), F_OK) != 0);  // not beside the config
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  RemoveTree(Dir() + "/ps");
 }
 
 void TheBuiltInListIsTheOverrideAloneInATestBuild() {
