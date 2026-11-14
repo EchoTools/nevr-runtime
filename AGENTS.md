@@ -37,7 +37,7 @@ step points to the skill and does not repeat it. Each skill has a Go consumer in
 - `verify-published-release`: a release is published and its bytes must be proven before anyone tests it (consumer `release-verify`).
 - `file-or-close-issue`: a defect is found and not fixed in the same turn, or an issue is being closed (consumer `issue-prose`).
 
-`merge-cleanup` and `nevr-work` are skills too (after a landing; at the start of any task) and have no consumer of this kind.
+`merge-cleanup`, `nevr-work` and `design-multiplatform-feature` are skills too (after a landing; at the start of any task; when designing or changing a feature that must work on more than one platform, or before writing platform-specific code) and have no consumer of this kind.
 
 ## How an agent works here
 

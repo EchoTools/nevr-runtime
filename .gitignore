@@ -160,6 +160,7 @@ dump.rdb
 !.claude/skills/run-on-a-copy/
 !.claude/skills/verify-published-release/
 !.claude/skills/file-or-close-issue/
+!.claude/skills/design-multiplatform-feature/
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/nevr-runtime-engineer.md

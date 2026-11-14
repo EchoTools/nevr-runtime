@@ -46,6 +46,7 @@ Operational procedures and testing protocols.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `testing/smoke-checklist.md` | Every feature a tester can check on a PC game client, a Quest game client or a game server, with the player action and the log line that proves it | Testers and release managers |
+| `.claude/skills/design-multiplatform-feature/SKILL.md` | The seven steps for a feature that runs on PC, Quest and a test double: the port, where PC already does it, one core implementation, thin edges chosen by file, one name, proof on the test edge first, and the review check | Developers and agents designing a cross-platform feature |
 | *(see `just --list` for automated test and verification recipes)* | | |
 
 ## Standards
