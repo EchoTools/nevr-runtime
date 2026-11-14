@@ -148,7 +148,7 @@ extra DLL for the plugin gate to verify. The runtime owns `staged.json` because 
 core's work and the publish, which takes the lock.
 
 **As built, the worker (#1200).** The runtime's half is `src/runtime/lifecycle/update_policy.cpp` (the decisions, pure),
-`src/runtime/lifecycle/update_run.cpp` (the check and the confirmation, with every dependency passed in), `src/runtime/lifecycle/update_worker.cpp` (the threads) and
+`src/runtime/lifecycle/update_run.cpp` (the check and the confirmation, with every dependency passed in; every file operation on `update\` goes through `nevr_update::UpdateFs`, `src/core/update/fs.h`, whose Win32 implementation is `src/runtime/lifecycle/update_fs_win32.cpp`), `src/runtime/lifecycle/update_worker.cpp` (the threads) and
 `src/runtime/lifecycle/update_process.cpp` (the binding to the core, the verifier, the log and the process); the names and the digest are the host's
 units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
 
@@ -471,7 +471,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
 | core | `stage_member` | `path`, `size`, `sha256`, `ok`, `reason` |
 | core | `stage_end` | `version`, `files`, `ok`, `reason`, `elapsed_ms` |
-| runtime | `update verify` | `path`, `version`, `ok`, `reason` (the verifier's text; `accepted` when it is) |
+| runtime | `update verify` | `path`, `version`, `ok`, `reason` (the verifier's text; `accepted` when it is; `path_unconvertible` when the staged file's path does not convert for the verifier, which is not a verdict on the bytes) |
 | runtime | `update published` | `version`, `files` |
 | core | `update_lock` | `ok`, `wait_ms`, `path`; on a failure `reason`, `detail`, `waited_ms` |
 | core | `update_clear` | `name`, `path`, `outcome` (`removed`, `absent`, `link_removed`, `failed`), `reason` on a failure; one per thing a baseline looks at |

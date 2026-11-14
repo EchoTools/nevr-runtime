@@ -17,8 +17,10 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -33,6 +35,9 @@ using namespace nevr_update;
 namespace {
 
 constexpr char kOldSha[] = "1111111111111111111111111111111111111111111111111111111111111111";
+constexpr std::uint32_t kHolderStepMs = 10;  // the other holder of update\lock retries every 10 ms
+constexpr char kPluginBytes[] = "PLUGIN";
+constexpr std::size_t kStagedFilesWithAPlugin = 2;  // nevr-runtime.dll and plugins/a.dll
 constexpr char kNewSha[] = "2222222222222222222222222222222222222222222222222222222222222222";
 
 // A nevr root in a temp folder, removed with the fixture.
@@ -166,6 +171,7 @@ struct FakeCore {
   std::string reason;
   std::string runtime_bytes = "NEW-RUNTIME";
   bool discard_ok = true;
+  bool with_plugin = false;  // the release also lists plugins/a.dll
   int open_calls = 0, manifest_calls = 0, stage_calls = 0, end_calls = 0, close_calls = 0, discard_calls = 0;
   std::string discard_version, discard_sha, discard_reason;
   std::string open_config, current_json, end_state, end_reason;
@@ -197,6 +203,10 @@ struct FakeCore {
       if (action == "staged") {
         root->Write(L"update\\staging\\" + std::wstring(version.begin(), version.end()) + L"\\nevr-runtime.dll", runtime_bytes);
         files.push_back({{"path", "nevr-runtime.dll"}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
+        if (with_plugin) {
+          root->Write(L"update\\staging\\" + std::wstring(version.begin(), version.end()) + L"\\plugins\\a.dll", kPluginBytes);
+          files.push_back({{"path", "plugins/a.dll"}, {"size", sizeof(kPluginBytes) - 1}, {"sha256", kOldSha}});
+        }
       }
       *result = json{{"action", action}, {"version", version}, {"direction", "upgrade"}, {"reason", reason}, {"files", files}}.dump();
       return true;
@@ -391,6 +401,133 @@ TEST(UpdatePolicy, StateReadersAndConfirmState) {
 }
 
 // ---- the check ---------------------------------------------------------------------------------------------------------
+
+TEST(UpdateCheck, EachStagedFileIsVerifiedAtItsPathInTheReleasesFolder) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  core.with_plugin = true;
+  CheckEnv env = MakeEnv(root, core, lines);
+  std::vector<std::wstring> seen;
+  const auto inner = env.verify;
+  env.verify = [&seen, inner](const std::wstring& path) {
+    seen.push_back(path);
+    return inner(path);
+  };
+  const CheckOutcome out = RunCheck(env);
+  EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
+  const std::wstring folder = root.File(L"update\\staging\\5.99.0");
+  ASSERT_EQ(seen.size(), kStagedFilesWithAPlugin);
+  EXPECT_EQ(seen[0], folder + L"\\nevr-runtime.dll");
+  EXPECT_EQ(seen[1], folder + L"\\plugins\\a.dll") << "a plugin's member path has a slash in the files and a backslash on Windows";
+}
+
+namespace {
+// The Win32 fs with every call written down, so a test sees which operations the engine asked for and in what order.
+class RecordingFs final : public UpdateFs {
+ public:
+  explicit RecordingFs(std::string root) : root_(std::move(root)) {}
+  mutable std::vector<std::string> calls;
+  std::vector<std::string> links;  // paths (relative to the root, as `calls` spells them) that IsLink answers true for
+  char Separator() const noexcept override { return Win32UpdateFs().Separator(); }
+  ReadResult ReadSmallFile(const std::string& p, std::string* out) const noexcept override { Note("ReadSmallFile", p); return Win32UpdateFs().ReadSmallFile(p, out); }
+  bool WriteByRename(const std::string& p, const std::string& t) const noexcept override { Note("WriteByRename", p); return Win32UpdateFs().WriteByRename(p, t); }
+  bool RemoveFile(const std::string& p) const noexcept override { Note("RemoveFile", p); return Win32UpdateFs().RemoveFile(p); }
+  void RemoveTree(const std::string& p) const noexcept override { Note("RemoveTree", p); Win32UpdateFs().RemoveTree(p); }
+  bool IsLink(const std::string& p) const noexcept override {
+    Note("IsLink", p);
+    return std::find(links.begin(), links.end(), Relative(p)) != links.end() || Win32UpdateFs().IsLink(p);
+  }
+  bool Exists(const std::string& p) const noexcept override { Note("Exists", p); return Win32UpdateFs().Exists(p); }
+  std::unique_ptr<FsLock> TakeLock(const std::string& d, std::uint32_t t, std::uint32_t st, int* e) const noexcept override {
+    Note("TakeLock", d);
+    return Win32UpdateFs().TakeLock(d, t, st, e);
+  }
+
+ private:
+  std::string Relative(const std::string& path) const { return path.compare(0, root_.size(), root_) == 0 ? path.substr(root_.size()) : path; }
+  void Note(const char* op, const std::string& path) const { calls.push_back(std::string(op) + " " + Relative(path)); }
+  std::string root_;
+};
+}  // namespace
+
+TEST(UpdateCheck, TheCheckAsksTheFsForEachOperationInTheOrderOfTheAdr) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  CheckEnv env = MakeEnv(root, core, lines);
+  const std::string root_utf8(root.path().begin(), root.path().end());  // the temp folder is ASCII
+  RecordingFs fs(root_utf8);
+  env.fs = &fs;
+  const auto inner = env.verify;
+  env.verify = [&fs, inner](const std::wstring& path) {
+    fs.calls.push_back("verify");
+    return inner(path);
+  };
+  const CheckOutcome out = RunCheck(env);
+  EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
+  const std::vector<std::string> expected = {
+      "IsLink \\update",
+      "IsLink \\update\\staging",
+      "Exists \\update\\pending.json",
+      "ReadSmallFile \\update\\state.json",
+      "IsLink \\update\\staging\\5.99.0",
+      "verify",
+      "TakeLock \\update",
+      "Exists \\update\\pending.json",
+      "WriteByRename \\update\\staged.json",
+  };
+  EXPECT_EQ(fs.calls, expected) << "the lock is taken after the verifier, the pending record is looked at again under it, staged.json goes last";
+}
+
+TEST(UpdateCheck, ALinkAtUpdateStagingOrTheReleasesFolderBlocksTheCheck) {
+  struct Case {
+    const char* link;
+    int stage_calls;  // the core is asked to stage only when the two folders above it are not links
+    bool verified;
+  };
+  const Case cases[] = {{"\\update", 0, false}, {"\\update\\staging", 0, false}, {"\\update\\staging\\5.99.0", 1, false}};
+  for (const Case& c : cases) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    CheckEnv env = MakeEnv(root, core, lines);
+    RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+    fs.links = {c.link};
+    env.fs = &fs;
+    int verified = 0;
+    const auto inner = env.verify;
+    env.verify = [&verified, inner](const std::wstring& path) {
+      ++verified;
+      return inner(path);
+    };
+    const CheckOutcome out = RunCheck(env);
+    EXPECT_EQ(out.action, CheckAction::kBlocked) << c.link << "\n" << lines.Dump();
+    EXPECT_EQ(out.reason, "reparse_point") << c.link;
+    EXPECT_EQ(core.stage_calls, c.stage_calls) << c.link;
+    EXPECT_EQ(verified, 0) << c.link;
+    EXPECT_FALSE(root.Exists(L"update\\staged.json")) << c.link << ": nothing is published through a link";
+  }
+}
+
+TEST(UpdateCheck, ARootThatIsNotUtf16TextReadsNothingAndEndsAsRootUnconvertible) {
+  Lines lines;
+  FakeCore core;
+  Root root;
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.root = L"C:\\nevr-\xD800";  // a lone surrogate
+  env.config_channel = "beta";
+  RecordingFs fs("");
+  env.fs = &fs;
+  const CheckOutcome out = RunCheck(env);
+  EXPECT_EQ(out.action, CheckAction::kFailed);
+  EXPECT_EQ(out.reason, "root_unconvertible");
+  EXPECT_TRUE(fs.calls.empty()) << "nothing is read from a root that cannot be given to the fs";
+  EXPECT_EQ(core.open_calls, 0);
+  EXPECT_NE(lines.Find("update check", {"action=failed", "reason=root_unconvertible", "channel=beta", "channel_source=config"}), "") << lines.Dump();
+  env.root = L"";
+  EXPECT_EQ(RunCheck(env).reason, "root_unconvertible") << "no root at all ends the same way";
+}
 
 TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   Root root;
@@ -648,9 +785,11 @@ TEST(UpdateCheck, TheQuarantineInStateReachesTheCore) {
 TEST(UpdateCheck, TheLockHeldByAnotherProcessDefersThePublication) {
   Root root;
   CreateDirectoryW(root.File(L"update").c_str(), nullptr);
-  UpdateFileLock other;
-  DWORD err = 0;
-  ASSERT_TRUE(other.Acquire(root.File(L"update"), 0, 10, &err));
+  int err = 0;
+  const std::wstring update_dir = root.File(L"update");
+  const std::string update_utf8(update_dir.begin(), update_dir.end());  // the temp folder is ASCII
+  const std::unique_ptr<FsLock> other = Win32UpdateFs().TakeLock(update_utf8, 0, kHolderStepMs, &err);
+  ASSERT_NE(other, nullptr) << err;
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
@@ -692,6 +831,58 @@ TEST(UpdateConfirm, TheMatchingReleaseIsConfirmedAndThePendingRecordGoes) {
   EXPECT_NE(lines.Find("update confirmed", {"version=5.99.0", "after_ms=10042", "role=server"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update confirmed"), kInfo);
   EXPECT_FALSE(root.Exists(L"update\\lock"));
+}
+
+TEST(UpdateConfirm, TheConfirmationWritesStateFirstThenRemovesPendingThenCrashedUnderTheLock) {
+  Root root;
+  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write(L"update\\crashed", "");
+  root.Write(L"update\\state.json", "{}");
+  Lines lines;
+  RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+  ConfirmEnv env;
+  env.root = root.path();
+  env.runtime_sha256 = kNewSha;
+  env.log = lines.Fn();
+  env.fs = &fs;
+  EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kConfirmed) << lines.Dump();
+  const std::vector<std::string> expected = {
+      "IsLink \\update",
+      "ReadSmallFile \\update\\pending.json",
+      "TakeLock \\update",
+      "ReadSmallFile \\update\\pending.json",
+      "ReadSmallFile \\update\\state.json",
+      "WriteByRename \\update\\state.json",
+      "RemoveFile \\update\\pending.json",
+      "RemoveFile \\update\\crashed",
+  };
+  EXPECT_EQ(fs.calls, expected) << "state.json first: a kill between the writes leaves a pending record the host drops as stale";
+}
+
+TEST(UpdateConfirm, ALinkAtUpdateIsNotWrittenThrough) {
+  Root root;
+  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
+  Lines lines;
+  RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+  fs.links = {"\\update"};
+  ConfirmEnv env;
+  env.root = root.path();
+  env.runtime_sha256 = kNewSha;
+  env.log = lines.Fn();
+  env.fs = &fs;
+  EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kPendingUnreadable);
+  EXPECT_TRUE(root.Exists(L"update\\pending.json"));
+}
+
+TEST(UpdateConfirm, ARootThatIsNotUtf16TextFailsClosedAndNoRootIsNoPending) {
+  Lines lines;
+  ConfirmEnv env;
+  env.runtime_sha256 = kNewSha;
+  env.log = lines.Fn();
+  env.root = L"C:\\nevr-\xD800";
+  EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kPendingUnreadable);
+  env.root = L"";
+  EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kNotPending);
 }
 
 TEST(UpdateConfirm, ARuntimeThatIsNotThePendingOneConfirmsNothing) {

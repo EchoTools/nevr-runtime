@@ -6,16 +6,16 @@
 // (the core, the verifier, the log, the clock), so the tests run them against a fake core in a temp folder and
 // update_worker.cpp runs them against the real one. No Log() here: every decision is one line through `LogFn`.
 //
-// Every path is composed here from the nevr root and the closed vocabulary of the host (runtime/host/update_names.h);
+// Every path is composed here from the nevr root and the closed vocabulary (core/update/names.h);
 // nothing is read from a file to name a path, and nothing is written under the game folder.
-
-#include <windows.h>
 
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
 
+#include "core/update/fs.h"
+#include "runtime/lifecycle/update_fs_win32.h"
 #include "runtime/lifecycle/update_policy.h"
 
 namespace nevr_update {
@@ -55,26 +55,9 @@ struct VerifyOutcome {
   std::string reason;  ///< the verifier's text (`Verdict::Describe`)
 };
 
-/// update\lock, the lock the host holds from its first read of update\ until its runtime is mapped (ADR 0024, section
-/// 4.1): exclusive, delete on close. The runtime takes it around every write to update\, never while it downloads.
-class UpdateFileLock {
- public:
-  UpdateFileLock() = default;
-  UpdateFileLock(const UpdateFileLock&) = delete;
-  UpdateFileLock& operator=(const UpdateFileLock&) = delete;
-  ~UpdateFileLock();
-  /// Tries every `step_ms` for up to `timeout_ms`. False with the Win32 error when it was not taken.
-  bool Acquire(const std::wstring& update_dir, DWORD timeout_ms, DWORD step_ms, DWORD* win32_error) noexcept;
-  void Release() noexcept;
-  bool Held() const noexcept { return handle_ != INVALID_HANDLE_VALUE; }
-
- private:
-  HANDLE handle_ = INVALID_HANDLE_VALUE;
-};
-
 /// How long the runtime waits for update\lock before it gives the write up for this launch.
-inline constexpr DWORD kLockTimeoutMs = 5000;
-inline constexpr DWORD kLockStepMs = 100;
+inline constexpr std::uint32_t kLockTimeoutMs = 5000;
+inline constexpr std::uint32_t kLockStepMs = 100;
 
 struct CheckEnv {
   std::wstring root;               ///< the nevr root (%LOCALAPPDATA%\nevr\echovr)
@@ -88,7 +71,9 @@ struct CheckEnv {
   std::function<std::uint64_t()> now_ms;  ///< a monotonic clock
   /// The whole stage's budget (ADR 0024, section 3: 120 s). A result that arrives after it is not published.
   std::uint64_t budget_ms = 120000;
-  DWORD lock_timeout_ms = kLockTimeoutMs;
+  std::uint32_t lock_timeout_ms = kLockTimeoutMs;
+  /// Every file operation on update\ goes through this (core/update/fs.h). The PC edge by default.
+  const UpdateFs* fs = &Win32UpdateFs();
 };
 
 enum class CheckAction { kNone, kStaged, kBlocked, kFailed };
@@ -121,7 +106,8 @@ struct ConfirmEnv {
   std::string runtime_sha256;  ///< sha256 of the file this process loaded
   const char* role = "client";  ///< client or server
   LogFn log;
-  DWORD lock_timeout_ms = kLockTimeoutMs;
+  std::uint32_t lock_timeout_ms = kLockTimeoutMs;
+  const UpdateFs* fs = &Win32UpdateFs();  ///< as CheckEnv::fs
 };
 
 /// ADR 0024, section 6, "The mark": under the lock, when update\pending.json's `to.sha256` equals the sha256 of the

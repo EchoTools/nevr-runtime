@@ -82,6 +82,7 @@ func mustMatch(t *testing.T, re, s, what string) {
 
 var jobFiles = []string{
 	"src/runtime/lifecycle/update_run.cpp",
+	"src/runtime/lifecycle/update_fs_win32.cpp",
 	"src/runtime/lifecycle/update_worker.cpp",
 	"src/runtime/lifecycle/update_policy.cpp",
 }
@@ -100,13 +101,40 @@ func TestTheJobsNameNoFolderOfTheirOwn(t *testing.T) {
 
 func TestEveryPathInTheJobsIsComposedFromTheRoot(t *testing.T) {
 	src := code(t, "src/runtime/lifecycle/update_run.cpp")
-	if !strings.Contains(src, `std::wstring UpdateDir(const std::wstring& root) { return root + L"\\" + names::kUpdateDir; }`) {
-		t.Error("update_run.cpp: UpdateDir is no longer the root plus the update folder's name")
+	if !strings.Contains(src, `std::string Update() const { return Join(root, names::kUpdateDir); }`) {
+		t.Error("update_run.cpp: Paths::Update is no longer the root plus the update folder's name")
 	}
 	allowed := map[string]bool{`\\`: true, `\\*`: true, `.`: true, `..`: true, `.tmp-`: true}
 	for _, m := range regexp.MustCompile(`L"([^"]*)"`).FindAllStringSubmatch(src, -1) {
 		if !allowed[m[1]] {
 			t.Errorf("update_run.cpp: a path literal that is not the root's: L%q", m[1])
+		}
+	}
+}
+
+// A path literal in the engine or in the PC fs is a separator, a glob, a temporary's suffix or a dot name: every other part of a
+// path is the root or a name of the closed vocabulary (core/update/names.h), which the code never spells out itself.
+// "failed" is left out: it is also the word of a check's action.
+var vocabulary = []string{"update", "lock", "staged.json", "swap.json", "pending.json", "state.json", "crashed", "staging", "previous",
+	"plugins", "nevr-runtime.dll"}
+
+func TestNoPathPartIsSpelledOutInTheEngineOrItsPcFs(t *testing.T) {
+	allowed := map[string]bool{`\\`: true, `\\*`: true, `.`: true, `..`: true, `.tmp-`: true}
+	for _, f := range []string{"src/runtime/lifecycle/update_run.cpp", "src/runtime/lifecycle/update_fs_win32.cpp"} {
+		for _, m := range regexp.MustCompile(`L?"([^"\n]*)"`).FindAllStringSubmatch(code(t, f), -1) {
+			lit := m[1]
+			for _, name := range vocabulary {
+				if lit == name {
+					t.Errorf("%s: %q is a name of the closed vocabulary and is spelled out; use core/update/names.h", f, lit)
+				}
+			}
+			if !strings.ContainsAny(lit, `\/.`) || allowed[lit] || strings.HasSuffix(lit, ".h") { // an #include is not a path of the root
+				continue
+			}
+			if f == "src/runtime/lifecycle/update_run.cpp" && !strings.ContainsAny(lit, `\/`) {
+				continue // a log word, a reason or a JSON key with a dot in it is not a path
+			}
+			t.Errorf("%s: a literal that looks like a path part: %q", f, lit)
 		}
 	}
 }
@@ -243,7 +271,7 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		}
 	}
 	just := read(t, "justfile")
-	for _, want := range []string{"--target test_update_worker --target test_update_core_link", "for name in test_update_worker test_update_core_link; do"} {
+	for _, want := range []string{"--target test_update_worker --target test_update_fs_win32 --target test_update_core_link", "for name in test_update_worker test_update_fs_win32 test_update_core_link; do"} {
 		if !strings.Contains(just, want) {
 			t.Errorf("justfile: no %q", want)
 		}

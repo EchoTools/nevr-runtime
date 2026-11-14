@@ -52,6 +52,7 @@ set(PATCHES_SOURCES
     # worker's threads, and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are the
     # host's units, compiled into both DLLs as game_image_guard and the verifier are.
     "lifecycle/update_policy.cpp"
+    "lifecycle/update_fs_win32.cpp"
     "lifecycle/update_run.cpp"
     "lifecycle/update_worker.cpp"
     "lifecycle/update_process.cpp"
@@ -2289,15 +2290,27 @@ if(BUILD_TESTING)
     add_executable(test_update_worker
       tests/test_update_worker.cpp
       lifecycle/update_policy.cpp
+      lifecycle/update_fs_win32.cpp
       lifecycle/update_run.cpp
       lifecycle/update_worker.cpp
       ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp)
-    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_run.cpp
-      lifecycle/update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_fs_win32.cpp
+      lifecycle/update_run.cpp lifecycle/update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_update_worker PRIVATE -Werror)
     target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_update_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_update_worker DISCOVERY_MODE PRE_TEST)
+
+    # The PC UpdateFs (core/update/fs.h) on its own, against a temp folder: every operation the engine asks of it.
+    add_executable(test_update_fs_win32
+      tests/test_update_fs_win32.cpp
+      lifecycle/update_fs_win32.cpp)
+    set_source_files_properties(tests/test_update_fs_win32.cpp lifecycle/update_fs_win32.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_update_fs_win32 PRIVATE -Werror)
+    target_include_directories(test_update_fs_win32 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_update_fs_win32 PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_update_fs_win32 DISCOVERY_MODE PRE_TEST)
 
     # The Rust core linked into a MinGW C++ binary and called from a worker thread (ADR 0024, "What is not known"): the same staticlib and
     # system libraries nevr-runtime.dll links.
