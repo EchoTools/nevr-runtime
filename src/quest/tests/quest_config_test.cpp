@@ -940,6 +940,35 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
   }
 }
 
+// update.enabled and update.channel: read as the PC reads them, and a file that sets them is accepted whole (the shared parser lists
+// `update` as a top-level section). Wrong kinds leave the value unset with one Warning that names the key.
+void TheUpdateKeysAreReadAsThePcReadsThem() {
+  {
+    const LoadResult r = Load(Full(), "update:\n  enabled: false\n  channel: beta\n");
+    CHECK(!r.config.fileRejected);
+    CHECK(r.config.update.enabled.has_value() && !*r.config.update.enabled);
+    CHECK(r.config.update.channel.has_value() && *r.config.update.channel == "beta");
+    CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+  }
+  for (const char* text : {"", "update:\n", "update: {}\n", "graphics:\n  hand_flip: true\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.update.enabled.has_value() && !r.config.update.channel.has_value());
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  {
+    const LoadResult r = Load(Full(), "update:\n  enabled: maybe\n  channel: [a, b]\n");
+    CHECK(!r.config.fileRejected);
+    CHECK(!r.config.update.enabled.has_value() && !r.config.update.channel.has_value());
+    CHECK(EventsContain(r, "config file key=update.enabled rejected reason=not_a_boolean"));
+    CHECK(EventsContain(r, "config file key=update.channel rejected reason=not_a_word"));
+  }
+  {  // a key the section does not have is counted as unknown (KnownSections), not rejected
+    const LoadResult r = Load(Full(), "update:\n  enabled: true\n  chanel: beta\n");
+    CHECK(!r.config.fileRejected && r.config.update.enabled.has_value() && *r.config.update.enabled);
+    CHECK(EventsContain(r, "unknown_keys=update.chanel"));
+  }
+}
+
 // graphics.hand_flip (#2082): the Controller Hand Flip choice, where the menu keeps it. Absent is Off and from the default; true is
 // On from the file; a value that is no boolean is Off, from the default, with one Warning that names the key and not the value.
 void HandFlipIsOffUnlessTheFileSaysTrue() {
@@ -1700,6 +1729,7 @@ int main() {
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   HandFlipIsOffUnlessTheFileSaysTrue();
+  TheUpdateKeysAreReadAsThePcReadsThem();
   TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue();
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
   CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();

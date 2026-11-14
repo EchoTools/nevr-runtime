@@ -343,6 +343,24 @@ void ReadHandFlip(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.handFlip = {on, given ? Source::kFile : Source::kAbsent};
 }
 
+// update.enabled and update.channel. Each stays unset unless the file gives a scalar of the right kind; the update policy
+// (core/update/policy.h, ResolveChannel) decides whether a channel word is one it knows.
+void ReadUpdate(const nevr::NevrConfig& cfg, LoadResult& r) {
+  constexpr const char* kEnabledKey = "update.enabled";
+  constexpr const char* kChannelKey = "update.channel";
+  if (cfg.GetBool(kEnabledKey).has_value()) {
+    r.config.update.enabled = cfg.GetBool(kEnabledKey);
+  } else if (cfg.Kind(kEnabledKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kEnabledKey + " rejected reason=not_a_boolean (default stays)");
+  }
+  const std::optional<std::string> channel = cfg.GetString(kChannelKey);
+  if (channel && !channel->empty()) {
+    r.config.update.channel = *channel;
+  } else if (!channel && cfg.Kind(kChannelKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kChannelKey + " rejected reason=not_a_word (default stays)");
+  }
+}
+
 // The CDN host's base: https, a host, no query, fragment or credentials, no control or space character, ending in '/'.
 bool NormalizeCdnBase(const std::string& in, std::string* out) {
   static const std::string kScheme = "https://";
@@ -562,6 +580,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.inviteCodes = ReadInviteCodes(cfg, r);
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
+  ReadUpdate(cfg, r);
   ReadAssets(cfg, r);
   ReadCombatForce(cfg, r);
   r.config.combat.heaps = ReadCombatSwitch(cfg, kCombatHeapsKey, r);

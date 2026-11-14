@@ -32,6 +32,7 @@
 #include "quest/invite/frame_dispatch.h"
 #include "quest/runtime/update_wiring.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/sentinel/activation.h"
 #include "quest/sentinel/build_variant.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/toast_presenter.h"
@@ -124,14 +125,15 @@ sentinel::LogLevel UpdateLevel(int level) noexcept {
 }
 
 // Starts the update worker once the constructor sequence has run, so the frame dispatcher exists (update_wiring.h). The inputs are the
-// runtime's own: the build, the host's capability bit and update root. Two are not there yet: the Rust
+// runtime's own: the build, the config's `update:` section, the host's capability bit and update root. Two are not there yet: the Rust
 // core and the verifier are not linked into this build (the Android build of the core is a held piece), so Start does not start the
 // worker and says so in one record. The host's capability bit is also 0 until the shim can swap, which would disable the update anyway.
 void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
   nevr_quest::update_wiring::Inputs in;
   in.dev_build = nevr_build::kIsDev;
-  // `update.enabled` and `update.channel` stay unset: the config parser (core/nevr_config.cpp, AllowedTopLevelKeys) rejects a file with
-  // an `update:` section as a whole, on PC as on Quest, so there is no value to read yet.
+  const nevr_quest::ResolvedConfig& config = sentinel::ActiveConfig();
+  in.config_enabled = config.update.enabled;
+  in.config_channel = config.update.channel;
   in.host_can_swap = nevr_quest_runtime_abi::HostCanSwap(host);
   if (host->update_root != nullptr) in.root = host->update_root;
   // One file system for the life of the process: the worker's threads outlive this call.

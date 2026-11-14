@@ -470,6 +470,19 @@ TEST(NevrConfig, DiagnosticsFrameStatsIsAKnownKey) {
   EXPECT_NE(std::find(known.begin(), known.end(), "diagnostics.frame_stats"), known.end());
 }
 
+// `update` is a top-level section: `update.enabled` and `update.channel` (core/update/policy.h) are known keys, any other key under it
+// is counted as unknown, and a misspelt section is still refused.
+TEST(NevrConfig, UpdateSectionHoldsEnabledAndChannel) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("update:\n  enabled: false\n  channel: beta\n");
+  ASSERT_TRUE(cfg.GetString("update.channel").has_value());
+  EXPECT_EQ(*cfg.GetString("update.channel"), "beta");
+  ASSERT_TRUE(cfg.GetBool("update.enabled").has_value());
+  EXPECT_FALSE(*cfg.GetBool("update.enabled"));
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(nevr::NevrConfig::LoadFromString("update:\n  chanel: beta\n").UnknownKeyCount(), 1u);
+  EXPECT_THROW(nevr::NevrConfig::LoadFromString("updates:\n  enabled: true\n"), nevr::NevrConfigError);
+}
+
 // `graphics` is a top-level section (the Quest's texture quality is `graphics.texture_quality`, #943). The PC accepts it and
 // reads nothing from it, so one config.yaml can serve both builds; an unknown section is still refused.
 TEST(NevrConfig, AcceptsGraphicsSection) {

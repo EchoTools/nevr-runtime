@@ -153,6 +153,14 @@ struct HandFlipChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
 };
 
+// The self-update's two keys (core/update/policy.h): `update.enabled` (a boolean) and `update.channel` (a word the update policy
+// checks). A key that is absent, or wrong, is left unset here and the policy's default stands; a wrong one is one Warning that names
+// the key and never the value.
+struct UpdateChoice {
+  std::optional<bool> enabled;
+  std::optional<std::string> channel;
+};
+
 // The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
 // defaults live in code (quest/cdn/cdn_worker.h); the file only changes them, and an empty field means the code's default.
 //   assets.cdn_url        the host's base (https only); assets.manifest the manifest's path under it (a test device names its own)
@@ -282,6 +290,7 @@ struct ResolvedConfig {
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
   HandFlipChoice handFlip;
+  UpdateChoice update;
   AssetsChoice assets;
   CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
