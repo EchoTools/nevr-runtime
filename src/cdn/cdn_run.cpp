@@ -409,7 +409,8 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   std::uint64_t declared = 0;
   bool haveDeclared = false;
   const std::uint64_t maxFrame = MaxManifestFrameBytes(limits.manifest_text_bytes);
-  const HttpResult http = env.Get(config.base_url + config.manifest_path,
+  const std::string manifestUrl = config.base_url + config.manifest_path;  // every cdn_manifest record names what it asked for
+  const HttpResult http = env.Get(manifestUrl,
                                   [&](long st, const void* data, std::size_t length) {
                                     status = st;
                                     if (!IsWholeBody(st)) return false;
@@ -459,7 +460,8 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     }
   }
   if (manifestFailure != nullptr) {
-    std::vector<Field> fields = {{"result", "failed"}, {"reason", manifestFailure}, {"http_status", httpStatus}, {"code", http.code}};
+    std::vector<Field> fields = {{"result", "failed"}, {"reason", manifestFailure}, {"url", manifestUrl}, {"http_status", httpStatus},
+                                 {"code", http.code}};
     if (haveDeclared) fields.push_back({"declared_bytes", declared});
     if (haveDeclared && std::string(manifestFailure) == "too_large") fields.push_back({"limit_bytes", limits.manifest_text_bytes});
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
@@ -472,7 +474,8 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   Manifest manifest;
   const ParseResult parsed = ParseManifestFrame(body, limits, &manifest);
   if (parsed.status != ParseStatus::kOk) {
-    std::vector<Field> fields = {{"result", "refused"}, {"reason", ParseStatusName(parsed.status)}, {"http_status", httpStatus}};
+    std::vector<Field> fields = {{"result", "refused"}, {"reason", ParseStatusName(parsed.status)}, {"url", manifestUrl},
+                                 {"http_status", httpStatus}};
     if (!parsed.label.empty()) {
       fields.push_back({"label", parsed.label});
       fields.push_back({"index", parsed.index});
@@ -496,6 +499,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                        [&](const Entry& e) { return store->HoldsSized(e.sha256, e.size, e.bytes); });
   env.Event(EventLevel::kInfo, "cdn_manifest",
             {{"result", "loaded"},
+             {"url", manifestUrl},
              {"http_status", httpStatus},
              {"frame_bytes", body.size()},
              {"bytes", declared},

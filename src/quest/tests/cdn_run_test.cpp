@@ -579,6 +579,7 @@ void AManifestThatCannotBeFetchedChangesNothingAndWhatIsStoredStaysMounted() {
     QCHECK(env.fs_->files[nc::ManifestCopyPath(kDir)] == cdn_test::ZstdFrameOf(w.ManifestText()));  // the saved manifest is the last good one
     const auto events = env.EventsNamed("cdn_manifest");
     QCHECK(events.size() == 1 && events[0].find("\"level\":\"warn\"") != std::string::npos && events[0].find("consequence") != std::string::npos);
+    if (events.size() == 1) QCHECK(FakeEnv::Value(events[0], "url") == std::string(kBase) + kManifestPath);  // a failure names what it asked for
   }
 }
 

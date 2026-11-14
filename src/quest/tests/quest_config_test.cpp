@@ -845,10 +845,10 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
   }
   {
     const LoadResult r = Load(Full(),
-                              "assets:\n  cdn_url: https://cdn.example.test/base\n  manifest: v1/test/manifest.json\n"
+                              "assets:\n  cdn_url: https://cdn.example.test/base\n  manifest: v1/test/manifest.json.zst\n"
                               "  required_only: true\n  labels:\n    lobby_posters: required\n    extra_label: off\n    third: on\n");
     CHECK(r.config.assets.cdnUrl == "https://cdn.example.test/base/");  // a trailing slash is added
-    CHECK(r.config.assets.manifest == "v1/test/manifest.json" && r.config.assets.requiredOnly);
+    CHECK(r.config.assets.manifest == "v1/test/manifest.json.zst" && r.config.assets.requiredOnly);
     CHECK(r.config.assets.labels.size() == 3 && r.config.assets.labels[0].first == "lobby_posters" && r.config.assets.labels[0].second == "required");
     CHECK(r.config.assets.labels[1].second == "off" && r.config.assets.labels[2].second == "on");
     CHECK(r.config.assets.source == Source::kFile);
@@ -872,9 +872,10 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
       CHECK(EventsContain(b, "key=assets.cdn_url rejected"));
     }
   }
-  for (const char* bad : {"../escape.json", "/absolute.json", "plain.txt", "a b.json", "a:b.json", ".json"}) {
+  for (const char* bad : {"../escape.json.zst", "/absolute.json.zst", "plain.txt", "a b.json.zst", "a:b.json.zst", ".json.zst",
+                          "v1/manifest.json"}) {  // a plain .json is no manifest the CDN publishes
     const LoadResult b = Load(Full(), std::string("assets:\n  manifest: \"") + bad + "\"\n");
-    CHECK(b.config.assets.manifest.empty() && EventsContain(b, "key=assets.manifest rejected reason=not_a_relative_json_path"));
+    CHECK(b.config.assets.manifest.empty() && EventsContain(b, "key=assets.manifest rejected reason=not_a_relative_json_zst_path"));
   }
   {
     const LoadResult r = rejected("assets:\n  required_only: maybe\n", "key=assets.required_only rejected reason=not_a_boolean", "maybe");
@@ -899,19 +900,19 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
     CHECK(EventsContain(r, "reason=too_many_labels more=1"));
   }
   {  // assets.whole_game: the whole-game mode, which needs the manifest that holds the game
-    const LoadResult off = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n");
+    const LoadResult off = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json.zst\n");
     CHECK(!off.config.assets.wholeGame);  // not asked: off
-    const LoadResult on = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: true\n");
+    const LoadResult on = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json.zst\n  whole_game: true\n");
     CHECK(on.config.assets.wholeGame && on.config.assets.source == Source::kFile);
     CHECK(EventsContain(on, "manifest=config whole_game=1 source=config"));
     CHECK(!HasLevel(on, LogLevel::kWarn));
-    const LoadResult explicitOff = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: false\n");
+    const LoadResult explicitOff = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json.zst\n  whole_game: false\n");
     CHECK(!explicitOff.config.assets.wholeGame && !HasLevel(explicitOff, LogLevel::kWarn));
     // Without a manifest there is nothing to serve the game from: off, with one Warning that names the key.
     const LoadResult noManifest = Load(Full(), "assets:\n  whole_game: true\n");
     CHECK(!noManifest.config.assets.wholeGame);
     CHECK(EventsWithAreAtLevel(noManifest, "key=assets.whole_game rejected reason=no_manifest", LogLevel::kWarn));
-    const LoadResult notBool = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json\n  whole_game: maybe\n");
+    const LoadResult notBool = Load(Full(), "assets:\n  manifest: v1/allassets/x/manifest.json.zst\n  whole_game: maybe\n");
     CHECK(!notBool.config.assets.wholeGame);
     CHECK(EventsWithAreAtLevel(notBool, "key=assets.whole_game rejected reason=not_a_boolean", LogLevel::kWarn));
     CHECK(!EventsContain(notBool, "maybe"));

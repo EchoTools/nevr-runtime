@@ -35,7 +35,9 @@ struct RunConfig {
   std::string manifest_path;  // relative to base_url, e.g. "v1/manifest.json"
   Platform platform = kAndroidArm64;
   Policy policy;
-  std::string source = "default";  // "default" or "config": whether the policy or the URL came from config (logged, never the values)
+  // "default" or "config": whether the policy or the URL came from config. cdn_start logs it and the host, not the configured values;
+  // cdn_manifest names the one URL it requested, so a failed request says what it asked for.
+  std::string source = "default";
   ProgressFn progress;             // optional
   // The first-run hold (docs/adr/0045 decision 11): the fetch stores every object of every served label through the first-run prefetch
   // (cdn/cdn_prefetch.h), one after another, and ends at the first object that cannot be had, so a caller that waits for it knows the

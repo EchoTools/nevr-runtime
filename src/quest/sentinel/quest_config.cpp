@@ -356,9 +356,11 @@ bool NormalizeCdnBase(const std::string& in, std::string* out) {
   return true;
 }
 
-// A manifest path below the host: relative, plain characters, no "..", ending in .json.
+// A manifest path below the host: relative, plain characters, no "..", ending in .json.zst. The CDN publishes a manifest only as one
+// zstd frame (docs/adr/0045 decision 4; the code's default is v1/manifest.json.zst), and the core refuses any other body.
 bool IsManifestPath(const std::string& p) {
-  if (p.empty() || p.size() > 128 || p[0] == '/' || p.size() < 6 || p.compare(p.size() - 5, 5, ".json") != 0) return false;
+  static const std::string kSuffix = ".json.zst";
+  if (p.size() <= kSuffix.size() || p.size() > 128 || p[0] == '/' || p.compare(p.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) return false;
   if (p.find("..") != std::string::npos) return false;
   for (const char c : p) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '/';
@@ -395,7 +397,7 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
       a.manifest = *value;
       given = true;
     } else {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_json_path (default stays)");
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_json_zst_path (default stays)");
     }
   }
   if (cfg.Kind(kAssetsRequiredOnlyKey) != nevr::NodeKind::kAbsent) {
