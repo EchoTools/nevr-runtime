@@ -861,25 +861,41 @@ quest-install *args: build-installer
 # command after `--`, then `go test -json` in tools/ (-C tools) with a hermetic environment, keeps its stream as <stem>-go.jsonl beside the
 # run's log, appends go_start and go_end to runs.jsonl, and ends with one line naming each failed half. ARGS go to the
 # Python runner only; the Go half always runs the module.
-# With no ARGS it is the whole suite, which records the run and alerts the owner when an agent started it
-# (build/go-tools/suite-run; AGENTS.md "Builds": no agent runs a whole suite).
+# Unless an argument names test files it is the whole suite, which records the run and alerts the owner when an agent
+# started it (build/go-tools/suite-run; AGENTS.md "Builds": no agent runs a whole suite). An argument names test files
+# when it is an existing file, a pytest node id (with ::) or a .py path; options and their values (-n 4, -k foo,
+# --maxfail 3) and directories (tools/tests) leave the run whole, as tools/run_tool_tests.py is_subset reads them.
 [positional-arguments]
 test-tools *ARGS: go-tools
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ $# -eq 0 && "${NEVR_SUITE_RECIPE:-}" != test-tools ]]; then
-        exec build/go-tools/suite-run -recipe test-tools -- just test-tools
+    whole=1
+    for arg in "$@"; do
+        if [[ -f "$arg" || "$arg" == *::* || "$arg" == *.py ]]; then whole=0; fi
+    done
+    if [[ $whole -eq 1 && "${NEVR_SUITE_RECIPE:-}" != test-tools ]]; then
+        exec build/go-tools/suite-run -recipe test-tools -- just test-tools "$@"
     fi
     exec build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
 
-# The tests that cover this branch's change, and nothing else: every path `git diff --name-only $(git merge-base
-# origin/main HEAD)` names is looked up in tools/test_map.json, and the tests of the components that own them run one at a
-# time, the build first, each printed with its exit code (tools/cmd/test-changed). A path the map does not cover fails
-# the run before anything starts, naming it. This is a branch's whole check before it lands (AGENTS.md, "Builds"); -n
+# The tests that cover this branch's change, and nothing else: every path `git diff --name-only --no-renames
+# $(git merge-base origin/main HEAD)` names is looked up in tools/test_map.json, and the tests of the components that own
+# them run one at a time, the build first, each printed with its exit code (tools/cmd/test-changed). The gtest ids of the
+# run are one `just test-auth-unit` call. A path the map does not cover is fixed by `just test-map`, never by hand: the
+# run fails before anything starts, naming it. This is a branch's whole check before it lands (AGENTS.md, "Builds"); -n
 # prints the plan and runs nothing.
 [positional-arguments]
 test-changed *ARGS: go-tools
     build/go-tools/test-changed "$@"
+
+# Writes tools/test_map.json, schema 2, the map test-changed reads (tools/cmd/test-map). It reads the build trees
+# (default $NEVR_BUILD_CHECKOUT/build, else <work root>/build-checkout/nevr-runtime/build): ninja's inputs and deps of
+# the test binaries and the shipped DLLs, the Quest preset targets, and go list over tools/; plus the tracked files and
+# the tests' own text. A tree it needs and cannot find fails it, naming the recipe that makes the tree. `just test-map
+# -check` writes nothing and fails when the file differs from what the trees say.
+[positional-arguments]
+test-map *ARGS: go-tools
+    build/go-tools/test-map "$@"
 
 # The full suite, run only by the owner, never by an agent (AGENTS.md, "Builds"): `just verify`, then the suites verify
 # does not run that need no game, headset, VM, network or release input. Each runs whatever the one before it did; the
@@ -1008,6 +1024,8 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
     # A failing binary is recorded and the loop goes on, so one failure does not hide the binaries after it
     # (#1228); the summary after the last binary names every failure and exits non-zero.
     test_failures=()
+    # The exit code of the last binary run_test ran (0 when it passed), read by the named loop below.
+    last_rc=0
     run_test() {
         local rc=0
         if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
@@ -1026,6 +1044,7 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
             echo "test-auth-unit: FAIL — $1 exited $rc" >&2
             test_failures+=("$1 (exit $rc)")
         fi
+        last_rc="$rc"
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
@@ -1096,6 +1115,9 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
             fi
             before=${#test_failures[@]}
             run_test "$bin"
+            # test-changed runs its gtest ids as one call of this recipe and reads each binary's exit code from the file
+            # NEVR_GTEST_RESULTS names (tools/cmd/test-changed). A binary that is not found exits the recipe above, before this line, and writes no line.
+            if [[ -n "${NEVR_GTEST_RESULTS:-}" ]]; then printf '%s\t%s\n' "$name" "$last_rc" >> "$NEVR_GTEST_RESULTS"; fi
             if [[ ${#test_failures[@]} -eq "$before" ]]; then echo "test-auth-unit: $name passed"; fi
         done
         if [[ "${#test_failures[@]}" -gt 0 ]]; then

@@ -43,10 +43,11 @@ func main() { os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr)) }
 // run is execute with the tool's run log: one "invoked" and one "finished" record in $XDG_STATE_HOME/nevr-runtime/run-copy.jsonl
 // (internal/runlog). A log that cannot be written is exit 74, never a run without its record.
 func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
-	return runlog.Invocation("run-copy", args, getenv, stderr, func(*slog.Logger) int { return execute(args, stdout, stderr) })
+	return runlog.Invocation("run-copy", args, getenv, stderr, func(*slog.Logger) int { return execute(args, getenv, stdout, stderr) })
 }
 
-func execute(args []string, stdout, stderr io.Writer) int {
+// execute checks the copy. It reads its environment only through getenv (ADR 0044 rule 8).
+func execute(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	fl := flag.NewFlagSet("run-copy", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	copyDir := fl.String("copy", "", "directory that holds echovr/")

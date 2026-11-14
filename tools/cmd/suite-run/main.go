@@ -3,11 +3,11 @@
 //
 //	suite-run -recipe <name> -- <command> [args...]
 //
-// It appends a suite_start record to <work root>/test-runs/suite-runs.jsonl (the work root is $NEVR_WORK_ROOT, else
+// It appends a suite_start record to <work root>/test-runs/suite-run.jsonl (the work root is $NEVR_WORK_ROOT, else
 // ~/src/nevr-runtime-work), runs the command with NEVR_SUITE_RECIPE=<name> and NEVR_SUITE_PARENT=<this run's id> in its
 // environment, appends a suite_end record with its exit code and duration, and exits with the command's code. The
-// whole-suite recipes (verify, test-full, test-tools with no file, test-auth-unit with no binary and no GTEST_FILTER)
-// start themselves again through it unless NEVR_SUITE_RECIPE already names them.
+// whole-suite recipes (verify, test-full, test-tools with no argument naming a file, test-auth-unit with no binary and
+// no GTEST_FILTER) start themselves again through it unless NEVR_SUITE_RECIPE already names them.
 //
 // suite_start names who ran it: the time, this process and its parent, the working directory, the command, and the
 // agent session the run came from: the nearest ancestor process whose program is an agent's (claude, codex, opencode),
@@ -39,6 +39,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,8 +62,8 @@ const alertTimeout = 10 * time.Second
 // tool is the program's name: the prefix of its lines.
 const tool = "suite-run"
 
-// logRel is the record file, relative to the work root.
-var logRel = filepath.Join("test-runs", "suite-runs.jsonl")
+// logRel is the record file, relative to the work root. Its name is the tool's name: runlog takes a record's tool from it.
+var logRel = filepath.Join("test-runs", tool+".jsonl")
 
 // agentPrograms are the programs whose descendants are an agent's runs, by their name in /proc/<pid>/comm.
 var agentPrograms = map[string]bool{"claude": true, "codex": true, "opencode": true}
@@ -239,12 +240,15 @@ func runChild(command []string, env []string, stdin io.Reader, stdout, stderr io
 		return exitNotStarted
 	}
 	done := make(chan struct{})
+	var forwarding sync.WaitGroup
+	forwarding.Add(1)
 	go func() {
+		defer forwarding.Done()
 		for {
 			select {
 			case s := <-sigs:
 				if s == syscall.SIGTERM {
-					cmd.Process.Signal(s)
+					signalChild(cmd.Process, s, stderr)
 				}
 			case <-done:
 				return
@@ -253,6 +257,7 @@ func runChild(command []string, env []string, stdin io.Reader, stdout, stderr io
 	}()
 	err := cmd.Wait()
 	close(done)
+	forwarding.Wait() // no line is written to stderr after runChild returns
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
@@ -265,4 +270,12 @@ func runChild(command []string, env []string, stdin io.Reader, stdout, stderr io
 	}
 	fmt.Fprintf(stderr, "%s: %s: %v\n", tool, command[0], err)
 	return exitNotStarted
+}
+
+// signalChild passes s on to the suite's process. A signal that does not reach it is a line on standard error that names
+// the signal and the error, so the failure is on the record of the run's own output (logging standard, "Loud").
+func signalChild(p *os.Process, s os.Signal, stderr io.Writer) {
+	if err := p.Signal(s); err != nil {
+		fmt.Fprintf(stderr, "%s: cannot pass signal %d (%v) on to the suite: %v\n", tool, s, s, err)
+	}
 }

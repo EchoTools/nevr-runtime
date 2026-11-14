@@ -545,6 +545,7 @@ binary) are the owner's alone.
 
 ```sh
 just test-changed             # The tests that cover this branch's change, from tools/test_map.json (-n: the plan only)
+just test-map                 # Write tools/test_map.json from the build trees (-check: compare, write nothing)
 just test-full                # The full suite: verify and the suites verify does not run (owner only)
 just test-auth-unit test_x    # Build and run the named GTest binaries only
 ```
@@ -840,20 +841,25 @@ your seat name, for example `claude-main` or `codex`.
   Never point a build at `~/.vcpkg` directly.
 - **A branch runs `just test-changed`, once, before it lands, and nothing else. An agent never picks tests.** The quick
   check is `systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env -u DISPLAY -u WAYLAND_DISPLAY just
-  test-changed` on the branch's tip. It reads `git diff --name-only $(git merge-base origin/main HEAD)`, looks each path up
-  in `tools/test_map.json` (path, then the component that owns it, then that component's tests: the build, the GTest
-  binaries that compile it, the Quest and scripting groups, the Go packages and pytest files that read it, and the
-  checks such as `verify_pe_contract.py` for `src/runtime/host/`), and runs exactly those, one at a time, each printed with
+  test-changed` on the branch's tip. It reads `git diff --name-only --no-renames $(git merge-base origin/main HEAD)` (a
+  moved file is its old path and its new one), looks each path up in `tools/test_map.json` (the path, then the component
+  of its directory, then that file's tests: the build, the GTest binaries that compile it, the Quest and scripting
+  groups, the Go packages and pytest files that read it, the checks such as `verify_pe_contract.py` for
+  `src/runtime/host/`, and the scanners that read every file of its kind), and runs exactly those, one at a time, each printed with
   its exit code (`tools/cmd/test-changed`). Quote its output, the plan lines and the summary, in the commit message. A
-  changed path the map does not cover fails the command, naming the path: the fix is an entry in the map, in the same
-  branch, for the component whose tests cover the path, and the map's own test (`tools/internal/testmap`) fails on a
-  tracked file with no entry. A change that removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit
-  that removes them. The PC login test is not part of a branch's check. No workflow runs on a push to `main` except
-  `vcpkg-cache.yml`, when a vcpkg input changes; start the rest by hand.
+  changed path the map does not cover fails the command, naming the path: the fix is `just test-map` run in the branch and
+  the map it writes committed in the same branch. The map is written by `just test-map` (`tools/cmd/test-map`) from the
+  build trees, never by hand: the mingw-release, quest-host-<group>, android-arm64 and scripting trees, looked for in the
+  build checkout, then the main checkout, then the branch's own `build/`; a missing one stops it, naming the recipe
+  that makes it, and the map's own test (`tools/internal/testmap`) fails on a tracked file with no entry. A
+  change that removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. The PC login
+  test is not part of a branch's check. No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input
+  changes; start the rest by hand.
 - **No agent runs the full suite or any whole suite.** The whole suites are `just test-full` (`just verify` and the
-  suites it does not run), `just verify`, `just test-tools` with no file and `just test-auth-unit` with no binary and no
-  `GTEST_FILTER`; only the owner runs them, at the owner's choice. Each run of one is recorded in
-  `<work root>/test-runs/suite-runs.jsonl` (the time, the process, the agent session it came from and its directory, the
+  suites it does not run), `just verify`, `just test-tools` with no argument that names test files (options, their values
+  and directories leave it whole) and `just test-auth-unit` with no binary and no `GTEST_FILTER`; only the owner runs them, at the
+  owner's choice. Each run of one is recorded in
+  `<work root>/test-runs/suite-run.jsonl` (the time, the process, the agent session it came from and its directory, the
   command, the exit code; `tools/cmd/suite-run`), and an agent's run calls the alert hook: the program
   `NEVR_SUITE_ALERT` names, as `$NEVR_SUITE_ALERT --from nevr-runtime "<session directory> ran <recipe>"`, unless the
   session directory is one of `NEVR_SUITE_ALERT_EXEMPT` (colon-separated). Both are empty unless a machine sets them, so a

@@ -40,13 +40,15 @@ func fixture(t *testing.T) (work, copyDir, src string) {
 	return
 }
 
+// do runs the tool with -work-root given, so the work root is the flag's and no environment is read: getenv is empty.
 func do(work, copyDir, src string) (int, string) {
 	var o, e bytes.Buffer
-	c := execute([]string{"-copy", copyDir, "-src", src, "-work-root", work}, &o, &e)
+	c := execute([]string{"-copy", copyDir, "-src", src, "-work-root", work}, testkit.Getenv(nil), &o, &e)
 	return c, o.String() + e.String()
 }
 
 func TestGreenCopy(t *testing.T) {
+	t.Parallel()
 	work, c, s := fixture(t)
 	// a link to / leaves the copy: listed, not refused
 	if err := os.Symlink("/", filepath.Join(c, "echovr", "z:")); err != nil {
@@ -60,6 +62,7 @@ func TestGreenCopy(t *testing.T) {
 
 // Planted violations, one per refusal.
 func TestPlantedViolationsAreRefused(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(t *testing.T, work, c, s string){
 		"credentials": func(t *testing.T, _, c, _ string) {
 			w(t, filepath.Join(c, "echovr", "x", ".credentials.json.bak"), "k")
@@ -93,35 +96,40 @@ func TestPlantedViolationsAreRefused(t *testing.T) {
 }
 
 func TestCopyOutsideWorkRootIsRefused(t *testing.T) {
+	t.Parallel()
 	_, c, s := fixture(t)
 	if code, out := do(t.TempDir(), c, s); code != 1 || !strings.Contains(out, "work root") {
 		t.Fatalf("%d %s", code, out)
 	}
 }
 
-// Without -work-root the work root is $NEVR_WORK_ROOT (runlog.WorkRoot). Not parallel: execute reads the process's
-// environment, which only t.Setenv can set, and t.Setenv forbids t.Parallel.
+// Without -work-root the work root is the NEVR_WORK_ROOT the tool is given (runlog.WorkRoot(getenv)). The test gives
+// that through testkit.Env, so it can run in parallel: no test sets the process environment, and the tool reads none.
 func TestWithoutTheFlagTheWorkRootIsNevrWorkRoot(t *testing.T) {
+	t.Parallel()
 	work, c, s := fixture(t)
+	inWork := testkit.Getenv(testkit.Env(t, "NEVR_WORK_ROOT="+work))
 	var o, e bytes.Buffer
-	t.Setenv("NEVR_WORK_ROOT", work)
-	if code := execute([]string{"-copy", c, "-src", s}, &o, &e); code != 0 {
+	if code := execute([]string{"-copy", c, "-src", s}, inWork, &o, &e); code != 0 {
 		t.Fatalf("a copy under $NEVR_WORK_ROOT: code %d: %s%s", code, o.String(), e.String())
 	}
-	t.Setenv("NEVR_WORK_ROOT", t.TempDir())
-	if code := execute([]string{"-copy", c, "-src", s}, &o, &e); code != 1 || !strings.Contains(o.String()+e.String(), "work root") {
-		t.Fatalf("a copy outside $NEVR_WORK_ROOT: code %d: %s%s", code, o.String(), e.String())
+	outside := testkit.Getenv(testkit.Env(t, "NEVR_WORK_ROOT="+t.TempDir()))
+	var o2, e2 bytes.Buffer
+	if code := execute([]string{"-copy", c, "-src", s}, outside, &o2, &e2); code != 1 || !strings.Contains(o2.String()+e2.String(), "work root") {
+		t.Fatalf("a copy outside $NEVR_WORK_ROOT: code %d: %s%s", code, o2.String(), e2.String())
 	}
 }
 
 func TestBadFlag(t *testing.T) {
+	t.Parallel()
 	var o, e bytes.Buffer
-	if execute(nil, &o, &e) != exitUsage {
+	if execute(nil, testkit.Getenv(nil), &o, &e) != exitUsage {
 		t.Fatal("want 2")
 	}
 }
 
-// Planted: the same link into the install, with -src and -copy given as relative paths.
+// Planted: the same link into the install, with -src and -copy given as relative paths. Not parallel: t.Chdir forbids
+// t.Parallel.
 func TestPlantedLinkIntoInstallWithRelativeSrcIsRefused(t *testing.T) {
 	work, c, s := fixture(t)
 	if err := os.Symlink(filepath.Join(s, "f"), filepath.Join(c, "echovr", "content")); err != nil {
@@ -129,7 +137,7 @@ func TestPlantedLinkIntoInstallWithRelativeSrcIsRefused(t *testing.T) {
 	}
 	t.Chdir(work)
 	var o, e bytes.Buffer
-	code := execute([]string{"-copy", "game-copy", "-src", "install", "-work-root", work}, &o, &e)
+	code := execute([]string{"-copy", "game-copy", "-src", "install", "-work-root", work}, testkit.Getenv(nil), &o, &e)
 	if code != 1 || !strings.Contains(o.String(), "resolves into the install") {
 		t.Fatalf("%d %s%s", code, o.String(), e.String())
 	}
@@ -138,6 +146,7 @@ func TestPlantedLinkIntoInstallWithRelativeSrcIsRefused(t *testing.T) {
 // Planted violation of the logging rule: a run that leaves no record in the tools log fails here. The run is the real
 // command through its own entry point, on a state directory of the test's own.
 func TestARunIsRecordedInTheToolsLog(t *testing.T) {
+	t.Parallel()
 	env := testkit.Env(t)
 	work, c, s := fixture(t)
 	args := []string{"-copy", c, "-src", s, "-work-root", work}
@@ -149,15 +158,28 @@ func TestARunIsRecordedInTheToolsLog(t *testing.T) {
 	testkit.RequireRunRecorded(t, env, "run-copy", code, args)
 }
 
+// run hands its getenv to execute: a run with no -work-root reads the work root from the NEVR_WORK_ROOT it is given. The
+// other run test passes -work-root, so it would not notice a run that drops the getenv.
+func TestRunReadsTheWorkRootItIsGiven(t *testing.T) {
+	t.Parallel()
+	work, c, s := fixture(t)
+	env := testkit.Env(t, "NEVR_WORK_ROOT="+work)
+	var o, e bytes.Buffer
+	if code := run([]string{"-copy", c, "-src", s}, testkit.Getenv(env), &o, &e); code != 0 {
+		t.Fatalf("a copy under the given NEVR_WORK_ROOT through run: code %d: %s%s", code, o.String(), e.String())
+	}
+}
+
 // Planted: without -src the link check cannot run, so the copy is refused and the missing flag is named, even when a link
 // into the install is present.
 func TestPlantedMissingSrcIsRefusedNamingTheFlag(t *testing.T) {
+	t.Parallel()
 	work, c, s := fixture(t)
 	if err := os.Symlink(filepath.Join(s, "f"), filepath.Join(c, "echovr", "content")); err != nil {
 		t.Fatal(err)
 	}
 	var o, e bytes.Buffer
-	code := execute([]string{"-copy", c, "-work-root", work}, &o, &e)
+	code := execute([]string{"-copy", c, "-work-root", work}, testkit.Getenv(nil), &o, &e)
 	if code != exitUsage || !strings.Contains(e.String(), "-src is required") {
 		t.Fatalf("%d %s%s", code, o.String(), e.String())
 	}
@@ -165,6 +187,7 @@ func TestPlantedMissingSrcIsRefusedNamingTheFlag(t *testing.T) {
 
 // Planted: a directory that cannot be read could hold a sign-in file, so it is a finding and not a skipped subtree.
 func TestPlantedUnreadableSubtreeIsAFinding(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root reads every directory")
 	}

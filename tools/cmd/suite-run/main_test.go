@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
@@ -28,6 +30,10 @@ const (
 	suiteFails = 5
 	// hookFails is the exit code the fake hook is told to return.
 	hookFails = 3
+	// recordsPerRun is a run's records: suite_start and suite_end.
+	recordsPerRun = 2
+	// alertMessageArg is the message's place in the hook's arguments: --from nevr-runtime <message>.
+	alertMessageArg = 2
 	// rcName is the file in a fake's directory that holds the exit code it returns.
 	rcName = "rc"
 )
@@ -121,7 +127,7 @@ func (f *fixture) run(sys system, recipe string) (int, string) {
 
 func (f *fixture) records() []map[string]any {
 	f.t.Helper()
-	fh, err := os.Open(filepath.Join(f.work, "test-runs", "suite-runs.jsonl"))
+	fh, err := os.Open(filepath.Join(f.work, "test-runs", "suite-run.jsonl"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -142,8 +148,12 @@ func (f *fixture) records() []map[string]any {
 func (f *fixture) startEnd() (map[string]any, map[string]any) {
 	f.t.Helper()
 	recs := f.records()
-	if len(recs) != 2 || recs[0]["event"] != "suite_start" || recs[1]["event"] != "suite_end" || recs[0]["run"] != recs[1]["run"] {
+	if len(recs) != recordsPerRun || recs[0]["event"] != "suite_start" || recs[1]["event"] != "suite_end" || recs[0]["run"] != recs[1]["run"] {
 		f.t.Fatalf("records = %v, want one suite_start and one suite_end of one run", recs)
+	}
+	// The record names the tool that wrote it (runlog takes the tool from the log file's name).
+	if recs[0]["tool"] != tool || recs[1]["tool"] != tool {
+		f.t.Fatalf("records name tool %v and %v, want %q", recs[0]["tool"], recs[1]["tool"], tool)
 	}
 	return recs[0], recs[1]
 }
@@ -223,7 +233,7 @@ func TestTheMarkerWithoutAnAgentAncestorIsAnAgentsRun(t *testing.T) {
 		t.Errorf("suite_start = %v, want an agent's run, session not found, alert sent", start)
 	}
 	cwd, _ := os.Getwd()
-	if calls := f.bonk.Calls(t); len(calls) != 1 || calls[0].Args[2] != cwd+" ran test-auth-unit" {
+	if calls := f.bonk.Calls(t); len(calls) != 1 || calls[0].Args[alertMessageArg] != cwd+" ran test-auth-unit" {
 		t.Errorf("bonk calls = %+v, want one naming the run's directory %s", calls, cwd)
 	}
 }
@@ -262,6 +272,24 @@ func TestARunThatCannotBeRecordedDoesNotStart(t *testing.T) {
 	}
 	if len(f.suite.Calls(t)) != 0 || len(f.bonk.Calls(t)) != 0 {
 		t.Error("the suite or the hook ran without a record")
+	}
+}
+
+// A signal the suite cannot take is a line on standard error that names the signal and the error. The fake suite has been
+// waited for before the signal is sent, so the signal cannot reach it: the failure is certain and needs no timing.
+func TestASignalThatCannotReachTheSuiteIsLoud(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	cmd := exec.Command(filepath.Join(f.suite.Dir(), "suite"))
+	cmd.Env = f.env
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("the fake suite: %v", err)
+	}
+	var errb bytes.Buffer
+	signalChild(cmd.Process, syscall.SIGTERM, &errb)
+	const want = "cannot pass signal 15 (terminated) on to the suite: os: process already finished"
+	if !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr = %q, want a line containing %q", errb.String(), want)
 	}
 }
 

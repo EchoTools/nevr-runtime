@@ -9,4 +9,4 @@ filing	AGENTS.md	Evidence at .<sha>
 landing	AGENTS.md	refs/heads/main
 landing	AGENTS.md	rerun the (touched|test recipes|tests)
 branch-check	AGENTS.md	looks each path up
-whole-suites	AGENTS.md	suite-runs\.jsonl
+whole-suites	AGENTS.md	suite-run\.jsonl

@@ -2,23 +2,32 @@
 //
 //	test-changed [-repo dir] [-map file] [-base origin/main] [-preset name] [-n]
 //
-// The change is what `git diff --name-only $(git merge-base origin/main HEAD)` lists: the branch's commits and its
-// uncommitted edits to tracked files. Each changed path belongs to one component of tools/test_map.json
-// (internal/testmap); the run is the union of those components' tests, one at a time, the build first, each printed with
-// its exit code. A path that was deleted is looked up in the map at the merge-base when the map no longer has it. A
-// changed path that no entry of the map covers stops the run before anything starts, naming the path, so the map
-// cannot drift away from the tree unnoticed.
+// The change is what `git diff --name-only --no-renames -z $(git merge-base origin/main HEAD)` lists: the branch's commits
+// and its uncommitted edits to tracked files. --no-renames makes a file moved between two components show as a deletion
+// and an addition, so both components' tests run. Each changed path is looked up in tools/test_map.json (schema 2,
+// internal/testmap): the path's component, its own tests and the tests of every scanner whose glob matches it. The run is
+// the union of those tests in the order testmap.Order gives, one call at a time, each printed with its exit code.
+//
+// Every gtest id of the run is one call of `just test-auth-unit <binary>...`, which appends one "<binary>\t<exit code>"
+// line per binary it ran to the file NEVR_GTEST_RESULTS names. That file is a fresh one under
+// <work root>/test-runs/test-changed/ and is kept as the run's evidence. A binary with no line gets the batch's own exit
+// code (1 when the batch exited 0), and its line says the batch exited before running it.
+//
+// A path that was deleted is looked up in the map at the merge-base when the map no longer has it. A changed path that no
+// entry of the map covers stops the run before anything starts, naming the path; the fix is `just test-map`, never a
+// hand edit of the map.
 //
 // Every test runs from the checkout's top directory without DISPLAY and WAYLAND_DISPLAY (a GTest under Wine must not
 // reach the desktop) and with PRESET set to -preset (default $PRESET, else mingw-release), so the build and the tests
 // read one build tree. -n prints the plan and runs nothing.
 //
-// Exit codes: 0 every test passed, or the change needs none; 1 a test failed; 2 a flag, git or the map is wrong; 3 a
-// changed path is not in the map; 130 interrupted between tests; 74 the run log could not be written.
+// Exit codes: 0 every test passed, or the change needs none; 1 a test failed; 2 a flag, git, the map or the results file is
+// wrong; 3 a changed path is not in the map; 127 a program a test starts is not on PATH; 130 interrupted between tests;
+// 74 the run log could not be written.
 //
-// Each run is recorded in $XDG_STATE_HOME/nevr-runtime/test-changed.jsonl (internal/runlog): invoked, plan (the
-// merge-base, the changed paths, their components and the tests), one test_end per test (its id, argv, exit and
-// milliseconds), finished.
+// Each run is recorded in $XDG_STATE_HOME/nevr-runtime/test-changed.jsonl (internal/runlog): invoked, plan (the merge-base,
+// the changed paths, their components and the tests), results (the results file of a gtest batch), one test_end per test
+// (its id, argv, exit and milliseconds; a gtest id also its note when the batch wrote no line for it), finished.
 package main
 
 import (
@@ -34,6 +43,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,8 +63,26 @@ const (
 // execBits are the mode bits of which one makes a file a program a shell would start.
 const execBits = 0o111
 
+// dirPerm and filePerm are the modes of the results directory and file.
+const (
+	dirPerm  = 0o755
+	filePerm = 0o644
+)
+
 // tool is the program's name: its log file and the prefix of every line it prints.
 const tool = "test-changed"
+
+// testRunsDir is the directory under the work root where the tools keep the results of test runs.
+const testRunsDir = "test-runs"
+
+// resultsEnv is the variable test-auth-unit appends its per-binary results to (justfile).
+const resultsEnv = "NEVR_GTEST_RESULTS"
+
+// runStamp is the UTC stamp a results file is named by, the same form the run log's run id uses.
+const runStamp = "20060102T150405.000000Z"
+
+// noResultFormat is the note of a gtest id whose binary the batch wrote no result for; the code is the batch's exit code.
+const noResultFormat = "(no result: the batch exited %d before running it)"
 
 // hiddenFromTests are the variables no test is started with: a GTest under Wine that sees a display takes it over.
 var hiddenFromTests = []string{"DISPLAY", "WAYLAND_DISPLAY"}
@@ -136,12 +164,25 @@ func (r *runner) git(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// change is one changed path and what owns it.
+// change is one changed path and what the map says about it.
 type change struct {
-	path, component, entry string
-	tests                  []string
-	none                   string
-	fromBase               bool
+	path, component, text string
+	tests                 []string
+	fromBase              bool
+}
+
+// step is one call of the run: one test id, or the batch of every gtest id, which one call of test-auth-unit runs.
+type step struct {
+	ids   []string
+	argv  []string
+	batch bool
+}
+
+// outcome is the exit of one test id, and the note the run gives it when it has no result of its own.
+type outcome struct {
+	id   string
+	code int
+	note string
 }
 
 func (r *runner) do(repo, mapFile, base string, dry bool) int {
@@ -165,7 +206,7 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 		return r.fail(exitUsage, "%v (is %s fetched? git fetch origin main)", err, base)
 	}
 	mb := strings.TrimSpace(mbOut)
-	diff, err := r.git("diff", "--name-only", "-z", mb)
+	diff, err := r.git("diff", "--name-only", "--no-renames", "-z", mb)
 	if err != nil {
 		return r.fail(exitUsage, "%v", err)
 	}
@@ -195,12 +236,12 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	var changes []change
 	var uncovered []string
 	for _, p := range paths {
-		c, entry, ok := m.Owner(p)
+		lk, ok := m.Lookup(p)
 		fromBase := false
 		if !ok {
 			if _, statErr := os.Stat(filepath.Join(r.repo, p)); errors.Is(statErr, fs.ErrNotExist) {
 				if bm, err := loadBase(); err == nil {
-					c, entry, ok = bm.Owner(p)
+					lk, ok = bm.Lookup(p)
 					fromBase = ok
 				}
 			}
@@ -209,11 +250,11 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 			uncovered = append(uncovered, p)
 			continue
 		}
-		changes = append(changes, change{path: p, component: c.Name, entry: entry, tests: c.Tests, none: c.None, fromBase: fromBase})
+		changes = append(changes, change{path: p, component: lk.Component.Name, text: describe(lk), tests: lk.Tests, fromBase: fromBase})
 	}
 	if len(uncovered) > 0 {
 		for _, p := range uncovered {
-			fmt.Fprintf(r.stderr, "%s: FAIL %s is not covered by %s: add it to the component whose tests cover it\n", tool, p, relTo(r.repo, mapFile))
+			fmt.Fprintf(r.stderr, "%s: FAIL %s is not in %s: run just test-map and commit the map it writes\n", tool, p, relTo(r.repo, mapFile))
 		}
 		r.log.Error("uncovered", "merge_base", mb, "paths", uncovered, "exit", exitUncovered)
 		fmt.Fprintf(r.stderr, "%s: FAIL %d changed path(s) not in the map; nothing was run\n", tool, len(uncovered))
@@ -222,24 +263,21 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	var all []string
 	var components []string
 	for _, c := range changes {
-		where := "component " + c.component + " (" + c.entry + ")"
+		line := fmt.Sprintf("%s -> %s : %s", c.path, c.component, c.text)
 		if c.fromBase {
-			where += ", deleted: from the map at the merge-base"
+			line += " (deleted: looked up in the map at the merge-base)"
 		}
-		if len(c.tests) == 0 {
-			r.say("%s -> %s: no tests: %s", c.path, where, c.none)
-		} else {
-			r.say("%s -> %s: %s", c.path, where, strings.Join(c.tests, " "))
-		}
+		r.say("%s", line)
 		components = append(components, c.component)
 		all = append(all, c.tests...)
 	}
-	ids := m.Order(all)
-	plan := make([][]string, len(ids))
-	for i, id := range ids {
-		if plan[i], err = m.Command(id, r.preset); err != nil {
-			return r.fail(exitUsage, "%v", err)
-		}
+	steps, err := r.plan(m, m.Order(all))
+	if err != nil {
+		return r.fail(exitUsage, "%v", err)
+	}
+	var ids []string
+	for _, st := range steps {
+		ids = append(ids, st.ids...)
 	}
 	r.log.Info("plan", "base", base, "merge_base", mb, "paths", paths, "components", components, "tests", ids, "preset", r.preset)
 	if len(ids) == 0 {
@@ -251,43 +289,214 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 		r.say("-n: nothing run")
 		return 0
 	}
-	return r.runAll(ids, plan)
+	results := ""
+	for _, st := range steps {
+		if st.batch {
+			if results, err = r.newResultsFile(); err != nil {
+				return r.fail(exitUsage, "%v", err)
+			}
+			r.log.Info("results", "file", results)
+			break
+		}
+	}
+	return r.runSteps(steps, results)
 }
 
-func (r *runner) runAll(ids []string, plan [][]string) int {
+// describe is what the map says about one path, for the plan's line.
+func describe(lk testmap.Lookup) string {
+	own := "no tests of its own: " + lk.None
+	if len(lk.Own) > 0 {
+		own = strings.Join(lk.Own, " ")
+	}
+	if len(lk.Scanners) == 0 {
+		return own
+	}
+	mine := map[string]bool{}
+	for _, id := range lk.Own {
+		mine[id] = true
+	}
+	var extra []string
+	for _, id := range lk.Tests {
+		if !mine[id] {
+			extra = append(extra, id)
+		}
+	}
+	scanned := strings.Join(extra, " ")
+	if len(extra) == 0 {
+		scanned = "no new tests"
+	}
+	return fmt.Sprintf("%s ; scanners %s: %s", own, strings.Join(lk.Scanners, ", "), scanned)
+}
+
+// plan turns the ordered ids into the calls of the run. The gtest ids become one step, in the place of the first of them,
+// whose argv is the command of the first with every other id's binary appended.
+func (r *runner) plan(m *testmap.Map, ids []string) ([]step, error) {
+	var steps []step
+	var batch step
+	var prefix, names []string
+	batchAt := -1
+	for _, id := range ids {
+		argv, err := m.Command(id, r.preset)
+		if err != nil {
+			return nil, err
+		}
+		if len(argv) == 0 {
+			return nil, fmt.Errorf("test %s has no command", id)
+		}
+		kind, _, _ := strings.Cut(id, ":")
+		if kind != testmap.KindGTest {
+			steps = append(steps, step{ids: []string{id}, argv: argv})
+			continue
+		}
+		p := argv[:len(argv)-1]
+		if batchAt < 0 {
+			batchAt = len(steps)
+			steps = append(steps, step{})
+			prefix = append([]string(nil), p...)
+		} else if !sameStrings(p, prefix) {
+			return nil, fmt.Errorf("gtest test %s runs as %v, not as the other gtest tests' %v", id, argv, prefix)
+		}
+		names = append(names, argv[len(argv)-1])
+		batch.ids = append(batch.ids, id)
+	}
+	if batchAt >= 0 {
+		batch.argv = append(append([]string(nil), prefix...), names...)
+		batch.batch = true
+		steps[batchAt] = batch
+	}
+	return steps, nil
+}
+
+// runSteps runs the steps in order, stopping between them on an interrupt, and summarises the run.
+func (r *runner) runSteps(steps []step, results string) int {
 	childEnv := r.childEnv()
+	total := 0
+	for _, st := range steps {
+		total += len(st.ids)
+	}
 	var failed []string
-	for i, id := range ids {
+	done := 0
+	for _, st := range steps {
 		if r.ctx.Err() != nil {
-			r.log.Warn("interrupted", "before", id, "exit", exitInterrupted)
-			fmt.Fprintf(r.stderr, "%s: interrupted before %s; %d test(s) not run\n", tool, id, len(ids)-i)
+			r.log.Warn("interrupted", "before", st.ids[0], "exit", exitInterrupted)
+			fmt.Fprintf(r.stderr, "%s: interrupted before %s; %d test(s) not run\n", tool, st.ids[0], total-done)
 			return exitInterrupted
 		}
-		argv := plan[i]
-		r.say("run %s: %s", id, strings.Join(argv, " "))
-		started := time.Now()
-		code := r.start(argv, childEnv)
-		ms := time.Since(started).Milliseconds()
-		r.log.Info("test_end", "test", id, "argv", argv, "exit", code, "ms", ms)
-		r.say("%s exit %d (%.1f s)", id, code, time.Since(started).Seconds())
-		if code != 0 {
-			failed = append(failed, fmt.Sprintf("%s (exit %d)", id, code))
+		var outs []outcome
+		if st.batch {
+			outs = r.runBatch(st, results, childEnv)
+		} else {
+			outs = []outcome{r.runOne(st, childEnv)}
 		}
+		for _, o := range outs {
+			if o.code != 0 {
+				failed = append(failed, fmt.Sprintf("%s (exit %d)", o.id, o.code))
+			}
+		}
+		done += len(st.ids)
 	}
 	if len(failed) > 0 {
-		r.say("%d test(s): %d passed, %d failed: %s", len(ids), len(ids)-len(failed), len(failed), strings.Join(failed, ", "))
+		r.say("%d test(s): %d passed, %d failed: %s", total, total-len(failed), len(failed), strings.Join(failed, ", "))
 		return exitFailed
 	}
-	r.say("%d test(s): all passed", len(ids))
+	r.say("%d test(s): all passed", total)
 	return 0
 }
 
-// childEnv is the environment every test starts with: this one, without the display variables, with PRESET.
+// runOne runs one test id as its own call.
+func (r *runner) runOne(st step, env []string) outcome {
+	id := st.ids[0]
+	r.say("run %s: %s", id, strings.Join(st.argv, " "))
+	started := time.Now()
+	code := r.start(st.argv, env)
+	ms := time.Since(started).Milliseconds()
+	r.log.Info("test_end", "test", id, "argv", st.argv, "exit", code, "ms", ms)
+	r.say("%s exit %d (%.1f s)", id, code, time.Since(started).Seconds())
+	return outcome{id: id, code: code}
+}
+
+// runBatch runs the gtest batch as one call, with NEVR_GTEST_RESULTS naming the results file, then reads each id's own
+// result from it. An id with no line gets the batch's exit code, or 1 when the batch exited 0.
+func (r *runner) runBatch(st step, results string, env []string) []outcome {
+	r.say("run %s: %s", strings.Join(st.ids, " "), strings.Join(st.argv, " "))
+	started := time.Now()
+	code := r.start(st.argv, withEnv(env, resultsEnv+"="+results))
+	ms := time.Since(started).Milliseconds()
+	got, err := readResults(results)
+	if err != nil {
+		r.log.Error("results_unreadable", "file", results, "error", err.Error())
+		fmt.Fprintf(r.stderr, "%s: FAIL %v\n", tool, err)
+	}
+	outs := make([]outcome, 0, len(st.ids))
+	for _, id := range st.ids {
+		_, name, _ := strings.Cut(id, ":")
+		o := outcome{id: id}
+		if c, ok := got[name]; ok {
+			o.code = c
+		} else {
+			o.code = code
+			if o.code == 0 {
+				o.code = exitFailed
+			}
+			o.note = fmt.Sprintf(noResultFormat, code)
+		}
+		args := []any{"test", id, "argv", st.argv, "exit", o.code, "ms", ms}
+		line := fmt.Sprintf("%s exit %d", id, o.code)
+		if o.note != "" {
+			args = append(args, "note", o.note)
+			line += " " + o.note
+		}
+		r.log.Info("test_end", args...)
+		r.say("%s", line)
+		outs = append(outs, o)
+	}
+	return outs
+}
+
+// readResults reads the "<binary>\t<exit code>" lines a test-auth-unit call appended. A line that is not one is an error,
+// and the lines before it are returned with it.
+func readResults(file string) (map[string]int, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	got := map[string]int{}
+	for n, row := range strings.Split(string(data), "\n") {
+		if row == "" {
+			continue
+		}
+		name, code, ok := strings.Cut(row, "\t")
+		c, cerr := strconv.Atoi(code)
+		if !ok || cerr != nil || name == "" {
+			return got, fmt.Errorf("results file %s line %d is not <binary>, a tab and an exit code: %q", file, n+1, row)
+		}
+		got[name] = c
+	}
+	return got, nil
+}
+
+// newResultsFile makes the fresh, empty results file of a gtest batch, under the work root, and returns its path.
+func (r *runner) newResultsFile() (string, error) {
+	dir := filepath.Join(runlog.WorkRoot(r.getenv), testRunsDir, tool)
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return "", fmt.Errorf("results directory: %w", err)
+	}
+	name := fmt.Sprintf("%s-%d.tsv", time.Now().UTC().Format(runStamp), os.Getpid())
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
+	if err != nil {
+		return "", fmt.Errorf("results file: %w", err)
+	}
+	return path, f.Close()
+}
+
+// childEnv is the environment every test starts with: this one, without the display variables, without the results
+// variable (only the gtest batch gets one), with PRESET.
 func (r *runner) childEnv() []string {
 	var out []string
 	for _, kv := range r.env {
 		key, _, _ := strings.Cut(kv, "=")
-		hidden := key == "PRESET"
+		hidden := key == "PRESET" || key == resultsEnv
 		for _, h := range hiddenFromTests {
 			hidden = hidden || key == h
 		}
@@ -341,6 +550,24 @@ func findProgram(name, path string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s is not on PATH", name)
+}
+
+// withEnv is env with kv added at the end (a later KEY=VALUE of the same key wins in a child process).
+func withEnv(env []string, kv string) []string {
+	return append(append([]string(nil), env...), kv)
+}
+
+// sameStrings reports whether a and b hold the same strings in the same order.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func relTo(root, file string) string {

@@ -88,7 +88,7 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 | Tools | `tools/README.md`; a sensor follows "Writing a sensor (N93, N99, N101, N111)" |
 | Release | `RELEASING.md` whole; no tag that is not on origin (`just release-preflight` refuses one); build CI runs only when started by hand ("Builds") |
 
-### 6. Prove it: the quick check, by area
+### 6. Prove it: just test-changed
 
 The gate before landing is "A branch runs `just test-changed`, once, before it lands, and nothing else" in `AGENTS.md`
 "Builds": the command picks the tests from `tools/test_map.json`, so no agent picks them, and no agent runs a whole suite.
