@@ -23,6 +23,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -387,6 +388,26 @@ void IsDirectoryTellsAFolderFromAFileAndALink() {
   QCHECK(fs->IsDirectory(root.At("real/inner")));
 }
 
+// While g_refuse_allocations is set, the operator new below main throws bad_alloc, and each refusal is counted. A new handler is not
+// used: the standard calls it only when malloc itself fails, so it cannot make an allocation fail.
+bool g_refuse_allocations = false;
+int g_refused_allocations = 0;
+
+// IsDirectory answers true when it cannot tell for lack of memory, as the PC host does, so the engine inspects the path instead of
+// skipping it. The path is made before the refusal starts; the call's own allocations are refused, and the count proves that they were.
+void IsDirectoryAnswersTrueWhenItCannotAllocate() {
+  constexpr std::size_t kLongNameLength = 4096;
+  Root root;
+  auto fs = MakeFs(root);
+  const std::string path = root.At(std::string(kLongNameLength, 'n'));
+  g_refused_allocations = 0;
+  g_refuse_allocations = true;
+  const bool answer = fs->IsDirectory(path);
+  g_refuse_allocations = false;
+  QCHECK(g_refused_allocations > 0);
+  QCHECK(answer);
+}
+
 // LastOsError names the errno of the last failed call: a read through a link fails with ELOOP, a read of an absent file with ENOENT.
 void LastOsErrorNamesTheLastFailedCall() {
   Root root;
@@ -635,6 +656,21 @@ void LastOsErrorIsPerThread() {
 
 }  // namespace
 
+// The allocation functions of this test program. Outside a refusal, an allocation is malloc's, and a null from malloc throws as the
+// default operator new does; during one (IsDirectoryAnswersTrueWhenItCannotAllocate) every allocation throws.
+void* operator new(std::size_t size) {
+  if (g_refuse_allocations) {
+    ++g_refused_allocations;
+    throw std::bad_alloc();
+  }
+  void* block = std::malloc(size == 0 ? 1 : size);
+  if (block == nullptr) throw std::bad_alloc();
+  return block;
+}
+
+void operator delete(void* block) noexcept { std::free(block); }
+void operator delete(void* block, std::size_t) noexcept { std::free(block); }
+
 int main() {
   ReadSmallFileTellsPresentAbsentAndTooBig();
   ReadSmallFileTellsAFileThatEndsEarlyAsDamaged();
@@ -648,6 +684,7 @@ int main() {
   MakeDirMakesAFolderAndRefusesAFileALinkAndALinkOnTheWay();
   RemoveEmptyDirRemovesOnlyAnEmptyFolder();
   IsDirectoryTellsAFolderFromAFileAndALink();
+  IsDirectoryAnswersTrueWhenItCannotAllocate();
   LastOsErrorNamesTheLastFailedCall();
   ALockInALinkedUpdateFolderIsRefusedAtOnce();
   TheLockIsExclusiveAndLetGoByItsOwner();

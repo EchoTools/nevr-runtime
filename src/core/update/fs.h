@@ -109,7 +109,8 @@ class UpdateFs {
   virtual bool RemoveEmptyDir(const std::string& /*path*/) const noexcept { return false; }
 
   /// True when `path` is a folder (a link to one is not a folder for this purpose: it is checked with IsLink first). The PC host
-  /// answers true for a path it cannot convert or cannot tell (out of memory), so the engine inspects it instead of skipping it.
+  /// answers true for a path it cannot convert, and the PC host and the POSIX edge answer true when they cannot tell (out of
+  /// memory), so the engine inspects the path instead of skipping it.
   virtual bool IsDirectory(const std::string& /*path*/) const noexcept { return false; }
 
   /// Lists a folder into `out`. False when it cannot be listed (an absent folder counts as false).

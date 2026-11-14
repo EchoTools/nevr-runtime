@@ -510,7 +510,7 @@ class PosixFs final : public UpdateFs {
       struct stat st{};
       return ::fstatat(dir.get(), leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode);
     } catch (const std::bad_alloc&) {
-      return false;
+      return true;  // out of memory: the answer is not known, and the engine inspects the path (fs.h), as the PC host answers
     }
   }
 
