@@ -653,6 +653,19 @@ inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineByte
 inline constexpr std::uint64_t kBalanceLookupSlot = 0x36c2750ULL;
 // The mangled name of that function (the JUMP_SLOT's symbol in libr15).
 inline constexpr char kBalanceLookupSymbol[] = "_ZN10NRadEngine8NRadGame24CR15NetBalanceSettingsCS4JsonENS_9CSymbol64E";
+// The session map pin's two libr15 functions (ADR 0048 decision 9; src/core/map_session_pin.h). Link-time vaddrs, as the rest of this
+// file. Checked against the disassembly (revault, consumer role, the binary's VA = vaddr + 0x100000): the words below are the bytes
+// there, and the names are CNSLobby's OwnerSymbol and CR15NetGame's ScheduleReturnToLobby (both confirmed by their bytes).
+namespace session_pin {
+// NRadEngine::CNSLobby::OwnerSymbol(char const*, CSymbol64) const: add x0, x0, #0x310; mov w3, wzr; b CJson::Symbol.
+// The branch is pc-relative inside libr15, so its word is fixed in the file.
+inline constexpr std::uint64_t kOwnerSymbolVaddr = 0x192db34;
+inline constexpr std::uint32_t kOwnerSymbolCode[3] = {0x910c4000, 0x2a1f03e3, 0x17d89651};
+// NRadEngine::NRadGame::CR15NetGame::ScheduleReturnToLobby(): str x19, [sp, #-0x20]!; sub x9, sp, #0xa0; stp x29, x30, [sp, #0x10];
+// add x29, sp, #0x10. Logs "[NETGAME] Scheduling return to lobby" and queues the return.
+inline constexpr std::uint64_t kScheduleReturnToLobbyVaddr = 0x124aa6c;
+inline constexpr std::uint32_t kScheduleReturnToLobbyCode[4] = {0xf81e0ff3, 0xd10283e9, 0xa9017bfd, 0x910043fd};
+}  // namespace session_pin
 
 // SNSConfigRequestv24Send(CTcpBroadcaster&, char const*, char const*): the
 // mangling encodes the parameters but not the return type, and no caller has
