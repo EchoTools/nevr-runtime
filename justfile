@@ -3431,7 +3431,7 @@ verify:
     # SECOND MinHook on CLog::PrintfImpl from a different static MinHook copy,
     # which measurably killed the built-in filter's game-line capture (67 game
     # lines -> 0) and stopped max_line_length from applying.
-    if ! grep -q 'kSupersededByBuiltin' src/runtime/ext/plugin_loader.cpp; then
+    if ! grep -q '"log_filter.dll"' src/runtime/ext/builtin_plugin_table.h || ! grep -q 'SkipRefusedByName(item' src/runtime/ext/plugin_loader.cpp; then
         echo "verify: FAIL — N89 superseded-plugin skip missing from plugin_loader; a stale" >&2
         echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
         exit 1

@@ -207,8 +207,8 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   nothing to deploy and no plugins directory is required for it.
   **Do NOT "restore" `log_filter.dll` to fix a logging problem — that plugin
   CAUSES the outage it looks like it would fix.** The loader refuses it by name
-  (`kSupersededByBuiltin` = `log_filter.dll`, `log-filter.dll` in
-  `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95) or packaged.
+  (the table in `src/runtime/ext/builtin_plugin_table.h`, rows `log_filter.dll` and `log-filter.dll`; the
+  refusal is `SkipRefusedByName` in `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95) or packaged.
 - No PC plugin is built in this repo. The plugin SDK is `sdk/` (`nevr::plugin_sdk`,
   header-only; `sdk/include/nevr/` builds for PC and Quest, `sdk/include/nevr/pc/` is
   Windows only); the test plugin fixtures in `src/runtime/tests/` build against it.

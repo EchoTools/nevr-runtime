@@ -2444,7 +2444,7 @@ TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) 
   LoadPlugins();
 
   ASSERT_EQ(GetLoadedPluginCount(), 1);
-  EXPECT_TRUE(TestLogContains("SKIPPED Log_Filter.dll"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "SKIPPED Log_Filter.dll"));
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
   EXPECT_EQ(manifest[0].at("loaded"), false);
@@ -2463,12 +2463,28 @@ TEST_F(PluginLoaderDiagnosticTest, ExternalEchoCombatDllsAreRefusedAsBuiltInAndT
   LoadPlugins();
 
   ASSERT_EQ(GetLoadedPluginCount(), 1);
-  EXPECT_TRUE(TestLogContains("plugin_load plugin=DroneFix file=DroneFix.dll outcome=refused reason=built_in "
-                              "replaced_by=combat.drone required=true"));
-  EXPECT_TRUE(TestLogContains("plugin_load plugin=PowerBoost file=.\\powerboost.DLL outcome=refused "
-                              "reason=built_in replaced_by=combat.overcharge,combat.medigun required=false"));
-  EXPECT_TRUE(TestLogContains("plugin_load plugin=VeilNet file=VeilNet.dll outcome=refused reason=built_in "
-                              "replaced_by=combat.veil,combat.match_control,combat.clean_exit required=true"));
+  constexpr EchoVR::LogLevel kWarning = EchoVR::LogLevel::Warning;
+  EXPECT_TRUE(TestLogContainsAtLevel(kWarning,
+                                     "plugin_load plugin=DroneFix entry=dronefix file=DroneFix.dll outcome=refused "
+                                     "reason=built_in replaced_by=combat.drone required=true"));
+  EXPECT_TRUE(TestLogContainsAtLevel(kWarning,
+                                     "plugin_load plugin=PowerBoost entry=powerboost file=.\\powerboost.DLL "
+                                     "outcome=refused reason=built_in "
+                                     "replaced_by=combat.overcharge,combat.medigun required=false"));
+  EXPECT_TRUE(TestLogContainsAtLevel(kWarning,
+                                     "plugin_load plugin=VeilNet entry=veilnet file=VeilNet.dll outcome=refused "
+                                     "reason=built_in "
+                                     "replaced_by=combat.veil,combat.match_control,combat.clean_exit required=true"));
+  // The new record is plain ASCII (a console or a grep that reads bytes must not meet a multi-byte dash).
+  constexpr unsigned kFirstNonAsciiByte = 0x80;
+  const std::vector<std::string> records = TestLogLinesContaining("plugin_load plugin=");
+  EXPECT_EQ(records.size(), 3u);
+  for (const std::string& line : records) {
+    EXPECT_EQ(std::count_if(line.begin(), line.end(),
+                            [](char c) { return static_cast<unsigned char>(c) >= kFirstNonAsciiByte; }),
+              0)
+        << line;
+  }
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 4u) << manifest.dump();
   EXPECT_EQ(manifest[0].at("loaded"), false);
@@ -2478,28 +2494,60 @@ TEST_F(PluginLoaderDiagnosticTest, ExternalEchoCombatDllsAreRefusedAsBuiltInAndT
   EXPECT_EQ(manifest[3].at("loaded"), true);
 }
 
-// The plugins the launcher marks required are refused by name with the reason `superseded`; the record names the
-// file and the reason and carries no replaced_by (no group replaces them yet); the next plugin still loads.
-class SupersededRefusal : public PluginLoaderDiagnosticTest {
+// The plugins the launcher marks required are refused by name with the reason `blocked` (not `superseded`, which
+// means replaced by built-in code); the record names the entry, the file and the reason and carries no replaced_by;
+// the next plugin still loads.
+class BlockedRefusal : public PluginLoaderDiagnosticTest {
  protected:
-  void ExpectRefused(const char* plugin, const char* file) {  // plugin: the table's name, which the record carries, not the config entry name
-    g_testPluginLoadPlan.push_back({plugin, file, true, "", "{}"});
+  void ExpectRefused(const char* plugin, const char* file) {
+    g_testPluginLoadPlan.push_back({"entry-name", file, true, "", "{}"});
     g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
     LoadPlugins();
     ASSERT_EQ(GetLoadedPluginCount(), 1);
-    EXPECT_TRUE(TestLogContains(std::string("plugin_load plugin=") + plugin + " file=" + file +
-                                " outcome=refused reason=superseded required=true"));
+    EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                       std::string("plugin_load plugin=") + plugin + " entry=entry-name file=" + file +
+                                           " outcome=refused reason=blocked required=true"));
     EXPECT_FALSE(TestLogContains("replaced_by"));
     const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
     ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
     EXPECT_EQ(manifest[0].at("loaded"), false);
-    EXPECT_EQ(manifest[0].at("error"), "superseded");
+    EXPECT_EQ(manifest[0].at("error"), "blocked");
     EXPECT_EQ(manifest[1].at("loaded"), true);
   }
 };
-TEST_F(SupersededRefusal, NvrAssetPatches) { ExpectRefused("NvrAssetPatches", "NvrAssetPatches.dll"); }
-TEST_F(SupersededRefusal, NvrXmlHttpFix) { ExpectRefused("NvrXmlHttpFix", "nvrxmlhttpfix.dll"); }
-TEST_F(SupersededRefusal, NvrGpuRating) { ExpectRefused("NvrGpuRating", "NvrGpuRating.dll"); }
+// plugin: the table's name, which the record carries, not the config entry name.
+TEST_F(BlockedRefusal, NvrAssetPatches) { ExpectRefused("NvrAssetPatches", "NvrAssetPatches.dll"); }
+TEST_F(BlockedRefusal, NvrXmlHttpFix) { ExpectRefused("NvrXmlHttpFix", "nvrxmlhttpfix.dll"); }
+TEST_F(BlockedRefusal, NvrGpuRating) { ExpectRefused("NvrGpuRating", "NvrGpuRating.dll"); }
+
+// The spellings Win32 resolves to DroneFix.dll are refused too: no extension (LoadLibrary appends .dll), and
+// trailing dots or spaces (the path is normalized before the lookup). One test each.
+class RefusedSpelling : public PluginLoaderDiagnosticTest {
+ protected:
+  void ExpectRefused(const char* file) {
+    g_testPluginLoadPlan.push_back({"cat", file, false, "", "{}"});
+    g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 1);
+    EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                       std::string("plugin_load plugin=DroneFix entry=cat file=") + file +
+                                           " outcome=refused reason=built_in"));
+  }
+};
+TEST_F(RefusedSpelling, WithoutAnExtension) { ExpectRefused("DroneFix"); }
+TEST_F(RefusedSpelling, WithATrailingDot) { ExpectRefused("DroneFix.dll."); }
+TEST_F(RefusedSpelling, WithATrailingSpace) { ExpectRefused("DroneFix.dll "); }
+TEST_F(RefusedSpelling, DottedAndUpperCaseWithBoth) { ExpectRefused(".\\DRONEFIX.DLL . "); }
+
+// Two entries that name one file each get their own record: `entry=` is the config entry's name (Rule 15), so
+// the records differ even though `plugin=` and `file=` are the same.
+TEST_F(PluginLoaderDiagnosticTest, TwoEntriesNamingOneRefusedFileEachGetARecordNamingTheirEntry) {
+  g_testPluginLoadPlan.push_back({"first", "DroneFix.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"second", "DroneFix.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_TRUE(TestLogContains("plugin_load plugin=DroneFix entry=first file=DroneFix.dll"));
+  EXPECT_TRUE(TestLogContains("plugin_load plugin=DroneFix entry=second file=DroneFix.dll"));
+}
 
 // A plugin that is not one of the EchoCombat DLLs, including one whose name only contains theirs, is untouched.
 TEST_F(PluginLoaderDiagnosticTest, UnrelatedPluginIsNotRefusedAsBuiltIn) {

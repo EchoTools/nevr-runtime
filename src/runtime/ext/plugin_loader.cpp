@@ -202,6 +202,15 @@ std::string_view PluginFilename(const std::string& file) {
   return name;
 }
 
+// The name the OS resolves a configured file to, for the by-name refusals: path normalization drops trailing dots
+// and spaces, and LoadLibrary appends ".dll" to a name with no extension (nevr_plugin_tree::WithDefaultExtension).
+// `DroneFix`, `DroneFix.dll.` and `DroneFix.dll ` all load DroneFix.dll.
+std::string RefusalLookupName(std::string_view name) {
+  const size_t last = name.find_last_not_of(". ");
+  const std::string trimmed(last == std::string_view::npos ? std::string_view() : name.substr(0, last + 1));
+  return nevr_plugin_tree::WithDefaultExtension(trimmed);
+}
+
 // ADR 0010 section 1: when the OS rejects the restricted search flags, a run that allows unsigned plugins
 // retries with the default search order (N75's old behaviour, logged); a signed-only run does not, because a
 // load the check did not shape is a load it did not cover.
@@ -954,8 +963,7 @@ class PluginLoadRun {
           item.name.c_str(), filename);
       return;
     }
-    if (SkipSuperseded(item, itemReport)) return;
-    if (SkipBuiltIn(item, itemReport)) return;
+    if (SkipRefusedByName(item, itemReport)) return;
     if (SkipDuplicateEntry(planIndex)) return;
     if (pluginDir.empty()) {
       FailPluginLoad(item, "the plugin directory cannot be resolved (no LOCALAPPDATA)", itemReport);
@@ -1115,57 +1123,32 @@ class PluginLoadRun {
     return false;
   }
 
-  // True when the entry is skipped.
-  bool SkipSuperseded(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
-    const char* filename = item.file.c_str();
-    const std::string_view name = PluginFilename(item.file);
-  // N89: refuse plugins whose function is now BUILT IN to gamepatches. Loading
-  // one makes two MinHook instances (gamepatches links extern/minhook, plugins
-  // link the vcpkg port — separate static copies, separate hook tables) fight
-  // over the same target. This survives the cutover to config-driven loading:
-  // an operator naming log_filter.dll explicitly is still an error we correct,
-  // because the built-in filter already provides it. Refused even if the entry
-  // is marked required — the function is present (built in), so it is not a
-  // missing dependency; warn and continue rather than fatal.
-  {
-    static const char* kSupersededByBuiltin[] = {"log_filter.dll", "log-filter.dll"};
-    bool superseded = false;
-    for (const char* s : kSupersededByBuiltin) {
-      if (name.size() == strlen(s) && _strnicmp(name.data(), s, name.size()) == 0) {
-        superseded = true;
-        break;
-      }
-    }
-    if (superseded) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PLUGIN] SKIPPED %s — superseded by the built-in log filter. Loading it "
-          "would install a second MinHook on CLog::PrintfImpl and silently disable both "
-          "file logging and max_line_length truncation. Remove it from config.yaml.",
-          filename);
-      itemReport.error = "superseded by the built-in log filter";
+  // True when the entry is skipped. The plugins in builtin_plugin_table.h are refused before LoadLibrary. N89: a
+  // plugin whose function is built in (the log filter) would install a second MinHook from a separate static copy
+  // and fight the built-in one over the same target; the built-in combat module likewise owns the EchoCombat DLLs'
+  // hooks. The refusal holds even for a required entry: the function is present (built in), so it is not a missing
+  // dependency, and a server must still start. The record names the file and the reason, never who installed it.
+  bool SkipRefusedByName(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
+    const std::string lookup = RefusalLookupName(PluginFilename(item.file));
+    const nevr_builtin_plugin::Entry* entry = nevr_builtin_plugin::Find(lookup);
+    if (entry == nullptr) return false;
+    itemReport.loaded = false;
+    if (!entry->skipped_text.empty()) {
+      const std::string text(entry->skipped_text);
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] SKIPPED %s \xE2\x80\x94 %s", item.file.c_str(), text.c_str());
+      itemReport.error = std::string(entry->manifest_error);
       return true;
     }
-  }
-    return false;
-  }
-
-  // True when the entry is skipped. The plugins in builtin_plugin_table.h are refused before LoadLibrary: the
-  // built-in combat module owns the EchoCombat DLLs' hooks, and the rest are refused until integrated. Like
-  // SkipSuperseded it holds even for a required entry (a server must still start), and the record names the file and
-  // the reason, never who installed it.
-  bool SkipBuiltIn(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
-    const nevr_builtin_plugin::Entry* entry = nevr_builtin_plugin::Find(PluginFilename(item.file));
-    if (entry == nullptr) return false;
     const std::string plugin(entry->plugin);
     const std::string reason(entry->reason);
     const std::string replacedBy(entry->replaced_by);
     const std::string replacedField = replacedBy.empty() ? std::string() : " replaced_by=" + replacedBy;
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PLUGIN] plugin_load plugin=%s file=%s outcome=refused reason=%s%s required=%s — not loaded: the "
-        "runtime refuses this DLL by name (a built-in module hooks the same functions, or it awaits integration); "
-        "remove the entry from config.yaml",
-        plugin.c_str(), item.file.c_str(), reason.c_str(), replacedField.c_str(), item.required ? "true" : "false");
-    itemReport.loaded = false;
+        "[NEVR.PLUGIN] plugin_load plugin=%s entry=%s file=%s outcome=refused reason=%s%s required=%s - not loaded: "
+        "the runtime refuses this DLL by name (a built-in module hooks the same functions, or it is blocked until "
+        "integrated); remove the entry from config.yaml",
+        plugin.c_str(), item.name.c_str(), item.file.c_str(), reason.c_str(), replacedField.c_str(),
+        item.required ? "true" : "false");
     itemReport.error = reason + (replacedBy.empty() ? std::string() : ": replaced by " + replacedBy);
     return true;
   }
