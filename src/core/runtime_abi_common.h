@@ -1,7 +1,7 @@
 #pragma once
 
 // What the PC ABI (core/runtime_abi.h, BugSplat64.dll <-> nevr-runtime.dll) and the Quest ABI (core/quest_runtime_abi.h,
-// the shim <-> libnevr_runtime.so) share: the header every descriptor starts with, the status codes and the two checks that
+// the shim <-> libnevr-runtime.so) share: the header every descriptor starts with, the status codes and the two checks that
 // read only that header, the one capability bit both name, and the name of the one entry point. Nothing here is specific to
 // a platform: no <windows.h>, no pointer-sized field, no major or minor number (each ABI keeps its own, because the two
 // versions move independently; docs/adr/0008-bugsplat-host-and-nevr-runtime.md, docs/adr/0024-pc-self-update.md).
@@ -34,7 +34,7 @@ struct NevrAbiHeader {
 
 namespace nevr_runtime_abi {
 
-/// The name of the runtime's single versioned entry point, on PC (nevr-runtime.dll) and on Quest (libnevr_runtime.so).
+/// The name of the runtime's single versioned entry point, on PC (nevr-runtime.dll) and on Quest (libnevr-runtime.so).
 inline constexpr char kGetRuntimeApiExport[] = "NEVR_GetRuntimeApi";
 
 /// Capability bit 0 of a host context's `capabilities` word, on PC and on Quest: this host performs the staged swap and puts

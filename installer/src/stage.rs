@@ -24,7 +24,7 @@ pub const RUNTIME: &str = "nevr-runtime.dll";
 /// The PC profile (ADR 0024 section 3): what `NevrPcStage` stages.
 pub const PC_PROFILE: &str = r#"{"kind":"windows-zip","members":["nevr-runtime.dll","plugins/*.dll"]}"#;
 /// The Quest profile: the runtime library, one file (`kQuestRuntimeMember` in `src/core/update/names.h`).
-pub const QUEST_PROFILE: &str = r#"{"kind":"quest-runtime","members":["libnevr_runtime.so"]}"#;
+pub const QUEST_PROFILE: &str = r#"{"kind":"quest-runtime","members":["libnevr-runtime.so"]}"#;
 /// A `<version>.partial-*` folder untouched for this long belongs to a stage that died.
 const PARTIAL_STALE: Duration = Duration::from_secs(600);
 /// The most members a profile lists.
@@ -487,8 +487,8 @@ mod tests {
     #[test]
     fn the_quest_profile_names_one_file_and_the_pc_profile_names_the_runtime_first() {
         let q = Profile::parse(QUEST_PROFILE).unwrap();
-        assert_eq!((q.kind.as_str(), q.form, q.runtime()), ("quest-runtime", Form::File, "libnevr_runtime.so"));
-        assert!(q.takes("libnevr_runtime.so") && !q.takes("other.so"));
+        assert_eq!((q.kind.as_str(), q.form, q.runtime()), ("quest-runtime", Form::File, "libnevr-runtime.so"));
+        assert!(q.takes("libnevr-runtime.so") && !q.takes("other.so"));
         let p = Profile::pc();
         assert_eq!((p.kind.as_str(), p.form, p.runtime()), ("windows-zip", Form::Zip, "nevr-runtime.dll"));
     }

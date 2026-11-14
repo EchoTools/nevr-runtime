@@ -139,7 +139,7 @@ func TestExportAllowlist(t *testing.T) {
 
 // The Quest runtime library (src/quest/sentinel/CMakeLists.txt, target nevr_quest_runtime). NEVR_QUEST_RUNTIME_SO names another
 // copy of it: the justfile check passes the copy in its own build tree.
-const runtimeSoRelPath = "../../build/android-arm64/sentinel/libnevr_runtime.so"
+const runtimeSoRelPath = "../../build/android-arm64/sentinel/libnevr-runtime.so"
 
 // runtimeSoPath is the runtime library the export allowlist reads: NEVR_QUEST_RUNTIME_SO when it is set, else the build
 // tree's copy. The file must exist: the test fails, it does not skip.

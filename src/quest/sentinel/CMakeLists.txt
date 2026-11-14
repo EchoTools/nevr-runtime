@@ -214,11 +214,11 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
 
-# ── Quest runtime library (libnevr_runtime.so) ──────────────────────────────────────────────────────
+# ── Quest runtime library (libnevr-runtime.so) ──────────────────────────────────────────────────────
 # The runtime is what RunSentinelConstructor runs (integration/production_steps.cpp): the sentinel's sources and libraries,
 # built again as a second shared object that exports one entry point, NEVR_GetRuntimeApi (core/quest_runtime_abi.h,
 # runtime/runtime_entry.cpp). The sentinel is unchanged: it still runs its own copy in process, and nothing in this tree
-# loads libnevr_runtime.so.
+# loads libnevr-runtime.so.
 #
 # It runs the sentinel's whole constructor sequence (RunSentinelConstructor, in nevr_quest_integration): sentinel::Arm, the
 # crash-first and dlopen hooks, the sentinel log writer, the hook registry (sentinel::RegistrySnapshot) and the process-end
@@ -247,7 +247,7 @@ add_library(nevr_quest_runtime SHARED
   ${NEVR_QUEST_RUNTIME_SOURCES}
   ../runtime/runtime_entry.cpp
   "${NEVR_REPO_ROOT}/src/core/build_identity.cpp")
-set_target_properties(nevr_quest_runtime PROPERTIES OUTPUT_NAME nevr_runtime)
+set_target_properties(nevr_quest_runtime PROPERTIES OUTPUT_NAME nevr-runtime)
 target_compile_definitions(nevr_quest_runtime PRIVATE NEVR_QUEST_RUNTIME_LIBRARY=1)
 target_include_directories(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_INCLUDES})
 target_compile_options(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_OPTIONS})

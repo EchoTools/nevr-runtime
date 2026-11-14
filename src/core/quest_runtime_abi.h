@@ -1,7 +1,7 @@
 #pragma once
 
 // Shim <-> runtime C ABI on the Quest, between the shim (libovrplatformloader.so, the trust anchor the APK carries) and the
-// runtime (libnevr_runtime.so, the part self-update replaces; docs/adr/0024-pc-self-update.md and its Quest counterpart).
+// runtime (libnevr-runtime.so, the part self-update replaces; docs/adr/0024-pc-self-update.md and its Quest counterpart).
 //
 // The shim maps the runtime from the app's private files folder (or, as the baseline, from the APK's native library
 // folder), resolves NEVR_GetRuntimeApi, validates the descriptor it returns BEFORE calling anything through it, and calls
@@ -63,14 +63,14 @@ struct NevrQuestHostContext {
   std::uint64_t capabilities;
 };
 
-/// Returned by libnevr_runtime.so's NEVR_GetRuntimeApi export.
+/// Returned by libnevr-runtime.so's NEVR_GetRuntimeApi export.
 struct NevrQuestRuntimeApi {
   NevrAbiHeader header;
   /// Returns 0 on success. Called once, after the descriptor validated.
   std::int32_t (*initialize)(const NevrQuestHostContext* host);
 };
 
-/// Signature of libnevr_runtime.so's single versioned entry point (nevr_runtime_abi::kGetRuntimeApiExport).
+/// Signature of libnevr-runtime.so's single versioned entry point (nevr_runtime_abi::kGetRuntimeApiExport).
 typedef const NevrQuestRuntimeApi* (*NevrQuestGetRuntimeApiFn)();
 
 }  // extern "C"
@@ -105,7 +105,7 @@ static_assert(sizeof(NevrQuestHostContext) == kHostContextV1Size && kHostContext
 static_assert(offsetof(NevrQuestRuntimeApi, initialize) == 16);
 static_assert(sizeof(NevrQuestRuntimeApi) == kRuntimeApiV1Size && kRuntimeApiV1Size == 24);
 
-/// Shim side: validate libnevr_runtime.so's descriptor before calling through it.
+/// Shim side: validate libnevr-runtime.so's descriptor before calling through it.
 inline nevr_runtime_abi::Status ValidateRuntimeApi(const NevrQuestRuntimeApi* api) noexcept {
   const nevr_runtime_abi::Status header =
       nevr_runtime_abi::CheckHeader(api == nullptr ? nullptr : &api->header, kRuntimeApiV1Size, kMajor);

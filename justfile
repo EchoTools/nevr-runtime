@@ -156,7 +156,7 @@ build-android: configure-android
 verbose-build-android: configure-android
     cmake --build build/android-arm64 -v
 
-# The Quest runtime library (libnevr_runtime.so, src/quest/sentinel/CMakeLists.txt, target nevr_quest_runtime) has no load-time
+# The Quest runtime library (libnevr-runtime.so, src/quest/sentinel/CMakeLists.txt, target nevr_quest_runtime) has no load-time
 # initializer beyond the two compiler-rt entries the --plugin check allows (docs/adr/0019-quest-plugin-loader.md, section 1),
 # and no text relocation (-z text makes one a link error; readelf -d is checked as well). Every undefined symbol is a link
 # error (-Wl,-z,defs in that file), so each one resolves against a library the link names. Its dynamic exports are checked by
@@ -166,9 +166,9 @@ _check-quest-runtime-library build_dir:
     #!/usr/bin/env bash
     set -euo pipefail
     llvm_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    so="{{ build_dir }}/sentinel/libnevr_runtime.so"
+    so="{{ build_dir }}/sentinel/libnevr-runtime.so"
     # The assignment is the command, so a failed listing stops the recipe; an empty object list is a failure, not a pass.
-    objects=$(python3 tools/quest_link_objects.py "{{ build_dir }}" sentinel/libnevr_runtime.so)
+    objects=$(python3 tools/quest_link_objects.py "{{ build_dir }}" sentinel/libnevr-runtime.so)
     [ -n "$objects" ] || { echo "check-quest-runtime-library: $so: an empty object list" >&2; exit 1; }
     tools/check_quest_static_init.sh --plugin "$llvm_bin" "$so" $objects
     dynamic=$("$llvm_bin/llvm-readelf" -d "$so")
