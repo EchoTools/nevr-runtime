@@ -81,6 +81,10 @@ bool ServeOpen(const char* game_path, std::uint32_t flags, std::string* pack_pat
 // The DllLoadHook rewriter: the pack's file for a load of `<exe dir>\scripts\<name>.dll` the pack carries.
 bool RewriteScript(const wchar_t* lower_path, std::wstring* load_path);
 
+// True when the served pack carries the script `lower_path` names (what RewriteScript would serve), with no log line and no
+// count: the map script provider refuses a hash the pack holds (runtime/content/script_provider.h).
+bool CarriesScript(const wchar_t* lower_path);
+
 // CFile::Open's type, and the body of its detour: an open the pack serves goes to `original` with the pack's file and is logged
 // with the game's result; every other open goes to `original` unchanged.
 using CFileOpenFn = std::uint64_t (*)(const char* path, std::uint32_t flags, HANDLE* out);

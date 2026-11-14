@@ -106,6 +106,9 @@ set(PATCHES_SOURCES
     "content/content_json.cpp"
     "content/content_pack.cpp"
     "content/content_pack_install.cpp"
+    # ADR 0048 decision 6: a map's script DLLs, held and served through the load rewriter (runtime/content/script_provider.h).
+    "content/script_provider.cpp"
+    "content/map_scripts_install.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     # #2336: the bullet spawn's one detour; PowerBoost's drop and DroneFix's tracer rule are filters on it.
@@ -2254,6 +2257,19 @@ if(BUILD_TESTING)
     target_include_directories(test_content_pack PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_content_pack PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_content_pack DISCOVERY_MODE PRE_TEST)
+
+    # ADR 0048 decision 6: the map script provider and its install half over synthetic DLL images the test builds in a temporary
+    # folder, beside a real content pack and the real load rewriters. The resource-set script waiver is the test's own recorder.
+    # Links the real Log(). No game file is read.
+    set(_map_scripts_test_sources tests/test_map_scripts.cpp content/script_provider.cpp content/map_scripts_install.cpp
+      content/content_json.cpp content/content_pack.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    add_executable(test_map_scripts ${_map_scripts_test_sources})
+    set_source_files_properties(${_map_scripts_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_map_scripts PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_map_scripts PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_map_scripts PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_map_scripts DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
