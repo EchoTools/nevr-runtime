@@ -13,6 +13,9 @@ nevr_ht_test(crash_report_test GROUP shared TIMEOUT 120
 # report files only, a bounded read, the .sent mark, the install id, and a whole pass with no Files given.
 nevr_ht_test(crash_send_test GROUP shared HOST TIMEOUT 120
   SRC src/core/crash_report.cpp src/quest/tests/crash_send_test.cpp)
+# The owned-removal guard (core/owned_remove.h, POSIX): the entry grammar, the descriptor walk, and the cases the test file names.
+nevr_ht_test(owned_remove_test GROUP shared TIMEOUT 60
+  SRC src/core/owned_remove_posix.cpp src/quest/tests/owned_remove_test.cpp)
 # #2129: the report's summary names its final file after the rename (sentinel/crash_summary_rules.h). Header-only rule.
 nevr_ht_test(crash_summary_rules_test GROUP shared TIMEOUT 60
   SRC src/quest/tests/crash_summary_rules_test.cpp)

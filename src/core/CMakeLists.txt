@@ -7,11 +7,13 @@
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
 set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "nevr_config_policy.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp"
-  "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp" "crash_report.cpp" "update/names.cpp")
+  "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp" "crash_report.cpp" "update/names.cpp"
+  "owned_remove_win32.cpp")
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
   "hooking.h" "auth_token.h" "auth_token_model.h" "auth_types.h" "auth_refresh.h" "device_auth_flow.h" "device_poll_response.h" "pch.h" "nevr_config.h" "nevr_config_testing.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h" "mic_owner_thread.h"
   "auth_token_refresh.h" "nevr_curl.h" "crash_report.h" "crash_first.h" "update/names.h"
+  "owned_remove.h" "owned_remove_rules.h"
   # Header-only published C ABI for the static modules. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own. The plugin ABI is in sdk/.
   "${CMAKE_SOURCE_DIR}/src/extension/module_interface.h")
@@ -57,6 +59,9 @@ set_source_files_properties(crash_report.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS 
 # update/names.cpp is the self-update vocabulary: pure, no windows.h, and the host compiles it too (NEVR_HOST_UNITS), so
 # it takes no PCH.
 set_source_files_properties(update/names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# owned_remove_win32.cpp: the owned-removal guard (owned_remove.h). Its Win32 file has no PCH need; the POSIX file is not
+# listed here (Quest and the host tests compile it).
+set_source_files_properties(owned_remove_win32.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_lifecycle.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_capture_drain.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_owner_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
