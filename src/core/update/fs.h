@@ -2,9 +2,9 @@
 
 // The files of update/ as the self-update engine sees them (docs/adr/0024-pc-self-update.md, sections 2 and 4), behind
 // one interface so the engine is the same on every platform and only the calls that touch a file differ: Win32 on PC
-// (runtime/lifecycle/update_fs_win32.h), POSIX on Quest. The engine composes every path from the nevr root and the
-// closed vocabulary of names.h, and hands this interface UTF-8 paths; an implementation converts them for its calls.
-// Pure interface: no platform header, no I/O of its own.
+// (runtime/lifecycle/update_fs_win32.h), POSIX on Quest and on the Linux host tests (fs_posix.cpp). The engine composes every
+// path from the nevr root and the closed vocabulary of names.h, and hands this interface UTF-8 paths; an implementation
+// converts them for its calls. Pure interface: no platform header, no I/O of its own.
 
 #include <cstdint>
 #include <memory>
@@ -67,6 +67,23 @@ class UpdateFs {
   /// platform's error code in `*os_error` when it is not null.
   virtual std::unique_ptr<FsLock> TakeLock(const std::string& update_dir, std::uint32_t timeout_ms, std::uint32_t step_ms,
                                            int* os_error) const noexcept = 0;
+
+  /// Moves `from` to `to` with no copy (ADR 0024, section 4.2): a rename, never a copy across volumes. False when it did not move:
+  /// a file is where `to` is going (a failure, never overwritten), `from` is absent, or the two are on different volumes. The
+  /// platform's reason goes to `*os_error` when it is not null: EXDEV on POSIX for a move across volumes, ERROR_NOT_SAME_DEVICE on
+  /// Win32. The journal undoes a move that failed. An implementation that cannot move keeps this default: it moves nothing and
+  /// reports no platform reason (`*os_error` = 0). The PC implementation (runtime/lifecycle/update_fs_win32.h) keeps it.
+  virtual bool Move(const std::string& /*from*/, const std::string& /*to*/, int* os_error) const noexcept {
+    if (os_error != nullptr) *os_error = 0;
+    return false;
+  }
 };
+
+/// The POSIX implementation (fs_posix.cpp), for Quest and the Linux host tests. Every path must lie under `root_dir` (the nevr
+/// root, the folder that holds update/). A folder between the root and the path is reached without following a link: a link there
+/// refuses the operation, and Exists and IsLink then answer that something is there, so the engine waits and writes nothing
+/// through it. A path outside the root, or one with a `..` name, names nothing. Null when the implementation cannot be made (out
+/// of memory).
+std::unique_ptr<UpdateFs> MakePosixUpdateFs(const std::string& root_dir) noexcept;
 
 }  // namespace nevr_update

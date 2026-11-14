@@ -83,6 +83,7 @@ func mustMatch(t *testing.T, re, s, what string) {
 var jobFiles = []string{
 	"src/runtime/lifecycle/update_run.cpp",
 	"src/runtime/lifecycle/update_fs_win32.cpp",
+	"src/core/update/fs_posix.cpp",
 	"src/runtime/lifecycle/update_worker.cpp",
 	"src/runtime/lifecycle/update_policy.cpp",
 }
@@ -120,7 +121,7 @@ var vocabulary = []string{"update", "lock", "staged.json", "swap.json", "pending
 
 func TestNoPathPartIsSpelledOutInTheEngineOrItsPcFs(t *testing.T) {
 	allowed := map[string]bool{`\\`: true, `\\*`: true, `.`: true, `..`: true, `.tmp-`: true}
-	for _, f := range []string{"src/runtime/lifecycle/update_run.cpp", "src/runtime/lifecycle/update_fs_win32.cpp"} {
+	for _, f := range []string{"src/runtime/lifecycle/update_run.cpp", "src/runtime/lifecycle/update_fs_win32.cpp", "src/core/update/fs_posix.cpp"} {
 		for _, m := range regexp.MustCompile(`L?"([^"\n]*)"`).FindAllStringSubmatch(code(t, f), -1) {
 			lit := m[1]
 			for _, name := range vocabulary {

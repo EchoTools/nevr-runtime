@@ -116,3 +116,9 @@ nevr_ht_test(symbol_hash_test GROUP shared SRC src/quest/tests/symbol_hash_test.
 # The same file with plain char unsigned, as under the NDK: it runs the loop with an unsigned char, which the NDK compile in
 # test-android only parses. A bare static_cast<uint64_t>(c) fails to compile here.
 nevr_ht_test(symbol_hash_test_uchar GROUP shared COPTS -funsigned-char SRC src/quest/tests/symbol_hash_test.cpp)
+
+# The POSIX UpdateFs (core/update/fs_posix.cpp, ADR 0024 section 4): each operation on a temporary nevr root, a link refused at each
+# folder and at the file, the lock held by a second process until its timeout, a move that is not a copy, and a move across volumes.
+# Not in CORE_SOURCES: the file is POSIX only, and the PC build (MinGW) does not compile it.
+nevr_ht_test(fs_posix_test GROUP shared PTHREAD TIMEOUT 120
+  SRC src/core/update/fs_posix.cpp src/quest/tests/fs_posix_test.cpp)
