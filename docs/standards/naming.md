@@ -151,9 +151,10 @@ the name and has to make sense as one.
   each has to be part of a name that says what the file holds.
 - `_entry.inc` is the only suffix for an assembly entry. `_thunk.inc` is not a role suffix (`thunk` is the manager's
   C++ wrapper, `callback_thunk.h`).
-- A file MUST NOT carry the platform in its stem after the stem's first word (`ui_text_quest`, `crash_report_win_common`,
-  `hwdump_android`; the words `quest`, `win`, `pc`, `android`): the directory names the platform, and includes are
-  path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one component. A stem
+- The suffix names the platform. A component's platform edge sits beside its core in the component's directory and
+  carries the platform as its last suffix (`_windows`, `_posix`, `_android`, and `_quest` or `_frame` only for one
+  headset): `crash_windows.cpp`, `crash_android.cpp`. The platform appears nowhere else in a stem (`ui_text_quest_common`,
+  `crash_report_win_common`), and a directory does not name a platform. A stem
   whose first word is a platform word (`quest_config`, `android_main`) names a thing of that platform, not one half of
   a component, and is left to review. A suffix that names a binary format or a binary's role (`_pe`, `_elf`, `_host`)
   is a word, not a platform.

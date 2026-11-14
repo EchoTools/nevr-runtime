@@ -21,11 +21,15 @@ Name the core interface before any code: the operations the feature needs from t
   every platform and only the calls that touch a file differ", "Pure interface: no platform header, no I/O of its own".
 - ADR 0003 ("Decision"): "Keep protocol and social rules in shared source and isolate platform-specific behavior in
   adapters."
-- The shape: pure virtual operations, results as a `bool` or a result struct, nothing that throws (`cargo_env.h`: "Nothing
-  here throws; every call that can fail returns a bool or a result"), one method per thing the machine does. A fact the
-  machine did not give is absent, never a constant (`cargo_env.h`, `DeviceFacts`).
-- Checking the shape: in C++17 the check is that the interface compiles in a host test with only a fake behind it. After
-  the C++23 move the port is written as a concept, and the check is a `static_assert` on each edge.
+- The shape to prefer is the Go shape (sprockee's decision of 11-14, ADR 0004 of nevr-apk): free functions declared once in the component's header and defined once per platform
+  file, selected by CMake, with no base class. The test edge is its own test target that defines the same functions.
+  Keep a virtual interface (the models above) only where a test must swap implementations at run time, and say so in the
+  header.
+- Either shape: results as a `bool` or a result struct, nothing that throws (`cargo_env.h`: "Nothing here throws; every
+  call that can fail returns a bool or a result"), one operation per thing the machine does. A fact the machine did not
+  give is absent, never a constant (`cargo_env.h`, `DeviceFacts`).
+- Checking the shape: in C++17 the check is that the declarations compile in a host test with only a test edge behind
+  them. After the C++23 move the shape is checked by a concept, and the check is a `static_assert` on each edge.
 
 Proof: the port header is written and a fake of it compiles, before any edge exists.
 
@@ -49,7 +53,9 @@ Proof: the PC `file:line`, or the report that there is none.
 
 ## 3. One core implementation, against the port
 
-The logic lives once, in `src/core`, written against the port.
+The logic lives once, in the unsuffixed files of the component's directory, `src/COMPONENT/` (COMPONENT is the
+component's name, e.g. `src/cdn/`), written against the port. Today's tree still has `src/core`, `src/runtime` and
+`src/quest`; a component moves to `src/COMPONENT/` when it is touched.
 
 - `AGENTS.md`, "Shared Libraries (static)": `src/core/` holds "nEVR's own primitives ... *we wrote this*"; the dependency
   "runs `core` -> `abi`, never the reverse".
@@ -67,14 +73,14 @@ Proof: the core compiles for MinGW and the NDK with no platform header.
 
 An edge implements the port for one platform and holds only what truly differs.
 
-- Name the edge file for the OS: `<name>_posix.cpp` and `<name>_windows.cpp`, plus a test edge (a fake in the test
-  directory). Never `win32`: it reads as 32-bit. An existing `_win32` file (`src/runtime/lifecycle/update_fs_win32.cpp`)
-  is renamed the next time it is touched. Where the two edges sit in separate platform directories (`src/runtime/...`
-  and `src/quest/...`), the directory names the platform and the stem does not (`docs/standards/naming.md`, "File
-  roles": "A file MUST NOT carry the platform in its stem after the stem's first word"); the OS suffix is for edges that
-  share one directory.
-- The edge is selected in CMake, by listing the file in the target that needs it, not by `#ifdef` in shared code.
-  Examples: `src/quest/sentinel/CMakeLists.txt` lists `../cargo/posix_env.cpp`; `src/runtime/CMakeLists.txt` lists
+- Each component is one directory, `src/COMPONENT/`. Its core is the unsuffixed files; its platform edges sit beside
+  them, and the suffix names the platform: `_windows`, `_posix` (Linux and Android), `_android` (Quest and Frame),
+  `_quest` or `_frame` only for one headset, plus a test edge in the test target. Never `win32`: it reads as 32-bit. An
+  existing `_win32` file (`src/runtime/lifecycle/update_fs_win32.cpp`) is renamed the next time it is touched.
+  Example: `src/host/{host.cpp,host_windows.cpp,host_android.cpp}`. No per-platform top directory for new work
+  (`docs/standards/naming.md`, "File roles": "The suffix names the platform").
+- CMake picks the suffixes per target, by listing the file in the target that needs it, not by `#ifdef` in shared code.
+  Today's examples, in the old layout: `src/quest/sentinel/CMakeLists.txt` lists `../cargo/posix_env.cpp`; `src/runtime/CMakeLists.txt` lists
   `lifecycle/update_fs_win32.cpp`.
 - "Do NOT write new platform abstraction layers. Use existing `common/` patterns. If none exist yet, surface it - don't
   write ad-hoc `#ifdef` blocks" (`AGENTS.md`, C++ Mingw Addendum, "What Not to Do").
@@ -115,8 +121,8 @@ Proof: the fake's test red without the change and green with it; the PC and Ques
 
 Reject the change if it has any of these:
 
-- A platform-only copy of shared logic: a `src/quest/` file that does what `src/runtime/` or `src/core/` already does,
-  with no stated platform reason (`AGENTS.md`, "Project"; `nevr-work`, "Mistakes that recur").
+- A platform-only copy of shared logic: a `_quest`, `_android` or `_posix` file, or a `src/quest/` file, that does what
+  the component's core or a `src/runtime/` file already does, with no stated platform reason (`AGENTS.md`, "Project"; `nevr-work`, "Mistakes that recur").
 - A core file that names a platform: `<windows.h>`, `_WIN32`, `__ANDROID__`, a game address, a hook (ADR 0003,
   "Architecture").
 - An edge holding logic that is not a platform difference (step 4).
@@ -124,4 +130,4 @@ Reject the change if it has any of these:
 - A message with no schema, or serialization built by hand (step 5).
 - A commit that does not state the other platform's status (step 6).
 
-After the C++23 move, add: a port that is not a concept, and an edge with no `static_assert` against it.
+After the C++23 move, add: a shape that is not checked by a concept, and an edge with no `static_assert` against it.
