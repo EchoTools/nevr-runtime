@@ -837,6 +837,9 @@ constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 // validated, not hooked. With the key at 0 (the default) the join hold hooks none. CNCAGAMESPACE_LOAD_LEVEL is hooked
 // on every PC run whose prologue matches: by hook/load_timing.cpp (the level_load record) whenever the join hold does not hold it, and by the
 // join hold's detour, which times the load too, when it does. One detour at a time owns the address.
+
+// validated, not hooked by the join hold. The config-alias hook (runtime/content/config_alias_hook.cpp) hooks it only
+// when a mounted map stages an alias. With the join hold's key at 0 (the default) the join hold hooks none.
 // ============================================================================
 
 /// Address: CncaGameSpace::LoadLevel (0x1404FE050, 2322 bytes). The name is ReVault's record for this function (source:
@@ -861,5 +864,54 @@ constexpr uintptr_t CGAMELEVELRESOURCE_ENABLE = 0x4ED4B0;
 /// EnableGameSpace (0x1404EF130) calls Enable only for the entry of the sorted array at Game+0x1F90 whose key matches
 /// the gamespace's value at +0x58.
 constexpr uintptr_t CR15NETGAME_ENABLE_GAME_SPACES = 0x161940;
+
+// ============================================================================
+// ConfigAlias (docs/adr/0048 decision 5; runtime/content/config_alias_hook.cpp). Every RVA and offset below was read
+// from echovr.exe (sha256 b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043, image base 0x140000000)
+// through ReVault (project echovr, binary echovr.exe), and each function's first bytes are checked at install.
+// ============================================================================
+
+/// Address: the balance-config lookup, `void* (u64 key)` (0x140D0B170, 100 bytes). ReVault names it ResolveConfigHash
+/// (reconstruction, confidence H): a binary search of 24-byte {key, value} entries whose count is at +0x30 of the table
+/// g_config_table points to, falling back to ResolveConfigHashAlt (0x1404B4340) on a miss. The first 16 bytes are the
+/// pinned prologue. mp_arena_rules is read through it. ReVault's measured call graph lists 18 distinct callers.
+constexpr uintptr_t CONFIG_BALANCE_LOOKUP = 0xD0B170;
+
+/// Offsets within the game object (the net game's +NETGAME_GAME_OFFSET) of its two sorted level tables. Each is a
+/// data pointer to 16-byte {level symbol, level resource} entries; its count is 0x30 further on (a CTable).
+/// - GAME_SPACE_TABLE (+0x1F90, count +0x1FC0): loaded levels that are not enabled. EnableGameSpace (0x1404EF130) finds
+///   the level there, calls Enable on its resource and moves the entry to the enabled table (the insert at 0x1404FA170).
+/// - GAME_ENABLED_SPACE_TABLE (+0x1F50, count +0x1F80): the enabled levels.
+/// Read from echovr.exe in EnableGameSpace (0x1404EF130: `param_1+0x3f2` data and `param_1[0x3f8]` count, `param_1+0x3ea`
+/// for the insert) and from the insert helper 0x1404FA170, whose count is `param_1[6]` on the table at `param_1`.
+constexpr uintptr_t GAME_SPACE_TABLE_OFFSET = 0x1F90;
+constexpr uintptr_t GAME_SPACE_TABLE_COUNT_OFFSET = 0x1FC0;
+constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_OFFSET = 0x1F50;
+constexpr uintptr_t GAME_ENABLED_SPACE_TABLE_COUNT_OFFSET = 0x1F80;
+
+/// Offset within the net game of its client lobby pointer (CR15NetClientLobby*). Unconfirmed in ReVault: no function
+/// read there has been located yet. Used by veilnet.cpp NetLobby (`*(netgame + 0x40)`) and by the session key of the
+/// alias hook, so a new client lobby means a new session.
+constexpr uintptr_t NETGAME_CLIENT_LOBBY_OFFSET = 0x40;
+
+/// Address: NRadEngine::CGameLevelResource::Disable (0x1404EC900, 1069 bytes; ReVault name: none, the decompilation is
+/// raw). `int32 (resource*)`, 0 on success. Returns 0 at once when the flags at +0xC40 already read disabled (the sign
+/// bit of the dword's low byte), else sets bit 0x80 and tears the level down. Its pinned prologue is 16 bytes long.
+constexpr uintptr_t CGAMELEVELRESOURCE_DISABLE = 0x4EC900;
+
+/// Offsets within a level resource: its level symbol (Enable and Disable name it from +0x58, and EnableGameSpace keys
+/// its entries on it) and its state flags dword, whose bit 0x80 reads "disabled".
+/// Read from Disable (0x1404EC900): `if ((char)*(uint32*)(this+0xC40) < 0) return 0;` then `|= 0x80`, and the name
+/// it logs comes from `CResourceID_GetName(this+0x58)`.
+constexpr uintptr_t LEVEL_RESOURCE_LEVEL_OFFSET = 0x58;
+constexpr uintptr_t LEVEL_RESOURCE_FLAGS_OFFSET = 0xC40;
+constexpr uint32_t LEVEL_RESOURCE_DISABLED_FLAG = 0x80;
+
+/// Address: CR15NetGame's balance-settings update (0x1401B2A90, 906 bytes; ReVault: SettingsUpdateCB, reconstruction
+/// confidence H). `int64 (CR15NetGame*)`. Its raw decompilation reads "mp_arena_rules" through the lookup (the
+/// CSymbol64 of that name, then HasConfigEntry), and its tuning block writes the zone point values to 0x142023CE8,
+/// 0x142023CF0 and 0x142023CF8 (ReVault's g_data_142023ce8, cf0 and cf8). Its callers are SetGameState (0x1401B8650)
+/// and the lobby member change (0x14018C720, through fcn.14018c720).
+constexpr uintptr_t NETGAME_BALANCE_SETTINGS_UPDATE = 0x1B2A90;
 
 }  // namespace nevr_patch_addresses

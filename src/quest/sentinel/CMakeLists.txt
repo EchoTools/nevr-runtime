@@ -213,3 +213,12 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
           $<TARGET_FILE:ovrplatformloader>
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
+
+# ConfigAlias on Quest (docs/adr/0048 decision 5). The lookup hook is built without exceptions (callback_thunk.h refuses
+# otherwise); its levels file, which allocates and catches, is built with them. Nothing links this library yet: the Quest's
+# map mount is its consumer (src/quest/cargo), and that mount is not on this tree. core/config_alias.cpp is the same pure
+# half the PC links, compiled here for the Quest's own mount.
+add_library(nevr_quest_config_alias STATIC config_alias_hook.cpp config_alias_levels.cpp ../../core/config_alias.cpp)
+set_source_files_properties(config_alias_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+target_link_libraries(nevr_quest_config_alias PUBLIC nevr_quest_got_hook nevr::plugin_sdk)
+target_compile_options(nevr_quest_config_alias PRIVATE -Wall -Wextra -Werror)

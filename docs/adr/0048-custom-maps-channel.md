@@ -117,8 +117,10 @@ The core is built into `nevr_core` and tested by its GTests (`src/core/maps.cmak
 and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal of a map whose manifest is not official (decision
 7), and the request queue (`map_fetch_queue.h`). Not built yet (#2733): the PC and Quest platform layers and the channel that
 starts them, including which keys they give the core as official (decision 7) and the `mixed_keys` check (decision 3); the
-config-alias hooks; the local-copy precedence (decision 8); the session pin (decision 9); the server's group fetch and its join
-hold (decisions 13 and 17); and the server mount (decision 18).
+local-copy precedence (decision 8); the session pin (decision 9); the server's group fetch and its join hold (decisions 13
+and 17); and the server mount (decision 18). The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`,
+`src/quest/sentinel/config_alias_hook.cpp`, with the arena override's precedence line in
+`src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map.
 
 ## Consequences
 

@@ -128,9 +128,12 @@ std::size_t Table::Arm(const OwnerLevels& mounted_owner_levels, HoldsFn holds, v
     armed_pairs += entry.pairs.size();
     armed[owner_levels.first] = std::move(entry);
   }
+  // Arming again with the same mount changes nothing: the generation stays, so a per-load record (the arena override's
+  // line) is not repeated when the mount observer calls Arm twice for one load.
+  const bool unchanged = armed == armed_;
   armed_ = std::move(armed);
   DropStaleLocked();
-  generation_.fetch_add(1, std::memory_order_acq_rel);
+  if (!unchanged) generation_.fetch_add(1, std::memory_order_acq_rel);
   return armed_pairs;
 }
 
@@ -251,6 +254,16 @@ std::uint64_t Table::Resolve(std::uint64_t key) const noexcept {
   return key;
 }
 
+std::string Table::LiveMapId(std::uint64_t key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const Winner& winner : published_) {
+    if (winner.key != key) continue;
+    const auto armed = armed_.find(winner.owner);
+    return armed == armed_.end() ? std::string() : armed->second.id;
+  }
+  return std::string();
+}
+
 Table& Global() {
   static Table* const table = new Table();
   return *table;
@@ -271,6 +284,7 @@ void Reconcile(std::uint64_t main_level, const std::vector<std::uint64_t>& loade
   Global().Reconcile(main_level, loaded_levels);
 }
 std::uint64_t Resolve(std::uint64_t key) noexcept { return Global().Resolve(key); }
+std::string LiveMapId(std::uint64_t key) { return Global().LiveMapId(key); }
 
 void LevelInstances::OnEnabled(const void* instance, std::uint64_t level) {
   if (instance != nullptr && level != 0) entries_[instance] = level;

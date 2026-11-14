@@ -109,6 +109,8 @@ set(PATCHES_SOURCES
     # ADR 0048 decision 6: a map's script DLLs, held and served through the load rewriter (runtime/content/script_provider.h).
     "content/script_provider.cpp"
     "content/map_scripts_install.cpp"
+    # docs/adr/0048 decision 5: the config-alias lookup detour, installed only when a mounted map stages an alias.
+    "content/config_alias_hook.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     # #2336: the bullet spawn's one detour; PowerBoost's drop and DroneFix's tracer rule are filters on it.
@@ -1179,6 +1181,20 @@ if(BUILD_TESTING)
     target_include_directories(test_load_timing_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_load_timing_rules PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_load_timing_rules DISCOVERY_MODE PRE_TEST)
+
+    # docs/adr/0048 decision 5: the config-alias detour (content/config_alias_hook.cpp) against a stub of the game's lookup
+    # and a fake game context, built without its install half (NEVR_CONFIG_ALIAS_HOOK_TESTING), beside the arena override
+    # the precedence line lives in (lifecycle/arena_rules_hook.cpp). Nothing is hooked.
+    set(_config_alias_hook_test_sources tests/test_config_alias_hook.cpp content/config_alias_hook.cpp
+      lifecycle/arena_rules_hook.cpp)
+    add_executable(test_config_alias_hook ${_config_alias_hook_test_sources})
+    set_source_files_properties(${_config_alias_hook_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_config_alias_hook PRIVATE NEVR_CONFIG_ALIAS_HOOK_TESTING)
+    target_include_directories(test_config_alias_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_config_alias_hook PRIVATE GTest::gtest GTest::gtest_main nevr_core
+      nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_config_alias_hook DISCOVERY_MODE PRE_TEST)
+
     # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
     add_executable(test_join_hold tests/test_join_hold.cpp)
     set_source_files_properties(tests/test_join_hold.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
