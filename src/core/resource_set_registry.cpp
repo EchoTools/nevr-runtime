@@ -8,8 +8,10 @@
 #include <cstring>
 #include <utility>
 
+#include "core/cargo_format.h"
 #include "nevr/resource_set.h"
 #include "nevr/symbol_hash.h"
+#include "quest/data/sha256.h"
 
 namespace nevr_resource_sets {
 
@@ -50,6 +52,16 @@ std::vector<Key> SortedKeys(const Set& set) {
 }
 
 Outcome Refuse(Refusal refusal, std::string detail) { return Outcome{refusal, std::move(detail)}; }
+
+// 1 to `max` bytes of printable ASCII with no double quote or backslash: an owner or a label a log line quotes and the login's JSON
+// carries.
+bool MapTextOk(const std::string& text, std::size_t max) {
+  if (text.empty() || text.size() > max) return false;
+  return std::all_of(text.begin(), text.end(), [](char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    return u >= ' ' && u <= '~' && c != '"' && c != '\\';
+  });
+}
 
 const Archive* FindArchive(const Set& set, std::uint64_t name) {
   const auto it = std::lower_bound(set.archives.begin(), set.archives.end(), name,
@@ -482,6 +494,60 @@ std::vector<const Set*> Registry::HeldSets() const {
 
 const Set* Registry::SetForUser(std::uint32_t user) const {
   return user < mountedOrder_.size() ? mountedOrder_[user] : nullptr;
+}
+
+Outcome CheckMapFileRequest(const MapFileRequest& request) {
+  if (!IsMapOwner(request.owner) || !MapTextOk(request.owner, kMaxMapOwnerBytes)) return Refuse(Refusal::kFormat, "bad_owner");
+  if (!MapTextOk(request.label, kMaxMapLabelBytes)) return Refuse(Refusal::kFormat, "bad_label");
+  if (request.rehash && !nevr_cargo::IsSha256Hex(request.sha256)) return Refuse(Refusal::kFormat, "bad_pin");
+  return Outcome{};
+}
+
+Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
+                        const std::function<Outcome(const void* view, std::uint64_t size)>& add) {
+  const Outcome checked = CheckMapFileRequest(request);
+  if (!checked.ok()) return checked;
+  // Before the size, the hash and the view, which are wasted once the sets are mounted; `add` checks again under its lock.
+  if (mounted()) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
+  std::uint64_t size = 0;
+  std::string problem;
+  if (!file.Size(&size, &problem)) return Refuse(Refusal::kFormat, problem);
+  if (size == 0) return Refuse(Refusal::kFormat, "empty_file");
+  if (request.rehash) {
+    std::vector<unsigned char> step(static_cast<std::size_t>(std::min<std::uint64_t>(size, kRehashStepBytes)));
+    nevr_quest::data::Sha256 sha;
+    for (std::uint64_t at = 0; at < size;) {
+      std::size_t got = 0;
+      const std::size_t want = static_cast<std::size_t>(std::min<std::uint64_t>(step.size(), size - at));
+      if (!file.ReadAt(at, step.data(), want, &got, &problem)) return Refuse(Refusal::kFormat, "hash_read: " + problem);
+      if (got == 0) return Refuse(Refusal::kFormat, "hash_read: the file ended at byte " + std::to_string(at));
+      sha.Update(step.data(), got);
+      at += got;
+    }
+    const std::string actual = sha.Hex();
+    if (actual != request.sha256) return Refuse(Refusal::kHash, "sha256 " + actual + ", pinned " + request.sha256);
+  }
+  const void* view = file.Map(size, &problem);
+  if (view == nullptr) return Refuse(Refusal::kFormat, problem);
+  struct Release {
+    HeldMapFile& file;
+    const void* view;
+    std::uint64_t size;
+    ~Release() { file.Unmap(view, size); }
+  } release{file, view, size};
+  return add(view, size);
+}
+
+bool MountObserver::Notify(const MountReport& report) {
+  const Fn fn = fn_.load();
+  if (fn == nullptr || notified_.exchange(true)) return false;
+  fn(report);
+  return true;
+}
+
+void MountObserver::Reset() {
+  fn_.store(nullptr);
+  notified_.store(false);
 }
 
 }  // namespace nevr_resource_sets

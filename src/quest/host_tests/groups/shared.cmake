@@ -111,3 +111,10 @@ nevr_ht_test(symbol_hash_test_uchar GROUP shared COPTS -funsigned-char SRC src/q
 set(_shared_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/shared)
 nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
   SRC src/quest/cargo/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
+# A map's set over a held descriptor on the Quest (quest/sentinel/map_sets.cpp; docs/adr/0048 decision 5): the shared registration
+# (core/resource_set_registry.cpp, the registry the PC compiles) with the Android types, its records read back as the sentinel log
+# writes them, and the file's mapping released before the registration returns.
+nevr_ht_test(map_sets_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env} INCS sdk/include src/quest/sentinel
+  SRC src/quest/tests/map_sets_test.cpp src/quest/sentinel/map_sets.cpp src/core/resource_set_registry.cpp
+      src/core/resource_shadow.cpp src/quest/sentinel/hook_log.cpp src/quest/data/sha256.cpp
+  LIBS ${NEVR_ZSTD_LIB})
