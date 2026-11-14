@@ -81,6 +81,16 @@ namespace nevr_quest::integration {
 
 namespace {
 
+// Set once by the runtime's initialize, before the sequence runs, and read by the InstallCrashFirst step. A constant-initialized atomic
+// has no dynamic initializer (tools/check_quest_static_init.sh).
+std::atomic<bool> g_shimOwnsCrashFirst{false};
+
+}  // namespace
+
+void SetShimOwnsCrashFirst(bool owns) noexcept { g_shimOwnsCrashFirst.store(owns, std::memory_order_release); }
+
+namespace {
+
 // Process-lifetime state. Leaked on purpose: the sentinel is a DT_NEEDED dependency of the game and is
 // never unloaded, and the hooks, the reporter and the transports' threads outlive any static destructor.
 struct Runtime {
@@ -107,18 +117,6 @@ Runtime& R() {
 }
 
 // --- logging -------------------------------------------------------------------------------------
-
-// The hook backend's JSON lines go to logcat and, through here, to the on-disk log as well.
-void HookLogToDisk(sentinel::LogLevel level, const char* line) {
-  nevr_quest::LogLevel mapped = nevr_quest::LogLevel::kInfo;
-  if (level == sentinel::LogLevel::kWarn) mapped = nevr_quest::LogLevel::kWarn;
-  if (level == sentinel::LogLevel::kError) mapped = nevr_quest::LogLevel::kError;
-  try {
-    sentinel::Emit(mapped, line);
-  } catch (const std::exception&) {
-    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "hook log line could not be written to the disk log");
-  }
-}
 
 nevr_quest::LogLevel MapRouter(nevr_session_router::LogLevel level) {
   switch (level) {
@@ -444,7 +442,8 @@ void OnGameProcessEnd() noexcept {
 class ProductionSteps final : public Steps {
  public:
   void ArmCrashReporter() override {
-    sentinel::SetLogSink(&HookLogToDisk);
+    // The hook lines reach the process's log through the shim's sink (sentinel.cpp, Arm) or, in the runtime library, through the host
+    // sink (hook_log.h); this step sets neither.
     sentinel::Arm();
     // The reports a past crash left go to nevr-api now, from the lowest layer, on a thread of its own (core/crash_send.h):
     // before the config, the bridge, the login or the game exist, and whether or not any of them comes up.
@@ -597,6 +596,17 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallCrashFirst() override {
+    // The shim installs the crash-first hooks from its constructor, after it arms the signal table they read (sentinel/entry.cpp).
+    // This copy has no table of its own, so it installs none and says the step is the shim's. The flag is the runtime's initialize
+    // setting it (entry_hooks.h): the preprocessor cannot tell this library's copy of this file from the shim's.
+    if (g_shimOwnsCrashFirst.load(std::memory_order_acquire)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "crash_first_install",
+                          {{"tag", "NEVR.HOST"},
+                           {"result", "shim_owned"},
+                           {"reason", "the shim installed the crash-first hooks from its constructor; this copy installs none"}});
+      detail_ = "shim_owned";
+      return true;
+    }
     const bool ok = nevr_quest::integration::InstallCrashFirstHook();
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;

@@ -74,6 +74,10 @@ std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, cons
 // reported once to logcat at error level; logcat keeps receiving every line.
 void Emit(nevr_quest::LogLevel level, const std::string& message);
 
+// Emit for a caller built without exceptions (the hook sources, the shim's entry): a failure inside Emit (out of memory) does not
+// leave the call; it is reported to logcat instead. Defined in sentinel_log.cpp, which is built with exceptions.
+void EmitNoThrow(nevr_quest::LogLevel level, const char* message) noexcept;
+
 // Logcat only, no allocation and no exceptions: for failure paths that must not throw (out of
 // memory in a catch block). `literal` must be a string literal.
 void EmitFixed(nevr_quest::LogLevel level, const char* literal) noexcept;

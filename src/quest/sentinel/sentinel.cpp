@@ -15,6 +15,8 @@
 
 #include "quest/sentinel/crash_dir.h"
 #include "quest/sentinel/crash_report_quest.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/sentinel/sentinel_log.h"
 
 #include "client/linux/handler/exception_handler.h"
 #include "client/linux/handler/minidump_descriptor.h"
@@ -150,8 +152,26 @@ void NoteAction(int signo, bool chained, std::uint32_t displaced) noexcept {
 
 }  // namespace
 
+// The hook backend's JSON lines go to logcat and to the process's log file. A line is one JSON object, so Emit flattens its fields
+// into the record (sentinel_log.h). Set by Arm, which only the shim runs.
+void WriteLineToDiskLog(LogLevel level, const char* line) {
+    nevr_quest::LogLevel mapped = nevr_quest::LogLevel::kInfo;
+    if (level == LogLevel::kWarn) mapped = nevr_quest::LogLevel::kWarn;
+    if (level == LogLevel::kError) mapped = nevr_quest::LogLevel::kError;
+    // The sink is called from hook_log.cpp, which is built without exceptions: a failure must not leave this frame.
+    EmitNoThrow(mapped, line);
+}
+
 void Arm() {
+#ifdef NEVR_QUEST_RUNTIME_LIBRARY
+    // The runtime copy never arms: the shim arms first and owns the crash handler and the log file of the process. The runtime's
+    // records reach that log through the host sink (hook_log.h, ForwardRecordToHost). The one thing the runtime needs from this
+    // step is the crash folder, which its crash send reads (production_steps.cpp); it is the same folder the shim resolves.
+    DumpDirStorage() = ResolveDumpDir();
+    return;
+#endif
     std::call_once(g_once, [] {
+        SetLogSink(&WriteLineToDiskLog);
         DumpDirStorage() = ResolveDumpDir();
         // The shared crash report's Quest platform, registered before any handler can reach it.
         RegisterCrashReportPlatform();

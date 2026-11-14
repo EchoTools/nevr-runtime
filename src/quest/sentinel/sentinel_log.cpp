@@ -3,6 +3,7 @@
 #include "core/crash_report.h"
 #include "core/run_id.h"
 #include "quest/sentinel/data_root.h"
+#include "quest/sentinel/hook_log.h"
 
 #include <android/log.h>
 
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <iterator>
 
 #include <dirent.h>
@@ -516,6 +518,14 @@ void EmitFixed(nevr_quest::LogLevel level, const char* literal) noexcept {
   __android_log_write(Priority(level), NEVR_TAG, literal);
 }
 
+void EmitNoThrow(nevr_quest::LogLevel level, const char* message) noexcept {
+  try {
+    Emit(level, message != nullptr ? message : "");
+  } catch (const std::exception&) {
+    EmitFixed(nevr_quest::LogLevel::kError, "a log line could not be written to the disk log");
+  }
+}
+
 void CloseDiskLog() {
   Lock lock;
   if (g_fd >= 0) ::close(g_fd);
@@ -594,10 +604,36 @@ std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, cons
   return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 
+#ifdef NEVR_QUEST_RUNTIME_LIBRARY
+namespace {
+
+// The hook log's level for a sentinel line; a level this build does not know reads as an error, never as a quieter one.
+LogLevel HostLogLevel(nevr_quest::LogLevel level) {
+  switch (level) {
+    case nevr_quest::LogLevel::kInfo: return LogLevel::kInfo;
+    case nevr_quest::LogLevel::kWarn: return LogLevel::kWarn;
+    case nevr_quest::LogLevel::kError: break;
+  }
+  return LogLevel::kError;
+}
+
+}  // namespace
+#endif  // NEVR_QUEST_RUNTIME_LIBRARY
+
 void Emit(nevr_quest::LogLevel level, const std::string& message) {
   // The crash report (#1605) prints the last 50 sentinel lines; the ring is lock-free and allocation-free.
   nevr_crash::RecordLogLine(message.data(), message.size());
+#ifdef NEVR_QUEST_RUNTIME_LIBRARY
+  // The runtime copy owns no log file: the shim has the process's one log, so the line goes to the host's record sink as the
+  // event kEmitHostEvent with the line in its one field kEmitHostField (hook_log.h); the shim writes it through its own Emit. With no
+  // sink, or one that did not take the record, the line is logcat only and no file is opened here.
+  const LogField messageField(kEmitHostField, message.c_str());
+  if (ForwardRecordToHost(HostLogLevel(level), kEmitHostEvent, &messageField, 1)) return;
   __android_log_write(Priority(level), NEVR_TAG, message.c_str());
+  return;
+#else
+  __android_log_write(Priority(level), NEVR_TAG, message.c_str());
+#endif
 
   Lock lock;
   if (g_diskDisabled) return;

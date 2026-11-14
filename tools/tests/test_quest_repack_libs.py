@@ -629,6 +629,52 @@ class VerifySignedTest(unittest.TestCase):
         self.assertEqual(self.run_verify(), [])
 
 
+class StageRuntimeTest(unittest.TestCase):
+    """The baseline runtime (quest-update piece shim-loads-baseline): `stage_runtime` stages libnevr-runtime.so under lib/arm64-v8a,
+    refuses a missing file and a store APK that already holds the name, and writes nothing when it refuses."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory(prefix="stage-runtime-")
+        self.addCleanup(tmp.cleanup)
+        self.root = pathlib.Path(tmp.name)
+
+    def store_apk(self, names: list[str]) -> pathlib.Path:
+        path = self.root / "store.apk"
+        with zipfile.ZipFile(path, "w") as archive:
+            for name in names:
+                archive.writestr(name, b"store")
+        return path
+
+    def runtime_file(self) -> pathlib.Path:
+        path = self.root / "libnevr-runtime.so"
+        path.write_bytes(b"\x7fELF runtime fixture")
+        return path
+
+    def test_stages_the_runtime_under_the_abi_folder(self) -> None:
+        runtime = self.runtime_file()
+        stage = self.root / "stage"
+        self.assertEqual(libs.stage_runtime(runtime, stage, self.store_apk(["classes.dex"])), [])
+        staged = stage / "lib/arm64-v8a/libnevr-runtime.so"
+        self.assertEqual(staged.read_bytes(), runtime.read_bytes())
+
+    def test_refuses_a_missing_runtime_and_writes_nothing(self) -> None:
+        stage = self.root / "stage"
+        problems = libs.stage_runtime(self.root / "absent.so", stage, self.store_apk([]))
+        self.assertEqual(len(problems), 1)
+        self.assertFalse(stage.exists())
+
+    def test_refuses_a_store_apk_that_already_holds_the_name(self) -> None:
+        stage = self.root / "stage"
+        problems = libs.stage_runtime(self.runtime_file(), stage,
+                                      self.store_apk(["lib/arm64-v8a/libnevr-runtime.so"]))
+        self.assertEqual(len(problems), 1)
+        self.assertFalse(stage.exists())
+
+    def test_the_name_is_a_stage_name_the_plugin_check_refuses(self) -> None:
+        self.assertIn(libs.RUNTIME_NAME, libs.STAGED_BY_RECIPE)
+        self.assertTrue(libs.plugin_name_collisions([], libs.RUNTIME_NAME))
+
+
 class WritePluginManifestTest(unittest.TestCase):
     """`write_plugin_manifest` hashes the staged copy, the bytes the APK will carry, not the file the recipe was given."""
 

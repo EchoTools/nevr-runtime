@@ -105,6 +105,7 @@ add_library(ovrplatformloader SHARED
   android_glue_layout_check.cpp
   sentinel.cpp
   sentinel_log.cpp
+  ../shim/runtime_load.cpp
   crash_report_quest.cpp
   elf_build_id.cpp
   ../../core/crash_report.cpp

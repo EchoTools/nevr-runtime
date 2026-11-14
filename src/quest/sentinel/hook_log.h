@@ -24,6 +24,10 @@
  * keeps it, which does NOT meet the durable-log rule in AGENTS.md. The intended sink is the
  * sentinel's on-disk log (sentinel_log); SetLogSink is where it plugs in. A test replaces the
  * sink to assert on lines.
+ *
+ * The sources are built into two shared objects, the shim (libovrplatformloader.so) and the runtime (libnevr-runtime.so), and each
+ * object has its own copy of this file's state. The shim owns the process's log file. The runtime's copy writes no file: the
+ * runtime registers a host sink with SetHostRecordSink, and LogFieldList hands every record to it (ForwardRecordToHost).
  */
 #pragma once
 
@@ -62,6 +66,21 @@ void LogFields(LogLevel level, const char* event, std::initializer_list<LogField
 // The same line from an array the caller built (a count that is only known at run time). `fields` must hold `count`
 // entries; the strings they point at must stay valid for the call.
 void LogFieldList(LogLevel level, const char* event, const LogField* fields, std::size_t count);
+
+// The host's record sink (the Quest shim's log, for the runtime copy): a function that writes one record to the process's one
+// log and returns true when it did. Set by the runtime's Initialize; nothing sets it in the shim, which owns the log.
+using HostRecordSink = bool (*)(LogLevel level, const char* event, const LogField* fields, std::size_t count);
+void SetHostRecordSink(HostRecordSink sink) noexcept;
+
+// Passes one record to the host sink. False when no sink is set or it did not take the record, so the caller writes it
+// where it would have written it without a host.
+bool ForwardRecordToHost(LogLevel level, const char* event, const LogField* fields, std::size_t count) noexcept;
+
+// The runtime copy's Emit (sentinel_log.cpp) forwards one already-formatted line as a record of this event with the line in this one
+// field; the shim (sentinel/entry.cpp, RuntimeLog) writes such a record through its own Emit, so the line reaches the log as it does
+// when the shim writes it itself.
+inline constexpr char kEmitHostEvent[] = "emit";
+inline constexpr char kEmitHostField[] = "msg";
 
 // Free-text compatibility form: {"event":"message","msg":"..."} (printf-style).
 void LogEvent(LogLevel level, const char* format, ...) __attribute__((format(printf, 2, 3)));

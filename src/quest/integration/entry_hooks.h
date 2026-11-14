@@ -130,6 +130,12 @@ void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept;
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;
 
+// True when the shim installed the crash-first hooks (InstallCrashFirstHook) from its own constructor, so the runtime's
+// InstallCrashFirst step installs none and reports the step as shim-owned. The runtime's copy of production_steps.cpp is the
+// static library nevr_quest_integration, compiled once for both shared objects, so no preprocessor symbol tells it which object it
+// is in; this flag does. Set by the runtime's initialize before RunSentinelConstructor.
+void SetShimOwnsCrashFirst(bool owns) noexcept;
+
 // Stops the bridge and joins the token-auth thread. Nothing calls it at process exit (the sentinel is
 // never unloaded); it is the teardown path for tests and for a future unload.
 void ShutdownIntegration() noexcept;

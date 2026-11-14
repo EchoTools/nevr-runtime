@@ -17,6 +17,10 @@ nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD TIMEOUT 
       src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp
       src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp src/quest/sentinel/build_variant.cpp)
 
+# 1b. the hook log's host record sink (hook_log.h): the runtime library's records reach the shim's log through it.
+nevr_ht_test(host_record_sink_test GROUP integration ${_on} TIMEOUT 60
+  SRC src/quest/tests/host_record_sink_test.cpp src/quest/sentinel/hook_log.cpp)
+
 # 2. the hook translation units and the counter budget
 foreach(f got_hook hook_report)
   nevr_ht_obj(o_integ_${f} GROUP integration ${_off} SRC src/quest/sentinel/${f}.cpp)
@@ -124,3 +128,19 @@ nevr_ht_test(texture_quality_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INC
 nevr_ht_test(frozen_frame_exit_pinned_test GROUP hooks-pinned NOEXC DL NO_TEST INCS ${_sent}
   SRC src/quest/tests/frozen_frame_exit_pinned_test.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp
       src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
+
+# 10. the shim's baseline start (src/quest/shim/runtime_load.h): one fixture runtime per mode, each loaded by the production start
+# and checked for its outcome, its record, the context its initialize was handed and the descriptor it took. The fixtures are
+# libnevr_fixture_<mode>.so in this group's build directory, which the test takes as its argument.
+nevr_ht_so(runtime_fx_ok GROUP integration OUTPUT_NAME nevr_fixture_ok NOEXC SRC src/quest/tests/runtime_load_fixture.cpp)
+nevr_ht_so(runtime_fx_no_entry GROUP integration OUTPUT_NAME nevr_fixture_no_entry DEFS NEVR_FIXTURE_NO_ENTRY NOEXC
+  SRC src/quest/tests/runtime_load_fixture.cpp)
+nevr_ht_so(runtime_fx_null_descriptor GROUP integration OUTPUT_NAME nevr_fixture_null_descriptor
+  DEFS NEVR_FIXTURE_NULL_DESCRIPTOR NOEXC SRC src/quest/tests/runtime_load_fixture.cpp)
+nevr_ht_so(runtime_fx_bad_major GROUP integration OUTPUT_NAME nevr_fixture_bad_major DEFS NEVR_FIXTURE_BAD_MAJOR NOEXC
+  SRC src/quest/tests/runtime_load_fixture.cpp)
+nevr_ht_so(runtime_fx_init_fail GROUP integration OUTPUT_NAME nevr_fixture_init_fail DEFS NEVR_FIXTURE_INIT_FAIL NOEXC
+  SRC src/quest/tests/runtime_load_fixture.cpp)
+nevr_ht_test(runtime_load_test GROUP integration NOEXC DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/integration"
+  DEPENDS runtime_fx_ok runtime_fx_no_entry runtime_fx_null_descriptor runtime_fx_bad_major runtime_fx_init_fail
+  SRC src/quest/tests/runtime_load_test.cpp src/quest/shim/runtime_load.cpp)

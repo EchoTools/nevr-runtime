@@ -69,6 +69,11 @@ named like a game library would silently take that library's place and the signe
       store APK has no `assets/nevr-pack/` entry of its own, and the APK (the store file plus the pack) stays under the 4 GiB a
       zip without zip64 can address, which the sentinel's zip reader requires.
 
+  stage-runtime --runtime RUNTIME_FILE --stage STAGE_DIR --store-apk STORE_APK
+      Stages the baseline runtime (libnevr-runtime.so, quest-update piece shim-loads-baseline) as lib/arm64-v8a/libnevr-runtime.so.
+      Refuses (exit 1) a missing or empty file, and a store APK that already holds a library of that name; writes nothing then. The
+      verify-signed step prints the signed APK's digest of it, and the loop there checks the signed bytes are the staged ones.
+
   pack-problems --stage STAGE_DIR [--plan-header FILE]
       Refuses (exit 1) a staged pack the runtime would not take (the rules of src/quest/data/pack.cpp ParsePackJson), a staged
       file `pack.json` does not list or whose sha-256 or size it gets wrong, and a file listed but not staged. Nothing staged is
@@ -111,12 +116,17 @@ MANIFEST_SCHEMA = 1
 # installer extracts it beside the sentinel, like the manifest, and is never loaded as a library.
 VARIANT_STAMP_NAME = "libnevr_build_variant.so"
 VARIANT_ENTRY = f"{ABI_DIR}/{VARIANT_STAMP_NAME}"
+# The baseline runtime (quest-update piece shim-loads-baseline; src/quest/shim/runtime_load.cpp): the file the shim maps at start from
+# this folder, trusted by the APK signature. The name must equal runtime_load.h's kBaselineFileName. Staged by stage-runtime.
+RUNTIME_NAME = "libnevr-runtime.so"
+RUNTIME_ENTRY = f"{ABI_DIR}/{RUNTIME_NAME}"
 # The variant words: one for each variant or option a recipe adds. `q15t` and `combat` are the APKs whose word turns the combat area on
 # (docs/adr/0046 rule 5); `perf-probe` is the measurement build (ADR 0037); `arena` is the release's APK built from the store APK with no combat
 # (#2298). Every other word is refused; the empty word is a plain release.
 VARIANT_WORDS = ("q15t", "combat", "perf-probe", "arena")
-# The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, the manifest and the stamp).
-STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME, VARIANT_STAMP_NAME)
+# The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, the manifest, the stamp and
+# the baseline runtime).
+STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME, VARIANT_STAMP_NAME, RUNTIME_NAME)
 # The one store entry the recipe replaces on purpose: the shim takes the loader's name.
 REPLACED_ON_PURPOSE = f"{ABI_DIR}/libovrplatformloader.so"
 # The other one: the patcher's output takes libr15's place (docs/adr/0021 section 9). It is compared with that output,
@@ -307,6 +317,26 @@ def write_build_variant(stage: pathlib.Path, word: str) -> list[str]:
     return []
 
 
+def stage_runtime(runtime: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.Path) -> list[str]:
+    """Stages the baseline runtime under `stage` as lib/arm64-v8a/libnevr-runtime.so; returns the problems and writes nothing when there
+    are any. The file must be a non-empty regular file, and the store APK must not hold a library of that name: the baseline would
+    replace it, and a recipe never replaces a store library by a file of its own."""
+    if not runtime.is_file() or runtime.stat().st_size == 0:
+        return [f"{runtime}: not a non-empty file; the baseline runtime is the sentinel's {RUNTIME_NAME}, built beside the shim"]
+    try:
+        with zipfile.ZipFile(store_apk) as store:
+            taken = [entry for entry in lib_entries(store) if entry.rsplit("/", 1)[-1] == RUNTIME_NAME]
+    except (OSError, zipfile.BadZipFile) as error:
+        return [f"{store_apk}: cannot be read as the store APK: {error}"]
+    if taken:
+        return [f"{store_apk.name} already holds {', '.join(taken)}: the baseline runtime would replace it"]
+    target = stage / ABI_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    (target / RUNTIME_NAME).write_bytes(runtime.read_bytes())
+    print(f"quest_repack_libs: baseline runtime {RUNTIME_ENTRY} sha256 staged {file_digest(target / RUNTIME_NAME)}", flush=True)
+    return []
+
+
 def plugin_manifest_problems(stage: pathlib.Path) -> list[str]:
     """The problems with the staged manifest, empty when there is none or it holds every staged plugin with its hash."""
     path = stage / ABI_DIR / MANIFEST_NAME
@@ -412,6 +442,10 @@ def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Pat
                                 "nothing was patched")
         for label in ("store", "patched", "signed"):
             print(f"quest_repack_libs: libr15.so sha256 {label:<7} {digests.get(label, '(not available)')}", flush=True)
+        if RUNTIME_ENTRY in present:
+            # The baseline is in the signed APK with the staged bytes (the loop above checks every staged library). Its digest is printed
+            # so the installed file can be matched to this build; the runtime_load record does not carry it.
+            print(f"quest_repack_libs: baseline runtime {RUNTIME_ENTRY} sha256 signed {entry_digest(result, RUNTIME_ENTRY)}", flush=True)
         if runtime:
             problems.extend(pinned_runtime_problems(original, result))
         staged_dir = stage / ABI_DIR
@@ -941,6 +975,10 @@ def main(argv: list[str]) -> int:
     variant_write = sub.add_parser("write-build-variant")
     variant_write.add_argument("--stage", type=pathlib.Path, required=True)
     variant_write.add_argument("--variant", required=True)
+    runtime_stage = sub.add_parser("stage-runtime")
+    runtime_stage.add_argument("--runtime", type=pathlib.Path, required=True)
+    runtime_stage.add_argument("--stage", type=pathlib.Path, required=True)
+    runtime_stage.add_argument("--store-apk", type=pathlib.Path, required=True)
     pack = sub.add_parser("stage-pack")
     pack.add_argument("--pack-zip", type=pathlib.Path, required=True)
     pack.add_argument("--meta", type=pathlib.Path, required=True)
@@ -980,6 +1018,8 @@ def main(argv: list[str]) -> int:
         problems = write_build_variant(args.stage, args.variant)
     elif args.command == "stage-pack":
         problems = stage_pack(args.pack_zip, args.meta, args.stage, args.store_apk, args.plan_header)
+    elif args.command == "stage-runtime":
+        problems = stage_runtime(args.runtime, args.stage, args.store_apk)
     elif args.command == "stage-libs":
         problems = stage_libs(args.libs, args.stage, args.store_apk)
     elif args.command == "pack-problems":

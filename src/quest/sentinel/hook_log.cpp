@@ -16,6 +16,7 @@ namespace sentinel {
 namespace {
 
 std::atomic<LogSink> g_sink{nullptr};
+std::atomic<HostRecordSink> g_host{nullptr};
 
 void DefaultSink(LogLevel level, const char* line) {
 #ifdef __ANDROID__
@@ -115,6 +116,13 @@ long long NowMs() {
 
 LogSink SetLogSink(LogSink sink) { return g_sink.exchange(sink, std::memory_order_acq_rel); }
 
+void SetHostRecordSink(HostRecordSink sink) noexcept { g_host.store(sink, std::memory_order_release); }
+
+bool ForwardRecordToHost(LogLevel level, const char* event, const LogField* fields, std::size_t count) noexcept {
+  const HostRecordSink sink = g_host.load(std::memory_order_acquire);
+  return sink != nullptr && sink(level, event, fields, count);
+}
+
 const char* HexString(char (&buf)[19], std::uint64_t value) {
   std::snprintf(buf, sizeof(buf), "0x%016llx", static_cast<unsigned long long>(value));
   return buf;
@@ -125,6 +133,8 @@ void LogFields(LogLevel level, const char* event, std::initializer_list<LogField
 }
 
 void LogFieldList(LogLevel level, const char* event, const LogField* fields, std::size_t count) {
+  // A record of the runtime copy goes to the shim's log when a host sink is set (hook_log.h, SetHostRecordSink).
+  if (ForwardRecordToHost(level, event, fields, count)) return;
   Writer w;
   w.Raw("{\"ts_ms\":");
   w.Number(NowMs());

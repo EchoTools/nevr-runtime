@@ -58,11 +58,16 @@
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/entry_hooks.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/shim/runtime_load.h"
+#include "libr15_identity.h"
 
 #include <jni.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace {
 
@@ -328,6 +333,71 @@ sentinel::GotStatus InstallLoginTitleHook() noexcept { return nevr_quest::login_
 // from these sources with NEVR_QUEST_RUNTIME_LIBRARY defined (sentinel/CMakeLists.txt, nevr_quest_runtime); it has no load-time
 // entry, so this block is left out of it.
 #ifndef NEVR_QUEST_RUNTIME_LIBRARY
+namespace {
+
+// The baseline runtime (piece shim-loads-baseline; src/quest/shim/runtime_load.h). The shim maps libnevr-runtime.so from the APK's
+// native library folder and calls its initialize, which runs the constructor sequence this file used to call. The crash handler
+// and the variant read stay here; the sequence and every hook it installs are in the runtime.
+//
+// kShimAnchor is an address inside this shared object: the folder that holds it is the folder the baseline is read from.
+constexpr char kShimAnchor = 0;
+
+// The runtime's log lines (NevrQuestLogFn, core/quest_runtime_abi.h) become sentinel records: the runtime's tag is the first field,
+// its message the second when it has one, and each of its fields follows in order.
+constexpr char kTagField[] = "tag";
+constexpr char kMessageField[] = "message";
+constexpr std::size_t kHeaderFields = 2;
+
+sentinel::LogLevel RuntimeLevel(std::uint32_t level) noexcept {
+  namespace rl = nevr_quest::runtime_load;
+  switch (level) {
+    case rl::kLogLevelDebug: return sentinel::LogLevel::kDebug;
+    case rl::kLogLevelInfo: return sentinel::LogLevel::kInfo;
+    case rl::kLogLevelWarning: return sentinel::LogLevel::kWarn;
+    case rl::kLogLevelError: return sentinel::LogLevel::kError;
+    default: return sentinel::LogLevel::kWarn;  // a level outside the range is a warning
+  }
+}
+
+void RuntimeLog(std::uint32_t level, const char* tag, const char* event, const char* message,
+                const NevrQuestLogField* fields, std::uint32_t count) {
+  // A line the runtime's Emit forwarded (sentinel_log.cpp): it was formatted over there, so it is written through this copy's Emit and
+  // reaches the log as a line the shim wrote itself.
+  if (event != nullptr && std::strcmp(event, sentinel::kEmitHostEvent) == 0 && count == 1 && fields[0].key != nullptr &&
+      std::strcmp(fields[0].key, sentinel::kEmitHostField) == 0 && fields[0].value != nullptr) {
+    nevr_quest::LogLevel mapped = nevr_quest::LogLevel::kInfo;
+    if (level == nevr_quest::runtime_load::kLogLevelWarning) mapped = nevr_quest::LogLevel::kWarn;
+    if (level == nevr_quest::runtime_load::kLogLevelError) mapped = nevr_quest::LogLevel::kError;
+    sentinel::EmitNoThrow(mapped, fields[0].value);  // this file is built without exceptions: EmitNoThrow keeps a failure inside it
+    return;
+  }
+  std::vector<sentinel::LogField> list;
+  list.reserve(static_cast<std::size_t>(count) + kHeaderFields);
+  list.emplace_back(kTagField, tag != nullptr ? tag : "");
+  if (message != nullptr) list.emplace_back(kMessageField, message);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (fields[i].key != nullptr) list.emplace_back(fields[i].key, fields[i].value);
+  }
+  sentinel::LogFieldList(RuntimeLevel(level), event != nullptr ? event : "", list.data(), list.size());
+}
+
+// Starts the baseline with the values the shim has at this point. The libr15 base is known once the dynamic linker has mapped
+// libr15.so; without it the runtime is not called and the start's record says why (host_context_refused).
+void StartRuntime(std::uint32_t variant) {
+  nevr_quest::runtime_load::HostInputs host;
+  sentinel::ElfImage libr15;
+  host.libr15_base = sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &libr15)
+                         ? reinterpret_cast<const void*>(libr15.base)
+                         : nullptr;
+  host.libr15_build_id = sentinel::pinned::LibR15PatchedBuildId();
+  host.shim_version = nevr_build::kVersion;
+  host.variant = variant;
+  host.log = &RuntimeLog;
+  nevr_quest::runtime_load::StartBaselineBesideShim(&kShimAnchor, host);
+}
+
+}  // namespace
+
 extern "C" {
 
 // Ground-truth marker export: proves our code is in the artifact (BAC-2).
@@ -341,13 +411,17 @@ const char* nevr_sentinel_marker() {
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
-    // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
+    // report the next start sends. Arm is idempotent, and does nothing in the runtime library's copy of these sources.
     sentinel::Arm();
+    // The crash-first hooks go in here, after Arm: they consult the signal table Arm installs (sentinel.cpp), and the shim owns that
+    // table, so the shim installs the hooks that read it. The runtime's InstallCrashFirst step installs none (production_steps.cpp).
+    const bool crashFirst = nevr_quest::integration::InstallCrashFirstHook();
+    sentinel::LogFields(crashFirst ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "crash_first_shim",
+                        {{"tag", "NEVR.HOST"}, {"result", crashFirst ? "installed" : "refused"}});
     // The variant the repack stamped beside this library (#2170, build_variant.h), read before the first line so that line names it. A
-    // stamp that is missing, unreadable or wrong is no variant; the begin record says which. The combat gate takes the word now and
-    // makes its answer when the configuration is resolved (ResolveCombatActive).
+    // stamp that is missing, unreadable or wrong is no variant; the begin record says which. The runtime takes the word from the
+    // host context when it initializes (StartRuntime).
     const nevr_quest::build_variant::Stamp variant = nevr_quest::build_variant::ReadOwnStamp();
-    nevr_quest::combat::SetVariant(variant.variant);
     // The crash report names the build too (core/crash_report.h, ADR 0040 rule 2): its `build:` line is set now, so a crash anywhere below carries it.
     char buildText[nevr_crash::kBuildBytes];
     std::snprintf(buildText, sizeof(buildText), "version=%s kind=%s variant=%s", nevr_build::kVersion,
@@ -355,14 +429,10 @@ static void nevr_sentinel_ctor() {
     nevr_crash::SetBuild(buildText);
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit,
                                                       nevr_build::kIsDev ? "dev" : "release", variant);
-    // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
-    nevr_quest::redirect::SetLoginIdentity(
-        {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});
-    // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
-    nevr_quest::toast::CaptureUiLooper();
-    // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
-    // configuration, counters, the single reporter start, then each hook gated by its feature switch.
-    nevr_quest::integration::RunSentinelConstructor();
+    // The runtime (piece shim-loads-baseline): the baseline libnevr-runtime.so runs the constructor sequence (integration/ctor_sequence.h:
+    // crash reporter, configuration, counters, the reporter start, then each hook gated by its feature switch). Its initialize is called
+    // on this thread, inside this constructor, as the sequence was.
+    StartRuntime(static_cast<std::uint32_t>(variant.variant));
 }
 
 // Belt-and-suspenders: if anything System.loadLibrary's this by name, arm here

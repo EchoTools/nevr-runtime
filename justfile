@@ -252,19 +252,22 @@ quest-reference-base apk out label="Echo VR":
 # private tmpfs file for the signing command only and is never generated here.
 # `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (tools/quest_repack_libs.py stage-libs):
 # `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
-# `variant` (the last parameter; docs/adr/0040-every-build-names-its-variant.md rule 1) is the word that names the APK's variant: `q15t`,
+# `variant` (docs/adr/0040-every-build-names-its-variant.md rule 1) is the word that names the APK's variant: `q15t`,
 # `combat` or `perf-probe`, or empty for a plain release or a development build of the tree. The repack stamps it as
 # lib/arm64-v8a/libnevr_build_variant.so (tools/quest_repack_libs.py write-build-variant), which the sentinel reads before its first log
 # line; the folded combat modules run only for `q15t` and `combat` (docs/adr/0046 rule 5). Any other word is refused before anything is
-# staged. Every recipe that repacks an APK passes it, the empty word included, as its last argument.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+# staged. Every recipe that repacks an APK passes it, the empty word included, after `extra_libs`.
+# `runtime` (the last parameter; quest-update piece shim-loads-baseline) is the baseline runtime, libnevr-runtime.so, that the shim maps
+# from the APK's native library folder at start. Empty, it is the file beside the shim, `$(dirname shim)/libnevr-runtime.so`, which the
+# sentinel's build writes; the repack refuses a missing one (tools/quest_repack_libs.py stage-runtime), since an APK without it starts with no runtime.
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
     plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
-    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; extra_libs="{{ extra_libs }}"; variant="{{ variant }}"
+    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; extra_libs="{{ extra_libs }}"; variant="{{ variant }}"; runtime="{{ runtime }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -381,6 +384,11 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # 3. drop our shim in under the hijacked name
     cp "$shim" "$work/stage/lib/arm64-v8a/libovrplatformloader.so"
     stage_libs=(lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so)
+    # 3a. the baseline runtime (quest-update piece shim-loads-baseline): the file the shim maps at start from this APK's native library
+    # folder, trusted by the APK signature. stage-runtime refuses a missing or empty file, and a store APK that already holds the name.
+    runtime="${runtime:-$(dirname "$shim")/libnevr-runtime.so}"
+    python3 -I tools/quest_repack_libs.py stage-runtime --runtime "$runtime" --stage "$work/stage" --store-apk "$apk"
+    stage_libs+=(lib/arm64-v8a/libnevr-runtime.so)
     # 3b. libr15.so: the store's file through the patcher (it refuses unless the file is the pinned one, and says why on
     # stderr), staged as the file the APK will carry. It is not in stage_libs: the store stores libr15.so DEFLATED and the zip
     # step below does the same for it, where the two libraries above go in STORED.
