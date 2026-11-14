@@ -84,11 +84,7 @@ func execute(args []string, stdout, stderr io.Writer) int {
 	}
 	wr := *workRoot
 	if wr == "" {
-		wr = os.Getenv("NEVR_WORK_ROOT")
-	}
-	if wr == "" {
-		home, _ := os.UserHomeDir()
-		wr = filepath.Join(home, "src", "nevr-runtime-work")
+		wr = runlog.WorkRoot(os.Getenv)
 	}
 	if r, err := filepath.EvalSymlinks(wr); err == nil {
 		wr = r

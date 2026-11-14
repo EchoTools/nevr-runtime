@@ -465,11 +465,7 @@ func logDir(getenv func(string) string) string {
 	if d := getenv("NEVR_TEST_LOG_DIR"); d != "" {
 		return d
 	}
-	root := getenv("NEVR_WORK_ROOT")
-	if root == "" {
-		root = filepath.Join(getenv("HOME"), "src", "nevr-runtime-work")
-	}
-	return filepath.Join(root, "test-runs", "tools-tests")
+	return filepath.Join(runlog.WorkRoot(getenv), "test-runs", "tools-tests")
 }
 
 // newStem is <UTC stamp to the microsecond>-<pid>-<16 random hex digits>, the Python runner's stem without the commit.

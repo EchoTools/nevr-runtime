@@ -44,6 +44,16 @@ func TestPathIsUnderXDGStateHomeInNevrRuntime(t *testing.T) {
 	}
 }
 
+func TestWorkRootIsNevrWorkRootElseUnderHome(t *testing.T) {
+	t.Parallel()
+	if got := WorkRoot(env(map[string]string{"NEVR_WORK_ROOT": "/work", "HOME": "/home/u"})); got != "/work" {
+		t.Errorf("WorkRoot with NEVR_WORK_ROOT = %q, want /work", got)
+	}
+	if got := WorkRoot(env(map[string]string{"HOME": "/home/u"})); got != "/home/u/src/nevr-runtime-work" {
+		t.Errorf("WorkRoot without NEVR_WORK_ROOT = %q, want /home/u/src/nevr-runtime-work", got)
+	}
+}
+
 func TestPathDefaultsXDGStateHomeToDotLocalStateUnderHome(t *testing.T) {
 	t.Parallel()
 	got, err := Path("my-tool", env(map[string]string{"HOME": "/home/u"}))
