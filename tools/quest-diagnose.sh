@@ -27,6 +27,7 @@ adb_path=""
 out_dir=""
 wait_s=20
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$here/lib/run_root.sh"
 log_file="$here/nevr-diagnose.log"
 
 run_log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$log_file" 2>/dev/null || echo "could not write the log $log_file" >&2; }
@@ -78,8 +79,9 @@ dev() { local secs=$1; shift; with_limit "$secs" "$adb_path" -s "$serial" "$@" 2
 hw_serial=$(dev 30 shell getprop ro.serialno | tr -d '\r')
 printf '%s' "$hw_serial" | grep -Eq '^[A-Za-z0-9._:-]{4,}$' || hw_serial=""
 
-work=$(mktemp -d "${TMPDIR:-/var/tmp}/nevr-diagnose.XXXXXX") || fail "could not make a working folder"
-trap 'rm -rf "$work"' EXIT
+rr=$(run_root_bin "$(dirname "$here")") || fail "could not build run-root (just go-tools)"
+work=$("$rr" make quest-diagnose) || fail "could not make a working folder"
+trap '"$rr" remove "$work"' EXIT
 escape_re() { printf '%s' "$1" | sed 's/[][\.*^$/+?(){}|]/\\&/g'; }
 mask="s/$(escape_re "$serial")/<device-serial>/g"
 if [ -n "$hw_serial" ] && [ "$hw_serial" != "$serial" ]; then mask="$mask;s/$(escape_re "$hw_serial")/<device-serial>/g"; fi

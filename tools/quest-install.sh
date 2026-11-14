@@ -32,8 +32,11 @@ if [ -n "${1-}" ] && [ "${1#-}" = "$1" ] && [ -d "$1" ]; then
 elif [ -n "${1-}" ] && [ "${1#-}" = "$1" ] && [ -f "$1" ] && [ "${1%.apk}" != "$1" ]; then
     apk=$(realpath "$1")
     shift
-    staging=$(mktemp -d)
-    trap 'rm -rf "$staging"' EXIT
+    script_dir=$(dirname "$(readlink -f "$0")")
+    . "$script_dir/lib/run_root.sh"
+    rr=$(run_root_bin "$(dirname "$script_dir")") || exit 1
+    staging=$("$rr" make quest-install) || exit 1
+    trap '"$rr" remove "$staging"' EXIT
     name=$(basename "$apk")
     ln -s "$apk" "$staging/$name"
     printf '%s  %s\n' "$(sha256sum "$apk" | cut -d' ' -f1)" "$name" > "$staging/$name.sha256"

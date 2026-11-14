@@ -128,7 +128,8 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${nevr_store_apk}")
 set(nevr_stock_member "lib/arm64-v8a/libr15.so")
 set(nevr_stock_dir "${CMAKE_BINARY_DIR}/stock")
-file(REMOVE_RECURSE "${nevr_stock_dir}")
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/nevr_build_tree_remove.cmake")
+nevr_build_tree_remove("${nevr_stock_dir}" "${CMAKE_BINARY_DIR}")
 file(MAKE_DIRECTORY "${nevr_stock_dir}/apk")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf "${nevr_store_apk}" -- "${nevr_stock_member}"
                 WORKING_DIRECTORY "${nevr_stock_dir}/apk" RESULT_VARIABLE nevr_tar_rc ERROR_VARIABLE nevr_tar_err TIMEOUT 300)
@@ -137,7 +138,7 @@ if(NOT nevr_tar_rc EQUAL 0 OR NOT EXISTS "${nevr_stock_dir}/apk/${nevr_stock_mem
   nevr_combat_refuse("the store APK has no ${nevr_stock_member} (cmake -E tar exit ${nevr_tar_rc}: ${nevr_tar_err})")
 endif()
 file(COPY_FILE "${nevr_stock_dir}/apk/${nevr_stock_member}" "${nevr_stock_dir}/libr15.so")
-file(REMOVE_RECURSE "${nevr_stock_dir}/apk")
+nevr_build_tree_remove("${nevr_stock_dir}/apk" "${nevr_stock_dir}")
 
 # ── The toolchain: the pinned NDK's own ─────────────────────────────────
 if(NOT CMAKE_TOOLCHAIN_FILE)

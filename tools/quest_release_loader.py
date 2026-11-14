@@ -27,9 +27,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the sibling module is beside this file
+from owned_remove import owned_scratch  # noqa: E402
 
 DEFAULT_REPO = "EchoTools/nevr-runtime"
 LOADER_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
@@ -87,7 +89,7 @@ def fetch(tag: str, out: Path, repo: str) -> str:
         raise Refused(f"release {tag} records no sha256 digest for {name}")
     want, size = found.group(1), named[0].get("size")
     out.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=out, prefix=".download-") as scratch:
+    with owned_scratch(out, ".download-") as scratch:
         _gh("release", "download", tag, "--repo", repo, "--pattern", name, "--dir", scratch)
         got = Path(scratch) / name
         if not got.is_file():

@@ -1,3 +1,4 @@
+# ADR 0044 recorded reason: tests the Quest diagnose cleanup that tools/quest-diagnose.sh runs, which stays Python-tested until #2132 ports that tool.
 """tools/package-release/quest-diagnose.ps1: the PC-side cleanup removes only what the script wrote (ORDER.md "The manifest rule").
 
 The script's temporary folder is cleaned by Remove-RecordedWork, which takes the files and folders the script recorded as it

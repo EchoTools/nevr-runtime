@@ -9,8 +9,10 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the sibling module below is found beside this file
+from owned_remove import owned_scratch, remove_checked_tree  # noqa: E402
 
 
 PE_SUFFIXES = {".dll", ".exe"}
@@ -181,8 +183,7 @@ def sign_package(package: Path, required: bool) -> tuple[str, list[str]] | None:
     # package tree so recursive PE enumeration stays immutable.
     temp_root = package.parent
     temp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nevr-sign-", dir=temp_root) as temp_name:
-        temp = Path(temp_name)
+    with owned_scratch(temp_root, "nevr-sign-") as temp:
         candidates: dict[Path, Path] = {}
         for index, source in enumerate(manifest):
             output = temp / f"signed-{index}{source.suffix}"
@@ -206,7 +207,6 @@ def sign_package(package: Path, required: bool) -> tuple[str, list[str]] | None:
         except OSError:
             for source, backup in backups.items():
                 if backup.exists():
-                    source.unlink(missing_ok=True)
                     os.replace(backup, source)
             raise
     return config
@@ -224,8 +224,7 @@ def verify_archives(tar_path: Path, package: Path, signing: tuple[str, list[str]
             raise RuntimeError(f"tar candidate lacks {name}")
 
     manifest = pe_manifest(package)
-    with tempfile.TemporaryDirectory(prefix="nevr-archive-verify-", dir=tar_path.parent) as temp_name:
-        temp = Path(temp_name)
+    with owned_scratch(tar_path.parent, "nevr-archive-verify-") as temp:
         for index, (source, expected_hash) in enumerate(manifest.items()):
             relative = source.relative_to(package)
             member = str(Path(package.name) / relative).replace("\\", "/")
@@ -249,8 +248,7 @@ def publish(package: Path, destination: Path, tar_path: Path,
     if tar_path.parent != root:
         raise RuntimeError("package and archive outputs must share one publication directory")
     root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nevr-dist-", dir=root) as temp_name:
-        temp = Path(temp_name)
+    with owned_scratch(root, "nevr-dist-") as temp:
         package_candidate = temp / name
         shutil.copytree(package, package_candidate)
         tar_candidate = temp / tar_path.name
@@ -276,19 +274,12 @@ def publish(package: Path, destination: Path, tar_path: Path,
                 installed.append(destination)
         except OSError:
             for destination in installed:
-                if destination.is_dir():
-                    shutil.rmtree(destination)
-                else:
-                    destination.unlink(missing_ok=True)
+                remove_checked_tree(destination, root)
             for destination, backup in reversed(moved_old):
                 if backup.exists():
                     os.replace(backup, destination)
             raise
-        for _, backup in moved_old:
-            if backup.is_dir():
-                shutil.rmtree(backup)
-            else:
-                backup.unlink(missing_ok=True)
+        # The old outputs were moved into `temp`; owned_scratch removes that directory, checked, on exit.
 
 
 def main() -> int:

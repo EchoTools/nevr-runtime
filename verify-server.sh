@@ -46,6 +46,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO" || exit 1
 # shellcheck source=tools/lib/game_install.sh
 source tools/lib/game_install.sh
+source tools/lib/owned.sh
 [ -n "${NEVR_GAME_ROOT:-}" ] || { echo "ERROR: verify-server.sh needs NEVR_GAME_ROOT=<a copy of the install>; a verification run never deploys into the install itself (AGENTS.md, \"The game install\")" >&2; exit 2; }
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
@@ -122,7 +123,7 @@ restore_deployed() {
   if [ -f "$ADDED" ]; then
     while IFS= read -r dst; do [ -n "$dst" ] && rm -f "$dst"; done < "$ADDED"
   fi
-  [ "$bad" -eq 0 ] && rm -rf "$BACKUP"
+  [ "$bad" -eq 0 ] && { owned_build_tree_rm "$BACKUP" "$SCRATCH_ROOT" || echo "verify-server: backup $BACKUP kept" >&2; }
   return "$bad"
 }
 if [ -d "$BACKUP" ]; then

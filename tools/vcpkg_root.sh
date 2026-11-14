@@ -21,6 +21,7 @@ set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
 here=$(pwd -P)
+. "$here/tools/lib/owned.sh"
 name="${1:-vcpkg-root}"
 case "$name" in
   .|..|*/*) echo "vcpkg_root: $name is not a vcpkg root name (one path element, under build/)" >&2; exit 2 ;;
@@ -40,7 +41,7 @@ if [[ "$have" != "$want" ]]; then
   mkdir -p "$here/build"
   # Build in a name nothing else uses, then rename: a half-made root is never visible at $root.
   tmp="$here/build/vcpkg-root.new.$$"
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'owned_build_tree_rm "$tmp" "$here/build"' EXIT
   if [[ -d "$root" ]]; then
     git -C "$root" fetch -q "$source_root" "$want" 2>/dev/null || true
     git -C "$root" checkout -q --detach "$want"

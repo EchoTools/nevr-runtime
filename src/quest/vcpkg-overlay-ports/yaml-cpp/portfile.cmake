@@ -31,7 +31,8 @@ endif()
 vcpkg_fixup_pkgconfig()
 
 # Remove debug include
-file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
+include("${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/nevr_build_tree_remove.cmake")
+nevr_build_tree_remove("${CURRENT_PACKAGES_DIR}/debug/include" "${CURRENT_PACKAGES_DIR}")
 
 if(VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")
     vcpkg_replace_string("${CURRENT_PACKAGES_DIR}/include/yaml-cpp/dll.h" "#ifdef YAML_CPP_STATIC_DEFINE" "#if 0")

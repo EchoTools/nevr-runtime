@@ -62,6 +62,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # the sibling module is beside this file
+from owned_remove import Refused, remove_checked_tree  # noqa: E402
+
 # A file with one of these suffixes is never read as text (objects, archives, images, packages).
 BINARY_SUFFIXES = frozenset({
     ".o", ".obj", ".a", ".lib", ".exe", ".dll", ".dbg", ".pdb", ".gch", ".pch", ".so", ".dylib", ".zip", ".gz",
@@ -248,8 +251,10 @@ def rewrite_text_files(copy: pathlib.Path, rewrite) -> int:
                 target = os.readlink(path)
                 new_target, n = rewrite(target.encode())
                 if n:
-                    path.unlink()
-                    path.symlink_to(new_target.decode())
+                    # Replace the link by renaming a new one over it: no path found by listing is unlinked.
+                    staged = path.with_name(f".{path.name}.{os.getpid()}.rewrite")
+                    os.symlink(new_target.decode(), staged)
+                    os.replace(staged, path)
                     rewritten += 1
                 continue
             if not _is_text(path):
@@ -459,7 +464,10 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
     except (OSError, subprocess.CalledProcessError) as e:
         return Result("error", f"{type(e).__name__}: {e}")
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            remove_checked_tree(staging, worktree / "build")
+        except (OSError, Refused) as error:
+            print(f"seed_build_tree: staging {staging} kept: {error}", file=sys.stderr)
     return Result("seeded", counts={
         "text_files_rewritten": files, "log_entries_kept": kept, "log_entries_dropped": dropped,
         "deps_paths_rewritten": deps_paths, "source_mtimes_aligned": aligned, "source_mtimes_touched": touched,

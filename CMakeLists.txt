@@ -310,9 +310,9 @@ find_program(MINGW_OBJCOPY_TOOL NAMES x86_64-w64-mingw32-objcopy llvm-objcopy ob
 
 # Custom target to prepare distribution directory with stripped DLLs
 add_custom_target(dist-prepare
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} "-DNEVR_BT_PATH=${DIST_STAGE_DIR}" "-DNEVR_BT_ALLOWED=${CMAKE_SOURCE_DIR}/dist" -P "${CMAKE_SOURCE_DIR}/cmake/nevr_build_tree_remove.cmake"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_SYMBOLS_DIR}"
+  COMMAND ${CMAKE_COMMAND} "-DNEVR_BT_PATH=${DIST_SYMBOLS_DIR}" "-DNEVR_BT_ALLOWED=${CMAKE_SOURCE_DIR}/dist" -P "${CMAKE_SOURCE_DIR}/cmake/nevr_build_tree_remove.cmake"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_SYMBOLS_DIR}"
   # Per shipped PE: copy, split the debug info off, strip, link the stripped file to the .dbg.
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_STAGE_DIR}/BugSplat64.dll"

@@ -222,7 +222,7 @@ jobs:
         if errorlevel 1 exit /b 1
         cl.exe /nologo /LD /MT /O2 /EHa /W3 /std:c++17 /I..\detours\include /I..\nevr-runtime\sdk\include /Foobj\ /Fe"out\VeilNet.dll" plugin\veilnet.cpp ..\detours\lib.X64\detours.lib ws2_32.lib user32.lib
         if errorlevel 1 exit /b 1
-        del /q out\*.exp out\*.lib 2>nul
+        del /q out\PowerBoost.exp out\PowerBoost.lib out\VeilNet.exp out\VeilNet.lib 2>nul
         dir out
 
     # PowerBoost.ini is not made here. Cat's powerboost_ini() (tools/echocombat_config.py) reads

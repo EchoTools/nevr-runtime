@@ -25,6 +25,9 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for owned_remove beside this file
+from owned_remove import remove_checked_tree  # noqa: E402
+
 DAY = 86400
 CODE_SIGNING = "1.3.6.1.5.5.7.3.3"
 TIME_STAMPING = "1.3.6.1.5.5.7.3.8"
@@ -573,7 +576,7 @@ def main():
             shutil.copy(signed_cap / f"{n}.dll", directory / f"{n}.dll")
         trees[tree_name] = {"dir": f"tree_{tree_name}", "root": f"{root_stem}.dll", "refused_file": None if used == 64 else "capdep_065.dll",
                             "via": "import", "reason": "Unreadable" if used == 65 else None, "cap": used}
-    shutil.rmtree(signed_cap)
+    remove_checked_tree(signed_cap, out)
 
     corpus = build_corpus(out)
     tree("import_named_by_path", "corpus_import_named_by_path.dll",

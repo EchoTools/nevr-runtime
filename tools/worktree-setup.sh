@@ -36,6 +36,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 self=$(readlink -f "${BASH_SOURCE[0]}")
 cd "$(dirname "$self")/.."
 here=$(pwd -P)
+. "$here/tools/lib/owned.sh"
 
 # Content is a regular, non-dot file (a `.git` pointer, a `.keep` or an empty directory tree is not).
 has_files() { [[ -d "$1" && -n "$(find "$1" -name .git -prune -o -type f ! -name '.*' -print -quit 2>/dev/null)" ]]; }
@@ -105,14 +106,14 @@ scratch="$here/.nevr-worktree-setup"
 # git-ignored, so anything else there is the user's and must not be deleted.
 if [[ -e "$scratch" ]]; then
   if [[ -f "$scratch/.created-by-worktree-setup" || ( -d "$scratch" && -z "$(ls -A "$scratch")" ) ]]; then
-    rm -rf "$scratch"
+    owned_build_tree_rm "$scratch" "$here"
   else
     echo "error: $scratch exists and was not created by this script; move it away first" >&2; exit 2
   fi
 fi
 mkdir "$scratch" "$scratch/tmp"
 : > "$scratch/.created-by-worktree-setup"
-trap 'rm -rf "$scratch"' EXIT
+trap 'owned_build_tree_rm "$scratch" "$here"' EXIT
 # A rename only stays atomic within one filesystem: refuse a destination on another (a mount point
 # for extern/ or the worktree root would turn the move into a copy that a kill can leave truncated).
 for p in extern .; do

@@ -15,6 +15,13 @@ from unittest import mock
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
 SEEDER = REPO / "tools/seed_build_tree.py"
+
+def copy_script_with_lib(src, dst):
+    """Copy a tool script and the lib/owned.sh it sources, beside it under dst's lib/ (the script sources it by path)."""
+    dst = pathlib.Path(dst)
+    shutil.copy(src, dst)
+    (dst.parent / "lib").mkdir(exist_ok=True)
+    shutil.copy(REPO / "tools/lib/owned.sh", dst.parent / "lib/owned.sh")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(REPO / "tools"))
 from gitenv import clean_env, git  # noqa: E402
@@ -26,7 +33,7 @@ DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
 PIN = "259a506a3e1b490ba3482e24e92ba4db"
 NEW_PIN = "0123456789abcdef0123456789abcdef"
 # The files a fixture needs so that gen/ can be a stamped, current output (tools/proto_stamp.py reads the pin from the justfile).
-GEN_INPUTS = ("justfile", "buf.gen.yaml", "tools/proto_stamp.py")
+GEN_INPUTS = ("justfile", "buf.gen.yaml", "tools/proto_stamp.py", "tools/owned_remove.py")
 
 
 def copy_gen_inputs(main):
@@ -45,13 +52,13 @@ class WorktreeSetupTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
-        shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        copy_script_with_lib(SCRIPT, self.main / "tools/worktree-setup.sh")
         shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
         (self.main / "src").mkdir()
         (self.main / "src/in.txt").write_text("input\n")
         copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", "src/in.txt", *GEN_INPUTS)
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/lib/owned.sh", "tools/seed_build_tree.py", "src/in.txt", *GEN_INPUTS)
         # The seeder appends to a log under XDG_STATE_HOME: keep a test run out of the real one.
         patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.tmp / "state")})
         patcher.start()
@@ -231,7 +238,7 @@ class WorktreeSetupTest(unittest.TestCase):
     def test_outside_a_git_checkout_it_fails_before_touching_anything(self):
         loose = self.tmp / "loose"
         (loose / "tools").mkdir(parents=True)
-        shutil.copy(SCRIPT, loose / "tools/worktree-setup.sh")
+        copy_script_with_lib(SCRIPT, loose / "tools/worktree-setup.sh")
         (loose / "gen/cpp").mkdir(parents=True)
         (loose / "gen/cpp/own.pb.cc").write_text("own\n")
         env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.tmp))
@@ -547,7 +554,7 @@ class WorktreeSetupTest(unittest.TestCase):
 
     def test_a_copy_of_the_script_below_the_worktree_root_is_refused(self):
         (self.wt / "sub/tools").mkdir(parents=True)
-        shutil.copy(SCRIPT, self.wt / "sub/tools/worktree-setup.sh")
+        copy_script_with_lib(SCRIPT, self.wt / "sub/tools/worktree-setup.sh")
         result = subprocess.run([str(self.wt / "sub/tools/worktree-setup.sh")], cwd=self.wt / "sub", capture_output=True,
                                 text=True, timeout=60)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -640,11 +647,11 @@ class WorktreeSetupLuauTest(unittest.TestCase):
         git(self.upstream, "commit", "-q", "-m", "luau", "--no-gpg-sign")
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
-        shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        copy_script_with_lib(SCRIPT, self.main / "tools/worktree-setup.sh")
         shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
         copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", *GEN_INPUTS)
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/lib/owned.sh", "tools/seed_build_tree.py", *GEN_INPUTS)
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
         git(self.main, "submodule", "add", "-q", str(self.upstream), "extern/luau", env=self.ENV)
         git(self.main, "commit", "-q", "-m", "pin luau", "--no-gpg-sign")

@@ -48,7 +48,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -58,6 +57,7 @@ import check_embedded_defaults as defaults_check  # noqa: E402
 import pe_version_info  # noqa: E402
 import quest_apk_version  # noqa: E402
 import release_audience_section  # noqa: E402
+import work_root  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 BODY_TEMPLATE = PACKAGE_DIR / "RELEASE-BODY.template.md"
@@ -568,7 +568,7 @@ def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
 def run_all(args) -> list:
     """`just package-dev`: the full gate for a LOCAL build (development version), then the same tree and
     seal the CI uses. Never a release: args.version is None here."""
-    with tempfile.TemporaryDirectory(prefix="package-release-") as tmp:
+    with work_root.run_root("package-release") as tmp:
         info = gate(args, Path(tmp))
         stage = Path(tmp) / "stage"
         stage.mkdir()

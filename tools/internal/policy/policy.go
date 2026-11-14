@@ -40,6 +40,36 @@ var Stays = []Stay{
 		Reason:   "retired by the unit that replaces it with a Go runner (G1a of #2132)",
 		EndsWhen: "that unit merges",
 	},
+	{
+		Path:     "tools/owned_remove.py",
+		Reason:   "the manifest-removal helper the Python tools that stay import; its Go twin is tools/internal/owned",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
+	{
+		Path:     "tools/tests/test_owned_remove.py",
+		Reason:   "tests of the Python removal helper that stays until its importers are ported",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
+	{
+		Path:     "tools/tests/test_owned_sh.py",
+		Reason:   "tests of the shell removal wrapper, which stays Python-tested until the scripts it serves are ported",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
+	{
+		Path:     "tools/tests/test_nevr_build_tree_remove_cmake.py",
+		Reason:   "tests the CMake build-tree removal, which stays Python-tested until its importers are ported",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
+	{
+		Path:     "tools/tests/test_work_root_runs.py",
+		Reason:   "tests the work root's run folders through the Python helper tools/work_root.py, which stays until it is ported",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
+	{
+		Path:     "tools/tests/test_quest_diagnose_cleanup.py",
+		Reason:   "tests the Quest diagnose cleanup that tools/quest-diagnose.sh runs, which stays Python-tested until that tool is ported",
+		EndsWhen: "the #2132 port of the importer or tool it serves merges",
+	},
 }
 
 //go:embed python_to_port.txt

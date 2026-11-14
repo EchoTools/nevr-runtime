@@ -22,6 +22,9 @@ import logging
 from pathlib import Path
 from collections import defaultdict
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/, for owned_remove
+from owned_remove import remove_checked_tree  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from echomod.radhash import rad_hash
@@ -805,7 +808,7 @@ def phase1_copy_to_build():
     log.info("=" * 60)
     if BUILD_DIR.exists():
         log.info("  Removing existing build directory...")
-        shutil.rmtree(BUILD_DIR)
+        remove_checked_tree(BUILD_DIR, SCRIPT_DIR)
     log.info("  Copying %s -> %s", CLEAN_EXTRACT_DIR, BUILD_DIR)
     shutil.copytree(str(CLEAN_EXTRACT_DIR), str(BUILD_DIR))
 
@@ -2230,13 +2233,13 @@ def _setup_sublevel_loading(build_mf: Path):
 
     stripped = 0
     for mf_dir in BUILD_DIR.iterdir():
-        if not mf_dir.is_dir():
+        if mf_dir.is_symlink() or not mf_dir.is_dir():
             continue
         for type_dir in mf_dir.iterdir():
-            if not type_dir.is_dir():
+            if type_dir.is_symlink() or not type_dir.is_dir():
                 continue
             combat_file = type_dir / f"{COMBAT_SUB}.bin"
-            if not combat_file.is_file():
+            if combat_file.is_symlink() or not combat_file.is_file():
                 continue
             dir_name = type_dir.name
             should_strip = dir_name in STRIP_VISUAL_CRS
@@ -3119,7 +3122,7 @@ def phase4_repack():
 
     if OUTPUT_DIR.exists():
         log.info("  Removing existing output directory...")
-        shutil.rmtree(OUTPUT_DIR)
+        remove_checked_tree(OUTPUT_DIR, SCRIPT_DIR)
 
     run_tool(["repack", str(BUILD_DIR), str(OUTPUT_DIR)])
     log.info("  Repacked to %s", OUTPUT_DIR)
@@ -3163,7 +3166,7 @@ def cleanup():
     log.info("=" * 60)
     if BUILD_DIR.exists():
         log.info("  Removing build directory...")
-        shutil.rmtree(BUILD_DIR)
+        remove_checked_tree(BUILD_DIR, SCRIPT_DIR)
         log.info("  Done.")
 
 

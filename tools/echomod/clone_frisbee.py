@@ -13,6 +13,9 @@ import json
 import logging
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/, for owned_remove
+from owned_remove import remove_checked_tree  # noqa: E402
+
 # Add parent to path for echomod imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -200,7 +203,7 @@ def phase1_copy_to_build():
 
     if BUILD_DIR.exists():
         log.info("  Removing existing build directory...")
-        shutil.rmtree(BUILD_DIR)
+        remove_checked_tree(BUILD_DIR, SCRIPT_DIR)
 
     log.info("  Copying %s -> %s", CLEAN_EXTRACT_DIR, BUILD_DIR)
     shutil.copytree(str(CLEAN_EXTRACT_DIR), str(BUILD_DIR))
@@ -873,7 +876,7 @@ def phase4_repack():
 
     if OUTPUT_DIR.exists():
         log.info("  Removing existing output directory...")
-        shutil.rmtree(OUTPUT_DIR)
+        remove_checked_tree(OUTPUT_DIR, SCRIPT_DIR)
 
     run_tool(["repack", str(BUILD_DIR), str(OUTPUT_DIR)])
     log.info("  Repacked to %s", OUTPUT_DIR)
@@ -920,7 +923,7 @@ def cleanup():
 
     if BUILD_DIR.exists():
         log.info("  Removing build directory %s ...", BUILD_DIR)
-        shutil.rmtree(BUILD_DIR)
+        remove_checked_tree(BUILD_DIR, SCRIPT_DIR)
         log.info("  Done.")
 
 

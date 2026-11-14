@@ -49,7 +49,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -57,6 +56,7 @@ import uuid
 from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from owned_remove import Refused, remove_checked_tree  # noqa: E402
 import quest_release_timer  # noqa: E402 - where the timer's work folder (and its lock) is found
 from publish_quest_apk import Failure, Log, fetch, public_base  # noqa: E402 - the sibling tool's log, failure and fetch
 
@@ -227,9 +227,9 @@ class Rollback:
             return ""
         scratch, self.scratch = self.scratch, None
         try:
-            shutil.rmtree(scratch)
-        except OSError as error:
-            return f"cleanup of {scratch} failed: {error.strerror}"
+            remove_checked_tree(scratch, scratch.parent)
+        except (OSError, Refused) as error:
+            return f"cleanup of {scratch} failed: {error}"
         return ""
 
     def read_live(self, step: str) -> dict:

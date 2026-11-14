@@ -88,7 +88,6 @@ import os
 import pathlib
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -99,6 +98,7 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import FETCH_TIMEOUT_SECONDS, Failure, Log, NoRedirect, public_base, sha256_file  # noqa: E402 - the sibling tool's log, failure, fetch and hash
+from owned_remove import remove_checked_tree  # noqa: E402
 from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
@@ -769,7 +769,7 @@ class Timer:
                 problems.append(f"remove-worktree exited {result.returncode}: {(result.stderr or '')[-TAIL:]}")
         try:
             if signer_dir.exists():
-                shutil.rmtree(signer_dir)
+                remove_checked_tree(signer_dir, self.work)
             tarball.unlink(missing_ok=True)
             extra_file.unlink(missing_ok=True)
             if arena_file is not None:

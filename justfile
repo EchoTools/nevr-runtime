@@ -132,7 +132,10 @@ proto:
 
 # Remove build and dist directories
 clean:
-    rm -rf build/ dist/
+    #!/usr/bin/env bash
+    . "{{ justfile_directory() }}/tools/lib/owned.sh"
+    owned_build_tree_rm "{{ justfile_directory() }}/build" "{{ justfile_directory() }}"
+    owned_build_tree_rm "{{ justfile_directory() }}/dist" "{{ justfile_directory() }}"
 
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
@@ -382,7 +385,11 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
         version_source=(--build-info "$build_info")
     fi
-    rm -rf "$work/stage" "$work/orig" "$work/manifest" "$work/libr15-patch-report.json"
+    . "{{ justfile_directory() }}/tools/lib/owned.sh"
+    owned_build_tree_rm "$work/stage" "{{ justfile_directory() }}/build"
+    owned_build_tree_rm "$work/orig" "{{ justfile_directory() }}/build"
+    owned_build_tree_rm "$work/manifest" "{{ justfile_directory() }}/build"
+    rm -f -- "$work/libr15-patch-report.json"
     mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
@@ -445,7 +452,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # switches its source marks TEST (pfxwarm.on alone hangs the GPU in the social lobby). The APK gets the list kept in this repo,
     # tools/quest-afk-default-on.txt, over it, refused if it names a TEST-only switch; a source APK without the entry (the store's) gets none.
     default_on_stage="$work/stage-default-on"
-    rm -rf "$default_on_stage"
+    owned_build_tree_rm "$default_on_stage" "{{ justfile_directory() }}/build"
     build/go-tools/quest-default-on stage --apk "$apk" --list tools/quest-afk-default-on.txt --stage "$default_on_stage"
     # 3d'. the variant stamp, every APK: the word as the file's bytes, empty for a plain release ({{go_tools}}/quest-repack-libs).
     {{go_tools}}/quest-repack-libs write-build-variant --stage "$work/stage" --variant "$variant"
@@ -498,7 +505,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     [ "$signed_code" = "$version_code" ] || { echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
     echo "versionCode $signed_code (the community installer's build is 4987570)"
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
-    rm -rf "$work/verify"; mkdir -p "$work/verify"
+    owned_build_tree_rm "$work/verify" "{{ justfile_directory() }}/build"; mkdir -p "$work/verify"
     unzip -o -q "$signed" 'lib/arm64-v8a/libovrplatformloader*.so' -d "$work/verify"
     echo "== shim  lib/arm64-v8a/libovrplatformloader.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader.so" | grep -iE 'soname|needed'
@@ -651,7 +658,8 @@ build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR
     # never the CMake tree beside them (#2092). Hard links into the build tree; a copy where a link cannot be made.
     # The names come from SHA256SUMS, not a glob, so a library an earlier libsrc left in the build tree is not taken.
     libs="$out/libs"
-    rm -rf "$libs"
+    . "{{ justfile_directory() }}/tools/lib/owned.sh"
+    owned_build_tree_rm "$libs" "{{ justfile_directory() }}/build"
     mkdir -p "$libs"
     [ -s "$out/SHA256SUMS" ] || { echo "build-quest-combat-libs: no library was built (build/quest-combat-libs/SHA256SUMS is empty or missing)" >&2; exit 1; }
     while read -r _ name; do
@@ -770,7 +778,8 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
         out="$out/variant"
         name="nevr-runtime-$tag-$variant-quest.apk"
     fi
-    rm -rf "$out"
+    . "{{ justfile_directory() }}/tools/lib/owned.sh"
+    owned_build_tree_rm "$out" "{{ justfile_directory() }}/build"
     mkdir -p "$out"
     # The release APK's base is the pinned reference build renamed to this package (#1994); the variant and combat APKs keep
     # the store APK they are given.
@@ -938,7 +947,7 @@ test-auth-groundtruth:
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
 # target with -DBUILD_TESTING=ON (the default presets do not enable it). Add new
 # GTest executables here as they land.
-test-auth-unit:
+test-auth-unit: go-tools
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
@@ -991,12 +1000,13 @@ test-auth-unit:
     source tools/lib/work_root.sh
     work_dir "$NEVR_WORK_ROOT/test-scratch" "Temporary directories of the tests; each test removes its own when it ends." \
         "a directory in here left behind by an interrupted test run can be removed at any time; this directory when no test run is live."
-    sigfix="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-plugin-signature.XXXXXX")"
+    tool="$PWD/build/go-tools/run-root"
+    sigfix="$("$tool" make test-plugin-signature)"
     # The run root of the Win32 test binaries (src/runtime/tests/run_root.h): one fresh absolute folder per recipe run,
-    # named to Wine as a Windows path. Every test makes its folders under it; the exit trap removes it with the sigfix folder.
-    runroot="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-run-root.XXXXXX")"
+    # made and removed by build/go-tools/run-root, which removes only the folder it made.
+    runroot="$("$tool" make test-run-root)"
     export NEVR_TEST_RUN_ROOT="$(winepath -w "$runroot")"
-    trap 'rm -rf "$sigfix" "$runroot"' EXIT
+    trap '"$tool" remove "$sigfix"; "$tool" remove "$runroot"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
     # The unsigned DLLs the fixtures are made from are CMake targets (src/runtime/tests/sigfix, ADR 0041); the script signs and damages them.

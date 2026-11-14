@@ -28,6 +28,9 @@ import shutil
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # the sibling module is beside this file
+from owned_remove import remove_checked_tree  # noqa: E402
 from typing import Callable, Dict, List, Optional, Tuple
 
 TAG = "NEVR.QUESTBUILD"
@@ -300,7 +303,7 @@ def collect(layout: Layout, store_apk: pathlib.Path, recipe: str, signer: str) -
     method = link_or_copy(layout.repacked_apk, apk_out)
     data_out = layout.out / "_data"
     if data_out.exists():
-        shutil.rmtree(data_out)
+        remove_checked_tree(data_out, layout.out)
     methods = set()
     for path in sorted(source_data.rglob("*")):
         if path.is_file() and not path.is_symlink():

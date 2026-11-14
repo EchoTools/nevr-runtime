@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/EchoTools/nevr-runtime/tools/internal/owned"
 	"github.com/EchoTools/nevr-runtime/tools/internal/radpack"
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 )
@@ -295,9 +296,11 @@ func writeStaged(out string, files map[string][]byte) (err error) {
 	if err != nil {
 		return err
 	}
+	// The names this function makes under stage, recorded before each is made: a failure removes exactly these.
+	var madeFiles, madeDirs []string
 	defer func() {
 		if err != nil {
-			if rmErr := os.RemoveAll(stage); rmErr != nil {
+			if rmErr := removeStaged(stage, madeFiles, madeDirs); rmErr != nil {
 				err = fmt.Errorf("%w; the staging folder %s was not removed: %v", err, stage, rmErr)
 			}
 		}
@@ -310,17 +313,50 @@ func writeStaged(out string, files map[string][]byte) (err error) {
 		rels = append(rels, rel)
 	}
 	sort.Strings(rels)
+	seen := map[string]bool{}
+	for _, rel := range rels {
+		parts := strings.Split(rel, "/")
+		for i := 1; i < len(parts); i++ {
+			if d := strings.Join(parts[:i], "/"); !seen[d] {
+				seen[d] = true
+				madeDirs = append(madeDirs, d)
+			}
+		}
+	}
 	for _, rel := range rels {
 		path := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
+		madeFiles = append(madeFiles, rel)
 		if err := writeFile(path, files[rel], 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", rel, err)
 		}
 	}
 	// os.Rename refuses an existing directory at -out, so a folder made there while the pack was written is kept.
 	return os.Rename(stage, out)
+}
+
+// removeStaged removes what writeStaged recorded making under stage, by name: the files, then the folders deepest
+// first, then the staging folder itself when it is empty. A folder that holds anything else is kept and reported.
+func removeStaged(stage string, files, dirs []string) error {
+	sort.SliceStable(dirs, func(i, j int) bool { return strings.Count(dirs[i], "/") > strings.Count(dirs[j], "/") })
+	entries := append(append([]string{}, files...), dirs...)
+	var problems []string
+	for _, r := range owned.RemoveOwned(stage, entries) {
+		if r.Outcome != owned.Removed && r.Outcome != owned.Absent {
+			problems = append(problems, fmt.Sprintf("%s: %s", r.Entry, r.Outcome))
+		}
+	}
+	for _, r := range owned.RemoveOwned(filepath.Dir(stage), []string{filepath.Base(stage)}) {
+		if r.Outcome != owned.Removed && r.Outcome != owned.Absent {
+			problems = append(problems, fmt.Sprintf("%s: %s", filepath.Base(stage), r.Outcome))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("kept: %s", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // within says whether path is gameDir or inside it, links resolved: gameDir whole, and path's nearest existing

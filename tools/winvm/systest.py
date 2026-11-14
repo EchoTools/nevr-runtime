@@ -26,7 +26,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 
@@ -284,7 +283,7 @@ if ($p) {{ Remove-Item '{ROOT}\run\hang.dmp' -ErrorAction SilentlyContinue
 # --- scenarios --------------------------------------------------------------------
 
 def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args) -> list[checks.Result]:
-    with tempfile.TemporaryDirectory() as t:
+    with work_root.run_root("winvm-systest") as t:
         setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore)
     deploy(g, dll)
     run_id = launch(g, args.game_args)

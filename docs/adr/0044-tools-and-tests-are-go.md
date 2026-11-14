@@ -171,6 +171,7 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 | --- | --- | --- |
 | `tools/echomod/**` (31 Python files, 8,708 lines) and the `generate-combat-overrides` recipe | Port cost against saving: no test in `tools/tests` names it, so a port saves no test time; 8,708 lines; five commits in its history, the last that changed what it does is `2ef919f32c88738dae649a0c1bbb1924d2c1a8d5`, since which it has had a 1-line path change (`2e23a64a5a9374d45e0d38a23d404a002531e5ae`), a mode bit (`c780136e41115d44e043abfdd36c3e3fb13bad7e`) and its README (`6cea8e3e684b2ec08ac462faa93c95e85210f98e`) | a change alters its behaviour; that change ports what it alters |
 | `tools/run_tool_tests.py` | Retired by unit G1a of #2132 | G1a merges |
+| `tools/owned_remove.py`, `tools/tests/test_owned_remove.py`, `tools/tests/test_owned_sh.py`, `tools/tests/test_nevr_build_tree_remove_cmake.py`, `tools/tests/test_work_root_runs.py`, `tools/tests/test_quest_diagnose_cleanup.py` | The manifest-removal helper and the tests of the Python tools that import it, which the Go twin `tools/internal/owned` already mirrors; the importers stay Python until their units of #2132 port them | Each importer is ported under #2132 |
 
 `tools/winvm/` is not in the table: both of its libraries have a Go counterpart (Context), and it ports in its own unit.
 

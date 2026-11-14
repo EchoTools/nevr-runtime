@@ -14,6 +14,15 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/vcpkg_root.sh"
 
 
+
+def copy_script_with_lib(src, dst):
+    """Copy a tool script and the lib/owned.sh it sources, beside it under dst's lib/ (the script sources it by path)."""
+    dst = pathlib.Path(dst)
+    shutil.copy(src, dst)
+    (dst.parent / "lib").mkdir(exist_ok=True)
+    shutil.copy(REPO / "tools/lib/owned.sh", dst.parent / "lib/owned.sh")
+
+
 def git(*args, cwd):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=cwd,
                    check=True, capture_output=True, text=True)
@@ -36,7 +45,7 @@ class VcpkgRootTest(unittest.TestCase):
     def checkout(self, name):
         root = self.tmp / name
         (root / "tools").mkdir(parents=True)
-        shutil.copy(SCRIPT, root / "tools/vcpkg_root.sh")
+        copy_script_with_lib(SCRIPT, root / "tools/vcpkg_root.sh")
         (root / ".vcpkg-commit").write_text(self.commit + "\n")
         return root
 
@@ -61,6 +70,7 @@ class VcpkgRootTest(unittest.TestCase):
     def test_a_second_call_reuses_the_root(self):
         a = self.checkout("a")
         first = self.run_script(a)
+        self.assertEqual(first.returncode, 0, first.stderr)
         marker = pathlib.Path(first.stdout.strip()) / "buildtrees-marker"
         marker.write_text("kept")
         second = self.run_script(a)

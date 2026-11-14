@@ -29,7 +29,9 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # the sibling module is beside this file
+from owned_remove import owned_scratch  # noqa: E402
 
 STAMP = ".proto-stamp"
 PIN_RE = re.compile(r'^proto_pin\s*:=\s*"([0-9a-f]+)"', re.M)
@@ -130,7 +132,7 @@ def generate(root, protoc_dir):
     old, _ = read_stamp(gen)
     old_files = list(old["files"]) if old else []
     config = config_sha(root)
-    with tempfile.TemporaryDirectory(prefix=".proto-gen-", dir=root) as tmp:
+    with owned_scratch(root, ".proto-gen-") as tmp:
         env = dict(os.environ, PATH=f"{protoc_dir}{os.pathsep}{os.environ.get('PATH', '')}")
         proc = subprocess.run(["buf", "generate", f"buf.build/echotools/nevr-api:{pin}", "-o", tmp], cwd=root,
                               env=env, capture_output=True, text=True)

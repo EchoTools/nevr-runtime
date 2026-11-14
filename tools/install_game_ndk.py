@@ -31,6 +31,9 @@ import tempfile
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # for owned_remove beside this file
+from owned_remove import Refused, remove_checked_tree  # noqa: E402
+
 HERE = pathlib.Path(__file__).resolve().parent
 KEYS = ("NDK_RELEASE", "NDK_BUILD", "NDK_URL", "NDK_SHA256", "NDK_SHA1", "CLANG_VERSION")
 CLANG_REL = pathlib.Path("toolchains/llvm/prebuilt/linux-x86_64/bin/clang")
@@ -229,7 +232,10 @@ def install(log, pin, root):
         log.info("built", dest=dest)
         return dest
     finally:
-        shutil.rmtree(build, ignore_errors=True)
+        try:
+            remove_checked_tree(build, root)
+        except (Refused, OSError) as error:
+            log.info("build_dir_kept", path=build, error=str(error))
 
 
 def main(argv=None):

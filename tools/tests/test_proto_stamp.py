@@ -44,6 +44,7 @@ class ProtoStampTest(unittest.TestCase):
         self.root = self.tmp / "root"
         (self.root / "tools").mkdir(parents=True)
         shutil.copy(STAMPER, self.root / "tools/proto_stamp.py")
+        shutil.copy(REPO / "tools/owned_remove.py", self.root / "tools/owned_remove.py")
         self.write_pin(PIN)
         (self.root / "buf.gen.yaml").write_text(BUF_GEN)
         self.protoc = self.tmp / "protoc-bin"

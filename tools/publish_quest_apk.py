@@ -47,10 +47,12 @@ import pathlib
 import re
 import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # the sibling module is beside this file
+import work_root  # noqa: E402
 
 REQUIRED_ENV = (
     "R2_ENDPOINT",
@@ -290,7 +292,7 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
         raise Failure(f"refused: --extra-out {extra_out} already exists")
 
     if variant is None:
-        with tempfile.TemporaryDirectory() as scratch:
+        with work_root.run_root("publish-quest-apk") as scratch:
             extra = os.path.join(scratch, "extra.json")
             command = [env["RELEASE_SIGNER_BIN"], "put-quest-apk", "--tag", args.tag, "--apk", str(apk), "--out", extra]
             if listed is not None:

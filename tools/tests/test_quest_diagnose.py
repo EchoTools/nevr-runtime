@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -18,6 +19,17 @@ import zipfile
 REPO = pathlib.Path(__file__).resolve().parents[2]
 PS1 = REPO / "tools/package-release/quest-diagnose.ps1"
 SH = REPO / "tools/quest-diagnose.sh"
+
+
+def install_run_root(tmp, scripts):
+    """quest-diagnose.sh makes its working folder with build/go-tools/run-root beside its own folder's parent, and sources
+    lib/run_root.sh beside itself. The copy gets both: the real binary (built by work_root.run_root_binary when missing)."""
+    sys.path.insert(0, str(REPO / "tools"))
+    import work_root  # noqa: E402
+    (scripts / "lib").mkdir(exist_ok=True)
+    shutil.copy(REPO / "tools/lib/run_root.sh", scripts / "lib/run_root.sh")
+    (tmp / "build/go-tools").mkdir(parents=True, exist_ok=True)
+    shutil.copy(work_root.run_root_binary(), tmp / "build/go-tools/run-root")
 SERIAL = "1WMHH8XQ4R0123"
 EMAIL = "player.one@example.com"
 MEDIA = "/sdcard/Android/media/com.readyatdawn.r15"
@@ -139,6 +151,8 @@ class DiagnoseCases:
         self.scripts = self.tmp / "scripts"
         self.scripts.mkdir()
         shutil.copy(self.script_source, self.scripts / self.script_source.name)
+        if self.script_source == SH:
+            install_run_root(self.tmp, self.scripts)
         self.script = self.scripts / self.script_source.name
         self.farm = self.tmp / "farm"
         tool_farm(self.farm)
@@ -523,8 +537,8 @@ class SourceShape(unittest.TestCase):
         self.assertIn("[System.IO.Directory]::Delete($full, $false)", ps1)
         self.assertNotRegex(ps1, r"\bdel\b|\brm\b")
         sh = SH.read_text()
-        self.assertEqual(re.findall(r"\brm\b[^\n]*", re.sub(r"^\s*#.*$", "", sh, flags=re.M)),
-                         ['rm -rf "$work"\' EXIT'])
+        self.assertEqual(re.findall(r"\brm\b[^\n]*", re.sub(r"^\s*#.*$", "", sh, flags=re.M)), [])
+        self.assertIn('trap \'"$rr" remove "$work"\' EXIT', sh)
 
     def test_no_adb_command_names_the_sign_in_file_or_changes_the_headset(self):
         for path in (PS1, SH):

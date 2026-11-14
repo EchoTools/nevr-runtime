@@ -12,10 +12,12 @@ it never overwrites a README that exists.
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import os
 import pathlib
-import tempfile
+import re
+import subprocess
 
 ENV_VAR = "NEVR_WORK_ROOT"
 DEFAULT_RELATIVE = pathlib.Path("src") / "nevr-runtime-work"
@@ -78,6 +80,72 @@ def test_scratch() -> pathlib.Path:
     )
 
 
-def make_test_dir(prefix: str = "tmp-") -> tempfile.TemporaryDirectory:
-    """A TemporaryDirectory in the test scratch directory."""
-    return tempfile.TemporaryDirectory(prefix=prefix, dir=test_scratch())
+class RunRootRefused(RuntimeError):
+    """A run root the Go tool refused (make or remove). Nothing was removed."""
+
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
+RUN_ROOT_BINARY = REPO / "build" / "go-tools" / "run-root"
+
+
+def run_root_binary() -> pathlib.Path:
+    """build/go-tools/run-root, the one implementation of run-root make and remove (tools/internal/runroot). It is built
+    from tools/cmd/run-root when missing, with the same command `just go-tools` runs for it."""
+    if not RUN_ROOT_BINARY.exists():
+        out = REPO / "build" / "go-tools"
+        out.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["go", "-C", str(REPO / "tools"), "build", "-trimpath", "-o", str(out) + os.sep, "./cmd/run-root"],
+                       check=True)
+    return RUN_ROOT_BINARY
+
+
+def run_root_make(label: str) -> pathlib.Path:
+    """Make a run root under the work root with the Go tool; returns its path."""
+    done = subprocess.run([str(run_root_binary()), "make", label], capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RunRootRefused(f"run-root make {label}: {done.stderr.strip() or done.returncode}")
+    return pathlib.Path(done.stdout.strip())
+
+
+def run_root_remove(path) -> None:
+    """Remove one run root with the Go tool, which makes the checks of runroot.Remove. Refused means nothing removed."""
+    done = subprocess.run([str(run_root_binary()), "remove", str(path)], capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RunRootRefused(f"run-root remove {path}: {done.stderr.strip() or done.returncode}")
+
+
+@contextlib.contextmanager
+def run_root(label: str):
+    """A run root for the length of a with-block: made by the Go tool, removed once by it on exit."""
+    path = run_root_make(label)
+    try:
+        yield path
+    finally:
+        run_root_remove(path)
+
+
+class RunRootDir:
+    """What make_test_dir returns: `name` is a run root made by the Go tool. cleanup() (or leaving a with-block) removes it
+    with the Go tool's remove; nothing else deletes it."""
+
+    def __init__(self, label: str) -> None:
+        self.path: pathlib.Path | None = run_root_make(label)
+        self.name = str(self.path)
+
+    def cleanup(self) -> None:
+        if self.path is not None:
+            run_root_remove(self.path)
+            self.path = None
+
+    def __enter__(self) -> str:
+        return self.name
+
+    def __exit__(self, *exc: object) -> None:
+        self.cleanup()
+
+
+def make_test_dir(prefix: str = "tmp-") -> RunRootDir:
+    """A run root (made by the Go tool) for a test's scratch. The label is the prefix reduced to the characters a run root
+    label allows; the directory is removed by cleanup() or on leaving a with-block."""
+    label = re.sub(r"[^a-z0-9-]+", "-", prefix.lower()).strip("-") or "tmp"
+    return RunRootDir(label[:64])

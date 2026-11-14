@@ -344,3 +344,35 @@ func TestAFolderMadeAtOutWhileThePackIsWrittenIsNotReplaced(t *testing.T) {
 		t.Errorf("beside -out: %v", left)
 	}
 }
+
+// A link planted at the name the pack writes next, while the write fails, is unlinked by name and its target survives:
+// the staging cleanup removes only the names writeStaged recorded, and never follows a link.
+func TestAFailedWriteNeverFollowsALinkPlantedInStaging(t *testing.T) {
+	f := newFixture(t)
+	out := f.out("p")
+	canary := filepath.Join(t.TempDir(), "canary.txt")
+	if err := os.WriteFile(canary, []byte("canary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	writeFile = func(name string, b []byte, mode os.FileMode) error {
+		if n++; n == 2 {
+			if err := os.Symlink(canary, name); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("disk full")
+		}
+		return os.WriteFile(name, b, mode)
+	}
+	t.Cleanup(func() { writeFile = os.WriteFile })
+	code, _, stderr := f.run(testSteps, "-game-dir", f.game, "-out", out, "-id", "p", "-version", "1")
+	if code != 1 || !strings.Contains(stderr, "disk full") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+	if b, err := os.ReadFile(canary); err != nil || string(b) != "canary\n" {
+		t.Errorf("the canary changed: %q, %v", b, err)
+	}
+	if left, _ := os.ReadDir(filepath.Dir(out)); len(left) != 0 {
+		t.Errorf("the staging folder was left: %v", left)
+	}
+}
