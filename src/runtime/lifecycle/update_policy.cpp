@@ -5,13 +5,13 @@
 
 #include <nlohmann/json.hpp>
 
-#include "runtime/host/update_names.h"
+#include "core/update/names.h"
 
 namespace nevr_update {
 namespace {
 
 using nlohmann::json;
-namespace names = nevr_host::update_names;
+namespace names = nevr_update_names;
 
 bool IsSha256Hex(const std::string& s) {
   return s.size() == 64 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c) != 0 && !std::isupper(c); });

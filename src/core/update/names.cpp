@@ -1,6 +1,6 @@
-#include "runtime/host/update_names.h"
+#include "core/update/names.h"
 
-namespace nevr_host::update_names {
+namespace nevr_update_names {
 namespace {
 
 char Upper(char c) noexcept { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
@@ -69,18 +69,11 @@ bool ParseMember(std::string_view path, Member* out) noexcept {
   return true;
 }
 
+bool IsQuestRuntimeMember(std::string_view path) noexcept { return path == std::string_view(kQuestRuntimeMember); }
+
 std::string MemberPath(const Member& member) {
   if (member.runtime) return kRuntimeMember;
   return std::string(kPluginPrefix) + member.plugin + kPluginSuffix;
 }
 
-std::wstring MemberRelativePath(const Member& member) {
-  if (member.runtime) return kRuntimeFile;
-  std::wstring out = kPluginsDir;
-  out += L'\\';
-  for (const char c : member.plugin) out.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-  out += L".dll";
-  return out;
-}
-
-}  // namespace nevr_host::update_names
+}  // namespace nevr_update_names

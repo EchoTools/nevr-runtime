@@ -125,7 +125,7 @@ pub fn take_lock(update: &Path, timeout: Duration, step: Duration) -> Result<Upd
     }
 }
 
-// The host's own name rules (src/runtime/host/update_names.cpp: IsName, IsDeviceName, IsVersionName, IsPluginName,
+// The host's own name rules (src/core/update/names.cpp: IsName, IsDeviceName, IsVersionName, IsPluginName,
 // ParseMember), mirrored because C++ is out of reach of this crate. A name is 1 to 64 characters from its set, never starts
 // or ends with '.', and is not a Windows device name (CON PRN AUX NUL CONIN$ CONOUT$ COM0-9 LPT0-9, any case, compared on
 // the part before the first '.'). The tests below pin this copy to the host's table.
@@ -139,12 +139,12 @@ fn is_name(name: &str, allowed: impl Fn(u8) -> bool) -> bool {
     !name.is_empty() && name.len() <= 64 && !name.starts_with('.') && !name.ends_with('.') && name.bytes().all(allowed) && !is_device_name(name)
 }
 
-/// update_names.cpp `IsVersionName`: [0-9A-Za-z.+-]{1,64}.
+/// names.cpp `IsVersionName`: [0-9A-Za-z.+-]{1,64}.
 pub fn is_version_name(v: &str) -> bool {
     is_name(v, |c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'+' | b'-'))
 }
 
-/// update_names.cpp `ParseMember`: `nevr-runtime.dll`, or `plugins/<name>.dll` with `<name>` [A-Za-z0-9._-]{1,64}.
+/// names.cpp `ParseMember`: `nevr-runtime.dll`, or `plugins/<name>.dll` with `<name>` [A-Za-z0-9._-]{1,64}.
 pub fn is_member(path: &str) -> bool {
     if path == crate::stage::RUNTIME {
         return true;
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn the_name_rules_are_the_hosts() {
-        // The host's cases (update_names.cpp): what it takes and what it refuses.
+        // The host's cases (core/update/names.cpp): what it takes and what it refuses.
         for ok in ["1.2.3", "5.16.1-dev.4+abc", "a", &"a".repeat(64), "CONSOLE", "COM10", "COM"] {
             assert!(is_version_name(ok), "{ok}");
         }

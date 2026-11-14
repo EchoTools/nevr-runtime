@@ -150,7 +150,7 @@ core's work and the publish, which takes the lock.
 **As built, the worker (#1200).** The runtime's half is `src/runtime/lifecycle/update_policy.cpp` (the decisions, pure),
 `src/runtime/lifecycle/update_run.cpp` (the check and the confirmation, with every dependency passed in), `src/runtime/lifecycle/update_worker.cpp` (the threads) and
 `src/runtime/lifecycle/update_process.cpp` (the binding to the core, the verifier, the log and the process); the names and the digest are the host's
-units (`host/update_names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
+units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
 
 - **When.** `RunDeferredRuntimeBootstrap` calls `nevr_update::StartProcessWorker` last, after the log line `runtime bootstrap
   complete` and after the command line is parsed (so `-no-update` has been read). Nothing starts from `DllMain`, `initialize`
@@ -170,7 +170,7 @@ units (`host/update_names.cpp`, `host/file_digest.cpp`), compiled into both DLLs
   the quarantine, the core is opened with `{"platform": "pc", "nevr_root": <root as UTF-8>, "channel"?}` (the core derives its state,
   log and download folders from `nevr_root`), the manifest is fetched, `NevrPcStage` runs with the running runtime's version (from
   its `NEVR-BUILD` literal) and sha256 and the quarantine, and the run is ended and closed on every path. The result must parse
-  inside the host's vocabulary (`runtime/host/update_names.h`: a version, a plain member path, 64 lowercase hex) or it is
+  inside the host's vocabulary (`src/core/update/names.h`: a version, a plain member path, 64 lowercase hex) or it is
   `failed reason=bad_result`. `none` and `blocked` from the core are logged and publish nothing. For `staged`, each file is
   verified (`update verify`) with `nevr_plugin_trust::ProductionPolicy()`, the denylist included; one that fails removes
   `update\staging\<version>` and ends in `blocked reason=verify_failed`. Then the lock (5 s), a second look for `pending.json`,
@@ -268,7 +268,7 @@ flowchart TD
    `owned` reduced to the runtime, and the host says so.
 9. **As built (#2104).** The vocabulary is stricter than the patterns above: a version or a plugin name never starts or
    ends with `.` (so `.` and `..` are never a name) and is never a Windows device name (`CON`, `NUL`, `COM1`, ...)
-   before its first dot (`src/runtime/host/update_names.h`). The files name a release's members as the core's
+   before its first dot (`src/core/update/names.h`). The files name a release's members as the core's
    `NevrPcStage` result does: `staged.json` is `{"version", "files": [{"path", "size", "sha256"}]}` with `path`
    `nevr-runtime.dll` or `plugins/<name>.dll`; `swap.json` is `{"kind", "from", "to", "phase", "out": [path], "in":
    [path]}`; `state.json` keeps `owned` as `[{"path", "sha256"}]`, and the swap rewrites `owned` at `done` to the files it
@@ -447,7 +447,7 @@ every `update check` line carries `channel_source`, so a player whose config dis
 - **What `state.json` becomes.** `channel`; `current` (the release and its runtime sha256); `owned` (the runtime at its new
   sha256, then every plugin the earlier file listed: the installer does not touch `plugins\`); `discards` and `quarantine` as
   they were. A file the host would not use (not an object, nested deeper than 16, over 64 KiB, an `owned`, `discards` or
-  `quarantine` of the wrong shape, an `owned` path or a `discards` key outside the host's name rules (`update_names.cpp`: no leading or trailing `.`, no device name), the rules `ValidState` applies) is replaced by one built from the baseline,
+  `quarantine` of the wrong shape, an `owned` path or a `discards` key outside the host's name rules (`src/core/update/names.cpp`: no leading or trailing `.`, no device name), the rules `ValidState` applies) is replaced by one built from the baseline,
   and its quarantine is lost with it (`state_before=rebuilt`). A file that is there and cannot be read is not written over.
 - **Links.** `update\` or `state.json` as a link stops the run (`reparse_point`); a link among the removals is removed and never
   followed (`outcome=link_removed`).

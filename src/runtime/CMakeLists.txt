@@ -26,8 +26,8 @@ set(NEVR_HOST_UNITS
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "host/stop_line.cpp"
-    # Self-update's swap at start (ADR 0024, section 4).
-    "host/update_names.cpp"
+    # Self-update's swap at start (ADR 0024, section 4). The vocabulary is the core's (core/update/names.cpp, shared with Quest).
+    "../core/update/names.cpp"
     "host/update_seams.cpp"
     "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
@@ -55,7 +55,6 @@ set(PATCHES_SOURCES
     "lifecycle/update_run.cpp"
     "lifecycle/update_worker.cpp"
     "lifecycle/update_process.cpp"
-    "host/update_names.cpp"
     "host/file_digest.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
@@ -2291,9 +2290,9 @@ if(BUILD_TESTING)
       lifecycle/update_policy.cpp
       lifecycle/update_run.cpp
       lifecycle/update_worker.cpp
-      host/update_names.cpp)
+      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp)
     set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_run.cpp
-      lifecycle/update_worker.cpp host/update_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      lifecycle/update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_update_worker PRIVATE -Werror)
     target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_update_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)

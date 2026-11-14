@@ -39,6 +39,7 @@ using nevr_host::UpdateLock;
 using nevr_host::UpdateAction;
 using nevr_host::UpdateResult;
 namespace names = nevr_host::update_names;
+namespace core_names = nevr_update_names;
 
 // ---- the vocabulary ----------------------------------------------------------------------------------------------
 
@@ -85,6 +86,23 @@ TEST(UpdateNames, AMemberIsTheRuntimeOrOnePluginAndNothingElse) {
     names::Member parsed;
     EXPECT_FALSE(names::ParseMember(bad, &parsed)) << bad;
   }
+}
+
+TEST(UpdateNames, TheQuestRuntimeIsAMemberOfTheVocabulary) {
+  EXPECT_TRUE(core_names::IsQuestRuntimeMember("libnevr_runtime.so"));
+  EXPECT_STREQ(core_names::kQuestRuntimeMember, "libnevr_runtime.so");
+}
+
+TEST(UpdateNames, NothingElseIsTheQuestMember) {
+  for (const char* bad : {"../x.so", "lib/x.so", "x.so", "../libnevr_runtime.so", "lib/libnevr_runtime.so",
+                          "libnevr_runtime.so/", "libnevr_runtime.so ", "LIBNEVR_RUNTIME.SO", "nevr-runtime.dll", ""}) {
+    EXPECT_FALSE(core_names::IsQuestRuntimeMember(bad)) << bad;
+  }
+}
+
+TEST(UpdateNames, PcStillRefusesTheQuestMember) {
+  core_names::Member member;
+  EXPECT_FALSE(core_names::ParseMember("libnevr_runtime.so", &member));
 }
 
 // ---- files ---------------------------------------------------------------------------------------------------------

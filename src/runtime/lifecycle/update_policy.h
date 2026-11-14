@@ -76,7 +76,7 @@ struct StageResult {
 };
 
 /// False, with `error`, when the text is not a result of that shape or names a version, path or hash outside the
-/// vocabulary the host accepts (runtime/host/update_names.h): such a result is never published.
+/// vocabulary the host accepts (core/update/names.h): such a result is never published.
 bool ParseStageResult(const std::string& text, StageResult* out, std::string* error);
 
 /// update\staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling the host reads.
