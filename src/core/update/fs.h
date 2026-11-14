@@ -70,9 +70,9 @@ class UpdateFs {
 
   /// Moves `from` to `to` with no copy (ADR 0024, section 4.2): a rename, never a copy across volumes. False when it did not move:
   /// a file is where `to` is going (a failure, never overwritten), `from` is absent, or the two are on different volumes. The
-  /// platform's reason goes to `*os_error` when it is not null: EXDEV on POSIX for a move across volumes, ERROR_NOT_SAME_DEVICE on
-  /// Win32. The journal undoes a move that failed. An implementation that cannot move keeps this default: it moves nothing and
-  /// reports no platform reason (`*os_error` = 0). The PC implementation (runtime/lifecycle/update_fs_win32.h) keeps it.
+  /// platform's reason goes to `*os_error` when it is not null: EXDEV from the POSIX implementation (fs_posix.cpp) for a move
+  /// across volumes. The journal undoes a move that failed. The Win32 implementation (runtime/lifecycle/update_fs_win32.h) does
+  /// not override this: it moves nothing and reports no platform reason (`*os_error` = 0), as this default does.
   virtual bool Move(const std::string& /*from*/, const std::string& /*to*/, int* os_error) const noexcept {
     if (os_error != nullptr) *os_error = 0;
     return false;
