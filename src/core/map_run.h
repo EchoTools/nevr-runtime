@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "core/cargo_env.h"
+#include "core/map_local_precedence.h"
 #include "core/map_manifest.h"
 #include "core/map_types.h"
 
@@ -83,7 +84,10 @@ inline std::string StageAliasesOrWithdraw(Mounter& mounter, const std::string& o
 struct ChannelConfig {
   std::string dir, base_url, platform = kPlatformPc, game_build;
   std::vector<std::string> stock_manifest_sha256;
-  std::vector<std::string> local_maps;  // ids a local map loader loads in this run
+  std::vector<std::string> local_maps;  // ids a local map loader loads in this run: local names (ADR 0048 decision 8)
+  // The provider seam (core/map_local_precedence.h): the level names of this run's local copies. Empty by default, which is no
+  // local level; the channel supplies the platform's.
+  LocalLevelNamesFn local_level_names;
   std::vector<PinnedKey> keys;
   bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
