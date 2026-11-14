@@ -11,12 +11,15 @@
 // nothing serves, and builds the shadow from the rest. A set registered after the mount is refused (kTooLate). A set's
 // overrides are held with it and handed to the override registry by the caller for mounted sets only.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "core/map_format.h"
 #include "core/resource_shadow.h"
 
 namespace nevr_resource_sets {
@@ -221,5 +224,75 @@ std::string KeyText(std::uint64_t type, std::uint64_t name);
 // Parses an archive's body (docs/engine/asset-system.md, "Archives"): u32 D, D x u64 dependencies, u32 N, N x (u64
 // type, u64 name), then the type table and a closing 0, which this does not read. False when it runs past `size`.
 bool ParseArchive(const unsigned char* data, std::size_t size, Archive* out);
+
+// ---- A map's file set (docs/adr/0048-custom-maps-channel.md decision 5). The rules both platforms apply before a downloaded set
+// reaches Registry::AddMapFile, in one place: the request's owner, label and pin, the size, the re-hash, the view. Each platform
+// supplies only what it alone can do with the file it holds (HeldMapFile: src/runtime/patch/resource_sets.cpp on the PC,
+// src/quest/sentinel/map_sets.cpp on the Quest) and the lock its registry lives under (RegisterMapFile's `add`).
+
+// An owner is "map:<id>" and a label "map:<id>@<version>": the longest map id (map_format.h kMaxMapIdChars) and the longest version
+// (kMaxVersionParts parts of kMaxVersionDigits digits, joined by dots) bound them. Each is printable ASCII with no '"' or '\\', so it
+// is written into a log line (quoted) and the login's JSON without breaking either.
+inline constexpr std::size_t kMaxMapOwnerBytes = sizeof(kMapOwnerPrefix) - 1 + nevr_maps::kMaxMapIdChars;
+inline constexpr std::size_t kMaxMapVersionBytes =
+    nevr_maps::kMaxVersionParts * nevr_maps::kMaxVersionDigits + (nevr_maps::kMaxVersionParts - 1);
+inline constexpr std::size_t kMaxMapLabelBytes = kMaxMapOwnerBytes + 1 + kMaxMapVersionBytes;
+// One read of a re-hash: the file is hashed this many bytes at a time, so a set of any size costs one step of memory.
+inline constexpr std::size_t kRehashStepBytes = std::size_t{1} << 20;
+
+struct MapFileRequest {
+  std::string owner;    // "map:<id>"
+  std::string label;    // "map:<id>@<version>"
+  std::string sha256;   // the pinned SHA-256, 64 lowercase hex; read only when `rehash`
+  // False when the caller compared the file's stamp, through the handle it holds, with the one recorded when the file was hashed at
+  // fetch (ADR 0048 decision 4): the mount, which may run on the boot thread, always passes false, so it hashes nothing (ADR 0045
+  // decision 7). True only on a worker, for a file whose stamp nobody verified: its bytes are hashed through the handle first.
+  bool rehash = false;
+};
+
+// The request's own rules, before the file is touched: kNone, or kFormat with the detail "bad_owner", "bad_label" or "bad_pin".
+Outcome CheckMapFileRequest(const MapFileRequest& request);
+
+// What a platform does with the file a map's set is registered from. The handle stays the caller's throughout.
+class HeldMapFile {
+ public:
+  virtual ~HeldMapFile() = default;
+  // The file's size; false with `problem` set ("bad_handle", "not_a_file", or the failing call and its error code).
+  virtual bool Size(std::uint64_t* size, std::string* problem) = 0;
+  // Up to `length` bytes at `offset`, read through the handle without moving the position the engine reads from; `*got` is 0 at
+  // the end of the file. False with `problem` set when the read fails.
+  virtual bool ReadAt(std::uint64_t offset, void* buffer, std::size_t length, std::size_t* got, std::string* problem) = 0;
+  // A read-only view of the whole file, or null with `problem` set; RegisterMapFile releases it (Unmap) before it returns.
+  virtual const void* Map(std::uint64_t size, std::string* problem) = 0;
+  virtual void Unmap(const void* view, std::uint64_t size) = 0;
+};
+
+// One map's set, registered: the request's rules (CheckMapFileRequest), kTooLate once `mounted()` is true, the file's size (an empty
+// file is kFormat "empty_file"), the re-hash when the request asks for it (kHash "sha256 <file's>, pinned <pin>" when they differ;
+// kFormat "hash_read: ..." when the file cannot be read to its size), the view, and then `add` with the view, whose outcome is
+// returned. `add` takes the platform's lock and calls Registry::AddMapFile, which copies what it keeps of the set (its records, chunks
+// and archives; a map's set carries no override, whose bytes would point into the view). So the view is released before this returns,
+// whatever the outcome: the game reads a mounted set through the held handle, never through the view. On a refusal the caller keeps
+// the handle; on ok() the registry owns it.
+Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
+                        const std::function<Outcome(const void* view, std::uint64_t size)>& add);
+
+// The mount observer both platforms offer: the map channel's code is told which sets the run's one mount mounted and refused, after
+// Registry::Mount and before the first request is answered from the shadow, with none of the platform's locks held. A run whose
+// registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. Thread-safe.
+class MountObserver {
+ public:
+  using Fn = void (*)(const MountReport& report);
+  void Set(Fn fn) { fn_.store(fn); }
+  bool Armed() const { return fn_.load() != nullptr; }
+  // Calls the observer once per run: true when it was called now, false when none is set or it was already called.
+  bool Notify(const MountReport& report);
+  // Test support: no observer, never called.
+  void Reset();
+
+ private:
+  std::atomic<Fn> fn_{nullptr};
+  std::atomic<bool> notified_{false};
+};
 
 }  // namespace nevr_resource_sets

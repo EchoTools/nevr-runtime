@@ -27,14 +27,16 @@ QUEST = ROOT / "src/quest"
 JUSTFILE = ROOT / "justfile"
 
 # Files (relative to src/quest) that may name a memory-protection or mapping call. got_hook.cpp: the GOT's data pages;
-# libr15_attach.cpp: its trampoline pages (anonymous memory); credits_text.cpp: its anonymous buffer. The two headers declare
-# the seams those files take (their own comments name mprotect and mmap).
+# libr15_attach.cpp: its trampoline pages (anonymous memory); credits_text.cpp: its anonymous buffer; map_sets.cpp: a read-only
+# view (PROT_READ) of a downloaded map's set file, a data page, released before its registration returns (docs/adr/0048). The two
+# headers declare the seams those files take (their own comments name mprotect and mmap).
 PROTECTION_ALLOWLIST = {
     "sentinel/got_hook.cpp",
     "sentinel/libr15_attach.cpp",
     "sentinel/libr15_attach.h",
     "sentinel/credits_text.cpp",
     "sentinel/credits_text.h",
+    "sentinel/map_sets.cpp",
 }
 # Files that may name the STOCK build ID constant, each with the reason.
 STOCK_ID_ALLOWLIST = {
