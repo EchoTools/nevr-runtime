@@ -200,6 +200,13 @@ void Table::Reconcile(std::uint64_t main_level, const std::vector<std::uint64_t>
 }
 
 void Table::PublishLocked(const std::vector<Winner>& winners) {
+  // A key whose alias goes live (no winner for it was published, one is now) starts a new epoch: the arena override's
+  // once-per-load line keys on it. A winner switch between two maps is not a new epoch.
+  for (const Winner& winner : winners) {
+    const bool was_live = std::any_of(published_.begin(), published_.end(),
+                                      [&](const Winner& previous) { return previous.key == winner.key; });
+    if (!was_live) ++live_epochs_[winner.key];
+  }
   if (winners.empty()) {
     live_.store(nullptr, std::memory_order_release);
     published_.clear();
@@ -264,6 +271,12 @@ std::string Table::LiveMapId(std::uint64_t key) const {
   return std::string();
 }
 
+std::uint64_t Table::LiveEpoch(std::uint64_t key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = live_epochs_.find(key);
+  return found == live_epochs_.end() ? 0 : found->second;
+}
+
 Table& Global() {
   static Table* const table = new Table();
   return *table;
@@ -285,6 +298,9 @@ void Reconcile(std::uint64_t main_level, const std::vector<std::uint64_t>& loade
 }
 std::uint64_t Resolve(std::uint64_t key) noexcept { return Global().Resolve(key); }
 std::string LiveMapId(std::uint64_t key) { return Global().LiveMapId(key); }
+std::uint64_t LiveEpoch(std::uint64_t key) { return Global().LiveEpoch(key); }
+void SetLiveRecord(const void* record) noexcept { Global().SetLiveRecord(record); }
+const void* LiveRecord() noexcept { return Global().LiveRecord(); }
 
 void LevelInstances::OnEnabled(const void* instance, std::uint64_t level) {
   if (instance != nullptr && level != 0) entries_[instance] = level;

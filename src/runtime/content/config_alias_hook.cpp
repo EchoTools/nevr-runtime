@@ -274,9 +274,14 @@ void ReconcileIfFrameMoved() noexcept { ReconcileOnGameThread(true); }
 void* LookupDetour(std::uint64_t key) {
   if (nevr_config_alias::KeyAllowed(key)) {
     ReconcileOnGameThread(false);
+    // The record this answer is read from, for the arena override's check: the aliased record while the alias answers, else none.
+    nevr_config_alias::SetLiveRecord(nullptr);
     const std::uint64_t alias = nevr_config_alias::Resolve(key);
     if (alias != key) {
-      if (void* record = g_original(alias)) return record;
+      if (void* record = g_original(alias)) {
+        nevr_config_alias::SetLiveRecord(record);
+        return record;
+      }
       if (!g_aliasMissLogged.exchange(true)) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.MAPS] config_alias reason=alias_not_found key=0x%016llx alias=0x%016llx (the game holds no record "

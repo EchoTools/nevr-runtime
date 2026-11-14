@@ -29,11 +29,10 @@ sentinel::GotHook g_lookupHook;
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_aliasMissLogged{false};
 
-constexpr const char kLookupSymbol[] = "_ZN10NRadEngine8NRadGame24CR15NetBalanceSettingsCS4JsonENS_9CSymbol64E";
-
 sentinel::GotTarget BalanceLookup() {
-  return sentinel::GotTarget{sentinel::pinned::kLibR15, kLookupSymbol, sentinel::RelocKind::kJumpSlot,
-                             sentinel::pinned::LibR15PatchedBuildId(), sentinel::pinned::kBalanceLookupSlot};
+  return sentinel::GotTarget{sentinel::pinned::kLibR15, sentinel::pinned::kBalanceLookupSymbol,
+                             sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(),
+                             sentinel::pinned::kBalanceLookupSlot};
 }
 
 template <typename Original>
@@ -75,15 +74,17 @@ bool InstallIfStaged() {
   if (got != sentinel::GotStatus::kOk) {
     hook::LookupThunk::Disarm();
     sentinel::LogFields(sentinel::LogLevel::kError, "config_alias",
-                        {{"status", "off"}, {"reason", "hook_refused"},
+                        {{"status", "off"}, {"reason", "hook_refused"}, {"got", sentinel::GotStatusName(got)},
                          {"consequence", "maps read the stock arena rules on this headset"}});
     return false;
   }
   hook::g_installed.store(true, std::memory_order_release);
   const bool ticking = nevr_quest::invite::frame::RegisterFrameWork(&hook::ReconcileWork, nullptr);
+  char slotHex[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "config_alias",
-                      {{"status", "installed"}, {"slot", "0x36c2750"}, {"source", "game_space_tables"},
-                       {"refresh", "unavailable"}, {"tick", ticking ? "frame_work" : "lookup_only"}});
+                      {{"status", "installed"}, {"slot", sentinel::HexString(slotHex, sentinel::pinned::kBalanceLookupSlot)},
+                       {"source", "game_space_tables"}, {"refresh", "unavailable"},
+                       {"tick", ticking ? "frame_work" : "lookup_only"}});
   return true;
 }
 

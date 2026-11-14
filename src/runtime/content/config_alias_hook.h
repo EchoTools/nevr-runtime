@@ -18,7 +18,7 @@
 
 namespace nevr_config_alias_hook {
 
-// The session pin installs the main-level source (nevr_map_session_pin::SessionLevel). Until one is set, main_level reads 0.
+// A caller installs the main-level source. Until one is set, main_level reads 0 and only the loaded levels decide.
 void SetMainLevelSource(std::uint64_t (*source)());
 
 // When on, a change of mp_arena_rules' winner makes the next frame's reconcile call
@@ -28,7 +28,7 @@ void SetCachedRulesRefresh(bool enabled);
 
 // The per-frame tick's call (game thread only; elsewhere it returns at once). Reads the main level and the loaded
 // levels, and calls Reconcile when they, the session, B's events or the armed maps changed since the last reconcile.
-// It runs a refresh that is due. It may allocate and catches everything: on failure the old snapshot stays and
+// It runs a refresh that is due. It may allocate and catches std::exception: on failure the old snapshot stays and
 // `config_alias reason=reconcile_failed` is logged once.
 void ReconcileIfFrameMoved() noexcept;
 

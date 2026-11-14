@@ -341,4 +341,22 @@ TEST_F(ConfigAliasTest, ArmingTheSameMountAgainChangesNothing) {
   EXPECT_NE(t.Generation(), generation);
 }
 
+// An alias's epoch moves each time it goes live: a sublevel unloaded and loaded again with no Stage is a new epoch, while a
+// Reconcile that changes nothing, or a winner switch between two maps, is not.
+TEST_F(ConfigAliasTest, LiveEpochCountsEachTimeTheAliasGoesLive) {
+  Table t;
+  StageAndArmBoth(t);
+  EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), 0u);
+  t.Reconcile(kStock, {kSubA});
+  const std::uint64_t first = t.LiveEpoch(kArenaRulesKey);
+  EXPECT_GT(first, 0u);
+  t.Reconcile(kStock, {kSubA});  // still live: nothing changes
+  EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), first);
+  t.Reconcile(kStock, {});  // unloaded
+  t.Reconcile(kStock, {kSubA});  // loaded again, no Stage
+  EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), first + 1u);
+  t.Reconcile(kMainB, {kSubA});  // beta wins over alpha while both are live: a switch, not a new epoch
+  EXPECT_EQ(t.LiveEpoch(kArenaRulesKey), first + 1u);
+}
+
 }  // namespace

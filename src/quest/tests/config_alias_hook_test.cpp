@@ -3,6 +3,7 @@
 // applied over the real core table. Built by the hooks group the way the sentinel builds the lookup (no exceptions) and
 // its levels file (with them). The game's lookup is a stub; nothing is hooked.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -11,30 +12,29 @@
 
 #include "core/config_alias.h"
 #include "quest/sentinel/config_alias_hook.h"
+#include "quest/sentinel/game_space_layout.h"
+#include "test_check.h"
 
 namespace hook = nevr_quest::config_alias_hook;
+namespace layout = sentinel::pinned::game_layout;
 
 namespace {
 
-int g_failures = 0;
-#define CA_CHECK(cond)                                                     \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      ++g_failures;                                                        \
-    }                                                                      \
-  } while (0)
+// The game object's game-space tables, from the shared layout (game_space_layout.h).
+constexpr std::size_t kGameBytes = 0x2000;  // large enough for the highest table count offset in the layout
 
-// The game object's loaded and enabled game-space tables (CncaGame::EnableGameSpace reads them at these offsets, ReVault
-// libr15 0x18DC124 less the file's 0x100000; see kEnabledTableOffset in config_alias_levels.cpp).
-constexpr std::size_t kEnabledTable = 0x1F48, kEnabledCount = 0x1F78;
-constexpr std::size_t kLoadedTable = 0x1F88, kLoadedCount = 0x1FB8;
-constexpr std::size_t kGameBytes = 0x2000;
+// The table bound the reader holds to (config_alias_levels.cpp kMaxTableCount), and the cap of two tables read.
+constexpr std::size_t kTableBound = 1024;
+constexpr std::size_t kLevelTables = 2;
+constexpr std::size_t kLevelCap = kLevelTables * kTableBound;
+constexpr std::size_t kOneLevel = 1;
+constexpr std::size_t kOverBound = kTableBound + kOneLevel;
 
 // rad_hash("m1_arena_rules"), the record a map's set carries for mp_arena_rules.
 constexpr std::uint64_t kAlias = 0x6216cd74aba74633ull;
 constexpr std::uint64_t kMain = 0x1000, kSub = 0x1001, kStock = 0x9000;
 constexpr std::uint64_t kResourceBase = 0x7700;  // a non-null level resource per level in the fake tables
+constexpr std::size_t kNoLevels = 0;
 
 int g_stockRecord = 0, g_aliasRecord = 0;
 
@@ -72,28 +72,31 @@ void ResetAlias() {
 void TestLoadedLevels() {
   std::vector<unsigned char> game(kGameBytes, 0);
   std::vector<std::uint64_t> enabled, loaded;
+  std::uint64_t levels[kLevelCap];
+  const int cap = static_cast<int>(kLevelCap);
+  const std::size_t enabledTable = layout::kEnabledSpaceTableOffset, enabledCount = layout::kEnabledSpaceCountOffset;
+  const std::size_t loadedTable = layout::kLoadedSpaceTableOffset, loadedCount = layout::kLoadedSpaceCountOffset;
 
   // Nothing loaded: both tables are empty.
-  std::uint64_t levels[2 * 1024];
-  WriteTable(&game, &enabled, {}, kEnabledTable, kEnabledCount);
-  WriteTable(&game, &loaded, {}, kLoadedTable, kLoadedCount);
-  CA_CHECK(hook::ReadLoadedLevels(game.data(), levels, 2 * 1024) == 0);
+  WriteTable(&game, &enabled, {}, enabledTable, enabledCount);
+  WriteTable(&game, &loaded, {}, loadedTable, loadedCount);
+  QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == static_cast<int>(kNoLevels));
 
   // One level in each table: the enabled one is listed first, then the loaded one.
-  WriteTable(&game, &enabled, {kSub}, kEnabledTable, kEnabledCount);
-  WriteTable(&game, &loaded, {kMain}, kLoadedTable, kLoadedCount);
-  CA_CHECK(hook::ReadLoadedLevels(game.data(), levels, 2 * 1024) == 2);
-  CA_CHECK(levels[0] == kSub);
-  CA_CHECK(levels[1] == kMain);
+  WriteTable(&game, &enabled, {kSub}, enabledTable, enabledCount);
+  WriteTable(&game, &loaded, {kMain}, loadedTable, loadedCount);
+  QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == static_cast<int>(kLevelTables));
+  QCHECK(levels[0] == kSub);
+  QCHECK(levels[1] == kMain);
 
-  // A count with a null data pointer is a table that cannot be read: -1, and no level is listed.
-  Put<const std::uint64_t*>(&game, kLoadedTable, nullptr);
-  Put<std::uint64_t>(&game, kLoadedCount, 1);
-  CA_CHECK(hook::ReadLoadedLevels(game.data(), levels, 2 * 1024) == -1);
+  // A count with a null data pointer is a table that cannot be read: -1.
+  Put<const std::uint64_t*>(&game, loadedTable, nullptr);
+  Put<std::uint64_t>(&game, loadedCount, kOneLevel);
+  QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == -static_cast<int>(kOneLevel));
 
-  // A count over the table bound (1024) is not a table this code reads: -1.
-  Put<std::uint64_t>(&game, kLoadedCount, 1025);
-  CA_CHECK(hook::ReadLoadedLevels(game.data(), levels, 2 * 1024) == -1);
+  // A count over the table bound is not a table this code reads: -1.
+  Put<std::uint64_t>(&game, loadedCount, kOverBound);
+  QCHECK(hook::ReadLoadedLevels(game.data(), levels, cap) == -static_cast<int>(kOneLevel));
 }
 
 void TestLookup() {
@@ -101,18 +104,18 @@ void TestLookup() {
   g_aliasRecord = 0;
   ResetAlias();
   // No alias staged: the lookup is the game's own answer.
-  CA_CHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_stockRecord);
+  QCHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_stockRecord);
 
   // Staged and armed, with the sublevel loaded: the published winner answers with the alias's record.
-  CA_CHECK(nevr_config_alias::Stage("owner-q", "m1", kMain, {{nevr_config_alias::kArenaRulesKey, kAlias}}) == 1u);
-  CA_CHECK(nevr_config_alias::Arm({{"owner-q", {kMain, kSub}}}, &HoldsAll, nullptr) == 1u);
+  QCHECK(nevr_config_alias::Stage("owner-q", "m1", kMain, {{nevr_config_alias::kArenaRulesKey, kAlias}}) == kOneLevel);
+  QCHECK(nevr_config_alias::Arm({{"owner-q", {kMain, kSub}}}, &HoldsAll, nullptr) == kOneLevel);
   nevr_config_alias::Reconcile(kStock, {kSub});
-  CA_CHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_aliasRecord);
-  CA_CHECK(nevr_config_alias::LiveMapId(nevr_config_alias::kArenaRulesKey) == "m1");
+  QCHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_aliasRecord);
+  QCHECK(nevr_config_alias::LiveMapId(nevr_config_alias::kArenaRulesKey) == "m1");
 
   // The sublevel unloads: the stock record again.
   nevr_config_alias::Reconcile(kStock, {});
-  CA_CHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_stockRecord);
+  QCHECK(hook::RunLookupForTest(&GameLookup, nevr_config_alias::kArenaRulesKey) == &g_stockRecord);
   ResetAlias();
 }
 
@@ -121,8 +124,8 @@ void TestLookup() {
 int main() {
   TestLoadedLevels();
   TestLookup();
-  if (g_failures != 0) {
-    std::fprintf(stderr, "config_alias_hook_test: %d failure(s)\n", g_failures);
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "config_alias_hook_test: %d failure(s)\n", quest_test::Failures());
     return 1;
   }
   std::printf("config_alias_hook_test: OK\n");

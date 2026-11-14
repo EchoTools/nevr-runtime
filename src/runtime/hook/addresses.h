@@ -840,6 +840,10 @@ constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 
 // validated, not hooked by the join hold. The config-alias hook (runtime/content/config_alias_hook.cpp) hooks it only
 // when a mounted map stages an alias. With the join hold's key at 0 (the default) the join hold hooks none.
+
+// server/join_hold.cpp hooks CNCAGAMESPACE_LOAD_LEVEL and CR15NETGAME_ENABLE_GAME_SPACES. The config-alias hook
+// (runtime/content/config_alias_hook.cpp) hooks CGAMELEVELRESOURCE_ENABLE only when a mounted map stages an alias.
+// With the join hold's key at 0 (the default) the join hold hooks none of them.
 // ============================================================================
 
 /// Address: CncaGameSpace::LoadLevel (0x1404FE050, 2322 bytes). The name is ReVault's record for this function (source:

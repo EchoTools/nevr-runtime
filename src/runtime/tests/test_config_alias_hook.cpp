@@ -424,6 +424,41 @@ TEST_F(ConfigAliasHookTest, AnOverrideIsLoggedAgainInANewLoad) {
   g_arenaRoundTime = 0.0f;
 }
 
+// The same mount, no Stage in between: the sublevel unloads and loads again, the alias goes live again, and the override is
+// logged again. Red before the epoch keying: the dedupe was on the table's generation, which a reload does not move.
+TEST_F(ConfigAliasHookTest, AReloadedSublevelLogsTheOverrideAgainWithoutAStage) {
+  EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
+  StageAndArm();
+  SetLoadedLevels({kSub});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();
+  PVOID root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
+  g_arenaRoundTime = 240.0f;
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  SetLoadedLevels({});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();  // the alias is not live
+  SetLoadedLevels({kSub});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();  // live again, no Stage, no Arm
+  root = nevr_config_alias_hook::LookupDetour(kArenaRulesKey);
+  ASSERT_EQ(root, &g_aliasRules);
+  EXPECT_EQ(CJsonGetFloatHook(root, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(LinesWith("config_alias override key=round_time map=m1"), 2u);
+  g_arenaRoundTime = 0.0f;
+}
+
+// A read of another record under the same path while the alias is live returns config.yaml's value, and is not reported as
+// the map's: the line is written only for the aliased record the lookup answered.
+TEST_F(ConfigAliasHookTest, AReadOfAnotherRecordWhileTheAliasIsLiveIsNotReportedAsTheMaps) {
+  EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
+  StageAndArm();
+  SetLoadedLevels({kSub});
+  nevr_config_alias_hook::ReconcileIfFrameMoved();
+  ASSERT_EQ(nevr_config_alias_hook::LookupDetour(kArenaRulesKey), &g_aliasRules);
+  g_arenaRoundTime = 240.0f;
+  EXPECT_EQ(CJsonGetFloatHook(&g_stockRules, "round_time", 0.0f, 0), 240.0f);
+  EXPECT_EQ(LinesWith("config_alias override"), 0u);
+  g_arenaRoundTime = 0.0f;
+}
+
 // With no alias live the override still applies config.yaml's value, and nothing is logged about a map.
 TEST_F(ConfigAliasHookTest, WithNoAliasLiveTheOverrideIsTheConfigValueAndNoLine) {
   EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
