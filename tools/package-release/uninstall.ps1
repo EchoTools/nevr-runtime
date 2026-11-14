@@ -10,7 +10,7 @@
 # one it moved out of the game folder (nevr-runtime.dll.legacy-<stamp>, named by runtime_legacy), into the game folder. It
 # never deletes anything of the player's: the backup stays where it is, and nothing is overwritten that was not put there
 # by install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
-# CDN user agent 'nevr-runtime/1.0', #785) is left alone and reported.
+# user agent 'nevr-runtime/1.0', #785) is left alone and reported.
 #
 # The sign-in cache stays where the runtime keeps it, in <nevr folder> (.credentials.json), and uninstall writes nothing
 # into the game folder's _local: a runtime that still reads _local only starts a new sign-in.
@@ -24,7 +24,7 @@ Set-StrictMode -Version 2
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
 # A NEVR runtime carries the NEVR-BUILD identity literal (#759); one built before that literal (#785) carries the CDN
-# user agent 'nevr-runtime/1.0' (src/runtime/patch/asset_cdn.cpp). Either one marks a runtime.
+# user agent 'nevr-runtime/1.0'. Either one marks a runtime.
 function Test-NevrRuntime([string]$path) {
   $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path))
   return $text.Contains('NEVR-BUILD ') -or $text.Contains('nevr-runtime/1.0')

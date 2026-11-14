@@ -24,7 +24,6 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/resource_sets.h"
-#include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_choice_hook.h"
@@ -728,18 +727,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // (runtime/patch/peer_timeout_log_rules.h). Both roles, one call; the hook for the other role is not installed.
   nevr_peer_timeout_log::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);
 
-  // N131: cosmetics are client-only — a headless server has nothing to render and
-  // must not open the CDN connection (it opens ServerDB + login only). AssetCDN
-  // was called UNCONDITIONALLY from initialize.cpp:364, which runs before the CLI
-  // is parsed, so g_isServer would still be FALSE there and a server would fetch tints it
-  // never draws. It is called here, post-CLI-parse where g_isServer is known, gated on
-  // client — the same deferral InstallResourceOverride uses (boot.cpp:29). The
-  // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
-  // so gating it off on a server does not affect loadout handling.
-  if (!g_isServer) {
-    nevr_asset_cdn::Initialize();
-  }
-
   // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they
   // are skipped.
   CheckGameData();
@@ -910,7 +897,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   nevr_server_frame_wait::Install(g_isServer != FALSE);
   // #1737 (101f): a server with network.join_hold_ms above 0 holds the service's accepts while the session's levels load
   // (docs/reference/join-hold.md); off by default, and a client or a server with the key off logs that it does not
-  // apply (N122/N124). Server-only (N131/N146): this runs in the deferred bootstrap, after the original call.
+  // apply (N122/N124). Server-only (N146): this runs in the deferred bootstrap, after the original call.
   nevr_join_hold::Install(g_isServer != FALSE);
   // The per-level-load timing record (runtime/hook/load_timing_rules.h): one detour on LoadLevel, unless the join hold holds that address.
   nevr_load_timing::Install(nevr_join_hold::HooksLoadLevel());

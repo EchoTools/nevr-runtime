@@ -121,7 +121,6 @@ for row.
 | `[NEVR.STOP]`         | A command line the run is refused for: the stop line (JSON), exit code 64 |
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp, and the readable crash report: one `crash: <signal> <module>+<offset> <symbol> report=<path>` line per report (`docs/reference/crash-report.md`) |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
-| `[NEVR.CDN]`          | Asset CDN download and override              |
 | `[NEVR.UPNP]`         | UPnP port mapping                            |
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |

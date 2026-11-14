@@ -294,7 +294,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   (`src/runtime/lifecycle/config.cpp`) for stock-engine keys only; it is optional, and
   when none is found the runtime supplies a built-in game config. Absence logs, it is
   not fatal.
-- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 36 entries), e.g.
+- The flat-key map is `src/runtime/lifecycle/service_map.cpp` (N133: 35 entries), e.g.
   `nevr_socket_uri` → `services.socket_uri`, `nevr_http_uri` → `auth.http_uri`,
   `matchingservice_host` → `services.matchmaking`, `nevr_serverdb_uri` →
   `services.serverdb_uri`, `external_ip` → `network.external_ip`, `upnp` →

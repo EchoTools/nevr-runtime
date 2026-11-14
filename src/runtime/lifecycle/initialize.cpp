@@ -637,12 +637,6 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_binary_bug_fixes::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] debug; binary bug fix hooks installed\n");
 
-  // --- CDN asset loading ---
-  // N131: lives in boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
-  // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
-  // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
-  // is known, so a headless server never opens the CDN connection.
-
   // Boot phase complete. From here on Log() reaches the game's CLog and the builtin_log_filter writes into the same main log the
   // boot phase wrote to (run_log_writer.h), so there is no second file to replay. Any remaining TeeFprintf calls write to stderr and
   // that file.

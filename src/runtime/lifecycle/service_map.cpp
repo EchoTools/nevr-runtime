@@ -86,8 +86,6 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       // S4b — nevr_guilds: registration metadata (guilds=...), list-shaped in the
       // schema, read CSV via LookupFlatCsv (a scalar stays a single element).
       {"nevr_guilds", "guilds"},
-      // assets
-      {"asset_cdn_url", "assets.cdn_url"},
       // arena rule overrides (floats)
       {"arena_round_time", "arena.round_time"},
       {"arena_celebration_time", "arena.celebration_time"},

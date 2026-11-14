@@ -8,7 +8,7 @@ comment-stripped source:
   - the release (ReleaseDue) runs after ProcessReceivedMessages in GameServerLib::Update;
   - a session create arms it, the service's CODE_ENDED and EndServerSession clear it, a reconnect's EndSession does not;
   - Install runs after nevr_server_frame_wait::Install in the deferred bootstrap;
-  - network.join_hold_ms is a known key and has no flat-key map entry (the N133 map stays 36);
+  - network.join_hold_ms is a known key and has no flat-key map entry (the N133 map stays 35);
   - the build lists the source and the test, and the test runs in test-auth-unit.
 """
 

@@ -107,8 +107,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("nevr_max_team_size"), "network.max_team_size");  // #1422
   EXPECT_EQ(FlatKeyToYamlPath("nevr_session_router"), "network.session_router");  // #708
   EXPECT_EQ(FlatKeyToYamlPath("nevr_invite_codes"), "network.invite_codes");  // #1156
-  // assets / arena / misc
-  EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
+  // arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("arena_round_time"), "arena.round_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_celebration_time"), "arena.celebration_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_mercy_score"), "arena.mercy_score");

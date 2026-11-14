@@ -122,10 +122,8 @@ class AnObserverThatRefusesKeepsTheServiceOff(unittest.TestCase):
 
 
 class ShutdownStopsTheService(unittest.TestCase):
-    def test_the_clients_normal_exit_stops_it_after_the_cdn_thread(self):
-        text = code("src/runtime/lifecycle/crash_recovery.cpp")
-        self.assertIn("nevr_invite_service::Shutdown()", text)
-        self.assertLess(text.index("nevr_asset_cdn::StopBackgroundFetch()"), text.index("nevr_invite_service::Shutdown()"))
+    def test_the_clients_normal_exit_stops_it(self):
+        self.assertIn("nevr_invite_service::Shutdown()", code("src/runtime/lifecycle/crash_recovery.cpp"))
 
     def test_the_dll_unload_stops_it(self):
         self.assertIn("nevr_invite_service::Shutdown()", code("src/runtime/lifecycle/dllmain.cpp"))

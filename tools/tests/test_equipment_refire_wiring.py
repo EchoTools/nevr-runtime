@@ -81,7 +81,7 @@ class SetterRows(unittest.TestCase):
 
 class Wiring(unittest.TestCase):
     def test_the_hook_reads_the_mode_at_call_time_not_at_install(self):
-        # g_isServer is not set when initialize.cpp installs (N131), so the glue reads it in the hook, not in Install.
+        # g_isServer is not set when initialize.cpp installs, so the glue reads it in the hook, not in Install.
         text = strip_comments(GLUE.read_text())
         hook = text[text.index("void SetterHook") : text.index("void HexBytes")]
         self.assertIn("g_isServer != FALSE", hook)

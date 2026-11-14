@@ -814,19 +814,6 @@ arena:
   # mercy_score: 15.0
 
 # ---------------------------------------------------------------------------
-# asset_cdn_url — custom CDN for game asset downloads
-#
-# Override the base URL the game uses to download asset bundles (cosmetics,
-# arena geometry, etc.). When set, the runtime hooks the asset download
-# pipeline and redirects requests to this URL.
-# KNOWN-WRONG #1305: the runtime reads this key and discards it; the parser's path for it is assets.cdn_url.
-# Absent: game downloads from the hardcoded Ready At Dawn CDN (dead).
-# Not a secret.
-# Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
-# ---------------------------------------------------------------------------
-# asset_cdn_url: "https://cdn.echovrce.com/assets"
-
-# ---------------------------------------------------------------------------
 # assets.whole_game — the manifest holds every asset of the game (Quest only)
 #
 # Needs assets.manifest. The first-run data step does not fetch the data zip

@@ -248,7 +248,7 @@ the alternatives.
 - Targets whose name is the name of a file users touch or of a third party, so `nevr_` is not applied:
   `echovr_server` (the launcher), `LibOVRPlatform64_1` (the stub DLL), `ovrplatformloader` (the Quest
   loader library) and `breakpad_client`.
-- Flat config keys without the `nevr_` prefix (`asset_cdn_url`, `telemetry_uri`, `upnp`): a key is a name
+- Flat config keys without the `nevr_` prefix (`arena_round_time`, `telemetry_uri`, `upnp`): a key is a name
   users write in their config file.
 - Log tags outside `[NEVR.<AREA>]`: `[NETGAME]`, `[NSLOBBY]`, `[RBX]`, `[SAVE_LOADOUT]`, `[SAVE_SUCCESS]`,
   `[CURRENT_LOADOUT]`, `[TELEMETRY.DIAG]` and a bare `[NEVR]`: scripts and the score log grep the text.

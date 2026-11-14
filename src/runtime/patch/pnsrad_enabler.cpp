@@ -152,9 +152,8 @@ static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
  * Memory patching
  * -------------------------------------------------------------------- */
 
-/// Lowercase hex dump — same shape as asset_cdn.cpp's BytesToHex, kept local
-/// since this is the only file in this pair that needs it for variable-length
-/// (2 or 6 byte) expected/actual prologue dumps.
+/// Lowercase hex dump, kept local since this is the only file in this pair that
+/// needs it for variable-length (2 or 6 byte) expected/actual prologue dumps.
 static std::string BytesToHex(const uint8_t* bytes, size_t len) {
     static const char hex[] = "0123456789abcdef";
     std::string result;

@@ -27,7 +27,6 @@ Checked with `nm` on each `libcurl.a`; the feature lists are `share/curl/vcpkg_a
 | Quest `src/quest/data/curl_transport.cpp` | HTTPS GET, `Range` | off | forced off | none | `https` |
 | Quest `src/quest/auth/curl_http.cpp` | POST with body | off | forced off | `Authorization` as a header only | `https` (`http,https` when plain HTTP is allowed) |
 | Quest `src/quest/net/curl_ws_connector.cpp` | WebSocket (`CONNECT_ONLY`) | off | `NOPROXY "*"` | none | `wss` |
-| PC `src/runtime/patch/asset_cdn.cpp` | HTTPS GET (manifest, assets) | **on** (`FOLLOWLOCATION 1`) | environment | none | libcurl default |
 | PC `src/runtime/patch/invite_transport_curl.cpp` | POST with body, `Authorization: Bearer` header | off | environment | header only | libcurl default |
 | PC `src/core/auth_token_refresh.h`, `src/modules/token-auth/src/token_auth.cpp`, `src/runtime/server/gameserver_serverdb.cpp` | POST with body | off (default) | environment | none | libcurl default |
 
@@ -40,7 +39,6 @@ finds none outside tests).
 | Advisory | Severity | Caller | Why it applies |
 | --- | --- | --- | --- |
 | CVE-2026-11586 (WebSocket Auto-PONG memory exhaustion) | Low | Quest `curl_ws_connector.cpp` | The connector reads with `curl_ws_recv` and leaves `CURLOPT_WS_OPTIONS` unset, so libcurl answers each PING itself and keeps the unanswered frames without a bound (its comment: "libcurl answers pings itself"). A server that floods PINGs can exhaust the process's memory. The peer is the configured service over verified TLS, so this needs a hostile or compromised service. Fixed in 8.20.1 and 8.21.0. |
-| CVE-2026-6253 (credentials of one proxy passed to a second proxy on redirect) | Medium | PC `asset_cdn.cpp` | The only caller that both follows redirects and honours the environment's proxies. It needs per-scheme proxies (`http_proxy` and `https_proxy`) that differ, the first with credentials, and a redirect that changes scheme. The code sets no proxy and no credential; the exposure is the player's own proxy credentials. |
 
 ## Advisories that do not apply, by reason
 
@@ -51,6 +49,8 @@ finds none outside tests).
 - **Pinning** (CVE-2026-80230, 87866): `PINNEDPUBLICKEY` is not set.
 - **TLS backends this tree does not link** (CVE-2026-82208, 87866 wolfSSL; 107928 GnuTLS; 7009 Apple SecTrust): PC links Schannel and Quest OpenSSL.
 - **Protocols no caller requests, and the `curl` tool** (CVE-2026-92388, 92389, 92391, 92390, 87865, 87864, 87863, 87862, 86410, 86409, 13608, 12064, 9547, 8925): FTP, TFTP, IMAP, SMTP, SASL, LDAP, SSH, MIME, SigV4 and HSTS are not used, and the tool-only advisories are not in the library. PC's FTP code is linked, and a redirect may lead to `ftp` or `ftps` by libcurl's default, but the FTP advisories need wildcard matching or a multi handle, which no caller sets.
+
+- **Redirects that carry proxy credentials** (CVE-2026-6253): no caller in the tree follows redirects while it reads the environment's proxies. PC `src/runtime/patch/invite_transport_curl.cpp:67` sets `CURLOPT_FOLLOWLOCATION` to 0; the PC auth and ServerDB calls keep libcurl's default of 0 (no option set in `src/core/auth_token_refresh.h`, `src/modules/token-auth/src/token_auth.cpp` or `src/runtime/server/gameserver_serverdb.cpp`); the Quest callers set 0 and `CURLOPT_NOPROXY "*"`. A caller that sets `CURLOPT_FOLLOWLOCATION` to 1 while the environment's proxies apply reopens this.
 
 ## What is still open
 

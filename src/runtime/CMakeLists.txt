@@ -210,8 +210,6 @@ set(PATCHES_SOURCES
     "log/url_diagnostics.cpp"
     "patch/broadcaster_guard.cpp"
     "hook/dll_load_hook.cpp"
-    "patch/asset_cdn.cpp"
-    "patch/evrp_package.cpp"
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
@@ -304,8 +302,6 @@ set(PATCHES_HEADERS
     "ext/plugin_manifest.h"
     "ext/plugin_manager_model.h"
     "ext/module_loader.h"
-    "patch/asset_cdn.h"
-    "patch/evrp_package.h"
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
@@ -2362,9 +2358,6 @@ if(BUILD_TESTING)
       # the provider-name redirect's detour (CNSProvider::LoadByName), driven through MinHook on a stand-in.
       tests/test_provider_name_redirect.cpp
       patch/provider_name_redirect.cpp
-      tests/test_evrp_package.cpp
-      # evrp_package.cpp is pure parsing; the test drives the production parser.
-      patch/evrp_package.cpp
       # #703: resource_override registers the cache's overrides through the production cache.
       patch/asset_cache.cpp
       patch/resource_override.cpp
@@ -2439,8 +2432,6 @@ if(BUILD_TESTING)
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
       tests/test_provider_name_redirect.cpp
-      tests/test_evrp_package.cpp
-      patch/evrp_package.cpp
       patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/netgun_bullets.cpp

@@ -2498,35 +2498,6 @@ verify:
         fi
     done
 
-    # --- N131: the Asset CDN must not fetch on a server --------------------------
-    # A headless server has nothing to render, so it must not open the CDN
-    # connection (it opens ServerDB + login only). initialize.cpp runs BEFORE the
-    # CLI is parsed, so g_isServer is FALSE there and a gate could not distinguish
-    # server from client. The call therefore lives in boot.cpp, post-CLI-parse,
-    # gated on the client. Guard both facts.
-    N131_RC=0; N131_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N131_RC=$?
-    sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
-    sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
-    # Whitespace-flattened and matched CONTIGUOUSLY: two separate greps ("some
-    # !g_isServer exists" AND "nevr_asset_cdn::Initialize exists") passed blind, because
-    # boot.cpp has OTHER !g_isServer gates — removing THIS gate while leaving the
-    # call unconditional still satisfied both. Require the call inside the gate.
-    N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
-    if ! grep -qE 'if \( *!g_isServer *\) *\{ *nevr_asset_cdn::Initialize\(\)' <<<"$N131_FLAT"; then
-        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
-        echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
-        exit 1
-    fi
-    # And it must NOT be called unconditionally from initialize.cpp (pre-CLI-parse).
-    N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
-    sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
-    sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
-    if grep -q 'nevr_asset_cdn::Initialize' <<<"$N131_INIT"; then
-        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
-        echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
-        exit 1
-    fi
-
     # --- N129: the DLL-load hooks must report per-hook failures ------------------
     # DllLoadHook installs its four LoadLibrary hooks (they run the load filters,
     # observers and callbacks the runtime registers; they restrict no search path)
@@ -3753,7 +3724,7 @@ verify:
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
         exit 1
     fi
-    # S7b — flat-map structural gate: exactly 36 entries. Adding or removing a
+    # S7b — flat-map structural gate: exactly 35 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
     # reminder to also add a test for the new mapping. The 29 entries measured in
     # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16) and
@@ -3762,8 +3733,8 @@ verify:
     # nevr_bots_per_session (#1423).
     # nevr_max_team_size (#1422).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 36 ]; then
-        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 36." >&2
+    if [ "$N133_S7B" -ne 35 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 35." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2

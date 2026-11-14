@@ -417,12 +417,6 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   // JSON — only OUR keys moved. g_localConfig stays the "game config struct
   // present" gate it always was (a pGame-offset pointer, ~always non-null here).
   if (g_localConfig != NULL) {
-    const CHAR* customCdnUrl = NevrCfgGetFlat("asset_cdn_url");
-    if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
-      // nevr_asset_cdn::SetCustomCdnUrl(customCdnUrl);  // inert: only the READ comes from config.yaml;
-      // the use is commented out.
-    }
-
     // exitonerror
     const CHAR* exitOnErrorVal = NevrCfgGetFlat("exitonerror");
     if (exitOnErrorVal != NULL && (strcmp(exitOnErrorVal, "true") == 0 || strcmp(exitOnErrorVal, "1") == 0)) {

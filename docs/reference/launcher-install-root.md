@@ -15,7 +15,7 @@ Nothing else of ours is put in the game folder by a launcher. The root, `%LOCALA
 `src/core/nevr_root.h` (`nevr_root::Names`); under Wine it is the Wine prefix's own `%LOCALAPPDATA%`. The folder is made by the
 launcher if it is missing. The game's own `%LOCALAPPDATA%\EchoVR` is never written by nEVR.
 
-The root also holds what the runtime writes: `logs\`, `crashes\`, `.credentials.json`, `cache\`, `cosmetics\v1\packages\`.
+The root also holds what the runtime writes: `logs\`, `crashes\`, `.credentials.json`, `cache\`; `cosmetics\v1\packages\` holds only what an older runtime downloaded, moved there once.
 A launcher does not create or edit those. Plugin files go in the root's `plugins\` (`%LOCALAPPDATA%\nevr\echovr\plugins\`); the runtime loads plugins from there and never from beside `echovr.exe`. The first run moves the files of an old `plugins\` folder beside `echovr.exe` into it, leaves no file behind, and logs each move.
 
 ## What the host does at game start

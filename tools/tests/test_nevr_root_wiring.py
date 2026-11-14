@@ -2,7 +2,7 @@
 
 Source-shape sensors (the behaviour is src/runtime/tests/test_nevr_root.cpp, run under Wine):
 
-  - the run log, the crash record, the asset cache and the cosmetic packages each name nevr_root, and none of those files names
+  - the run log, the crash record and the asset cache each name nevr_root, and none of those files names
     the original game's %LOCALAPPDATA%\\EchoVR folder; the sign-in cache is the root's .credentials.json (the move takes it from an
     install's _local folders through the protected write, nothing else), and config.yaml is not moved by it (the config choice, `nevr_config_yaml::Resolve`, copies it once, #1255);
   - initialize.cpp runs the move after the boot log opens and before the main log, the config or any cache is opened;
@@ -30,7 +30,6 @@ class EveryWriterUsesTheRoot(unittest.TestCase):
             ("src/runtime/log/run_log_writer.h", "inline bool Resolve(", "nevr_root::LogsDir("),
             ("src/runtime/lifecycle/crash_recovery.cpp", "static void PrepareCrashRecordPath(", "nevr_root::LogsDir("),
             ("src/runtime/patch/asset_cache.cpp", "std::wstring DefaultDir(", "nevr_root::CacheDir("),
-            ("src/runtime/patch/asset_cdn.cpp", "std::string nevr_asset_cdn::GetCacheDir(", "nevr_root::CosmeticsDir("),
         )
         for path, signature, call in sites:
             with self.subTest(path=path):
@@ -41,7 +40,6 @@ class EveryWriterUsesTheRoot(unittest.TestCase):
             "src/runtime/log/builtin_filter.cpp",
             "src/runtime/lifecycle/crash_recovery.cpp",
             "src/runtime/patch/asset_cache.cpp",
-            "src/runtime/patch/asset_cdn.cpp",
         ):
             code = strip_comments(read(path))
             with self.subTest(path=path):

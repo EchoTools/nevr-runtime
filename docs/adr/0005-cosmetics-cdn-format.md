@@ -7,7 +7,7 @@ audience: all
 
 # ADR 0005: Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN
 
-Status: accepted, implemented (`src/runtime/patch/asset_cdn.cpp`, `src/runtime/patch/evrp_package.cpp`).
+Status: superseded by docs/adr/0045-cdn-texture-delivery.md; nothing in the tree implements it.
 Game version: 34.4.631547.1, the PC build: the shipped `echovr.exe` (md5 `c2d5261e20eb193a8f08589d1bacaad5`) contains the strings
 `Build: goldmaster 631547` and `RAD_Version: goldmaster631547` (it has no PE version resource). The Quest build version is not recorded.
 
@@ -22,9 +22,9 @@ the source tints from game archives).
 
 Cosmetic assets are distributed as `.evrp` files, a flat binary format invented for this
 project, listed in a JSON manifest under `https://r2.echo.taxi/v1/`. Both sides MUST
-produce and consume data conforming to the layout below exactly. The accepting test vector, a
-complete 108-byte tint for symbol `0x74d228d09dc5dc86`, and one rejecting case per
-validation rule are in `src/runtime/tests/test_evrp_package.cpp`.
+produce and consume data conforming to the layout below exactly. A conforming parser accepts a
+complete 108-byte tint for symbol `0x74d228d09dc5dc86` and rejects one case per validation rule
+(section 6); the tree holds no parser or test of the format.
 
 ---
 

@@ -67,7 +67,6 @@ tools/tests/test_adr_numbers.py	ported by its unit of #2132
 tools/tests/test_android_workflow.py	ported by its unit of #2132
 tools/tests/test_arena_round_time_wiring.py	ported by its unit of #2132
 tools/tests/test_asset_cache_tool.py	ported by its unit of #2132
-tools/tests/test_asset_cdn_tint_lifetime.py	ported by its unit of #2132
 tools/tests/test_auth_unit_builds_what_it_runs.py	ported by its unit of #2132
 tools/tests/test_bridge_role_wiring.py	ported by its unit of #2132
 tools/tests/test_broadcaster_allow_incoming_wiring.py	ported by its unit of #2132

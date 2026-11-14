@@ -126,9 +126,6 @@ S22@@server@@IServerLib resolved in-process@@serverlib symbol resolved@@
 S23@@server@@ServerDB registration requested@@Requested game server registration@@Failed to initiate WebSocket connection
 S24@@server@@ServerDB registration accepted@@Received registration success via protobuf: server_id=@@Error received before registration
 S25@@server@@Server authenticated via token@@Server authenticated \(token acquired\)@@
-S26@@server@@Asset CDN hook installed@@\[NEVR\.CDN\] Loadout_ResolveDataFromId hook installed@@
-S27@@server@@CDN manifest fetched@@\[NEVR\.CDN\] Manifest loaded: [0-9]+ packages@@Manifest fetch failed|Failed to resolve cache directory
-S28@@server@@CDN tints loaded into memory@@\[NEVR\.CDN\] Fetch complete: .*[1-9][0-9]* tints loaded@@\.evrp bad magic|\.evrp file too small
 S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR\.UPNP\] No UPnP devices found|AddPortMapping failed|No valid IGD
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@

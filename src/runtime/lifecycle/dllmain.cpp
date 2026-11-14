@@ -6,7 +6,6 @@
 // initializes from there, on the game's main thread, outside the loader lock. DllMain therefore does nothing at
 // attach: no initialization, no file I/O, no thread.
 #include "core/pch.h"
-#include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/broadcaster_guard.h"
 #include "runtime/ext/module_loader.h"
@@ -32,7 +31,6 @@ BOOL APIENTRY DllMain(HMODULE, DWORD ul_reason_for_call, LPVOID lpReserved) {
       // for a host that unloads the runtime and for the test hosts that do.
       if (lpReserved == NULL) {
         UnloadModules();
-        nevr_asset_cdn::Shutdown();
         nevr_invite_service::Shutdown();
         nevr_binary_bug_fixes::Shutdown();
         nevr_broadcaster_guard::Shutdown();
