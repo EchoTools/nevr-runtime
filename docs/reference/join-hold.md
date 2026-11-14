@@ -4,7 +4,7 @@ The join hold holds a dedicated server's lobby accepts while a session's level s
 functions of `echovr.exe`. This page records them, the server chain that reaches them, what was read and what was
 inferred, and the live run that tested its prediction. The three are pinned in `src/runtime/hook/addresses.h` (section
 "Level-load state the join hold reads") and in `tools/hook_identity_manifest.json`. With `network.join_hold_ms` above 0 on a dedicated server, `src/runtime/server/join_hold.cpp`
-detours two of them (`LoadLevel` and `EnableGameSpaces`); `Enable` is validated and never hooked. With the key at 0, the default, the join hold hooks nothing; the load timing hook (`src/runtime/hook/load_timing.cpp`) detours `LoadLevel` instead, on every PC run whose prologue matches, so `LoadLevel` has one detour at any time.
+detours two of them (`LoadLevel` and `EnableGameSpaces`); the join hold never hooks `Enable`. The config-alias hook (`src/runtime/content/config_alias_hook.cpp`) is the one owner of that address (N84): it detours it, with its prologue checked, only while a mounted map stages an alias. With the key at 0, the default, the join hold hooks nothing; the load timing hook (`src/runtime/hook/load_timing.cpp`) detours `LoadLevel` instead, on every PC run whose prologue matches, so `LoadLevel` has one detour at any time.
 
 The binary is `echovr.exe`, sha256 `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043`, 35397120
 bytes, image base 0x140000000. The ReVault `echovr` project holds the same file. Addresses here are VAs. `addresses.h`

@@ -130,7 +130,7 @@ std::size_t Table::Arm(const OwnerLevels& mounted_owner_levels, HoldsFn holds, v
   }
   // Arming again with the same mount changes nothing: the generation stays, so the hook's state stamp does not move and
   // no reconcile runs for an Arm that armed nothing new. (The arena override's line follows LiveEpoch, which only a
-  // change of the published winners moves.)
+  // key going from no published winner to one moves.)
   const bool unchanged = armed == armed_;
   armed_ = std::move(armed);
   DropStaleLocked();

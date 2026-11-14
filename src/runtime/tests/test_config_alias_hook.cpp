@@ -21,6 +21,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/config_alias.h"
+#include "core/game_space_table.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/content/config_alias_hook.h"
@@ -62,7 +63,7 @@ constexpr std::uint64_t kAlias = 0x6216cd74aba74633ull;  // rad_hash("m1_arena_r
 constexpr std::uint64_t kMain = 0x1000, kSub = 0x1001, kStock = 0x9000, kOtherKey = 0x4242, kUnaskedKey = 0x5555;
 constexpr std::uint64_t kResourceBase = 0x7700;  // a non-null level resource per level in the fake tables
 constexpr std::uintptr_t kLobbyFirst = 0xc1000, kLobbySecond = 0xc2000;
-constexpr std::uint64_t kUnreadableTableCount = 5000;  // over the reader's bound: the tables read as unreadable
+constexpr std::uint64_t kUnreadableTableCount = 5000;  // over the table's own capacity: the tables read as unreadable
 constexpr std::int64_t kLevelFailure = 7;              // a nonzero Enable or Disable result
 constexpr FLOAT kStockRoundTime = 300.0f, kAliasRoundTime = 200.0f, kConfigRoundTime = 240.0f, kOtherRoundTime = 1.0f;
 constexpr FLOAT kMercyConfigured = 7.0f;
@@ -116,7 +117,9 @@ void SetClientLobby(std::uintptr_t lobby) { Put(&g_netGame, nevr_patch_addresses
 void WriteTable(const std::vector<std::uint64_t>& pairs, std::uintptr_t data_offset, std::uintptr_t count_offset) {
   const std::uint64_t* entries = pairs.empty() ? nullptr : pairs.data();
   Put(&g_gameObject, data_offset, entries);
-  Put(&g_gameObject, count_offset, static_cast<std::uint64_t>(pairs.size() / kLevelEntryWords));
+  const auto count = static_cast<std::uint64_t>(pairs.size() / kLevelEntryWords);
+  Put(&g_gameObject, count_offset, count);
+  Put(&g_gameObject, count_offset - nevr_game_space_table::kCapacityBytesBeforeCount, count);  // the table's own capacity
 }
 
 // The loaded levels that are not enabled (game object +0x1F90).
@@ -145,6 +148,9 @@ void BreakTheTables() {
   static const std::uint64_t kSomewhere[kLevelEntryWords] = {kStock, kResourceBase};
   Put(&g_gameObject, nevr_patch_addresses::GAME_SPACE_TABLE_OFFSET, &kSomewhere[0]);
   Put(&g_gameObject, nevr_patch_addresses::GAME_SPACE_TABLE_COUNT_OFFSET, kUnreadableTableCount);
+  Put(&g_gameObject,
+      nevr_patch_addresses::GAME_SPACE_TABLE_COUNT_OFFSET - nevr_game_space_table::kCapacityBytesBeforeCount,
+      std::uint64_t{kLevelEntryWords});  // a capacity the count passes
 }
 
 // A level resource: its level symbol at LEVEL_RESOURCE_LEVEL_OFFSET and its flags dword at LEVEL_RESOURCE_FLAGS_OFFSET.
@@ -403,8 +409,8 @@ TEST_F(ConfigAliasHookTest, WithTheRefreshOffTheGameIsNeverCalled) {
   EXPECT_TRUE(g_refreshes.empty());
 }
 
-// config.yaml's round_time wins over a live alias (decision 5), and the win is logged: the line names the map, the key,
-// the value the game read from the aliased record and config.yaml's value, once per map and key per load.
+// config.yaml's round_time wins over a live alias (decision 5), and the win is logged: the line names the map, the key
+// and config.yaml's value, once per map and key each time the alias goes live.
 TEST_F(ConfigAliasHookTest, AnAliasLiveOverrideLogsOncePerLoadAndReturnsTheConfigValue) {
   EchoVR::CJsonGetFloat = &GameCJsonGetFloat;
   StageAndArm();
@@ -499,7 +505,7 @@ TEST_F(ConfigAliasHookTest, AnUnrelatedRecordLogsOnlyForTheThreeKeys) {
   g_arenaRoundTime = 0.0f;
 }
 
-// The Debug record carries the record the game's read was made on beside the record the lookup answered, and whether they
+// The Debug record carries the record the game read from beside the record the lookup answered, and whether they
 // are the same, once per map and key per live epoch, so one live run shows which record the arena values are read from.
 TEST_F(ConfigAliasHookTest, TheRootCheckRecordCarriesBothPointersOncePerMapAndKey) {
   EchoVR::CJsonGetFloat = &GameCJsonGetFloat;

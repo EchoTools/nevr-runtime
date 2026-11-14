@@ -5,11 +5,12 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <initializer_list>
+#include <limits>
 #include <utility>
 #include <vector>
 
 #include "core/config_alias.h"
+#include "core/game_space_table.h"
 #include "hook_log.h"
 #include "game_space_layout.h"
 #include "outside_game_call.h"
@@ -26,11 +27,11 @@ constexpr std::size_t kEnabledTableOffset = sentinel::pinned::game_layout::kEnab
 constexpr std::size_t kEnabledCountOffset = sentinel::pinned::game_layout::kEnabledSpaceCountOffset;
 constexpr std::size_t kLoadedTableOffset = sentinel::pinned::game_layout::kLoadedSpaceTableOffset;
 constexpr std::size_t kLoadedCountOffset = sentinel::pinned::game_layout::kLoadedSpaceCountOffset;
-constexpr std::size_t kEntryBytes = 16;
-constexpr std::size_t kEntryResourceOffset = 8;  // the resource follows the level symbol in an entry
-constexpr std::uint64_t kMaxTableCount = 1024;   // the bound the PC hook uses: more reads as a table that is not one
-constexpr int kLevelTables = 2;                  // the enabled table and the loaded table
-constexpr int kMaxLevels = kLevelTables * static_cast<int>(kMaxTableCount);
+// The entry shape and the bound on a table's count are the shared ones (core/game_space_table.h): the bound is the table's
+// own capacity word, one word before its count.
+constexpr std::size_t kEntryBytes = nevr_game_space_table::kEntryBytes;
+constexpr std::size_t kEntryResourceOffset = nevr_game_space_table::kResourceWord * sizeof(std::uint64_t);
+constexpr std::size_t kCapacityBytesBeforeCount = nevr_game_space_table::kCapacityBytesBeforeCount;
 
 std::atomic<std::uint64_t (*)() noexcept> g_mainLevelSource{nullptr};
 std::atomic<bool> g_failureLogged{false};
@@ -66,9 +67,16 @@ void Reconcile() noexcept {
   try {
     const auto source = g_mainLevelSource.load(std::memory_order_acquire);
     const std::uint64_t mainLevel = source != nullptr ? source() : 0;
-    static std::uint64_t levels[kMaxLevels];  // tick thread only
+    static std::vector<std::uint64_t> levels;  // tick thread only; sized to what the tables hold
     const void* game = GameObject();
-    int count = game != nullptr ? ReadLoadedLevels(game, levels, kMaxLevels) : 0;
+    int count = 0;
+    if (game != nullptr) {
+      count = LoadedLevelUpperBound(game);
+      if (count >= 0) {
+        levels.resize(static_cast<std::size_t>(count));
+        count = ReadLoadedLevels(game, levels.data(), count);
+      }
+    }
     if (count < 0) {
       LogOnce(g_unreadableLogged, "tables_unreadable", "the loaded levels read as none; only the main level decides");
       count = 0;
@@ -76,7 +84,7 @@ void Reconcile() noexcept {
     std::uint64_t stamp = Fold(Fold(kFnvOffsetBasis, mainLevel), nevr_config_alias::Global().Generation());
     for (int i = 0; i < count; ++i) stamp = Fold(stamp, levels[i]);
     if (g_haveStamp && stamp == g_lastStamp) return;
-    nevr_config_alias::Reconcile(mainLevel, std::vector<std::uint64_t>(levels, levels + count));
+    nevr_config_alias::Reconcile(mainLevel, std::vector<std::uint64_t>(levels.begin(), levels.begin() + count));
     g_lastStamp = stamp;
     g_haveStamp = true;
   } catch (const std::exception&) {
@@ -90,14 +98,33 @@ void SetMainLevelSource(std::uint64_t (*source)() noexcept) noexcept {
   g_mainLevelSource.store(source, std::memory_order_release);
 }
 
+namespace {
+
+constexpr std::pair<std::size_t, std::size_t> kTables[] = {{kEnabledTableOffset, kEnabledCountOffset},
+                                                           {kLoadedTableOffset, kLoadedCountOffset}};
+
+bool TableReadable(const void* game, const std::pair<std::size_t, std::size_t>& table) noexcept {
+  return nevr_game_space_table::Readable(ReadAt<const void*>(game, table.first), ReadAt<std::uint64_t>(game, table.second),
+                                         ReadAt<std::uint64_t>(game, table.second - kCapacityBytesBeforeCount));
+}
+
+}  // namespace
+
+int LoadedLevelUpperBound(const void* game) noexcept {
+  std::uint64_t total = 0;
+  for (const auto& table : kTables) {
+    if (!TableReadable(game, table)) return -1;
+    total += ReadAt<std::uint64_t>(game, table.second);
+  }
+  return total > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ? -1 : static_cast<int>(total);
+}
+
 int ReadLoadedLevels(const void* game, std::uint64_t* out, int cap) noexcept {
   int written = 0;
-  for (const auto& table : {std::pair<std::size_t, std::size_t>{kEnabledTableOffset, kEnabledCountOffset},
-                            std::pair<std::size_t, std::size_t>{kLoadedTableOffset, kLoadedCountOffset}}) {
+  for (const auto& table : kTables) {
+    if (!TableReadable(game, table)) return -1;
     const auto* entries = ReadAt<const unsigned char*>(game, table.first);
     const auto count = ReadAt<std::uint64_t>(game, table.second);
-    if (count == 0) continue;
-    if (entries == nullptr || count > kMaxTableCount) return -1;
     for (std::uint64_t i = 0; i < count && written < cap; ++i) {
       const auto level = ReadAt<std::uint64_t>(entries, i * kEntryBytes);
       if (level != 0 && ReadAt<const void*>(entries, i * kEntryBytes + kEntryResourceOffset) != nullptr) out[written++] = level;

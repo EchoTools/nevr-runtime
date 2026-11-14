@@ -28,8 +28,13 @@ void SetMainLevelSource(std::uint64_t (*source)() noexcept) noexcept;
 // logged once. Runs as frame work every tick, and from the lookup on the tick thread.
 void ReconcileIfFrameMoved() noexcept;
 
-// The levels in both game-space tables of `game` (a CncaGame), into out[cap]. Returns the count, or -1 when a table is not
-// readable (a null data pointer with a count, or a count over 1024). Tests drive it with a fake game object.
+// The most levels both game-space tables of `game` (a CncaGame) can list: the sum of their counts, or -1 when a table is not
+// readable. The reader sizes its buffer with it.
+int LoadedLevelUpperBound(const void* game) noexcept;
+
+// The levels in both game-space tables of `game`, into out[cap]. Returns the count, or -1 when a table is not readable (a null
+// data pointer with a count, or a count over the table's own capacity word, core/game_space_table.h). Tests drive it with a
+// fake game object.
 int ReadLoadedLevels(const void* game, std::uint64_t* out, int cap) noexcept;
 
 // The lookup with the alias applied; `original` is the game's function (or a test double).

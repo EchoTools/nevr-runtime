@@ -14,7 +14,8 @@ inline constexpr std::size_t kGameOffset = 8;
 // The two game-space tables of the game object: the enabled table and the loaded table, each a data pointer with its count
 // 0x30 further on (a CTable). Read from CncaGame::EnableGameSpace (ReVault libr15 0x18DC124 = this libr15's 0x17DC124; the
 // file vaddr is the disassembly VA less 0x100000): `self+0x1F88` data and `self+0x1FB8` count select the loaded table,
-// `self+0x1F48` and `self+0x1F78` the enabled. Entries are 16 bytes: {CSymbol64 level, CncaGameSpace* space}.
+// `self+0x1F48` and `self+0x1F78` the enabled. Entries are 16 bytes: {CSymbol64 level, CncaGameSpace* space}. The table's
+// capacity word is one word before its count (core/game_space_table.h); the reader uses it as the bound on the count.
 inline constexpr std::size_t kEnabledSpaceTableOffset = 0x1F48;
 inline constexpr std::size_t kEnabledSpaceCountOffset = 0x1F78;
 inline constexpr std::size_t kLoadedSpaceTableOffset = 0x1F88;
