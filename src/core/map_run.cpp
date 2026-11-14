@@ -219,6 +219,7 @@ class MountRun {
     const std::uint64_t free_fds = facts.fd_soft_limit > facts.fds_open ? facts.fd_soft_limit - facts.fds_open : 0;
     descriptor_budget_ = nevr_device::Share(free_fds, kDescriptorShareForMaps);
     document_bytes_ = MapDocumentBytes(facts);
+    local_names_ = CollectLocalNames(config_.local_level_names, config_.local_maps);
 
     const CacheIndexStatus status = ReadCacheIndex(env_, config_.dir, &index_);
     if (status != CacheIndexStatus::kOk) {
@@ -297,9 +298,12 @@ class MountRun {
     report_.not_mounted.emplace_back(id, token);
   }
 
-  void Skip(const std::string& id, const std::string& token) {
+  // `local_name` is set for a local copy (kLocalMapToken): the local level or id that won.
+  void Skip(const std::string& id, const std::string& token, const std::string& local_name = std::string()) {
     NotMounted(&report_.skipped, id, token);
-    env_.Event(EventLevel::kWarn, "map_skipped", {{"id", id}, {"reason", token}});
+    std::vector<Field> fields{{"id", id}, {"reason", token}};
+    if (!local_name.empty()) fields.emplace_back("local_name", local_name);
+    env_.Event(EventLevel::kWarn, "map_skipped", fields);
   }
 
   void Defer(const std::string& id, const std::string& token) {
@@ -370,7 +374,11 @@ class MountRun {
   }
 
   void MountOne(const std::string& id, const std::vector<Listing>& listings) {
-    if (Contains(config_.local_maps, id)) return Skip(id, "local_map");
+    // ADR 0048 decision 8: the CDN map's names (its id and each level name its listings carry) against this run's local names.
+    std::vector<std::string> cdn_names{id};
+    for (const Listing& l : listings) cdn_names.push_back(l.entry.level_name);
+    const LocalPrecedence local = DecideLocalPrecedence(cdn_names, local_names_);
+    if (local.skip) return Skip(id, kLocalMapToken, local.matched);
     if (revoked_ids_.count(id)) return Refuse(id, "revoked");
     const auto found = index_.maps.find(MapKey(id, config_.platform));
     if (found == index_.maps.end() || found->second.pinned_serial == 0) {
@@ -559,6 +567,7 @@ class MountRun {
   CacheIndex index_;
   std::map<std::string, std::vector<Listing>> listings_;
   std::set<std::string> revoked_ids_, revoked_sha_;
+  std::set<std::string> local_names_;  // this run's local level names and local map ids (core/map_local_precedence.h)
   MountReport report_;
   std::map<std::string, bool> stock_checked_;
   std::uint64_t descriptor_budget_ = 0, document_bytes_ = 0, held_ = 0;
@@ -594,6 +603,7 @@ class FetchRun {
       : env_(env), fs_(fs), config_(config), group_(group), deriver_(deriver), keep_going_(keep_going),
         progress_fn_(progress) {
     report_.group = group;
+    local_names_ = CollectLocalNames(config.local_level_names, config.local_maps);
   }
 
   FetchReport Run(const std::vector<std::string>& deferred, const std::string& now_utc) {
@@ -1309,8 +1319,9 @@ class FetchRun {
         env_.Event(level, "map_plan", {{"group", group_}, {"id", id}, {"reason", reason}});
       };
       report_.set_bytes += entry.bytes;
-      if (Contains(config_.local_maps, id)) {
-        plan("local_map");
+      const LocalPrecedence local = DecideLocalPrecedence({id, entry.level_name}, local_names_);
+      if (local.skip) {
+        plan(kLocalMapToken);
         continue;
       }
       if (Contains(manifest.revoked_ids, id) || revoked_sha_.count(entry.index.sha256)) {
@@ -1461,6 +1472,7 @@ class FetchRun {
   CacheIndex index_;
   ParsedManifest parsed_;
   std::set<std::string> revoked_sha_;
+  std::set<std::string> local_names_;  // this run's local level names and local map ids (core/map_local_precedence.h)
   std::unordered_map<std::string, PieceLocation> catalog_;
   std::string first_map_failure_;
   bool dirty_ = false;
