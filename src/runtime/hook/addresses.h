@@ -918,5 +918,17 @@ constexpr uint32_t LEVEL_RESOURCE_DISABLED_FLAG = 0x80;
 /// 0x142023CF0 and 0x142023CF8 (ReVault's g_data_142023ce8, cf0 and cf8). Its callers are SetGameState (0x1401B8650)
 /// and the lobby member change (0x14018C720, through fcn.14018c720).
 constexpr uintptr_t NETGAME_BALANCE_SETTINGS_UPDATE = 0x1B2A90;
+// CNSLobby owner-JSON symbol setter and getter (ADR 0048 decision 9: the session map pin). RVAs; the image base is 0x140000000.
+// The setter's name is not confirmed: the disassembly (revault fcn.140615e60) names it only by its address, and its body is
+// a setter of the owner JSON at this+0x310 (CJson::Set, then the CSymbol64 placeholder). The getter is CNSLobby::OwnerJson_GetSymbol
+// (revault: VA 0x14060D3D0, which wraps CJson::GetSymbol(this+0x310, key, default)). Both prologues are checked before any call (Rule 6).
+constexpr uintptr_t CNSLOBBY_OWNER_SYMBOL_SET = 0x615E60;
+constexpr unsigned char CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE[31] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c,
+                                                                  0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57,
+                                                                  0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xe9, 0x49,
+                                                                  0x8b, 0xd8, 0x48, 0x81, 0xc1, 0x10, 0x03};
+constexpr uintptr_t CNSLOBBY_OWNER_SYMBOL_GET = 0x60D3D0;
+constexpr unsigned char CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE[13] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48,
+                                                                  0x81, 0xc1, 0x10, 0x03, 0x00, 0x00};
 
 }  // namespace nevr_patch_addresses

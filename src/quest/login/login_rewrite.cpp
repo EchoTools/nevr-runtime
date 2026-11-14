@@ -20,6 +20,7 @@ constexpr char kPathSeparator = '|';
 constexpr std::string_view kNoVrSerial = "N/A";
 constexpr std::string_view kGameMeasuredPrefix = "system_info|";
 constexpr const char* kPluginsKey = "nevr_plugins";
+constexpr const char* kMapsKey = "nevr_maps";
 
 void Flatten(const nlohmann::json& node, const std::string& prefix, std::vector<Field>& fields,
              std::vector<std::string>& skipped) {
@@ -61,11 +62,11 @@ void Flatten(const nlohmann::json& node, const std::string& prefix, std::vector<
 // 0x35917c -> path walker 0x35ba84 -> object walker 0x364bdc -> array member 0x36522c -> array walker 0x364a0c; the tokenizer
 // 0x363718 parses "N]|", and 0x364dd4 pads the array with json_null.
 // An empty array is no fields: the service reads an absent key as an empty report.
-void FlattenPlugins(const nlohmann::json& array, std::vector<Field>& fields) {
+void FlattenIndexed(const char* key, const nlohmann::json& array, std::vector<Field>& fields) {
   std::size_t index = 0;
   for (const nlohmann::json& entry : array) {
     if (!entry.is_object()) continue;
-    const std::string base = std::string(kPluginsKey) + "[" + std::to_string(index++) + "]";
+    const std::string base = std::string(key) + "[" + std::to_string(index++) + "]";
     std::vector<std::string> skipped;
     Flatten(entry, base, fields, skipped);
   }
@@ -118,6 +119,13 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
     // A report that cannot be built is an empty one; the login does not depend on it.
   }
 
+  // The maps the same way as the plugins: a report that cannot be built is an empty one.
+  try {
+    if (build.map_report) inputs.maps = build.map_report();
+  } catch (const std::exception&) {
+    inputs.maps = nlohmann::json::array();
+  }
+
   // dump() throws on a display name that is not valid UTF-8; the game ABI must never see it.
   try {
     const std::string text = nevr_login_profile::BuildLoginProfileJson(inputs);
@@ -126,17 +134,24 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
       result.status = ComposeStatus::ProfileBuildFailed;
       return result;
     }
-    // Taken out first: Flatten has no array case, and the members go in as indexed paths (FlattenPlugins).
+    // Taken out first: Flatten has no array case, and the members go in as indexed paths (FlattenIndexed).
     nlohmann::json plugins = nlohmann::json::array();
     if (profile.contains(kPluginsKey)) {
       plugins = profile[kPluginsKey];
       profile.erase(kPluginsKey);
     }
+    nlohmann::json maps = nlohmann::json::array();
+    if (profile.contains(kMapsKey)) {
+      maps = profile[kMapsKey];
+      profile.erase(kMapsKey);
+    }
     Flatten(profile, std::string(), result.fields, result.skipped);
-    FlattenPlugins(plugins, result.plugin_fields);
+    FlattenIndexed(kPluginsKey, plugins, result.plugin_fields);
+    FlattenIndexed(kMapsKey, maps, result.map_fields);
   } catch (const std::exception&) {
     result.fields.clear();
     result.plugin_fields.clear();
+    result.map_fields.clear();
     result.skipped.clear();
     result.status = ComposeStatus::ProfileBuildFailed;
     return result;
@@ -208,6 +223,7 @@ void ComposePlanImpl(IdentitySource& source, const BuildInfo& build, const Obser
     plan.fields.push_back(std::move(field));
   }
   plan.plugin_fields = std::move(composition.plugin_fields);
+  plan.map_fields = std::move(composition.map_fields);
   plan.account_id = identity.account_id;
   plan.skipped = composition.skipped.size();
   plan.hmd_serial_source = composition.hmd_serial_source;

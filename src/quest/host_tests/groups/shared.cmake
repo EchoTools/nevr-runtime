@@ -122,6 +122,14 @@ nevr_ht_test(symbol_hash_test_uchar GROUP shared COPTS -funsigned-char SRC src/q
 set(_shared_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/shared)
 nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
   SRC src/quest/cargo/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
+# The session map pin's pure part on the Quest (core/map_session_pin.cpp, ADR 0048 decision 9): the vectors and decision rows a Quest
+# client meets, the view's replacement and the empty-state gate, over a counting game.
+nevr_ht_test(map_session_pin_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
+  SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp)
+# The Quest's libr15 half of the pin (quest/cargo/map_pin_game.cpp), compiled for the host: its layout, its pinned words and its
+# call into the core. It is not linked here (it needs the sentinel's libr15 image), so this is a compile check of the Quest half.
+nevr_ht_obj(o_map_pin_game GROUP shared NOEXC DEFS NEVR_QUEST_TESTING INCS ${_sentinel} sdk/include src
+  SRC src/quest/cargo/map_pin_game.cpp)
 # A map's set over a held descriptor on the Quest (quest/sentinel/map_sets.cpp; docs/adr/0048 decision 5): the shared registration
 # (core/resource_set_registry.cpp, the registry the PC compiles) with the Android types, its records read back as the sentinel log
 # writes them, and the file's mapping released before the registration returns.

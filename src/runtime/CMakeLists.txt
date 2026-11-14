@@ -111,6 +111,8 @@ set(PATCHES_SOURCES
     "content/map_scripts_install.cpp"
     # docs/adr/0048 decision 5: the config-alias lookup detour, installed only when a mounted map stages an alias.
     "content/config_alias_hook.cpp"
+    # ADR 0048 decision 9: the session map pin's PC half (the pure part is core/map_session_pin.cpp, in nevr_core).
+    "content/map_session_pin_game.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
     # #2336: the bullet spawn's one detour; PowerBoost's drop and DroneFix's tracer rule are filters on it.
@@ -1823,6 +1825,14 @@ if(BUILD_TESTING)
     target_include_directories(test_login_refusal PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_login_refusal PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_login_refusal DISCOVERY_MODE PRE_TEST)
+
+    # ADR 0048 decision 9: the session pin's login and registration entries as the PC login carries them (the pure part is
+    # core/map_session_pin.cpp, in nevr_core; the byte-identical login check reads the real login_profile.cpp).
+    add_executable(test_map_session_pin tests/test_map_session_pin.cpp compat/login_profile.cpp)
+    set_source_files_properties(tests/test_map_session_pin.cpp compat/login_profile.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_map_session_pin PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_map_session_pin PRIVATE nevr_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_map_session_pin DISCOVERY_MODE PRE_TEST)
 
     # #1845: the log level of a relative \\?\ path the CreateDirectoryW hook creates (platform-compat's nt_path_log.h): header only, pure.
     add_executable(test_nt_path_log tests/nt_path_log_test.cpp)

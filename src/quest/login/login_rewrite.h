@@ -34,6 +34,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "runtime/compat/social_level.h"
 #include "runtime/ext/plugin_manifest.h"
 
@@ -87,6 +89,9 @@ struct BuildInfo {
   // because the loader settles entries over the run. Empty function or empty result: no plugin fields. Called from the
   // exceptions-enabled compose phase only, so it may allocate; it must not call into the game.
   std::function<std::vector<PluginManifestEntry>()> plugin_report;
+  // The session map pins (`nevr_maps`, ADR 0048 decision 9): the core's nevr_map_session_pin::LoginEntries() on the Quest, a JSON
+  // array. Unset or empty: no `nevr_maps` (a run with no maps config sends today's login).
+  std::function<nlohmann::json()> map_report;
 };
 
 // Values the game already placed in the login JSON; the rewrite relays them.
@@ -140,6 +145,8 @@ struct Composition {
   // The `nevr_plugins` array as CJson indexed paths (`nevr_plugins[0]|name`, one Field per member), built from the same
   // nevr_login_profile builder as the PCVR login. Apart from `fields` because it is applied best effort: see Plan.
   std::vector<Field> plugin_fields;
+  // The `nevr_maps` array the same way (`nevr_maps[0]|id`), applied best effort after the plugins.
+  std::vector<Field> map_fields;
   // Profile members that have no CJson setter (arrays, nulls, reals, out-of-range
   // integers). Paths only, never values.
   std::vector<std::string> skipped;
@@ -465,6 +472,7 @@ struct Plan {
   // headset (docs/adr/0019-quest-plugin-loader.md, section 2). A refusal restores them and the login goes out without
   // `nevr_plugins`, which the service reads as an empty report.
   std::vector<Field> plugin_fields;
+  std::vector<Field> map_fields;  // as plugin_fields, for `nevr_maps`
   std::size_t skipped = 0;
   std::size_t kept_client_class = 0;
   std::size_t kept_measured = 0;

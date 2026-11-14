@@ -296,6 +296,16 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
       if (!had_key) json.Clear("nevr_plugins");
     }
   }
+  long long maps_written = 0;
+  std::string maps_failed;
+  if (!plan.map_fields.empty()) {
+    const bool had_key = json.TypeOf("nevr_maps") != JsonType::Absent;
+    if (ApplyFieldsAtomically(plan.map_fields, json, maps_failed)) {
+      maps_written = 1;
+    } else {
+      if (!had_key) json.Clear("nevr_maps");
+    }
+  }
   const LogKv d[] = {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
                      Text("hmd_serial_source", plan.hmd_serial_source.c_str()),
                      Num("fields", static_cast<long long>(plan.fields.size())),
@@ -304,8 +314,13 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      Num("kept_measured", static_cast<long long>(plan.kept_measured)),
                      Num("plugin_fields", static_cast<long long>(plan.plugin_fields.size())),
                      Num("plugins_written", plugin_written),
-                     Text("plugins_refused_path", plugin_failed.c_str())};
-  EmitLoginRecord(log, Level::Info, Outcome::Rewritten, d, sizeof(d) / sizeof(d[0]));
+                     Text("plugins_refused_path", plugin_failed.c_str()),
+                     Num("map_fields", static_cast<long long>(plan.map_fields.size())),
+                     Num("maps_written", maps_written),
+                     Text("maps_refused_path", maps_failed.c_str())};
+  // The map members only when there were maps, so a run with no maps config logs today's record.
+  const std::size_t count = sizeof(d) / sizeof(d[0]) - (plan.map_fields.empty() ? 3 : 0);
+  EmitLoginRecord(log, Level::Info, Outcome::Rewritten, d, count);
   return Outcome::Rewritten;
 }
 

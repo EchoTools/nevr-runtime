@@ -4,6 +4,7 @@
 #include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/server_features.h"
 #include "runtime/compat/login_profile.h"
+#include "core/map_session_pin.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -1201,6 +1202,10 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   if (resources.is_discarded() || !resources.is_array()) resources = nlohmann::json::array();
   Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_resources count=%zu", resources.size());
   profileInputs.resources = std::move(resources);
+  // docs/adr/0047: the channel maps staged or mounted. With none the key and this line are absent, as before.
+  nlohmann::json maps = nevr_map_session_pin::LoginEntries();
+  if (!maps.empty()) Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_maps count=%zu", maps.size());
+  profileInputs.maps = std::move(maps);
   const std::string jsonStr = nevr_login_profile::BuildLoginProfileJson(profileInputs);
 
   // Frame layout (UUID, platform, account, JSON, NUL) is EvrCodec's, shared with the Quest target.

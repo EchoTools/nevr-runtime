@@ -57,6 +57,12 @@ set(_maps_run_sources
 set_source_files_properties(${_maps_run_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_run_sources})
 
+# The session map pin's pure part (core/map_session_pin.h; ADR 0048 decision 9): the pin value, the view, the decision table, the
+# notice, the login and registration entries and the tick over a GameAccess. Each platform compiles its game half beside it
+# (runtime/content/map_session_pin_game.cpp, quest/cargo/map_pin_game.cpp). Platform-free: no PCH, no Log().
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp")
+
 if(BUILD_TESTING)
   find_package(GTest QUIET)
   find_package(zstd CONFIG QUIET)
@@ -130,4 +136,13 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_link_libraries(test_map_run PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
     nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_run DISCOVERY_MODE PRE_TEST)
+
+  # The session pin's pure part over a fake game (ADR 0048 decision 9): the level names and the pin value by their vectors, the
+  # decision table, the notice fit, the view's replacement, the empty-state gate and the tick's events. No game, no Win32.
+  add_executable(test_map_session_pin_core "${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_session_pin_core PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_map_session_pin_core PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
+    nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_session_pin_core DISCOVERY_MODE PRE_TEST)
 endif()
