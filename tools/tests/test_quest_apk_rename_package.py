@@ -63,8 +63,10 @@ def lib_with(old: str, count: int, salt: bytes) -> bytes:
     return body + b"\0tail" * 3
 
 
-def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, ascii_in_vrapi: int = 1, manifest: bytes = None, extra: dict = None) -> list:
-    """(name, data, compress_type) for a fixture reference APK, in a fixed order."""
+def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, ascii_in_vrapi: int = 0, manifest: bytes = None, extra: dict = None) -> list:
+    """(name, data, compress_type) for a fixture reference APK, in a fixed order. The fixture libvrapi is in no table: by default
+    it holds the package 0 times (what an unknown runtime may hold); a test that wants it to hold more names it in a table
+    (`runtime_table`)."""
     out = [
         ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n", zipfile.ZIP_DEFLATED),
         ("META-INF/ECHOVRTE.SF", b"Signature-Version: 1.0\n", zipfile.ZIP_DEFLATED),
@@ -80,6 +82,11 @@ def entries(ascii_in_libr15: int = 5, ascii_in_assetpatch: int = 2, ascii_in_vra
     for name, data in (extra or {}).items():
         out.append((name, data, zipfile.ZIP_DEFLATED))
     return out
+
+
+def runtime_table(items: list, ascii_count: int) -> dict:
+    """A `known_runtimes` table naming the fixture's libvrapi (by the sha-256 of its bytes in `items`) as holding `ascii_count` copies."""
+    return {sha(dict((n, d) for n, d, _ in items)[VRAPI]): (ascii_count, 0)}
 
 
 def write_apk(path: pathlib.Path, items: list) -> None:
@@ -118,26 +125,46 @@ class FixtureTest(unittest.TestCase):
 
 class RenameTest(FixtureTest):
     def test_each_known_runtime_renames_with_its_own_count_and_renames_again_as_already_renamed(self):
-        # the pinned reference APK's runtime holds the package 0 times, the wave-2 runtime once
+        # the pinned reference APK's runtime holds the package 0 times, the wave-2 runtime once; each is named in the table given
         for n in (0, 1):
             with self.subTest(ascii_in_vrapi=n):
-                self.make(ascii_in_vrapi=n)
-                record = rp.rename_apk(self.src, self.out)
+                table = runtime_table(self.make(ascii_in_vrapi=n), n)
+                record = rp.rename_apk(self.src, self.out, known_runtimes=table)
                 self.assertEqual(record["event"], "package_renamed")
                 self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [n, 0]})
                 self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH} | ({VRAPI} if n else set()))
                 self.assertEqual(read_apk(self.out)[VRAPI][0].count(OLD.encode()), 0)
                 again = self.dir / "again.apk"
-                second = rp.rename_apk(self.out, again)
+                second = rp.rename_apk(self.out, again, known_runtimes=table)
                 self.assertEqual(second["event"], "package_already_renamed")
                 self.assertEqual(second["counts"][VRAPI], [n, 0])
 
-    def test_the_table_names_the_runtime_of_the_pinned_reference_apk_and_the_wave_2_runtime(self):
-        self.assertEqual(sorted(rp.KNOWN_RUNTIMES.values()), [(0, 0), (1, 0)])
+    def test_the_built_in_table_names_the_two_real_runtimes(self):
+        self.assertEqual(rp.KNOWN_RUNTIMES, {
+            "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839": (0, 0),   # the pinned reference APK's runtime
+            "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a": (1, 0),   # the wave-2 runtime
+        })
+
+    def test_the_default_table_is_the_built_in_one(self):
+        # no known_runtimes argument: a runtime added to the built-in table renames with its count
+        table = runtime_table(self.make(ascii_in_vrapi=1), 1)
+        with mock.patch.dict(rp.KNOWN_RUNTIMES, table):
+            self.assertEqual(rp.rename_apk(self.src, self.out)["counts"][VRAPI], [1, 0])
+        self.out.unlink()
+        self.assertIn(VRAPI, self.refused())  # the built-in table is back to the two real runtimes
+
+    def test_a_given_table_extends_the_built_in_one(self):
+        # an explicit table names the fixture's runtime; the built-in entries stay in force
+        table = runtime_table(self.make(ascii_in_vrapi=1), 1)
+        merged = rp.merged_runtimes(table)
+        self.assertEqual({**rp.KNOWN_RUNTIMES, **table}, merged)
+        self.assertEqual(rp.merged_runtimes(None), rp.KNOWN_RUNTIMES)
+        self.assertEqual(rp.merged_runtimes({}), rp.KNOWN_RUNTIMES)
+        self.assertEqual(rp.rename_apk(self.src, self.out, known_runtimes=table)["counts"][VRAPI], [1, 0])
 
     def test_renames_exactly_the_four_entries_with_their_counts(self):
-        items = self.make()
-        record = rp.rename_apk(self.src, self.out)
+        items = self.make(ascii_in_vrapi=1)
+        record = rp.rename_apk(self.src, self.out, known_runtimes=runtime_table(items, 1))
         before, after = {n: d for n, d, _ in items}, read_apk(self.out)
         self.assertEqual(record["event"], "package_renamed")
         self.assertEqual(record["counts"], {"AndroidManifest.xml": [0, 1], LIBR15: [5, 0], ASSETPATCH: [2, 0], VRAPI: [1, 0]})
@@ -201,16 +228,29 @@ class RefusalTest(FixtureTest):
         self.make(ascii_in_assetpatch=3)
         self.assertIn("expected (2, 0)", self.refused())
 
-    def test_refuses_an_unknown_libvrapi_with_a_count_other_than_zero_or_one(self):
-        self.make(ascii_in_vrapi=2)
-        self.assertIn(VRAPI, self.refused())
+    def test_refuses_an_unknown_libvrapi_that_holds_the_package(self):
+        # the tool never renames what its table does not name: an unknown runtime holds the package 0 times or is refused
+        for n in (1, 2):
+            with self.subTest(ascii_in_vrapi=n):
+                self.make(ascii_in_vrapi=n)
+                self.assertIn("expected (0, 0)", self.refused())
 
     def test_a_known_runtime_must_hold_exactly_its_count(self):
         # the table says this exact libvrapi holds the package once; the fixture's copy holds it 0 times
-        items = self.make(ascii_in_vrapi=0)
-        runtime = {name: data for name, data, _ in items}[VRAPI]
-        with mock.patch.dict(rp.KNOWN_RUNTIMES, {sha(runtime): (1, 0)}):
-            self.assertIn("expected (1, 0)", self.refused())
+        runtime = {name: data for name, data, _ in self.make(ascii_in_vrapi=0)}[VRAPI]
+        self.assertIn("expected (1, 0)", self.refused(known_runtimes={sha(runtime): (1, 0)}))
+
+    def test_an_already_renamed_known_runtime_that_holds_fewer_copies_than_its_table_count_is_refused(self):
+        # the table says the runtime held the package twice; the renamed one holds the target once. The lookup puts the rename
+        # back to find the table entry, so a renamed runtime is held to its count too (kills `candidates = [data]`)
+        items = self.make(ascii_in_vrapi=1)
+        table = runtime_table(items, 1)
+        renamed = self.dir / "renamed.apk"
+        rp.rename_apk(self.src, renamed, known_runtimes=table)
+        self.src = renamed
+        message = self.refused(known_runtimes=runtime_table(items, 2))
+        self.assertIn("not a reference APK this tool knows", message)
+        self.assertIn(VRAPI, message)
 
     def test_refuses_a_second_manifest_string(self):
         data = afk_manifest()
@@ -251,6 +291,11 @@ class RefusalTest(FixtureTest):
     def test_refuses_a_missing_named_entry(self):
         write_apk(self.src, [(n, d, m) for n, d, m in entries() if n != ASSETPATCH])
         self.assertIn(ASSETPATCH, self.refused())
+
+    def test_refuses_a_missing_runtime_library(self):
+        # the APK must carry lib/arm64-v8a/libvrapi.so: without it there is no runtime to check against the table
+        write_apk(self.src, [(n, d, m) for n, d, m in entries() if n != VRAPI])
+        self.assertIn(VRAPI, self.refused())
 
     def test_refuses_names_of_different_length_or_equal_or_non_ascii(self):
         self.make()
@@ -320,6 +365,70 @@ class CliTest(FixtureTest):
         self.assertEqual(done.returncode, 1)
         self.assertEqual(json.loads(done.stderr)["event"], "package_rename_refused")
 
+    def test_known_runtimes_file_names_the_runtime_and_the_default_does_not(self):
+        table = runtime_table(self.make(ascii_in_vrapi=1), 1)
+        refused = self.run_tool("rename", "--apk", self.src, "--out", self.out)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn(VRAPI, json.loads(refused.stderr)["reason"])
+        known = self.dir / "known.json"
+        known.write_text(json.dumps({k: list(v) for k, v in table.items()}))
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--known-runtimes", known)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["counts"][VRAPI], [1, 0])
+
+    def test_a_known_runtimes_file_with_an_upper_case_sha_names_the_runtime_as_the_lower_case_one_does(self):
+        table = runtime_table(self.make(ascii_in_vrapi=1), 1)
+        (key, counts), = table.items()
+        upper = self.dir / "upper.json"
+        upper.write_text(json.dumps({key.upper(): list(counts)}))
+        self.assertNotEqual(key, key.upper())
+        # the file loader normalises the key, and the table it returns renames through the known_runtimes argument
+        loaded = rp.load_known_runtimes(upper)
+        self.assertEqual(loaded, rp.merged_runtimes(table))
+        self.assertEqual(rp.rename_apk(self.src, self.out, known_runtimes=loaded)["counts"][VRAPI], [1, 0])
+        self.out.unlink()
+        # the same file through the command line
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--known-runtimes", upper)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["counts"][VRAPI], [1, 0])
+
+    def test_a_known_runtimes_file_of_the_wrong_shape_is_a_refusal(self):
+        good = "a" * 64
+        cases = {
+            "not_json": "{",
+            "a_list": "[]",
+            "value_not_a_list": json.dumps({good: 1}),
+            "one_count": json.dumps({good: [1]}),
+            "three_counts": json.dumps({good: [1, 0, 0]}),
+            "negative": json.dumps({good: [-1, 0]}),
+            "a_bool": json.dumps({good: [True, 0]}),
+            "a_string": json.dumps({good: ["1", 0]}),
+            "a_float": json.dumps({good: [1.0, 0]}),
+            "short_sha": json.dumps({"a" * 63: [1, 0]}),
+            "non_hex_sha": json.dumps({"g" * 64: [1, 0]}),
+            "long_sha": json.dumps({"a" * 65: [1, 0]}),
+            "names_a_built_in_runtime_with_another_count": json.dumps({next(iter(rp.KNOWN_RUNTIMES)): [3, 0]}),
+        }
+        self.make()
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                known = self.dir / f"{name}.json"
+                known.write_text(text)
+                done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--known-runtimes", known)
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertEqual(done.stdout, "")
+                self.assertEqual(len(done.stderr.splitlines()), 1)
+                record = json.loads(done.stderr)
+                self.assertEqual(record["event"], "package_rename_refused")
+                self.assertIn("known-runtimes", record["reason"])
+                self.assertFalse(self.out.exists())
+
+    def test_a_missing_known_runtimes_file_is_a_refusal(self):
+        self.make()
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--known-runtimes", self.dir / "nope.json")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(json.loads(done.stderr)["event"], "package_rename_refused")
+
     def test_from_and_to_default_to_afk_and_r15(self):
         self.make()
         explicit = self.dir / "explicit.apk"
@@ -366,7 +475,7 @@ class LabelTest(FixtureTest):
         for name in without:
             if name != "AndroidManifest.xml":
                 self.assertEqual(after[name], without[name], f"{name}: the label changed another entry")
-        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH, VRAPI})
+        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH})
         self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_in"], sha(source))
         self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_out"], sha(manifest))
         self.assertEqual(record["sha256_out"], sha(self.out.read_bytes()))

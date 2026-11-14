@@ -14,7 +14,8 @@ expected count (a count that differs is a refusal, nothing is written):
     AndroidManifest.xml               1 occurrence, UTF-16LE (the manifest's string pool), 0 ASCII
     lib/arm64-v8a/libr15.so           5 occurrences, ASCII, 0 UTF-16LE
     lib/arm64-v8a/libassetpatch.so    2 occurrences, ASCII, 0 UTF-16LE
-    lib/arm64-v8a/libvrapi.so         0 or 1 occurrence, ASCII, 0 UTF-16LE (exactly the count of a runtime in KNOWN_RUNTIMES)
+    lib/arm64-v8a/libvrapi.so         the count of its runtime in the known-runtimes table, ASCII, 0 UTF-16LE; a runtime the
+                                      table does not name must hold 0
 
 The two names have the same length, so no offset, size or string-pool index moves: the replacement is byte for byte
 in place, and the tool re-reads each result and checks its length and its remaining counts. The manifest is also
@@ -31,7 +32,16 @@ least as often as the source was expected) is reported as `package_already_renam
 second run over its own output writes the same entries again.
 
     quest_apk_rename_package.py rename --apk IN.apk --out OUT.apk [--from com.readyatdawn.afk] [--to com.readyatdawn.r15]
-                                       [--label TEXT]
+                                       [--label TEXT] [--known-runtimes FILE]
+
+KNOWN RUNTIMES. The libvrapi of a reference build is looked up by the sha-256 of the library as the APK carries it (an
+already-renamed library is looked up with the target put back to the source). `KNOWN_RUNTIMES` names the two reference
+runtimes (the pinned reference APK's, 0 copies; the wave-2 base's, 1). A libvrapi the table does not name must hold the
+source string 0 times, else the rename is refused: the tool never renames what its table does not name. `--known-runtimes
+FILE` (and the `known_runtimes` argument of `rename_apk`) EXTENDS the built-in table, never replaces it: FILE is a JSON
+object of sha-256 (64 hex digits) to [ASCII count, UTF-16LE count], two non-negative integers; an entry that names a
+built-in runtime with a different count, and any other shape, is a refusal. Without the argument the table is the
+built-in one. The argument exists so that a test can name its fixture library; it is not an environment variable.
 
 LABEL. The reference build's launcher label reads "Echo Combat (port)"; the project's APK reads "Echo VR". With
 `--label TEXT` the output's AndroidManifest.xml also has its `<application>` label replaced by TEXT, in place, through
@@ -71,16 +81,16 @@ EXPECTED = {
     "lib/arm64-v8a/libassetpatch.so": (2, 0),
 }
 
-# The reference runtime. Its package-string count depends on the base it belongs to: a runtime in KNOWN_RUNTIMES (by the sha-256
-# of the library as the APK carries it) must hold exactly its count; any other libvrapi may hold RUNTIME_COUNTS and nothing else.
+# The reference runtime: its package-string count depends on the base it belongs to. A runtime in KNOWN_RUNTIMES (by the sha-256
+# of the library as the APK carries it) must hold exactly its count; any other libvrapi must hold 0 (see KNOWN RUNTIMES above).
 RUNTIME_ENTRY = "lib/arm64-v8a/libvrapi.so"
-RUNTIME_COUNTS = ((0, 0), (1, 0))
 KNOWN_RUNTIMES = {
     # the 12-module runtime of the pinned reference APK (tools/quest_release_base.py REFERENCE_APK_SHA256): no package string
     "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839": (0, 0),
     # the 13-module wave-2 runtime: the package once, as the fallback name of a file-existence check
     "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a": (1, 0),
 }
+SHA256_HEX_DIGITS = 64
 
 
 class RenameError(Exception):
@@ -171,24 +181,54 @@ def _in_meta_inf(name: str) -> bool:
     return name.startswith("META-INF/") or name == "META-INF"
 
 
-def _runtime_expected(data: bytes, found: tuple, old: str, new: str, renamed: bool) -> tuple:
-    """The (ASCII, UTF-16LE) count of `old` that the runtime in `data` must hold. A runtime in KNOWN_RUNTIMES has its table
-    count (an already-renamed input is looked up as it was before the rename, `new` put back to `old`); any other must hold one of
-    RUNTIME_COUNTS (`found` is what it holds), else RenameError."""
+def merged_runtimes(extra: dict | None) -> dict:
+    """The built-in KNOWN_RUNTIMES extended by `extra` (None or empty: the built-in table). An `extra` entry that names a
+    built-in runtime with a different count is a RenameError."""
+    merged = dict(KNOWN_RUNTIMES)
+    for key, counts in (extra or {}).items():
+        if key in KNOWN_RUNTIMES and tuple(KNOWN_RUNTIMES[key]) != tuple(counts):
+            raise RenameError(f"known-runtimes: {key} is a built-in runtime with counts {KNOWN_RUNTIMES[key]}, not {tuple(counts)}")
+        merged[key] = tuple(counts)
+    return merged
+
+
+def load_known_runtimes(path: Path) -> dict:
+    """The `--known-runtimes` file: a JSON object of sha-256 (64 hex digits) to [ASCII count, UTF-16LE count]. Any other
+    shape is a RenameError."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RenameError(f"known-runtimes: {path.name} cannot be read as JSON: {error}") from None
+    if not isinstance(raw, dict):
+        raise RenameError(f"known-runtimes: {path.name} is not a JSON object of sha-256 to [ascii count, utf16le count]")
+    table = {}
+    for key, value in raw.items():
+        if len(key) != SHA256_HEX_DIGITS or any(c not in "0123456789abcdefABCDEF" for c in key):
+            raise RenameError(f"known-runtimes: key {key!r} is not {SHA256_HEX_DIGITS} hex digits")
+        if (not isinstance(value, list) or len(value) != 2
+                or any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in value)):
+            raise RenameError(f"known-runtimes: {key} must map to [ascii count, utf16le count], two non-negative integers")
+        table[key.lower()] = (value[0], value[1])
+    return merged_runtimes(table)
+
+
+def _runtime_expected(data: bytes, old: str, new: str, renamed: bool, known: dict) -> tuple:
+    """The (ASCII, UTF-16LE) count of `old` that the runtime in `data` must hold. A runtime in `known` has its table count
+    (an already-renamed input is looked up as it was before the rename, `new` put back to `old`); any other holds none."""
     candidates = [data] + ([data.replace(new.encode("ascii"), old.encode("ascii"))] if renamed else [])
     for candidate in candidates:
-        if _sha(candidate) in KNOWN_RUNTIMES:
-            return KNOWN_RUNTIMES[_sha(candidate)]
-    if renamed or found in RUNTIME_COUNTS:
-        return (0, 0) if renamed else found
-    raise RenameError(f"{RUNTIME_ENTRY} (sha256 {_sha(data)}) holds the source package string ascii/utf16le {found}, expected "
-                      f"one of {RUNTIME_COUNTS}; nothing written")
+        if _sha(candidate) in known:
+            return known[_sha(candidate)]
+    return (0, 0)
 
 
-def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT_TO, label: str | None = None) -> dict:
+def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT_TO, label: str | None = None,
+               known_runtimes: dict | None = None) -> dict:
     """Write `dst` from `src`; returns the record the CLI logs. RenameError (nothing written) unless every rule in the
-    module docstring holds. A `label` also sets the manifest's launcher label (see LABEL in the module docstring)."""
+    module docstring holds. A `label` also sets the manifest's launcher label (see LABEL in the module docstring).
+    `known_runtimes` extends the built-in KNOWN_RUNTIMES (None: the built-in table; see KNOWN RUNTIMES)."""
     _check_names(old, new)
+    known = merged_runtimes(known_runtimes)
     if src.resolve() == dst.resolve():
         raise RenameError("the output is the input file: the tool never edits an APK in place")
     found: dict = {}          # entry -> (ascii, utf16) of `old`, for every non-META-INF entry that has a hit
@@ -214,7 +254,7 @@ def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT
         missing = [n for n in (*EXPECTED, RUNTIME_ENTRY) if n not in names]
         if missing:
             raise RenameError(f"the APK has no entry {', '.join(missing)}")
-        expected_all = {**EXPECTED, RUNTIME_ENTRY: _runtime_expected(runtime, found.get(RUNTIME_ENTRY, (0, 0)), old, new, renamed=not found)}
+        expected_all = {**EXPECTED, RUNTIME_ENTRY: _runtime_expected(runtime, old, new, not found, known)}
         record = {"tag": TAG, "apk": src.name, "out": dst.name, "from": old, "to": new,
                   "dropped_meta_inf": sum(1 for n in names if _in_meta_inf(n))}
         unnamed = {n: c for n, c in found.items() if n not in expected_all}
@@ -277,9 +317,12 @@ def main(argv=None) -> int:
     rename.add_argument("--from", dest="old", default=DEFAULT_FROM)
     rename.add_argument("--to", dest="new", default=DEFAULT_TO)
     rename.add_argument("--label", default=None, help="also set the manifest's launcher label to this text (in place, no longer than the old one)")
+    rename.add_argument("--known-runtimes", type=Path, default=None, dest="known_runtimes",
+                        help="JSON file naming more reference runtimes, sha-256 -> [ascii, utf16le]; extends the built-in table")
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(rename_apk(args.apk, args.out, args.old, args.new, args.label)))
+        known = load_known_runtimes(args.known_runtimes) if args.known_runtimes else None
+        print(json.dumps(rename_apk(args.apk, args.out, args.old, args.new, args.label, known)))
         return 0
     except (OSError, zipfile.BadZipFile, RenameError) as error:
         print(json.dumps({"tag": TAG, "event": "package_rename_refused", "apk": args.apk.name, "reason": str(error)}),

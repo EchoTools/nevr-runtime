@@ -199,7 +199,7 @@ android-repack-libovr src:
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
 
 # The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
-# to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so, and in libvrapi.so 0 or 1 by the reference runtime it carries; counts asserted, META-INF dropped),
+# to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so, and in libvrapi.so 0 or 1 by the reference runtime it carries (a runtime the tool's table does not name must hold 0); counts asserted, META-INF dropped),
 # then `just android-repack-apk <out>` repacks it. The output also carries the launcher label `label` (default "Echo VR"; the reference build
 # reads "Echo Combat (port)"), set in place in the manifest by tools/quest_apk_label.py through the rename tool's --label, so a `label` longer
 # than the reference's is a refusal. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.

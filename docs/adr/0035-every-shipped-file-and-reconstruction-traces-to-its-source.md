@@ -23,7 +23,7 @@ a recipe here first:
   signed copy against the pin tool's output (`tools/quest_repack_libs.py`).
 - `libassetpatch.so`: the package rename rewrites two strings in it, as it rewrites five in the reference `libr15.so`, one in
   the manifest and, by the reference runtime the base carries (`KNOWN_RUNTIMES`), none or one in `libvrapi.so`
-  (`tools/quest_apk_rename_package.py`).
+  (a runtime the table does not name must hold none; `tools/quest_apk_rename_package.py`).
 - `libr15.so`: the reference build's own byte-patched file, renamed and then accepted by its sha256
   (`kLibR15ReferenceSha256` in `src/quest/patch/libr15_patch_table.h`), goes through this repo's patcher (ADR 0021).
 
