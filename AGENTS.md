@@ -428,7 +428,7 @@ a file it names.
 Every branch an agent creates has a documented deletion point from the moment it exists. A landed branch is scratch: `main` keeps the commits, so never keep one "for reference".
 
 - **One branch per unit of work.** Name it `<seat>/<issue>-<slug>`.
-- **Create:** `git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
+- **Create:** `git fetch origin main && git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`, fetch first, every time: a worktree made from an unfetched `origin/main` starts from wherever the last fetch left it, hours behind. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
 - **Declare the end:** `git worktree lock --reason "<seat>: delete when it lands on main or is abandoned" .claude/worktrees/<branch>`.
 - **The branch stays local.** Commits in a worktree survive a dead session (rule 5), and a branch on origin could not be rebased at landing. The one push is `main` ("Landing"); a contributor without push access pushes to their fork instead ("For contributors").
 - **On landing or abandoning:** the seat that created the branch removes its worktree and deletes the branch in the same turn. `tools/reap_merged.py` is a backstop, not the plan.
