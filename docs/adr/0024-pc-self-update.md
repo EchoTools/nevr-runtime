@@ -147,8 +147,8 @@ operator can run it without the game. The core is linked into `nevr-runtime.dll`
 extra DLL for the plugin gate to verify. The runtime owns `staged.json` because the Authenticode check sits between the
 core's work and the publish, which takes the lock.
 
-**As built, the worker (#1200).** The runtime's half is `src/runtime/lifecycle/update_policy.cpp` (the decisions, pure),
-`src/runtime/lifecycle/update_run.cpp` (the check and the confirmation, with every dependency passed in; every file operation on `update\` goes through `nevr_update::UpdateFs`, `src/core/update/fs.h`, whose Win32 implementation is `src/runtime/lifecycle/update_fs_win32.cpp`), `src/runtime/lifecycle/update_worker.cpp` (the threads) and
+**As built, the worker (#1200).** The runtime's half is `src/core/update/policy.cpp` (the decisions, pure),
+`src/core/update/engine_check.cpp` (the check and the confirmation, with every dependency passed in; every file operation on `update\` goes through `nevr_update::UpdateFs`, `src/core/update/fs.h`, whose Win32 implementation is `src/runtime/lifecycle/update_fs_win32.cpp`), `src/core/update/worker.cpp` (the threads) and
 `src/runtime/lifecycle/update_process.cpp` (the binding to the core, the verifier, the log and the process); the names and the digest are the host's
 units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
 
@@ -411,7 +411,7 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   rewrites it. Q3: a root runtime with no `NEVR-BUILD` version blocks the swap (section 4, item 9). Q4: a rollback
   deferred because the runtime is in use increments nothing. Q5: a start that "stops" stops the game (`update_blocked`).
 
-**As built, the confirmation (#1200).** `UpdateConfirm` (`src/runtime/lifecycle/update_run.cpp`) reads `update\pending.json` (at most 64 KiB, the
+**As built, the confirmation (#1200).** `UpdateConfirm` (`src/core/update/engine_check.cpp`) reads `update\pending.json` (at most 64 KiB, the
 host's cap): absent is `update confirm skipped reason=no_pending` and creates nothing. A record whose `to.sha256` is not the
 sha256 of the file this process loaded is `not_the_pending_release`. Otherwise it takes the lock (5 s), reads the record again,
 reads `state.json` (absent is `{}`; one that is not an object, or cannot be read, is `state_unreadable` and is not written over),

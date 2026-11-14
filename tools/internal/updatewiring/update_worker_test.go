@@ -84,8 +84,9 @@ var jobFiles = []string{
 	"src/runtime/lifecycle/update_run.cpp",
 	"src/runtime/lifecycle/update_fs_win32.cpp",
 	"src/core/update/fs_posix.cpp",
-	"src/runtime/lifecycle/update_worker.cpp",
-	"src/runtime/lifecycle/update_policy.cpp",
+	"src/core/update/engine_check.cpp",
+	"src/core/update/worker.cpp",
+	"src/core/update/policy.cpp",
 }
 
 func TestTheJobsNameNoFolderOfTheirOwn(t *testing.T) {
@@ -101,10 +102,10 @@ func TestTheJobsNameNoFolderOfTheirOwn(t *testing.T) {
 }
 
 func TestEveryPathInTheJobsIsComposedFromTheRoot(t *testing.T) {
-	src := code(t, "src/runtime/lifecycle/update_run.cpp")
-	if !strings.Contains(src, `std::string Update() const { return Join(root, names::kUpdateDir); }`) {
-		t.Error("update_run.cpp: Paths::Update is no longer the root plus the update folder's name")
+	if !strings.Contains(code(t, "src/core/update/engine_check.cpp"), `std::string Update() const { return Join(root, names::kUpdateDir); }`) {
+		t.Error("engine_check.cpp: Paths::Update is no longer the root plus the update folder's name")
 	}
+	src := code(t, "src/runtime/lifecycle/update_run.cpp")
 	allowed := map[string]bool{`\\`: true, `\\*`: true, `.`: true, `..`: true, `.tmp-`: true}
 	for _, m := range regexp.MustCompile(`L"([^"]*)"`).FindAllStringSubmatch(src, -1) {
 		if !allowed[m[1]] {
@@ -145,18 +146,18 @@ func TestTheOneSourceOfTheRootIsTheNevrRoot(t *testing.T) {
 	if n := strings.Count(src, "nevr_root::RootW()"); n != 1 {
 		t.Errorf("update_process.cpp reads the nevr root %d times, want 1", n)
 	}
-	mustMatch(t, `deps\.root\s*=\s*nevr_root::RootW\(\);`, src, "update_process.cpp")
-	if !strings.Contains(src, "deps.switches.no_root = deps.root.empty();") {
+	mustMatch(t, `deps\.root_unconvertible\s*=\s*!RootToUtf8\(nevr_root::RootW\(\),\s*&deps\.root\);`, src, "update_process.cpp")
+	if !strings.Contains(src, "deps.switches.no_root = deps.root.empty() && !deps.root_unconvertible;") {
 		t.Error("update_process.cpp: no %LOCALAPPDATA% must stop the worker (switches.no_root)")
 	}
-	if !strings.Contains(code(t, "src/runtime/lifecycle/update_worker.cpp"), "if (s.deps.root.empty()) switches.no_root = true;") {
+	if !strings.Contains(code(t, "src/core/update/worker.cpp"), "if (s.deps.root.empty() && !s.deps.root_unconvertible) switches.no_root = true;") {
 		t.Error("update_worker.cpp: an empty root must stop the worker even when the caller forgot to say so")
 	}
 }
 
 func TestTheCoreIsGivenTheNevrRootAndNothingElse(t *testing.T) {
-	src := code(t, "src/runtime/lifecycle/update_run.cpp")
-	mustMatch(t, `json config = \{\{"platform", "pc"\}, \{"nevr_root", root_utf8\}\};`, src, "update_run.cpp")
+	src := code(t, "src/core/update/engine_check.cpp")
+	mustMatch(t, `json config = \{\{"platform", env\.platform\}, \{"nevr_root", env\.root\}\};`, src, "engine_check.cpp")
 	if regexp.MustCompile(`config\["(root|log|work|state)"\]`).MatchString(src) {
 		t.Error("update_run.cpp sets one of the core's other folders; they are derived from nevr_root")
 	}
@@ -226,7 +227,7 @@ func TestTheTwoConfigKeysAreReadThroughTheAccessorsAndDocumented(t *testing.T) {
 // ---- the confirmation outlives the off switches ----
 
 func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {
-	b := body(t, "src/runtime/lifecycle/update_worker.cpp", "Disabled Worker::Start()")
+	b := body(t, "src/core/update/worker.cpp", "Disabled Worker::Start()")
 	mustMatch(t, `const bool can_confirm = s\.decision != Disabled::kDevBuild && s\.decision != Disabled::kNoRoot && s\.decision != Disabled::kHostCannotSwap;`, b, "update_worker.cpp")
 	for _, off := range []string{"kFlag", "kConfig"} {
 		if strings.Contains(b, off) {
@@ -236,7 +237,7 @@ func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {
 }
 
 func TestTheDecisionOrderIsDevFlagConfigHost(t *testing.T) {
-	b := body(t, "src/runtime/lifecycle/update_policy.cpp", "Disabled Decide(")
+	b := body(t, "src/core/update/policy.cpp", "Disabled Decide(")
 	last := -1
 	for _, w := range []string{"s.dev_build", "s.no_root", "s.flag_no_update", "s.config_enabled", "s.host_can_swap"} {
 		at := strings.Index(b, w)
@@ -272,7 +273,7 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		}
 	}
 	just := read(t, "justfile")
-	for _, want := range []string{"--target test_update_worker --target test_update_fs_win32 --target test_update_core_link", "for name in test_update_worker test_update_fs_win32 test_update_core_link; do"} {
+	for _, want := range []string{"--target test_update_worker --target test_update_fs_win32 --target test_update_core_link", "for name in test_update_worker test_update_fs_win32 test_update_core_link test_engine_pending; do"} {
 		if !strings.Contains(just, want) {
 			t.Errorf("justfile: no %q", want)
 		}
@@ -304,8 +305,8 @@ func TestAVersionRunLinksTheLibraryTheCoreLibraryJobBuilt(t *testing.T) {
 
 // F5 (ADR 0024): a release the verifier refused is recorded by the core, so the next launch does not fetch it again.
 func TestARefusedReleaseIsRecordedByTheCore(t *testing.T) {
-	run := code(t, "src/runtime/lifecycle/update_run.cpp")
-	mustMatch(t, `env\.core\.discard\s*&&\s*env\.core\.discard\(root_utf8, staged\.version, runtime_sha, "verify_failed"`, run, "update_run.cpp")
+	run := code(t, "src/core/update/engine_check.cpp")
+	mustMatch(t, `env\.core\.discard\s*&&\s*env\.core\.discard\(env\.root, staged\.version, runtime_sha, "verify_failed"`, run, "engine_check.cpp")
 	before(t, run, "env.core.discard", "run.Finish(\"unchanged\", \"verify_failed\")", "the discard is recorded while the core session is still open")
 	proc := code(t, "src/runtime/lifecycle/update_process.cpp")
 	mustMatch(t, `NevrPcDiscard\(\*session,`, proc, "update_process.cpp")

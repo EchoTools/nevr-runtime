@@ -1,7 +1,7 @@
 #pragma once
 
-// The runtime's half of PC self-update, the decisions (docs/adr/0024-pc-self-update.md, sections 3, 6 and 8). Pure: no
-// I/O, no windows.h, so a test drives every branch. The worker that acts on them is update_worker.h.
+// The runtime's half of self-update, the decisions (docs/adr/0024-pc-self-update.md, sections 3, 6 and 8). Pure: no
+// I/O, no windows.h, so a test drives every branch. The worker that acts on them is core/update/worker.h.
 //
 //   Decide        update.enabled / -no-update / a dev build / a host that cannot swap  ->  why no check runs
 //   ResolveChannel  update.channel in config.yaml, else the installer's channel in update\state.json, else the core's default

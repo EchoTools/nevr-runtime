@@ -1,10 +1,11 @@
 // The process's update worker: the real core, the real verifier, the real log, the real clock (docs/adr/0024-pc-self-update.md,
-// sections 3 and 6). The decisions and the two jobs are update_policy.cpp and update_run.cpp, which a test drives against a fake core;
-// this file only binds them to the process.
+// sections 3 and 6). The decisions, the two jobs and the worker are core/update (policy.cpp, engine_check.cpp, worker.cpp), which a test
+// drives against a fake core; this file only binds them to the process.
 
 #include <windows.h>
 
 #include <atomic>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/host/file_digest.h"
 #include "runtime/lifecycle/service_config.h"
+#include "runtime/lifecycle/update_fs_win32.h"
+#include "runtime/lifecycle/update_run.h"
 #include "runtime/lifecycle/update_worker.h"
 
 namespace nevr_update {
@@ -162,15 +165,26 @@ void StartProcessWorker(bool host_can_swap, bool flag_no_update, bool server) {
   deps.switches.host_can_swap = host_can_swap;
   if (const char* channel = NevrCfgUpdateChannel()) deps.config_channel = channel;
   deps.server = server;
-  deps.root = nevr_root::RootW();
+  deps.platform = "pc";  // the core's platform word (ADR 0024, section 3)
+  // The root's text as UTF-8, which the engine takes. A root that does not convert is not "no root": the check and the confirmation
+  // run and fail closed, reading nothing. Out of memory while the root is read or converted is taken the same way: nothing is read
+  // from the root, staged or confirmed. The check then ends with the reason root_unconvertible, and the confirmation with
+  // pending_unreadable.
+  try {
+    deps.root_unconvertible = !RootToUtf8(nevr_root::RootW(), &deps.root);
+  } catch (const std::bad_alloc&) {
+    deps.root.clear();
+    deps.root_unconvertible = true;
+  }
+  deps.fs = &Win32UpdateFs();
   deps.read_running = &ReadRunningRuntime;
   deps.core = MakeFfiCore();
-  deps.verify = &VerifyStaged;
+  deps.verify = WidenVerifier(&VerifyStaged);
   deps.log = [](int level, const std::string& line) {
     Log(static_cast<EchoVR::LogLevel>(EchoLevelBits(level)), "%s", line.c_str());
   };
   deps.now_ms = [] { return static_cast<std::uint64_t>(GetTickCount64()); };
-  deps.switches.no_root = deps.root.empty();  // the worker says so and starts no thread: nothing is staged or confirmed without a root
+  deps.switches.no_root = deps.root.empty() && !deps.root_unconvertible;  // the worker says so and starts no thread: nothing is staged or confirmed without a root
   Worker* worker = new Worker(std::move(deps));  // NOLINT: never destroyed, see g_worker_for_frames
   worker->Start();
   g_worker_for_frames.store(worker, std::memory_order_release);

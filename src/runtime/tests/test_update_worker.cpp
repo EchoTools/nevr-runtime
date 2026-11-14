@@ -1,33 +1,52 @@
-// The runtime's half of PC self-update (docs/adr/0024-pc-self-update.md, sections 3, 6 and 8; #1200 work item 5).
+// The runtime's half of self-update (docs/adr/0024-pc-self-update.md, sections 3, 6 and 8; #1200 work item 5), on the shared engine
+// (core/update: policy, engine_check, worker).
 //
-// What is driven for real: the decisions (update_policy), the check and the confirmation (update_run: real files in a
-// temp nevr root, the real update\lock), and the worker's threads (update_worker). What is faked: the core (its C ABI is
-// the `Core` struct), the Authenticode verifier and the clock. #1200's falsifier lines this item owns:
+// What is driven for real: the decisions (policy), the check and the confirmation (engine_check: real files in a temp nevr root, the
+// real update\lock through the platform's UpdateFs), and the worker's threads (worker). What is faked: the core (its C ABI is the
+// `Core` struct), the verifier and the clock. #1200's falsifier lines this item owns:
 //   * a staged file that fails its signature is loaded                  -> VerifyFailureStagesNothing, a file the verifier refuses is never published
 //   * a download cut off at any byte is installed                       -> CutOffDownloadPublishesNothing (the core's failure publishes nothing)
 //   * a run writes a file under the game folder                         -> every test lists the root after the run: only the update folder
 // and ADR 0024's "Tests, failing first", item 3 (the worker is not started for a dev build, with the flag, with the config key
 // off, or without the host capability; UpdateConfirm confirms the matching sha256 only and only after 10 s of frames).
 // Every decision is one line, and every test asserts the line (the house logging rule).
+//
+// One source for two hosts: PC (the Win32 fs and folders, under Wine) and the Linux host (the POSIX fs, core/update/fs_posix.h).
+// The Win32 folder, the wide conversions and the PC edge tests (the wide root and the wide verifier path) are under
+// #if defined(_WIN32); every other test is the same on both hosts.
 
 #include <gtest/gtest.h>
 
-#include <windows.h>
-
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+
+#include "runtime/lifecycle/update_fs_win32.h"
+#include "runtime/lifecycle/update_run.h"
+#else
+#include <unistd.h>
+
+#include <filesystem>
+#endif
+
 #include <nlohmann/json.hpp>
 
-#include "runtime/lifecycle/update_policy.h"
-#include "runtime/lifecycle/update_run.h"
-#include "runtime/lifecycle/update_worker.h"
+#include "core/update/engine_check.h"
+#include "core/update/fs.h"
+#include "core/update/policy.h"
+#include "core/update/worker.h"
 
 using nlohmann::json;
 using namespace nevr_update;
@@ -40,84 +59,177 @@ constexpr char kPluginBytes[] = "PLUGIN";
 constexpr std::size_t kStagedFilesWithAPlugin = 2;  // nevr-runtime.dll and plugins/a.dll
 constexpr char kNewSha[] = "2222222222222222222222222222222222222222222222222222222222222222";
 
-// A nevr root in a temp folder, removed with the fixture.
+// ---- the platform seams ------------------------------------------------------------------------------------------------------
+
+// The fs under test: the Win32 one on PC, the POSIX one on the Linux host.
+const UpdateFs& TestFs() noexcept {
+#if defined(_WIN32)
+  return Win32UpdateFs();
+#else
+  // Every test root is a folder of the system's temporary directory (class Root), so one POSIX fs rooted there reaches all of them.
+  static const std::unique_ptr<UpdateFs> posix = MakePosixUpdateFs(std::filesystem::temp_directory_path().string());
+  return *posix;
+#endif
+}
+
+#if defined(_WIN32)
+constexpr char kSeparator = '\\';
+std::wstring WideOf(const std::string& utf8) {
+  std::wstring out;
+  Utf8ToWide(utf8, &out);  // the test's paths are UTF-8 and convert strictly
+  return out;
+}
+// Every folder above a file, made once each. The first three characters are the drive ("C:\").
+void MakeDirsOfWide(const std::wstring& file) {
+  for (std::size_t i = 3; i < file.size(); ++i) {
+    if (file[i] == L'\\') CreateDirectoryW(file.substr(0, i).c_str(), nullptr);
+  }
+}
+void RemoveTreeWide(const std::wstring& dir) {
+  WIN32_FIND_DATAW f;
+  HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+  if (h != INVALID_HANDLE_VALUE) {
+    do {
+      const std::wstring name = f.cFileName;
+      if (name == L"." || name == L"..") continue;
+      const std::wstring p = dir + L"\\" + name;
+      if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        RemoveTreeWide(p);
+      } else {
+        SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
+        DeleteFileW(p.c_str());
+      }
+    } while (FindNextFileW(h, &f));
+    FindClose(h);
+  }
+  RemoveDirectoryW(dir.c_str());
+}
+void WalkWide(const std::wstring& base, const std::wstring& rel, std::vector<std::string>* out) {
+  WIN32_FIND_DATAW f;
+  HANDLE h = FindFirstFileW((base + (rel.empty() ? L"" : L"\\" + rel) + L"\\*").c_str(), &f);
+  if (h == INVALID_HANDLE_VALUE) return;
+  do {
+    const std::wstring name = f.cFileName;
+    if (name == L"." || name == L"..") continue;
+    const std::wstring r = rel.empty() ? name : rel + L"\\" + name;
+    std::string narrow(r.begin(), r.end());
+    std::replace(narrow.begin(), narrow.end(), '\\', '/');
+    out->push_back(narrow);
+    if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) WalkWide(base, r, out);
+  } while (FindNextFileW(h, &f));
+  FindClose(h);
+}
+std::string ReadAllFile(const std::string& path) {
+  std::ifstream in(WideOf(path).c_str(), std::ios::binary);
+  std::stringstream s;
+  s << in.rdbuf();
+  return s.str();
+}
+#else
+constexpr char kSeparator = '/';
+std::string ReadAllFile(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  std::stringstream s;
+  s << in.rdbuf();
+  return s.str();
+}
+#endif
+
+// A relative path in these tests is written with backslashes, as a Windows path; this is the platform's spelling of it.
+std::string Native(std::string rel) {
+#if defined(_WIN32)
+  return rel;
+#else
+  std::replace(rel.begin(), rel.end(), '\\', '/');
+  return rel;
+#endif
+}
+
+// A nevr root in a temp folder, removed with the fixture. Paths are UTF-8.
 class Root {
  public:
-  explicit Root(const std::wstring& suffix = L"") {
+  explicit Root(const char* suffix = "") {
+    static std::atomic<int> n{0};
+#if defined(_WIN32)
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
-    static std::atomic<int> n{0};
-    path_ = std::wstring(temp) + L"nevr-update-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-            std::to_wstring(n.fetch_add(1)) + suffix;
-    CreateDirectoryW(path_.c_str(), nullptr);
+    std::string temp_utf8;
+    RootToUtf8(temp, &temp_utf8);
+    path_ = temp_utf8 + "nevr-update-test-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(n.fetch_add(1)) + suffix;
+    CreateDirectoryW(WideOf(path_).c_str(), nullptr);
+#else
+    path_ = (std::filesystem::temp_directory_path() /
+             ("nevr-update-test-" + std::to_string(::getpid()) + "-" + std::to_string(n.fetch_add(1)) + suffix))
+                .string();
+    std::filesystem::create_directories(path_);
+#endif
   }
-  ~Root() { Remove(path_); }
-  const std::wstring& path() const { return path_; }
-  std::wstring File(const std::wstring& rel) const { return path_ + L"\\" + rel; }
-  void Write(const std::wstring& rel, const std::string& text) const {
-    const std::wstring full = File(rel);
-    MakeDirs(full);
-    std::ofstream out(full.c_str(), std::ios::binary | std::ios::trunc);
+  ~Root() {
+#if defined(_WIN32)
+    RemoveTreeWide(WideOf(path_));
+#else
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+#endif
+  }
+  Root(const Root&) = delete;
+  Root& operator=(const Root&) = delete;
+
+  const std::string& path() const { return path_; }
+  /// A path under the root; `rel` is written with backslashes.
+  std::string File(const std::string& rel) const { return path_ + kSeparator + Native(rel); }
+  void Write(const std::string& rel, const std::string& text) const {
+    const std::string full = File(rel);
+#if defined(_WIN32)
+    const std::wstring wide = WideOf(full);
+    MakeDirsOfWide(wide);
+    std::ofstream out(wide.c_str(), std::ios::binary | std::ios::trunc);
+#else
+    std::filesystem::create_directories(std::filesystem::path(full).parent_path());
+    std::ofstream out(full, std::ios::binary | std::ios::trunc);
+#endif
     out << text;
   }
-  std::string Read(const std::wstring& rel) const {
-    const std::wstring full = File(rel);
-    std::ifstream in(full.c_str(), std::ios::binary);
-    std::stringstream s;
-    s << in.rdbuf();
-    return s.str();
+  std::string Read(const std::string& rel) const { return ReadAllFile(File(rel)); }
+  void MakeDir(const std::string& rel) const {
+#if defined(_WIN32)
+    CreateDirectoryW(WideOf(File(rel)).c_str(), nullptr);
+#else
+    std::filesystem::create_directories(File(rel));
+#endif
   }
-  bool Exists(const std::wstring& rel) const { return GetFileAttributesW(File(rel).c_str()) != INVALID_FILE_ATTRIBUTES; }
-  /// Every file and folder under the root, as a path relative to it, with forward slashes.
+  bool Exists(const std::string& rel) const {
+#if defined(_WIN32)
+    return GetFileAttributesW(WideOf(File(rel)).c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
+    return std::filesystem::exists(File(rel));
+#endif
+  }
+  /// Every file and folder under the root, as a path relative to it, with forward slashes, sorted.
   std::vector<std::string> List() const {
     std::vector<std::string> out;
-    Walk(path_, L"", &out);
+#if defined(_WIN32)
+    WalkWide(WideOf(path_), L"", &out);
+#else
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(path_)) {
+      out.push_back(std::filesystem::relative(entry.path(), path_).string());
+    }
+#endif
     std::sort(out.begin(), out.end());
     return out;
   }
 
  private:
-  static void MakeDirs(const std::wstring& file) {
-    for (std::size_t i = 3; i < file.size(); ++i) {
-      if (file[i] == L'\\') CreateDirectoryW(file.substr(0, i).c_str(), nullptr);
-    }
-  }
-  static void Walk(const std::wstring& base, const std::wstring& rel, std::vector<std::string>* out) {
-    WIN32_FIND_DATAW f;
-    HANDLE h = FindFirstFileW((base + (rel.empty() ? L"" : L"\\" + rel) + L"\\*").c_str(), &f);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
-      const std::wstring name = f.cFileName;
-      if (name == L"." || name == L"..") continue;
-      const std::wstring r = rel.empty() ? name : rel + L"\\" + name;
-      std::string narrow(r.begin(), r.end());
-      std::replace(narrow.begin(), narrow.end(), '\\', '/');
-      out->push_back(narrow);
-      if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) Walk(base, r, out);
-    } while (FindNextFileW(h, &f));
-    FindClose(h);
-  }
-  static void Remove(const std::wstring& dir) {
-    WIN32_FIND_DATAW f;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
-    if (h != INVALID_HANDLE_VALUE) {
-      do {
-        const std::wstring name = f.cFileName;
-        if (name == L"." || name == L"..") continue;
-        const std::wstring p = dir + L"\\" + name;
-        if (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-          Remove(p);
-        } else {
-          SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-          DeleteFileW(p.c_str());
-        }
-      } while (FindNextFileW(h, &f));
-      FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
-  }
-  std::wstring path_;
+  std::string path_;
 };
+
+// The lock is released: the same folder's lock is taken again. (Whether the lock file remains is the implementation's: Win32 deletes
+// it with the last handle, POSIX keeps it; the proof is that the next holder gets it.)
+void ExpectLockFree(const Root& root) {
+  int err = 0;
+  const std::unique_ptr<FsLock> again = TestFs().TakeLock(root.File("update"), 0, kHolderStepMs, &err);
+  EXPECT_NE(again, nullptr) << "the lock is released (error " << err << ")";
+}
 
 struct Lines {
   std::vector<std::string> all;
@@ -201,10 +313,10 @@ struct FakeCore {
       }
       json files = json::array();
       if (action == "staged") {
-        root->Write(L"update\\staging\\" + std::wstring(version.begin(), version.end()) + L"\\nevr-runtime.dll", runtime_bytes);
+        root->Write("update\\staging\\" + version + "\\nevr-runtime.dll", runtime_bytes);
         files.push_back({{"path", "nevr-runtime.dll"}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
         if (with_plugin) {
-          root->Write(L"update\\staging\\" + std::wstring(version.begin(), version.end()) + L"\\plugins\\a.dll", kPluginBytes);
+          root->Write("update\\staging\\" + version + "\\plugins\\a.dll", kPluginBytes);
           files.push_back({{"path", "plugins/a.dll"}, {"size", sizeof(kPluginBytes) - 1}, {"sha256", kOldSha}});
         }
       }
@@ -233,16 +345,16 @@ CheckEnv MakeEnv(const Root& root, FakeCore& core, Lines& lines) {
   core.root = &root;
   CheckEnv env;
   env.root = root.path();
+  env.platform = "pc";
   env.version = "5.16.1";
   env.runtime_sha256 = kOldSha;
   env.core = core.Make();
-  env.verify = [](const std::wstring& path) {
-    std::ifstream in(path.c_str(), std::ios::binary);
-    std::stringstream s;
-    s << in.rdbuf();
+  env.fs = &TestFs();
+  env.verify = [](const std::string& path) {
+    const std::string text = ReadAllFile(path);
     VerifyOutcome v;
-    v.ok = s.str().find("BAD") == std::string::npos;
-    v.refused = !v.ok && s.str().find("UNREADABLE") == std::string::npos;  // a file the verifier could not read is not a refusal
+    v.ok = text.find("BAD") == std::string::npos;
+    v.refused = !v.ok && text.find("UNREADABLE") == std::string::npos;  // a file the verifier could not read is not a refusal
     v.reason = v.ok ? "accepted" : "Unsigned: no embedded signature";
     return v;
   };
@@ -408,44 +520,67 @@ TEST(UpdateCheck, EachStagedFileIsVerifiedAtItsPathInTheReleasesFolder) {
   FakeCore core;
   core.with_plugin = true;
   CheckEnv env = MakeEnv(root, core, lines);
-  std::vector<std::wstring> seen;
+  std::vector<std::string> seen;
   const auto inner = env.verify;
-  env.verify = [&seen, inner](const std::wstring& path) {
+  env.verify = [&seen, inner](const std::string& path) {
     seen.push_back(path);
     return inner(path);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
-  const std::wstring folder = root.File(L"update\\staging\\5.99.0");
   ASSERT_EQ(seen.size(), kStagedFilesWithAPlugin);
-  EXPECT_EQ(seen[0], folder + L"\\nevr-runtime.dll");
-  EXPECT_EQ(seen[1], folder + L"\\plugins\\a.dll") << "a plugin's member path has a slash in the files and a backslash on Windows";
+  EXPECT_EQ(seen[0], root.File("update\\staging\\5.99.0\\nevr-runtime.dll"));
+  EXPECT_EQ(seen[1], root.File("update\\staging\\5.99.0\\plugins\\a.dll")) << "a plugin's member path has a separator of its own";
 }
 
 namespace {
-// The Win32 fs with every call written down, so a test sees which operations the engine asked for and in what order.
+// The fs with every call written down, so a test sees which operations the engine asked for and in what order. The spelling in
+// `calls` is always backslashes, whatever the platform's separator is.
 class RecordingFs final : public UpdateFs {
  public:
   explicit RecordingFs(std::string root) : root_(std::move(root)) {}
   mutable std::vector<std::string> calls;
   std::vector<std::string> links;  // paths (relative to the root, as `calls` spells them) that IsLink answers true for
-  char Separator() const noexcept override { return Win32UpdateFs().Separator(); }
-  ReadResult ReadSmallFile(const std::string& p, std::string* out) const noexcept override { Note("ReadSmallFile", p); return Win32UpdateFs().ReadSmallFile(p, out); }
-  bool WriteByRename(const std::string& p, const std::string& t) const noexcept override { Note("WriteByRename", p); return Win32UpdateFs().WriteByRename(p, t); }
-  bool RemoveFile(const std::string& p) const noexcept override { Note("RemoveFile", p); return Win32UpdateFs().RemoveFile(p); }
-  void RemoveTree(const std::string& p) const noexcept override { Note("RemoveTree", p); Win32UpdateFs().RemoveTree(p); }
+  char Separator() const noexcept override { return TestFs().Separator(); }
+  ReadResult ReadSmallFile(const std::string& p, std::string* out) const noexcept override {
+    Note("ReadSmallFile", p);
+    return TestFs().ReadSmallFile(p, out);
+  }
+  bool WriteByRename(const std::string& p, const std::string& t) const noexcept override {
+    Note("WriteByRename", p);
+    return TestFs().WriteByRename(p, t);
+  }
+  bool RemoveFile(const std::string& p) const noexcept override {
+    Note("RemoveFile", p);
+    return TestFs().RemoveFile(p);
+  }
+  void RemoveTree(const std::string& p) const noexcept override {
+    Note("RemoveTree", p);
+    TestFs().RemoveTree(p);
+  }
   bool IsLink(const std::string& p) const noexcept override {
     Note("IsLink", p);
-    return std::find(links.begin(), links.end(), Relative(p)) != links.end() || Win32UpdateFs().IsLink(p);
+    return std::find(links.begin(), links.end(), Relative(p)) != links.end() || TestFs().IsLink(p);
   }
-  bool Exists(const std::string& p) const noexcept override { Note("Exists", p); return Win32UpdateFs().Exists(p); }
+  bool Exists(const std::string& p) const noexcept override {
+    Note("Exists", p);
+    return TestFs().Exists(p);
+  }
   std::unique_ptr<FsLock> TakeLock(const std::string& d, std::uint32_t t, std::uint32_t st, int* e) const noexcept override {
     Note("TakeLock", d);
-    return Win32UpdateFs().TakeLock(d, t, st, e);
+    return TestFs().TakeLock(d, t, st, e);
+  }
+  bool Move(const std::string& from, const std::string& to, int* e) const noexcept override {
+    Note("Move", from);
+    return TestFs().Move(from, to, e);
   }
 
  private:
-  std::string Relative(const std::string& path) const { return path.compare(0, root_.size(), root_) == 0 ? path.substr(root_.size()) : path; }
+  std::string Relative(const std::string& path) const {
+    std::string rel = path.compare(0, root_.size(), root_) == 0 ? path.substr(root_.size()) : path;
+    std::replace(rel.begin(), rel.end(), '/', '\\');
+    return rel;
+  }
   void Note(const char* op, const std::string& path) const { calls.push_back(std::string(op) + " " + Relative(path)); }
   std::string root_;
 };
@@ -456,11 +591,10 @@ TEST(UpdateCheck, TheCheckAsksTheFsForEachOperationInTheOrderOfTheAdr) {
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
-  const std::string root_utf8(root.path().begin(), root.path().end());  // the temp folder is ASCII
-  RecordingFs fs(root_utf8);
+  RecordingFs fs(root.path());
   env.fs = &fs;
   const auto inner = env.verify;
-  env.verify = [&fs, inner](const std::wstring& path) {
+  env.verify = [&fs, inner](const std::string& path) {
     fs.calls.push_back("verify");
     return inner(path);
   };
@@ -492,12 +626,12 @@ TEST(UpdateCheck, ALinkAtUpdateStagingOrTheReleasesFolderBlocksTheCheck) {
     Lines lines;
     FakeCore core;
     CheckEnv env = MakeEnv(root, core, lines);
-    RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+    RecordingFs fs(root.path());
     fs.links = {c.link};
     env.fs = &fs;
     int verified = 0;
     const auto inner = env.verify;
-    env.verify = [&verified, inner](const std::wstring& path) {
+    env.verify = [&verified, inner](const std::string& path) {
       ++verified;
       return inner(path);
     };
@@ -506,16 +640,17 @@ TEST(UpdateCheck, ALinkAtUpdateStagingOrTheReleasesFolderBlocksTheCheck) {
     EXPECT_EQ(out.reason, "reparse_point") << c.link;
     EXPECT_EQ(core.stage_calls, c.stage_calls) << c.link;
     EXPECT_EQ(verified, 0) << c.link;
-    EXPECT_FALSE(root.Exists(L"update\\staged.json")) << c.link << ": nothing is published through a link";
+    EXPECT_FALSE(root.Exists("update\\staged.json")) << c.link << ": nothing is published through a link";
   }
 }
 
-TEST(UpdateCheck, ARootThatIsNotUtf16TextReadsNothingAndEndsAsRootUnconvertible) {
+TEST(UpdateCheck, AnUnconvertibleRootReadsNothingAndEndsAsRootUnconvertible) {
   Lines lines;
   FakeCore core;
   Root root;
   CheckEnv env = MakeEnv(root, core, lines);
-  env.root = L"C:\\nevr-\xD800";  // a lone surrogate
+  env.root = "";
+  env.root_unconvertible = true;  // a root whose text does not convert to UTF-8 (a lone surrogate on PC)
   env.config_channel = "beta";
   RecordingFs fs("");
   env.fs = &fs;
@@ -525,7 +660,7 @@ TEST(UpdateCheck, ARootThatIsNotUtf16TextReadsNothingAndEndsAsRootUnconvertible)
   EXPECT_TRUE(fs.calls.empty()) << "nothing is read from a root that cannot be given to the fs";
   EXPECT_EQ(core.open_calls, 0);
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=root_unconvertible", "channel=beta", "channel_source=config"}), "") << lines.Dump();
-  env.root = L"";
+  env.root_unconvertible = false;
   EXPECT_EQ(RunCheck(env).reason, "root_unconvertible") << "no root at all ends the same way";
 }
 
@@ -537,13 +672,17 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   const CheckOutcome out = RunCheck(env);
 
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
-  ASSERT_TRUE(root.Exists(L"update\\staged.json"));
-  const json staged = json::parse(root.Read(L"update\\staged.json"));
+  ASSERT_TRUE(root.Exists("update\\staged.json"));
+  const json staged = json::parse(root.Read("update\\staged.json"));
   EXPECT_EQ(staged["version"], "5.99.0");
   EXPECT_EQ(staged["files"][0]["path"], "nevr-runtime.dll");
   EXPECT_EQ(staged["files"][0]["sha256"], kNewSha);
-  EXPECT_TRUE(root.Exists(L"update\\staging\\5.99.0\\nevr-runtime.dll")) << "the staged files stay for the host's swap";
-  EXPECT_FALSE(root.Exists(L"update\\lock")) << "the lock is released (delete on close)";
+  EXPECT_TRUE(root.Exists("update\\staging\\5.99.0\\nevr-runtime.dll")) << "the staged files stay for the host's swap";
+#if defined(_WIN32)
+  // Win32 deletes the lock file with its last handle (FILE_FLAG_DELETE_ON_CLOSE in update_fs_win32.cpp).
+  EXPECT_FALSE(root.Exists("update\\lock")) << "the lock is released (delete on close)";
+#endif
+  ExpectLockFree(root);
 
   EXPECT_NE(lines.Find("update verify", {"path=nevr-runtime.dll", "ok=true"}), "") << lines.Dump();
   EXPECT_NE(lines.Find("update published", {"version=5.99.0", "files=1"}), "") << lines.Dump();
@@ -552,7 +691,7 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   EXPECT_EQ(lines.LevelOf("update check", {"action=staged"}), kInfo);
   EXPECT_NE(lines.Find("update check", {"action=staged", "target=5.99.0", "current=5.16.1", "direction=upgrade",
                                         "channel_source=default"}), "") << lines.Dump();
-  EXPECT_NE(lines.Find("update check")  .find("elapsed_ms="), std::string::npos);
+  EXPECT_NE(lines.Find("update check").find("elapsed_ms="), std::string::npos);
   // The core was driven in order and its run was ended.
   EXPECT_EQ(core.open_calls, 1);
   EXPECT_EQ(core.manifest_calls, 1);
@@ -564,7 +703,7 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   EXPECT_EQ(cur["runtime_sha256"], kOldSha);
   const json cfg = json::parse(core.open_config);
   EXPECT_EQ(cfg["platform"], "pc");
-  EXPECT_EQ(cfg["nevr_root"], std::string(root.path().begin(), root.path().end())) << "an ASCII root reaches the core as it is";
+  EXPECT_EQ(cfg["nevr_root"], root.path()) << "an ASCII root reaches the core as it is";
   EXPECT_FALSE(cfg.contains("channel")) << "no channel anywhere: the core's default";
   // Nothing outside update\ and the core's own folders is written.
   for (const std::string& p : root.List()) {
@@ -573,7 +712,7 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
 }
 
 TEST(UpdateCheck, ARootWithANonAsciiLetterReachesTheCoreAsUtf8) {
-  Root root(L"-Zo\u00eb");  // a profile folder named for the player
+  Root root("-Zo\xC3\xAB");  // a profile folder named for the player
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
@@ -593,8 +732,8 @@ TEST(UpdateCheck, AFileTheVerifierRefusesIsNeverPublished) {
 
   EXPECT_EQ(out.action, CheckAction::kBlocked) << lines.Dump();
   EXPECT_EQ(out.reason, "verify_failed");
-  EXPECT_FALSE(root.Exists(L"update\\staged.json")) << "falsifier: a staged file that fails its signature must not be offered to the host";
-  EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "staging removed";
+  EXPECT_FALSE(root.Exists("update\\staged.json")) << "falsifier: a staged file that fails its signature must not be offered to the host";
+  EXPECT_FALSE(root.Exists("update\\staging\\5.99.0")) << "staging removed";
   EXPECT_NE(lines.Find("update verify", {"path=nevr-runtime.dll", "ok=false"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update verify", {"ok=false"}), kWarning);
   EXPECT_EQ(lines.LevelOf("update check", {"action=blocked"}), kInfo);
@@ -617,7 +756,7 @@ TEST(UpdateCheck, ACutOffDownloadPublishesNothing) {
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kFailed);
   EXPECT_EQ(out.reason, "stage_failed");
-  EXPECT_FALSE(root.Exists(L"update\\staged.json"));
+  EXPECT_FALSE(root.Exists("update\\staged.json"));
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=stage_failed"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update check", {"action=failed"}), kWarning);
   EXPECT_EQ(core.discard_calls, 0) << "a download that failed is not a refused release";
@@ -670,14 +809,14 @@ TEST(UpdateCheck, NoneAndBlockedFromTheCoreAreLoggedAndPublishNothing) {
     const CheckOutcome out = RunCheck(env);
     EXPECT_EQ(std::string(CheckActionWord(out.action)), action);
     EXPECT_EQ(out.reason, core.reason);
-    EXPECT_FALSE(root.Exists(L"update\\staged.json"));
+    EXPECT_FALSE(root.Exists("update\\staged.json"));
     EXPECT_NE(lines.Find("update check", {std::string("action=") + action, "reason=" + core.reason}), "") << lines.Dump();
   }
 }
 
 TEST(UpdateCheck, AReleaseWaitsWhileAnotherIsPendingAndNothingIsFetched) {
   Root root;
-  root.Write(L"update\\pending.json", R"({"to":{"version":"5.98.0","sha256":")" + std::string(kNewSha) + R"("},"from":null,"boot_attempts":1,"failed_reason":null})");
+  root.Write("update\\pending.json", R"({"to":{"version":"5.98.0","sha256":")" + std::string(kNewSha) + R"("},"from":null,"boot_attempts":1,"failed_reason":null})");
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
@@ -695,14 +834,14 @@ TEST(UpdateCheck, AResultThatArrivesAfterTheBudgetIsNotPublished) {
   CheckEnv env = MakeEnv(root, core, lines);
   auto clock = std::make_shared<std::uint64_t>(1000);
   env.now_ms = [clock] { return *clock; };
-  core.during_stage = [clock] { *clock += 121000; };
+  core.during_stage = [clock] { *clock += kCheckBudgetMs + 1000; };  // past the 120 s budget
   env.core = core.Make();
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kFailed);
   EXPECT_EQ(out.reason, "timeout");
-  EXPECT_FALSE(root.Exists(L"update\\staged.json")) << "bounded: 120 s for the whole stage";
+  EXPECT_FALSE(root.Exists("update\\staged.json")) << "bounded: 120 s for the whole stage";
   EXPECT_EQ(lines.Count("update verify"), 0) << "a late result is not even verified";
-  EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "what a late stage wrote is removed, not left on disk";
+  EXPECT_FALSE(root.Exists("update\\staging\\5.99.0")) << "what a late stage wrote is removed, not left on disk";
   EXPECT_EQ(core.discard_calls, 0) << "a late result is not a refused one";
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=timeout"}), "") << lines.Dump();
 }
@@ -715,14 +854,14 @@ TEST(UpdateCheck, AReleaseThatTurnsLateWhileItIsBeingVerifiedIsRemovedToo) {
   auto clock = std::make_shared<std::uint64_t>(1000);
   env.now_ms = [clock] { return *clock; };
   const auto verify = env.verify;
-  env.verify = [clock, verify](const std::wstring& path) {
-    *clock += 121000;  // the verification itself runs past the budget
+  env.verify = [clock, verify](const std::string& path) {
+    *clock += kCheckBudgetMs + 1000;  // the verification itself runs past the budget
     return verify(path);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.reason, "timeout");
-  EXPECT_FALSE(root.Exists(L"update\\staged.json"));
-  EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "staging removed on the second budget check as on the first";
+  EXPECT_FALSE(root.Exists("update\\staged.json"));
+  EXPECT_FALSE(root.Exists("update\\staging\\5.99.0")) << "staging removed on the second budget check as on the first";
   EXPECT_EQ(core.discard_calls, 0);
 }
 
@@ -735,7 +874,7 @@ TEST(UpdateCheck, AFileThatCouldNotBeReadIsNotDiscardedAndAFailedRecordIsAWarnin
     CheckEnv env = MakeEnv(root, core, lines);
     EXPECT_EQ(RunCheck(env).reason, "verify_failed");
     EXPECT_EQ(core.discard_calls, 0) << "a scanner's lock is not a verdict: the next launch tries again";
-    EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0"));
+    EXPECT_FALSE(root.Exists("update\\staging\\5.99.0"));
     EXPECT_EQ(lines.Count("update discard"), 0);
   }
   {
@@ -753,7 +892,7 @@ TEST(UpdateCheck, AFileThatCouldNotBeReadIsNotDiscardedAndAFailedRecordIsAWarnin
 
 TEST(UpdateCheck, TheChannelAndItsSourceReachTheCoreAndTheLine) {
   Root root;
-  root.Write(L"update\\state.json", R"({"channel":"stable","owned":[]})");
+  root.Write("update\\state.json", R"({"channel":"stable","owned":[]})");
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
@@ -772,7 +911,7 @@ TEST(UpdateCheck, TheChannelAndItsSourceReachTheCoreAndTheLine) {
 
 TEST(UpdateCheck, TheQuarantineInStateReachesTheCore) {
   Root root;
-  root.Write(L"update\\state.json", json{{"quarantine", json::array({{{"version", "5.99.0"}, {"runtime_sha256", kNewSha}}})}}.dump());
+  root.Write("update\\state.json", json{{"quarantine", json::array({{{"version", "5.99.0"}, {"runtime_sha256", kNewSha}}})}}.dump());
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
@@ -784,11 +923,9 @@ TEST(UpdateCheck, TheQuarantineInStateReachesTheCore) {
 
 TEST(UpdateCheck, TheLockHeldByAnotherProcessDefersThePublication) {
   Root root;
-  CreateDirectoryW(root.File(L"update").c_str(), nullptr);
+  root.MakeDir("update");
   int err = 0;
-  const std::wstring update_dir = root.File(L"update");
-  const std::string update_utf8(update_dir.begin(), update_dir.end());  // the temp folder is ASCII
-  const std::unique_ptr<FsLock> other = Win32UpdateFs().TakeLock(update_utf8, 0, kHolderStepMs, &err);
+  const std::unique_ptr<FsLock> other = TestFs().TakeLock(root.File("update"), 0, kHolderStepMs, &err);
   ASSERT_NE(other, nullptr) << err;
   Lines lines;
   FakeCore core;
@@ -797,7 +934,7 @@ TEST(UpdateCheck, TheLockHeldByAnotherProcessDefersThePublication) {
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kFailed);
   EXPECT_EQ(out.reason, "lock_unavailable");
-  EXPECT_FALSE(root.Exists(L"update\\staged.json"));
+  EXPECT_FALSE(root.Exists("update\\staged.json"));
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=lock_unavailable"}), "") << lines.Dump();
 }
 
@@ -812,34 +949,39 @@ std::string PendingJson(const char* version, const char* sha) {
 
 TEST(UpdateConfirm, TheMatchingReleaseIsConfirmedAndThePendingRecordGoes) {
   Root root;
-  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-  root.Write(L"update\\crashed", "");
-  root.Write(L"update\\state.json", R"({"channel":"beta","owned":[{"path":"nevr-runtime.dll","sha256":")" + std::string(kNewSha) + R"("}]})");
+  root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write("update\\crashed", "");
+  root.Write("update\\state.json", R"({"channel":"beta","owned":[{"path":"nevr-runtime.dll","sha256":")" + std::string(kNewSha) + R"("}]})");
   Lines lines;
   ConfirmEnv env;
   env.root = root.path();
   env.runtime_sha256 = kNewSha;
   env.role = "server";
   env.log = lines.Fn();
+  env.fs = &TestFs();
   EXPECT_EQ(UpdateConfirm(env, 10042), ConfirmResult::kConfirmed) << lines.Dump();
-  EXPECT_FALSE(root.Exists(L"update\\pending.json"));
-  EXPECT_FALSE(root.Exists(L"update\\crashed"));
-  const json state = json::parse(root.Read(L"update\\state.json"));
+  EXPECT_FALSE(root.Exists("update\\pending.json"));
+  EXPECT_FALSE(root.Exists("update\\crashed"));
+  const json state = json::parse(root.Read("update\\state.json"));
   EXPECT_EQ(state["current"]["version"], "5.99.0");
   EXPECT_EQ(state["current"]["runtime_sha256"], kNewSha);
   EXPECT_EQ(state["channel"], "beta");
   EXPECT_NE(lines.Find("update confirmed", {"version=5.99.0", "after_ms=10042", "role=server"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update confirmed"), kInfo);
-  EXPECT_FALSE(root.Exists(L"update\\lock"));
+#if defined(_WIN32)
+  // Win32 deletes the lock file with its last handle (FILE_FLAG_DELETE_ON_CLOSE in update_fs_win32.cpp).
+  EXPECT_FALSE(root.Exists("update\\lock")) << "the lock is released (delete on close)";
+#endif
+  ExpectLockFree(root);
 }
 
 TEST(UpdateConfirm, TheConfirmationWritesStateFirstThenRemovesPendingThenCrashedUnderTheLock) {
   Root root;
-  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-  root.Write(L"update\\crashed", "");
-  root.Write(L"update\\state.json", "{}");
+  root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write("update\\crashed", "");
+  root.Write("update\\state.json", "{}");
   Lines lines;
-  RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+  RecordingFs fs(root.path());
   ConfirmEnv env;
   env.root = root.path();
   env.runtime_sha256 = kNewSha;
@@ -861,9 +1003,9 @@ TEST(UpdateConfirm, TheConfirmationWritesStateFirstThenRemovesPendingThenCrashed
 
 TEST(UpdateConfirm, ALinkAtUpdateIsNotWrittenThrough) {
   Root root;
-  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
   Lines lines;
-  RecordingFs fs(std::string(root.path().begin(), root.path().end()));  // the temp folder is ASCII
+  RecordingFs fs(root.path());
   fs.links = {"\\update"};
   ConfirmEnv env;
   env.root = root.path();
@@ -871,32 +1013,35 @@ TEST(UpdateConfirm, ALinkAtUpdateIsNotWrittenThrough) {
   env.log = lines.Fn();
   env.fs = &fs;
   EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kPendingUnreadable);
-  EXPECT_TRUE(root.Exists(L"update\\pending.json"));
+  EXPECT_TRUE(root.Exists("update\\pending.json"));
 }
 
-TEST(UpdateConfirm, ARootThatIsNotUtf16TextFailsClosedAndNoRootIsNoPending) {
+TEST(UpdateConfirm, AnUnconvertibleRootFailsClosedAndNoRootIsNoPending) {
   Lines lines;
   ConfirmEnv env;
   env.runtime_sha256 = kNewSha;
   env.log = lines.Fn();
-  env.root = L"C:\\nevr-\xD800";
+  env.fs = &TestFs();
+  env.root = "";
+  env.root_unconvertible = true;
   EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kPendingUnreadable);
-  env.root = L"";
+  env.root_unconvertible = false;
   EXPECT_EQ(UpdateConfirm(env, 1), ConfirmResult::kNotPending);
 }
 
 TEST(UpdateConfirm, ARuntimeThatIsNotThePendingOneConfirmsNothing) {
   Root root;
-  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-  root.Write(L"update\\state.json", "{}");
+  root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write("update\\state.json", "{}");
   Lines lines;
   ConfirmEnv env;
   env.root = root.path();
   env.runtime_sha256 = kOldSha;  // the old runtime, e.g. a second process that still maps it
   env.log = lines.Fn();
+  env.fs = &TestFs();
   EXPECT_EQ(UpdateConfirm(env, 10000), ConfirmResult::kNotThePendingRelease);
-  EXPECT_TRUE(root.Exists(L"update\\pending.json"));
-  EXPECT_EQ(root.Read(L"update\\state.json"), "{}");
+  EXPECT_TRUE(root.Exists("update\\pending.json"));
+  EXPECT_EQ(root.Read("update\\state.json"), "{}");
   EXPECT_EQ(lines.Count("update confirmed"), 0);
   EXPECT_NE(lines.Find("update confirm skipped", {"reason=not_the_pending_release"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update confirm skipped"), kInfo);
@@ -909,6 +1054,7 @@ TEST(UpdateConfirm, NoPendingRecordMeansNothingToConfirm) {
   env.root = root.path();
   env.runtime_sha256 = kNewSha;
   env.log = lines.Fn();
+  env.fs = &TestFs();
   EXPECT_EQ(UpdateConfirm(env, 10000), ConfirmResult::kNotPending);
   EXPECT_NE(lines.Find("update confirm skipped", {"reason=no_pending"}), "") << lines.Dump();
   EXPECT_EQ(lines.LevelOf("update confirm skipped", {"reason=no_pending"}), kDebug);
@@ -917,18 +1063,56 @@ TEST(UpdateConfirm, NoPendingRecordMeansNothingToConfirm) {
 
 TEST(UpdateConfirm, AStateFileThatIsDamagedIsNotWrittenOver) {
   Root root;
-  root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-  root.Write(L"update\\state.json", "this is not json");
+  root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+  root.Write("update\\state.json", "this is not json");
   Lines lines;
   ConfirmEnv env;
   env.root = root.path();
   env.runtime_sha256 = kNewSha;
   env.log = lines.Fn();
+  env.fs = &TestFs();
   EXPECT_EQ(UpdateConfirm(env, 10000), ConfirmResult::kStateUnreadable);
-  EXPECT_TRUE(root.Exists(L"update\\pending.json")) << "the host rebuilds state; the record of the trial stays";
-  EXPECT_EQ(root.Read(L"update\\state.json"), "this is not json");
+  EXPECT_TRUE(root.Exists("update\\pending.json")) << "the host rebuilds state; the record of the trial stays";
+  EXPECT_EQ(root.Read("update\\state.json"), "this is not json");
   EXPECT_NE(lines.Find("update confirm skipped", {"reason=state_unreadable"}), "") << lines.Dump();
 }
+
+#if defined(_WIN32)
+// ---- the PC edge: the wide root and the wide verifier path (update_run.cpp) ----------------------------------------------
+
+TEST(UpdateEdgePc, ALoneSurrogateDoesNotConvertAndNoRootIsEmpty) {
+  std::string out = "x";
+  EXPECT_FALSE(RootToUtf8(L"C:\\nevr-\xD800", &out));
+  EXPECT_TRUE(out.empty()) << "a root that does not convert leaves nothing behind";
+  EXPECT_TRUE(RootToUtf8(L"", &out));
+  EXPECT_TRUE(out.empty());
+  EXPECT_TRUE(RootToUtf8(L"C:\\nevr", &out));
+  EXPECT_EQ(out, "C:\\nevr");
+}
+
+TEST(UpdateEdgePc, APathThatDoesNotConvertIsNotAVerdictAndTheWideVerifierIsNotRun) {
+  bool ran = false;
+  const auto verify = WidenVerifier([&ran](const std::wstring&) {
+    ran = true;
+    return VerifyOutcome{true, false, "accepted"};
+  });
+  const VerifyOutcome out = verify(std::string("C:\\x\xFF"));  // not UTF-8
+  EXPECT_FALSE(out.ok);
+  EXPECT_FALSE(out.refused) << "a path that does not convert is not a refusal: nothing is discarded for it";
+  EXPECT_EQ(out.reason, "path_unconvertible");
+  EXPECT_FALSE(ran);
+  EXPECT_TRUE(verify(std::string("C:\\ok")).ok) << "a path that converts reaches the wide verifier";
+  EXPECT_TRUE(ran);
+}
+
+TEST(UpdateLevels, TheGamesLogLevelBitsAreTheOnesTheLinesAreWrittenAt) {
+  EXPECT_EQ(EchoLevelBits(kDebug), 0x1);
+  EXPECT_EQ(EchoLevelBits(kInfo), 0x2);
+  EXPECT_EQ(EchoLevelBits(kWarning), 0x4);
+  EXPECT_EQ(EchoLevelBits(kError), 0x8);
+  EXPECT_EQ(EchoLevelBits(42), 0x2) << "an unknown level is Info";
+}
+#endif
 
 // ---- the worker ---------------------------------------------------------------------------------------------------------
 
@@ -942,6 +1126,7 @@ struct WorkerFixture {
   WorkerFixture() {
     core.root = &root;
     deps.switches.host_can_swap = true;
+    deps.platform = "pc";
     deps.root = root.path();
     deps.read_running = [](std::string* v, std::string* s, std::string*) {
       *v = "5.16.1";
@@ -949,9 +1134,10 @@ struct WorkerFixture {
       return true;
     };
     deps.core = core.Make();
-    deps.verify = [](const std::wstring&) { return VerifyOutcome{true, false, "accepted"}; };
+    deps.verify = [](const std::string&) { return VerifyOutcome{true, false, "accepted"}; };
     deps.log = lines.Fn();
     deps.now_ms = [this] { return clock.load(); };
+    deps.fs = &TestFs();
   }
 };
 }  // namespace
@@ -1004,12 +1190,16 @@ TEST(UpdateWorker, WithNoNevrRootNothingStartsAndTheLineIsAWarning) {
   EXPECT_EQ(f.lines.Count("update confirm skipped"), 0) << "no thread ran";
 }
 
-TEST(UpdateLevels, TheGamesLogLevelBitsAreTheOnesTheLinesAreWrittenAt) {
-  EXPECT_EQ(EchoLevelBits(kDebug), 0x1);
-  EXPECT_EQ(EchoLevelBits(kInfo), 0x2);
-  EXPECT_EQ(EchoLevelBits(kWarning), 0x4);
-  EXPECT_EQ(EchoLevelBits(kError), 0x8);
-  EXPECT_EQ(EchoLevelBits(42), 0x2) << "an unknown level is Info";
+TEST(UpdateWorker, AnUnconvertibleRootIsNotNoRootSoTheCheckRunsAndFailsClosed) {
+  WorkerFixture f;
+  f.deps.root.clear();
+  f.deps.root_unconvertible = true;  // the root exists but its text does not convert: not "no root", so the check runs and fails closed
+  Worker w(f.deps);
+  EXPECT_EQ(w.Start(), Disabled::kNone);
+  ASSERT_TRUE(w.WaitCheckDone(10000)) << f.lines.Dump();
+  w.Stop(2000);
+  EXPECT_EQ(f.core.open_calls, 0) << "nothing is read from a root that does not convert";
+  EXPECT_NE(f.lines.Find("update check", {"action=failed", "reason=root_unconvertible"}), "") << f.lines.Dump();
 }
 
 TEST(UpdateWorker, AHostThatCannotSwapGetsNoDownloadAndNoConfirmation) {
@@ -1025,30 +1215,42 @@ TEST(UpdateWorker, AHostThatCannotSwapGetsNoDownloadAndNoConfirmation) {
   {
     WorkerFixture f;
     f.deps.switches.host_can_swap = false;
-    f.root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-    f.root.Write(L"update\\state.json", "{}");
+    f.root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+    f.root.Write("update\\state.json", "{}");
     Worker w(f.deps);
     w.Start();
     w.OnFrame(1000);
     w.OnFrame(20000);
     w.Stop(3000);
-    EXPECT_TRUE(f.root.Exists(L"update\\pending.json")) << "no capability bit, so no swap ever made this record: nothing confirms it";
+    EXPECT_TRUE(f.root.Exists("update\\pending.json")) << "no capability bit, so no swap ever made this record: nothing confirms it";
     EXPECT_EQ(f.lines.Count("update confirmed"), 0);
   }
 }
 
 TEST(UpdateWorker, TheCheckRunsOffTheCallersThreadAndEndsWithItsLine) {
   WorkerFixture f;
-  const DWORD caller = GetCurrentThreadId();
-  auto stage_thread = std::make_shared<std::atomic<DWORD>>(0);
-  f.core.during_stage = [stage_thread] { stage_thread->store(GetCurrentThreadId()); };
+  struct StageThread {
+    std::mutex mu;
+    std::thread::id id;
+  };
+  auto stage_thread = std::make_shared<StageThread>();
+  f.core.during_stage = [stage_thread] {
+    std::lock_guard<std::mutex> lock(stage_thread->mu);
+    stage_thread->id = std::this_thread::get_id();
+  };
+  const std::thread::id caller = std::this_thread::get_id();
   f.deps.core = f.core.Make();
   Worker w(f.deps);
   EXPECT_EQ(w.Start(), Disabled::kNone);
   ASSERT_TRUE(w.WaitCheckDone(10000)) << f.lines.Dump();
-  EXPECT_NE(stage_thread->load(), 0u);
-  EXPECT_NE(stage_thread->load(), caller) << "the game thread never waits for the core";
-  EXPECT_TRUE(f.root.Exists(L"update\\staged.json"));
+  std::thread::id ran_on;
+  {
+    std::lock_guard<std::mutex> lock(stage_thread->mu);
+    ran_on = stage_thread->id;
+  }
+  EXPECT_NE(ran_on, std::thread::id()) << "the stage ran";
+  EXPECT_NE(ran_on, caller) << "the game thread never waits for the core";
+  EXPECT_TRUE(f.root.Exists("update\\staged.json"));
   EXPECT_NE(f.lines.Find("update check", {"action=staged"}), "") << f.lines.Dump();
   w.Stop(2000);
 }
@@ -1068,32 +1270,32 @@ TEST(UpdateWorker, AFileTheRunningRuntimeCannotBeReadAsStopsTheCheckWithAReason)
 
 TEST(UpdateWorker, TheConfirmationWaitsForTenSecondsOfFramesThenConfirms) {
   WorkerFixture f;
-  f.root.Write(L"update\\pending.json", PendingJson("5.99.0", kNewSha));
-  f.root.Write(L"update\\state.json", "{}");
+  f.root.Write("update\\pending.json", PendingJson("5.99.0", kNewSha));
+  f.root.Write("update\\state.json", "{}");
   f.deps.switches.flag_no_update = true;  // checks off; the confirmation still runs
   Worker w(f.deps);
   EXPECT_EQ(w.Start(), Disabled::kFlag);
   w.OnFrame(50000);  // the first call fixes the start of the 10 s
   w.OnFrame(59999);
   EXPECT_FALSE(w.WaitConfirmDone(300)) << "9.999 s of frames is not the mark";
-  EXPECT_TRUE(f.root.Exists(L"update\\pending.json"));
+  EXPECT_TRUE(f.root.Exists("update\\pending.json"));
   w.OnFrame(60000);
   ASSERT_TRUE(w.WaitConfirmDone(10000)) << f.lines.Dump();
-  EXPECT_FALSE(f.root.Exists(L"update\\pending.json"));
+  EXPECT_FALSE(f.root.Exists("update\\pending.json"));
   EXPECT_NE(f.lines.Find("update confirmed", {"version=5.99.0", "role=client"}), "") << f.lines.Dump();
   w.Stop(2000);
 }
 
 TEST(UpdateWorker, ARuntimeThatIsNotThePendingOneDoesNotConfirmAtTheMark) {
   WorkerFixture f;
-  f.root.Write(L"update\\pending.json", PendingJson("5.99.0", kOldSha));  // the running one is kNewSha
-  f.root.Write(L"update\\state.json", "{}");
+  f.root.Write("update\\pending.json", PendingJson("5.99.0", kOldSha));  // the running one is kNewSha
+  f.root.Write("update\\state.json", "{}");
   Worker w(f.deps);
   w.Start();
   w.OnFrame(1000);
   w.OnFrame(12000);
   ASSERT_TRUE(w.WaitConfirmDone(10000));
-  EXPECT_TRUE(f.root.Exists(L"update\\pending.json"));
+  EXPECT_TRUE(f.root.Exists("update\\pending.json"));
   EXPECT_EQ(f.lines.Count("update confirmed"), 0);
   EXPECT_NE(f.lines.Find("update confirm skipped", {"reason=not_the_pending_release"}), "") << f.lines.Dump();
   w.Stop(2000);

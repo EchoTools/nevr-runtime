@@ -856,7 +856,7 @@ arena:
 #
 # Not secrets.
 # Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgUpdateEnabled, NevrCfgUpdateChannel),
-#         src/runtime/lifecycle/update_worker.cpp
+#         src/core/update/worker.cpp
 # ---------------------------------------------------------------------------
 # update:
 #   enabled: true

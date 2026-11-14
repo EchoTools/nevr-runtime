@@ -1,4 +1,4 @@
-#include "runtime/lifecycle/update_policy.h"
+#include "core/update/policy.h"
 
 #include <algorithm>
 #include <cctype>

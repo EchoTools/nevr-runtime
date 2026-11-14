@@ -33,6 +33,11 @@ class FsLock {
   virtual void Release() noexcept = 0;
 };
 
+/// kLockTimeoutMs is how long the runtime waits for update\lock before it gives up the write for this launch. A taker waits
+/// up to the timeout it is given, trying again every step it is given; these are the engine's values (ADR 0024, section 4.1).
+inline constexpr std::uint32_t kLockTimeoutMs = 5000;
+inline constexpr std::uint32_t kLockStepMs = 100;
+
 class UpdateFs {
  public:
   virtual ~UpdateFs() = default;

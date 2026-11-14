@@ -48,13 +48,15 @@ set(PATCHES_SOURCES
     "lifecycle/game_image_guard.cpp"
     "lifecycle/runtime_entry.cpp"
     "lifecycle/runtime_exports.cpp"
-    # PC self-update, the runtime's half (ADR 0024, sections 3 and 6; #1200): the decisions, the check and the confirmation, the
-    # worker's threads, and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are the
-    # host's units, compiled into both DLLs as game_image_guard and the verifier are.
-    "lifecycle/update_policy.cpp"
+    # PC self-update, the runtime's half (ADR 0024, sections 3 and 6; #1200): the decisions (core/update/policy.cpp), the check and
+    # the confirmation (core/update/engine_check.cpp), the worker's threads (core/update/worker.cpp), the PC edge (the Win32 fs, the
+    # wide-text conversions) and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are
+    # the host's units, compiled into both DLLs as game_image_guard and the verifier are.
+    "../core/update/policy.cpp"
+    "../core/update/engine_check.cpp"
+    "../core/update/worker.cpp"
     "lifecycle/update_fs_win32.cpp"
     "lifecycle/update_run.cpp"
-    "lifecycle/update_worker.cpp"
     "lifecycle/update_process.cpp"
     "host/file_digest.cpp"
     "log/boot_log_tee.cpp"
@@ -2319,13 +2321,15 @@ if(BUILD_TESTING)
     # the worker's threads, against a fake core in a temp nevr root. Compiles no game stub, no Log and no core (Rust).
     add_executable(test_update_worker
       tests/test_update_worker.cpp
-      lifecycle/update_policy.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/policy.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_check.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/worker.cpp
       lifecycle/update_fs_win32.cpp
       lifecycle/update_run.cpp
-      lifecycle/update_worker.cpp
       ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp)
-    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_fs_win32.cpp
-      lifecycle/update_run.cpp lifecycle/update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+    set_source_files_properties(tests/test_update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/policy.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_check.cpp ${CMAKE_SOURCE_DIR}/src/core/update/worker.cpp
+      lifecycle/update_fs_win32.cpp lifecycle/update_run.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_update_worker PRIVATE -Werror)
     target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
