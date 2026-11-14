@@ -121,6 +121,7 @@ for row.
 | `[NEVR.STOP]`         | A command line the run is refused for: the stop line (JSON), exit code 64 |
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp, and the readable crash report: one `crash: <signal> <module>+<offset> <symbol> report=<path>` line per report (`docs/reference/crash-report.md`) |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
+| `[NEVR.CDN]`          | The CDN on the PC (`src/cdn`, `env_windows.cpp`): one `<event> key=value ...` line per CDN record (`cdn_start`, `cdn_manifest`, `cdn_plan`, `cdn_blob`, `cdn_mounted`, `cdn_done`, ...), the same records the Quest writes through the sentinel log |
 | `[NEVR.UPNP]`         | UPnP port mapping                            |
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |

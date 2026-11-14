@@ -26,6 +26,7 @@
 
 #include "core/device_memory.h"
 #include "quest/cdn/cdn_worker.h"
+#include "cdn/cdn_service.h"
 #include "cdn/env_posix.h"
 #include "quest/data/sha256.h"
 #include "quest/sentinel/hook_log.h"
@@ -237,6 +238,35 @@ void GetMapsTheTransportsAnswer() {
   QCHECK(!none.Get("https://h/a", [](long, const void*, std::size_t) { return true; }, [] { return true; }).completed);
 }
 
+// The core's production start (cdn/cdn_service.h Start), on the path that starts no thread: a cache directory that cannot be made turns
+// the delivery off for the run, with one Warning, and still counts as the one start of the process, so a second start is refused.
+class NoDirEnv : public cdn_test::FakeEnv {
+ public:
+  bool MakeDirs(const std::string&) override { return false; }
+};
+
+void NoPublish(const nc::Mounted*) { QCHECK(false); }
+
+void StartIsOneShotAndOffWithoutACacheDirectory() {
+  static NoDirEnv env;  // Start keeps the env for the process; this path keeps no thread on it
+  nc::Settings settings;
+  const nc::RunConfig config = nc::MakeRunConfig(settings, "/no/such/cache", nc::kAndroidArm64);
+  QCHECK(nc::Start(&env, config, &NoPublish));
+  std::vector<std::string> lines = env.EventsNamed("cdn_start");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(cdn_test::FakeEnv::Value(lines[0], "result") == "off" && cdn_test::FakeEnv::Value(lines[0], "reason") == "no_cache_dir");
+  }
+  QCHECK(!nc::Start(&env, config, &NoPublish));
+  lines = env.EventsNamed("cdn_start");
+  QCHECK(lines.size() == 2);
+  if (lines.size() == 2) {
+    QCHECK(cdn_test::FakeEnv::Value(lines[1], "result") == "refused" &&
+           cdn_test::FakeEnv::Value(lines[1], "reason") == "already_started");
+  }
+  QCHECK(env.requests.empty());  // neither call fetched anything
+}
+
 void EventsAreOneParsableSentinelLineEachWithTypedFields() {
   ClearLog();
   nc::PosixEnv env(nullptr);
@@ -362,6 +392,7 @@ int main() {
   GetMapsTheTransportsAnswer();
   EventsAreOneParsableSentinelLineEachWithTypedFields();
   TheSettingsAreTheCodesDefaultsChangedByTheFile();
+  StartIsOneShotAndOffWithoutACacheDirectory();
   TheFirstLaunchOnRealFilesPublishesAShadowWhoseHandleReadsTheStoredBytes();
   TheSecondLaunchMountsFromTheStoreAndMakesNoBlobRequest();
   if (std::getenv("NEVR_CDN_PRINT_LOG") != nullptr) {  // the sentinel's own JSON lines of the last run, for a commit message or a person

@@ -1,5 +1,5 @@
 // Command cargo-extract turns a game data set into content-addressed zstd objects and a manifest in the schema of
-// src/core/cargo_manifest.h (docs/adr/0045-cdn-texture-delivery.md): every resource of every package manifest of the
+// src/cdn/cdn_manifest.h (docs/adr/0045-cdn-texture-delivery.md): every resource of every package manifest of the
 // set becomes one zstd frame of its own, named by the SHA-256 of the stored frame, and one manifest entry that says what
 // the frame holds. The input is the game's own layout, read as the engine reads it (radpack: a resource is a record in a
 // chunk, and a chunk is one zstd frame of a package file):
@@ -99,7 +99,7 @@ func finish(err error, stderr io.Writer, log *slog.Logger) int {
 	return 1
 }
 
-// platforms maps a cargo platform name (src/core/cargo_manifest.h) to the folder the game keeps that platform's
+// platforms maps a cargo platform name (src/cdn/cdn_manifest.h) to the folder the game keeps that platform's
 // manifests and packages in (rad15/<folder>): the PC build's is "win10" (docs/engine/asset-system.md, "Where assets
 // live"), the Quest build's "android".
 var platforms = map[string]string{

@@ -156,11 +156,12 @@ the name and has to make sense as one.
   (`src/cdn/`) keeps its core in unsuffixed files with no platform word in them, and each platform edge beside them
   carries its platform as the role suffix `_windows` or `_posix` (`src/cdn/env_windows.cpp`, `src/cdn/env_posix.cpp`);
   CMake picks the edge per target. These two are the only platform suffixes. A stem MUST NOT carry the words `quest`,
-  `win`, `pc` or `android` after its first word (`ui_text_quest`, `crash_report_win_common`, `hwdump_android`). A file
-  that predates its component's move into one directory is a platform half under `src/runtime/` or `src/quest/`, and
-  includes are path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one
-  component until it moves. A stem whose first word is a platform word (`quest_config`, `android_main`) names a thing
-  of that platform, not one half of a component, and is left to review. A suffix that names a binary format or a
+  `win`, `pc` or `android` after its first word (`ui_text_quest`, `crash_report_win_common`, `hwdump_android`). A
+  component whose two halves live in the two runtime trees keeps the bare name in each, and includes are
+  path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one component. An edge
+  may include its own runtime's headers (`env_posix.cpp` takes the Quest's transport, SHA-256 and log); the core never
+  does. A stem whose first word is a platform word (`quest_config`, `android_main`) names a thing of that platform,
+  not one half of a component, and is left to review. A suffix that names a binary format or a
   binary's role (`_pe`, `_elf`, `_host`) is a word, not a platform.
 - A test is named for the stem it tests. A C++ test is `<stem>_test.cpp`; a freestanding qemu test is
   `<stem>_qemu.cpp`, where `<stem>` is the stem of a file the test runs (its `<stem>.cpp` or `<stem>_entry.inc`); a Python test is `test_<stem>.py` and a Go test `<stem>_test.go`, as their test runners require.

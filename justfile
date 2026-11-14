@@ -957,6 +957,14 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    # The CDN's PC edge (src/cdn/env_windows.cpp): a temp directory, no network. Named here because no other line of this recipe does.
+    cmake --build --preset {{ preset }} --target test_env_windows
+    bin="build/{{ preset }}/bin/test_env_windows.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_combat_settings.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2

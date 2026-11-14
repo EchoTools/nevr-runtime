@@ -60,6 +60,7 @@ set(PATCHES_SOURCES
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
+    "lifecycle/cdn_start.cpp"
     "lifecycle/config.cpp"
     "lifecycle/arena_round_time.cpp"
     "lifecycle/arena_rules_hook.cpp"
@@ -210,6 +211,17 @@ set(PATCHES_SOURCES
     "log/url_diagnostics.cpp"
     "patch/broadcaster_guard.cpp"
     "hook/dll_load_hook.cpp"
+    # The shared CDN core (docs/adr/0045) and the PC's Env. The core is platform-neutral; env_windows.cpp is the Win32 edge.
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp"
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
@@ -253,6 +265,10 @@ set(PATCHES_HEADERS
     "log/boot_replay.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
+    "lifecycle/cdn_start.h"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_env.h"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.h"
+    "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.h"
     "lifecycle/config.h"
     "lifecycle/config_redirect_result.h"
     "lifecycle/service_map.h"
@@ -515,6 +531,12 @@ set_source_files_properties(${NEVR_HOST_UNITS} host/host_dllmain.cpp host/runtim
 set_source_files_properties(compat/peer_message.cpp compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# The CDN core and its PC Env: the core includes no windows.h, and env_windows.cpp defines NOMINMAX itself, so neither takes the PCH.
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp ${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
@@ -1824,6 +1846,18 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_service PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_service PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
     gtest_discover_tests(test_invite_service DISCOVERY_MODE PRE_TEST)
+
+    # The CDN's PC edge (src/cdn/env_windows.cpp) on a temp directory: files, SHA-256, device facts and the clock. No network.
+    add_executable(test_env_windows tests/test_env_windows.cpp "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp")
+    set_source_files_properties(tests/test_env_windows.cpp "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_env_windows PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_env_windows PRIVATE GTest::gtest GTest::gtest_main nevr_core CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_env_windows nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_env_windows PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_env_windows DISCOVERY_MODE PRE_TEST)
 
     # #1415, docs/adr/0017: the per-frame applier (patch/invite_answer_apply.cpp) against the real invite service; the writer,
     # the join and the log are stubs (tests/invite_apply_stubs.cpp).

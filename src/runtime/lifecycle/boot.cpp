@@ -3,6 +3,7 @@
 #include "runtime/hook/script_resource_hook.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
+#include "runtime/lifecycle/cdn_start.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
@@ -726,6 +727,11 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Peer timeout log: the server's communication-timeout line, or the client's send state and no-send warning
   // (runtime/patch/peer_timeout_log_rules.h). Both roles, one call; the hook for the other role is not installed.
   nevr_peer_timeout_log::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);
+
+  // The CDN fetches only on a client; a server serves no asset.
+  if (!g_isServer) {
+    nevr_cdn_start::Start();
+  }
 
   // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they
   // are skipped.

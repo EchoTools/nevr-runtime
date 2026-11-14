@@ -257,7 +257,7 @@ void AnOtherThreadHasItsOwnPin() {
   QCHECK(Get<std::int64_t>(request, layout::kPackageHandle) == kCdnPixHandle);  // this thread still finishes its pair from the first set
 }
 
-// The loose-file overlay's four game functions, counted: a stock miss that a CDN shadow holds is CDN's, never the overlay's.
+// The loose-file overlay's four game functions, counted: a stock miss that a CDN shadow holds is the CDN's to serve, never the overlay's.
 int g_overlayCalls = 0;
 void OverlayClear(unsigned char*) { ++g_overlayCalls; }
 int OverlayPath(const CResourceManagerOpaque*, std::uint64_t, std::uint64_t, unsigned char*) { ++g_overlayCalls; return 0; }

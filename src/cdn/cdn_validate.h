@@ -1,4 +1,4 @@
-/* The one validator of CDN (docs/adr/0045-cdn-texture-delivery.md). A manifest entry, a downloaded frame and a mounted record are
+/* The one validator of the CDN code (docs/adr/0045-cdn-texture-delivery.md). A manifest entry, a downloaded frame and a mounted record are
  * all judged here, by rules that have names: a refusal carries the rule's name, and whoever refuses logs that name.
  *
  * The rules, and what each one protects the engine from:

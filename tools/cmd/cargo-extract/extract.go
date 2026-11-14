@@ -41,7 +41,7 @@ const (
 	residentBudget = 1 << 30
 )
 
-// The limits of src/core/cargo_manifest.h's parser, which the summary's cargo_rules reports against. They are copied:
+// The limits of src/cdn/cdn_manifest.h's parser, which the summary's cargo_rules reports against. They are copied:
 // nothing links the Go tool to the C++ header, and the report says which constant each number is held to.
 const (
 	cargoMaxManifestBytes = 1 << 20
@@ -50,7 +50,7 @@ const (
 	cargoMaxEntries       = 2048
 )
 
-// entryDoc is one buffer of one resource, in the schema of src/core/cargo_manifest.h without `stock_size`: a stock
+// entryDoc is one buffer of one resource, in the schema of src/cdn/cdn_manifest.h without `stock_size`: a stock
 // extraction has no art made against a stock buffer, and the parser's refusal of that is reported, not papered over.
 type entryDoc struct {
 	Platform string `json:"platform"`
@@ -95,7 +95,7 @@ type encoderInfo struct {
 	Checksum bool   `json:"checksum"`
 }
 
-// cargoRules counts what the full set breaks of the parser's rules (src/core/cargo_manifest.h and ADR 0045, decision 8),
+// cargoRules counts what the full set breaks of the parser's rules (src/cdn/cdn_manifest.h and ADR 0045, decision 8),
 // each against its constant. The tool writes the true entries whatever these say.
 type cargoRules struct {
 	ZeroByteRecords          int    `json:"zero_byte_records"`            // size or bytes of 0: kTooBig

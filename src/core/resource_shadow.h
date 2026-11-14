@@ -27,7 +27,7 @@
  * kChunkIndexLimit. A base above the stock count, with (base + chunks) * 0x10 below 2^31, lands on the same entry whether the game
  * does the multiply in 32 or 64 bits, signed or unsigned.
  *
- * This is the one builder both the CDN textures (CDN) and the plugin levels use. Nothing here allocates after Build, takes a
+ * This is the one builder both the CDN textures and the plugin levels use. Nothing here allocates after Build, takes a
  * lock or writes: a Shadow is immutable, and a reader needs no synchronisation once it holds the pointer. It is never freed by
  * the code that publishes it (a request being filled from it must stay valid).
  */
