@@ -1930,13 +1930,15 @@ if(BUILD_TESTING)
 
     # #2161: plugin resource sets: the format (nevr/resource_set.h), the registry and its mount checks
     # (core/resource_set_registry.cpp), the shadow it builds (core/resource_shadow.cpp) and the PE image mapping
-    # (patch/image_file_range.h). std, zstd and the SDK only.
+    # (patch/image_file_range.h), and a map's file set's shared rules with the portable SHA-256 its re-hash uses
+    # (quest/data/sha256.cpp; docs/adr/0048 decision 5). std, zstd and the SDK only.
     add_executable(test_resource_sets
       tests/test_resource_sets.cpp
       "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
-      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
-    set_source_files_properties(tests/test_resource_sets.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp")
+    set_source_files_properties(tests/test_resource_sets.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
+      "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp" "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp"
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_resource_sets PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_resource_sets PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main zstd::libzstd)
@@ -2408,6 +2410,10 @@ if(BUILD_TESTING)
       patch/resource_sets.cpp
       "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      # docs/adr/0048 decision 5: a downloaded map's set registered from a held file, beside a plugin's set; the registry's re-hash
+      # is the portable SHA-256.
+      tests/resource_sets_test.cpp
+      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp"
       # #2161: a mounted set's levels reach installed_levels through the production key list and merge.
       server/registered_levels.cpp
       server/installed_levels.cpp
@@ -2451,6 +2457,8 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
+      tests/resource_sets_test.cpp
+      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp"
       tests/test_provider_name_redirect.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp

@@ -10,11 +10,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/map_format.h"
 #include "core/resource_shadow.h"
 #include "nevr/pc/plugin_resources.h"
 #include "nevr/resource_set.h"
@@ -759,6 +761,258 @@ TEST(ImageFileRange, EachRangeTheFileDoesNotHoldAsMappedIsRefused) {
   std::vector<unsigned char> broken = plain;
   broken[0] = 'X';
   EXPECT_EQ(nevr_image_range::FileOffsetOf(broken.data(), 0x1100, 0x10).problem, nevr_image_range::Problem::kHeaders);
+}
+
+
+// ---- A map's file set: the rules both platforms share (core/resource_set_registry.h RegisterMapFile; docs/adr/0048 decision 5),
+// over a fake file that counts its reads and its views.
+
+using nevr_resource_sets::HeldMapFile;
+using nevr_resource_sets::MapFileRequest;
+using nevr_resource_sets::MountObserver;
+using nevr_resource_sets::Outcome;
+
+constexpr char kAbcSha256[] = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+class FakeHeldFile : public HeldMapFile {
+ public:
+  explicit FakeHeldFile(std::string bytes) : bytes_(std::move(bytes)) {}
+
+  bool Size(std::uint64_t* size, std::string* problem) override {
+    if (!size_problem.empty()) {
+      *problem = size_problem;
+      return false;
+    }
+    *size = bytes_.size();
+    return true;
+  }
+  bool ReadAt(std::uint64_t offset, void* buffer, std::size_t length, std::size_t* got, std::string* problem) override {
+    ++reads;
+    if (offset >= ends_at) {
+      *got = 0;
+      return true;
+    }
+    if (!read_problem.empty()) {
+      *problem = read_problem;
+      return false;
+    }
+    // At most `step` bytes a call: a short read is asked again for the rest.
+    const std::size_t n = std::min({length, step, bytes_.size() - static_cast<std::size_t>(offset)});
+    std::memcpy(buffer, bytes_.data() + offset, n);
+    *got = n;
+    return true;
+  }
+  const void* Map(std::uint64_t size, std::string* problem) override {
+    if (!map_problem.empty()) {
+      *problem = map_problem;
+      return nullptr;
+    }
+    EXPECT_EQ(size, bytes_.size());
+    ++maps;
+    return bytes_.data();
+  }
+  void Unmap(const void* view, std::uint64_t) override {
+    EXPECT_EQ(view, bytes_.data());
+    ++unmaps;
+  }
+
+  std::string size_problem, read_problem, map_problem;
+  std::size_t step = std::size_t{1} << 20;
+  std::uint64_t ends_at = ~std::uint64_t{0};
+  int reads = 0, maps = 0, unmaps = 0;
+
+ private:
+  std::string bytes_;
+};
+
+MapFileRequest MapRequest(std::string owner = "map:arena", std::string label = "map:arena@1.2", std::string sha256 = "",
+                          bool rehash = false) {
+  MapFileRequest r;
+  r.owner = std::move(owner);
+  r.label = std::move(label);
+  r.sha256 = std::move(sha256);
+  r.rehash = rehash;
+  return r;
+}
+
+struct AddSpy {
+  int calls = 0;
+  std::uint64_t size = 0;
+  Outcome answer;
+  std::function<Outcome(const void*, std::uint64_t)> Fn() {
+    return [this](const void*, std::uint64_t s) {
+      ++calls;
+      size = s;
+      return answer;
+    };
+  }
+};
+
+bool NotMounted() { return false; }
+bool Mounted() { return true; }
+
+TEST(MapFileRequestRules, AnOwnerIsMapAndAnIdUpToTheLongestMapId) {
+  const std::string longestId(nevr_maps::kMaxMapIdChars, 'a');
+  EXPECT_TRUE(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:" + longestId, "map:x@1")).ok());
+  for (const std::string& owner : {std::string("arena"), std::string("map:"), std::string("plugin:arena"),
+                                   "map:" + longestId + "a", std::string("map:a\"b"), std::string("map:a\\b"),
+                                   std::string("map:a\nb"), std::string("map:\x7f")}) {
+    const Outcome o = nevr_resource_sets::CheckMapFileRequest(MapRequest(owner));
+    EXPECT_EQ(o.refusal, Refusal::kFormat) << owner;
+    EXPECT_EQ(o.detail, "bad_owner") << owner;
+  }
+}
+
+TEST(MapFileRequestRules, ALabelIsUpToTheLongestOwnerAtTheLongestVersion) {
+  const std::string longestVersion = "999999999.999999999.999999999.999999999";
+  ASSERT_EQ(longestVersion.size(), nevr_resource_sets::kMaxMapVersionBytes);
+  const std::string longest = "map:" + std::string(nevr_maps::kMaxMapIdChars, 'a') + "@" + longestVersion;
+  ASSERT_EQ(longest.size(), nevr_resource_sets::kMaxMapLabelBytes);
+  EXPECT_TRUE(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", longest)).ok());
+  for (const std::string& label : {longest + "9", std::string(), std::string("two\nlines"), std::string("a\"b")}) {
+    const Outcome o = nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", label));
+    EXPECT_EQ(o.detail, "bad_label") << label;
+  }
+}
+
+TEST(MapFileRequestRules, ThePinIsReadOnlyForARehash) {
+  EXPECT_TRUE(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", "map:arena@1", "not a pin", false)).ok());
+  EXPECT_EQ(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", "map:arena@1", "ABC", true)).detail, "bad_pin");
+  EXPECT_EQ(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", "map:arena@1", std::string(64, 'A'), true)).detail,
+            "bad_pin");
+  EXPECT_TRUE(nevr_resource_sets::CheckMapFileRequest(MapRequest("map:arena", "map:arena@1", kAbcSha256, true)).ok());
+}
+
+// The mount passes rehash=false: it compared the file's stamp with the one recorded at fetch, and it may run on the boot thread, where
+// nothing is hashed (ADR 0045 decision 7). Not one byte is read.
+TEST(MapFileRegistration, WithoutARehashNothingIsReadAndTheViewGoesToAdd) {
+  FakeHeldFile file("set bytes");
+  AddSpy add;
+  const Outcome o = nevr_resource_sets::RegisterMapFile(MapRequest(), file, &NotMounted, add.Fn());
+  EXPECT_TRUE(o.ok());
+  EXPECT_EQ(file.reads, 0);
+  EXPECT_EQ(add.calls, 1);
+  EXPECT_EQ(add.size, 9u);
+  EXPECT_EQ(file.maps, 1);
+  EXPECT_EQ(file.unmaps, 1) << "the registry copies what it keeps; the view is released before the registration returns";
+}
+
+TEST(MapFileRegistration, ARehashReadsTheWholeFileInShortReadsAndMatchesThePin) {
+  FakeHeldFile file("abc");
+  file.step = 1;  // one byte a read: every short read is asked again for the rest
+  AddSpy add;
+  EXPECT_TRUE(nevr_resource_sets::RegisterMapFile(MapRequest("map:arena", "map:arena@1", kAbcSha256, true), file, &NotMounted,
+                                                  add.Fn())
+                  .ok());
+  EXPECT_EQ(file.reads, 3);
+  EXPECT_EQ(add.calls, 1);
+}
+
+TEST(MapFileRegistration, ARehashThatDiffersFromThePinIsRefusedBeforeAnyView) {
+  FakeHeldFile file("abd");
+  AddSpy add;
+  const std::string pin = kAbcSha256;
+  const Outcome o =
+      nevr_resource_sets::RegisterMapFile(MapRequest("map:arena", "map:arena@1", pin, true), file, &NotMounted, add.Fn());
+  EXPECT_EQ(o.refusal, Refusal::kHash);
+  EXPECT_EQ(o.detail.rfind("sha256 ", 0), 0u) << o.detail;
+  EXPECT_NE(o.detail.find(", pinned " + pin), std::string::npos) << o.detail;
+  EXPECT_EQ(add.calls, 0);
+  EXPECT_EQ(file.maps, 0);
+}
+
+TEST(MapFileRegistration, AFileThatEndsOrFailsBeforeItsSizeIsFormat) {
+  FakeHeldFile ended("abc");
+  ended.step = 1;
+  ended.ends_at = 2;  // the file ends after two bytes of its stated three
+  AddSpy add;
+  Outcome o = nevr_resource_sets::RegisterMapFile(MapRequest("map:arena", "map:arena@1", kAbcSha256, true), ended, &NotMounted,
+                                                  add.Fn());
+  EXPECT_EQ(o.refusal, Refusal::kFormat);
+  EXPECT_EQ(o.detail, "hash_read: the file ended at byte 2");
+  FakeHeldFile failing("abc");
+  failing.read_problem = "pread error 5";
+  o = nevr_resource_sets::RegisterMapFile(MapRequest("map:arena", "map:arena@1", kAbcSha256, true), failing, &NotMounted, add.Fn());
+  EXPECT_EQ(o.detail, "hash_read: pread error 5");
+  EXPECT_EQ(add.calls, 0);
+}
+
+TEST(MapFileRegistration, TheFilesOwnRefusalsComeBeforeAnyRead) {
+  AddSpy add;
+  FakeHeldFile late("set");
+  EXPECT_EQ(nevr_resource_sets::RegisterMapFile(MapRequest(), late, &Mounted, add.Fn()).refusal, Refusal::kTooLate);
+  FakeHeldFile bad("set");
+  bad.size_problem = "bad_handle";
+  EXPECT_EQ(nevr_resource_sets::RegisterMapFile(MapRequest(), bad, &NotMounted, add.Fn()).detail, "bad_handle");
+  FakeHeldFile empty("");
+  EXPECT_EQ(nevr_resource_sets::RegisterMapFile(MapRequest(), empty, &NotMounted, add.Fn()).detail, "empty_file");
+  FakeHeldFile unmapped("set");
+  unmapped.map_problem = "mmap error 12";
+  EXPECT_EQ(nevr_resource_sets::RegisterMapFile(MapRequest(), unmapped, &NotMounted, add.Fn()).detail, "mmap error 12");
+  FakeHeldFile owner("set");
+  EXPECT_EQ(nevr_resource_sets::RegisterMapFile(MapRequest("arena"), owner, &NotMounted, add.Fn()).detail, "bad_owner");
+  for (const FakeHeldFile* f : {&late, &bad, &empty, &unmapped, &owner}) {
+    EXPECT_EQ(f->reads, 0);
+    EXPECT_EQ(f->maps, 0);
+  }
+  EXPECT_EQ(add.calls, 0);
+}
+
+TEST(MapFileRegistration, ARefusalFromTheRegistryIsReturnedAndTheViewStillReleased) {
+  FakeHeldFile file("set");
+  AddSpy add;
+  add.answer = Outcome{Refusal::kCollides, "0x1:0x2 owner=plugin:levels"};
+  const Outcome o = nevr_resource_sets::RegisterMapFile(MapRequest(), file, &NotMounted, add.Fn());
+  EXPECT_EQ(o.refusal, Refusal::kCollides);
+  EXPECT_EQ(o.detail, "0x1:0x2 owner=plugin:levels");
+  EXPECT_EQ(file.maps, 1);
+  EXPECT_EQ(file.unmaps, 1);
+}
+
+// The registry's own check, through the shared path: a real set registers, and the same bytes again collide.
+TEST(MapFileRegistration, ARealSetGoesThroughToTheRegistry) {
+  SetBuilder b;
+  const std::uint32_t c = b.AddChunk();
+  b.AddRecord(kLevelRootType, 0x4d4150004c56454cULL, Bytes(64, 0x11), c);
+  b.AddRecord(kArchiveType, 0x4d4150004c56454cULL, Archive({}, {{kLevelRootType, 0x4d4150004c56454cULL}}), c);
+  const std::vector<unsigned char> built = b.Build();
+  Registry registry;
+  for (const Refusal expected : {Refusal::kNone, Refusal::kCollides}) {
+    FakeHeldFile file(std::string(built.begin(), built.end()));
+    const Outcome o = nevr_resource_sets::RegisterMapFile(
+        MapRequest(), file, [&] { return registry.mounted(); },
+        [&](const void* view, std::uint64_t size) { return registry.AddMapFile("map:arena", "map:arena@1.2", view, size, 7); });
+    EXPECT_EQ(o.refusal, expected) << o.detail;
+    EXPECT_EQ(file.unmaps, 1);
+  }
+  EXPECT_EQ(registry.held(), 1u);
+}
+
+int g_observedCalls = 0;
+std::size_t g_observedSets = 0;
+void CountMount(const nevr_resource_sets::MountReport& report) {
+  ++g_observedCalls;
+  g_observedSets = report.sets;
+}
+
+TEST(MapMountObserver, CalledOnceARunAndNotWithoutAnObserver) {
+  MountObserver observer;
+  g_observedCalls = 0;
+  EXPECT_FALSE(observer.Armed());
+  EXPECT_FALSE(observer.Notify(nevr_resource_sets::MountReport{}));
+  observer.Set(&CountMount);
+  EXPECT_TRUE(observer.Armed());
+  nevr_resource_sets::MountReport report;
+  report.sets = 2;
+  EXPECT_TRUE(observer.Notify(report));
+  EXPECT_FALSE(observer.Notify(report));
+  EXPECT_EQ(g_observedCalls, 1);
+  EXPECT_EQ(g_observedSets, 2u);
+  observer.Reset();
+  EXPECT_FALSE(observer.Armed());
+  observer.Set(&CountMount);
+  EXPECT_TRUE(observer.Notify(report));
+  EXPECT_EQ(g_observedCalls, 2);
 }
 
 }  // namespace
