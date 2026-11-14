@@ -252,6 +252,7 @@ set(PATCHES_SOURCES
     "server/upnp.cpp"
     # #1737: the join hold on a dedicated server (pure logic in server/join_hold_rules.h).
     "server/join_hold.cpp"
+    "server/map_hold.cpp"
     # Level-load and boot timing records (runtime/hook/load_timing_rules.h).
     "hook/load_timing.cpp"
 )

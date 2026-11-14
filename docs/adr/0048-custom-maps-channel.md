@@ -139,7 +139,11 @@ and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal o
 `RegistrationEntries` is not called and the Quest login's `map_report` is not set (`KNOWN-WRONG #TBD` at each site). Not built
 yet (#2733): the PC and Quest platform layers and the channel that starts them, including which keys they give the core as
 official (decision 7) and the `mixed_keys` check (decision 3); the local-copy precedence (decision 8); the wiring of the session
-pin; the server's group fetch and its join hold (decisions 13 and 17); and the server mount (decision 18).
+pin. The server's group fetch and its join hold (decisions 13 and 17) have their rules built in `src/core/map_server_hold.h` and
+their PC glue in `src/runtime/server/map_hold.cpp` and `join_hold.cpp`; the glue waits for the channel's request entry and for its
+progress and mount notes. The server mount (decision 18) has its signed-only rule written as `ServerMountsScripts`, which nothing calls yet: the
+mount tests the same rule inline (`src/core/map_run.cpp`), so the two are one rule in two places until the channel's mount
+calls the function.
 
 ## Consequences
 

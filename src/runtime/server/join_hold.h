@@ -10,6 +10,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+
+#include "core/map_server_hold.h"
 
 namespace nevr_join_hold {
 
@@ -34,5 +37,27 @@ void OnSessionCreate(const char* sessionId);
 
 /// The session ended (`cause` is service_ended or game_ended) or the server is shutting down: disarm and drop.
 void OnSessionEnd(const char* cause, const char* sessionId);
+
+// The maps hold (ADR 0048 decision 17; the rules are core/map_server_hold.h, the callers are runtime/server/map_hold.cpp). It is
+// one more reason a join waits for, beside the levels hold above, and it does not depend on network.join_hold_ms: a join waits
+// for both (nevr_maps::ComposeJoinHold). The state sits behind the same mutex as the levels gate.
+
+enum class MapsArmResult { kArmed, kMounted, kNoGroup };
+
+/// The channel is set (a server with a fetch channel): the gate is in use, with no game hook installed for the maps hold. A
+/// client does nothing here.
+void MapsEnable(bool isServer);
+
+/// A session's group: arms the maps hold for it when the group's maps are not mounted in this process (kArmed, and an Info line
+/// with the timeout it starts with); kMounted when they are (the hold is dropped); kNoGroup for "" (the hold is dropped). Any
+/// earlier maps hold is replaced. Game thread.
+MapsArmResult MapsArm(const std::string& group);
+
+/// A fetch's plan or progress for `group`, from the channel's worker. Ignored unless `group` is the held group.
+void MapsNoteProgress(const std::string& group, const nevr_maps::HoldPlan& plan);
+
+/// The group's maps are mounted in this process: remembered (a later session of the group does not hold for it), and a held
+/// group's hold is lifted with an Info line. Any thread.
+void MapsNoteMounted(const std::string& group);
 
 }  // namespace nevr_join_hold

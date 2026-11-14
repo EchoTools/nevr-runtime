@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 
 #include "abi/echovr_functions.h"
@@ -41,7 +42,9 @@ Gate g_gate;
 std::atomic<bool> g_loadLevelHooked{false};  // a join-hold detour is installed on LoadLevel (armed or not)
 std::atomic<bool> g_active{false};  // hooks in and the key above 0: the gate is in use
 std::atomic<std::size_t> g_queued{0};  // the queue size, readable without the lock (ReleaseDue's idle path)
-std::string g_sessionId;               // for the detours' lines, under g_mutex
+std::atomic<bool> g_mapsHolding{false};  // the maps hold stands (ReleaseDue reads it with g_queued, without the lock)
+std::set<std::string> g_mountedGroups;   // the groups whose maps mounted in this process, under g_mutex
+std::string g_sessionId;                 // for the detours' lines, under g_mutex
 
 std::uint64_t NowMs() { return GetTickCount64(); }
 
@@ -101,7 +104,7 @@ class GameHooker {
     if (nevr::ValidatePrologue(address, s.prologue->data(), s.prologue->size())) return true;
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=prologue_mismatch expected=%s actual=%s "
-        "(no detour was installed; accepts are forwarded at once)",
+        "(no detour was installed; the levels hold is off)",
         s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
         nevr_load_timing::HexBytes(s.prologue->data(), s.prologue->size()).c_str(), nevr_load_timing::HexBytes(static_cast<const std::uint8_t*>(address), s.prologue->size()).c_str());
     return false;
@@ -118,7 +121,7 @@ class GameHooker {
     *s.original = nullptr;
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] join hold not armed name=%s va=0x%llX reason=detour_failed expected=%s actual=%s "
-        "(accepts are forwarded at once)",
+        "(the levels hold is off)",
         s.name, static_cast<unsigned long long>(0x140000000ULL + s.rva),
         nevr_load_timing::HexBytes(s.prologue->data(), s.prologue->size()).c_str(), nevr_load_timing::HexBytes(static_cast<const std::uint8_t*>(address), s.prologue->size()).c_str());
     return false;
@@ -196,13 +199,25 @@ bool Admit(const void* encoded, std::size_t size, std::size_t entrants, const ch
   return true;
 }
 
+// The maps hold's deadline (ADR 0048 decision 17): lifted here, once, with the Warning naming the group, the set's size, the
+// bytes fetched, the timeout and the consequence. Called under g_mutex, every frame the hold stands.
+void PollMapsLocked(std::uint64_t now) {
+  nevr_maps::ServerMapHold& maps = g_gate.Maps();
+  if (!maps.Holding()) return;
+  if (maps.Poll(now) != nevr_maps::ServerMapHold::Step::kTimeout) return;
+  g_mapsHolding.store(false, std::memory_order_release);
+  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapHoldTimeoutLine(maps.Group(), maps.Plan(), maps.TimeoutMs()).c_str());
+}
+
 void ReleaseDue(void* broadcaster, const char* sessionId) {
-  if (!g_active.load(std::memory_order_acquire) || g_queued.load(std::memory_order_acquire) == 0) return;
+  if (!g_active.load(std::memory_order_acquire)) return;
+  if (g_queued.load(std::memory_order_acquire) == 0 && !g_mapsHolding.load(std::memory_order_acquire)) return;
   Release due;
   std::uint64_t now = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     now = NowMs();
+    PollMapsLocked(now);
     due = g_gate.TakeDue(now);
     g_queued.store(g_gate.QueueSize(), std::memory_order_release);
   }
@@ -248,8 +263,52 @@ void OnSessionEnd(const char* cause, const char* sessionId) {
     std::lock_guard<std::mutex> lock(g_mutex);
     dropped = g_gate.Clear();
     g_queued.store(0, std::memory_order_release);
+    g_mapsHolding.store(false, std::memory_order_release);
   }
   LogDropped(dropped, cause, sessionId);
+}
+
+void MapsEnable(bool isServer) {
+  if (!isServer) return;
+  g_active.store(true, std::memory_order_release);
+}
+
+MapsArmResult MapsArm(const std::string& group) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  nevr_maps::ServerMapHold& maps = g_gate.Maps();
+  if (group.empty()) {
+    maps.Clear();
+    g_mapsHolding.store(false, std::memory_order_release);
+    return MapsArmResult::kNoGroup;
+  }
+  if (g_mountedGroups.count(group) != 0) {
+    maps.Clear();
+    g_mapsHolding.store(false, std::memory_order_release);
+    return MapsArmResult::kMounted;
+  }
+  // A hold already standing for this group keeps its deadline: a session both frames name arms it once.
+  if (maps.Holding() && maps.Group() == group) return MapsArmResult::kArmed;
+  maps.Arm(group, NowMs());
+  g_mapsHolding.store(true, std::memory_order_release);
+  Log(EchoVR::LogLevel::Info, "%s", nevr_maps::MapHoldArmedLine(group, nevr_maps::kMapHoldCeilingMs).c_str());
+  return MapsArmResult::kArmed;
+}
+
+void MapsNoteProgress(const std::string& group, const nevr_maps::HoldPlan& plan) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_gate.Maps().Note(group, plan);
+}
+
+void MapsNoteMounted(const std::string& group) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_mountedGroups.insert(group);
+  nevr_maps::ServerMapHold& maps = g_gate.Maps();
+  const std::uint64_t armed = maps.ArmedMs();
+  const std::uint64_t now = NowMs();
+  if (maps.Mounted(group) != nevr_maps::ServerMapHold::Step::kMounted) return;
+  g_mapsHolding.store(false, std::memory_order_release);
+  Log(EchoVR::LogLevel::Info, "%s",
+      nevr_maps::MapHoldMountedLine(group, now >= armed ? now - armed : 0).c_str());
 }
 
 }  // namespace nevr_join_hold

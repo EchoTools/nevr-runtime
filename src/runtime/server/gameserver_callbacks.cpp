@@ -27,6 +27,7 @@
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/join_hold.h"
+#include "runtime/server/map_hold.h"
 #include "runtime/server/game_type_table.h"
 #include "runtime/server/lobby_settings_relay.h"
 #include "runtime/server/protobuf_transport.h"
@@ -159,6 +160,9 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
 
       // #1737 (101f): arm the join hold for this session's level load; an earlier session's held accepts are dropped.
       nevr_join_hold::OnSessionCreate(sessionCreate.lobby_session_id().c_str());
+      // ADR 0048 decision 17: the session's group is fetched when its maps are not mounted, and joins wait for them on the maps
+      // hold (its own, beside the levels hold above; a join waits for both).
+      nevr_map_hold::OnSessionCreate(sessionCreate.group_id(), sessionCreate.lobby_session_id());
 
       if (!self->GetContext().StartSession()) {
         Log(EchoVR::LogLevel::Error,
@@ -957,6 +961,10 @@ void GameServerLib::RegisterTcpCallbacks() {
       }
       // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
       nevr_server_bots::ForgetSession();
+      // ADR 0048 decision 17: the frame's group (the GUID at +0x10) arms the maps hold like the protobuf create does; a session
+      // both frames name is armed once (join_hold.cpp's MapsArm keeps a hold already standing for the same group).
+      nevr_map_hold::OnSessionCreate(nevr_map_hold::GroupOfSessionStart(static_cast<const uint8_t*>(data), size),
+                                     nevr_server_bots::SessionIdOf(static_cast<const uint8_t*>(data), size));
       if (broadcaster) {
         // #1423: with bots armed, the settings get numteams and players_per_team, which bot team placement reads.
         nevr_server_bots::SessionSettings(&data, &size);

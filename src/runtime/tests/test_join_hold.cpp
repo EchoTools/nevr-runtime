@@ -328,4 +328,41 @@ TEST(JoinHoldDeliver, TheSinkIsHandedTheReasonOfTheRelease) {
   EXPECT_EQ(timedOut.reasons, (std::vector<ReleaseReason>{ReleaseReason::kTimeout, ReleaseReason::kTimeout}));
 }
 
+// The maps hold (ADR 0048 decision 17) is a second reason a join waits for, beside the levels hold; a join waits for both
+// (nevr_maps::ComposeJoinHold). With network.join_hold_ms off, the maps hold still holds.
+TEST(JoinHoldMaps, HeldWithTheLevelsHoldOffUntilTheMountReleases) {
+  Gate g;
+  g.Arm(0);
+  g.Maps().Arm("grp", 0);
+  EXPECT_TRUE(g.Admit(Accept(0, 1)));
+  EXPECT_EQ(g.TakeDue(1000).accepts.size(), 0u);
+  EXPECT_EQ(g.Maps().Mounted("grp"), nevr_maps::ServerMapHold::Step::kMounted);
+  const Release due = g.TakeDue(1000);
+  EXPECT_EQ(due.accepts.size(), 1u);
+  EXPECT_EQ(due.reason, ReleaseReason::kSettled);
+}
+
+TEST(JoinHoldMaps, TheMapsTimeoutReleasesWithTheLevelsHoldOff) {
+  Gate g;
+  g.Arm(0);
+  g.Maps().Arm("grp", 0);
+  EXPECT_TRUE(g.Admit(Accept(0, 2)));
+  EXPECT_EQ(g.Maps().Poll(nevr_maps::kMapHoldCeilingMs), nevr_maps::ServerMapHold::Step::kTimeout);
+  const Release due = g.TakeDue(nevr_maps::kMapHoldCeilingMs);
+  EXPECT_EQ(due.accepts.size(), 1u);
+}
+
+TEST(JoinHoldMaps, AJoinWaitsForBothHolds) {
+  Gate g;
+  g.Configure(1000);  // network.join_hold_ms 1000: the levels hold stands until its settle or its timeout
+  g.Arm(0);
+  g.Maps().Arm("grp", 0);
+  EXPECT_TRUE(g.Admit(Accept(0, 3)));
+  EXPECT_EQ(g.Maps().Mounted("grp"), nevr_maps::ServerMapHold::Step::kMounted);  // the maps are in; the levels are not
+  EXPECT_EQ(g.TakeDue(500).accepts.size(), 0u);                                   // still held by the levels hold
+  const Release due = g.TakeDue(1000);                                            // the levels hold times out
+  EXPECT_EQ(due.accepts.size(), 1u);
+  EXPECT_EQ(due.reason, ReleaseReason::kTimeout);
+}
+
 }  // namespace

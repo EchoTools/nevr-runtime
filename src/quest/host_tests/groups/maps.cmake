@@ -30,3 +30,8 @@ nevr_ht_obj(o_map_monocypher GROUP shared COPTS -w
 nevr_ht_test(map_mount_rules_test GROUP shared HOST PTHREAD TIMEOUT 120
   INCS src/quest/tests third_party/monocypher/src OBJS o_map_monocypher
   SRC src/quest/tests/map_mount_rules_test.cpp ${_maps_mount_core})
+
+# The dedicated server's maps hold, pure (core/map_server_hold.h; ADR 0048 decisions 13, 17 and 18): the timeout's size, rate and
+# bounds, the one group fetched, the hold lifted by the mount or the deadline, the join composition and the signed-only rule.
+nevr_ht_test(map_server_hold_test GROUP shared NOEXC TIMEOUT 120 INCS src
+  SRC src/core/tests/map_server_hold_test.cpp src/core/map_server_hold.cpp)
