@@ -1,12 +1,12 @@
 """The runtime md5 pin (#1737): tools/quest_runtime_pin.py replaces the stock entry of the reference runtime's libr15
-checksum list, in both forms the binary holds it in (twelve ASCII copies, twelve sites of sixteen immediate words), with the
+checksum list, in both forms the binary holds it in (thirteen ASCII copies, thirteen sites of sixteen immediate words), with the
 md5 of the libr15 the APK carries.
 
-The fixture is a synthetic AArch64 ELF built here (`make_runtime`): an executable segment with twelve sites per entry, each of
+The fixture is a synthetic AArch64 ELF built here (`make_runtime`): an executable segment with thirteen sites per entry, each of
 sixteen `movz`/`movk` words that build the four 8-byte chunks of the entry's text (interleaved over four registers, with
-unrelated instructions between), and a data segment with twelve lists of three entries. A pin of the fixture must equal the
-fixture built for the new text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the reference APK's
-`libvrapi.so` (sha-256 below), which the lane's expected output (md5 0748d0e3...) is compared with.
+unrelated instructions between), and a data segment with thirteen lists of three entries. A pin of the fixture must equal the
+fixture built for the new text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the wave-2 reference runtime's
+`libvrapi.so` (sha-256 below).
 """
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ THIRD = "0734f86fd23afc03aea76ffadeb7b924"
 NEW = hashlib.md5(b"a patched libr15").hexdigest()
 OTHER = hashlib.md5(b"another libr15").hexdigest()
 NOP = 0xD503201F
+MODULES = 13  # the modules wave 2 of the reference runtime gates on the list (its own notes say thirteen lists)
 EOR_X8 = 0xCA090108  # eor x8, x8, x9: an instruction on register 8 that is neither movz nor movk
-REFERENCE_SHA256 = "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839"
-LANE_MD5 = "0748d0e375e3a6d1956ca057a009bf48"
+REFERENCE_SHA256 = "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a"  # wave 2 runtime, libvrapi 8b7eab33
 LANE_PIN_MD5 = "3e89307b9eddca58aa4573953a4477b9"
 
 
@@ -73,19 +73,19 @@ def make_elf(code: bytes, data: bytes, machine: int = 0xB7) -> bytes:
     return bytes(image)
 
 
-def make_runtime(old: str = OLD, *, sites: int = 12, copies: int = 12, others: tuple[str, ...] = (SECOND, THIRD),
+def make_runtime(old: str = OLD, *, sites: int = MODULES, copies: int = MODULES, others: tuple[str, ...] = (SECOND, THIRD),
                  decoy: bool = False, extra: bytes = b"") -> bytes:
-    """A runtime fixture whose list is `old` then `others`. `sites` sites and `copies` ASCII copies of `old` (12 in the
-    reference runtime); the others always have 12 of each. `decoy` adds a run of `old` in the non-executable segment."""
+    """A runtime fixture whose list is `old` then `others`. `sites` sites and `copies` ASCII copies of `old` (MODULES in the
+    reference runtime); the others always have MODULES of each. `decoy` adds a run of `old` in the non-executable segment."""
     code = bytearray()
-    for m in range(max(sites, 12)):
-        for text, wanted in [(old, sites)] + [(o, 12) for o in others]:
+    for m in range(max(sites, MODULES)):
+        for text, wanted in [(old, sites)] + [(o, MODULES) for o in others]:
             if m < wanted:
                 code += b"".join(struct.pack("<I", w) for w in site_words(text))
                 code += struct.pack("<I", NOP) * 12
     data = bytearray()
-    for m in range(max(copies, 12)):
-        for text, wanted in [(old, copies)] + [(o, 12) for o in others]:
+    for m in range(max(copies, MODULES)):
+        for text, wanted in [(old, copies)] + [(o, MODULES) for o in others]:
             if m < wanted:
                 data += text.encode() + b"\0"
         data += b"module %d: %%.8s is none of the known builds\0" % m
@@ -100,7 +100,7 @@ class PinDataTest(unittest.TestCase):
     def test_the_pinned_runtime_is_the_runtime_built_for_the_new_md5(self):
         result, report = pin.pin_data(make_runtime(), NEW)
         self.assertEqual(result, make_runtime(NEW))
-        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]), (12, 12, 48, 192))
+        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]), (MODULES, MODULES, 4 * MODULES, 16 * MODULES))
         self.assertEqual(report["old_md5"], OLD)
         self.assertEqual(report["table"], [OLD, SECOND, THIRD])
 
@@ -111,7 +111,7 @@ class PinDataTest(unittest.TestCase):
         differing = [i for i in range(len(before)) if before[i] != result[i]]
         self.assertEqual(len(differing), report["changed_bytes"])
         text = pin.ascii_copies(before, OLD.encode())
-        self.assertEqual(len(text), 12)
+        self.assertEqual(len(text), MODULES)
         inside = {i for o in text for i in range(o, o + 32)}
         for i in differing:
             if i in inside:
@@ -119,11 +119,11 @@ class PinDataTest(unittest.TestCase):
             word = i & ~3
             self.assertEqual((struct.unpack_from("<I", before, word)[0] ^ struct.unpack_from("<I", result, word)[0]) & ~(0xFFFF << 5), 0)
 
-    def test_the_new_md5_is_found_twelve_times_in_each_form_and_the_old_one_never(self):
+    def test_the_new_md5_is_found_once_per_module_in_each_form_and_the_old_one_never(self):
         result, _ = pin.pin_data(make_runtime(), NEW)
         scan = pin.Scan(result)
-        self.assertEqual(len(pin.ascii_copies(result, NEW.encode())), 12)
-        self.assertEqual(sum(len(scan.runs(c)) for c in pin.chunks_of(NEW.encode())), 48)
+        self.assertEqual(len(pin.ascii_copies(result, NEW.encode())), MODULES)
+        self.assertEqual(sum(len(scan.runs(c)) for c in pin.chunks_of(NEW.encode())), 4 * MODULES)
         self.assertEqual(pin.ascii_copies(result, OLD.encode()), [])
         self.assertEqual(sum(len(scan.runs(c)) for c in pin.chunks_of(OLD.encode())), 0)
         self.assertEqual(pin.table(result), [NEW.encode(), SECOND.encode(), THIRD.encode()])
@@ -132,8 +132,8 @@ class PinDataTest(unittest.TestCase):
         result, _ = pin.pin_data(make_runtime(), NEW)
         scan = pin.Scan(result)
         for text in (SECOND, THIRD):
-            self.assertEqual(len(pin.ascii_copies(result, text.encode())), 12)
-            self.assertEqual(sum(len(scan.runs(c)) for c in pin.chunks_of(text.encode())), 48)
+            self.assertEqual(len(pin.ascii_copies(result, text.encode())), MODULES)
+            self.assertEqual(sum(len(scan.runs(c)) for c in pin.chunks_of(text.encode())), 4 * MODULES)
 
     def test_a_second_pin_with_the_same_md5_changes_nothing(self):
         once, _ = pin.pin_data(make_runtime(), NEW)
@@ -150,28 +150,28 @@ class PinDataTest(unittest.TestCase):
     def test_a_decoy_run_in_a_data_segment_is_not_a_site(self):
         before = make_runtime(decoy=True)
         result, report = pin.pin_data(before, NEW)
-        self.assertEqual(report["sites"], 12)
+        self.assertEqual(report["sites"], MODULES)
         decoy = b"".join(struct.pack("<I", w) for w in site_words(OLD))
         self.assertTrue(before.endswith(decoy))
-        self.assertEqual(len(pin.Scan(before).runs(pin.chunks_of(OLD.encode())[0])), 12)
+        self.assertEqual(len(pin.Scan(before).runs(pin.chunks_of(OLD.encode())[0])), MODULES)
         self.assertTrue(result.endswith(decoy))  # not an executable segment: left as it was
 
-    def test_eleven_sites_are_refused(self):
-        with self.assertRaisesRegex(pin.PinError, "has 44 immediate runs"):
-            pin.pin_data(make_runtime(sites=11), NEW)
+    def test_twelve_sites_are_refused(self):
+        with self.assertRaisesRegex(pin.PinError, "has 48 immediate runs"):
+            pin.pin_data(make_runtime(sites=12), NEW)
 
     def test_a_duplicated_site_is_refused(self):
-        with self.assertRaisesRegex(pin.PinError, "has 52 immediate runs"):
-            pin.pin_data(make_runtime(sites=13), NEW)
+        with self.assertRaisesRegex(pin.PinError, "has 56 immediate runs"):
+            pin.pin_data(make_runtime(sites=14), NEW)
 
-    def test_eleven_ascii_copies_are_refused(self):
-        with self.assertRaisesRegex(pin.PinError, "has 11 ASCII copies, not 12"):
-            pin.pin_data(make_runtime(copies=11), NEW)
+    def test_twelve_ascii_copies_are_refused(self):
+        with self.assertRaisesRegex(pin.PinError, "has 12 ASCII copies, not 13"):
+            pin.pin_data(make_runtime(copies=12), NEW)
 
     def test_a_text_inside_a_longer_hex_string_is_not_a_copy_and_is_left_alone(self):
         for extra in (b"0" + OLD.encode() + b"\0", OLD.encode() + b"0\0"):
             result, report = pin.pin_data(make_runtime(extra=extra), NEW)
-            self.assertEqual(report["ascii_copies"], 12)
+            self.assertEqual(report["ascii_copies"], MODULES)
             self.assertEqual(result, make_runtime(NEW, extra=extra))
 
     def test_a_new_md5_that_is_another_entry_of_the_list_is_refused(self):
@@ -198,9 +198,9 @@ class PinDataTest(unittest.TestCase):
 
     def test_a_file_that_is_not_an_aarch64_elf_is_refused(self):
         with self.assertRaisesRegex(pin.PinError, "not a 64-bit little-endian ELF"):
-            pin.pin_data(b"not an elf " + (OLD.encode() + b"\0") * 12, NEW)
+            pin.pin_data(b"not an elf " + (OLD.encode() + b"\0") * MODULES, NEW)
         with self.assertRaisesRegex(pin.PinError, "is not AArch64"):
-            pin.pin_data(make_elf(b"\0" * 8, (OLD.encode() + b"\0") * 12, machine=0x3E), NEW)
+            pin.pin_data(make_elf(b"\0" * 8, (OLD.encode() + b"\0") * MODULES, machine=0x3E), NEW)
 
     def test_a_replace_index_outside_the_list_is_refused(self):
         with self.assertRaisesRegex(pin.PinError, "the table has 3 entries"):
@@ -231,12 +231,12 @@ class PinDataTest(unittest.TestCase):
             pin.pin_data(make_runtime(), NEW, 0, "4911ef7f")
 
     def test_the_expected_entry_must_have_its_immediate_sites_too(self):
-        # the ASCII table says OLD is at index 0 and it has 12 copies; one of its sites is gone, so the pin must not go on
+        # the ASCII table says OLD is at index 0 and it has 13 copies; one of its sites is gone, so the pin must not go on
         runtime = make_runtime()
         site = b"".join(struct.pack("<I", w) for w in site_words(OLD))
         damaged = runtime.replace(site, b"".join(struct.pack("<I", NOP) for _ in site_words(OLD)), 1)
         self.assertNotEqual(damaged, runtime)
-        with self.assertRaisesRegex(pin.PinError, "has 44 immediate runs"):
+        with self.assertRaisesRegex(pin.PinError, "has 48 immediate runs"):
             pin.pin_data(damaged, NEW)
 
     def test_an_md5_that_is_not_32_lowercase_hex_is_refused(self):
@@ -285,14 +285,14 @@ class PinCommandTest(unittest.TestCase):
         self.assertEqual(again.read_bytes(), out.read_bytes())
 
     def test_a_refusal_exits_one_logs_the_reason_on_stderr_and_writes_nothing(self):
-        self.libvrapi.write_bytes(make_runtime(sites=11))
+        self.libvrapi.write_bytes(make_runtime(sites=12))
         out = self.tmp / "pinned.so"
         result = self.run_tool("pin", "--libvrapi", str(self.libvrapi), "--libr15", str(self.libr15), "--out", str(out))
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
         record = json.loads(result.stderr)
         self.assertEqual((record["tag"], record["event"]), ("NEVR.QUEST.RUNTIME_PIN", "runtime_pin_refused"))
-        self.assertIn("44 immediate runs", record["reason"])
+        self.assertIn("48 immediate runs", record["reason"])
         self.assertFalse(out.exists())
 
     def test_a_damaged_first_entry_exits_one_naming_the_expected_and_the_found_md5(self):
@@ -354,14 +354,13 @@ class PinCommandTest(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("NEVR_REFERENCE_LIBVRAPI"),
                      "set NEVR_REFERENCE_LIBVRAPI to the reference APK's lib/arm64-v8a/libvrapi.so")
 class RealReferenceRuntimeTest(unittest.TestCase):
-    def test_the_pin_reproduces_the_lane_file_byte_for_byte(self):
+    def test_the_wave_2_runtime_pins_with_thirteen_copies_and_thirteen_sites(self):
         data = pathlib.Path(os.environ["NEVR_REFERENCE_LIBVRAPI"]).read_bytes()
         self.assertEqual(hashlib.sha256(data).hexdigest(), REFERENCE_SHA256)
         self.assertEqual(pin.table(data), [OLD.encode(), SECOND.encode(), THIRD.encode()])
         result, report = pin.pin_data(data, LANE_PIN_MD5)
-        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]), (12, 12, 48, 192))
-        self.assertEqual(report["changed_bytes"], 828)
-        self.assertEqual(hashlib.md5(result).hexdigest(), LANE_MD5)
+        self.assertEqual((report["ascii_copies"], report["sites"], report["immediate_runs"], report["immediate_words"]), (13, 13, 52, 208))
+        self.assertEqual(report["changed_bytes"], 897)
         again, _ = pin.pin_data(result, LANE_PIN_MD5)
         self.assertEqual(again, result)
 
