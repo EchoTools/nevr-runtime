@@ -133,8 +133,8 @@ struct StepConfig {
   std::size_t pinned_set_count = 0;
 };
 
-// A manifest file the step reads whole may take at most 1/N of the memory the device can still give. N is the share the cargo manifest
-// takes (kMemoryShareForManifest in core/cargo_limits.h, 8): both read one manifest whole while the engine is not yet running. The game reads a manifest whole,
+// A manifest file the step reads whole may take at most 1/N of the memory the device can still give. N is the share the CDN manifest
+// takes (kMemoryShareForManifest in cdn/cdn_limits.h, 8): both read one manifest whole while the engine is not yet running. The game reads a manifest whole,
 // sized by the file, and is bounded only by its allocator (CSysCompression::DecompressAndReadFile, libr15 0x2b9e0a0); here the bound
 // is a share of the device's memory, through the one function every memory-based limit uses (core/device_memory.h).
 inline constexpr std::uint64_t kMemoryShareForLocalManifest = 8;

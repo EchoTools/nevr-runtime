@@ -1,7 +1,7 @@
 // Host test for the shadow manifest builder (src/core/resource_shadow.{h,cpp}; docs/adr/0045-cdn-texture-delivery.md): the
 // bytes it builds are the layout the game's own resolver reads (manager +8, records at +0 sorted as signed, the count at +0x30,
 // the chunk table at +0x80, the handle table at +0x128), every chunk index it hands out is above the stock manifest's, and each
-// refusal is the one the plugin-level and cargo designs rely on. The reference reading is ReadLikeTheEngine plus this file's own
+// refusal is the one the plugin-level and CDN designs rely on. The reference reading is ReadLikeTheEngine plus this file's own
 // pointer arithmetic, which does what the game's code does with the table: `table + chunk * 0x10`.
 //
 // Built and run by `just test-quest-data`.
@@ -173,16 +173,16 @@ void AShadowThatDoesNotFitTheIndexSpaceIsRefusedAndTakesNoIndex() {
 // design 8.1 (plugin levels): shadows built in turn, then a republish, never share an index; each takes fresh indices above the last.
 void ShadowsBuiltInTurnNeverShareAnIndex() {
   FreshCounter();
-  const auto cargo = BuildOk(ThreeRecords());         // the cargo shadow: indices [first, first + 3)
+  const auto cdn = BuildOk(ThreeRecords());         // the CDN shadow: indices [first, first + 3)
   const auto packages = BuildOk(ThreeRecords());      // the package shadow: the next three
-  const auto republish = BuildOk(ThreeRecords());     // a cargo republish after a fetch: three more
-  if (!cargo || !packages || !republish) return;
-  QCHECK(cargo->chunk_base() == ns::kFirstChunkIndex);
-  QCHECK(packages->chunk_base() == cargo->chunk_base() + cargo->chunk_count());
+  const auto republish = BuildOk(ThreeRecords());     // a CDN republish after a fetch: three more
+  if (!cdn || !packages || !republish) return;
+  QCHECK(cdn->chunk_base() == ns::kFirstChunkIndex);
+  QCHECK(packages->chunk_base() == cdn->chunk_base() + cdn->chunk_count());
   QCHECK(republish->chunk_base() == packages->chunk_base() + packages->chunk_count());
   QCHECK(ns::Shadow::NextChunkIndex() == republish->chunk_base() + republish->chunk_count());
   std::set<std::uint32_t> seen;
-  for (const ns::Shadow* shadow : {cargo.get(), packages.get(), republish.get()}) {
+  for (const ns::Shadow* shadow : {cdn.get(), packages.get(), republish.get()}) {
     for (std::uint64_t name : {0x3fa6d25bc24a7b01ULL}) {
       ns::Found f;
       QCHECK(shadow->Find(kHighType, name, &f));
@@ -195,7 +195,7 @@ void ShadowsBuiltInTurnNeverShareAnIndex() {
   QCHECK(seen.size() == 9);
   // And each still reads its own handle: the second shadow's table is not the first's.
   ns::Found a, b;
-  QCHECK(cargo->Find(kLowType, 5, &a) && republish->Find(kLowType, 5, &b) && a.chunk != b.chunk && a.handle == b.handle);
+  QCHECK(cdn->Find(kLowType, 5, &a) && republish->Find(kLowType, 5, &b) && a.chunk != b.chunk && a.handle == b.handle);
 }
 
 void AFailedBuildBetweenTwoGoodOnesLeavesNoGap() {

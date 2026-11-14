@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-#include "cargo_read_keys.h"
+#include "cdn_read_keys.h"
 #include "hook_log.h"
 #include "menu_cards_hook.h"
 #include "menu_cards_swap.h"
@@ -756,13 +756,13 @@ void OnlyTheTransformClassUnderTheQuestNameIsOffered() {
   }
 }
 
-// ---- cargo_read (T2c, #2135): the read-finished record for a key the CDN served ----------------------
+// ---- cdn_read (T2c, #2135): the read-finished record for a key the CDN served ----------------------
 
 constexpr std::uint64_t kPosterName = 0x065104dd7f7388f1ULL;   // ui_menu_splash_screen_poster_a
 constexpr std::uint64_t kTextureClass = 0x0123456789abcdefULL;  // the resource's class: any value; the key is (name, index)
 
 // One ASTC 4x4 void-extent block (magenta) and a second block, so the first 16 bytes are the header and its colour.
-std::vector<unsigned char> CargoBytes() {
+std::vector<unsigned char> CdnBytes() {
   std::vector<unsigned char> b = {0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                                   0xff, 0xff, 0x00, 0x00, 0xcc, 0xcc, 0xff, 0xff};
   for (int i = 0; i < 16; ++i) b.push_back(static_cast<unsigned char>(0xa0 + i));  // never shown: past the first block
@@ -771,14 +771,14 @@ std::vector<unsigned char> CargoBytes() {
 
 void AServedKeysReadIsLoggedWithItsStatusLengthAndFirstBlock() {
   Reset("");
-  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
-  std::vector<unsigned char> bytes = CargoBytes();
+  nevr_quest::cdn_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CdnBytes();
   Block block;
   Resource res;
   Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
   QCHECK(Call(block) == kCallbackResult);
   QCHECK(g_seen.calls == 1 && g_seen.buffer == bytes.data());
-  const std::vector<std::string> lines = Lines("cargo_read");
+  const std::vector<std::string> lines = Lines("cdn_read");
   QCHECK(lines.size() == 1);
   if (lines.size() != 1) return;
   QCHECK(Text(lines[0], "level") == "info");
@@ -794,15 +794,15 @@ void AServedKeysReadIsLoggedWithItsStatusLengthAndFirstBlock() {
 
 void AServedKeyIsLoggedAtItsFirstSecondAndFourthRead() {
   Reset("");
-  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
-  std::vector<unsigned char> bytes = CargoBytes();
+  nevr_quest::cdn_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CdnBytes();
   for (int i = 0; i < 5; ++i) {
     Block block;
     Resource res;
     Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
     QCHECK(Call(block) == kCallbackResult);
   }
-  const std::vector<std::string> lines = Lines("cargo_read");
+  const std::vector<std::string> lines = Lines("cdn_read");
   QCHECK(lines.size() == 3);
   if (lines.size() != 3) return;
   QCHECK(Field(lines[0], "reads") == "1" && Field(lines[1], "reads") == "2" && Field(lines[2], "reads") == "4");
@@ -811,21 +811,21 @@ void AServedKeyIsLoggedAtItsFirstSecondAndFourthRead() {
 
 void AReadOfAKeyTheCdnDidNotServeIsSilent() {
   Reset("");
-  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
-  std::vector<unsigned char> bytes = CargoBytes();
+  nevr_quest::cdn_read::NoteServed(kPosterName, 1);
+  std::vector<unsigned char> bytes = CdnBytes();
   Block block;
   Resource res;
   Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);  // buffer 0: stock
   QCHECK(Call(block) == kCallbackResult);
   Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName + 1);  // another name
   QCHECK(Call(block) == kCallbackResult);
-  QCHECK(Lines("cargo_read").empty());
+  QCHECK(Lines("cdn_read").empty());
   QCHECK(g_seen.calls == 2);
 }
 
 void AFailedReadOfAServedKeyIsAWarningWithNoBytes() {
   Reset("");
-  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  nevr_quest::cdn_read::NoteServed(kPosterName, 1);
   Block block;
   Resource res;
   // A failed read can name its length with no buffer: the record must not read through the null pointer.
@@ -834,7 +834,7 @@ void AFailedReadOfAServedKeyIsAWarningWithNoBytes() {
   *Thunk::OriginalOut() = reinterpret_cast<void*>(+[](unsigned char*) -> std::uint64_t { return kCallbackResult; });
   mc::ArmForTest("", &g_contextPointer);
   QCHECK(Call(block) == kCallbackResult);
-  const std::vector<std::string> lines = Lines("cargo_read");
+  const std::vector<std::string> lines = Lines("cdn_read");
   QCHECK(lines.size() == 1);
   if (lines.size() != 1) return;
   QCHECK(Text(lines[0], "level") == "warn");
@@ -846,13 +846,13 @@ void AFailedReadOfAServedKeyIsAWarningWithNoBytes() {
 
 void AShortBufferShowsOnlyItsOwnBytes() {
   Reset("");
-  nevr_quest::cargo_read::NoteServed(kPosterName, 1);
+  nevr_quest::cdn_read::NoteServed(kPosterName, 1);
   std::vector<unsigned char> bytes = {0xfc, 0xfd, 0xff};
   Block block;
   Resource res;
   Fill(block, res, 4, 1, bytes.data(), bytes.size(), &g_alloc, 16, kTextureClass, kPosterName);
   QCHECK(Call(block) == kCallbackResult);
-  const std::vector<std::string> lines = Lines("cargo_read");
+  const std::vector<std::string> lines = Lines("cdn_read");
   QCHECK(lines.size() == 1 && Text(lines[0], "head") == "fcfdff" && Field(lines[0], "bytes") == "3");
 }
 

@@ -1,6 +1,6 @@
 /* SHA-256 (FIPS 180-4), streaming. On aarch64 Linux and Android the compression function is the CPU's own SHA-2 instructions when
  * /proc's hardware capabilities (getauxval AT_HWCAP, HWCAP_SHA2) say it has them, and the portable code below otherwise; both give
- * the same digest (sha256_backend_test). The cargo objects are hashed once, while they download, and this is the hash.
+ * the same digest (sha256_backend_test). The CDN objects are hashed once, while they download, and this is the hash.
  The pin on the game-data zip is one digest of the whole file
  * (docs/adr/0011-quest-game-data-first-run.md), so the downloader feeds every body byte through Update and compares
  * Hex() with the pin. No allocation, no exceptions.

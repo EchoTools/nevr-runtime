@@ -21,13 +21,13 @@
  * address minus chunk_base * 0x10 (as an integer, wrapping), so the game's `table + chunk * 0x10` lands on the right entry. The
  * engine's block cache is keyed by the chunk index alone (echovr.exe 0x1415255a0: the cached block's slot holds the chunk index),
  * so a shadow chunk index must never equal a stock one (stock has 10,304 chunks) and never equal another shadow's, whether that is
- * a second kind of shadow (cargo and plugin packages) or the same kind built again (a cargo republish): a cached block of one would
+ * a second kind of shadow (CDN and plugin packages) or the same kind built again (a CDN republish): a cached block of one would
  * be served as the other. So the indices of every shadow in the process come from ONE counter that never gives a value out twice:
  * Build takes n fresh indices, above every index given before, and fails (taking none) when fewer than n are left below
  * kChunkIndexLimit. A base above the stock count, with (base + chunks) * 0x10 below 2^31, lands on the same entry whether the game
  * does the multiply in 32 or 64 bits, signed or unsigned.
  *
- * This is the one builder both the CDN textures (cargo) and the plugin levels use. Nothing here allocates after Build, takes a
+ * This is the one builder both the CDN textures (CDN) and the plugin levels use. Nothing here allocates after Build, takes a
  * lock or writes: a Shadow is immutable, and a reader needs no synchronisation once it holds the pointer. It is never freed by
  * the code that publishes it (a request being filled from it must stay valid).
  */
@@ -54,7 +54,7 @@ inline constexpr std::size_t kChunkBytes = 0x10;
 
 // The stock manifest holds 10,304 chunks; no shadow chunk index may be below this (kFirstChunkIndex is far above).
 inline constexpr std::uint32_t kStockChunkCount = 10304;
-// The first index the process-wide counter gives out (above stock; the cargo design's Q20), and the limit it stays under:
+// The first index the process-wide counter gives out (above stock; the CDN design's Q20), and the limit it stays under:
 // (index) * 0x10 stays below 2^31 for every index below kChunkIndexLimit, so the game's index multiply is the same in any width.
 inline constexpr std::uint32_t kFirstChunkIndex = 0x01000000;
 inline constexpr std::uint64_t kChunkIndexLimit = (std::uint64_t{1} << 31) / kChunkBytes;  // 0x08000000
@@ -67,7 +67,7 @@ struct Record {
   std::uint32_t offset_in_chunk = 0;
   std::uint32_t size = 0;
   std::uint32_t alignment = 0;
-  std::uint32_t user = 0;  // the caller's tag (the cargo label's index); never written into the engine's layout
+  std::uint32_t user = 0;  // the caller's tag (the CDN label's index); never written into the engine's layout
 };
 
 // One stored block of a package file. `package` indexes Input::handles.

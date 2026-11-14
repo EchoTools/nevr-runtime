@@ -1,8 +1,8 @@
 // Host test of the SHA-256 backends (src/quest/data/sha256.*): the scalar code and, on an aarch64 CPU that has the SHA-2 instructions,
 // the hardware code give the same digest for every length and every split of the input, and the scalar code is what runs when the CPU
-// does not have them. The hash of every cargo object is made once, while it downloads, so on a headset it is made by the instructions.
+// does not have them. The hash of every CDN object is made once, while it downloads, so on a headset it is made by the instructions.
 //
-// Built for the host by `just test-quest-data`; the same source is built for aarch64 and run under qemu-user (REPORT-P3-cargo.md has
+// Built for the host by `just test-quest-data`; the same source is built for aarch64 and run under qemu-user (REPORT-P3-cdn.md has
 // the commands), where the hardware backend is present.
 
 #if defined(__aarch64__) && defined(__linux__)

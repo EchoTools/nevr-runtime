@@ -29,7 +29,7 @@
 
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
-#include "quest/cargo/cargo_service.h"
+#include "quest/cdn/cdn_worker.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
@@ -636,10 +636,10 @@ class ProductionSteps final : public Steps {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
-    // Not in the whole-game mode: the data step's first-run worker (cargo::FirstRun, #2398) is then the one writer of the store, and a second
+    // Not in the whole-game mode: the data step's first-run worker (cdn::FirstRun, #2398) is then the one writer of the store, and a second
     // fetch from here would append to the same store files with no lock between the two.
     const nevr_quest::AssetsChoice& assets = sentinel::ActiveConfig().assets;
-    if (ok && !assets.wholeGame) nevr_quest::cargo::Start(assets);
+    if (ok && !assets.wholeGame) nevr_quest::cdn::Start(assets);
     return ok;
   }
 

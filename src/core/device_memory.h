@@ -1,7 +1,7 @@
 /* The one place the memory a device can still give is read, and the one function every memory-share limit goes through
- * (docs/adr/0045-cdn-texture-delivery.md decision 8). The cargo limits (cargo_limits.h) and the first-run data step's manifest read
+ * (docs/adr/0045-cdn-texture-delivery.md decision 8). The CDN limits (cdn_limits.h) and the first-run data step's manifest read
  * (quest/data/data_step.h) take their sizes from the same number with the same arithmetic, so a device with less memory gets a smaller
- * bound on every path and one with more gets a larger one. (The resolver's pin is thread-local and needs no size: cargo_resolver.h.)
+ * bound on every path and one with more gets a larger one. (The resolver's pin is thread-local and needs no size: cdn_resolver.h.)
  */
 #pragma once
 

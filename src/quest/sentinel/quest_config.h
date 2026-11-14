@@ -154,7 +154,7 @@ struct HandFlipChoice {
 };
 
 // The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
-// defaults live in code (quest/cargo/cargo_service.h); the file only changes them, and an empty field means the code's default.
+// defaults live in code (quest/cdn/cdn_worker.h); the file only changes them, and an empty field means the code's default.
 //   assets.cdn_url        the host's base (https only); assets.manifest the manifest's path under it (a test device names its own)
 //   assets.required_only  fetch only the labels whose state is `required`
 //   assets.labels.<name>  on, off or required; a label the code and the file do not name is off, whatever a manifest says

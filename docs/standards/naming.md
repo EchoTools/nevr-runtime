@@ -142,6 +142,7 @@ the name and has to make sense as one.
 | `<name>_rules.h` | the decisions | pure C++: what the component decides from values it is handed. Header only | a read of game memory, a call into the game or the OS, or a log write, other than through a seam the caller passes (an `Env`, an `Ops`); an address |
 | `<name>_targets.h` | the pins | the game's addresses, slots and instruction words the component hooks or reads, with the compile-time checks that tie each offset to its word | logic |
 | `_entry.inc` | a reviewed assembly entry | the assembly a manager slot enters (ADR 0046 rule 2), included at global scope by the platform half and by its qemu test, so the test runs the text the build ships | C++ |
+| `<name>_windows.*`, `<name>_posix.*` | a platform edge | the one platform's implementation of a seam the component's core declares (an `Env`): its files, its network, its clock, its log | a decision the core could make (a hash, a verification, a size limit, a path check), or anything the other edge also needs |
 
 - `<name>_rules.h` is the only suffix for the decisions, whether one platform uses them or both. A component has at most one
   `<name>_rules.h`. `<name>_core.h` is not a role suffix.
@@ -151,12 +152,16 @@ the name and has to make sense as one.
   each has to be part of a name that says what the file holds.
 - `_entry.inc` is the only suffix for an assembly entry. `_thunk.inc` is not a role suffix (`thunk` is the manager's
   C++ wrapper, `callback_thunk.h`).
-- A file MUST NOT carry the platform in its stem after the stem's first word (`ui_text_quest`, `crash_report_win_common`,
-  `hwdump_android`; the words `quest`, `win`, `pc`, `android`): the directory names the platform, and includes are
-  path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one component. A stem
-  whose first word is a platform word (`quest_config`, `android_main`) names a thing of that platform, not one half of
-  a component, and is left to review. A suffix that names a binary format or a binary's role (`_pe`, `_elf`, `_host`)
-  is a word, not a platform.
+- The suffix names the platform, not the directory. A component that both platforms build from one directory
+  (`src/cdn/`) keeps its core in unsuffixed files with no platform word in them, and each platform edge beside them
+  carries its platform as the role suffix `_windows` or `_posix` (`src/cdn/env_windows.cpp`, `src/cdn/env_posix.cpp`);
+  CMake picks the edge per target. These two are the only platform suffixes. A stem MUST NOT carry the words `quest`,
+  `win`, `pc` or `android` after its first word (`ui_text_quest`, `crash_report_win_common`, `hwdump_android`). A file
+  that predates its component's move into one directory is a platform half under `src/runtime/` or `src/quest/`, and
+  includes are path-qualified, so `quest/invite/ui_text.h` and `runtime/patch/ui_text.h` are two files of one
+  component until it moves. A stem whose first word is a platform word (`quest_config`, `android_main`) names a thing
+  of that platform, not one half of a component, and is left to review. A suffix that names a binary format or a
+  binary's role (`_pe`, `_elf`, `_host`) is a word, not a platform.
 - A test is named for the stem it tests. A C++ test is `<stem>_test.cpp`; a freestanding qemu test is
   `<stem>_qemu.cpp`, where `<stem>` is the stem of a file the test runs (its `<stem>.cpp` or `<stem>_entry.inc`); a Python test is `test_<stem>.py` and a Go test `<stem>_test.go`, as their test runners require.
 
@@ -166,6 +171,9 @@ the name and has to make sense as one.
   by the membership test of that directory (`AGENTS.md`, "Architecture"): `splash_skip_rules.h` beside `splash_skip.cpp`
   in `patch/`, `<name>_rules.h` beside the drone code in `combat/`. A rule with no PC half lives with its only
   platform half.
+- A component whose core runs unchanged on both platforms behind a seam lives in its own directory under `src/`, named
+  for the component (`src/cdn/`), core and edges together. What each runtime does to start it (its config reader, its
+  cache directory, its publisher) stays in that runtime's tree (`src/quest/cdn/`, `src/runtime/lifecycle/cdn_start.cpp`).
 - The Quest half of a shared component lives in the Quest directory of its area and takes the component's name:
   `src/quest/sentinel/ui_texture_mips.cpp` for `src/runtime/patch/ui_texture_mips_rules.h`.
 - A PC file ported whole from an upstream file that holds several components (EchoCombat's `dronefix.cpp`) is not split

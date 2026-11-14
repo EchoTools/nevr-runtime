@@ -2,7 +2,7 @@
 // then the mount before the step returns, instead of logging `data_all_assets_ready result=skipped reason=no_worker`.
 //
 // The step is run as the sentinel runs it: StepConfig::all_assets on, and all_assets_ready the function the sentinel sets
-// (nevr_quest::cargo::MakeFirstRunWorker, the one MakeProductionFirstRunWorker wraps over libcurl), here over a scripted transport and
+// (nevr_quest::cdn::MakeFirstRunWorker, the one MakeProductionFirstRunWorker wraps over libcurl), here over a scripted transport and
 // a scratch cache. The sentinel's own line that sets it (src/quest/sentinel/entry.cpp) is checked by tools/internal/questwiring/whole_game_test.go.
 //
 // Built and run by `just test-quest-data`.
@@ -19,19 +19,19 @@
 
 #include <nlohmann/json.hpp>
 
-#include "quest/cargo/cargo_service.h"
+#include "quest/cdn/cdn_worker.h"
 #include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
 #include "quest/sentinel/hook_log.h"
-#include "quest/tests/cargo_fake_env.h"
-#include "quest/tests/cargo_zstd_support.h"
+#include "quest/tests/cdn_fake_env.h"
+#include "quest/tests/cdn_zstd_support.h"
 #include "quest/tests/data_test_support.h"
 #include "quest/tests/test_check.h"
 
 namespace {
 
-namespace nc = nevr_cargo;
-namespace qc = nevr_quest::cargo;
+namespace nc = nevr_cdn;
+namespace qc = nevr_quest::cdn;
 namespace qd = nevr_quest::data;
 using json = nlohmann::ordered_json;
 using nevr_quest::data::Sha256Hex;
@@ -47,10 +47,10 @@ constexpr std::size_t kSizeSkew = 16;                 // how far a row's stated 
 constexpr std::size_t kNotAFramePageBytes = 4096;     // the body of a reachable URL that is not a zstd frame
 
 std::mutex g_mutex;
-std::vector<std::string> g_cargoLines;  // the sentinel's JSON lines (the cargo worker and the Quest env log through them)
+std::vector<std::string> g_cdnLines;  // the sentinel's JSON lines (the CDN worker and the Quest env log through them)
 void Sink(sentinel::LogLevel, const char* line) {
   std::lock_guard<std::mutex> lock(g_mutex);
-  g_cargoLines.emplace_back(line);
+  g_cdnLines.emplace_back(line);
 }
 // The first line of `event` (that also has `field` equal to `value`, when one is named); lines.size() when there is none.
 std::size_t FirstIndexOf(const std::vector<std::string>& lines, const std::string& event, const char* field = nullptr, const char* value = nullptr) {
@@ -62,10 +62,10 @@ std::size_t FirstIndexOf(const std::vector<std::string>& lines, const std::strin
   return lines.size();
 }
 void PrintLog(const char* title, const std::vector<std::string>& step) {
-  if (std::getenv("NEVR_CARGO_PRINT_LOG") == nullptr) return;  // the sentinel's own lines of a launch, for a commit message or a person
+  if (std::getenv("NEVR_CDN_PRINT_LOG") == nullptr) return;  // the sentinel's own lines of a launch, for a commit message or a person
   std::printf("== %s\n", title);
   for (const std::string& line : step) std::printf("%s\n", line.c_str());
-  for (const std::string& line : g_cargoLines) std::printf("%s\n", line.c_str());
+  for (const std::string& line : g_cdnLines) std::printf("%s\n", line.c_str());
 }
 
 struct Scripted : qd::Transport {
@@ -108,8 +108,8 @@ struct Launch {
   std::vector<std::string> published;   // what the worker handed to the resource request hook
 
   Launch() {
-    descriptor = cargo_test::MakeFrame(kDescriptorBytes, 40);
-    pixels = cargo_test::MakeFrame(kPixelBytes, 2000);
+    descriptor = cdn_test::MakeFrame(kDescriptorBytes, 40);
+    pixels = cdn_test::MakeFrame(kPixelBytes, 2000);
     const auto entry = [](const char* type, const std::string& blob, std::uint64_t bytes) {
       return json{{"platform", "android-arm64"}, {"type", type}, {"name", "0x3fa6d25bc24a7b01"}, {"format", "zstd-frame"},
                   {"sha256", Sha256Hex(blob.data(), blob.size())}, {"size", blob.size()}, {"bytes", bytes}, {"align", 16}, {"stock_size", bytes}};
@@ -117,7 +117,7 @@ struct Launch {
     const json doc = {{"schema", "nevr-cargo-manifest"},
                       {"schema_version", 1},
                       {"labels", {{"game", {{"entries", {entry("0xe2efe7289d5985b8", descriptor, kDescriptorBytes), entry(kType, pixels, kPixelBytes)}}}}}}};
-    transport.server[std::string(kBase) + kManifestPath] = cargo_test::ZstdFrameOf(doc.dump());
+    transport.server[std::string(kBase) + kManifestPath] = cdn_test::ZstdFrameOf(doc.dump());
     transport.server[std::string(kBase) + "blobs/sha256/" + Sha256Hex(descriptor.data(), descriptor.size())] = descriptor;
     transport.server[std::string(kBase) + "blobs/sha256/" + Sha256Hex(pixels.data(), pixels.size())] = pixels;
 
@@ -154,7 +154,7 @@ std::function<qd::AllAssetsResult(const std::string&)> TheSentinelsWorker(Launch
 }
 
 void AWholeGameLaunchDownloadsEveryObjectAndMountsTheShadowBeforeTheStepReturns() {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   Launch launch;
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
@@ -169,14 +169,14 @@ void AWholeGameLaunchDownloadsEveryObjectAndMountsTheShadowBeforeTheStepReturns(
   QCHECK(!launch.StepSaid("no_worker") && !launch.StepSaid("data_all_assets_ready result=skipped"));
   // The download: the manifest, then each object once, all inside the step.
   QCHECK(launch.transport.requests.size() == 3);
-  const std::size_t start = FirstIndexOf(g_cargoLines, "cargo_prefetch_start");
-  const std::size_t done = FirstIndexOf(g_cargoLines, "cargo_prefetch_done");
-  const std::size_t mounted = FirstIndexOf(g_cargoLines, "cargo_mounted", "source", "fetch");  // the boot mount of an empty store says none
-  QCHECK(start < done && done < mounted && mounted < g_cargoLines.size());  // the download ends before the mount, and both ran
-  if (!(mounted < g_cargoLines.size())) return;
-  const json doneLine = json::parse(g_cargoLines[done], nullptr, false);
+  const std::size_t start = FirstIndexOf(g_cdnLines, "cdn_prefetch_start");
+  const std::size_t done = FirstIndexOf(g_cdnLines, "cdn_prefetch_done");
+  const std::size_t mounted = FirstIndexOf(g_cdnLines, "cdn_mounted", "source", "fetch");  // the boot mount of an empty store says none
+  QCHECK(start < done && done < mounted && mounted < g_cdnLines.size());  // the download ends before the mount, and both ran
+  if (!(mounted < g_cdnLines.size())) return;
+  const json doneLine = json::parse(g_cdnLines[done], nullptr, false);
   QCHECK(doneLine["result"] == "complete" && doneLine["fetched"] == 2);
-  const json mountLine = json::parse(g_cargoLines[mounted], nullptr, false);
+  const json mountLine = json::parse(g_cdnLines[mounted], nullptr, false);
   QCHECK(mountLine["source"] == "fetch" && mountLine["records"] == 2);
   // The mount was published, and it reads what the download stored.
   QCHECK(g_published.size() == 1 && g_published[0]->shadow != nullptr);
@@ -184,21 +184,21 @@ void AWholeGameLaunchDownloadsEveryObjectAndMountsTheShadowBeforeTheStepReturns(
 }
 
 void ADownloadThatCannotFinishEndsTheLaunchWithTheMessageNotTheNoWorkerWarning() {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   Launch launch;
   launch.transport.server.erase(std::string(kBase) + "blobs/sha256/" + Sha256Hex(launch.pixels.data(), launch.pixels.size()));  // a 404
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
-  QCHECK(r.message == qc::kFirstRunFailedMessage);
+  QCHECK(r.message == nc::kFirstRunFailedMessage);
   QCHECK(launch.StepSaid("data_all_assets_ready result=failed reason=worker_refused") && !launch.StepSaid("no_worker"));
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_prefetch_failed") < g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_prefetch_failed") < g_cdnLines.size());
   QCHECK(g_published.empty());  // nothing mounted from a store that is not whole
 }
 
 void AStoreThatIsWholeButMountsNothingEndsTheLaunchWithTheMessage() {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   Launch launch;
   nevr_quest::AssetsChoice assets;
@@ -209,21 +209,21 @@ void AStoreThatIsWholeButMountsNothingEndsTheLaunchWithTheMessage() {
   const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);  // not ok: the engine would have no asset source
   QCHECK(g_published.empty());
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", "failed") < g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", "failed") < g_cdnLines.size());
 }
 
 void AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored() {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   Launch launch;
   // The object's bytes hash to its name, but its frame header says 248 bytes and the manifest says 999.
-  const std::string frame = cargo_test::MakeFrame(248, 40);
+  const std::string frame = cdn_test::MakeFrame(248, 40);
   const json doc = {{"schema", "nevr-cargo-manifest"},
                     {"schema_version", 1},
                     {"labels", {{"game", {{"entries", {{{"platform", "android-arm64"}, {"type", "0xe2efe7289d5985b8"}, {"name", "0x3fa6d25bc24a7b01"},
                                                          {"format", "zstd-frame"}, {"sha256", Sha256Hex(frame.data(), frame.size())},
                                                          {"size", frame.size()}, {"bytes", 999}, {"align", 16}, {"stock_size", 999}}}}}}}}};
-  launch.transport.server[std::string(kBase) + kManifestPath] = cargo_test::ZstdFrameOf(doc.dump());
+  launch.transport.server[std::string(kBase) + kManifestPath] = cdn_test::ZstdFrameOf(doc.dump());
   launch.transport.server[std::string(kBase) + "blobs/sha256/" + Sha256Hex(frame.data(), frame.size())] = frame;
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
@@ -234,7 +234,7 @@ void AFrameWhoseHeaderStatesAnotherSizeThanTheManifestIsNotStored() {
 
 // The second launch of the same cache with every request failing: the manifest cannot be refreshed (#2414).
 qd::StepResult RunOffline(Launch& launch) {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   launch.stepEvents.clear();
   launch.transport.requests.clear();
@@ -257,26 +257,26 @@ void AnOfflineLaunchOverACompleteCacheBootsAndWarnsThatTheManifestWasNotRefreshe
   QCHECK(!launch.StepSaid("worker_refused"));
   // The cache was mounted from disk and handed on, once; nothing was downloaded.
   QCHECK(g_published.size() == 1 && g_published[0]->shadow != nullptr);
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_mounted", "source", "boot") < g_cargoLines.size());
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_prefetch_start") == g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_mounted", "source", "boot") < g_cdnLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_prefetch_start") == g_cdnLines.size());
   // One Warning says the manifest was not refreshed, and what that means.
-  const std::size_t at = FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed);
-  QCHECK(at < g_cargoLines.size());
-  if (at < g_cargoLines.size()) {
-    const json line = json::parse(g_cargoLines[at], nullptr, false);
+  const std::size_t at = FirstIndexOf(g_cdnLines, "cdn_first_run", "result", nc::kFirstRunManifestNotRefreshed);
+  QCHECK(at < g_cdnLines.size());
+  if (at < g_cdnLines.size()) {
+    const json line = json::parse(g_cdnLines[at], nullptr, false);
     QCHECK(line.value("level", "") == "warn" && line.value("stopped", "") == nc::kStoppedManifestFailed && !line.value("consequence", "").empty());
   }
 }
 
 void AnOfflineLaunchOverAnEmptyCacheStillEndsWithTheMessage() {
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   Launch launch;
   const qd::StepResult r = RunOffline(launch);  // nothing was ever stored
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
   QCHECK(g_published.empty());
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", "failed") < g_cargoLines.size());
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", "failed") < g_cdnLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", nc::kFirstRunManifestNotRefreshed) == g_cdnLines.size());
 }
 
 // A first launch that stores everything, then the saved manifest rewritten to name one more name (`extra`, a manifest entry) than the
@@ -293,7 +293,7 @@ qd::StepResult OfflineLaunchOverASavedManifestWithOneMoreName(Launch& launch, co
                     {"labels", {{"game", {{"entries", {entry("0x3fa6d25bc24a7b01", "0xe2efe7289d5985b8", launch.descriptor, kDescriptorBytes),
                                                        entry("0x3fa6d25bc24a7b01", kType, launch.pixels, kPixelBytes), extra}}}}}}};
   const std::string saved = launch.scratch.Path("nevr/cache/manifest.json.zst");
-  const std::string frame = cargo_test::ZstdFrameOf(doc.dump());
+  const std::string frame = cdn_test::ZstdFrameOf(doc.dump());
   std::FILE* f = std::fopen(saved.c_str(), "wb");
   QCHECK(f != nullptr);
   if (f != nullptr) {
@@ -305,13 +305,13 @@ qd::StepResult OfflineLaunchOverASavedManifestWithOneMoreName(Launch& launch, co
 
 void AnOfflineLaunchOverACacheMissingAnObjectOfItsSavedManifestStillEndsWithTheMessage() {
   Launch launch;
-  const std::string other = cargo_test::MakeFrame(kDescriptorBytes, kOtherFrameSize);  // named by the manifest, never stored
+  const std::string other = cdn_test::MakeFrame(kDescriptorBytes, kOtherFrameSize);  // named by the manifest, never stored
   const json extra = {{"platform", "android-arm64"}, {"type", "0xe2efe7289d5985b8"}, {"name", "0x3fa6d25bc24a7b02"}, {"format", "zstd-frame"},
                       {"sha256", Sha256Hex(other.data(), other.size())}, {"size", other.size()}, {"bytes", kDescriptorBytes}, {"align", kStoreAlign},
                       {"stock_size", kDescriptorBytes}};
   const qd::StepResult r = OfflineLaunchOverASavedManifestWithOneMoreName(launch, extra);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", nc::kFirstRunManifestNotRefreshed) == g_cdnLines.size());
 }
 
 void AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestStatesStillEndsWithTheMessage() {
@@ -323,12 +323,12 @@ void AnOfflineLaunchOverACacheHoldingAnObjectAtAnotherSizeThanItsSavedManifestSt
                       {"bytes", kDescriptorBytes}, {"align", kStoreAlign}, {"stock_size", kDescriptorBytes}};
   const qd::StepResult r = OfflineLaunchOverASavedManifestWithOneMoreName(launch, extra);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", nc::kFirstRunManifestNotRefreshed) == g_cdnLines.size());
   // The set was refused for its size, not for a missing object: the boot mount says so.
-  const std::size_t at = FirstIndexOf(g_cargoLines, "cargo_mounted", "source", "boot");
-  QCHECK(at < g_cargoLines.size());
-  if (at < g_cargoLines.size()) {
-    const json line = json::parse(g_cargoLines[at], nullptr, false);
+  const std::size_t at = FirstIndexOf(g_cdnLines, "cdn_mounted", "source", "boot");
+  QCHECK(at < g_cdnLines.size());
+  if (at < g_cdnLines.size()) {
+    const json line = json::parse(g_cdnLines[at], nullptr, false);
     QCHECK(line.value("missing", 1) == 0 && line.value("refused", 0) == 1);
   }
 }
@@ -337,14 +337,14 @@ void AManifestTheCdnAnswersThatIsNotAZstdFrameStillEndsTheLaunchOverACompleteCac
   Launch launch;
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   QCHECK(qd::RunDataStep(launch.config, launch.transport).outcome == qd::StepOutcome::kStubbed);
-  g_cargoLines.clear();
+  g_cdnLines.clear();
   g_published.clear();
   launch.stepEvents.clear();
   launch.transport.server[std::string(kBase) + kManifestPath] = std::string(kNotAFramePageBytes, 'x');  // reachable, but not what the CDN publishes
   launch.config.all_assets_ready = TheSentinelsWorker(launch);
   const qd::StepResult r = qd::RunDataStep(launch.config, launch.transport);
   QCHECK(r.outcome == qd::StepOutcome::kFailed && r.status == qd::FetchStatus::kWorkerRefused);  // a refused manifest is not an offline launch
-  QCHECK(FirstIndexOf(g_cargoLines, "cargo_first_run", "result", qc::kFirstRunManifestNotRefreshed) == g_cargoLines.size());
+  QCHECK(FirstIndexOf(g_cdnLines, "cdn_first_run", "result", nc::kFirstRunManifestNotRefreshed) == g_cdnLines.size());
 }
 
 }  // namespace

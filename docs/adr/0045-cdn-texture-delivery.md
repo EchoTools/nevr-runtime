@@ -1,6 +1,6 @@
 # ADR 0045: Game textures are served from a CDN cache through the game's own resolver
 
-Status: proposed. Applies to `src/core/resource_shadow.*`, `src/core/cargo_*`, `src/quest/cargo/`, the resolver hook in
+Status: proposed. Applies to `src/core/resource_shadow.*`, `src/cdn/cdn_*`, `src/quest/cdn/`, the resolver hook in
 `src/quest/sentinel/resource_request_hook.cpp` and, for the PC half, `src/runtime/patch/plugin_assets.cpp`. Supersedes
 `docs/adr/0005-cosmetics-cdn-format.md` (the v1 `.evrp` tint packages, which write nothing to the game). Amends the cache path of
 `docs/reference/content-packs.md` and the in-place write of `NEVR_RegisterResourceOverride` for textures. Read together with the
@@ -35,15 +35,15 @@ process.
    from the cache's records. The engine fills the request itself and its own reader reads our file into a buffer its own allocator
    makes. No hook is added: the hook on the resolver exists on both platforms. The shadow builder is shared with the plugin-level
    package registry.
-2. **Precedence: cargo, then stock, then plugin packages.** A cargo entry is a deliberate, published replacement of a stock name
+2. **Precedence: CDN, then stock, then plugin packages.** A CDN entry is a deliberate, published replacement of a stock name
    and is served before stock. A plugin package never replaces a stock name: a package that collides with stock is refused, so a
    server and its clients resolve a name to the same bytes. Each rule has its reason; neither changes the other.
 3. **One process-wide chunk-index counter, first value `0x01000000`.** Shadow chunk words start above the stock manifest's 10,304
    chunks, because the engine's block cache is keyed by the chunk index alone: a cached block of one shadow would be served as
-   another's. So every shadow in the process (cargo, plugin packages, a cargo republish) takes its indices from one counter that
+   another's. So every shadow in the process (CDN, plugin packages, a CDN republish) takes its indices from one counter that
    never gives a value out twice, and a build that finds fewer than it needs below `0x08000000` takes none and fails. Below that
    limit `index * 0x10` stays under 2^31, so the game's index multiply lands on the same entry in 32 or 64 bits, signed or unsigned.
-4. **The manifest supersedes ADR 0005's.** One JSON document keyed `(platform, on-disk type, name)` (`src/core/cargo_manifest.h`), for
+4. **The manifest supersedes ADR 0005's.** One JSON document keyed `(platform, on-disk type, name)` (`src/cdn/cdn_manifest.h`), for
    any on-disk type, published as one zstd frame (`manifest.json.zst`) whose header states the content size. The client decodes it with
    the libzstd the runtime already links (not the game's `CSysCompression`, which needs the engine's allocator and function table
    before the engine runs) and holds the declared size to the device's memory before it decodes anything. A record of 0 bytes is
@@ -55,19 +55,19 @@ process.
    `v1/manifest.json.zst` holds no label in this decision. The manifest-publish token is held by the project owner's delegate;
    whether an R2 token can be limited to a key prefix is open and not needed here.
 6. **Objects are appended to a few store files and hashed once.** A blob is streamed into `store-<n>.pack` (at most 4 GiB: the engine's
-   chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cargo_validate.h`); when size, header
+   chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cdn_validate.h`); when size, header
    and SHA-256 match, its bytes are synced and then one fixed record (SHA-256, file, offset, sizes, crc) is appended to `blobs.idx`
    and synced. A failure or a kill gives the bytes back at the next open. The manifest is saved as it was published. At boot the
    store reads the index and measures its files; nothing is read or hashed. At mount each store file is opened once, read-only,
    held for the life of the process, and serves every object in it. On Quest the directory is `<internalDataPath>/nevr/cache/`.
 7. **Never block the boot.** The runtime mounts what the cache holds at boot with no network, fetches in the background on a
    client only, and mounts what arrives. A first launch may show the stock texture; a second launch shows the CDN texture from its
-   first load with no request. Every request of a cargo key reads the cargo file; there is no served-once latch.
-8. **Limits come from the device and the manifest, never from a constant** (`src/core/cargo_limits.h`). The manifest text, the entry
+   first load with no request. Every request of a CDN key reads the CDN file; there is no served-once latch.
+8. **Limits come from the device and the manifest, never from a constant** (`src/cdn/cdn_limits.h`). The manifest text, the entry
    count, one object's size, the storage a plan may add and the store files held open are each a share of the device's free memory,
    free space and free descriptors, read when the run starts; a missing fact stops the run with its name. What remains constant is
-   what a format defines (`src/core/cargo_format.h`: SHA-256, hex, CRC-32, the zstd frame header, the blob index; and the engine's layout: a 4 GiB
-   store file, 32-bit sizes, an alignment that is a power of two of at most 4096). Every memory-based bound on every path, the cargo
+   what a format defines (`src/cdn/cdn_format.h`: SHA-256, hex, CRC-32, the zstd frame header, the blob index; and the engine's layout: a 4 GiB
+   store file, 32-bit sizes, an alignment that is a power of two of at most 4096). Every memory-based bound on every path, the CDN
    limits and the first-run data step's manifest read, goes through one reader and one function (`src/core/device_memory.h`). A resolver
    pin is thread-local, as the game keeps its own per-thread state (FillResourceFileRequest echovr.exe `0x140fa1fe0`: slot lookup `0x140fa2155`, `TlsGetValue` through `CPool::GetOrCreate` `0x140fa2171`, allocation `0x140fa218d`), so
    no table size limits the threads that read resources. A manifest's decoded size is taken from its frame header, as the game takes a
@@ -87,10 +87,10 @@ process.
     there, and then calls the launch's setup (`data_wiring::Options::all_assets_ready`: the download and the mount of the shadow manifest,
     which the first archive load needs) before the engine starts. The step runs that function when one is set and ends the launch with its
     message when it answers not-ok (status `worker_refused`). The sentinel (`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`) sets that
-    function beside the mode, from the same configuration: `nevr_quest::cargo::MakeProductionFirstRunWorker` (`src/quest/cargo/cargo_service.h`) mounts what the cache
-    holds, then runs the cargo worker with `RunConfig::first_run`, which stores every object of every served label through the first-run
-    prefetch (`src/core/cargo_prefetch.h`, over an adapter on the cargo store in `src/core/cargo_run.cpp`), ends at the first object that
-    cannot be had, saves the manifest and mounts the shadow. It answers ok only when the store is whole. When the manifest cannot be refreshed (a failed request, or a body over the size limit) and the set mounted from the saved manifest at the start left no name out, it answers ok with one Warning (`cargo_first_run result=manifest_not_refreshed`), so an offline launch over a complete cache boots; a missing name, a refused manifest or an empty cache still ends the launch with the message. A stub that cannot be written ends the launch with a message, because the engine
+    function beside the mode, from the same configuration: `nevr_quest::cdn::MakeProductionFirstRunWorker` (`src/quest/cdn/cdn_worker.h`) mounts what the cache
+    holds, then runs the CDN worker with `RunConfig::first_run`, which stores every object of every served label through the first-run
+    prefetch (`src/cdn/cdn_prefetch.h`, over an adapter on the CDN store in `src/cdn/cdn_run.cpp`), ends at the first object that
+    cannot be had, saves the manifest and mounts the shadow. It answers ok only when the store is whole. When the manifest cannot be refreshed (a failed request, or a body over the size limit) and the set mounted from the saved manifest at the start left no name out, it answers ok with one Warning (`cdn_first_run result=manifest_not_refreshed`), so an offline launch over a complete cache boots; a missing name, a refused manifest or an empty cache still ends the launch with the message. A stub that cannot be written ends the launch with a message, because the engine
     could not start either. A manifest that is already there is kept and logged (Warning when it is not the stub or cannot be read); the step
     does not check that the engine will accept it.
 

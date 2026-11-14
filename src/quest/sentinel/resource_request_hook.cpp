@@ -11,8 +11,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "core/cargo_resolver.h"
-#include "cargo_read_keys.h"
+#include "cdn/cdn_resolver.h"
+#include "cdn_read_keys.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -63,20 +63,20 @@ std::atomic<std::uint64_t> g_overlayFailed{0};
 std::atomic<std::uint64_t> g_overlayTicket{0};
 std::atomic<bool> g_overlayCapSaid{false};
 
-// The cargo set (PublishCargo). The resolver holds the published shadow and the per-thread pins; g_sets remembers which Mounted each
+// The CDN set (PublishCdn). The resolver holds the published shadow and the per-thread pins; g_sets remembers which Mounted each
 // published shadow came from, for the label name of a serve line (read only when a line is written, never on the hot path).
 // A function-local static, not a namespace-scope object: the Resolver's constructor takes its id from a counter at run time, so a
 // namespace-scope one gets a load-time initializer (tools/check_quest_static_init.sh). The Resolver is trivially destructible and its
 // constructor neither allocates nor locks; two threads that call this first at once are ordered by the static's guard.
-nevr_cargo::Resolver& Cargo() noexcept {
-  static nevr_cargo::Resolver cargo;
-  return cargo;
+nevr_cdn::Resolver& Cdn() noexcept {
+  static nevr_cdn::Resolver cdn;
+  return cdn;
 }
-std::atomic<const nevr_cargo::Mounted*> g_sets[kCargoSets];
+std::atomic<const nevr_cdn::Mounted*> g_sets[kCdnSets];
 std::atomic<unsigned> g_setCount{0};
-std::atomic<std::uint64_t> g_cargoServed{0};
-constexpr unsigned kCargoSlots = 256;
-KeySlot g_cargoSeen[kCargoSlots];
+std::atomic<std::uint64_t> g_cdnServed{0};
+constexpr unsigned kCdnSlots = 256;
+KeySlot g_cdnSeen[kCdnSlots];
 
 constexpr std::uint64_t Mix(std::uint64_t x) noexcept {
   x ^= x >> 30;
@@ -115,11 +115,11 @@ void CountUnlogged() noexcept {
   if ((count & (count - 1)) == 0) sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_unlogged", {{"count", count}});
 }
 
-// The same as Touch for the cargo keys: how many times this key has been served, or 0 when it found no slot.
-std::uint64_t TouchCargo(std::uint64_t key) noexcept {
-  const std::size_t home = static_cast<std::size_t>(key % kCargoSlots);
+// The same as Touch for the CDN keys: how many times this key has been served, or 0 when it found no slot.
+std::uint64_t TouchCdn(std::uint64_t key) noexcept {
+  const std::size_t home = static_cast<std::size_t>(key % kCdnSlots);
   for (unsigned probe = 0; probe < kProbeLimit; ++probe) {
-    KeySlot& slot = g_cargoSeen[(home + probe) % kCargoSlots];
+    KeySlot& slot = g_cdnSeen[(home + probe) % kCdnSlots];
     std::uint64_t held = slot.key.load(std::memory_order_acquire);
     if (held == 0 && slot.key.compare_exchange_strong(held, key, std::memory_order_acq_rel)) held = key;
     if (held != key) continue;
@@ -296,29 +296,29 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
 }
 
 // The label of a record in the set whose shadow answered: the Mounted that published that shadow.
-const char* CargoLabel(const nevr_shadow::Shadow* shadow, std::uint32_t user) noexcept {
+const char* CdnLabel(const nevr_shadow::Shadow* shadow, std::uint32_t user) noexcept {
   const unsigned count = g_setCount.load(std::memory_order_acquire);
-  for (unsigned i = 0; i < count && i < kCargoSets; ++i) {
-    const nevr_cargo::Mounted* const set = g_sets[i].load(std::memory_order_acquire);
+  for (unsigned i = 0; i < count && i < kCdnSets; ++i) {
+    const nevr_cdn::Mounted* const set = g_sets[i].load(std::memory_order_acquire);
     if (set != nullptr && set->shadow.get() == shadow) return user < set->labels.size() ? set->labels[user].c_str() : "unknown";
   }
   return "unknown";
 }
 
-// Counts a request filled from a cargo shadow and writes its line at the key's 1st, 2nd, 4th, 8th ... serve. Runs after the game's
+// Counts a request filled from a CDN shadow and writes its line at the key's 1st, 2nd, 4th, 8th ... serve. Runs after the game's
 // function returned, so no logging frame is live while game code runs.
-void NoteCargo(const nevr_shadow::Shadow* shadow, std::uint32_t user, std::uint64_t ret, std::uint64_t type, std::uint64_t name,
+void NoteCdn(const nevr_shadow::Shadow* shadow, std::uint32_t user, std::uint64_t ret, std::uint64_t type, std::uint64_t name,
                std::uint64_t index, std::uint32_t bytes, const void* caller) noexcept {
-  g_cargoServed.fetch_add(1, std::memory_order_relaxed);
-  // The read-finished callback matches its read to this serve by (name, index) and writes `cargo_read` (cargo_read_keys.h).
-  if (ret == 0) cargo_read::NoteServed(name, index);
-  const std::uint64_t seen = TouchCargo(KeyOf(type, name, index));
+  g_cdnServed.fetch_add(1, std::memory_order_relaxed);
+  // The read-finished callback matches its read to this serve by (name, index) and writes `cdn_read` (cdn_read_keys.h).
+  if (ret == 0) cdn_read::NoteServed(name, index);
+  const std::uint64_t seen = TouchCdn(KeyOf(type, name, index));
   if (seen == 0 || (seen & (seen - 1)) != 0) return;
   const std::uint64_t pinnedCaller =
       static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(caller)) - g_loadBase.load(std::memory_order_relaxed);
   char typeHex[19], nameHex[19];
-  sentinel::LogFields(ret == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, ret == 0 ? "cargo_served" : "cargo_failed",
-                      {{"label", CargoLabel(shadow, user)},
+  sentinel::LogFields(ret == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, ret == 0 ? "cdn_served" : "cdn_failed",
+                      {{"label", CdnLabel(shadow, user)},
                        {"type", sentinel::HexString(typeHex, type)},
                        {"name", sentinel::HexString(nameHex, name)},
                        {"index", index},
@@ -475,13 +475,13 @@ void NoteOverlay(const Served& s, std::uint64_t type, std::uint64_t name, std::u
 std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManagerOpaque* manager, std::uint64_t type,
                       std::uint64_t name, std::uint64_t unused, void* allocator, void* owner, std::uint64_t index,
                       unsigned char* request) noexcept {
-  // Cargo first: a key the published shadow holds is filled by the game's own function from the shadow, and cargo replaces stock.
+  // Cdn first: a key the published shadow holds is filled by the game's own function from the shadow, and CDN replaces stock.
   // Select also pins the shadow of a texture's index 0 for its index 1, so it runs for every request.
-  const nevr_shadow::Shadow* const cargo = Cargo().Select(name, index);
+  const nevr_shadow::Shadow* const cdn = Cdn().Select(name, index);
   nevr_shadow::Found found;
   std::uint32_t user = 0;
-  const bool fromCargo = cargo != nullptr && cargo->Find(type, name, &found, &user);
-  if (!fromCargo && request != nullptr) {
+  const bool fromCdn = cdn != nullptr && cdn->Find(type, name, &found, &user);
+  if (!fromCdn && request != nullptr) {
     const GameFns* const fns = g_fns.load(std::memory_order_acquire);
     if (fns != nullptr && ManifestMisses(manager, type, name)) {
       const Served served = ServeLoose(*fns, manager, type, name, allocator, owner, index, request);
@@ -491,9 +491,9 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
     }
   }
   CResourceManagerOpaque* const filledFrom =
-      fromCargo ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(cargo->manager())) : manager;
+      fromCdn ? reinterpret_cast<CResourceManagerOpaque*>(const_cast<void*>(cdn->manager())) : manager;
   const std::uint64_t ret = original(filledFrom, type, name, unused, allocator, owner, index, request);
-  if (fromCargo) NoteCargo(cargo, user, ret, type, name, index, found.size, caller);
+  if (fromCdn) NoteCdn(cdn, user, ret, type, name, index, found.size, caller);
   if (g_logRequests.load(std::memory_order_relaxed)) {
     Note(type, name, index, owner, allocator, ret, caller, request);
   } else if (ret != 0) {
@@ -581,17 +581,17 @@ bool InstallCounted(bool countersRegistered, bool logRequests) noexcept {
   return InstallImpl(logRequests, countersRegistered ? "registered" : "refused");
 }
 
-void PublishCargo(const nevr_cargo::Mounted* mounted) noexcept {
+void PublishCdn(const nevr_cdn::Mounted* mounted) noexcept {
   if (mounted == nullptr || !mounted->shadow) return;
   const unsigned at = g_setCount.load(std::memory_order_relaxed);
-  if (at < kCargoSets) {
+  if (at < kCdnSets) {
     g_sets[at].store(mounted, std::memory_order_release);
     g_setCount.store(at + 1, std::memory_order_release);
   }
-  Cargo().Publish(mounted->shadow.get());
+  Cdn().Publish(mounted->shadow.get());
 }
 
-unsigned long long CargoServedCount() noexcept { return g_cargoServed.load(std::memory_order_relaxed); }
+unsigned long long CdnServedCount() noexcept { return g_cdnServed.load(std::memory_order_relaxed); }
 
 const char* ResolveGameFnsForTest(std::uint64_t base, SymbolLookup lookup, GameFns* out) noexcept {
   struct Want {
@@ -641,7 +641,7 @@ std::uint64_t WindowClockMsForTest() noexcept { return NowMs(); }
 void SetClockForTest(ClockMs clock) noexcept { g_clock.store(clock, std::memory_order_relaxed); }
 
 void ResetForTest() noexcept {
-  cargo_read::ResetForTest();
+  cdn_read::ResetForTest();
   for (KeySlot& slot : g_slots) {
     slot.key.store(0, std::memory_order_relaxed);
     slot.seen.store(0, std::memory_order_relaxed);
@@ -660,11 +660,11 @@ void ResetForTest() noexcept {
   g_fns.store(nullptr, std::memory_order_release);
   g_logRequests.store(false, std::memory_order_relaxed);
   g_loadBase.store(0, std::memory_order_relaxed);
-  Cargo().Reset();
-  for (unsigned i = 0; i < kCargoSets; ++i) g_sets[i].store(nullptr, std::memory_order_relaxed);
+  Cdn().Reset();
+  for (unsigned i = 0; i < kCdnSets; ++i) g_sets[i].store(nullptr, std::memory_order_relaxed);
   g_setCount.store(0, std::memory_order_relaxed);
-  g_cargoServed.store(0, std::memory_order_relaxed);
-  for (KeySlot& slot : g_cargoSeen) {
+  g_cdnServed.store(0, std::memory_order_relaxed);
+  for (KeySlot& slot : g_cdnSeen) {
     slot.key.store(0, std::memory_order_relaxed);
     slot.seen.store(0, std::memory_order_relaxed);
   }

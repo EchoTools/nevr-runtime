@@ -22,7 +22,7 @@
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
 #include "core/crash_report.h"
-#include "quest/cargo/cargo_service.h"
+#include "quest/cdn/cdn_worker.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/equip_refire.h"
@@ -173,10 +173,10 @@ bool InstallPermissionWaitHook() noexcept {
     // `assets.whole_game` (quest_config.h): the CDN holds every asset of the game, so the data step writes the stub manifests and
     // fetches no data zip, in any build. The configuration is resolved before this step runs (ctor_sequence.cpp).
     // The download and the mount that must finish before the step returns (`all_assets_ready`, docs/adr/0045 decision 11): the first-run
-    // prefetch of every manifest object into the cargo store, then the mount of the shadow the engine's first archive load reads. It is set
+    // prefetch of every manifest object into the CDN store, then the mount of the shadow the engine's first archive load reads. It is set
     // beside the mode and from the same configuration, so a launch with the mode on never reaches the step without it.
     options.all_assets = sentinel::ActiveConfig().assets.wholeGame;
-    options.all_assets_ready = nevr_quest::cargo::MakeProductionFirstRunWorker(sentinel::ActiveConfig().assets);
+    options.all_assets_ready = nevr_quest::cdn::MakeProductionFirstRunWorker(sentinel::ActiveConfig().assets);
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);

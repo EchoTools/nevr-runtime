@@ -845,16 +845,16 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
   }
   {
     const LoadResult r = Load(Full(),
-                              "assets:\n  cdn_url: https://cargo.example.test/base\n  manifest: v1/test/manifest.json\n"
+                              "assets:\n  cdn_url: https://cdn.example.test/base\n  manifest: v1/test/manifest.json\n"
                               "  required_only: true\n  labels:\n    lobby_posters: required\n    extra_label: off\n    third: on\n");
-    CHECK(r.config.assets.cdnUrl == "https://cargo.example.test/base/");  // a trailing slash is added
+    CHECK(r.config.assets.cdnUrl == "https://cdn.example.test/base/");  // a trailing slash is added
     CHECK(r.config.assets.manifest == "v1/test/manifest.json" && r.config.assets.requiredOnly);
     CHECK(r.config.assets.labels.size() == 3 && r.config.assets.labels[0].first == "lobby_posters" && r.config.assets.labels[0].second == "required");
     CHECK(r.config.assets.labels[1].second == "off" && r.config.assets.labels[2].second == "on");
     CHECK(r.config.assets.source == Source::kFile);
     CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config whole_game=0 source=config"));
     CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
-    CHECK(!EventsContain(r, "cargo.example.test"));  // a configured value is never logged on the Quest
+    CHECK(!EventsContain(r, "cdn.example.test"));  // a configured value is never logged on the Quest
     CHECK(!EventsContain(r, "unknown_nested="));     // every assets key is on the schema
   }
   const auto rejected = [](const char* yaml, const char* reasonText, const char* valueText) {
@@ -866,7 +866,7 @@ void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
   {
     const LoadResult r = rejected("assets:\n  cdn_url: http://plain.example.test/\n", "key=assets.cdn_url rejected reason=not_an_https_address", "plain.example.test");
     CHECK(r.config.assets.cdnUrl.empty() && r.config.assets.source == Source::kAbsent);
-    for (const char* bad : {"https://", "https:///x", "ftp://x/", "https://host/with space", "https://host/?q=1", "https://user@host/", "cargo.example.test"}) {
+    for (const char* bad : {"https://", "https:///x", "ftp://x/", "https://host/with space", "https://host/?q=1", "https://user@host/", "cdn.example.test"}) {
       const LoadResult b = Load(Full(), std::string("assets:\n  cdn_url: \"") + bad + "\"\n");
       CHECK(b.config.assets.cdnUrl.empty());
       CHECK(EventsContain(b, "key=assets.cdn_url rejected"));

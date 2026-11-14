@@ -117,7 +117,7 @@ reason=<reason> detail="..."`.
 ## Overrides
 
 A set's overrides replace resources the game already has. They are an explicit exception to ADR 0045's decision 2
-(cargo, then stock, then plugin packages): on the client that carries the plugin, an override replaces a stock name,
+(CDN, then stock, then plugin packages): on the client that carries the plugin, an override replaces a stock name,
 the same power `NEVR_RegisterResourceOverride` already gives a plugin, so it is declared per key and logged. Decision 2
 still governs a set's records: a record never carries a stock name, the game's manifests come first, and so an
 override cannot be a record.

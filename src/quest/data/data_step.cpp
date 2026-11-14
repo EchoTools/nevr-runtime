@@ -418,7 +418,7 @@ StepResult RunAllAssets(const StepConfig& config, const Decision& decision, Step
     };
     if (config.exists(path.c_str())) {
       std::string held;
-      const char* why = "";  // the cap on what a manifest file may be read at is the cargo side's (ReadBoundedFile): a file over it is not read whole
+      const char* why = "";  // the cap on what a manifest file may be read at is the CDN side's (ReadBoundedFile): a file over it is not read whole
       const bool read = ReadBoundedFile(config, path, held, &why);
       if (read && held == stub) {
         EmitInfo(config, say("kept", "stub_current"));
