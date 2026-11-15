@@ -45,6 +45,7 @@ struct State {
   nevr_cdn::Env* env = nullptr;
   PosixMapFs fs;
   std::unique_ptr<nevr_map_channel::Channel> channel;
+  std::unique_ptr<QuestMounter> mounter;  // the boot's cache mount keeps a reference to it, so it lives as long as the state
 };
 
 // A seam's answer, or none when the platform gave no such seam.
@@ -110,8 +111,8 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
   // The score waiver is installed only when the channel runs: a run that does not run has no map script to answer for.
   const bool runs = state->channel->start() == nevr_map_channel::Start::kRun;
   if (runs) nevr_resource_sets::SetScriptWaiver(&HoldsMapScript);
-  QuestMounter mounter(/*signed_only=*/false);
-  const nevr_map_channel::BootResult& boot = state->channel->Boot(*env, state->fs, mounter, deriver, NowUtc(), {});
+  state->mounter = std::make_unique<QuestMounter>(/*signed_only=*/false);
+  const nevr_map_channel::BootResult& boot = state->channel->Boot(*env, state->fs, *state->mounter, deriver, NowUtc(), {});
   if (boot.start != nevr_map_channel::Start::kRun) {
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
