@@ -75,6 +75,17 @@ lists: six the game defines in mp_weapon_settings but does not list, and the tra
 to `-out` when every file is in it, so a failed write leaves no `-out`, and it refuses an `-out` inside `-game-dir`, links
 resolved: nothing of ours is written into a game folder.
 
+## A pack's records as a CDN label
+
+`tools/cmd/cargo-pack -content-pack <pack folder> -label <label> -platform windows-x86_64 -out <dir> -max-window <bytes>`
+reads an installed-pack folder as data (nothing in it is run) and makes one cargo label of the records the pack's own
+packages store: every resource whose chunk is in a listed package numbered from `stock_packages` on (a pack's packages
+include every record it adds or replaces, and may include others). The manifest and package files are checked against the sha-256 `content.json` lists. A record of 0
+bytes goes to the manifest's `empty` list (which belongs to the manifest, not to a label), and a record that two of the pack's sets both store is one record when its bytes
+and alignment are the same, and a refusal when they differ. The output is the `cargo-publish` input
+(`docs/adr/0045-cdn-texture-delivery.md`). A script DLL is no record: the game loads it from a file (`../engine/asset-system.md`,
+"Script DLLs"), so a label carries the pack's resources and the scripts stay with an installed pack.
+
 ## When a pack is refused
 
 The runtime checks the pack once, at the game's first command-line pass, after the early plugin pass and before the

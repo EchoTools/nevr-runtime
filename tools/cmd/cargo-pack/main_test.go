@@ -84,7 +84,7 @@ func TestPackWritesNamedFramesAndAManifestThatListsThem(t *testing.T) {
 	e2.StockSize = &stock
 	spec := writeSpec(t, []specEntry{entry("0x0000000000000001", "small.bin"), e2}, map[string][]byte{"small.bin": small, "large.bin": large})
 	out := t.TempDir()
-	sum, err := pack(spec, out, testWindow, quiet())
+	sum, err := packSpec(spec, out, testWindow)
 	if err != nil {
 		t.Fatalf("pack: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestPackRefusesBadInputAndWritesNothing(t *testing.T) {
 	}
 	for name, entries := range cases {
 		out := t.TempDir()
-		if _, err := pack(writeSpec(t, entries, files), out, testWindow, quiet()); err == nil {
+		if _, err := packSpec(writeSpec(t, entries, files), out, testWindow); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 		if left, _ := os.ReadDir(out); len(left) != 0 {
@@ -162,6 +162,9 @@ func TestEncodeFrameStatesTheSizeAndKeepsTheWindow(t *testing.T) {
 		if w > testWindow {
 			t.Errorf("%d bytes: the frame asks for a window of %d, above %d", n, w, testWindow)
 		}
+		if h.SingleSegment != (n <= testWindow) {
+			t.Errorf("%d bytes: single segment = %t, want %t", n, h.SingleSegment, n <= testWindow)
+		}
 		if h.HasCheckSum {
 			t.Errorf("%d bytes: frame carries a checksum", n)
 		}
@@ -176,7 +179,7 @@ func TestManifestUsesTheKeysTheClientParserReads(t *testing.T) {
 	e.StockSize = &stock
 	spec := writeSpec(t, []specEntry{e}, map[string][]byte{"small.bin": body(smallBytes, seedC)})
 	out := t.TempDir()
-	if _, err := pack(spec, out, testWindow, quiet()); err != nil {
+	if _, err := packSpec(spec, out, testWindow); err != nil {
 		t.Fatal(err)
 	}
 	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
@@ -204,4 +207,12 @@ func TestManifestUsesTheKeysTheClientParserReads(t *testing.T) {
 	if got["format"] != "zstd-frame" || len(got) != entryKeyCount {
 		t.Errorf("entry = %v", got)
 	}
+}
+
+func packSpec(specPath, out string, window uint64) (*summary, error) {
+	recs, err := specRecords(specPath)
+	if err != nil {
+		return nil, err
+	}
+	return build(recs, out, window, quiet())
 }
