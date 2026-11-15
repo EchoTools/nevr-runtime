@@ -24,6 +24,10 @@ using nevr_menu_press::Sender;
 
 constexpr uint64_t kOtherComponent = 0x35ec861316abbb34ULL;  // PLAY's
 constexpr uint64_t kOtherSymbol = 0xabcdULL;
+// The component ids the game gives the TUTORIALS card and its clone, the PLUGINS card, as measured (#1857). Test-local on
+// purpose: the test checks the production constants against these, so it must not read the values from them.
+constexpr uint64_t kExpectedTutorialsCardId = 0x35ec861316abbb35ULL;
+constexpr uint64_t kExpectedPluginsCardId = 0x35ec861316abbbf1ULL;
 constexpr size_t kBufferAlign = alignof(uint64_t);
 constexpr uint64_t kNoActor = 0xffffULL;
 constexpr uint64_t kSeenCount = 12;
@@ -83,8 +87,8 @@ struct FakeGame {
 TEST(PluginsCardConstants, TheCardHasAnIdOfItsOwn) {
   // The clone was made from TUTORIALS and shared its id, so a press on PLUGINS started the tutorial (#1857 measurement).
   EXPECT_NE(nevr_plugins_card::kPluginsCardComponent, nevr_plugins_card::kTutorialsCardComponent);
-  EXPECT_EQ(nevr_plugins_card::kTutorialsCardComponent, 0x35ec861316abbb35ULL);
-  EXPECT_EQ(nevr_plugins_card::kPluginsCardComponent, 0x35ec861316abbbf1ULL);
+  EXPECT_EQ(nevr_plugins_card::kTutorialsCardComponent, kExpectedTutorialsCardId);
+  EXPECT_EQ(nevr_plugins_card::kPluginsCardComponent, kExpectedPluginsCardId);
 }
 
 TEST(PluginsCardPress, ACardClickWithTheCardsComponentIsAPressWithItsOwnerResolved) {

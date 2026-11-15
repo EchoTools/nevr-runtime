@@ -10,7 +10,8 @@ import re
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+TESTS_DIR = Path(__file__).resolve().parent  # <repo>/tools/tests
+ROOT = TESTS_DIR.parent.parent  # the repo root
 HOOK = ROOT / "src/runtime/patch/invite_choice_hook.cpp"
 STANDARD = ROOT / "docs/standards/logging.md"
 TAG = "[NEVR.PLUGINMGR]"

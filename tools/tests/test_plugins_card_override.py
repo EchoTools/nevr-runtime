@@ -17,7 +17,8 @@ import struct
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+TESTS_DIR = Path(__file__).resolve().parent  # <repo>/tools/tests
+ROOT = TESTS_DIR.parent.parent  # the repo root
 HEADER = ROOT / "src/runtime/patch/plugins_card.h"
 FIXTURE = ROOT / "tools/tests/fixtures/plugins_card_override_ids.json"
 ENV = "NEVR_PLUGINS_CARD_OVERRIDE_DIR"
