@@ -1,6 +1,8 @@
 #include "runtime/patch/asset_cache.h"
 
 #include "core/nevr_root.h"
+#include "core/owned_remove.h"
+#include "runtime/patch/asset_cache_index.h"
 
 #include <wincrypt.h>
 
@@ -124,10 +126,9 @@ std::wstring TempPathFor(const std::wstring& dir, const std::wstring& tempStem) 
                            std::to_wstring(GetTickCount64()) + L"." + std::to_wstring(sequence) + kTempSuffix);
 }
 
-/// temp file in `dir` -> flush -> rename over `finalPath`. *step names the failing step.
-bool WriteAtomically(const std::wstring& dir, const std::wstring& finalPath, const std::wstring& tempStem,
-                     const void* data, std::size_t len, const char** step, DWORD* error) {
-  const std::wstring tempPath = TempPathFor(dir, tempStem);
+/// temp file `tempPath` (recorded in the index before this call) -> flush -> rename over `finalPath`. *step names the failing step.
+bool WriteAtomically(const std::wstring& tempPath, const std::wstring& finalPath, const void* data, std::size_t len,
+                     const char** step, DWORD* error) {
   *step = "create temp";
   HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
@@ -185,6 +186,151 @@ void Touch(const std::wstring& path) {
 
 std::uint64_t FileTimeValue(const FILETIME& ft) {
   return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+}
+
+/// The last component of a path.
+std::wstring LeafOf(const std::wstring& path) {
+  const std::size_t slash = path.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+/// Owned names are ASCII by the grammar (asset_cache_index.h); a name with any other character is not one.
+bool AsciiName(const std::wstring& wide, std::string* out) {
+  out->assign(wide.begin(), wide.end());
+  for (const wchar_t c : wide) {
+    if (static_cast<unsigned int>(c) > 127u) return false;
+  }
+  return true;
+}
+
+std::string Utf8(const std::wstring& wide) {
+  if (wide.empty()) return std::string();
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  if (needed <= 0) return std::string();
+  std::string out(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), needed, nullptr, nullptr);
+  return out;
+}
+
+/// Writes `text` to `finalPath` through the index's literal temp (`owned.txt.tmp`): create, flush, rename over. The temp name is fixed
+/// and the only name written without being recorded first; a leftover one is removed by name by the next Evict.
+bool WriteLiteral(const std::wstring& finalPath, const std::string& text, DWORD* error) {
+  const std::wstring tempPath = finalPath + kTempSuffix;
+  HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    *error = GetLastError();
+    return false;
+  }
+  std::size_t done = 0;
+  bool ok = true;
+  while (ok && done < text.size()) {
+    DWORD put = 0;
+    const DWORD want = static_cast<DWORD>(std::min<std::size_t>(text.size() - done, 1u << 20));
+    ok = WriteFile(file, text.data() + done, want, &put, nullptr) != 0 && put != 0;
+    if (!ok) *error = GetLastError();
+    done += put;
+  }
+  if (ok && FlushFileBuffers(file) == 0) {
+    ok = false;
+    *error = GetLastError();
+  }
+  CloseHandle(file);
+  if (!ok) {
+    DeleteFileW(tempPath.c_str());
+    return false;
+  }
+  if (MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+    *error = GetLastError();
+    DeleteFileW(tempPath.c_str());
+    return false;
+  }
+  return true;
+}
+
+/// Reads owned.txt. *present is false when there is no index yet; false with `error` when it exists and cannot be read or parsed.
+bool ReadOwnedIndex(const std::wstring& dir, bool* present, std::vector<std::string>* names, std::size_t* dropped, std::string* error) {
+  *present = true;
+  std::vector<std::uint8_t> raw;
+  bool tooLarge = false;
+  DWORD err = 0;
+  const std::wstring path = JoinPath(dir, Widen(std::string(nevr_asset_cache_index::kOwnedIndexName)));
+  if (!ReadWholeFile(path, nevr_asset_cache_index::kMaxOwnedIndexBytes, &raw, &tooLarge, &err)) {
+    if (!tooLarge && (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)) {
+      *present = false;
+      return true;
+    }
+    *error = tooLarge ? "owned.txt is larger than the cache reads" : "owned.txt unreadable, error " + std::to_string(err);
+    return false;
+  }
+  return nevr_asset_cache_index::ParseOwnedIndex(std::string_view(reinterpret_cast<const char*>(raw.data()), raw.size()), names, dropped, error);
+}
+
+/// Makes sure owned.txt exists. Without one (a cache from before the index) it adopts, once, each blob whose content hashes to its own
+/// name; a legacy temp is never adopted; everything else in the folder is a stranger and is not listed. The counts go back in
+/// `adoption`, and the index is written before this returns, so the adoption is not repeated.
+bool EnsureOwnedIndex(const std::wstring& dir, nevr_asset_cache::IndexAdoption* adoption, std::string* error) {
+  bool present = false;
+  std::vector<std::string> names;
+  std::size_t dropped = 0;
+  if (!ReadOwnedIndex(dir, &present, &names, &dropped, error)) return false;
+  if (present) return true;
+  WIN32_FIND_DATAW fd;
+  HANDLE find = FindFirstFileW(JoinPath(dir, L"*").c_str(), &fd);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+      std::string name;
+      if (!AsciiName(fd.cFileName, &name)) continue;
+      if (nevr_asset_cache_index::IsTempLeaf(name)) {
+        ++adoption->legacyTemps;
+        continue;
+      }
+      if (!nevr_asset_cache_index::IsBlobLeaf(name)) continue;
+      std::vector<std::uint8_t> bytes;
+      bool tooLarge = false;
+      DWORD readError = 0;
+      std::string sha;
+      if (ReadWholeFile(JoinPath(dir, fd.cFileName), kMaxBlobBytes, &bytes, &tooLarge, &readError)) {
+        sha = Sha256Hex(bytes.data(), bytes.size());
+      }
+      if (nevr_asset_cache_index::ShouldAdoptLegacyBlob(name, sha)) {
+        names.push_back(name);
+        ++adoption->adopted;
+      } else {
+        ++adoption->mismatched;
+      }
+    } while (FindNextFileW(find, &fd) != 0);
+    FindClose(find);
+  }
+  DWORD writeError = 0;
+  if (!WriteLiteral(JoinPath(dir, Widen(std::string(nevr_asset_cache_index::kOwnedIndexName))),
+                    nevr_asset_cache_index::FormatOwnedIndex(names), &writeError)) {
+    *error = "owned.txt could not be written, error " + std::to_string(writeError);
+    return false;
+  }
+  return true;
+}
+
+/// Lists `names` in owned.txt. It reads the list (a line that is not a name of this cache is dropped), adds the new names not already
+/// listed, and rewrites the whole list through its literal temp, synced, before the caller creates any file it names. A damaged or
+/// torn list heals on this write.
+bool RecordOwned(const std::wstring& dir, const std::vector<std::string>& names, nevr_asset_cache::IndexAdoption* adoption,
+                 std::string* error) {
+  if (!EnsureOwnedIndex(dir, adoption, error)) return false;
+  bool present = false;
+  std::vector<std::string> listed;
+  std::size_t dropped = 0;
+  if (!ReadOwnedIndex(dir, &present, &listed, &dropped, error)) return false;
+  for (const std::string& name : names) {
+    if (std::find(listed.begin(), listed.end(), name) == listed.end()) listed.push_back(name);
+  }
+  DWORD writeError = 0;
+  if (!WriteLiteral(JoinPath(dir, Widen(std::string(nevr_asset_cache_index::kOwnedIndexName))),
+                    nevr_asset_cache_index::FormatOwnedIndex(listed), &writeError)) {
+    *error = "owned.txt could not be written, error " + std::to_string(writeError);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -278,7 +424,18 @@ StoreResult Store(const std::wstring& dir, const void* data, std::size_t len) {
     r.status = StoreStatus::AlreadyPresent;
     return r;
   }
-  if (!WriteAtomically(dir, BlobPath(dir, r.sha256), Widen(r.sha256), data, len, &r.failedStep, &r.error)) return r;
+  // The temp and the blob are recorded in the index, and the record synced, before either file is made: Evict removes only what is listed.
+  const std::wstring finalPath = BlobPath(dir, r.sha256);
+  const std::wstring tempPath = TempPathFor(dir, Widen(r.sha256));
+  std::string tempName;
+  AsciiName(LeafOf(tempPath), &tempName);
+  std::string recordError;
+  if (!RecordOwned(dir, {tempName, r.sha256 + ".blob"}, &r.adoption, &recordError)) {
+    r.failedStep = "record in index";
+    r.error = ERROR_WRITE_FAULT;
+    return r;
+  }
+  if (!WriteAtomically(tempPath, finalPath, data, len, &r.failedStep, &r.error)) return r;
   r.status = StoreStatus::Stored;
   r.failedStep = "";
   return r;
@@ -381,7 +538,16 @@ bool SetIndexEntry(const std::wstring& dir, const IndexEntry& entry, std::string
     return false;
   }
   const char* step = "";
-  if (!WriteAtomically(dir, JoinPath(dir, kIndexName), L"index", text.data(), text.size(), &step, &err)) {
+  const std::wstring tempPath = TempPathFor(dir, L"index");
+  std::string tempName;
+  AsciiName(LeafOf(tempPath), &tempName);
+  nevr_asset_cache::IndexAdoption adoption;
+  std::string recordError;
+  if (!RecordOwned(dir, {tempName}, &adoption, &recordError)) {
+    *error = recordError;
+    return false;
+  }
+  if (!WriteAtomically(tempPath, JoinPath(dir, kIndexName), text.data(), text.size(), &step, &err)) {
     *error = std::string(step) + " failed, error " + std::to_string(err);
     return false;
   }
@@ -394,44 +560,63 @@ std::wstring TempPathForTest(const std::wstring& dir, const std::wstring& tempSt
 
 EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::set<std::string>& referenced) {
   EvictReport report;
-  struct Blob {
-    std::string sha;
-    std::wstring path;
-    std::uint64_t bytes;
-    std::uint64_t lastUsed;
-  };
-  std::vector<Blob> blobs;
+  if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) return report;  // nothing cached: nothing to list or remove
+  std::string error;
+  if (!EnsureOwnedIndex(dir, &report.adoption, &error)) {
+    report.indexUnreadable = true;  // nothing is removed on an index that cannot be read
+    return report;
+  }
+  bool present = false;
+  std::vector<std::string> names;
+  std::size_t dropped = 0;
+  if (!ReadOwnedIndex(dir, &present, &names, &dropped, &error)) {
+    report.indexUnreadable = true;
+    return report;
+  }
+  const std::string root = Utf8(dir);
+  // The index's own literal temp, left by a rewrite that was killed: a name this code makes, removed by name.
+  nevr_owned::RemoveEntry(root, std::string(nevr_asset_cache_index::kOwnedIndexName) + ".tmp");
+
   FILETIME nowFt;
   GetSystemTimeAsFileTime(&nowFt);
   const std::uint64_t now = FileTimeValue(nowFt);
   const std::uint64_t staleTicks = kStaleTempSeconds * 10000000ull;
 
-  WIN32_FIND_DATAW fd;
-  HANDLE find = FindFirstFileW(JoinPath(dir, L"*").c_str(), &fd);
-  if (find == INVALID_HANDLE_VALUE) return report;
-  do {
-    if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
-    const std::wstring name = fd.cFileName;
-    const std::uint64_t size = (static_cast<std::uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
-    const std::uint64_t stamp = FileTimeValue(fd.ftLastWriteTime);
-    const auto endsWith = [&name](const wchar_t* suffix) {
-      const std::size_t n = std::wcslen(suffix);
-      return name.size() >= n && name.compare(name.size() - n, n, suffix) == 0;
-    };
-    if (endsWith(kTempSuffix)) {
-      if (now > stamp && now - stamp > staleTicks && DeleteFileW(JoinPath(dir, name).c_str()) != 0) {
-        ++report.staleTempsRemoved;
-      }
+  struct Blob {
+    std::string sha;
+    std::string leaf;
+    std::uint64_t bytes;
+    std::uint64_t lastUsed;
+  };
+  std::vector<Blob> blobs;
+  std::vector<std::string> kept;  // the names that remain listed after this run
+  for (const std::string& name : names) {
+    const std::wstring wide(name.begin(), name.end());
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    if (GetFileAttributesExW(JoinPath(dir, wide).c_str(), GetFileExInfoStandard, &attrs) == 0) {
+      const DWORD gone = GetLastError();
+      if (gone == ERROR_FILE_NOT_FOUND || gone == ERROR_PATH_NOT_FOUND) continue;  // already gone: no longer listed
+      kept.push_back(name);  // unknown: listed still, and not touched
       continue;
     }
-    if (!endsWith(kBlobSuffix) || name.size() != 64 + std::wcslen(kBlobSuffix)) continue;
-    std::string sha;
-    for (std::size_t i = 0; i < 64; ++i) sha.push_back(static_cast<char>(name[i] < 128 ? name[i] : '?'));
-    if (!IsSha256Hex(sha)) continue;
-    blobs.push_back({sha, JoinPath(dir, name), size, stamp});
+    const std::uint64_t size = (static_cast<std::uint64_t>(attrs.nFileSizeHigh) << 32) | attrs.nFileSizeLow;
+    const std::uint64_t stamp = FileTimeValue(attrs.ftLastWriteTime);
+    if (nevr_asset_cache_index::IsTempLeaf(name)) {
+      if (nevr_asset_cache_index::IsStaleTemp(now, stamp, staleTicks)) {
+        const nevr_owned::Result r = nevr_owned::RemoveEntry(root, name);
+        if (r.outcome == nevr_owned::Outcome::kRemoved) ++report.staleTempsRemoved;
+        if (r.outcome == nevr_owned::Outcome::kAbsent || r.outcome == nevr_owned::Outcome::kRemoved) continue;
+      }
+      kept.push_back(name);
+      continue;
+    }
+    if (!nevr_asset_cache_index::IsBlobLeaf(name)) {
+      kept.push_back(name);  // an index entry of another shape is never removed here
+      continue;
+    }
+    blobs.push_back({name.substr(0, 64), name, size, stamp});
     report.blobBytesBefore += size;
-  } while (FindNextFileW(find, &fd) != 0);
-  FindClose(find);
+  }
 
   report.blobBytesAfter = report.blobBytesBefore;
   std::vector<const Blob*> evictable;
@@ -439,14 +624,27 @@ EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::se
     if (referenced.count(b.sha) == 0) evictable.push_back(&b);
   }
   std::sort(evictable.begin(), evictable.end(), [](const Blob* a, const Blob* b) { return a->lastUsed < b->lastUsed; });
+  std::set<std::string> removed;
   for (const Blob* b : evictable) {
     if (report.blobBytesAfter <= capBytes) break;
-    if (DeleteFileW(b->path.c_str()) != 0) {
+    const nevr_owned::Result r = nevr_owned::RemoveEntry(root, b->leaf);
+    if (r.outcome == nevr_owned::Outcome::kRemoved) {
       report.blobBytesAfter -= b->bytes;
       ++report.blobsEvicted;
     }
+    if (r.outcome == nevr_owned::Outcome::kRemoved || r.outcome == nevr_owned::Outcome::kAbsent) removed.insert(b->leaf);
+  }
+  for (const Blob& b : blobs) {
+    if (removed.count(b.leaf) == 0) kept.push_back(b.leaf);
   }
   report.overCapAllReferenced = report.blobBytesAfter > capBytes;
+  // Rewritten only when something left the index. An index that still names a removed file is harmless: the next Evict drops it.
+  DWORD indexError = 0;
+  report.linesDropped = static_cast<std::uint32_t>(dropped);
+  if (kept.size() != names.size() || dropped != 0) {  // a dropped line heals on this rewrite
+    WriteLiteral(JoinPath(dir, Widen(std::string(nevr_asset_cache_index::kOwnedIndexName))),
+                 nevr_asset_cache_index::FormatOwnedIndex(kept), &indexError);
+  }
   return report;
 }
 

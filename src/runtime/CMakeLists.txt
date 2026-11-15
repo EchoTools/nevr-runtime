@@ -1685,10 +1685,14 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_stock_source DISCOVERY_MODE PRE_TEST)
 
     # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
+    # P5: the cache's Evict deletes through the owned-removal guard (core/owned_remove.h). This target links no nevr_core, so the Win32
+    # guard is compiled in as a source; it needs only windows.h and core/owned_remove_rules.h.
     add_executable(test_asset_cache
       tests/test_asset_cache.cpp
-      patch/asset_cache.cpp)
+      patch/asset_cache.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/owned_remove_win32.cpp")
     set_source_files_properties(tests/test_asset_cache.cpp patch/asset_cache.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/owned_remove_win32.cpp"
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_asset_cache PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_asset_cache PRIVATE

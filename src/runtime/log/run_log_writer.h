@@ -175,7 +175,7 @@ inline void SetDirectory(const char* dir) {
 /// Rotation: the file written so far is renamed to `<name>.<n>.jsonl` (the smallest n that is free) and a new file of the same name
 /// is begun, so the process's log keeps one name that the host and the crash path append to. False, with the file left in place and
 /// still being appended to, when the rename was refused (the host holds the file open for an instant: tried a few times).
-inline bool Rotate() {
+inline bool Rotate(bool (*beforeRename)(const std::string& archive) = nullptr) {
   detail::State& s = detail::Get();
   AcquireSRWLockExclusive(&s.lock);
   bool rotated = false;
@@ -188,6 +188,9 @@ inline bool Rotate() {
     for (int n = 1; n < 1000 && !rotated; ++n) {
       const std::string archive = base + "." + std::to_string(n) + ".jsonl";
       if (GetFileAttributesA(archive.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
+      // beforeRename records the archive's name first (the run-log index, run_log_index.h). Its result never blocks the rotation: an
+      // archive the index cannot list is kept and not deleted by retention (a leak, not a wedge).
+      if (beforeRename != nullptr) beforeRename(archive);
       for (int attempt = 0; attempt < 5 && !rotated; ++attempt) {
         rotated = MoveFileExA(s.path, archive.c_str(), 0) != FALSE;
         if (!rotated) Sleep(20);

@@ -7,16 +7,21 @@
 //   index.json                    {"version":1,"overrides":[{"type":"0x..","name":"0x..","sha256":"..","label":".."}]}
 //                                 which blob stands in for which (type, name) resource
 //   <sha256>.<pid>.<tick>.<seq>.tmp  a write in progress, never read
+//   owned.txt                     one name per line: every blob and temp this cache made (asset_cache_index.h); the only names
+//                                 Evict may remove (ORDER.md "The manifest rule")
 //
 // Rules, each pinned by test_asset_cache.cpp:
 //   * A blob is trusted only after it is read and hashed again: Load() compares the SHA-256 of the bytes it read
 //     with the key, every time, not only when the file was downloaded.
 //   * Bytes are written to a temp file in the same directory, flushed, then renamed into place, so a kill
-//     mid-write leaves a .tmp that nothing reads, never a short blob under a trusted name.
-//   * Size cap: Evict() removes blobs that no index entry names, least recently used first (a Load hit or a
-//     Store refreshes a blob's last-write time), until the blobs fit the cap. A blob the index names is in use
-//     and is never evicted; when only those remain over the cap, the report says so. Temp files older than a
-//     day are removed.
+//     mid-write leaves a .tmp that nothing reads, never a short blob under a trusted name. The temp and the blob
+//     are recorded in owned.txt, synced, before either file is made.
+//   * Size cap: Evict() removes the blobs listed in owned.txt that no index entry names, least recently used first
+//     (a Load hit or a Store refreshes a blob's last-write time), until the blobs fit the cap. A blob the index
+//     names is in use and is never evicted; when only those remain over the cap, the report says so. A listed
+//     temp older than a day is removed. Each removal is by name (nevr_owned::RemoveEntry), never by listing.
+//   * A cache with no owned.txt (from before it) adopts, once, each blob whose content hashes to its own name; a
+//     temp is never adopted. A file that is neither is never touched.
 //
 // Pure of the game and of the logger: results are returned, the caller logs them. Paths are UTF-16 end to end.
 
@@ -57,11 +62,19 @@ bool IsSha256Hex(const std::string& s);
 std::wstring BlobPath(const std::wstring& dir, const std::string& sha256);
 
 enum class StoreStatus { Stored, AlreadyPresent, Failed };
+/// What the one-time legacy adoption of owned.txt found (a cache from before the index).
+struct IndexAdoption {
+  std::uint32_t adopted = 0;     ///< blobs whose content hashed to their name: now listed
+  std::uint32_t mismatched = 0;  ///< blob-shaped names whose content did not match: left alone, never listed
+  std::uint32_t legacyTemps = 0; ///< temp files of a cache from before the index: left alone, never listed
+};
+
 struct StoreResult {
   StoreStatus status = StoreStatus::Failed;
   std::string sha256;
   DWORD error = 0;
   const char* failedStep = "";  ///< which step failed, for the log
+  IndexAdoption adoption;       ///< set when this store made owned.txt
 };
 
 /// Writes the bytes under their own SHA-256: temp file, flush, rename. An existing blob that re-hashes to its key
@@ -106,6 +119,9 @@ struct EvictReport {
   std::uint32_t blobsEvicted = 0;
   std::uint32_t staleTempsRemoved = 0;
   bool overCapAllReferenced = false;  ///< still over the cap, every remaining blob named by the index
+  bool indexUnreadable = false;       ///< owned.txt could not be read: nothing was removed
+  std::uint32_t linesDropped = 0;     ///< owned.txt lines that were not names of this cache: dropped, and rewritten away
+  IndexAdoption adoption;             ///< set when this call made owned.txt
 };
 
 /// Test support: every write (a blob, the index) stops with ERROR_DISK_FULL once it has written this many bytes

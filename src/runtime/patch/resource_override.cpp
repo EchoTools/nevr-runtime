@@ -754,6 +754,12 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
         static_cast<unsigned long long>(ev.blobBytesBefore), static_cast<unsigned long long>(ev.blobBytesAfter),
         static_cast<unsigned long long>(cap_bytes), ev.blobsEvicted, ev.staleTempsRemoved,
         ev.overCapAllReferenced ? "true" : "false");
+    // owned.txt: a cache from before the index adopts, once, the blobs whose content hashes to their names (asset_cache_index.h).
+    if (ev.indexUnreadable || ev.adoption.adopted != 0 || ev.adoption.mismatched != 0 || ev.adoption.legacyTemps != 0) {
+      Log(ev.indexUnreadable ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+          "[NEVR.RESOURCE] cache index adopted=%u not_adopted_content_mismatch=%u legacy_temps_left=%u index_unreadable=%s",
+          ev.adoption.adopted, ev.adoption.mismatched, ev.adoption.legacyTemps, ev.indexUnreadable ? "true" : "false");
+    }
     return loaded;
 }
 

@@ -32,6 +32,8 @@
 #include "runtime/log/runtime_adapter_note.h"
 #include "runtime/log/rate_limiter.h"
 #include "runtime/log/log_retention.h"
+#include "runtime/log/run_log_index.h"
+#include "core/owned_remove.h"
 #include "core/globals.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/crash_recovery.h"
@@ -510,6 +512,133 @@ static void FormatTimestamp(char* buf, size_t buf_size) {
  * run_log_writer.h. The boot phase and the host already write into it; the filter adopts the same file, so there is no second file and
  * no replay between two. A run that cannot make the folder or open the file is told so on stderr by the writer and records nothing
  * here: there is no fallback folder (docs/standards/logging.md, "One log"). */
+/* The run-log index (runtime/log/run_log_index.h): runlog-index.txt beside the logs. Retention deletes only the names listed there, each by
+ * name through nevr_owned::RemoveEntry. A run lists its own log's name, synced, before the file can be made, and each rotated archive's
+ * name before its rename. A folder with no index adopts, once, the names of the run-log grammar; nothing else in it is listed. */
+
+static std::string AnsiToUtf8(const std::string& ansi) {
+    const int wide_len = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), static_cast<int>(ansi.size()), nullptr, 0);
+    if (wide_len <= 0) return std::string();
+    std::wstring wide(static_cast<std::size_t>(wide_len), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), static_cast<int>(ansi.size()), &wide[0], wide_len);
+    const int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wide_len, nullptr, 0, nullptr, nullptr);
+    if (utf8_len <= 0) return std::string();
+    std::string utf8(static_cast<std::size_t>(utf8_len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wide_len, &utf8[0], utf8_len, nullptr, nullptr);
+    return utf8;
+}
+
+/* Writes `text` to `finalPath` through its literal temp (`<finalPath>.tmp`): create, flush, rename over. */
+static bool WriteIndexText(const std::string& finalPath, const std::string& text, std::string* error) {
+    const std::string tmp = finalPath + ".tmp";
+    HANDLE file = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        *error = "create " + tmp + " failed, error " + std::to_string(GetLastError());
+        return false;
+    }
+    DWORD put = 0;
+    bool ok = text.empty() || (WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &put, nullptr) != 0 && put == text.size());
+    if (ok) ok = FlushFileBuffers(file) != 0;
+    const DWORD writeError = GetLastError();
+    CloseHandle(file);
+    if (!ok) {
+        DeleteFileA(tmp.c_str());
+        *error = "write " + tmp + " failed, error " + std::to_string(writeError);
+        return false;
+    }
+    if (MoveFileExA(tmp.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+        *error = "rename " + tmp + " failed, error " + std::to_string(GetLastError());
+        DeleteFileA(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+/* Reads the index: the names the parser kept, and how many lines it dropped. *present is false when there is no index yet. */
+static bool ReadRunLogIndex(const std::string& dir, bool* present, std::vector<std::string>* names, std::size_t* dropped, std::string* error) {
+    *present = true;
+    const std::string path = dir + "\\" + nevr_run_log_index::kRunLogIndexName;
+    HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD openError = GetLastError();
+        if (openError == ERROR_FILE_NOT_FOUND || openError == ERROR_PATH_NOT_FOUND) {
+            *present = false;
+            return true;
+        }
+        *error = "open " + path + " failed, error " + std::to_string(openError);
+        return false;
+    }
+    std::string text;
+    char buffer[4096];
+    DWORD got = 0;
+    while (text.size() <= nevr_run_log_index::kMaxRunLogIndexBytes && ReadFile(file, buffer, sizeof(buffer), &got, nullptr) != 0 && got != 0) {
+        text.append(buffer, got);
+    }
+    CloseHandle(file);
+    return nevr_run_log_index::ParseRunLogIndex(text, names, dropped, error);
+}
+
+/* The first byte of a file, or 0 when it is empty or cannot be read. */
+static char FirstByteOf(const std::string& path) {
+    HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    char first = 0;
+    DWORD got = 0;
+    if (ReadFile(file, &first, 1, &got, nullptr) == 0 || got != 1) first = 0;
+    CloseHandle(file);
+    return first;
+}
+
+static bool g_index_dropped_warned = false;
+
+/* Lists `leaf` in the index and rewrites the whole list (literal temp, flush, rename), so a damaged or torn file heals on this write.
+ * A folder with no index adopts once the run-log names of its JSON-lines logs (first byte '{'); nothing else in it is listed. */
+static bool AppendRunLogName(const std::string& dir, const std::string& leaf, std::size_t* adopted, std::string* error) {
+    bool present = false;
+    std::vector<std::string> names;
+    std::size_t dropped = 0;
+    if (!ReadRunLogIndex(dir, &present, &names, &dropped, error)) return false;
+    if (!present) {
+        std::vector<std::string> listing;
+        WIN32_FIND_DATAA fd;
+        HANDLE find = FindFirstFileA((dir + "\\*").c_str(), &fd);
+        if (find != INVALID_HANDLE_VALUE) {
+            do {
+                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) listing.push_back(fd.cFileName);
+            } while (FindNextFileA(find, &fd) != 0);
+            FindClose(find);
+        }
+        for (const std::string& candidate : nevr_run_log_index::AdoptableRunLogs(listing)) {
+            if (nevr_run_log_index::IsJsonLogStart(FirstByteOf(dir + "\\" + candidate))) names.push_back(candidate);
+        }
+        *adopted = names.size();
+    }
+    if (dropped != 0 && !g_index_dropped_warned) {
+        g_index_dropped_warned = true;
+        BlfLog("run-log index: %llu lines that are not run-log names were dropped; the file is rewritten without them",
+               static_cast<unsigned long long>(dropped));
+    }
+    if (std::find(names.begin(), names.end(), leaf) == names.end()) names.push_back(leaf);
+    return WriteIndexText(dir + "\\" + nevr_run_log_index::kRunLogIndexName, nevr_run_log_index::FormatRunLogIndex(names), error);
+}
+
+/* The rotation's hook (run_log_writer.h Rotate). A refused record never blocks the rotation: the archive is kept and not listed (a
+ * leak, not a wedge). The refusal is logged once per process. */
+static bool RecordArchiveName(const std::string& archive) {
+    const std::string leaf = archive.substr(archive.find_last_of("\\/") + 1);
+    std::size_t adopted = 0;
+    std::string error;
+    if (AppendRunLogName(g_log_dir, leaf, &adopted, &error)) return true;
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        BlfLog("run log archive %s is not in the run-log index (%s): it is kept, and retention will not delete it", leaf.c_str(), error.c_str());
+    }
+    return false;
+}
+
 static void OpenLogFile() {
     const char* path = nevr_run_log_writer::Path();
     if (path == nullptr || path[0] == '\0') {
@@ -519,6 +648,16 @@ static void OpenLogFile() {
     g_log_file_path = path;
     const std::string::size_type slash = g_log_file_path.find_last_of("\\/");
     g_log_dir = slash == std::string::npos ? std::string() : g_log_file_path.substr(0, slash);
+    if (!g_log_dir.empty()) {
+        std::size_t adopted = 0;
+        std::string error;
+        const std::string leaf = g_log_file_path.substr(slash + 1);
+        if (!AppendRunLogName(g_log_dir, leaf, &adopted, &error)) {
+            BlfLog("run log not in the run-log index (%s): retention will not delete this log", error.c_str());
+        } else if (adopted != 0) {
+            BlfLog("run-log index adopted %llu existing run logs", static_cast<unsigned long long>(adopted));
+        }
+    }
     g_log_file_open = true;
     g_file_open_time = GetEpochSeconds();
     BlfLog("logging to: %s", g_log_file_path.c_str());
@@ -534,29 +673,51 @@ static void CloseLogFile() {
 static void PruneOldLogs() {
     if (g_log_cap_bytes == 0 || g_log_dir.empty()) return;
 
+    /* Only the names the index lists are candidates; a listed name whose file is gone is dropped from the index. */
+    const std::string root = AnsiToUtf8(g_log_dir);
+    nevr_owned::RemoveEntry(root, nevr_run_log_index::kRunLogIndexName + std::string(".tmp"));  // a rewrite that was killed
+    bool present = false;
+    std::vector<std::string> listed;
+    std::size_t dropped = 0;
+    std::string error;
+    if (!ReadRunLogIndex(g_log_dir, &present, &listed, &dropped, &error)) {
+        BlfLog("run log retention skipped: %s", error.c_str());
+        return;
+    }
     std::vector<nevr_log_retention::RunLogFile> files;
-    const std::string pattern = g_log_dir + "\\nevr-*.jsonl";
-
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            nevr_log_retention::RunLogFile f;
-            f.path = g_log_dir + "\\" + fd.cFileName;
-            f.bytes = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
-            files.push_back(f);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    std::vector<std::string> kept;
+    for (const std::string& leaf : listed) {
+        const std::string path = g_log_dir + "\\" + leaf;
+        WIN32_FILE_ATTRIBUTE_DATA attrs;
+        if (GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attrs) == 0) continue;
+        nevr_log_retention::RunLogFile f;
+        f.path = path;
+        f.bytes = (static_cast<uint64_t>(attrs.nFileSizeHigh) << 32) | attrs.nFileSizeLow;
+        files.push_back(f);
+        kept.push_back(leaf);
     }
 
     const std::vector<std::string> doomed =
         nevr_log_retention::SelectLogsToDelete(files, g_log_cap_bytes, g_log_file_path);
     for (const std::string& path : doomed) {
-        if (std::remove(path.c_str()) == 0) {
+        const std::string leaf = path.substr(g_log_dir.size() + 1);
+        const nevr_owned::Result r = nevr_owned::RemoveEntry(root, leaf);
+        if (r.outcome == nevr_owned::Outcome::kRemoved) {
             BlfLog("run log deleted over the size cap: %s (cap_mb=%llu)", path.c_str(),
                    static_cast<unsigned long long>(g_log_cap_bytes / nevr_log_retention::kBytesPerMiB));
         } else {
-            BlfLog("run log NOT deleted over the size cap: %s errno=%d", path.c_str(), errno);
+            BlfLog("run log NOT deleted over the size cap: %s outcome=%s os_error=%d", path.c_str(),
+                   nevr_owned::OutcomeName(r.outcome), r.os_error);
+        }
+        if (r.outcome == nevr_owned::Outcome::kRemoved || r.outcome == nevr_owned::Outcome::kAbsent) {
+            kept.erase(std::remove(kept.begin(), kept.end(), leaf), kept.end());
+        }
+    }
+    if (kept.size() != listed.size() || dropped != 0) {  // a dropped line heals on this rewrite
+        std::string write_error;
+        if (!WriteIndexText(g_log_dir + "\\" + nevr_run_log_index::kRunLogIndexName, nevr_run_log_index::FormatRunLogIndex(kept),
+                            &write_error)) {
+            BlfLog("run-log index not rewritten: %s", write_error.c_str());
         }
     }
 }
@@ -581,7 +742,7 @@ static bool ShouldRotate() {
  * which append to that name, keep writing to the live file (run_log_writer.h, Rotate). */
 static void RotateIfNeeded() {
     if (!ShouldRotate()) return;
-    nevr_run_log_writer::Rotate();
+    nevr_run_log_writer::Rotate(&RecordArchiveName);
     g_file_open_time = GetEpochSeconds();  /* a refused rename is retried after one more interval, not on every line */
     PruneOldLogs();
 }

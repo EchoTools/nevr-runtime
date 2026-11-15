@@ -35,6 +35,20 @@ class AssetCache : public ::testing::Test {
     dir_ = folder + L"\\cache";  // not created: Store makes it, as a first run would
   }
 
+  static std::string ReadText(const std::wstring& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return std::string();
+    std::string out;
+    char buf[4096];
+    DWORD got = 0;
+    while (ReadFile(file, buf, sizeof(buf), &got, nullptr) != 0 && got != 0) out.append(buf, got);
+    CloseHandle(file);
+    return out;
+  }
+
+  std::vector<std::wstring> made_;  ///< every file this test wrote itself, by full path
+
   std::string StoreOk(const std::vector<std::uint8_t>& data) {
     const cache::StoreResult r = cache::Store(dir_, data.data(), data.size());
     EXPECT_NE(r.status, cache::StoreStatus::Failed) << r.failedStep << " error " << r.error;
@@ -58,7 +72,8 @@ class AssetCache : public ::testing::Test {
     CloseHandle(f);
   }
 
-  static void WriteRaw(const std::wstring& path, const std::vector<std::uint8_t>& data) {
+  void WriteRaw(const std::wstring& path, const std::vector<std::uint8_t>& data) {
+    made_.push_back(path);
     HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     ASSERT_NE(f, INVALID_HANDLE_VALUE);
     DWORD put = 0;
@@ -333,10 +348,14 @@ TEST_F(AssetCache, AReadRefreshesALastUsedStampSoTheBlobOutlivesAnUnreadOne) {
   EXPECT_FALSE(Exists(cache::BlobPath(dir_, neverRead)));
 }
 
-TEST_F(AssetCache, StaleTempFilesAreRemovedAndFreshOnesKept) {
+// A stale temp is removed only when owned.txt names it; a fresh one is kept (it may belong to a live writer in another process).
+TEST_F(AssetCache, AStaleTempTheIndexNamesIsRemovedAndAFreshOneKept) {
   ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
-  const std::wstring stale = dir_ + L"\\" + std::wstring(64, L'a') + L".1.2.tmp";
-  const std::wstring fresh = dir_ + L"\\" + std::wstring(64, L'b') + L".3.4.tmp";
+  const std::string staleName = std::string(64, 'a') + ".1.2.3.tmp";
+  const std::string freshName = std::string(64, 'b') + ".3.4.5.tmp";
+  const std::wstring stale = dir_ + L"\\" + std::wstring(staleName.begin(), staleName.end());
+  const std::wstring fresh = dir_ + L"\\" + std::wstring(freshName.begin(), freshName.end());
+  WriteRaw(dir_ + L"\\owned.txt", Bytes(staleName + "\n" + freshName + "\n"));
   WriteRaw(stale, Bytes("x"));
   WriteRaw(fresh, Bytes("y"));
   SetAge(stale, 2 * 24 * 60 * 60);
@@ -345,6 +364,96 @@ TEST_F(AssetCache, StaleTempFilesAreRemovedAndFreshOnesKept) {
   EXPECT_EQ(r.staleTempsRemoved, 1u);
   EXPECT_FALSE(Exists(stale));
   EXPECT_TRUE(Exists(fresh)) << "a younger temp may belong to a live writer in another process";
+}
+
+TEST_F(AssetCache, AnUnindexedTempIsNeverRemoved) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::wstring stale = dir_ + L"\\" + std::wstring(64, L'a') + L".1.2.3.tmp";
+  WriteRaw(stale, Bytes("x"));
+  SetAge(stale, 2 * 24 * 60 * 60);
+  const cache::EvictReport r = cache::Evict(dir_, cache::kDefaultCapBytes, {});
+  EXPECT_EQ(r.staleTempsRemoved, 0u);
+  EXPECT_TRUE(Exists(stale)) << "a temp no index entry names is not this cache's to remove";
+}
+
+TEST_F(AssetCache, ABlobShapedFileWhoseContentDoesNotMatchItsNameIsNeverRemoved) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::wstring liar = dir_ + L"\\" + std::wstring(64, L'c') + L".blob";  // the content does not hash to its name
+  WriteRaw(liar, Bytes("not the bytes that hash to ccc"));
+  const cache::EvictReport r = cache::Evict(dir_, 0, {});  // a cap of zero: every listed blob would go
+  EXPECT_EQ(r.adoption.mismatched, 1u);
+  EXPECT_EQ(r.adoption.adopted, 0u);
+  EXPECT_EQ(r.blobsEvicted, 0u);
+  EXPECT_TRUE(Exists(liar));
+}
+
+TEST_F(AssetCache, ALegacyCacheAdoptsOnceEachBlobWhoseContentHashesToItsName) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::vector<std::uint8_t> data = Filler(1000, 7);
+  const std::string sha = cache::Sha256Hex(data.data(), data.size());
+  WriteRaw(cache::BlobPath(dir_, sha), data);  // a blob from before the index
+  const cache::EvictReport first = cache::Evict(dir_, cache::kDefaultCapBytes, {});
+  EXPECT_EQ(first.adoption.adopted, 1u);
+  EXPECT_EQ(first.blobBytesBefore, 1000u);
+  EXPECT_TRUE(Exists(cache::BlobPath(dir_, sha)));
+  const cache::EvictReport second = cache::Evict(dir_, cache::kDefaultCapBytes, {});
+  EXPECT_EQ(second.adoption.adopted, 0u) << "the adoption happens once: the index now exists";
+  EXPECT_EQ(second.blobBytesBefore, 1000u);
+}
+
+TEST_F(AssetCache, ALegacyTempIsLeftAndCountedNeverAdopted) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::wstring legacy = dir_ + L"\\" + std::wstring(64, L'a') + L".1.2.3.tmp";
+  WriteRaw(legacy, Bytes("x"));
+  SetAge(legacy, 2 * 24 * 60 * 60);
+  const cache::EvictReport r = cache::Evict(dir_, cache::kDefaultCapBytes, {});
+  EXPECT_EQ(r.adoption.legacyTemps, 1u);
+  EXPECT_EQ(r.staleTempsRemoved, 0u);
+  EXPECT_TRUE(Exists(legacy));
+}
+
+TEST_F(AssetCache, AnIndexThatCannotBeReadRemovesNothing) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::vector<std::uint8_t> data = Filler(1000, 1);
+  const std::string sha = cache::Sha256Hex(data.data(), data.size());
+  WriteRaw(cache::BlobPath(dir_, sha), data);
+  WriteRaw(dir_ + L"\\owned.txt", Bytes("../escape.blob\n"));  // a line that is not a name of this cache: dropped, never trusted
+  const cache::EvictReport r = cache::Evict(dir_, 0, {});
+  EXPECT_FALSE(r.indexUnreadable);
+  EXPECT_EQ(r.linesDropped, 1u);
+  EXPECT_EQ(r.blobsEvicted, 0u) << "the blob is not listed, so it is never removed";
+  EXPECT_TRUE(Exists(cache::BlobPath(dir_, sha)));
+  EXPECT_EQ(ReadText(dir_ + L"\\owned.txt"), "") << "the list is rewritten without the dropped line";
+}
+
+TEST_F(AssetCache, AStoreAfterATornListWritesACleanListWithTheNewNames) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::string listed = std::string(64, 'e') + ".blob";
+  WriteRaw(dir_ + L"\\owned.txt", Bytes(listed + "\n" + std::string(64, 'f') + ".blo"));  // a torn last line
+  const std::string sha = StoreOk(Filler(500, 9));
+  const std::string text = ReadText(dir_ + L"\\owned.txt");
+  EXPECT_NE(text.find(listed + "\n"), std::string::npos);
+  EXPECT_NE(text.find(sha + ".blob\n"), std::string::npos);
+  EXPECT_EQ(text.find(".blo\n"), std::string::npos) << "the torn line is gone";
+  EXPECT_EQ(text.back(), '\n');
+}
+
+TEST_F(AssetCache, ALinkAtAnIndexedNameIsRemovedAsALinkAndItsTargetKept) {
+  ASSERT_TRUE(CreateDirectoryW(dir_.c_str(), nullptr) != 0);
+  const std::wstring target = dir_ + L"-target.bin";  // outside the cache folder: a link must never be followed
+  const std::string name = std::string(64, 'd') + ".blob";
+  const std::wstring link = dir_ + L"\\" + std::wstring(name.begin(), name.end());
+  WriteRaw(target, Bytes("target bytes"));
+  WriteRaw(dir_ + L"\\owned.txt", Bytes(name + "\n"));
+  if (CreateSymbolicLinkW(link.c_str(), target.c_str(), 0) == 0) {
+    DeleteFileW(target.c_str());
+    GTEST_SKIP() << "symbolic links need a privilege this account does not have";
+  }
+  const cache::EvictReport r = cache::Evict(dir_, 0, {});
+  EXPECT_EQ(r.blobsEvicted, 1u);
+  EXPECT_FALSE(Exists(link));
+  EXPECT_TRUE(Exists(target)) << "the link's target is never followed or removed";
+  DeleteFileW(target.c_str());
 }
 
 TEST_F(AssetCache, FilesThatAreNotBlobsAreNeverCountedOrRemoved) {

@@ -19,6 +19,13 @@ nevr_ht_test(owned_remove_test GROUP shared TIMEOUT 60
 # The order a test removes its recorded entries in (runtime/tests/run_root_order.h), and the POSIX guard run over that order.
 nevr_ht_test(run_root_order_test GROUP shared TIMEOUT 60
   SRC src/core/owned_remove_posix.cpp src/quest/tests/run_root_order_test.cpp)
+# P5: the asset cache's index rules (runtime/patch/asset_cache_index.h): which names the cache records and removes, the index text,
+# the legacy adoption decision. Header-only: the Win32 cache runs the same functions.
+nevr_ht_test(asset_cache_index_test GROUP shared TIMEOUT 60
+  SRC src/quest/tests/asset_cache_index_test.cpp)
+# P5: the run-log index rules (runtime/log/run_log_index.h) and the retention selection it feeds (runtime/log/log_retention.h).
+nevr_ht_test(run_log_index_test GROUP shared TIMEOUT 60
+  SRC src/quest/tests/run_log_index_test.cpp)
 # #2129: the report's summary names its final file after the rename (sentinel/crash_summary_rules.h). Header-only rule.
 nevr_ht_test(crash_summary_rules_test GROUP shared TIMEOUT 60
   SRC src/quest/tests/crash_summary_rules_test.cpp)

@@ -67,11 +67,22 @@ case "$*" in
         printf 'MDMP-binary' > "$3/nevr-crashes/crash-1.dmp"
         printf 'crash for %s and %s\n' "$FAKE_SERIAL" "$FAKE_HWSERIAL" > "$3/nevr-crashes/crash-1.txt"
         echo "2 files pulled"; exit 0 ;;
+      */nevr-crashes/crash-1.dmp)
+        mkdir -p "$(dirname "$3")"
+        printf 'MDMP-binary' > "$3"
+        echo "1 file pulled"; exit 0 ;;
+      */nevr-crashes/crash-1.txt)
+        mkdir -p "$(dirname "$3")"
+        printf 'crash for %s and %s\n' "$FAKE_SERIAL" "$FAKE_HWSERIAL" > "$3"
+        echo "1 file pulled"; exit 0 ;;
       *) echo "unexpected pull $2" >&2; exit 1 ;;
     esac ;;
   "shell ls "*"/nevr/logs")
     if [[ -n "${FAKE_NO_SENTINEL_LOG:-}" || ( -n "${FAKE_NO_MEDIA_LOGS:-}" && "$2" == */Android/media/* ) ]]; then echo "ls: $2: No such file or directory"; exit 1; fi
     printf 'nevr-2026-10-20T21-00-00.000.jsonl\nnevr-2026-10-21T22-00-00.000.jsonl\n' ;;
+  "shell ls -p "*"/nevr-crashes")
+    if [[ -n "${FAKE_NO_MEDIA_LOGS:-}" && "$2" == */Android/media/* ]]; then echo "ls: $2: No such file or directory"; exit 1; fi
+    printf 'crash-1.dmp\ncrash-1.txt\n'; if [[ -n "${FAKE_CRASH_EXTRA:-}" ]]; then printf '%s\n' "$FAKE_CRASH_EXTRA"; fi ;;
   "shell ls "[!-]*) printf 'nevr-crashes\nconfig.yaml\n' ;;
   "shell getprop ro.serialno") echo "$FAKE_HWSERIAL" ;;
   "shell getprop ro.product.model") echo "Quest 2" ;;
@@ -109,6 +120,15 @@ def tool_farm(directory: pathlib.Path) -> None:
 
 
 class DiagnoseCases:
+    # The PC script pulls the crash folder one listed file at a time (so the cleanup knows each file it wrote); the bash script
+    # still pulls the folder whole. Each class says which.
+    CRASH_PULLS_PER_FILE = False
+
+    def crash_pull_targets(self, base):
+        if self.CRASH_PULLS_PER_FILE:
+            return [f"{base}/nevr-crashes/crash-1.dmp", f"{base}/nevr-crashes/crash-1.txt"]
+        return [f"{base}/nevr-crashes"]
+
     """The behaviour both scripts share. A subclass says how to run its script."""
 
     kind = ""
@@ -283,6 +303,15 @@ class DiagnoseCases:
         self.assertRegex(result.stdout, rf"{re.escape(MEDIA)}/files/_data: absent")
         self.assertIn("android_media_unmarked", result.stdout)
 
+    def test_a_crash_name_that_climbs_out_of_the_work_folder_is_not_pulled(self):
+        if not self.CRASH_PULLS_PER_FILE:
+            self.skipTest("the bash script pulls the crash folder whole, not by name")
+        result = self.run_script(FAKE_CRASH_EXTRA=r"..\..\x")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pulls = [c for c in self.calls() if c.startswith("pull ")]
+        self.assertFalse([c for c in pulls if ".." in c or "\\" in c], pulls)
+        self.assertEqual(len([c for c in pulls if "/nevr-crashes/" in c]), 2, "only the two plain crash names are pulled")
+
     def test_device_login_txt_is_never_collected(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -292,8 +321,9 @@ class DiagnoseCases:
         pulls = [c for c in self.calls() if c.startswith("pull ")]
         # The runtime's folder under Android/media is read first; the Android/data folder is not touched when it answers.
         self.assertEqual(sorted(p.split()[1] for p in pulls),
-                         [f"{MEDIA}/files/nevr-crashes", f"{MEDIA}/files/nevr/logs/nevr-2026-10-20T21-00-00.000.jsonl",
-                          f"{MEDIA}/files/nevr/logs/nevr-2026-10-21T22-00-00.000.jsonl"])
+                         sorted(self.crash_pull_targets(f"{MEDIA}/files") + [
+                             f"{MEDIA}/files/nevr/logs/nevr-2026-10-20T21-00-00.000.jsonl",
+                             f"{MEDIA}/files/nevr/logs/nevr-2026-10-21T22-00-00.000.jsonl"]))
         data, _ = self.members()
         self.assertIn("sentinel/nevr-2026-10-20T21-00-00.000.jsonl", data)
         self.assertIn(b"<email>", data["sentinel/nevr-2026-10-20T21-00-00.000.jsonl"])
@@ -305,7 +335,8 @@ class DiagnoseCases:
         self.assertEqual([p for p in pulls if "/nevr/logs/" in p],
                          [f"{FILES}/nevr/logs/nevr-2026-10-20T21-00-00.000.jsonl",
                           f"{FILES}/nevr/logs/nevr-2026-10-21T22-00-00.000.jsonl"])
-        self.assertIn(f"{FILES}/nevr-crashes", pulls)
+        for target in self.crash_pull_targets(FILES):
+            self.assertIn(target, pulls)
         data, _ = self.members()
         self.assertIn("sentinel/nevr-2026-10-21T22-00-00.000.jsonl", data)
         self.assertIn("sentinel/nevr-crashes/crash-1.txt", data)
@@ -484,8 +515,12 @@ class SourceShape(unittest.TestCase):
 
     def test_the_scripts_delete_only_the_working_folder_they_made(self):
         ps1 = PS1.read_text()
-        self.assertEqual(len(re.findall(r"Remove-Item", ps1)), 1)
-        self.assertIn("Remove-Item -LiteralPath $script:Work -Recurse -Force", ps1)
+        # the PC side removes only what it recorded writing (test_quest_diagnose_cleanup.py): no -Recurse anywhere
+        self.assertNotIn("-Recurse -Force", ps1)
+        for line in re.sub(r"(?m)^\s*#.*$", "", ps1).splitlines():  # a read may recurse; a removal may not
+            if re.search(r"Remove-Item|Delete\(|\brmdir\b", line):
+                self.assertNotIn("-Recurse", line)
+        self.assertIn("[System.IO.Directory]::Delete($full, $false)", ps1)
         self.assertNotRegex(ps1, r"\bdel\b|\brm\b")
         sh = SH.read_text()
         self.assertEqual(re.findall(r"\brm\b[^\n]*", re.sub(r"^\s*#.*$", "", sh, flags=re.M)),
@@ -517,6 +552,7 @@ class SourceShape(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
 class QuestDiagnosePs1Test(DiagnoseCases, unittest.TestCase):
+    CRASH_PULLS_PER_FILE = True
     script_source = PS1
 
     def run_script(self, adb=None, pause=False, stdin="\n", out=None, cwd=None, **extra):

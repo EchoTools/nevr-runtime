@@ -27,6 +27,39 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
+# Every file and folder this script writes into its temporary folder is recorded here as it is made (Save-Text, Ensure-WorkFolder,
+# the pulls). The cleanup removes exactly these, by literal path (ORDER.md "The manifest rule"); it never lists the folder.
+$script:WorkFiles = New-Object System.Collections.Generic.List[string]
+$script:WorkFolders = New-Object System.Collections.Generic.List[string]
+
+# Removes the recorded files, then the recorded folders deepest first. A folder goes only when it is empty: Directory.Delete with
+# recursive=false, which fails on a folder that still holds something and never asks to remove its children. (Remove-Item without
+# -Recurse is not used: on a non-empty folder it asks "all children will be removed" and removes them on Yes.) Returns how many
+# recorded entries are still there.
+function Remove-RecordedWork([string]$Root, [string[]]$Files, [string[]]$Folders) {
+  # Only paths under $Root (its full path, resolved) are touched; anything else counts as left and is never deleted.
+  $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+  $prefix = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+  $left = 0
+  foreach ($file in $Files) {
+    $full = [System.IO.Path]::GetFullPath($file)
+    if (-not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $left++; continue }
+    if ([System.IO.File]::Exists($full)) {
+      try { [System.IO.File]::Delete($full) } catch { }
+      if ([System.IO.File]::Exists($full)) { $left++ }
+    }
+  }
+  foreach ($folder in @($Folders | Sort-Object { $_.Length } -Descending)) {
+    $full = [System.IO.Path]::GetFullPath($folder)
+    if ($full -ne $rootFull -and -not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $left++; continue }
+    if ([System.IO.Directory]::Exists($full)) {
+      try { [System.IO.Directory]::Delete($full, $false) } catch { }
+      if ([System.IO.Directory]::Exists($full)) { $left++ }
+    }
+  }
+  return $left
+}
+
 $package = 'com.readyatdawn.r15'
 $activity = 'com.oculus.gles3jni.MainActivity'
 $mediaRoot = "/sdcard/Android/media/$package"
@@ -152,10 +185,18 @@ function Protect-Text([string]$text) {
   return [regex]::Replace($text, '[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+', '<email>')
 }
 
+function Ensure-WorkFolder([string]$folder) {
+  if (Test-Path -LiteralPath $folder -PathType Container) { return }
+  $parent = Split-Path -Parent $folder
+  if ($parent -and $folder.StartsWith($script:Work) -and $folder.Length -gt $script:Work.Length) { Ensure-WorkFolder $parent }
+  New-Item -ItemType Directory -Path $folder -Force | Out-Null
+  $script:WorkFolders.Add($folder)
+}
+
 function Save-Text([string]$relative, [string]$text) {
   $path = Join-Path $script:Work $relative
-  $folder = Split-Path -Parent $path
-  if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+  Ensure-WorkFolder (Split-Path -Parent $path)
+  $script:WorkFiles.Add($path)
   [System.IO.File]::WriteAllText($path, (Protect-Text $text), (New-Object System.Text.UTF8Encoding($false)))
 }
 
@@ -182,7 +223,7 @@ try {
   $zipPath = Join-Path $OutDir "nevr-diagnose-$stamp.zip"
   if (Test-Path -LiteralPath $zipPath) { throw "$zipPath exists; not overwritten" }
   $script:Work = Join-Path ([System.IO.Path]::GetTempPath()) "nevr-diagnose-$stamp"
-  New-Item -ItemType Directory -Path $script:Work -Force | Out-Null
+  Ensure-WorkFolder $script:Work
 
   Write-Host 'Reading the headset ...'
   $model = Get-DeviceText 30 @('shell', 'getprop', 'ro.product.model')
@@ -224,12 +265,12 @@ try {
   # The runtime's own logs and crash files: every nevr-*.jsonl in nevr/logs (one log for each run of the game, and the
   # rotated files of a long run) and nevr-crashes. The Android/media files folder is read first (where the runtime writes
   # them, and where a player can reach them); the Android/data folder is the fallback.
-  New-Item -ItemType Directory -Path (Join-Path $script:Work 'sentinel') -Force | Out-Null
+  Ensure-WorkFolder (Join-Path $script:Work 'sentinel')
   $logDir = ''
   $logNames = @()
   foreach ($candidate in @("$mediaRoot/files", $filesDir)) {
     $listing = Get-DeviceText 30 @('shell', "ls $candidate/nevr/logs")
-    $found = @($listing -split "`r?`n" | Where-Object { $_ -match '^nevr-.+\.jsonl$' })
+    $found = @($listing -split "`r?`n" | Where-Object { $_ -match '^nevr-[A-Za-z0-9._-]+\.jsonl$' -and $_ -notmatch '^\.+$' })
     if ($found.Count -gt 0) { $logDir = "$candidate/nevr/logs"; $logNames = $found; break }
   }
   $logRc = 1
@@ -237,15 +278,32 @@ try {
   if ($logDir) {
     $logRc = 0
     foreach ($name in $logNames) {
+      $script:WorkFiles.Add((Join-Path $script:Work "sentinel/$name"))
       $pulled = Invoke-Device 120 @('pull', "$logDir/$name", (Join-Path $script:Work "sentinel/$name"))
       $logPulls += "${name}: $($pulled.Output)`n"
     }
   }
-  $crashes = $null
+  # The crash folder is pulled one listed file at a time, so every file written is recorded. ls -p marks a subfolder with '/';
+  # a subfolder is not pulled, because the files inside it could not be recorded for the cleanup.
+  $crashDir = ''
+  $crashNames = @()
   foreach ($candidate in @("$mediaRoot/files", $filesDir)) {
-    $crashes = Invoke-Device 120 @('pull', "$candidate/nevr-crashes", (Join-Path $script:Work 'sentinel'))
-    if ($crashes.Code -eq 0) { break }
+    $listing = Get-DeviceText 30 @('shell', "ls -p $candidate/nevr-crashes")
+    # Only plain names are pulled: letters, digits, '.', '_' and '-', and not all dots. A name with '\', ':', a space or a
+    # traversal part is skipped, so nothing outside the work folder is ever written to.
+    $names = @($listing -split "`r?`n" | Where-Object { $_ -match '^[A-Za-z0-9._-]+$' -and $_ -notmatch '^\.+$' })
+    if ($names.Count -gt 0) { $crashDir = "$candidate/nevr-crashes"; $crashNames = $names; break }
   }
+  $crashLog = ''
+  if ($crashDir) {
+    Ensure-WorkFolder (Join-Path $script:Work 'sentinel/nevr-crashes')
+    foreach ($name in $crashNames) {
+      $script:WorkFiles.Add((Join-Path $script:Work "sentinel/nevr-crashes/$name"))
+      $pulled = Invoke-Device 120 @('pull', "$crashDir/$name", (Join-Path $script:Work "sentinel/nevr-crashes/$name"))
+      $crashLog += "${name}: exit $($pulled.Code) $($pulled.Output)`n"
+    }
+  }
+  $crashes = [pscustomobject]@{ Code = $(if ($crashDir) { 0 } else { 1 }); Output = $crashLog.Trim() }
   $logFiles = @(Get-ChildItem -LiteralPath (Join-Path $script:Work 'sentinel') -File -Filter 'nevr-*.jsonl' -ErrorAction SilentlyContinue)
   foreach ($file in $logFiles) { Save-Text ($file.FullName.Substring($script:Work.Length + 1)) ([System.IO.File]::ReadAllText($file.FullName)) }
   $logFullNames = @($logFiles | ForEach-Object { $_.FullName })
@@ -342,7 +400,10 @@ try {
   Write-Host ('(also written to ' + $logFile + ')')
   Write-RunLog ($scriptName + ' ERROR: ' + $message)
 } finally {
-  if ($script:Work -and (Test-Path -LiteralPath $script:Work)) { Remove-Item -LiteralPath $script:Work -Recurse -Force -ErrorAction SilentlyContinue }
+  if ($script:Work) {
+    $left = Remove-RecordedWork $script:Work @($script:WorkFiles) @($script:WorkFolders)
+    if ($left -gt 0) { Write-RunLog ("cleanup left $left recorded entries in " + $script:Work) }
+  }
 }
 Wait-BeforeClose
 exit $exitCode
