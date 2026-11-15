@@ -1,5 +1,5 @@
 // The combat module's group switches and their defaults (runtime/combat/combat_settings.h), and the balance transform's
-// merge (runtime/combat/balance_merge.h) over a synthetic CJsonResourceWin10, whose output is parsed back.
+// merge (core/combat_balance/balance_merge.h) over a synthetic CJsonResourceWin10, whose output is parsed back.
 
 #include <cstdint>
 #include <cstring>
@@ -9,8 +9,8 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "runtime/combat/balance_merge.h"
-#include "runtime/combat/balance_values.h"
+#include "core/combat_balance/balance_merge.h"
+#include "core/combat_balance/balance_values.h"
 #include "runtime/combat/combat_settings.h"
 
 namespace {
@@ -123,6 +123,33 @@ TEST(CombatBalance, CatsValuesParseAndSetSomething) {
   EXPECT_GT(changed, 0u);
   const auto parsed = nlohmann::json::parse(out.substr(nevr_combat::balance::kHeaderSize), nullptr, false);
   EXPECT_FALSE(parsed.is_discarded());
+}
+
+// The proof line of both platforms reads these values back from the merged bytes: Cat's PROTOSTAR and QUARK numbers.
+TEST(CombatBalance, TheProbeReadsCatsValuesBackFromTheMergedResource) {
+  const std::string in = Resource(R"({"weapon_properties":{"magnum":{"projectile_damage":50}}})");
+  std::string out;
+  std::size_t changed = 0;
+  ASSERT_EQ(nevr_combat::balance::Apply(reinterpret_cast<const std::uint8_t*>(in.data()), in.size(),
+                                        nevr_combat::balance::kCatWeaponSettings, &out, &changed),
+            nevr_combat::balance::Result::kApplied);
+  const nevr_combat::balance::Probe p =
+      nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(out.data()), out.size());
+  EXPECT_EQ(p.magnumDamage, 45);
+  EXPECT_EQ(p.magnumHead, 1.5556);
+  EXPECT_EQ(p.magnumRefire, 0.6);
+  EXPECT_EQ(p.smgVent, 71.43);
+  EXPECT_EQ(nevr_combat::balance::ProbeText(p), "magnum_damage=45 magnum_head=1.5556 magnum_refire=0.6 smg_vent=71.43");
+  const nevr_combat::balance::Probe stock =
+      nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(in.data()), in.size());
+  EXPECT_EQ(stock.magnumDamage, 50) << "the stock value reads back unmerged";
+  EXPECT_EQ(stock.smgVent, -1);
+}
+
+TEST(CombatBalance, BothPlatformsJsonResourceClassesAreRecognised) {
+  EXPECT_TRUE(nevr_combat::balance::IsJsonResourceType(nevr_combat::balance::kJsonResourceType));
+  EXPECT_TRUE(nevr_combat::balance::IsJsonResourceType(nevr_combat::balance::kJsonResourceTypeAndroid));
+  EXPECT_FALSE(nevr_combat::balance::IsJsonResourceType(0x1234));
 }
 
 }  // namespace

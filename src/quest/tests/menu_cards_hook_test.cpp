@@ -20,6 +20,7 @@
 #include "hook_log.h"
 #include "menu_cards_hook.h"
 #include "menu_cards_swap.h"
+#include "core/combat_balance/balance_merge.h"
 #include "pinned_targets.h"
 #include "quest/data/sha256.h"
 #include "quest/tests/test_check.h"
@@ -640,6 +641,82 @@ void OnlyTheNetgunClassUnderAFiveLevelNameIsOffered() {
   }
 }
 
+// ---- the weapon-value merge (the Quest edge of core/combat_balance/balance_merge.h) --------------------------------
+
+bool GateOn() noexcept { return true; }
+bool GateOff() noexcept { return false; }
+
+// A stock mp_weapon_settings of the CJsonResource layout: a 0x220-byte header whose u64 at +8 is the body length, then the body.
+std::vector<unsigned char> StockWeaponSettings() {
+  const std::string body = R"({"weapon_properties":{"magnum":{"projectile_damage":50,"refire_delay":0.5}},"damage_table":{"magnum":{"head":1.5}}})";
+  std::vector<unsigned char> blob(nevr_combat::balance::kHeaderSize + body.size(), 0);
+  const std::uint64_t length = body.size();
+  std::memcpy(blob.data() + nevr_combat::balance::kLengthOffset, &length, sizeof length);
+  std::memcpy(blob.data() + nevr_combat::balance::kHeaderSize, body.data(), body.size());
+  return blob;
+}
+
+// In a combat variant the stock values the game delivered are replaced, through the game's allocator, by Cat's, and the proof
+// record carries the values read back from the bytes served; the game's callback runs on the merged copy.
+void CatsWeaponValuesAreServedInACombatVariant() {
+  for (const std::uint64_t cls : {nevr_combat::balance::kJsonResourceType, nevr_combat::balance::kJsonResourceTypeAndroid}) {
+    Reset("");
+    mc::SetCombatGate(&GateOn);
+    std::vector<unsigned char> stock = StockWeaponSettings();
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, stock.data(), stock.size(), &g_alloc, 0x10, cls, nevr_combat::balance::kWeaponSettingsName);
+    QCHECK(Call(block) == kCallbackResult);
+    QCHECK(g_seen.calls == 1 && g_seen.buffer != stock.data() && g_allocCalls == 1);
+    const nevr_combat::balance::Probe p = nevr_combat::balance::ReadProbe(g_seen.bytes.data(), g_seen.bytes.size());
+    QCHECK(p.magnumDamage == 45 && p.magnumHead == 1.5556 && p.magnumRefire == 0.6);
+    const std::vector<std::string> lines = Lines("combat_balance_applied");
+    QCHECK(lines.size() == 1);
+    QCHECK(Text(lines[0], "magnum_damage") == "45" && Text(lines[0], "magnum_head") == "1.5556" &&
+           Text(lines[0], "magnum_refire") == "0.6");
+    QCHECK(Field(lines[0], "bytes_before") == std::to_string(stock.size()));
+    QCHECK(Lines("combat_balance_skip").empty());
+  }
+}
+
+// Outside a combat variant (no gate, or a gate that says no) the game keeps its own values, and the skip says why.
+void WithoutTheCombatGateTheStockWeaponValuesStay() {
+  for (int gate = 0; gate < 2; ++gate) {
+    Reset("");
+    if (gate == 1) mc::SetCombatGate(&GateOff);
+    std::vector<unsigned char> stock = StockWeaponSettings();
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, stock.data(), stock.size(), &g_alloc, 0x10, nevr_combat::balance::kJsonResourceTypeAndroid,
+         nevr_combat::balance::kWeaponSettingsName);
+    QCHECK(Call(block) == kCallbackResult);
+    QCHECK(g_seen.buffer == stock.data() && g_allocCalls == 0);
+    const std::vector<std::string> lines = Lines("combat_balance_skip");
+    QCHECK(lines.size() == 1 && Field(lines[0], "reason") == "\"not_a_combat_variant\"");
+    QCHECK(Lines("combat_balance_applied").empty());
+  }
+}
+
+// Another allocator than the one FreeResource releases through, or another name or class, leaves the bytes alone.
+void OnlyTheWeaponSettingsResourceWithTheReleaseAllocatorIsMerged() {
+  Reset("");
+  mc::SetCombatGate(&GateOn);
+  std::vector<unsigned char> stock = StockWeaponSettings();
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, stock.data(), stock.size(), &g_otherAlloc, 0x10, nevr_combat::balance::kJsonResourceTypeAndroid,
+       nevr_combat::balance::kWeaponSettingsName);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer == stock.data() && g_allocCalls == 0);
+  const std::vector<std::string> lines = Lines("combat_balance_skip");
+  QCHECK(lines.size() == 1 && Field(lines[0], "reason") == "\"allocator_mismatch\"");
+  Reset("");
+  mc::SetCombatGate(&GateOn);
+  Fill(block, res, 4, 0, stock.data(), stock.size(), &g_alloc, 0x10, nevr_combat::balance::kJsonResourceTypeAndroid, 0x1234);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer == stock.data() && Lines("combat_balance_applied").empty() && Lines("combat_balance_skip").empty());
+}
+
 // ---- the four buttons' slots (#1679) -----------------------------------------------------------------
 
 // A transform table of the format menu_slots.h reads: a 56-byte descriptor, then 176-byte entries (owner at +0x08, the pose
@@ -862,6 +939,9 @@ int main() {
   sentinel::SetLogSink(&Sink);
   g_table[0] = nullptr;
   AnUnarmedThunkPassesThroughAndTouchesNothing();
+  CatsWeaponValuesAreServedInACombatVariant();
+  WithoutTheCombatGateTheStockWeaponValuesStay();
+  OnlyTheWeaponSettingsResourceWithTheReleaseAllocatorIsMerged();
   APinnedPageIsServedWithTheCardsThroughTheGamesAllocator();
   TheDigestIsLoggedWhateverThePinIs();
   AnUnsetPinServesTheStockPageAndSaysWhy();

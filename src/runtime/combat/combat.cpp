@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "core/logging.h"
-#include "runtime/combat/balance_merge.h"
-#include "runtime/combat/balance_values.h"
+#include "core/combat_balance/balance_merge.h"
+#include "core/combat_balance/balance_values.h"
 #include "runtime/combat/capture_scores.h"
 #include "runtime/combat/capture_time.h"
 #include "runtime/combat/cat_compat.h"
@@ -93,10 +93,11 @@ bool BalanceTransform(const void* original, uint64_t originalSize, const void** 
   *out = g_balanceBuffers.back().data();
   *outSize = g_balanceBuffers.back().size();
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.COMBAT] balance applied resource=mp_weapon_settings values=%llu size=%llu->%llu (Cat's weapon tuning merged into "
-      "the stock settings)",
+      "[NEVR.COMBAT] balance applied resource=mp_weapon_settings values=%llu size=%llu->%llu %s (Cat's weapon tuning merged "
+      "into the stock settings)",
       static_cast<unsigned long long>(changed), static_cast<unsigned long long>(originalSize),
-      static_cast<unsigned long long>(*outSize));
+      static_cast<unsigned long long>(*outSize),
+      balance::ProbeText(balance::ReadProbe(static_cast<const std::uint8_t*>(*out), static_cast<std::size_t>(*outSize))).c_str());
   return true;
 }
 

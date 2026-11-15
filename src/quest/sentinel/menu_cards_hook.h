@@ -31,6 +31,12 @@
  * `menu_slots_swap` with the slots before and after read back from the bytes served (`slots_after` reads left to right, and
  * `slot_play`, `slot_join`, `slot_create`, `slot_tutorial` are the same slots as numbers), `menu_slots_skip` with the reason.
  *
+ * The same handler merges Cat's EchoCombat weapon values into the stock mp_weapon_settings (a CJsonResourceAndroid, the same
+ * CJsonResource layout the PC merges: core/combat_balance/balance_merge.h, one implementation for both platforms), but only in the
+ * combat variants (SetCombatGate). Events: `combat_balance_applied` with the value count, the sizes and the probe values read back
+ * from the merged bytes (magnum_damage, magnum_head, magnum_refire, smg_vent; the PC line `balance applied` carries the same), and
+ * `combat_balance_skip` with the reason. The buffer is served through the same allocator check as the page.
+ *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h (the handler's frames are live
  * while the game's allocator and callback run). Building the page and hashing it run before any game code and are
  * marked NEVR_OUTSIDE_GAME_CALL.
@@ -51,6 +57,10 @@ inline constexpr unsigned long long kBandMax = 140000;
 // Installs the thunk on libr15's callback slot. One line {"event":"menu_cards_install",...} says what happened and the
 // libr15 load base. True only when the slot holds the thunk.
 bool Install() noexcept;
+
+// The gate on the Quest balance merge (core/combat_balance/balance_merge.h): the folded combat modules' own rule, combat::Active()
+// (quest/combat/combat_active.h), passed in so this unit does not link the combat area. Unset: the merge is off.
+void SetCombatGate(bool (*active)() noexcept) noexcept;
 
 // Test support: arms the handler without touching a GOT slot, with the pin the test chooses ("" = unset) and the address
 // of the 8-byte slot that holds the memory context pointer (nullptr = the game has no context).

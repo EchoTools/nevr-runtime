@@ -9,7 +9,7 @@ import (
 )
 
 // The equipment lists (#600, EchoCombat slice 6). mp_equipment (a CJsonResourceWin10: a 0x220-byte header whose u64 at
-// +8 is the body's length, then the minified JSON body; src/runtime/combat/balance_merge.h reads the same layout) lists
+// +8 is the body's length, then the minified JSON body; src/core/combat_balance/balance_merge.h reads the same layout) lists
 // the gear the loadout offers in gear_table.weapons and gear_table.ordnances. The game already defines four more weapons
 // and two more ordnances in mp_weapon_settings (weapon_properties magnum, smg, chain, rifle; grenade_properties dot,
 // drone) that the stock lists leave out. The combat gun patch the EchoCombat pack starts from appends them, and the

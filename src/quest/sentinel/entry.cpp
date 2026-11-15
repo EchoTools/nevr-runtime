@@ -283,7 +283,10 @@ bool InstallPnsProviderHook() noexcept { return nevr_quest::pns_provider::Instal
 
 // The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
 // refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.
-bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install(); }
+bool InstallMenuCardsHook() noexcept {
+  nevr_quest::menu_cards::SetCombatGate(&nevr_quest::combat::Active);  // the weapon-value merge runs in the combat variants only
+  return nevr_quest::menu_cards::Install();
+}
 
 // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2) on libr15's MetricLog. A refused install is logged by GotHook and by
 // the observer's own line, and leaves the game's call intact.

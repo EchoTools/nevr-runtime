@@ -8,7 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/logging.h"
-#include "runtime/combat/balance_values.h"
+#include "core/combat_balance/balance_values.h"
 #include "runtime/combat/shipped_settings.h"
 #include "runtime/combat/write_gate.h"
 #include "runtime/hook/patching.h"

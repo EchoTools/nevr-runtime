@@ -353,7 +353,7 @@ nevr_ht_test(clock_levels_hook_test GROUP hooks ${_hf} TIMEOUT 120
       src/quest/sentinel/hook_report.cpp)
 # The Quest main-menu cards (#966): the real handler through the thunk entry against a stand-in callback block, a CAllocator with
 # the slots FreeResource and the streaming worker use, and the game's callback.
-nevr_ht_test(menu_cards_hook_test GROUP hooks ${_hf} TIMEOUT 120
+nevr_ht_test(menu_cards_hook_test GROUP hooks ${_hf} HOST TIMEOUT 120
   OBJS ${_core} o_hooks_id_libr15_identity o_hooks_id_libr15_patch_identity
   SRC src/quest/tests/menu_cards_hook_test.cpp src/quest/sentinel/menu_cards_hook.cpp src/quest/data/sha256.cpp)
 # The CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017 slice S2): the real observer through the thunk

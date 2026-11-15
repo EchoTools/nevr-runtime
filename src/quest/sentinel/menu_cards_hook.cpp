@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "cdn_read_keys.h"
+#include "core/combat_balance/balance_merge.h"
+#include "core/combat_balance/balance_values.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -29,6 +31,7 @@ sentinel::GotHook g_hook;
 std::atomic<void* const*> g_contextSlot{nullptr};
 std::atomic<const char*> g_pin{nevr_menu_cards::kQuestStockPageSha256};
 std::atomic<const char*> g_slotPin{nevr_menu_cards::kStockTransformSha256};
+std::atomic<bool (*)() noexcept> g_combatGate{nullptr};
 std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
@@ -184,6 +187,48 @@ void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Re
                        {"rows_before", r.entriesBefore}, {"rows_after", r.entriesAfter}});
 }
 
+// Cat's EchoCombat weapon values merged into the stock mp_weapon_settings (the PC does the same in runtime/combat/combat.cpp
+// BalanceTransform; the merge is core/combat_balance/balance_merge.h, shared). Only in the combat variants. The merged resource is
+// served through the allocator check of the page; any doubt leaves the game's own values and says why. Nothing is cached: SwapIn
+// copies the bytes into the game's heap.
+void OfferBalance(unsigned char* data, const Delivery& d) noexcept {
+  char nameHex[19];
+  const char* const name = sentinel::HexString(nameHex, d.nameSymbol);
+  bool (*const gate)() noexcept = g_combatGate.load(std::memory_order_acquire);
+  if (gate == nullptr || !gate()) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_balance_skip",
+                        {{"resource", "mp_weapon_settings"}, {"name", name}, {"reason", "not_a_combat_variant"}});
+    return;
+  }
+  std::string merged;
+  std::size_t changed = 0;
+  const nevr_combat::balance::Result r = nevr_combat::balance::Apply(
+      d.buffer, static_cast<std::size_t>(d.size), nevr_combat::balance::kCatWeaponSettings, &merged, &changed);
+  if (r != nevr_combat::balance::Result::kApplied) {
+    sentinel::LogFields(r == nevr_combat::balance::Result::kUnchanged ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+                        "combat_balance_skip",
+                        {{"resource", "mp_weapon_settings"}, {"name", name}, {"bytes", d.size},
+                         {"reason", nevr_combat::balance::ResultName(r)}});
+    return;
+  }
+  const Swap swap = SwapIn(data, reinterpret_cast<const unsigned char*>(merged.data()), merged.size(), ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_balance_skip",
+                        {{"resource", "mp_weapon_settings"}, {"name", name}, {"bytes", d.size}, {"reason", SwapName(swap)}});
+    return;
+  }
+  const nevr_combat::balance::Probe p =
+      nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(merged.data()), merged.size());
+  const std::string damage = nevr_combat::balance::ValueText(p.magnumDamage);
+  const std::string head = nevr_combat::balance::ValueText(p.magnumHead);
+  const std::string refire = nevr_combat::balance::ValueText(p.magnumRefire);
+  const std::string vent = nevr_combat::balance::ValueText(p.smgVent);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_balance_applied",
+                      {{"resource", "mp_weapon_settings"}, {"name", name}, {"values", changed}, {"bytes_before", d.size},
+                       {"bytes_after", merged.size()}, {"magnum_damage", damage.c_str()}, {"magnum_head", head.c_str()},
+                       {"magnum_refire", refire.c_str()}, {"smg_vent", vent.c_str()}});
+}
+
 // The main-menu level's transform table (#1679): the four buttons stand where the actors' transforms put them, so a pinned
 // stock table is served with Play, Join, Create and Tutorial given the slots of that order from the left (the PC rewrite,
 // runtime/patch/menu_slots.h, decides the bytes; the table is the same 52,680 bytes on PC). Any other buffer is left alone
@@ -269,6 +314,10 @@ void Offer(unsigned char* data) noexcept {
     OfferNetgun(data, d, netgun);
     return;
   }
+  if (nevr_combat::balance::IsJsonResourceType(d.classSymbol) && d.nameSymbol == nevr_combat::balance::kWeaponSettingsName) {
+    OfferBalance(data, d);
+    return;
+  }
   if (d.classSymbol == nevr_menu_cards::kTransformType && d.nameSymbol == nevr_menu_cards::kQuestPageName) {
     OfferSlots(data, d);
     return;
@@ -327,6 +376,8 @@ bool Install() noexcept {
   return ok;
 }
 
+void SetCombatGate(bool (*active)() noexcept) noexcept { g_combatGate.store(active, std::memory_order_release); }
+
 void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
   g_pin.store(pinHex, std::memory_order_release);
   g_contextSlot.store(contextSlot, std::memory_order_release);
@@ -337,6 +388,7 @@ void ArmSlotPinForTest(const char* pinHex) noexcept { g_slotPin.store(pinHex, st
 
 void ResetForTest() noexcept {
   cdn_read::ResetForTest();
+  g_combatGate.store(nullptr, std::memory_order_release);
   g_deliveries.store(0, std::memory_order_relaxed);
   g_pages.store(0, std::memory_order_relaxed);
   g_swapped.store(0, std::memory_order_relaxed);

@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "runtime/combat/balance_values.h"
+#include "core/combat_balance/balance_values.h"
 #include "runtime/combat/shipped_settings.h"
 
 namespace {
