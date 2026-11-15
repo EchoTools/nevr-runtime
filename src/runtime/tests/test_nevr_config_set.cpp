@@ -1010,3 +1010,57 @@ TEST(NevrConfigSetPlugin, SetOnASectionKeyStillUsesTheYamlTable) {
   EXPECT_FALSE(r.wrote);
   EXPECT_EQ(Read(dir.File()), before);
 }
+
+// A YAML alias is the same node as its anchor: editing the text of one entry edits what the other reads. Two list elements that
+// are the same node are refused, wherever the index points, and nothing is written.
+TEST(NevrConfigSetPlugin, AnEntryThatIsAnAliasOfAnotherIsRefusedFromEitherEnd) {
+  const std::string text = "plugins:\n  - &shared\n    name: a\n    enabled: true\n  - *shared\n";
+  for (const std::size_t index : {kAlpha, kBeta}) {
+    Dir dir;
+    Write(dir.File(), text);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), index, kNameA, false);
+    EXPECT_FALSE(r.ok) << index;
+    EXPECT_FALSE(r.wrote) << index;
+    EXPECT_STREQ(r.reason, "entry_shared") << index;
+    EXPECT_EQ(Read(dir.File()), text) << index;
+  }
+}
+
+TEST(NevrConfigSetPlugin, AnAnchoredEntryNothingElseUsesIsEdited) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - &solo\n    name: a\n    enabled: true\n  - name: b\n    enabled: true\n");
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_EQ(Read(dir.File()), "plugins:\n  - &solo\n    name: a\n    enabled: false\n  - name: b\n    enabled: true\n");
+}
+
+// A shared scalar rather than a shared entry: `enabled: &flag true` is an anchored value that entry b aliases. An in-place edit of
+// entry a's text would change what b reads, so the anchored value is refused before any text is touched.
+TEST(NevrConfigSetPlugin, AnAnchoredEnabledValueAnotherEntryAliasesIsRefusedAndNothingIsWritten) {
+  Dir dir;
+  const std::string text = "plugins:\n  - name: a\n    enabled: &flag true\n  - name: b\n    enabled: *flag\n";
+  Write(dir.File(), text);
+  // The anchored value itself is not a plain scalar; the alias's text is not on the key's line (it is where the anchor is).
+  const nevr::ConfigSetResult anchored = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  EXPECT_FALSE(anchored.ok);
+  EXPECT_FALSE(anchored.wrote);
+  EXPECT_STREQ(anchored.reason, "value_not_plain");
+  const nevr::ConfigSetResult alias = SetPluginOn(dir.File(), kBeta, kNameB, false);
+  EXPECT_FALSE(alias.ok);
+  EXPECT_FALSE(alias.wrote);
+  EXPECT_STREQ(alias.reason, "value_not_on_key_line");
+  EXPECT_EQ(Read(dir.File()), text);
+}
+
+TEST(NevrConfigSetPlugin, AnEditLeavesEveryOtherEntrysEnabledAsTheLoaderReadItBefore) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: a\n    enabled: off\n  - name: b\n  - name: c\n    enabled: maybe\n  - name: d\n    enabled: no\n");
+  const nevr::NevrConfig before = nevr::NevrConfig::LoadFromFile(dir.File());
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameB, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  const nevr::NevrConfig after = nevr::NevrConfig::LoadFromFile(dir.File());
+  ASSERT_EQ(after.Plugins().size(), before.Plugins().size());
+  for (std::size_t i = 0; i < after.Plugins().size(); ++i) {
+    EXPECT_EQ(after.Plugins()[i].enabled, i == kBeta ? false : before.Plugins()[i].enabled) << i;
+  }
+}

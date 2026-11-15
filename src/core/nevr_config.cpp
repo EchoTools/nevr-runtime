@@ -790,16 +790,21 @@ bool LoaderReadsEnabled(const YAML::Node& entry) {
   return !enabledNode.IsScalar() || ParseBool(enabledNode.Scalar()).value_or(true);
 }
 
-// Whether `text` still holds `entryCount` plugin entries and the loader reads `plugins[index]` as enabled or not as the edit says.
-bool EnabledReadsBack(const std::string& text, std::size_t index, std::size_t entryCount, const ScalarEdit& edit) {
+// Whether `text` still holds as many plugin entries as `before` has, the loader reads `plugins[index]` as enabled or not as the edit
+// says, and every other entry reads as it did (`before` holds each entry's LoaderReadsEnabled from the text before the edit).
+bool EnabledReadsBack(const std::string& text, std::size_t index, const std::vector<bool>& before, const ScalarEdit& edit) {
   try {
     const std::vector<YAML::Node> docs = YAML::LoadAll(text);
     if (docs.size() != 1 || !docs[0].IsMap()) return false;
     const YAML::Node& rootNode = docs[0];  // const: reading must not create the key
     const YAML::Node list = rootNode[kPluginsKey];
-    if (!list.IsDefined() || !list.IsSequence() || list.size() != entryCount || index >= list.size()) return false;
+    if (!list.IsDefined() || !list.IsSequence() || list.size() != before.size() || index >= list.size()) return false;
     const YAML::Node entry = list[index];
     if (!entry.IsMap()) return false;
+    std::size_t at = 0;
+    for (YAML::const_iterator it = list.begin(); it != list.end(); ++it, ++at) {
+      if (at != index && LoaderReadsEnabled(*it) != before[at]) return false;
+    }
     return LoaderReadsEnabled(entry) == edit.boolValue;
   } catch (const YAML::Exception&) {
     return false;
@@ -884,6 +889,14 @@ Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::
   if (entry.Style() == YAML::EmitterStyle::Flow) return Refused("entry_flow_style");
   // The index is only meaningful for the list the caller read: when the file changed since, it may name another plugin.
   if (!EntryNameIs(entry, name)) return Refused("plugin_name_mismatch");
+  // An alias makes two list elements one node (`- &shared ...` and `- *shared`): the text of one entry is what the other reads, so an
+  // edit of either changes both. Node identity, not text, says so.
+  std::vector<bool> readsEnabledBefore;
+  std::size_t position = 0;
+  for (YAML::const_iterator it = list.begin(); it != list.end(); ++it, ++position) {
+    if (position != index && (*it).is(entry)) return Refused("entry_shared");
+    readsEnabledBefore.push_back(LoaderReadsEnabled(*it));
+  }
 
   ScalarEdit edit;
   edit.text = BoolText(enabled);
@@ -934,7 +947,7 @@ Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::
     result = ReplaceValue(text, starts, hits[0].first, hits[0].second, kEnabledKey, edit, out);
     if (!result.ok) return result;
   }
-  if (!EnabledReadsBack(*out, index, list.size(), edit)) {
+  if (!EnabledReadsBack(*out, index, readsEnabledBefore, edit)) {
     out->clear();
     return Refused("verify_failed");
   }
