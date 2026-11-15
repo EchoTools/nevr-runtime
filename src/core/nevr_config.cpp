@@ -825,18 +825,30 @@ bool EntryNameIs(const YAML::Node& entry, const std::string& name) {
 
 enum class BlockScalarScan { kNone, kFound, kTooComplex };
 
+// The offset of the first byte after the properties (`&anchor`, `!tag`, `!<verbatim tag>`, `!!suffix`) that start at `at`, with the
+// white space around them skipped; `at` itself when there are none. The parser's mark for a node with properties is taken before
+// them. It only moves forward and stops at the end of `text`.
+std::size_t SkipNodeProperties(const std::string& text, std::size_t at) {
+  auto isSpace = [&](std::size_t i) { return std::isspace(static_cast<unsigned char>(text[i])) != 0; };
+  while (at < text.size() && (text[at] == '&' || text[at] == '!')) {
+    while (at < text.size() && !isSpace(at)) ++at;  // no property holds white space, a verbatim `!<uri>` tag included
+    while (at < text.size() && isSpace(at)) ++at;
+  }
+  return at;
+}
+
 // Whether `node` or anything under it (keys included) is a block scalar, `|` or `>`. The parser's mark for a scalar is where its
-// text starts, so a block scalar is the one kind whose first byte there is its indicator: a plain scalar cannot start with `|` or
-// `>`, and a quoted or flow one starts with its quote or bracket. Bounded like the loader's walk (kMaxConfigDepth,
-// kMaxConfigNodes): an alias can make the tree a cycle or a DAG that expands without end.
+// text starts, before any anchor or tag (SkipNodeProperties passes them), so a block scalar is the one kind whose first byte
+// after them is its indicator: a plain scalar cannot start with `|` or `>`, and a quoted or flow one starts with its quote or
+// bracket. Bounded like the loader's walk (kMaxConfigDepth, kMaxConfigNodes): an alias can make the tree a cycle or a DAG that expands without end.
 BlockScalarScan ScanForBlockScalar(const std::string& text, const std::vector<std::size_t>& starts, const YAML::Node& node,
                                    std::size_t depth, std::size_t* visited) {
   if (depth > kMaxConfigDepth || ++*visited > kMaxConfigNodes) return BlockScalarScan::kTooComplex;
   if (node.IsScalar()) {
     std::size_t at = 0;
-    return OffsetOf(starts, text, node.Mark(), &at) && at < text.size() && (text[at] == '|' || text[at] == '>')
-               ? BlockScalarScan::kFound
-               : BlockScalarScan::kNone;
+    if (!OffsetOf(starts, text, node.Mark(), &at)) return BlockScalarScan::kNone;
+    at = SkipNodeProperties(text, at);
+    return at < text.size() && (text[at] == '|' || text[at] == '>') ? BlockScalarScan::kFound : BlockScalarScan::kNone;
   }
   if (!node.IsMap() && !node.IsSequence()) return BlockScalarScan::kNone;
   BlockScalarScan result = BlockScalarScan::kNone;

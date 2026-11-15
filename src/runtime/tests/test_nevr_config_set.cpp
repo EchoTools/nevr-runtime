@@ -925,6 +925,35 @@ TEST(NevrConfigSetPlugin, AnEntryWithABlockScalarIsRefusedWhereAnInsertWouldCutI
   }
 }
 
+// The parser's mark for a scalar with properties is taken before its anchor or tag, so the byte there is `&` or `!`, not the
+// indicator: the scan reads past the properties to the indicator.
+TEST(NevrConfigSetPlugin, ABlockScalarWithAnAnchorOrATagIsRefusedWhereAnInsertWouldCutItOff) {
+  const char* const indicators[] = {"&s |", "!!str |", "&a !!str |", "!!str &a |", "&s  >-", "!<tag:yaml.org,2002:str> |", "&s |2", "!!str >+"};
+  for (const char* const indicator : indicators) {
+    Dir dir;
+    const std::string text = std::string("plugins:\n  - name: a\n    args:\n      script: ") + indicator + "\n        run\n        # keep\n";
+    Write(dir.File(), text);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+    EXPECT_FALSE(r.ok) << text;
+    EXPECT_FALSE(r.wrote) << text;
+    EXPECT_STREQ(r.reason, "entry_has_block_scalar") << text;
+    EXPECT_EQ(Read(dir.File()), text);
+  }
+}
+
+// The guard on the other side: properties on a plain or quoted scalar do not make it a block scalar, so the insert goes through.
+TEST(NevrConfigSetPlugin, AnAnchoredOrTaggedPlainOrQuotedScalarDoesNotStopAnInsert) {
+  const char* const values[] = {"&m fast", "!!str fast", "&m !!str fast", "&m \"fast\"", "!!str 'fast'"};
+  for (const char* const value : values) {
+    Dir dir;
+    const std::string before = std::string("plugins:\n  - name: a\n    args:\n      mode: ") + value + "\n";
+    Write(dir.File(), before);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+    ASSERT_TRUE(r.ok) << r.reason << " " << value;
+    EXPECT_EQ(Read(dir.File()), before + "    enabled: false\n");
+  }
+}
+
 TEST(NevrConfigSetPlugin, AnExistingEnabledIsReplacedInPlaceBesideABlockScalar) {
   Dir dir;
   Write(dir.File(), "plugins:\n  - name: a\n    enabled: true\n    args:\n      script: |\n        run\n        # keep\n");
