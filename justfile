@@ -1116,6 +1116,22 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
                 echo "ERROR: GTest binary not found: $name (built by --target $name, looked for build/{{ preset }}/bin/$name.exe and build/{{ preset }}/bin/*/$name.exe)" >&2
                 exit 1
             fi
+            # A binary one directory below bin/ that is not its directory's harness (test_<directory>, dashes as underscores) is a
+            # child the harness starts with what it stages for it (the bootstrap-attach static-import binary needs the runtime fixture
+            # beside it and a LOCALAPPDATA of its own). The full run runs only the harness, so naming the child runs the harness.
+            dir="$(dirname "$bin")"
+            if [[ "$dir" != "build/{{ preset }}/bin" ]]; then
+                harness="test_$(basename "$dir" | tr - _)"
+                if [[ "$name" != "$harness" ]]; then
+                    cmake --build --preset {{ preset }} --target "$harness"
+                    if [[ ! -f "$dir/$harness.exe" ]]; then
+                        echo "ERROR: $name runs as a child of $harness, which was not built: $dir/$harness.exe" >&2
+                        exit 1
+                    fi
+                    echo "test-auth-unit: $name is a child of $harness; running $harness, which starts it"
+                    bin="$dir/$harness.exe"
+                fi
+            fi
             before=${#test_failures[@]}
             run_test "$bin"
             # test-changed runs its gtest ids as one call of this recipe and reads each binary's exit code from the file
