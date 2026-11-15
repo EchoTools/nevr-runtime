@@ -315,6 +315,16 @@ VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
+  // A map of this server's group was updated on the channel while its old version is mounted: the server leaves once nobody is
+  // in the session (never mid-match), so its restart hosts the new version. Before ReleaseDue: no held join reaches the old one.
+  if (!s_exitPending && nevr_join_hold::MapsRestartForUpdateDue(m_context->GetEntrantCount())) {
+    s_exitPending = true;
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map update restart (the session is empty: the server exits so its restart hosts the new map version)");
+    BeginGracefulShutdown(false);
+    return;
+  }
+
   // #1737 (101f): accepts the join hold queued go to the game here, on the game thread and after this frame's service
   // messages (so a held accept is never overtaken); one atomic read when nothing is held.
   nevr_join_hold::ReleaseDue(m_context->GetBroadcaster(), m_context->GetSessionState().lobbySessionId.c_str());

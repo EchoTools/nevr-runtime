@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace nevr_maps {
 
@@ -48,7 +50,8 @@ std::uint64_t MapHoldTimeoutMs(const HoldPlan& plan);
 // `guilds: any`) is never an input, so no config key adds a group to the fetch. "" when the allocation names none.
 std::string GroupToFetch(const std::string& allocated);
 
-// The server's hold, for one session's group. Holding = joins wait. It is armed only for a group whose maps are not mounted.
+// The server's hold, for one session's group. Holding = joins wait. It is armed at every session create that names a group: a
+// group mounted in this process is checked again, so an update the channel published since is never hidden behind the old version.
 class ServerMapHold {
  public:
   // Arms the hold for `group` at `nowMs`. False, and nothing held, for an empty group.
@@ -63,6 +66,12 @@ class ServerMapHold {
   // The group's maps mounted: lifts the hold. kMounted once when it lifted the hold, kNone otherwise.
   enum class Step { kNone, kMounted, kTimeout };
   Step Mounted(const std::string& group);
+
+  // The check found a new version of a map this process holds mounted at the old one (UpdatedWhileMounted): the hold stands with
+  // no deadline, so no join reaches the old version; the server leaves once its session is empty (RestartForUpdateNow). True
+  // when `group` is the held group.
+  bool Updated(const std::string& group);
+  bool WaitsForRestart() const { return updated_; }
 
   // At the deadline (armed time plus the current timeout) lifts the hold: kTimeout once, with the timeout and the plan that
   // expired it in TimeoutMs() and Plan() until the next Poll. kNone while the hold stands or when nothing is held.
@@ -80,7 +89,22 @@ class ServerMapHold {
   std::uint64_t armedMs_ = 0;
   HoldPlan plan_;
   std::uint64_t timeoutMs_ = 0;
+  bool updated_ = false;
 };
+
+// The maps of a mount's `not_mounted` rows (core/map_run.h MountReport) that this process holds mounted at a version the channel
+// has moved past (mounted_other_version). A mounted map is never replaced in a process, so a server cannot host the new version
+// until it restarts.
+std::vector<std::string> UpdatedWhileMounted(const std::vector<std::pair<std::string, std::string>>& not_mounted);
+
+// A server restarts for an update only between matches: an update waits and no player is in the session.
+inline bool RestartForUpdateNow(bool updateWaits, std::uint64_t entrants) { return updateWaits && entrants == 0; }
+
+// The Warning line when the check finds an update of a mounted map: the group, the maps and what the server does.
+std::string MapUpdateRestartLine(const std::string& group, const std::vector<std::string>& ids);
+
+// The Warning line when the check of a mounted group could not be made (the fetch failed): the joins go ahead on what is mounted.
+std::string MapCheckFailedLine(const std::string& group);
 
 // How a held join is released. A join waits for the maps hold and for the levels hold (network.join_hold_ms, its own settle
 // and timeout). It is released when neither holds it: the maps hold is lifted, and the levels hold is off, settled or timed out.

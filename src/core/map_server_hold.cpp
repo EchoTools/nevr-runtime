@@ -1,6 +1,8 @@
 #include "core/map_server_hold.h"
 
 #include <algorithm>
+
+#include "core/map_run.h"
 #include <limits>
 
 namespace nevr_maps {
@@ -42,6 +44,7 @@ void ServerMapHold::Clear() {
   armedMs_ = 0;
   plan_ = HoldPlan{};
   timeoutMs_ = 0;
+  updated_ = false;
 }
 
 void ServerMapHold::Note(const std::string& group, const HoldPlan& plan) {
@@ -54,8 +57,14 @@ ServerMapHold::Step ServerMapHold::Mounted(const std::string& group) {
   return Step::kMounted;
 }
 
+bool ServerMapHold::Updated(const std::string& group) {
+  if (!holding_ || group != group_) return false;
+  updated_ = true;
+  return true;
+}
+
 ServerMapHold::Step ServerMapHold::Poll(std::uint64_t nowMs) {
-  if (!holding_) return Step::kNone;
+  if (!holding_ || updated_) return Step::kNone;
   timeoutMs_ = MapHoldTimeoutMs(plan_);
   const std::uint64_t waited = nowMs >= armedMs_ ? nowMs - armedMs_ : 0;
   if (waited < timeoutMs_) return Step::kNone;
@@ -72,6 +81,29 @@ std::string MapHoldTimeoutLine(const std::string& group, const HoldPlan& plan, s
 std::string MapHoldArmedLine(const std::string& group, std::uint64_t timeoutMs) {
   return "[NEVR.MAPS] map hold armed group=" + group + " timeout_ms=" + std::to_string(timeoutMs) +
          " (joins wait until the group's maps mount, or the timeout passes)";
+}
+
+std::vector<std::string> UpdatedWhileMounted(const std::vector<std::pair<std::string, std::string>>& not_mounted) {
+  std::vector<std::string> ids;
+  for (const auto& row : not_mounted) {
+    if (row.second == kMountedOtherVersionToken) ids.push_back(row.first);
+  }
+  return ids;
+}
+
+std::string MapUpdateRestartLine(const std::string& group, const std::vector<std::string>& ids) {
+  std::string list;
+  for (const std::string& id : ids) list += (list.empty() ? "" : ",") + id;
+  return "[NEVR.MAPS] map update group=" + group + " ids=" + list +
+         " reason=mounted_other_version (the channel lists a new version of a map this server has mounted, and a mounted map is "
+         "never replaced in the process: no player joins the old version, and the server exits once its session is empty so its "
+         "restart hosts the new one)";
+}
+
+std::string MapCheckFailedLine(const std::string& group) {
+  return "[NEVR.MAPS] map check failed group=" + group +
+         " (the group's manifest could not be fetched: the session goes ahead on the versions this server has mounted, and the "
+         "next session checks again)";
 }
 
 std::string MapHoldMountedLine(const std::string& group, std::uint64_t waitedMs) {

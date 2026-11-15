@@ -286,15 +286,19 @@ bool RequestServerGroup(const std::string& group) {
   return st->queue->Request(group, [](const nevr_maps::FetchReport&) {}, &reason);
 }
 
-// One group for a dedicated server (ADR 0048 decisions 13 and 17). Its progress goes to the join hold. When the fetch did not fail,
-// its maps mount now, in this process, and the hold hears of the mount. A failed fetch mounts nothing: the hold runs to its timeout,
-// and the Warning there says the session started without the maps.
+// One group for a dedicated server (ADR 0048 decisions 13 and 17), at every session create: the first fetches it, a later one
+// checks it for an update. Its progress goes to the join hold. When the fetch did not fail, its maps mount now, in this process,
+// and the hold hears of the mount (an update of a mounted map holds the joins until the server restarts). A failed fetch mounts
+// nothing: a group never mounted holds to its timeout, a mounted one goes ahead on what is mounted.
 nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, const std::function<bool()>& keep_going) {
   const std::string now = NowUtc();
   const nevr_maps::FetchProgressFn progress = [](const nevr_maps::FetchProgress& p) { nevr_map_hold::NoteFetchProgress(p); };
   const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred,
                                                               st->deriver.get(), now, keep_going, progress);
-  if (report.outcome == nevr_maps::FetchOutcome::kFailed) return report;
+  if (report.outcome == nevr_maps::FetchOutcome::kFailed) {
+    nevr_map_hold::NoteFetchFailed(group);
+    return report;
+  }
   const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
   GrantMounted(st, mounted);
   if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
