@@ -1318,12 +1318,19 @@ TEST_F(MapCacheBudgetTest, AtTheCapTheLeastRecentlyPlayedMapIsEvictedWhole) {
 
 TEST_F(MapCacheBudgetTest, AMapThisRunMountedIsNeverEvicted) {
   const std::uint64_t s = PlayAlphaBetaAlpha();
+  ASSERT_EQ(Play({"gamma"}, kT4).reason, "");
+  channel.Publish("delta", "1.0.0", MakeSet(4, 'd'));
+  channel.Sign(2);
+  // Two maps must go for delta. The session marks beta played at gamma's second, and equal times evict by id, so without the
+  // protection the order would be alpha, beta, gamma: only the protection keeps beta.
   config.cache_cap_bytes = 2 * s + s / 2;
-  EXPECT_EQ(Play({"gamma"}, kT4, {"beta"}).reason, "");
+  EXPECT_EQ(Play({"delta"}, kT4, {"beta"}).reason, "");
   EXPECT_TRUE(Cached("beta"));
   EXPECT_TRUE(HasMapDir("beta"));
   EXPECT_FALSE(Cached("alpha"));
-  EXPECT_TRUE(Cached("gamma"));
+  EXPECT_FALSE(Cached("gamma"));
+  EXPECT_TRUE(Cached("delta"));
+  EXPECT_EQ(env.FindRecord("map_gc", "evicted", MapKey("beta", kPlatformPc)), nullptr);
 }
 
 TEST_F(MapCacheBudgetTest, WithNoCapTheDeviceStorageShareStillHolds) {
