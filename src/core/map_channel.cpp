@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <mutex>
 #include <set>
 #include <utility>
+
+#include "core/map_groups.h"
 
 namespace nevr_map_channel {
 
@@ -120,6 +123,82 @@ std::vector<std::string> LocalShadowIds(const std::vector<std::string>& local_id
 }
 
 Seams NoSeams() { return Seams{}; }
+
+namespace {
+
+// The groups the session pin requested this run, latest first. A fixed bound: a request is taken on the game's thread, and it
+// neither allocates nor throws. A slot holds one id, which IsPathSafeGroupId bounds by kGroupIdMaxBytes.
+constexpr std::size_t kRequestedGroupSlots = 8;
+
+struct RequestedGroupSlot {
+  std::size_t length = 0;
+  char text[nevr_maps::kGroupIdMaxBytes] = {};
+};
+
+struct RequestList {
+  std::mutex mutex;
+  RequestedGroupSlot slots[kRequestedGroupSlots];
+  std::size_t count = 0;
+};
+
+RequestList& Requests() {
+  static RequestList list;  // function-local: no static initialisation order to depend on
+  return list;
+}
+
+bool SameSlot(const RequestedGroupSlot& slot, const std::string& group) {
+  return slot.length == group.size() && std::equal(group.begin(), group.end(), slot.text);
+}
+
+}  // namespace
+
+void ArmSessionGroupRequest() { nevr_maps::SetSessionGroupRequest(&RecordRequestedGroup); }
+
+void RecordRequestedGroup(const std::string& group) {
+  if (!nevr_maps::IsPathSafeGroupId(group)) return;  // the session pin validated it; a bad id is not queued
+  RequestList& list = Requests();
+  std::lock_guard<std::mutex> lock(list.mutex);
+  bool found = false;
+  std::size_t at = 0;  // the slot the group takes: its own when it is queued, else a new one, else the oldest is dropped
+  for (std::size_t i = 0; i < list.count && !found; ++i) {
+    if (SameSlot(list.slots[i], group)) {
+      at = i;
+      found = true;
+    }
+  }
+  if (!found) {
+    if (list.count < kRequestedGroupSlots) ++list.count;
+    at = list.count - 1;
+  }
+  for (std::size_t i = at; i > 0; --i) list.slots[i] = list.slots[i - 1];
+  list.slots[0].length = group.size();
+  std::copy(group.begin(), group.end(), list.slots[0].text);
+}
+
+std::vector<std::string> RequestedGroups() {
+  RequestList& list = Requests();
+  std::lock_guard<std::mutex> lock(list.mutex);
+  std::vector<std::string> groups;
+  for (std::size_t i = 0; i < list.count; ++i) groups.emplace_back(list.slots[i].text, list.slots[i].length);
+  return groups;
+}
+
+std::vector<std::string> MergeRecordedGroups(const std::vector<std::string>& requested, const std::vector<std::string>& cached) {
+  std::vector<std::string> groups = requested;
+  for (const std::string& group : cached) {
+    if (std::find(groups.begin(), groups.end(), group) == groups.end()) groups.push_back(group);
+  }
+  return groups;
+}
+
+Seams RecordedGroupSeams(nevr_cdn::Env& env, const std::string& dir) {
+  Seams seams;
+  nevr_cdn::Env* const env_ptr = &env;
+  seams.recorded_groups = [env_ptr, dir]() {
+    return MergeRecordedGroups(RequestedGroups(), nevr_maps::CachedGroupIds(*env_ptr, dir));
+  };
+  return seams;
+}
 
 MountDecision DecideMount(const std::vector<std::string>& expected, const nevr_config_alias::OwnerLevels& mounted_owners,
                           const std::function<void(const std::string& owner)>& withdraw,

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/map_channel.h"
+#include "core/map_groups.h"
 #include "core/map_run.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/map_fake_fs.h"
@@ -363,6 +364,54 @@ void AWorkerRefusesARequestInsideTheGap() {
   QCHECK(passes.load() <= 3);
 }
 
+// ---- The session pin's group requests and the recorded groups (ADR 0048 decisions 15 and 16) -------------------------------------------
+
+// The armed request queues each group once, latest first, drops a path-unsafe id, and keeps the latest kRequestedGroupSlots (8).
+// This is the only test that queues a group, so the queue is read from its empty start.
+void TheGroupRequestsAreQueuedLatestFirstOnceAndBounded() {
+  constexpr const char* kGameGroup = "44332211-6655-8877-99AA-BBCCDDEEFFB0";  // the game's text; the queued id is its lower case
+  constexpr const char* kGameGroupId = "44332211-6655-8877-99aa-bbccddeeffb0";
+  mc::ArmSessionGroupRequest();
+  std::string id;
+  QCHECK(nevr_maps::RequestSessionGroup(kGameGroup, &id) == nevr_maps::SessionGroupRequest::kRequested);
+  QCHECK(id == kGameGroupId);
+  QCHECK(mc::RequestedGroups() == std::vector<std::string>{kGameGroupId});
+  mc::RecordRequestedGroup("../escape");  // not path safe: not queued
+  QCHECK(mc::RequestedGroups() == std::vector<std::string>{kGameGroupId});
+  mc::RecordRequestedGroup("a");
+  mc::RecordRequestedGroup(kGameGroupId);  // already queued: it moves to the front, once
+  QCHECK((mc::RequestedGroups() == std::vector<std::string>{kGameGroupId, "a"}));
+  std::vector<std::string> expected;
+  for (int i = 0; i < 8; ++i) {
+    const std::string group = "n" + std::to_string(i);
+    mc::RecordRequestedGroup(group);
+    expected.insert(expected.begin(), group);
+  }
+  // Eight new groups: the list keeps the latest eight, and the older game group and "a" are dropped.
+  QCHECK(mc::RequestedGroups() == expected);
+  QCHECK(mc::RequestedGroups().size() == 8);
+}
+
+// The recorded groups are the requests in their order, then the cached groups none of them names.
+void TheRecordedGroupsAreTheRequestsThenTheCachedOnes() {
+  const std::vector<std::string> merged = mc::MergeRecordedGroups({"b", "a"}, {"c", "a", "b", "d"});
+  QCHECK((merged == std::vector<std::string>{"b", "a", "c", "d"}));
+  QCHECK(mc::MergeRecordedGroups({}, {}).empty());
+  QCHECK((mc::MergeRecordedGroups({}, {"x"}) == std::vector<std::string>{"x"}));
+}
+
+// The seam answers this run's requests with an empty cache index (no group is cached in an empty directory), and it reads the
+// requests when it is asked, not when it is made.
+void TheRecordedGroupSeamAnswersTheRequestsAsTheyAreAskedFor() {
+  cdn_test::FakeEnv env;
+  const mc::Seams seams = mc::RecordedGroupSeams(env, "/cache/maps");
+  QCHECK(seams.recorded_groups != nullptr);
+  QCHECK(seams.recorded_groups() == mc::RequestedGroups());
+  mc::RecordRequestedGroup("late-group");
+  QCHECK(seams.recorded_groups().front() == "late-group");
+  QCHECK(!static_cast<bool>(seams.local_map_ids));  // no local copy is listed on either platform
+}
+
 }  // namespace
 
 int main() {
@@ -384,6 +433,9 @@ int main() {
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();
+  TheGroupRequestsAreQueuedLatestFirstOnceAndBounded();
+  TheRecordedGroupsAreTheRequestsThenTheCachedOnes();
+  TheRecordedGroupSeamAnswersTheRequestsAsTheyAreAskedFor();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "map_channel_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

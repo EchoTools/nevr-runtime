@@ -289,9 +289,12 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   }
 
   PcMounter mounter;
-  const Seams seams = NoSeams();
+  // The recorded groups are the session pin's requests and the cache index's groups (RecordedGroupSeams). No local copy is listed
+  // here: this build has no reader of hand-installed copies, so local_map_ids is unset and the boot's local list is empty.
+  const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
   const BootResult& boot = st->channel->Boot(*st->env, *st->fs, mounter, st->deriver.get(), NowUtc(), Ask(seams.local_map_ids));
   if (boot.start != Start::kRun) return;  // the core wrote why (not_configured, or the refusal)
+  ArmSessionGroupRequest();  // a session success now queues its group for the fetch worker (ADR 0048 decision 15)
 
   for (const std::string& id : boot.report.mounted) st->granted.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
   if (mounter.any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
@@ -310,7 +313,7 @@ void StartFetchUnguarded() {
   st->worker = std::make_unique<FetchWorker>(
       [st](const std::function<bool()>& keep_going) {
         try {
-          const Seams seams = NoSeams();
+          const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
           st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
                                  keep_going);
         } catch (const std::exception& e) {

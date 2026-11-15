@@ -81,7 +81,7 @@ bool StartFromConfig(const MapsConfig& config) noexcept {
   production->stock = MakePosixStockSource(&obb_skip::CurrentRoot, lib_dir,
                                            nevr_quest::data::ApkPathForLibrary(library, &obb_skip::PathExists));
   production->deriver = std::make_unique<nevr_maps::ChannelDeriver>(production->env, production->fs, *production->stock);
-  return Start(&production->env, settings, production->deriver.get(), nevr_map_channel::NoSeams());
+  return Start(&production->env, settings, production->deriver.get());
 }
 
 }  // namespace nevr_quest::maps

@@ -72,14 +72,29 @@ std::vector<std::string> FetchGroups(const std::vector<std::string>& recorded);
 // a local copy holds, sorted and unique: the channel passes them as ChannelConfig::local_maps.
 std::vector<std::string> LocalShadowIds(const std::vector<std::string>& local_ids);
 
-// The seams the other parts of the channel implement. A platform that has neither part passes NoSeams(), which answers nothing.
-//   recorded_groups: the lobby groups the session pin recorded this run, latest first (the group recording, ADR 0048 decision 16).
-//   local_map_ids:   the ids a local map copy holds this run (local-copy precedence, ADR 0048 decision 8).
+// The seams the platforms plug into the channel. An unset seam answers nothing.
+//   recorded_groups: the lobby groups to fetch, latest first: the session pin's requests this run merged with the cache index's
+//                    groups (RecordedGroupSeams; ADR 0048 decisions 15 and 16).
+//   local_map_ids:   the ids a local map copy holds this run (local-copy precedence, ADR 0048 decision 8). Unset on both platforms:
+//                    no reader lists hand-installed copies yet (the PC's installed_levels reads the game's own manifests, not copies).
 struct Seams {
   std::function<std::vector<std::string>()> recorded_groups;
   std::function<std::vector<std::string>()> local_map_ids;
 };
 Seams NoSeams();
+
+// The session pin's group requests (ADR 0048 decision 15) and the groups the cache holds (decision 16). ArmSessionGroupRequest sets
+// nevr_maps::SetSessionGroupRequest's function to RecordRequestedGroup; a platform calls it once its channel runs, so until then a
+// session success requests nothing. RecordRequestedGroup may be called from any thread: it takes a short lock, allocates nothing, and
+// never throws (the Quest is built without exceptions). The queue keeps the latest kRequestedGroupSlots groups, each once.
+void ArmSessionGroupRequest();
+void RecordRequestedGroup(const std::string& group);
+std::vector<std::string> RequestedGroups();  // the groups requested this run, latest first
+// The requested groups in their order, then the cached groups none of them names (a group once, the first occurrence kept).
+std::vector<std::string> MergeRecordedGroups(const std::vector<std::string>& requested, const std::vector<std::string>& cached);
+// The recorded_groups seam for a platform: this run's requests merged with the cache index's groups in `dir`. Reads the index when
+// called (the worker or the boot thread), never on the game's thread. `env` must outlive the seam.
+Seams RecordedGroupSeams(nevr_cdn::Env& env, const std::string& dir);
 
 // The mount observer's decision, the same on both platforms (ADR 0048 decisions 5 and 8): each expected owner that no mounted set
 // belongs to is withdrawn (`withdraw`: its scripts and aliases; the set itself is the registry's); the mounted owners' aliases are

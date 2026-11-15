@@ -97,8 +97,7 @@ bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_
   return map_sets::Mount(stock, publish).sets != 0;
 }
 
-bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver,
-           const nevr_map_channel::Seams& seams) noexcept {
+bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept {
   if (env == nullptr || g_started.exchange(true)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "maps_start",
                         {{"result", "refused"}, {"reason", env == nullptr ? "no_env" : "already_started"}});
@@ -117,19 +116,21 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
   for (const std::string& id : boot.report.mounted) g_granted_owners.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
+  nevr_map_channel::ArmSessionGroupRequest();  // a session success now queues its group for the worker (ADR 0048 decision 15)
   map_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
   sentinel::LogFields(sentinel::LogLevel::kInfo, "maps_start",
                       {{"result", "started"},
                        {"mounted", boot.report.mounted.size()},
                        {"deferred", boot.report.deferred.size()}});
-  std::thread([state, deriver, seams]() {
+  std::thread([state, deriver]() {
     const auto always = [] { return true; };
     MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
                            &resource_request::PublishMapSets, kManifestWaitMs, always);
-    // The groups to fetch: the seam's recorded groups, filtered; with no seam, none (the fetch is then not requested this run).
-    state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)),
-                              NowUtc(), always);
+    // The groups to fetch: this run's session requests merged with the cache index's groups (RecordedGroupSeams), filtered by FetchGroups.
+    const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
+    state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
+                              always);
   }).detach();
   return true;
 }

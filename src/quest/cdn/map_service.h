@@ -5,7 +5,8 @@
  *
  * The map scripts (route B) and aliases are granted with their set, all or nothing (map_mount.h). Recipes rebuild through the Deriver
  * the caller gives (the stock source over the game's data root and the APK, map_start.cpp); with none, a recipe map is refused
- * derived_unsupported. The session pin's wiring and the group recording are not here (a later part of the channel).
+ * derived_unsupported. The session pin's group request is armed by Start once the channel runs, and the fetch's groups are the
+ * session pin's requests merged with the cache index (RecordedGroupSeams); no local copy is listed (no reader exists on the Quest).
  *
  * Built without exceptions, like the cargo service.
  */
@@ -43,8 +44,7 @@ bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_
 // The boot mount on the calling thread, then the thread that mounts and fetches. `env` (the POSIX env over the app's transport) and
 // `deriver` (null: no recipe rebuild) outlive the process. False when the channel does not run (its refusal or not_configured is
 // logged by the core) or when it was started before.
-bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver,
-           const nevr_map_channel::Seams& seams) noexcept;
+bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept;
 
 // Production (map_start.cpp; production_steps.cpp calls it beside the cargo start): the core's settings from the Quest config's maps
 // section, then, only when the channel runs, the libcurl transport, the POSIX env, the stock source over the game's data root and the
