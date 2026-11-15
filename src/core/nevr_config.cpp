@@ -796,10 +796,22 @@ bool EnabledReadsBack(const std::string& text, std::size_t index, std::size_t en
   }
 }
 
+// Whether `entry`'s `name` reads as `name` to the loader (ParsePlugins): the first `name` key's scalar, `${VAR}` references resolved.
+// An entry with no scalar name, an empty one, or one whose references the loader would refuse reads as no name and matches nothing.
+bool EntryNameIs(const YAML::Node& entry, const std::string& name) {
+  const YAML::Node nameNode = ChildByKey(entry, "name");
+  if (!nameNode.IsScalar() || nameNode.Scalar().empty()) return false;
+  try {
+    return InterpolateString(nameNode.Scalar(), nullptr, nameNode.Mark()) == name;
+  } catch (const NevrConfigError&) {
+    return false;
+  }
+}
+
 // SetPluginEnabled's edit: `plugins[index].enabled` becomes `enabled`. `existing` is the file's text, or null when the file is missing.
 // A block list of block entries only. The entry's own `enabled:` value is replaced in place (ReplaceValue); an entry without one
 // gets `enabled: <value>` after its last content line, at the column of its first key.
-Splice SpliceEnabled(const std::string* existing, std::size_t index, bool enabled, std::string* out) {
+Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::string& name, bool enabled, std::string* out) {
   if (existing == nullptr) return Refused("plugins_missing");
   const std::string& text = *existing;
   std::vector<YAML::Node> docs;
@@ -826,6 +838,8 @@ Splice SpliceEnabled(const std::string* existing, std::size_t index, bool enable
   const YAML::Node entry = list[index];
   if (!entry.IsMap()) return Refused("entry_not_a_mapping");
   if (entry.Style() == YAML::EmitterStyle::Flow) return Refused("entry_flow_style");
+  // The index is only meaningful for the list the caller read: when the file changed since, it may name another plugin.
+  if (!EntryNameIs(entry, name)) return Refused("plugin_name_mismatch");
 
   ScalarEdit edit;
   edit.text = BoolText(enabled);
@@ -1059,17 +1073,18 @@ ConfigSetResult NevrConfig::Set(const std::string& path, const std::string& valu
   return SetScalar(path, edit);
 }
 
-ConfigSetResult NevrConfig::SetPluginEnabled(std::size_t index, bool enabled) noexcept {
+ConfigSetResult NevrConfig::SetPluginEnabled(std::size_t index, const std::string& name, bool enabled) noexcept {
   if (boundFile_.empty()) {
     ConfigSetResult r;
     r.reason = "no_file";
     return r;
   }
   return EditBoundFile(
-      boundFile_, [index, enabled](const std::string* existing, std::string* out) { return SpliceEnabled(existing, index, enabled, out); },
-      [this, index, enabled]() {
-        // The file holds the new value; the loaded list follows it. An index the loaded list lacks (the file changed since the load) is left.
-        if (index < plugins_.size()) plugins_[index].enabled = enabled;
+      boundFile_, [index, &name, enabled](const std::string* existing, std::string* out) { return SpliceEnabled(existing, index, name, enabled, out); },
+      [this, index, &name, enabled]() {
+        // The file holds the new value; the loaded list follows it. An entry the loaded list lacks, or holds under another name (the
+        // file changed since the load), is left.
+        if (index < plugins_.size() && plugins_[index].name == name) plugins_[index].enabled = enabled;
       });
 }
 

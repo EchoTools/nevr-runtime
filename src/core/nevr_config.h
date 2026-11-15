@@ -179,13 +179,18 @@ class NevrConfig {
   ConfigSetResult Set(const std::string& path, const char* value) = delete;
 
   /// Turns `plugins[index]`'s `enabled` on or off in the bound file, the same splice-and-rename as Set: every other byte is
-  /// kept. Inserts `enabled:` at the entry's child indentation when the entry has none. A flow-style list or entry is refused
-  /// with a named reason, and so is an index past the end; nothing is written then. By index, not name: the loader keeps
-  /// list order and two entries may share a name (#1857). On success the loaded `Plugins()[index].enabled`
-  /// follows the file; the same lock as Set covers the whole edit. Never throws. The refusals are those of Set that apply, and
-  /// "plugins_missing" (no file, no `plugins` key or a null one), "duplicate_key" (two `enabled` in the entry), "plugins_not_a_list", "plugins_flow_style", "plugin_index_out_of_range",
-  /// "entry_not_a_mapping" and "entry_flow_style".
-  ConfigSetResult SetPluginEnabled(std::size_t index, bool enabled) noexcept;
+  /// kept. Inserts `enabled:` at the entry's child indentation when the entry has none. The index is where the caller read the
+  /// plugin (#1857: the loader keeps list order and two entries may share a name), and `name` is the name it read there, so a
+  /// config.yaml that changed in between cannot make the write land on another plugin: the entry's `name` is compared as the
+  /// loader reads it (the first `name` scalar, `${VAR}` references resolved) and a mismatch, or an entry with no name, is refused.
+  /// On success the loaded `Plugins()[index].enabled` follows the file when that entry is still the plugin `name`; the same lock
+  /// as Set covers the whole edit. Never throws.
+  ///
+  /// A write that cannot be made exactly is refused and nothing is written. The refusals are those of Set that apply, and:
+  ///  - "plugins_missing" (no file, no `plugins` key or a null one), "plugins_not_a_list", "plugins_flow_style",
+  ///    "plugin_index_out_of_range", "entry_not_a_mapping", "entry_flow_style", "duplicate_key" (two `enabled` in the entry);
+  ///  - "plugin_name_mismatch": the entry at `index` is not the plugin `name`.
+  ConfigSetResult SetPluginEnabled(std::size_t index, const std::string& name, bool enabled) noexcept;
 
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }

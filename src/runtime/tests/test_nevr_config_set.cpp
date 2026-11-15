@@ -580,15 +580,23 @@ TEST(NevrConfigSetConcurrent, TheLockIsHeldThroughTheObjectUpdate) {
 }
 
 // #1857: SetPluginEnabled, the plugin manager's writer. The same promise as Set (every other byte kept), addressed by list
-// index.
+// index and checked against the plugin's name, so a file that changed since the manager read it is refused, not misedited.
 //
 // The indexes the plugin tests name, in kThreePlugins order, and the size of that list.
 constexpr std::size_t kAlpha = 0;
 constexpr std::size_t kBeta = 1;
 constexpr std::size_t kGamma = 2;
+constexpr std::size_t kTwoPluginCount = 2;
 constexpr std::size_t kThreePluginCount = 3;
 // An index no test list reaches, far past its end.
 constexpr std::size_t kFarPastTheEnd = 5;
+// The plugin names in kThreePlugins, and the short names the one-off lists use.
+constexpr const char* kNameAlpha = "alpha";
+constexpr const char* kNameBeta = "beta";
+constexpr const char* kNameGamma = "gamma";
+constexpr const char* kNameA = "a";
+constexpr const char* kNameB = "b";
+constexpr const char* kNameSame = "same";
 
 const char* const kThreePlugins =
     "# nevr config\n"
@@ -604,16 +612,16 @@ const char* const kThreePlugins =
     "graphics:\n"
     "  hand_flip: false\n";
 
-nevr::ConfigSetResult SetPluginOn(const std::string& file, std::size_t index, bool enabled) {
+nevr::ConfigSetResult SetPluginOn(const std::string& file, std::size_t index, const std::string& name, bool enabled) {
   nevr::NevrConfig cfg;
   cfg.BindFile(file);
-  return cfg.SetPluginEnabled(index, enabled);
+  return cfg.SetPluginEnabled(index, name, enabled);
 }
 
 TEST(NevrConfigSetPlugin, TurningOneOffKeepsEveryOtherByte) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameBeta, false);
   ASSERT_TRUE(r.ok) << r.reason;
   EXPECT_TRUE(r.wrote);
   std::string want = kThreePlugins;
@@ -631,7 +639,7 @@ TEST(NevrConfigSetPlugin, TurningOneOffKeepsEveryOtherByte) {
 TEST(NevrConfigSetPlugin, AMissingEnabledIsInsertedAtTheEntrysIndentation) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kGamma, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kGamma, kNameGamma, false);
   ASSERT_TRUE(r.ok) << r.reason;
   std::string want = kThreePlugins;
   const std::string at = "  - name: gamma\n";
@@ -644,7 +652,7 @@ TEST(NevrConfigSetPlugin, AFlowStyleListIsRefusedAndNothingIsWritten) {
   Dir dir;
   const std::string before = "plugins: [{name: a, enabled: true}]\n";
   Write(dir.File(), before);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
   EXPECT_FALSE(r.ok);
   EXPECT_FALSE(r.wrote);
   EXPECT_STREQ(r.reason, "plugins_flow_style");
@@ -654,7 +662,7 @@ TEST(NevrConfigSetPlugin, AFlowStyleListIsRefusedAndNothingIsWritten) {
 TEST(NevrConfigSetPlugin, AnIndexPastTheEndIsRefused) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kFarPastTheEnd, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kFarPastTheEnd, kNameAlpha, false);
   EXPECT_FALSE(r.ok);
   EXPECT_FALSE(r.wrote);
   EXPECT_STREQ(r.reason, "plugin_index_out_of_range");
@@ -665,7 +673,7 @@ TEST(NevrConfigSetPlugin, TurningOneOnWritesTrueAndLeavesTheOthers) {
   Dir dir;
   const std::string before = "plugins:\n  - name: a\n    enabled: false\n  - name: b\n    enabled: false\n";
   Write(dir.File(), before);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, true);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameB, true);
   ASSERT_TRUE(r.ok) << r.reason;
   EXPECT_TRUE(r.wrote);
   EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    enabled: false\n  - name: b\n    enabled: true\n");
@@ -674,7 +682,7 @@ TEST(NevrConfigSetPlugin, TurningOneOnWritesTrueAndLeavesTheOthers) {
 TEST(NevrConfigSetPlugin, AValueThatAlreadyReadsAsAskedIsLeftAlone) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, true);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameAlpha, true);
   EXPECT_TRUE(r.ok) << r.reason;
   EXPECT_FALSE(r.wrote);
   EXPECT_EQ(Read(dir.File()), kThreePlugins);
@@ -685,11 +693,11 @@ TEST(NevrConfigSetPlugin, TheLoadedListFollowsTheFile) {
   Write(dir.File(), kThreePlugins);
   nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
   ASSERT_EQ(cfg.Plugins().size(), kThreePluginCount);
-  ASSERT_TRUE(cfg.SetPluginEnabled(kBeta, false).ok);
+  ASSERT_TRUE(cfg.SetPluginEnabled(kBeta, kNameBeta, false).ok);
   EXPECT_TRUE(cfg.Plugins()[kAlpha].enabled);
   EXPECT_FALSE(cfg.Plugins()[kBeta].enabled);
   EXPECT_TRUE(cfg.Plugins()[kGamma].enabled);
-  ASSERT_TRUE(cfg.SetPluginEnabled(kGamma, false).ok);
+  ASSERT_TRUE(cfg.SetPluginEnabled(kGamma, kNameGamma, false).ok);
   EXPECT_FALSE(cfg.Plugins()[kGamma].enabled);
 }
 
@@ -704,7 +712,7 @@ TEST(NevrConfigSetPlugin, AMissingEnabledGoesAfterTheEntrysLastBlockLine) {
       "  # next\n"
       "  - name: b\n";
   Write(dir.File(), before);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
   ASSERT_TRUE(r.ok) << r.reason;
   std::string want = before;
   const std::string at = "      mode: fast\n";
@@ -715,7 +723,7 @@ TEST(NevrConfigSetPlugin, AMissingEnabledGoesAfterTheEntrysLastBlockLine) {
 TEST(NevrConfigSetPlugin, AMissingEnabledOnTheLastLineOfAFileWithoutANewline) {
   Dir dir;
   Write(dir.File(), "plugins:\n  - name: a");
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
   ASSERT_TRUE(r.ok) << r.reason;
   EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    enabled: false\n");
 }
@@ -723,15 +731,15 @@ TEST(NevrConfigSetPlugin, AMissingEnabledOnTheLastLineOfAFileWithoutANewline) {
 TEST(NevrConfigSetPlugin, ACrLfFileKeepsItsLineEndings) {
   Dir dir;
   Write(dir.File(), "plugins:\r\n  - name: a\r\n    enabled: true\r\n  - name: b\r\n");
-  ASSERT_TRUE(SetPluginOn(dir.File(), kAlpha, false).ok);
-  ASSERT_TRUE(SetPluginOn(dir.File(), kBeta, false).ok);
+  ASSERT_TRUE(SetPluginOn(dir.File(), kAlpha, kNameA, false).ok);
+  ASSERT_TRUE(SetPluginOn(dir.File(), kBeta, kNameB, false).ok);
   EXPECT_EQ(Read(dir.File()), "plugins:\r\n  - name: a\r\n    enabled: false\r\n  - name: b\r\n    enabled: false\r\n");
 }
 
 TEST(NevrConfigSetPlugin, TheIndexNamesTheEntryWhenTwoShareAName) {
   Dir dir;
   Write(dir.File(), "plugins:\n  - name: same\n    enabled: true\n  - name: same\n    enabled: true\n");
-  ASSERT_TRUE(SetPluginOn(dir.File(), kBeta, false).ok);
+  ASSERT_TRUE(SetPluginOn(dir.File(), kBeta, kNameSame, false).ok);
   const nevr::NevrConfig again = nevr::NevrConfig::LoadFromFile(dir.File());
   EXPECT_TRUE(again.Plugins()[kAlpha].enabled);
   EXPECT_FALSE(again.Plugins()[kBeta].enabled);
@@ -741,7 +749,7 @@ TEST(NevrConfigSetPlugin, AnEntryThatIsAFlowMappingIsRefused) {
   Dir dir;
   const std::string before = "plugins:\n  - name: a\n  - {name: b, enabled: true}\n";
   Write(dir.File(), before);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameB, false);
   EXPECT_FALSE(r.ok);
   EXPECT_STREQ(r.reason, "entry_flow_style");
   EXPECT_EQ(Read(dir.File()), before);
@@ -772,7 +780,7 @@ TEST(NevrConfigSetPlugin, TheRefusalsNameTheirShape) {
   for (const Case& c : cases) {
     Dir dir;
     Write(dir.File(), c.text);
-    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
     EXPECT_FALSE(r.ok) << c.text;
     EXPECT_FALSE(r.wrote) << c.text;
     EXPECT_STREQ(r.reason, c.reason) << c.text;
@@ -783,7 +791,7 @@ TEST(NevrConfigSetPlugin, TheRefusalsNameTheirShape) {
 TEST(NevrConfigSetPlugin, AnIndexAtTheSizeOfTheListIsRefusedByName) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kGamma + 1, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kGamma + 1, kNameGamma, false);
   EXPECT_FALSE(r.ok);
   EXPECT_STREQ(r.reason, "plugin_index_out_of_range");
   EXPECT_EQ(Read(dir.File()), kThreePlugins);
@@ -791,9 +799,9 @@ TEST(NevrConfigSetPlugin, AnIndexAtTheSizeOfTheListIsRefusedByName) {
 
 TEST(NevrConfigSetPlugin, NoBoundFileAndAMissingFileAreRefused) {
   nevr::NevrConfig unbound;
-  EXPECT_STREQ(unbound.SetPluginEnabled(kAlpha, false).reason, "no_file");
+  EXPECT_STREQ(unbound.SetPluginEnabled(kAlpha, kNameAlpha, false).reason, "no_file");
   Dir dir;
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
   EXPECT_FALSE(r.ok);
   EXPECT_STREQ(r.reason, "plugins_missing");
   EXPECT_FALSE(Exists(dir.File()));
@@ -803,10 +811,91 @@ TEST(NevrConfigSetPlugin, AFailedRenameLeavesThePreviousFileIntact) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
   nevr::config_testing::SetRenameForTest([](const char*, const char*) { return EACCES; });
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameBeta, false);
   nevr::config_testing::SetRenameForTest(nullptr);
   EXPECT_FALSE(r.ok);
   EXPECT_STREQ(r.reason, "rename_failed");
   EXPECT_EQ(Read(dir.File()), kThreePlugins);
 }
 
+
+// The manager read the list, then config.yaml changed: the index now names another plugin. The write is refused and the file is
+// untouched, where an unchecked index would flip the wrong plugin and still report success.
+TEST(NevrConfigSetPlugin, AStaleIndexNamingAnotherPluginIsRefusedAndNothingIsWritten) {
+  Dir dir;
+  const std::string reordered =
+      "plugins:\n"
+      "  - name: beta\n"
+      "    enabled: true\n"
+      "  - name: alpha\n"
+      "    enabled: true\n";
+  Write(dir.File(), reordered);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameAlpha, false);  // the manager still thinks alpha is first
+  EXPECT_FALSE(r.ok);
+  EXPECT_FALSE(r.wrote);
+  EXPECT_STREQ(r.reason, "plugin_name_mismatch");
+  EXPECT_EQ(Read(dir.File()), reordered);
+}
+
+TEST(NevrConfigSetPlugin, TheNameAtTheIndexMatchingLetsTheEditThrough) {
+  Dir dir;
+  const std::string reordered = "plugins:\n  - name: beta\n    enabled: true\n  - name: alpha\n    enabled: true\n";
+  Write(dir.File(), reordered);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameAlpha, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_TRUE(r.wrote);
+  EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: beta\n    enabled: true\n  - name: alpha\n    enabled: false\n");
+}
+
+TEST(NevrConfigSetPlugin, AnEntryWithNoNameIsRefused) {
+  Dir dir;
+  const std::string before = "plugins:\n  - enabled: true\n";
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_STREQ(r.reason, "plugin_name_mismatch");
+  EXPECT_EQ(Read(dir.File()), before);
+}
+
+TEST(NevrConfigSetPlugin, ANameIsComparedAsTheLoaderReadsIt) {
+  // The loader interpolates `${VAR:-default}` in a plugin's name, so the name the manager holds is the interpolated one.
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: ${NEVR_TEST_NO_SUCH_PLUGIN_NAME:-real}\n    enabled: true\n");
+  EXPECT_STREQ(SetPluginOn(dir.File(), kAlpha, "${NEVR_TEST_NO_SUCH_PLUGIN_NAME:-real}", false).reason, "plugin_name_mismatch");
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, "real", false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_TRUE(r.wrote);
+}
+
+TEST(NevrConfigSetPlugin, AnObjectLoadedBeforeTheFileChangedKeepsAnEntryThatIsAnotherPlugin) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: alpha\n    enabled: true\n  - name: beta\n    enabled: true\n");
+  nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+  ASSERT_EQ(cfg.Plugins().size(), kTwoPluginCount);
+  Write(dir.File(), "plugins:\n  - name: beta\n    enabled: true\n  - name: alpha\n    enabled: true\n");  // reordered behind the object
+  ASSERT_TRUE(cfg.SetPluginEnabled(kBeta, kNameAlpha, false).ok);
+  EXPECT_TRUE(cfg.Plugins()[kBeta].enabled) << "the object's entry at that index is beta, which the edit did not touch";
+  EXPECT_FALSE(nevr::NevrConfig::LoadFromFile(dir.File()).Plugins()[kBeta].enabled);
+}
+
+TEST(NevrConfigSetPlugin, AnEmptyNameMatchesNothing) {
+  // The loader refuses an entry whose name is empty, so no caller can hold that name for it.
+  Dir dir;
+  const std::string before = "plugins:\n  - name: \"\"\n    enabled: true\n";
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, "", false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_STREQ(r.reason, "plugin_name_mismatch");
+  EXPECT_EQ(Read(dir.File()), before);
+}
+
+TEST(NevrConfigSetPlugin, ANameTheLoaderWouldRefuseMatchesNothing) {
+  // `${VAR:?msg}` with VAR unset makes the loader throw; the manager cannot hold that name, so the entry is a mismatch, not a write error.
+  Dir dir;
+  const std::string before = "plugins:\n  - name: ${NEVR_TEST_NO_SUCH_PLUGIN_NAME:?needed}\n    enabled: true\n";
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_STREQ(r.reason, "plugin_name_mismatch");
+  EXPECT_EQ(Read(dir.File()), before);
+}
