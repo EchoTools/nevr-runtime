@@ -29,7 +29,10 @@ import work_root  # noqa: E402
 import axml_fixtures as fx  # noqa: E402
 import quest_apk_version as qv  # noqa: E402
 from quest_patcher_standin import MARKER, make_standin  # noqa: E402
-from test_quest_keystore import ALIAS, PASSPHRASE  # noqa: E402
+# The fixture key this test makes with keytool: its alias and passphrase. The originals are the Go keystore tests'
+# (tools/cmd/quest-keystore); the Python test that held them was ported to Go (ADR 0044).
+ALIAS = "nevr"
+PASSPHRASE = "fixture-pass-7f3a91"
 
 JUSTFILE = REPO / "justfile"
 INSTALLER_VERSION_CODE = 4987570  # the game build the community installer pins
