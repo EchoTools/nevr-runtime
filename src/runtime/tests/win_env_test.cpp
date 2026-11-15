@@ -431,7 +431,7 @@ TEST_F(WinEnvTest, FilesRefuseWhatThePosixEnvRefuses) {
   EXPECT_FALSE(env_->MakeDirs(dir_ + "/a/b/c/x.json"));
 }
 
-// The device's facts the limits are shares of (cargo_limits.h): free space on the folder's volume, the handle budget, and memory.
+// The device's facts the limits are shares of (cdn_limits.h): free space on the folder's volume, the handle budget, and memory.
 TEST_F(WinEnvTest, QueryDeviceGivesEveryFactTheLimitsNeed) {
   nc::DeviceFacts facts;
   facts.fds_open = 1;  // overwritten: a query starts from nothing

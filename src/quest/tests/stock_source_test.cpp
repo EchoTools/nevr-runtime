@@ -196,7 +196,7 @@ void NothingOverTheMemoryShareIsRead() {
   std::vector<std::uint8_t> out;
   std::vector<nevr_maps::StockStamp> read_from;
 
-  // The share is the one-object share of cargo_limits.h: half the memory the device can still give.
+  // The share is the one-object share of cdn_limits.h: half the memory the device can still give.
   g_memory = 1u << 30;
   {
     SharedCore core(dir + "/m", dir + "/p");

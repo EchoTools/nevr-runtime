@@ -54,7 +54,7 @@ std::string IndexPath(const std::string& dir);
 // The manifest as it was last fetched, byte for byte (a zstd frame or JSON text: what it is is read from its bytes, never from this
 // name).
 std::string ManifestCopyPath(const std::string& dir);
-// FormatHex64 is cargo_format.h's.
+// FormatHex64 is cdn_format.h's.
 std::uint32_t Crc32(const void* data, std::size_t length) noexcept;
 
 struct BlobLoc {

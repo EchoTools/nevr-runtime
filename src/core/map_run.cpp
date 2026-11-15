@@ -28,7 +28,7 @@ using json = nlohmann::json;
 // three retries.
 constexpr int kDownloadAttempts = 4;
 // One read of a stored file when a piece is copied or a deferred map is hashed again: at most this many bytes, and never more than
-// the device's share for one object (cargo_limits.h, Limits::max_object_bytes).
+// the device's share for one object (cdn_limits.h, Limits::max_object_bytes).
 constexpr std::uint64_t kCopyStepBytes = std::uint64_t{1} << 20;
 // What one listed map costs the fetch in memory, for the entry share of nevr_cdn::ComputeLimits.
 constexpr std::uint64_t kMapEntryMemoryBytes = sizeof(MapEntry) + sizeof(PlatformEntry) + sizeof(CachedMap);

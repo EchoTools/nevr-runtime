@@ -99,7 +99,7 @@ void TheWin10TypesAreThePcsAndTheAndroidTypesDiffer() {
   QCHECK(rs::kWin10Types.script == rs::kScriptType);
   QCHECK(rs::kWin10Types.texture == rs::kTextureType);
   QCHECK(rs::kWin10Types.texture_gpu == rs::kTextureGpuType);
-  QCHECK(rs::kAndroidTypes.texture == 0xe2efe7289d5985b8ULL);      // cargo_manifest.h kAndroidArm64 buffer 0
+  QCHECK(rs::kAndroidTypes.texture == 0xe2efe7289d5985b8ULL);      // cdn_manifest.h kAndroidArm64 buffer 0
   QCHECK(rs::kAndroidTypes.texture_gpu == 0x489bb35d53ca50e9ULL);  // and buffer 1
   QCHECK(rs::kAndroidTypes.archive != rs::kArchiveType);
   QCHECK(rs::kAndroidTypes.level_root != rs::kLevelRootType);

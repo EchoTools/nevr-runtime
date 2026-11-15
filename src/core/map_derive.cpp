@@ -20,7 +20,7 @@ namespace set = nevr_resource_set;
 
 // A derived record is aligned to the largest alignment a set may ask for (WriteMergedSet).
 constexpr std::uint32_t kDerivedAlignment = set::kMaxAlignment;
-// Every chunk's file offset and size is a u32 word of the set (nevr/resource_set.h), as the store's are (cargo_limits.h).
+// Every chunk's file offset and size is a u32 word of the set (nevr/resource_set.h), as the store's are (cdn_limits.h).
 constexpr std::uint64_t kU32Limit = nevr_cdn::kFormatMaxStoreBytes;
 
 // RFC 8878 section 3.1.1: the frame magic, then a descriptor with a 4-byte content size and a window descriptor (no single

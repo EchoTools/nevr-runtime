@@ -10,10 +10,10 @@
  * nevr_device::MemoryAvailable (GlobalMemoryStatusEx's available physical memory on Windows). A Win32 process has no soft limit on
  * open files; what bounds the handles it may hold is the kernel's per-process handle limit, kProcessHandleLimit below, and the
  * handles it holds now are GetProcessHandleCount's. Those two stand for fd_soft_limit and fds_open, so the descriptor shares of
- * cargo_limits.h and map_run.h are shares of the handles this process may still open. Wine answers GetProcessHandleCount with 0
+ * cdn_limits.h and map_run.h are shares of the handles this process may still open. Wine answers GetProcessHandleCount with 0
  * whatever is open (measured on Wine 11.21); the 0 is taken as given, because a game's few thousand handles are under 0.1% of the
  * limit, so the share it moves is that small. A fact a call does not give is left absent, and the limits that need it stop with
- * its name (cargo_limits.h).
+ * its name (cdn_limits.h).
  *
  * Every call blocks (disk or network); callers run on a worker thread, never the game's thread.
  */

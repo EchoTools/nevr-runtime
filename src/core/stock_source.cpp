@@ -77,7 +77,7 @@ bool DecompressFrame(StockFile& file, std::uint64_t offset, std::uint64_t compre
 
 PackageStockSource::PackageStockSource(MemoryFn memory_available) : memory_available_(memory_available) {}
 
-// The one-object share of the device's memory (cargo_limits.h kMemoryShareForObject), the same share the rebuild holds a recipe's
+// The one-object share of the device's memory (cdn_limits.h kMemoryShareForObject), the same share the rebuild holds a recipe's
 // bytes to (map_derive.h DeriveMemoryOf, object_bytes).
 std::uint64_t PackageStockSource::ObjectBytes() const {
   std::uint64_t memory = 0;

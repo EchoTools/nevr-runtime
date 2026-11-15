@@ -20,7 +20,7 @@
 #include "runtime/content/content_pack.h"
 #include "runtime/content/script_provider.h"
 #include "runtime/hook/dll_load_hook.h"
-#include "core/cargo_env.h"
+#include "cdn/cdn_env.h"
 #include "core/map_manifest.h"
 #include "core/map_script_check.h"
 #include "core/resource_set_registry.h"
@@ -54,7 +54,7 @@ constexpr std::uint64_t kStockHash = 0x190ed14fe6c74dd3ULL;
 // The byte limit a run gives the provider: the device's share for a document (MapDocumentBytes), from a device fact.
 constexpr std::uint64_t kTestMemoryAvailable = 1ULL << 30;
 std::uint64_t TestByteLimit() {
-  nevr_cargo::DeviceFacts facts;
+  nevr_cdn::DeviceFacts facts;
   facts.have_memory = true;
   facts.memory_available = kTestMemoryAvailable;
   return nevr_maps::MapDocumentBytes(facts);
@@ -296,7 +296,7 @@ TEST_F(MapScripts, ARevokedHashIsRefusedAndOneAlreadyHeldIsDroppedBeforeItLoads)
   maps::Forget();
   Configure();
   ASSERT_TRUE(RegisterImage(image).ok());
-  maps::SetRevoked({std::string(nevr_cargo::kSha256HexChars, '0')});
+  maps::SetRevoked({std::string(nevr_cdn::kSha256HexChars, '0')});
   EXPECT_EQ(maps::HeldCount(), 1u);
   maps::SetRevoked({Sha(image)});
   EXPECT_EQ(maps::HeldCount(), 0u);
@@ -347,7 +347,7 @@ TEST_F(MapScripts, AFileWhoseBytesAreNotItsDigestAndBadClaimsAreRefused) {
   const std::vector<std::uint8_t> image = BuildDll();
   const std::int64_t h = Held(L"x.dll", image);
   Keep(h);
-  EXPECT_EQ(maps::Register("map:arena1", kHash, h, std::string(nevr_cargo::kSha256HexChars, 'a'), true).reason, "sha_mismatch");
+  EXPECT_EQ(maps::Register("map:arena1", kHash, h, std::string(nevr_cdn::kSha256HexChars, 'a'), true).reason, "sha_mismatch");
   EXPECT_EQ(maps::Register("map:arena1", kHash, h, "ABC", true).reason, "bad_sha256");
   EXPECT_EQ(maps::Register("plugin-x", kHash, h, Sha(image), true).reason, "bad_owner");
   EXPECT_EQ(maps::Register("map:", kHash, h, Sha(image), true).reason, "bad_owner");
@@ -360,7 +360,7 @@ TEST_F(MapScripts, AFileWhoseBytesAreNotItsDigestAndBadClaimsAreRefused) {
 TEST_F(MapScripts, ARekeyServesThePlayersOwnStockFileAndRefusesAWrongDigest) {
   const std::vector<std::uint8_t> stock = BuildDll();
   WriteBytes(GamePath(kStockHash), stock);
-  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, std::string(nevr_cargo::kSha256HexChars, 'b')).reason, "stock_sha_mismatch");
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, std::string(nevr_cdn::kSha256HexChars, 'b')).reason, "stock_sha_mismatch");
   EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kOtherHash, Sha(stock)).reason, "stock_missing");
   EXPECT_EQ(maps::RegisterRekey("map:arena1", kStockHash, kStockHash, Sha(stock)).reason, "stock_hash");
   ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock)).ok());
@@ -438,7 +438,7 @@ TEST_F(MapScripts, HoldsIsFalseAfterWithdrawAndTheOwnerIsNotTakenAgain) {
 
 // A rekeyed script the recipe rebuild wrote sits at <version dir>\scripts\<hash16>.dll in the maps cache (core/map_derive.h).
 std::wstring RebuiltName(std::uint64_t hash) { return L"v1\\scripts\\" + Hash16W(hash) + L".dll"; }
-const std::string kStockSha = std::string(nevr_cargo::kSha256HexChars, 'c');
+const std::string kStockSha = std::string(nevr_cdn::kSha256HexChars, 'c');
 
 TEST_F(MapScripts, ADerivedScriptIsHeldAndServedFromItsRebuiltFile) {
   const std::vector<std::uint8_t> image = BuildDll();
@@ -458,7 +458,7 @@ TEST_F(MapScripts, ADerivedScriptWhoseBytesAreNotTheResultDigestIsRefused) {
   const std::vector<std::uint8_t> image = BuildDll();
   const std::int64_t h = Held(RebuiltName(kHash), image);
   Keep(h);
-  EXPECT_EQ(maps::RegisterDerived("map:arena1", kHash, h, std::string(nevr_cargo::kSha256HexChars, 'a'), kStockSha).reason, "sha_mismatch");
+  EXPECT_EQ(maps::RegisterDerived("map:arena1", kHash, h, std::string(nevr_cdn::kSha256HexChars, 'a'), kStockSha).reason, "sha_mismatch");
   EXPECT_EQ(maps::RegisterDerived("map:arena1", kHash, h, Sha(image), "c0ffee").reason, "bad_sha256");
   EXPECT_EQ(maps::RegisterDerived("map:arena1", kHash, h, Sha(image), "").reason, "bad_sha256");
   EXPECT_EQ(maps::HeldCount(), 0u);

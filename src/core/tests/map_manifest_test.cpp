@@ -411,7 +411,7 @@ TEST(MapDocumentBytes, IsAShareOfTheMemoryTheDeviceReports) {
   EXPECT_EQ(nevr_maps::MapDocumentBytes(facts), 0u);  // no memory fact: nothing is read
   facts.have_memory = true;
   facts.memory_available = std::uint64_t{3} << 30;
-  // The texture cargo's manifest arithmetic (cargo_limits.h): 1/8 of memory for the text, its copy and its parsed form (2 + 6).
+  // The texture cargo's manifest arithmetic (cdn_limits.h): 1/8 of memory for the text, its copy and its parsed form (2 + 6).
   EXPECT_EQ(nevr_maps::MapDocumentBytes(facts), (std::uint64_t{3} << 30) / (8 * (2 + 6)));
   facts.memory_available = std::uint64_t{1} << 20;
   EXPECT_EQ(nevr_maps::MapDocumentBytes(facts), (std::uint64_t{1} << 20) / (8 * (2 + 6)));

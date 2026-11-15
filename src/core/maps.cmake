@@ -43,8 +43,8 @@ target_include_directories(nevr_core PRIVATE "${_maps_monocypher_dir}")
 set(_maps_derive_sources
   "${CMAKE_CURRENT_LIST_DIR}/map_set_tables.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/map_derive.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/cargo_validate.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/cargo_limits.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/../cdn/cdn_validate.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/../cdn/cdn_limits.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/device_memory.cpp")
 set_source_files_properties(${_maps_derive_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_derive_sources})

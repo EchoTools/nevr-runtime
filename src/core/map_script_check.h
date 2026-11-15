@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "core/cargo_format.h"
+#include "cdn/cdn_format.h"
 #include "core/map_manifest.h"
 #include "core/resource_set_registry.h"
 #include "core/script_image_rules.h"
@@ -20,7 +20,7 @@ namespace nevr_map_script {
 
 // True when `text` is a sha-256 digest in 64 lowercase hex characters.
 inline bool IsSha256Digest(const std::string& text) {
-  if (text.size() != nevr_cargo::kSha256HexChars) return false;
+  if (text.size() != nevr_cdn::kSha256HexChars) return false;
   for (const char c : text) {
     if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
   }

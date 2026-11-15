@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "core/cargo_format.h"
+#include "cdn/cdn_format.h"
 #include "core/script_image_rules.h"
 #include "core/tests/script_image_builders.h"
 #include "hook_log.h"
@@ -64,7 +64,7 @@ constexpr std::uint64_t kMissingFileHash = 0x1111; // no library file for this h
 constexpr std::uint64_t kBadElfHash = 0xaa;        // the library file that fails the ELF rules
 constexpr std::uint64_t kEmptyFileHash = 1;        // the library file with no bytes
 constexpr std::uint64_t kNoHash = 0;               // names no script (bad_hash)
-constexpr std::size_t kDigestChars = nevr_cargo::kSha256HexChars;  // a sha-256 in hex, the digest of no file here
+constexpr std::size_t kDigestChars = nevr_cdn::kSha256HexChars;  // a sha-256 in hex, the digest of no file here
 const char kBadElfName[] = "lib00000000000000aa.so";  // kBadElfHash's file name
 const char kEmptyName[] = "lib0000000000000001.so";   // kEmptyFileHash's file name
 

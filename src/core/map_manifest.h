@@ -80,7 +80,7 @@ struct ParsedManifest {
 };
 
 // The most bytes of one JSON document (a manifest body, a package index, the cache index) this device may read whole: a share of the
-// memory it reports, by the arithmetic the texture cargo uses for its manifest (cargo_limits.h: the text, its copy and its parsed
+// memory it reports, by the arithmetic the texture cargo uses for its manifest (cdn_limits.h: the text, its copy and its parsed
 // form take at most kMemoryShareForManifest of it). 0 when the device gave no memory fact.
 std::uint64_t MapDocumentBytes(const nevr_cdn::DeviceFacts& facts) noexcept;
 

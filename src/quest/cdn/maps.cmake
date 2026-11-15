@@ -36,6 +36,6 @@ target_include_directories(nevr_quest_maps PRIVATE
   "${_qmaps_monocypher}")
 target_compile_options(nevr_quest_maps PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden>)
-target_link_libraries(nevr_quest_maps PUBLIC nevr_quest_cargo nevr_quest_plugin nevr_quest_config_alias nevr::plugin_sdk
+target_link_libraries(nevr_quest_maps PUBLIC nevr_quest_cdn nevr_quest_plugin nevr_quest_config_alias nevr::plugin_sdk
   nlohmann_json::nlohmann_json)
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_maps)

@@ -15,7 +15,7 @@ namespace {
 namespace check = nevr_map_script;
 
 // The digest length the format fixes (a sha-256 in hex), and its neighbours for the must-fail cases.
-constexpr std::size_t kDigestChars = nevr_cargo::kSha256HexChars;
+constexpr std::size_t kDigestChars = nevr_cdn::kSha256HexChars;
 constexpr std::size_t kOneByte = 1;
 constexpr std::uint64_t kByteLimit = 4096;  // a stand-in for the device's share (MapDocumentBytes); the test sets it
 constexpr std::uint64_t kPinned = 1000;

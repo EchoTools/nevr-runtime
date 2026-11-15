@@ -23,7 +23,7 @@ namespace {
 // the channel runs, so a run without maps.base_url constructs none of them.
 struct Production {
   nevr_quest::data::CurlTransport transport;
-  nevr_quest::cargo::PosixEnv env;
+  nevr_cdn::PosixEnv env;
   PosixMapFs fs;
   std::unique_ptr<nevr_maps::StockSource> stock;
   std::unique_ptr<nevr_maps::ChannelDeriver> deriver;
