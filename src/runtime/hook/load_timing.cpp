@@ -3,6 +3,7 @@
 #include <winsock2.h>
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 
@@ -13,6 +14,7 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
+#include "runtime/lifecycle/crash_recovery.h"
 
 namespace nevr_load_timing {
 namespace {
@@ -72,11 +74,30 @@ void LogNotArmed(const char* reason, const void* address) {
 
 void LogRecord(const std::string& line) { Log(EchoVR::LogLevel::Info, "%s", line.c_str()); }
 
+// Which thread runs the game-space init fiber that calls LoadLevel (docs/reference/join-hold.md step 7) is not read from the
+// binary. The join hold may only wait off the game's loop thread, where the frame that mounts the map and ticks the hold keeps
+// running, so each load records where it ran and the hold is offered only after a load was seen off that thread.
+std::atomic<bool> g_loadSeenOffLoop{false};
+std::atomic<bool> g_loadThreadLogged{false};
+
+bool OnGameLoopThread() {
+  const unsigned long loop = GameLoopThreadId();
+  return loop == 0 || loop == GetCurrentThreadId();  // unknown counts as the loop: never wait where the frame may run
+}
+
 std::uint64_t __fastcall LoadLevelDetour(void* gameSpace, std::uint64_t p2, void* p3) {
-  // A client's map join hold: the load waits for the fetched map's mount. The caller is the game-space init fiber
-  // (docs/reference/join-hold.md step 7), and the frame that mounts the map and ticks the hold keeps running meanwhile.
-  while (nevr_map_session_pin::JoinHeldFor(p2, GetTickCount64()))
-    Sleep(static_cast<DWORD>(nevr_map_session_pin::kJoinHoldPollMs));
+  const bool onLoop = OnGameLoopThread();
+  g_loadSeenOffLoop.store(!onLoop, std::memory_order_release);
+  if (!g_loadThreadLogged.exchange(true)) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.MAPS] level load thread=%lu game_loop=%lu join_hold=%s (%s)", static_cast<unsigned long>(GetCurrentThreadId()),
+        GameLoopThreadId(), onLoop ? "leave" : "hold",
+        onLoop ? "the load runs on the game's loop thread, so a join for a missing map leaves and is joined again once it is ready"
+               : "the load runs off the game's loop thread, so a join for a missing map waits for its download and mount");
+  }
+  nevr_map_session_pin::WaitWhileJoinHeld(
+      p2, onLoop, [] { return static_cast<std::uint64_t>(GetTickCount64()); },
+      [](std::uint64_t ms) { Sleep(static_cast<DWORD>(ms)); });
   return TimedLoad(p2, g_originalLoadLevel, gameSpace, p2, p3);
 }
 
@@ -111,7 +132,7 @@ void Install(bool joinHoldHooksIt) {
   Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] load timing armed hook=LoadLevel (each level load now writes a level_load record)");
 }
 
-bool HoldsLoad() { return g_originalLoadLevel != nullptr; }
+bool HoldsLoad() { return g_originalLoadLevel != nullptr && g_loadSeenOffLoop.load(std::memory_order_acquire); }
 
 void OnGameLine(const char* line) {
   if (nevr_load_timing::IsEngineReadyLine(line)) g_boot.MarkEngineReady(ElapsedSinceProcessStartMs());

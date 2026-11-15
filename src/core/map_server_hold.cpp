@@ -100,10 +100,24 @@ std::string MapUpdateRestartLine(const std::string& group, const std::vector<std
          "restart hosts the new one)";
 }
 
-std::string MapCheckFailedLine(const std::string& group) {
-  return "[NEVR.MAPS] map check failed group=" + group +
-         " (the group's manifest could not be fetched: the session goes ahead on the versions this server has mounted, and the "
-         "next session checks again)";
+std::string MapCheckFailedLine(const std::string& group, const std::string& reason) {
+  return "[NEVR.MAPS] map check failed group=" + group + " reason=" + (reason.empty() ? std::string("unknown") : reason) +
+         " (the group's manifest could not be fetched or verified: the session goes ahead on the versions this server has mounted, "
+         "and the next session checks again)";
+}
+
+std::string MapGroupOverCapLine(const std::string& group, std::uint64_t held_bytes, std::uint64_t cap_bytes) {
+  constexpr std::uint64_t kMiB = std::uint64_t{1} << 20;
+  return "[NEVR.MAPS] map group over cap group=" + group + " needs_mib=" + std::to_string((held_bytes + kMiB - 1) / kMiB) +
+         " cap_mib=" + std::to_string(cap_bytes / kMiB) +
+         " (a server keeps its whole group, so the cache holds more than maps.cache_cap_gib: raise the cap to at least this)";
+}
+
+std::string MapGroupPartialLine(const std::string& group, const std::vector<std::pair<std::string, std::string>>& failed) {
+  std::string list;
+  for (const auto& [id, reason] : failed) list += (list.empty() ? "" : ",") + id + ":" + reason;
+  return "[NEVR.MAPS] map group partial group=" + group + " failed=" + list +
+         " (these maps could not be stored; the rest of the group mounts, and a session on a failed map starts without it)";
 }
 
 std::string MapHoldMountedLine(const std::string& group, std::uint64_t waitedMs) {

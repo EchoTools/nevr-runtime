@@ -103,8 +103,15 @@ inline bool RestartForUpdateNow(bool updateWaits, std::uint64_t entrants) { retu
 // The Warning line when the check finds an update of a mounted map: the group, the maps and what the server does.
 std::string MapUpdateRestartLine(const std::string& group, const std::vector<std::string>& ids);
 
-// The Warning line when the check of a mounted group could not be made (the fetch failed): the joins go ahead on what is mounted.
-std::string MapCheckFailedLine(const std::string& group);
+// The Warning line when the check of a mounted group could not be made (the manifest was not had or not verified, `reason`): the
+// joins go ahead on what is mounted.
+std::string MapCheckFailedLine(const std::string& group, const std::string& reason);
+
+// The Warning line when a server's group is stored past maps.cache_cap_gib: what the cache holds with the group, and the cap.
+std::string MapGroupOverCapLine(const std::string& group, std::uint64_t held_bytes, std::uint64_t cap_bytes);
+
+// The Warning line when a map of a server's group could not be stored (`reason`): the rest of the group mounts.
+std::string MapGroupPartialLine(const std::string& group, const std::vector<std::pair<std::string, std::string>>& failed);
 
 // How a held join is released. A join waits for the maps hold and for the levels hold (network.join_hold_ms, its own settle
 // and timeout). It is released when neither holds it: the maps hold is lifted, and the levels hold is off, settled or timed out.

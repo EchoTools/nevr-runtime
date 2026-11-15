@@ -149,6 +149,9 @@ class Channel {
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
   // Empty when Boot did not run the channel. Worker thread only, after Boot.
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
+  // A dedicated server's scope for the group a session names: the whole group, every map this process mounted kept from eviction
+  // (the game reads their files), and the group stored whole even past the cap (FetchScope::server_group).
+  nevr_maps::FetchScope ServerGroupScope() const;
   // The worker, after FetchPass: answers `requests` until keep_going turns false or the requests stop. Each fetch is followed by a
   // mount of its group from the cache through the boot's mount (the hot mount): a map that arrived mounts now, with no restart; a
   // map this run mounted at another version is skipped (mounted_other_version), never replaced, so a loaded level is never

@@ -341,6 +341,13 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
   return reports;
 }
 
+nevr_maps::FetchScope Channel::ServerGroupScope() const {
+  nevr_maps::FetchScope scope;
+  scope.server_group = true;
+  if (mount_) scope.in_use = mount_->MountedIds();
+  return scope;
+}
+
 nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
   if (start_ != Start::kRun || !booted_ || !mount_) return nevr_maps::MountReport();
   return mount_->Mount(groups, now_utc);

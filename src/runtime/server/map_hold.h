@@ -42,8 +42,8 @@ void NoteFetchProgress(const nevr_maps::FetchProgress& progress);
 // A map the check found at a new version while its old one is mounted holds the joins until the server restarts (MapsNoteUpdated).
 void NoteGroupMounted(const std::string& group, const nevr_maps::MountReport& report);
 
-/// The channel's fetch of `group` failed (join_hold.h MapsNoteCheckFailed). Any thread.
-void NoteFetchFailed(const std::string& group);
+/// The channel's fetch of `group` failed before its manifest verified, for `reason` (join_hold.h MapsNoteCheckFailed). Any thread.
+void NoteFetchFailed(const std::string& group, const std::string& reason);
 
 /// The group a legacy GameServerSessionStart frame names: the GUID at its +0x10 (messages.h, the frame's two GUIDs), in the same
 /// lowercase text the protobuf group id is taken as. "" when the frame is too short to carry it.

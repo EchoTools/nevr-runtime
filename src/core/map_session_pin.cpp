@@ -1,5 +1,6 @@
 #include "core/map_session_pin.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -60,7 +61,9 @@ TickState& g_tick() {
 // worker (NoteFetchFailed), so it sits under g_mutex.
 struct JoinHoldState {
   bool armed = false;
-  std::string id, failed;  // failed: the consequence of a failed fetch of `id`
+  bool mount_refused = false;  // the registry refused the map's set: no mount this run can cure it
+  bool unholdable = false;     // the load came on the game's loop thread, where waiting would stop the frame
+  std::string id, failed;      // failed: the consequence of a failed fetch of `id`
   std::uint64_t lobby = 0, level = 0, pin = 0, deadline = 0;
   std::uint64_t load_names[2] = {0, 0};  // both level names of the map, as the level load passes them
 };
@@ -240,9 +243,15 @@ bool HoldTick(GameAccess& game, std::uint64_t lobby, std::uint64_t level, std::u
     game.Event(event);
     return true;
   }
-  if (!hold.failed.empty()) {
+  if (hold.mount_refused) {
+    event.reason = "mount_refused";
+    event.notice = FitLine({{"Map "}, {hold.id, true}, {" could not be loaded this run. See the nevr log."}});
+  } else if (!hold.failed.empty()) {
     event.reason = "fetch_failed";
     event.notice = FitLine({{"Map "}, {hold.id, true}, {" could not be downloaded. See the nevr log."}});
+  } else if (hold.unholdable) {
+    event.reason = "load_not_holdable";
+    event.notice = FitLine({{"Downloading "}, {hold.id, true}, {"; join again when it is ready."}});
   } else if (now >= hold.deadline) {
     event.reason = "hold_timeout";
     event.notice = FitLine({{"Downloading "}, {hold.id, true}, {" took too long; join again later."}});
@@ -443,6 +452,15 @@ std::vector<MapPin> MountedPins() {
   return g_mounted();
 }
 
+std::vector<MapPin> PinsMounted(const nevr_maps::MountReport& run, const std::vector<std::string>& mounted_ids) {
+  std::vector<MapPin> pins;
+  for (const nevr_maps::MountedMap& m : run.staged) {
+    if (std::find(mounted_ids.begin(), mounted_ids.end(), m.id) == mounted_ids.end()) continue;
+    pins.push_back({m.id, m.version, m.index_sha256, m.platform, m.source_sha256, m.title, m.level});
+  }
+  return pins;
+}
+
 void SetFetchRequest(FetchRequestFn fn) {
   std::lock_guard<std::mutex> lock(g_mutex());
   g_fetch = fn;
@@ -589,9 +607,26 @@ bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs) {
   return level == g_hold().load_names[0] || level == g_hold().load_names[1];
 }
 
+bool WaitWhileJoinHeld(std::uint64_t level, bool on_loop_thread, const std::function<std::uint64_t()>& now_ms,
+                       const std::function<void(std::uint64_t)>& sleep_ms) {
+  if (!JoinHeldFor(level, now_ms())) return false;
+  if (on_loop_thread) {
+    std::lock_guard<std::mutex> lock(g_mutex());
+    g_hold().unholdable = true;
+    return false;
+  }
+  while (JoinHeldFor(level, now_ms())) sleep_ms(kJoinHoldPollMs);
+  return true;
+}
+
 void NoteFetchFailed(const std::string& id, const std::string& consequence) {
   std::lock_guard<std::mutex> lock(g_mutex());
   if (g_hold().armed && g_hold().id == id) g_hold().failed = consequence.empty() ? std::string("failed") : consequence;
+}
+
+void NoteMountRefused(const std::string& id) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  if (g_hold().armed && g_hold().id == id) g_hold().mount_refused = true;
 }
 
 void ResetForTest() {

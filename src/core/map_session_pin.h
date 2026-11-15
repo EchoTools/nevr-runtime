@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -95,6 +96,10 @@ ChannelView ViewFromMount(const nevr_maps::MountReport& report);
 void SetChannelView(ChannelView view);
 void SetMountedPins(std::vector<MapPin> pins);
 std::vector<MapPin> MountedPins();  // any thread; a copy taken under the same mutex
+
+// The pins the mounted pins may name: the maps of `run` (every grant of this run's mounts) whose sets the registry confirmed
+// mounted (`mounted_ids`). A grant the registry refused, or one whose later mount has not run yet, is never published.
+std::vector<MapPin> PinsMounted(const nevr_maps::MountReport& run, const std::vector<std::string>& mounted_ids);
 
 using FetchRequestFn = void (*)(const std::string& id);
 void SetFetchRequest(FetchRequestFn fn);  // default none: no request is made
@@ -185,9 +190,20 @@ void TickWith(GameAccess& game);
 // is before the hold's deadline.
 bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs);
 
+// The level load's side of the hold, on the thread that runs the load. Off the game's loop thread it waits (`sleep_ms`,
+// kJoinHoldPollMs at a time) while JoinHeldFor reads true. On the loop thread it never waits, since the frame that mounts the map
+// and ticks the hold runs there: the hold is marked unholdable instead, and the next tick leaves with a "join again" notice while
+// the download goes on. Returns true when it waited.
+bool WaitWhileJoinHeld(std::uint64_t level, bool on_loop_thread, const std::function<std::uint64_t()>& now_ms,
+                       const std::function<void(std::uint64_t)>& sleep_ms);
+
 // The worker: a fetch that named `id` failed, with the request's plain-words consequence. A join held for `id` leaves on the
 // next tick; any other id is ignored.
 void NoteFetchFailed(const std::string& id, const std::string& consequence);
+
+// The mount observer: the registry refused the set of map `id` (a key clash with the stock or an earlier mount). A join held for
+// `id` leaves on the next tick with a plain notice; any other id is ignored.
+void NoteMountRefused(const std::string& id);
 
 // The login's nevr_maps: the mounted maps, then the staged maps not yet mounted (each with "mounted"). An empty array when none.
 nlohmann::json LoginEntries();

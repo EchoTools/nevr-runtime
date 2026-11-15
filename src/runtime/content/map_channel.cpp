@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -24,6 +25,7 @@
 #include "core/map_fetch_queue.h"
 #include "core/map_manifest.h"
 #include "core/map_request.h"
+#include "core/map_server_hold.h"
 #include "core/map_session_pin.h"
 #include "core/nevr_root.h"
 #include "core/resource_set_registry.h"
@@ -197,13 +199,6 @@ struct State {
 };
 State* g_state = nullptr;
 
-std::vector<nevr_map_session_pin::MapPin> PinsOf(const nevr_maps::MountReport& run) {
-  std::vector<nevr_map_session_pin::MapPin> pins;
-  for (const nevr_maps::MountedMap& m : run.staged)
-    pins.push_back({m.id, m.version, m.index_sha256, m.platform, m.source_sha256, m.title, m.level});
-  return pins;
-}
-
 // The mounted owners and their levels, from the registry's report: the entries whose plugin is "map:<id>".
 nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
   nevr_config_alias::OwnerLevels owners;
@@ -228,14 +223,20 @@ nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
 }
 
 // The mount observer: the core's decision, with the PC's withdraw and alias record type. Runs on the mounting thread.
-void OnMount(const nevr_resource_sets::MountReport&) {
+void OnMount(const nevr_resource_sets::MountReport& report) {
   State* st = g_state;
   if (st == nullptr) return;
   std::vector<std::string> granted;
+  nevr_maps::MountReport run;
   {
     std::lock_guard<std::mutex> lock(st->granted_mutex);
     granted = st->granted;
-    nevr_map_session_pin::SetMountedPins(PinsOf(st->run));
+    run = st->run;
+  }
+  const std::size_t prefix = std::strlen(nevr_resource_sets::kMapOwnerPrefix);
+  for (const nevr_resource_sets::MountReport::Refused& refused : report.refusals) {
+    if (refused.plugin.rfind(nevr_resource_sets::kMapOwnerPrefix, 0) == 0)
+      nevr_map_session_pin::NoteMountRefused(refused.plugin.substr(prefix));
   }
   const MountDecision decision = DecideMount(
       granted, MountedOwners(nevr_resource_sets::ReportJson()),
@@ -246,6 +247,11 @@ void OnMount(const nevr_resource_sets::MountReport&) {
       [](const std::string&, std::uint64_t alias) {
         return nevr_resource_sets::HoldsKey(nevr_config_alias::kAliasRecordTypeWin10, alias);
       });
+  // Only what the registry confirmed: a pin published for a refused or not-yet-mounted grant would release a join hold into a
+  // level whose sets are not served.
+  std::vector<std::string> mounted_ids;
+  for (const std::string& owner : decision.mounted) mounted_ids.push_back(owner.substr(prefix));
+  nevr_map_session_pin::SetMountedPins(nevr_map_session_pin::PinsMounted(run, mounted_ids));
   Log(decision.withdrawn.empty() ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MAPS] map_summary stage=mount mounted=%zu withdrawn=%s armed=%zu", decision.mounted.size(),
       Join(decision.withdrawn).c_str(), decision.armed);
@@ -287,18 +293,26 @@ bool RequestServerGroup(const std::string& group) {
 }
 
 // One group for a dedicated server (ADR 0048 decisions 13 and 17), at every session create: the first fetches it, a later one
-// checks it for an update. Its progress goes to the join hold. When the fetch did not fail, its maps mount now, in this process,
-// and the hold hears of the mount (an update of a mounted map holds the joins until the server restarts). A failed fetch mounts
-// nothing: a group never mounted holds to its timeout, a mounted one goes ahead on what is mounted.
+// checks it for an update. Its progress goes to the join hold. Once the manifest verified, what is stored mounts now, in this
+// process, even when one map of the group could not be stored, and the hold hears of the mount (an update of a mounted map holds
+// the joins until the server restarts). A fetch whose manifest did not verify mounts nothing: a group never mounted holds to its
+// timeout, a mounted one goes ahead on what is mounted. The maps this process mounted are never evicted.
 nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, const std::function<bool()>& keep_going) {
   const std::string now = NowUtc();
   const nevr_maps::FetchProgressFn progress = [](const nevr_maps::FetchProgress& p) { nevr_map_hold::NoteFetchProgress(p); };
-  const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred,
-                                                              st->deriver.get(), now, keep_going, progress);
-  if (report.outcome == nevr_maps::FetchOutcome::kFailed) {
-    nevr_map_hold::NoteFetchFailed(group);
+  const nevr_maps::FetchReport report =
+      nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred, st->deriver.get(), now, keep_going,
+                            progress, st->channel->ServerGroupScope());
+  if (report.outcome == nevr_maps::FetchOutcome::kFailed && !report.manifest_verified) {
+    nevr_map_hold::NoteFetchFailed(group, report.reason);
     return report;
   }
+  if (report.over_cap_held != 0) {
+    Log(EchoVR::LogLevel::Warning, "%s",
+        nevr_maps::MapGroupOverCapLine(group, report.over_cap_held, st->channel->config().cache_cap_bytes).c_str());
+  }
+  if (!report.failed_maps.empty())
+    Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapGroupPartialLine(group, report.failed_maps).c_str());
   const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
   GrantMounted(st, mounted);
   if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();

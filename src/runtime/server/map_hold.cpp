@@ -73,7 +73,9 @@ void NoteFetchProgress(const nevr_maps::FetchProgress& progress) {
   nevr_join_hold::MapsNoteProgress(progress.group, plan);
 }
 
-void NoteFetchFailed(const std::string& group) { nevr_join_hold::MapsNoteCheckFailed(group); }
+void NoteFetchFailed(const std::string& group, const std::string& reason) {
+  nevr_join_hold::MapsNoteCheckFailed(group, reason);
+}
 
 void NoteGroupMounted(const std::string& group, const nevr_maps::MountReport& report) {
   const std::vector<std::string> updated = nevr_maps::UpdatedWhileMounted(report.not_mounted);

@@ -693,6 +693,7 @@ class FetchRun {
                 {"channel", parsed_.channel},
                 {"maps", parsed_.manifest.maps.size()}});
     LogTrustChange();
+    report_.manifest_verified = true;
     revoked_sha_.insert(parsed_.manifest.revoked_sha256.begin(), parsed_.manifest.revoked_sha256.end());
 
     PlanAndFetch();
@@ -1426,7 +1427,14 @@ class FetchRun {
       const auto listed = manifest.maps.find(id);
       if (listed != manifest.maps.end() && listed->second.platforms.count(config_.platform) != 0) continue;
       env_.Event(EventLevel::kWarn, "map_plan", {{"group", group_}, {"id", id}, {"reason", "not_listed"}});
-      MapFailed("not_listed");
+      MapFailed(id, "not_listed");
+    }
+    const std::uint64_t cap = config_.cache_cap_bytes;
+    if (scope_.server_group && cap != 0 && budget.held > cap) {
+      report_.over_cap_held = budget.held;
+      env_.Event(EventLevel::kWarn, "map_plan",
+                 {{"group", group_}, {"reason", "group_over_cap"}, {"held", budget.held}, {"cap", cap},
+                  {"consequence", "a server keeps its whole group: the cache holds more than maps.cache_cap_gib"}});
     }
     report_.bytes_to_fetch = planned;
     Progress();
@@ -1475,7 +1483,8 @@ class FetchRun {
       trial.disk_room += victim_bytes;
       chosen.push_back(key);
     }
-    if (!fits()) {
+    const bool server_past_cap = scope_.server_group && bytes <= trial.disk_room;
+    if (!fits() && !server_past_cap) {
       const std::uint64_t cap_room = trial.held - replaced >= cap ? 0 : cap - (trial.held - replaced);
       const std::uint64_t available = cap == 0 ? trial.disk_room : std::min(trial.disk_room, cap_room);
       env_.Event(EventLevel::kWarn, "map_plan",
@@ -1487,7 +1496,7 @@ class FetchRun {
         report_.no_room_available = available;
         report_.no_room_cap = cap;
       }
-      MapFailed("over_budget");
+      MapFailed(id, "over_budget");
       return false;
     }
     trial.held = trial.held - replaced + bytes;
@@ -1516,8 +1525,9 @@ class FetchRun {
     for (const std::string& key : keys) Remove(Join(config_.dir, key), key, "budget");
   }
 
-  void MapFailed(const std::string& reason) {
+  void MapFailed(const std::string& id, const std::string& reason) {
     if (first_map_failure_.empty()) first_map_failure_ = reason;
+    report_.failed_maps.emplace_back(id, reason);
   }
 
   void FetchMap(const std::string& id, const PlatformEntry& entry) {
@@ -1525,7 +1535,7 @@ class FetchRun {
     auto fail = [&](const char* event, const std::string& why, bool failure = true) {
       env_.Event(why == "cancelled" ? EventLevel::kInfo : EventLevel::kWarn, event,
                  {{"id", id}, {"version", entry.version}, {"reason", why}});
-      if (failure) MapFailed(why);
+      if (failure) MapFailed(id, why);
     };
     std::string index_bytes;
     std::string reason = FetchIndex(entry.index, &index_bytes);

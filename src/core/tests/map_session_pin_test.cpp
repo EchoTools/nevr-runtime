@@ -824,6 +824,87 @@ TEST_F(MapJoinHold, AFailedFetchOfTheHeldMapLeavesAtOnceAndAnotherMapsFailureDoe
   EXPECT_EQ(game.notices[0].second, "Map arena_c could not be downloaded. See the nevr log.");
 }
 
+// The mount observer publishes only what the registry confirmed: a grant the later mount refused never releases the hold, and the
+// refusal makes the held join leave with a plain notice instead of loading a level that is not served.
+TEST_F(MapJoinHold, ARefusedLaterMountNeverReleasesTheHoldAndTheJoinLeaves) {
+  JoinArenaC();
+  Stored();
+  const sp::MapPin granted = Pin("arena_c", "1.0", kSourceA);
+  nevr_maps::MountReport run;
+  nevr_maps::MountedMap staged;
+  staged.id = granted.id;
+  staged.version = granted.version;
+  staged.index_sha256 = granted.index_sha256;
+  staged.platform = granted.platform;
+  staged.source_sha256 = granted.source_sha256;
+  staged.title = granted.title;
+  staged.level = granted.level;
+  run.staged.push_back(staged);
+  ASSERT_EQ(sp::PinsMounted(run, {"arena_c"}).size(), 1u);
+
+  sp::SetMountedPins(sp::PinsMounted(run, {}));  // the registry refused arena_c's set
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 0u);
+  EXPECT_TRUE(Held());
+
+  sp::NoteMountRefused("arena_d");
+  sp::TickWith(game);
+  EXPECT_TRUE(Held());
+  sp::NoteMountRefused("arena_c");
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "mount_refused");
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 0u);
+  EXPECT_FALSE(Held());
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Map arena_c could not be loaded this run. See the nevr log.");
+}
+
+// The level load on the game's loop thread never waits (the frame that mounts the map runs there): the hold is given up, the
+// download goes on, and the join leaves to be joined again.
+TEST_F(MapJoinHold, ALoadOnTheGameLoopThreadNeverWaitsAndTheJoinLeavesToJoinAgain) {
+  JoinArenaC();
+  int sleeps = 0;
+  EXPECT_FALSE(sp::WaitWhileJoinHeld(
+      Level("arena_c"), /*on_loop_thread=*/true, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; }));
+  EXPECT_EQ(sleeps, 0);
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "load_not_holdable");
+  EXPECT_FALSE(Held());
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Downloading arena_c; join again when it is ready.");
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+}
+
+// Off the loop thread the load waits while the frame keeps ticking, and the same join loads once the session's version mounts.
+TEST_F(MapJoinHold, ALoadOffTheLoopThreadWaitsUntilTheFramesMountReleasesIt) {
+  JoinArenaC();
+  int sleeps = 0;
+  const bool waited = sp::WaitWhileJoinHeld(
+      Level("arena_c"), /*on_loop_thread=*/false, [&] { return game.now; },
+      [&](std::uint64_t ms) {
+        game.now += ms;
+        if (++sleeps == 3) {
+          Stored();
+          sp::SetMountedPins({Pin("arena_c", "1.0", kSourceA)});
+        }
+        sp::TickWith(game);  // the frame, which another thread runs meanwhile
+      });
+  EXPECT_TRUE(waited);
+  EXPECT_EQ(sleeps, 3);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldLeave), 0u);
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_FALSE(sp::WaitWhileJoinHeld(
+      Level("arena_c"), false, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; }));
+  EXPECT_EQ(sleeps, 3);
+}
+
 TEST_F(MapJoinHold, LeavingTheSessionDropsTheHold) {
   JoinArenaC();
   game.state = 0;

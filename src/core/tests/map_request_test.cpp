@@ -430,4 +430,43 @@ TEST_F(MapRequestTest, AServerRequestTakesTheWholeGroup) {
   EXPECT_EQ(IndexGets("beta"), 1u);
 }
 
+// A server's scope keeps every map this process mounted from eviction: the game reads their files while the server runs.
+TEST_F(MapRequestTest, AServerGroupScopeKeepsEveryMountedMapAndTakesTheWholeGroup) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().reason, "");
+  BootClient();
+  const FetchScope scope = client->ServerGroupScope();
+  EXPECT_TRUE(scope.server_group);
+  EXPECT_FALSE(scope.on_demand);
+  EXPECT_EQ(scope.in_use, std::vector<std::string>{"arena_c"});
+}
+
+// One map's failure fails the hold of that map only: the asked map that stored is not told it failed when another map's update
+// in the same pass could not be stored. A failure before the manifest verified fails every asked map.
+TEST(MapRequestConsequence, AFailedPassFailsOnlyTheMapsThatFailed) {
+  FetchReport report;
+  report.outcome = FetchOutcome::kFailed;
+  report.reason = "over_budget";
+  report.manifest_verified = true;
+  report.failed_maps = {{"zeta", "over_budget"}};
+  EXPECT_EQ(nevr_maps::FailedConsequenceFor(report, "arena_c", false), "");
+  EXPECT_NE(nevr_maps::FailedConsequenceFor(report, "zeta", false), "");
+
+  report.failed_maps = {{"zeta", "over_budget"}, {"arena_c", "not_listed"}};
+  FetchReport not_listed;
+  not_listed.outcome = FetchOutcome::kFailed;
+  not_listed.reason = "not_listed";
+  EXPECT_EQ(nevr_maps::FailedConsequenceFor(report, "arena_c", false), nevr_maps::RequestConsequence(not_listed, true, false));
+
+  FetchReport manifest;
+  manifest.outcome = FetchOutcome::kFailed;
+  manifest.reason = "signature";
+  EXPECT_EQ(nevr_maps::FailedConsequenceFor(manifest, "arena_c", false), nevr_maps::RequestConsequence(manifest, true, false));
+
+  FetchReport fine;
+  fine.outcome = FetchOutcome::kFetched;
+  EXPECT_EQ(nevr_maps::FailedConsequenceFor(fine, "arena_c", false), "");
+}
+
 }  // namespace

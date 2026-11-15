@@ -317,7 +317,7 @@ void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& i
   Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapUpdateRestartLine(group, ids).c_str());
 }
 
-void MapsNoteCheckFailed(const std::string& group) {
+void MapsNoteCheckFailed(const std::string& group, const std::string& reason) {
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_mountedGroups.count(group) == 0) return;
@@ -325,7 +325,7 @@ void MapsNoteCheckFailed(const std::string& group) {
       g_mapsHolding.store(false, std::memory_order_release);
     }
   }
-  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapCheckFailedLine(group).c_str());
+  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapCheckFailedLine(group, reason).c_str());
 }
 
 bool MapsRestartForUpdateDue(std::uint64_t entrants) {

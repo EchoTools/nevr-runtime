@@ -67,7 +67,7 @@ void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& i
 
 /// The fetch of `group` failed. A mounted group's check lifts the hold with a Warning (the session goes ahead on what is
 /// mounted); a group never mounted keeps its hold to the timeout. Any thread.
-void MapsNoteCheckFailed(const std::string& group);
+void MapsNoteCheckFailed(const std::string& group, const std::string& reason);
 
 /// True once an update waits and `entrants` is 0: the server leaves so its restart hosts the new version. Game thread.
 bool MapsRestartForUpdateDue(std::uint64_t entrants);

@@ -195,6 +195,11 @@ struct FetchReport {
   // the cap (0 = none).
   std::string no_room_id;
   std::uint64_t no_room_needed = 0, no_room_available = 0, no_room_cap = 0;
+  // A server's held group past the cap (FetchScope::server_group): what the cache holds once the group is in. 0 when within it.
+  std::uint64_t over_cap_held = 0;
+  // True once the group's manifest verified: a later failure is a map's (`failed_maps`) or the index write, never the manifest.
+  bool manifest_verified = false;
+  std::vector<std::pair<std::string, std::string>> failed_maps;  // (id, reason) of each map this pass could not store
 };
 
 // Which of the maps a group's manifest lists one fetch stores. By default every listed map (a server's group, ADR 0048 decision 13).
@@ -207,8 +212,13 @@ struct FetchReport {
 // fails over_budget when evicting every map it may evict still leaves too little. Never evicted: `in_use` (the maps this run
 // mounted, stamped as played now), the ids the scope names, the maps this fetch stores, and on a whole-group fetch (a server's
 // held group) every map the group lists.
+//
+// A dedicated server's held group (`server_group`) is stored whole even past the cap: the cap still evicts every other map it
+// may evict, and only the device's storage share refuses a map of the group. The report then names the bytes held
+// (`over_cap_held`), so the log can say what the group needs against the cap.
 struct FetchScope {
   bool on_demand = false;
+  bool server_group = false;
   std::vector<std::string> ids;
   std::vector<std::string> in_use;
 };

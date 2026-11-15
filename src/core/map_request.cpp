@@ -1,5 +1,6 @@
 #include "core/map_request.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <utility>
@@ -108,6 +109,18 @@ void MapRequests::Refused(const std::string& group, const std::string& id, const
               {"consequence", RequestConsequence(refused, !id.empty(), is_server_)}});
 }
 
+std::string FailedConsequenceFor(const FetchReport& report, const std::string& id, bool is_server) {
+  if (report.outcome != FetchOutcome::kFailed) return "";
+  FetchReport own = report;
+  if (report.manifest_verified && !report.failed_maps.empty()) {
+    const auto failed = std::find_if(report.failed_maps.begin(), report.failed_maps.end(),
+                                     [&](const std::pair<std::string, std::string>& f) { return f.first == id; });
+    if (failed == report.failed_maps.end()) return "";
+    own.reason = failed->second;
+  }
+  return RequestConsequence(own, true, is_server);
+}
+
 bool MapRequests::RunNext(const Fetch& fetch) {
   return queue_.RunNext([&](const std::string& group) {
     FetchScope scope;
@@ -121,10 +134,11 @@ bool MapRequests::RunNext(const Fetch& fetch) {
       }
     }
     FetchReport report = fetch(group, scope);
-    // A join held for a named map leaves at once on a failure instead of waiting out its deadline.
-    if (report.outcome == FetchOutcome::kFailed) {
-      const std::string consequence = RequestConsequence(report, true, is_server_);
-      for (const std::string& id : scope.ids) nevr_map_session_pin::NoteFetchFailed(id, consequence);
+    // A join held for a named map leaves at once when that map failed, instead of waiting out its deadline. Before the manifest
+    // verified, every named map failed; after it, only the maps the pass names (another map's failed update fails no hold).
+    for (const std::string& id : scope.ids) {
+      const std::string consequence = FailedConsequenceFor(report, id, is_server_);
+      if (!consequence.empty()) nevr_map_session_pin::NoteFetchFailed(id, consequence);
     }
     return report;
   });

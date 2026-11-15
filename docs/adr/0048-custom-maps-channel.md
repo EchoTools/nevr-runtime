@@ -171,6 +171,33 @@ through its graceful shutdown once its session has no entrant (`MapsRestartForUp
 never mid-match. Its restart mounts the new version at boot. This needs a supervisor that restarts an exited server. A failed
 check of a mounted group lifts the hold with a Warning: the session goes ahead on what is mounted.
 
+What the restart-for-update plan depends on, for the operator:
+- A supervisor that restarts an exited server is required. Without one the server stays down after the exit, and the only
+  signal is the `map update` Warning.
+- Once a check found an update, the server exits at its next empty session even when the update was for a group the hold was
+  not holding (`g_updateWaits` is set for any update the check finds).
+- A CDN that never answers holds every session's joins for the maps hold's timeout (at most 120 s), since the check runs at
+  every session create.
+
+A server fetches its group with `Channel::ServerGroupScope`: every map the process mounted is never evicted (the mount holds
+only the set file, so an eviction would delete the rest of a mounted map's files under the running server), and the group is
+stored whole even past `maps.cache_cap_gib`. Refusing a map of a server's group would leave the whole group unmounted, so the
+cap still evicts every other map it may evict, and a group that alone needs more logs `map group over cap` with what it needs
+and the cap; only the device's storage share refuses a map then. Once the group's manifest verified, what was stored mounts even
+when one map failed (`map group partial` names it); `map check failed` (with its `reason`) is written only when the manifest
+itself could not be had or verified.
+
+Known limit: an eviction drops the map from the index before its directory is deleted. A directory that cannot be deleted (a
+file in it is held open) keeps its bytes on disk while the budget counts them as freed, until a later GC deletes it as
+unlisted. Maps this process mounted are never evicted, so this needs a file held by something else.
+
+The client's join hold waits inside the game's `LoadLevel` only off the game's loop thread (`WaitWhileJoinHeld`,
+`src/runtime/hook/load_timing.cpp`): which thread runs the game-space init fiber is not read from the binary, and waiting on the
+loop thread would stop the frame that mounts the map. The hold is offered only after a level load was seen off that thread, and
+the first load logs `level load thread=... join_hold=hold|leave`. A load on the loop thread never waits: the join leaves with
+"Downloading <id>; join again when it is ready." while the download goes on. A later mount that refuses the held map's set
+makes the join leave ("could not be loaded this run"); the mounted pins name only the sets the registry confirmed.
+
 ## Consequences
 
 - With no `maps.base_url`, nevr starts no thread, makes no directory, installs no hook and writes one Info record,

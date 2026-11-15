@@ -30,6 +30,10 @@ namespace nevr_maps {
 // (ChannelConfig::mounts_mid_run).
 std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server, bool mounts_now = true);
 
+// The consequence for the named map `id` when a fetch failed, "" when `id` itself did not fail. When maps failed (failed_maps),
+// only those did, each with its own reason; any other failure (the manifest, the index write, a stop) fails every named map.
+std::string FailedConsequenceFor(const FetchReport& report, const std::string& id, bool is_server);
+
 class MapRequests {
  public:
   using Fetch = std::function<FetchReport(const std::string& group, const FetchScope& scope)>;

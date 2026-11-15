@@ -1370,6 +1370,37 @@ TEST_F(MapCacheBudgetTest, NoRoomIsRefusedWithTheNumbersAndEvictsNothing) {
   EXPECT_FALSE(AnyEvicted());
 }
 
+// A dedicated server's group is stored whole past the cap: refusing a map of it would leave the whole group unmounted. The report
+// names the bytes held so the log can say what the group needs against the cap; each map that could not be stored is named.
+TEST_F(MapCacheBudgetTest, AServerGroupPastTheCapIsStoredWholeAndSaysWhatItNeeds) {
+  const std::uint64_t s = PlayAlphaBetaAlpha();
+  config.cache_cap_bytes = s / 2;
+  FetchScope server;
+  server.server_group = true;
+  const FetchReport stored = FetchGroup(env, fs, config, kGroup, {}, nullptr, kT4, keep_going, nullptr, server);
+  EXPECT_EQ(stored.reason, "");
+  EXPECT_TRUE(stored.manifest_verified);
+  EXPECT_TRUE(stored.failed_maps.empty());
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_TRUE(Cached("gamma"));
+  EXPECT_FALSE(AnyEvicted());
+  EXPECT_GT(stored.over_cap_held, 2 * s);
+  const Record* over = env.FindRecord("map_plan", "reason", "group_over_cap");
+  ASSERT_NE(over, nullptr);
+  EXPECT_EQ(over->Get("cap"), std::to_string(s / 2));
+
+  // The client's on-demand fetch keeps the cap: the same map is refused, and the report names the map and its reason.
+  channel.Publish("delta", "1.0.0", MakeSet(4, 'd'));
+  channel.Sign(2);
+  const FetchReport refused = Play({"delta"}, kT4);
+  EXPECT_EQ(refused.reason, "over_budget");
+  EXPECT_TRUE(refused.manifest_verified);
+  ASSERT_EQ(refused.failed_maps.size(), 1u);
+  EXPECT_EQ(refused.failed_maps[0].first, "delta");
+  EXPECT_EQ(refused.failed_maps[0].second, "over_budget");
+}
+
 TEST_F(MapCacheBudgetTest, AnUpdateRemovesTheOldVersionInTheSameFetchAndOtherMapsStay) {
   channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
   channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
