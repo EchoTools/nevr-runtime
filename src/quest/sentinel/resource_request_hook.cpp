@@ -584,7 +584,8 @@ bool InstallImpl(bool logRequests, const char* counters) noexcept {
                        {"load_base", sentinel::HexString(baseHex, base)},
                        {"overlay", overlay},
                        {"log", logRequests ? 1 : 0},
-                       {"counters", counters}});
+                       {"counters", counters},
+                       {"cdn_pin_error", Cdn().pin_error()}});
   return ok;
 }
 

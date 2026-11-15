@@ -911,6 +911,7 @@ void WithoutLibr15TheInstallIsRefusedAndSaysWhy() {
     QCHECK(Field(lines[0], "overlay") == "\"module_not_loaded\"");
     QCHECK(Field(lines[0], "log") == "1");
     QCHECK(Field(lines[0], "counters") == "\"registered\"");
+    QCHECK(Field(lines[0], "cdn_pin_error") == "0");
   }
   Reset();
   QCHECK(!rr::InstallCounted(false, false));
