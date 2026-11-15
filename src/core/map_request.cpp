@@ -1,6 +1,7 @@
 #include "core/map_request.h"
 
 #include <atomic>
+#include <cstdio>
 #include <utility>
 #include <vector>
 
@@ -10,6 +11,19 @@
 #include "core/map_session_pin.h"
 
 namespace nevr_maps {
+namespace {
+
+std::string SizeText(std::uint64_t bytes) {
+  char text[32];
+  if (bytes >= (1ull << 30)) {
+    std::snprintf(text, sizeof text, "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ull << 30));
+  } else {
+    std::snprintf(text, sizeof text, "%llu MiB", static_cast<unsigned long long>((bytes + (1ull << 20) - 1) >> 20));
+  }
+  return text;
+}
+
+}  // namespace
 
 std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server) {
   const std::string& reason = report.reason;
@@ -23,6 +37,12 @@ std::string RequestConsequence(const FetchReport& report, bool named_map, bool i
   if (reason == "cancelled" || reason == "stopped") return "the game is closing: nothing more is fetched";
   if (reason == "no_session_group") return "no lobby group is known for this session, so the map cannot be asked for";
   if (reason == "bad_group" || reason == "bad_id") return "the session named an id that is not valid: nothing is fetched";
+  if (reason == "over_budget") {
+    return "not enough room for " + report.no_room_id + ": needs " + SizeText(report.no_room_needed) + ", " +
+           SizeText(report.no_room_available) + " can be made free, cap " +
+           (report.no_room_cap == 0 ? std::string("none") : SizeText(report.no_room_cap)) +
+           ": no maps were removed for it, and an old copy is never loaded in its place";
+  }
   return "the map could not be fetched: an old copy is never loaded in its place, and the next request tries again";
 }
 

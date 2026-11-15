@@ -24,6 +24,7 @@ optional. `docs/reference/example-config.yaml` shows the section.
 | `maps.base_url` | string (URL) | empty: channel off | The base URL. A trailing `/` is added when it is missing. A group's manifest is read from `guilds/<group id>/manifest` under it (`GroupManifestUrl`, `core/map_run.h`). |
 | `maps.channel` | string | empty | The channel name the base URL is bound to. Empty: the name of the first verified manifest (`core/map_channel.h`). |
 | `maps.boot_budget_ms` | non-negative integer, milliseconds | 0: no limit | How long one boot mount may take. A map that would start after the budget is spent is skipped with `reason=boot_budget`. |
+| `maps.cache_cap_gib` | non-negative integer, GiB | 20 | The map cache's cap. A fetch that would pass it first removes the least recently played maps (never one this run mounted); when that frees too little the map fails `over_budget` and the request says so. Old versions of an updated map are removed after the index commit. 0: no cap (the device's storage share still applies). |
 | `maps.official_keys` | list of minisign public keys | empty | Keys in official trust. They are never compiled in: the build compiles in no official key (`CompiledOfficialKeys`, `core/map_channel.cpp`). |
 | `maps.trusted_keys` | list of minisign public keys | empty | Author keys. They are not official. |
 

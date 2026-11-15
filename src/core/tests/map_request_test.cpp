@@ -97,6 +97,21 @@ constexpr std::uint64_t kOtherServerPin = 0x5eed;
 
 // Owner: "if a player trys to load arena_C but doesnt have it it should download, then mount, and load." Nothing is cached, the
 // group lists two maps; only arena_c is fetched, it mounts mid-run, and the same server's session then loads.
+TEST(MapRequestConsequence, NoRoomSaysWhatTheMapNeedsWhatCanBeMadeFreeAndTheCap) {
+  nevr_maps::FetchReport r;
+  r.outcome = nevr_maps::FetchOutcome::kFailed;
+  r.reason = "over_budget";
+  r.no_room_id = "arena_c";
+  r.no_room_needed = std::uint64_t{3} << 30;
+  r.no_room_available = std::uint64_t{512} << 20;
+  r.no_room_cap = std::uint64_t{20} << 30;
+  EXPECT_EQ(nevr_maps::RequestConsequence(r, true, false),
+            "not enough room for arena_c: needs 3.0 GiB, 512 MiB can be made free, cap 20.0 GiB: no maps were removed for it, "
+            "and an old copy is never loaded in its place");
+  r.no_room_cap = 0;
+  EXPECT_NE(nevr_maps::RequestConsequence(r, true, false).find("cap none"), std::string::npos);
+}
+
 TEST_F(MapRequestTest, ArenaCNotCachedIsDownloadedMountedAndLoadsWithNoRestart) {
   channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
   channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));

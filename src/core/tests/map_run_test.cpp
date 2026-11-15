@@ -1255,4 +1255,190 @@ TEST_F(MapRunOnDemandTest, ANamedIdTheManifestDoesNotListFailsAndFetchesNothing)
   EXPECT_TRUE(Boot().mounted.empty());
 }
 
+// The map-cache budget (core/map_run.h, FetchScope): the cap, the device's storage share, the least recently played first, and
+// the maps never evicted.
+class MapCacheBudgetTest : public MapRunOnDemandTest {
+ protected:
+  static constexpr const char* kT1 = "2026-11-11T01:00:00Z";
+  static constexpr const char* kT2 = "2026-11-11T02:00:00Z";
+  static constexpr const char* kT3 = "2026-11-11T03:00:00Z";
+  static constexpr const char* kT4 = "2026-11-11T04:00:00Z";
+
+  FetchReport Play(const std::vector<std::string>& ids, const std::string& now, const std::vector<std::string>& in_use = {}) {
+    FetchScope scope;
+    scope.on_demand = true;
+    scope.ids = ids;
+    scope.in_use = in_use;
+    return FetchGroup(env, fs, config, kGroup, {}, nullptr, now, keep_going, nullptr, scope);
+  }
+  std::uint64_t Bytes(const std::string& id) {
+    std::uint64_t bytes = 0;
+    for (const CachedFile& f : Index().maps.at(MapKey(id, kPlatformPc)).files) bytes += f.size;
+    return bytes;
+  }
+  bool AnyEvicted() const {
+    for (const Record& r : env.records) {
+      if (r.name == "map_gc" && !r.Get("evicted").empty()) return true;
+    }
+    return false;
+  }
+  bool Cached(const std::string& id) { return Index().maps.count(MapKey(id, kPlatformPc)) != 0; }
+  bool HasMapDir(const std::string& id) { return fs.HasDir(std::string(kDir) + "/" + id + "/" + kPlatformPc); }
+  // alpha is played at T1, beta at T2, and alpha again at T3 (mounted in that run): beta is the least recently played. Returns
+  // one map's bytes; the three maps are the same size.
+  std::uint64_t PlayAlphaBetaAlpha() {
+    channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+    channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+    channel.Publish("gamma", "1.0.0", MakeSet(4, 'c'));
+    channel.Sign(1);
+    EXPECT_EQ(Play({"alpha"}, kT1).reason, "");
+    EXPECT_EQ(Play({"beta"}, kT2).reason, "");
+    EXPECT_EQ(Play({}, kT3, {"alpha"}).reason, "");
+    EXPECT_EQ(Bytes("beta"), Bytes("alpha"));
+    return Bytes("alpha");
+  }
+};
+
+TEST_F(MapCacheBudgetTest, AtTheCapTheLeastRecentlyPlayedMapIsEvictedWhole) {
+  const std::uint64_t s = PlayAlphaBetaAlpha();
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, kT3);
+  EXPECT_EQ(Index().maps.at(MapKey("beta", kPlatformPc)).last_played_utc, kT2);
+  config.cache_cap_bytes = 2 * s + s / 2;
+  EXPECT_EQ(Play({"gamma"}, kT4).reason, "");
+  EXPECT_FALSE(Cached("beta"));
+  EXPECT_FALSE(HasMapDir("beta"));
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("gamma"));
+  EXPECT_EQ(Index().maps.at(MapKey("gamma", kPlatformPc)).last_played_utc, kT4);
+  const Record* evicted = env.FindRecord("map_gc", "evicted", MapKey("beta", kPlatformPc));
+  ASSERT_NE(evicted, nullptr);
+  EXPECT_EQ(evicted->Get("last_played"), kT2);
+  EXPECT_EQ(env.FindRecord("map_gc", "evicted", MapKey("alpha", kPlatformPc)), nullptr);
+}
+
+TEST_F(MapCacheBudgetTest, AMapThisRunMountedIsNeverEvicted) {
+  const std::uint64_t s = PlayAlphaBetaAlpha();
+  config.cache_cap_bytes = 2 * s + s / 2;
+  EXPECT_EQ(Play({"gamma"}, kT4, {"beta"}).reason, "");
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_TRUE(HasMapDir("beta"));
+  EXPECT_FALSE(Cached("alpha"));
+  EXPECT_TRUE(Cached("gamma"));
+}
+
+TEST_F(MapCacheBudgetTest, WithNoCapTheDeviceStorageShareStillHolds) {
+  const std::uint64_t s = PlayAlphaBetaAlpha();
+  config.cache_cap_bytes = 0;
+  env.device.free_bytes = s / 2;  // a fetch may add less than one map
+  EXPECT_EQ(Play({"gamma"}, kT4).reason, "");
+  EXPECT_FALSE(Cached("beta"));
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("gamma"));
+}
+
+TEST_F(MapCacheBudgetTest, NoRoomIsRefusedWithTheNumbersAndEvictsNothing) {
+  const std::uint64_t s = PlayAlphaBetaAlpha();
+  config.cache_cap_bytes = s / 2;  // gamma alone is over the cap
+  const FetchReport refused = Play({"gamma"}, kT4);
+  EXPECT_EQ(refused.outcome, FetchOutcome::kFailed);
+  EXPECT_EQ(refused.reason, "over_budget");
+  EXPECT_EQ(refused.no_room_id, "gamma");
+  EXPECT_EQ(refused.no_room_needed, s);
+  EXPECT_EQ(refused.no_room_available, s / 2);
+  EXPECT_EQ(refused.no_room_cap, s / 2);
+  const Record* plan = env.FindRecord("map_plan", "reason", "over_budget");
+  ASSERT_NE(plan, nullptr);
+  EXPECT_EQ(plan->Get("needed"), std::to_string(s));
+  EXPECT_EQ(plan->Get("cap"), std::to_string(s / 2));
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_FALSE(Cached("gamma"));
+  EXPECT_FALSE(AnyEvicted());
+
+  // Room enough once alpha and beta go, but both are in use: refused, and neither is touched.
+  config.cache_cap_bytes = 2 * s + s / 2;
+  EXPECT_EQ(Play({"gamma"}, kT4, {"alpha", "beta"}).reason, "over_budget");
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_FALSE(AnyEvicted());
+}
+
+TEST_F(MapCacheBudgetTest, AnUpdateRemovesTheOldVersionInTheSameFetchAndOtherMapsStay) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  Fetch();
+  const std::string v1 = channel.VersionDir("alpha");
+  const std::string beta = channel.VersionDir("beta");
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'c'));
+  channel.Sign(2);
+  EXPECT_EQ(Fetch().reason, "");
+  EXPECT_FALSE(fs.HasDir(v1));
+  EXPECT_TRUE(fs.HasDir(channel.VersionDir("alpha")));
+  EXPECT_TRUE(fs.HasDir(beta));
+  EXPECT_NE(env.FindRecord("map_gc", "reason", "updated"), nullptr);
+}
+
+TEST_F(MapCacheBudgetTest, AnUpdateOfAMapThisRunMountedKeepsTheMountedVersionsDirectory) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  Play({"alpha"}, kT1);
+  const std::string v1 = channel.VersionDir("alpha");
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'c'));
+  channel.Sign(2);
+  EXPECT_EQ(Play({}, kT2, {"alpha"}).reason, "");
+  EXPECT_TRUE(fs.HasDir(channel.VersionDir("alpha")));
+  EXPECT_TRUE(fs.HasDir(v1));
+  EXPECT_EQ(Play({}, kT3, {"alpha"}).reason, "");  // the next fetch of the same run keeps it too
+  EXPECT_TRUE(fs.HasDir(v1));
+  EXPECT_EQ(Play({}, kT4).reason, "");  // the next run's first fetch removes it
+  EXPECT_FALSE(fs.HasDir(v1));
+}
+
+TEST_F(MapCacheBudgetTest, ACrashAfterTheNewVersionIsInPlaceLeavesTheOldVersionValid) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  Fetch();
+  const std::string v1 = channel.VersionDir("alpha");
+  const std::string v1_sha = channel.IndexSha("alpha");
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  // The process dies before the commit: neither the stored manifest nor the index is written.
+  env.fail_writes = {std::string(kDir) + "/index.json", StoredGroupManifestPath(kDir, kGroup)};
+  EXPECT_EQ(Fetch().outcome, FetchOutcome::kFailed);
+  EXPECT_TRUE(fs.HasDir(v1));
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).index_sha256, v1_sha);
+  const MountReport boot = Boot();
+  ASSERT_TRUE(Mounted(boot, "alpha"));
+  ASSERT_EQ(boot.staged.size(), 1u);
+  EXPECT_EQ(boot.staged[0].version, "1.0.0");
+}
+
+TEST_F(MapCacheBudgetTest, AnEmptyOrRelativeCacheRootDeletesNothing) {
+  for (const char* const name : {"", "maps"}) {
+    const std::string root = name;
+    env.MakeDirs(root + "/guild-manifests/old");
+    env.MakeDirs(root + "/zeta/" + kPlatformPc + "/0123456789ab");
+    config.dir = root;
+    EXPECT_EQ(Fetch().reason, "cache_dir");
+    EXPECT_TRUE(fs.HasDir(root + "/guild-manifests/old"));
+    EXPECT_TRUE(fs.HasDir(root + "/zeta/" + kPlatformPc + "/0123456789ab"));
+  }
+  EXPECT_NE(env.FindRecord("map_gc", "refused", "root"), nullptr);
+}
+
+TEST_F(MapCacheBudgetTest, AnIndexWrittenBeforeLastPlayedReadsAsNeverPlayed) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  Play({"alpha"}, kT1);
+  nlohmann::json doc = nlohmann::json::parse(CacheIndexToJson(Index()));
+  for (auto& map : doc["maps"]) {
+    EXPECT_EQ(map["last_played_utc"], kT1);
+    map.erase("last_played_utc");
+  }
+  CacheIndex old;
+  ASSERT_TRUE(CacheIndexFromJson(doc.dump(), &old));
+  EXPECT_EQ(old.maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, "");
+}
+
 }  // namespace

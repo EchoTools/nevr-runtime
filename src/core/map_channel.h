@@ -39,8 +39,8 @@ namespace nevr_map_channel {
 // The keys compiled into this build as official (ADR 0048 decision 12). Empty until the official key is chosen.
 const std::vector<nevr_maps::PinnedKey>& CompiledOfficialKeys();
 
-// The maps.* values by their flat keys (service_map.cpp: maps_base_url, maps_channel, maps_boot_budget_ms, maps_official_keys,
-// maps_trusted_keys). A scalar answers "" when absent; a list answers one entry per item, in file order.
+// The maps.* values by their flat keys (service_map.cpp: maps_base_url, maps_channel, maps_boot_budget_ms, maps_cache_cap_gib,
+// maps_official_keys, maps_trusted_keys). A scalar answers "" when absent; a list answers one entry per item, in file order.
 using ScalarLookup = std::function<std::string(const char* flat_key)>;
 using ListLookup = std::function<std::vector<std::string>(const char* flat_key)>;
 
@@ -50,6 +50,8 @@ struct Settings {
   std::string base_url;   // maps.base_url with a trailing '/'; empty when not configured
   std::string channel;    // maps.channel: the channel name the base URL is bound to ("" = the first verified manifest's)
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one boot mount may take; 0 = no limit
+  // maps.cache_cap_gib: the most the map cache holds, in GiB; 0 = no cap. Absent or not a whole number keeps the default.
+  std::uint64_t cache_cap_bytes = nevr_maps::kDefaultCacheCapBytes;
   // The trust set: the compiled-in official keys (official and compiled), then maps.official_keys (official, never compiled), then
   // maps.trusted_keys (author keys, not official). Official and author keys are never both present (`mixed_keys`, decision 3).
   std::vector<nevr_maps::PinnedKey> keys;

@@ -1,6 +1,7 @@
 #include "core/map_run.h"
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -35,6 +36,28 @@ constexpr std::uint64_t kCopyStepBytes = std::uint64_t{1} << 20;
 constexpr std::uint64_t kMapEntryMemoryBytes = sizeof(MapEntry) + sizeof(PlatformEntry) + sizeof(CachedMap);
 
 std::string Join(const std::string& a, const std::string& b) { return a + "/" + b; }
+
+// An empty or relative cache directory resolves against a drive root or the working directory, so nothing is deleted under it.
+bool IsCacheRoot(const std::string& dir) {
+  const bool drive = dir.size() > 3 && std::isalpha(static_cast<unsigned char>(dir[0])) && dir[1] == ':' &&
+                     (dir[2] == '/' || dir[2] == '\\');
+  const bool posix = dir.size() > 1 && dir[0] == '/' && dir[1] != '/';
+  return drive || posix;
+}
+
+bool UnderCacheRoot(const std::string& root, const std::string& path) {
+  if (!IsCacheRoot(root) || path.size() <= root.size() + 1 || path.compare(0, root.size(), root) != 0 ||
+      path[root.size()] != '/') {
+    return false;
+  }
+  return (path + "/").find("/../") == std::string::npos;
+}
+
+std::uint64_t CachedBytes(const CachedMap& map) {
+  std::uint64_t bytes = 0;
+  for (const CachedFile& f : map.files) bytes += f.size;
+  return bytes;
+}
 
 std::string Owner(const std::string& id) { return "map:" + id; }
 
@@ -607,14 +630,20 @@ class FetchRun {
   FetchRun(Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group, Deriver* deriver,
            const std::function<bool()>& keep_going, const FetchProgressFn& progress, const FetchScope& scope)
       : env_(env), fs_(fs), config_(config), group_(group), deriver_(deriver), keep_going_(keep_going),
-        progress_fn_(progress), scope_(scope) {
+        progress_fn_(progress), scope_(scope), in_use_(scope.in_use.begin(), scope.in_use.end()) {
     report_.group = group;
     local_names_ = CollectLocalNames(config.local_level_names, config.local_maps);
   }
 
   FetchReport Run(const std::vector<std::string>& deferred, const std::string& now_utc) {
     started_ = env_.NowMs();
+    now_utc_ = now_utc;
     if (!IsPathSafeGroupId(group_)) return Finish("bad_group");
+    if (!IsCacheRoot(config_.dir)) {
+      env_.Event(EventLevel::kWarn, "map_gc",
+                 {{"refused", "root"}, {"consequence", "the cache directory is not an absolute path: nothing is fetched or deleted"}});
+      return Finish("cache_dir");
+    }
     if (!env_.MakeDirs(config_.dir)) return Finish("cache_dir");
     nevr_cdn::DeviceFacts facts;
     limits_ = LoadLimits(env_, config_.dir, "fetch", &facts);
@@ -628,6 +657,7 @@ class FetchRun {
       env_.Event(EventLevel::kWarn, "map_index",
                  {{"reason", CacheIndexStatusName(status)}, {"consequence", "the cache is treated as empty"}});
     }
+    MarkPlayed();
     RememberGroup();
     BoundGroups();
     CollectGarbage();
@@ -681,7 +711,15 @@ class FetchRun {
   FetchReport Finish(const std::string& reason) {
     std::string why = reason;
     // The index records what is in place whatever ended the pass, so a stopped pass keeps its group's list and its staging.
-    if (dirty_ && !WriteCacheIndex(env_, config_.dir, index_) && why.empty()) why = "index_write";
+    if (dirty_) {
+      if (WriteCacheIndex(env_, config_.dir, index_)) {
+        // Only once the index names the new version may the old one go: a crash before this keeps the old index and its directory.
+        for (const std::string& rel : superseded_) Remove(Join(config_.dir, rel), rel, "updated");
+        superseded_.clear();
+      } else if (why.empty()) {
+        why = "index_write";
+      }
+    }
     if (why.empty() && !first_map_failure_.empty()) why = first_map_failure_;
     report_.reason = why;
     report_.outcome = !why.empty() ? FetchOutcome::kFailed
@@ -709,6 +747,18 @@ class FetchRun {
     p.bytes_fetched = report_.bytes_fetched;
     p.elapsed_ms = env_.NowMs() - started_;
     progress_fn_(p);
+  }
+
+  // The maps this run mounted, and the ones the session asks for, are played now.
+  void MarkPlayed() {
+    for (const std::vector<std::string>* ids : {&scope_.in_use, &scope_.ids}) {
+      for (const std::string& id : *ids) {
+        const auto cached = index_.maps.find(MapKey(id, config_.platform));
+        if (cached == index_.maps.end() || cached->second.last_played_utc >= now_utc_) continue;
+        cached->second.last_played_utc = now_utc_;
+        dirty_ = true;
+      }
+    }
   }
 
   // The requested group becomes the latest the index keeps (core/map_groups.h).
@@ -780,15 +830,24 @@ class FetchRun {
     if (index_.maps.erase(key)) dirty_ = true;
   }
 
+  // Every deletion of the fetch goes through here: a path outside the cache directory is never removed.
+  bool RemoveUnderRoot(const std::string& path) {
+    if (UnderCacheRoot(config_.dir, path)) return fs_.RemoveTree(path);
+    env_.Event(EventLevel::kWarn, "map_gc",
+               {{"refused", "root"}, {"path", path}, {"consequence", "nothing outside the map cache is deleted"}});
+    return false;
+  }
+
   void Remove(const std::string& path, const std::string& what, const char* reason) {
-    const bool removed = fs_.RemoveTree(path);
+    const bool removed = RemoveUnderRoot(path);
     env_.Event(removed ? EventLevel::kInfo : EventLevel::kWarn, "map_gc",
                {{"removed", what}, {"reason", reason}, {"result", removed ? "ok" : "held"}});
   }
 
   // Maps no kept group lists, other platforms, and version directories the index does not name are removed; so are the stored
   // manifests of groups no longer kept. An index entry whose directory is gone is dropped. A directory a mount holds open fails
-  // to go and is tried again at the next fetch. A staging directory stays until RemoveSupersededStaging.
+  // to go and is tried again at the next fetch. A staging directory stays until RemoveSupersededStaging. A map this run mounted
+  // keeps every directory it has until the next run, whatever the index says.
   void CollectGarbage() {
     std::set<std::string> listed;
     for (const CachedGroup& g : index_.groups) listed.insert(g.maps.begin(), g.maps.end());
@@ -809,7 +868,8 @@ class FetchRun {
     for (const std::string& id : names) {
       if (!IsValidMapId(id)) continue;  // index.json, guild-manifests, *.bad, and anything not ours
       const std::string id_dir = Join(config_.dir, id);
-      if (!listed.count(MapKey(id, config_.platform))) {
+      const bool in_use = in_use_.count(id) != 0;
+      if (!listed.count(MapKey(id, config_.platform)) && !in_use) {
         Remove(id_dir, id, "unlisted");
         continue;
       }
@@ -828,7 +888,7 @@ class FetchRun {
           const std::string rel = id + "/" + platform + "/" + version;
           if (entry != index_.maps.end() && entry->second.dir == rel) {
             present.insert(entry->first);
-          } else if (!IsStagingName(version)) {
+          } else if (!IsStagingName(version) && !in_use) {
             Remove(Join(platform_dir, version), rel, "unreferenced");
           }
         }
@@ -1303,7 +1363,7 @@ class FetchRun {
       std::string id;
       const PlatformEntry* entry = nullptr;
     };
-    std::vector<Planned> to_fetch;
+    std::vector<Planned> candidates, to_fetch;
     for (const auto& [map_id, map] : manifest.maps) {
       const std::string& id = map_id;  // a lambda cannot capture a structured binding before C++20
       const auto platform = map.platforms.find(config_.platform);
@@ -1341,16 +1401,24 @@ class FetchRun {
         plan("current");
         continue;
       }
-      // What this pass adds to the disk stays within the device's storage share (ADR 0045 decision 8).
-      if (entry.bytes > limits_.storage_budget - std::min(planned, limits_.storage_budget)) {
-        plan("over_budget", EventLevel::kWarn);
-        MapFailed("over_budget");
-        continue;
-      }
-      planned += entry.bytes;
-      plan("fetch");
-      to_fetch.push_back(Planned{id, &entry});
+      candidates.push_back(Planned{id, &entry});
     }
+    std::set<std::string> keep(in_use_);
+    keep.insert(scope_.ids.begin(), scope_.ids.end());
+    for (const Planned& p : candidates) keep.insert(p.id);
+    if (!scope_.on_demand) {
+      for (const auto& [id, map] : manifest.maps) keep.insert(id);
+    }
+    Budget budget = StartBudget(keep);
+    std::vector<std::string> evicted;
+    for (const Planned& p : candidates) {
+      if (Fit(p.id, p.entry->bytes, &budget, &evicted)) {
+        planned += p.entry->bytes;
+        env_.Event(EventLevel::kInfo, "map_plan", {{"group", group_}, {"id", p.id}, {"reason", "fetch"}});
+        to_fetch.push_back(p);
+      }
+    }
+    Evict(evicted);
     for (const std::string& id : scope_.ids) {
       const auto listed = manifest.maps.find(id);
       if (listed != manifest.maps.end() && listed->second.platforms.count(config_.platform) != 0) continue;
@@ -1363,6 +1431,86 @@ class FetchRun {
       if (!keep_going_()) return;
       FetchMap(p.id, *p.entry);
     }
+  }
+
+  // What the cache holds (each map's files, the steady state the cap bounds), what this pass may still add to the disk (the
+  // device's storage share, ADR 0045 decision 8, plus what evictions free), and the maps it may evict, least recently played first.
+  struct Budget {
+    std::uint64_t held = 0, disk_room = 0;
+    std::vector<std::pair<std::string, std::uint64_t>> victims;  // (key, bytes)
+    std::size_t next_victim = 0;
+  };
+
+  Budget StartBudget(const std::set<std::string>& keep) {
+    Budget b;
+    b.disk_room = limits_.storage_budget;
+    std::vector<const CachedMap*> evictable;
+    for (const auto& [key, map] : index_.maps) {
+      b.held += CachedBytes(map);
+      if (keep.count(map.id) == 0) evictable.push_back(&map);
+    }
+    std::sort(evictable.begin(), evictable.end(), [](const CachedMap* a, const CachedMap* b) {
+      return a->last_played_utc != b->last_played_utc ? a->last_played_utc < b->last_played_utc : a->id < b->id;
+    });
+    for (const CachedMap* m : evictable) b.victims.emplace_back(MapKey(m->id, m->platform), CachedBytes(*m));
+    return b;
+  }
+
+  // Charges `bytes` for map `id`, evicting the next victims while it does not fit. An update's old version is counted against the
+  // cap as gone, since it goes once the index names the new one, but not against the disk: both are on it until then. On a refusal
+  // nothing is evicted for this map.
+  bool Fit(const std::string& id, std::uint64_t bytes, Budget* budget, std::vector<std::string>* evicted) {
+    const auto old = index_.maps.find(MapKey(id, config_.platform));
+    const std::uint64_t replaced = old != index_.maps.end() ? CachedBytes(old->second) : 0;
+    const std::uint64_t cap = config_.cache_cap_bytes;
+    Budget trial = *budget;
+    std::vector<std::string> chosen;
+    auto fits = [&] { return bytes <= trial.disk_room && (cap == 0 || trial.held - replaced + bytes <= cap); };
+    while (!fits() && trial.next_victim < trial.victims.size()) {
+      const auto& [key, victim_bytes] = trial.victims[trial.next_victim++];
+      trial.held -= victim_bytes;
+      trial.disk_room += victim_bytes;
+      chosen.push_back(key);
+    }
+    if (!fits()) {
+      const std::uint64_t cap_room = trial.held - replaced >= cap ? 0 : cap - (trial.held - replaced);
+      const std::uint64_t available = cap == 0 ? trial.disk_room : std::min(trial.disk_room, cap_room);
+      env_.Event(EventLevel::kWarn, "map_plan",
+                 {{"group", group_}, {"id", id}, {"reason", "over_budget"}, {"needed", bytes}, {"available", available},
+                  {"cap", cap}, {"consequence", "the cache has no room for this map: nothing is evicted for it"}});
+      if (report_.no_room_id.empty()) {
+        report_.no_room_id = id;
+        report_.no_room_needed = bytes;
+        report_.no_room_available = available;
+        report_.no_room_cap = cap;
+      }
+      MapFailed("over_budget");
+      return false;
+    }
+    trial.held = trial.held - replaced + bytes;
+    trial.disk_room -= bytes;
+    *budget = std::move(trial);
+    evicted->insert(evicted->end(), chosen.begin(), chosen.end());
+    return true;
+  }
+
+  // The index drops the evicted maps and is written before their directories go, so a crash between the two leaves directories
+  // no index names, which the next GC removes.
+  void Evict(const std::vector<std::string>& keys) {
+    if (keys.empty()) return;
+    for (const std::string& key : keys) {
+      const CachedMap& map = index_.maps.at(key);
+      env_.Event(EventLevel::kInfo, "map_gc",
+                 {{"evicted", key}, {"reason", "budget"}, {"bytes", CachedBytes(map)},
+                  {"last_played", map.last_played_utc.empty() ? std::string("never") : map.last_played_utc}});
+      Drop(key);
+    }
+    if (!WriteCacheIndex(env_, config_.dir, index_)) {
+      env_.Event(EventLevel::kWarn, "map_gc",
+                 {{"reason", "index_write"}, {"consequence", "the evicted maps' directories go at a later fetch"}});
+      return;
+    }
+    for (const std::string& key : keys) Remove(Join(config_.dir, key), key, "budget");
   }
 
   void MapFailed(const std::string& reason) {
@@ -1403,13 +1551,13 @@ class FetchRun {
       if (Resumable(why)) {
         WriteResume(staging, reached);
       } else {
-        fs_.RemoveTree(staging);
+        RemoveUnderRoot(staging);
       }
       fail(event, why);
     };
     if (!env_.MakeDirs(staging)) return fail("map_ready", "mkdir");
     const std::map<std::string, ResumePoint> resume = ReadResume(staging);
-    if (!fs_.RemoveTree(Join(staging, kResumeDir))) return fail("map_ready", "staging_busy");
+    if (!RemoveUnderRoot(Join(staging, kResumeDir))) return fail("map_ready", "staging_busy");
     for (const Member& m : package.members) {
       if (!env_.MakeDirs(ParentOf(Join(staging, m.path)))) return abandon("map_ready", "mkdir");
     }
@@ -1445,13 +1593,19 @@ class FetchRun {
       reason = RunDerive(staging, package, &cached.files, &cached.stock_stamps);
       if (!reason.empty()) return abandon("map_derive", reason);
     }
-    if (!fs_.RemoveTree(final_dir)) return abandon("map_ready", "dir_busy");
+    if (!RemoveUnderRoot(final_dir)) return abandon("map_ready", "dir_busy");
     if (!fs_.RenameDir(staging, final_dir)) return abandon("map_ready", "rename");
     for (CachedFile& f : cached.files) {
       if (!Stamp(Join(final_dir, f.path), &f.stamp)) return fail("map_ready", "stamp");
     }
     if (!Stamp(Join(final_dir, kPackageFile), &cached.index_stamp)) return fail("map_ready", "stamp");
     AddToCatalog(final_dir, package, cached.files);
+    const auto old = index_.maps.find(key);
+    if (old != index_.maps.end()) {
+      cached.last_played_utc = old->second.last_played_utc;
+      if (old->second.dir != rel && in_use_.count(id) == 0) superseded_.push_back(old->second.dir);
+    }
+    if (Contains(scope_.ids, id)) cached.last_played_utc = now_utc_;
     index_.maps[key] = std::move(cached);
     dirty_ = true;
     ++report_.maps_updated;
@@ -1470,6 +1624,9 @@ class FetchRun {
   const std::function<bool()>& keep_going_;
   const FetchProgressFn& progress_fn_;
   const FetchScope& scope_;
+  const std::set<std::string> in_use_;
+  std::string now_utc_;
+  std::vector<std::string> superseded_;  // old version directories of maps this pass updated: removed after the index commit
   nevr_cdn::Limits limits_;
   std::uint64_t document_bytes_ = 0;
   std::uint64_t table_bytes_ = 0;
@@ -1520,6 +1677,13 @@ CacheMount::CacheMount(Env& env, MapFs& fs, const ChannelConfig& config, Mounter
 
 MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std::string& now_utc) {
   return MountRun(env_, fs_, config_, mounter_, deriver_, mounted_, script_holders_).Run(groups, now_utc);
+}
+
+std::vector<std::string> CacheMount::MountedIds() const {
+  std::vector<std::string> ids;
+  ids.reserve(mounted_.size());
+  for (const auto& [id, sha] : mounted_) ids.push_back(id);
+  return ids;
 }
 
 FetchReport FetchGroup(Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,

@@ -83,6 +83,9 @@ inline std::string StageAliasesOrWithdraw(Mounter& mounter, const std::string& o
   return grant.reason.empty() ? "alias_partial" : grant.reason;
 }
 
+// maps.cache_cap_gib's default: the most the map cache holds on disk.
+inline constexpr std::uint64_t kDefaultCacheCapBytes = 20ull << 30;
+
 // What the channel is told by config.yaml (the `maps` section) and by the platform. Nothing here chooses a group.
 struct ChannelConfig {
   std::string dir, base_url, platform = kPlatformPc, game_build;
@@ -95,6 +98,7 @@ struct ChannelConfig {
   bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
+  std::uint64_t cache_cap_bytes = kDefaultCacheCapBytes;  // maps.cache_cap_gib: the most the cache holds; 0 = no cap
 };
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.
@@ -137,6 +141,7 @@ class CacheMount {
  public:
   CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
   MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
+  std::vector<std::string> MountedIds() const;  // every map a call mounted, sorted
 
  private:
   nevr_cdn::Env& env_;
@@ -174,15 +179,26 @@ struct FetchReport {
   std::string reason;  // "" unless the outcome is kFailed
   std::size_t maps_updated = 0, pieces_fetched = 0, pieces_reused = 0;
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
+  // The first map the cache had no room for (reason over_budget): what it needs, the most the budget could make free for it, and
+  // the cap (0 = none).
+  std::string no_room_id;
+  std::uint64_t no_room_needed = 0, no_room_available = 0, no_room_cap = 0;
 };
 
 // Which of the maps a group's manifest lists one fetch stores. By default every listed map (a server's group, ADR 0048 decision 13).
 // On demand (a client's fetch): only the ids the caller names (the map its session needs) and the maps the cache already holds at a
 // version the manifest no longer lists, so a bucket of many maps costs a player only the maps it plays. A named id the manifest
 // does not list for this platform fails the fetch (not_listed); nothing outside the verified manifest is ever fetched.
+//
+// The cache budget: what the cache holds stays within ChannelConfig::cache_cap_bytes, and what one fetch adds within the device's
+// storage share. A map that does not fit evicts whole maps, the least recently played first (never played counts as oldest), and
+// fails over_budget when evicting every map it may evict still leaves too little. Never evicted: `in_use` (the maps this run
+// mounted, stamped as played now), the ids the scope names, the maps this fetch stores, and on a whole-group fetch (a server's
+// held group) every map the group lists.
 struct FetchScope {
   bool on_demand = false;
   std::vector<std::string> ids;
+  std::vector<std::string> in_use;
 };
 
 // Fetches one group's manifest and the maps `scope` takes of it. `deferred` are maps a mount deferred (MountReport::deferred):
