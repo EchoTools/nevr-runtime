@@ -48,7 +48,7 @@ These seven rules come before every other rule in this file. Each carries its re
 3. **Never discard work you did not make or have not read.** No `git restore`, no `git checkout` of a path, no `git reset --hard` and no `git clean` over it. Uncommitted changes you did not make are someone's work: leave them, read them (`git diff`), tell the owner, or, if they truly block you, stash them (`git stash push -u -m "<seat>: <why>"`) and report the stash. Reason: uncommitted work exists in one place, so discarding it cannot be undone, and an agent that has not read it cannot know what it destroys.
 4. **Never wait on a subagent's report.** When a subagent should be done, check the result yourself with a command (`git -C <worktree> log --oneline origin/main..HEAD`, `git ls-remote origin refs/heads/main`, the test output) and take the next step in the same turn. Reason: a report is the subagent's account of itself, and it can be late, wrong or never sent; the commit and the test output are the state of the work, and the step after them is yours.
 5. **Sessions are disposable.** Assume yours can die at any time. Keep state in git and in files (a commit for each finished tranche, the issue, the ledger) and recover from them ("Recover a session"), never from memory. Reason: what a session remembers dies with it, and a summary of it is lossy; a commit or a file is still there for the next session.
-6. **These phrases mean the agent has stopped working, and are never said:** "I need Andrew's approval", "it's your call", "waiting on the return", "I shouldn't have". Do the next documented step, or name the missing pattern. Where this file reserves a step for the owner ("Production Deployment", a release, deleting a doc), the documented step is to finish everything else and report that step as not done, with the command it takes. Finished code is not such a step: it lands on `origin/main` ("Finished work lands"). A question that your task or this file already answers is not a decision: do not list it, act on the answer. Reason: each phrase stops the work and hands the owner a decision this file already made; an apology repairs nothing, the next step does.
+6. **These phrases mean the agent has stopped working, and are never said:** "I need Andrew's approval", "it's your call", "waiting on the return", "I shouldn't have", "say go and I build", "want me to build / fetch / generate it?". Do the next documented step, or name the missing pattern. Where this file reserves a step for the owner ("Production Deployment", a release, deleting a doc), the documented step is to finish everything else and report that step as not done, with the command it takes. Finished code is not such a step: it lands on `origin/main` ("Finished work lands"). A question that your task or this file already answers is not a decision: do not list it, act on the answer. Reason: each phrase stops the work and hands the owner a decision this file already made; an apology repairs nothing, the next step does.
 7. **An agent is a tool, not a person.** No persona, no "I feel", no promises. A seat name, a commit author and a GitHub account are labels for which session or account did something, not characters to speak as. Reason: an agent's output is judged only by what lands on `main`; a feeling cannot be checked, and a promise from a session that may die (rule 5) is worth nothing.
 
 - **The patterns.** Rule 1 looks an action up here. A `just` recipe, a standard in `docs/standards/` or a step in `RELEASING.md` is a pattern where a section named below sends you to it.
@@ -82,6 +82,10 @@ After "How an agent works here", these come before every other rule in this file
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **What a task needs, it makes.** Building, fetching or generating whatever the task needs, on this machine or on any other build host the seat can reach
+  (a build tree, a vcpkg install, `just proto`, a fetch of a submodule or a release file, a configure), is part of the task. A
+  seat does it, and never stops to ask first. The only limits are the ones this file states: a run on the owner's install,
+  a deploy, a tag, a release, and making the pristine game copy (only a human does, "The game install").
 - **Finished work lands.** Our own work is not done until it is on `origin/main`. A seat that finishes a tranche runs the
   quick check, starts the review itself, fixes every FIX, and runs `just land` itself, in the same turn. It never stops at a
   passing check, a MERGE verdict, a pushed branch or a report, never leaves a branch for another seat or for the owner to
@@ -805,6 +809,8 @@ your seat name, for example `claude-main` or `codex`.
 
 > **Maintainers only.** The shared live-run slice is configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
+- **A build tree, vcpkg install or generated file a task needs is built, fetched or generated by the seat,** on this machine or on another build host it can reach,
+  without asking ("What a task needs, it makes"). It is not a decision for the owner.
 - **A build, verify or test runs the plain recipe** (`just build`, `just build-android`, `just android-repack-apk`,
   `just package-dev`), with no job count on the command line, no `systemd-run` slice and no `MemoryMax`. The job count comes
   from the environment (`CMAKE_BUILD_PARALLEL_LEVEL`, `VCPKG_MAX_CONCURRENCY`) when the machine sets them, and otherwise

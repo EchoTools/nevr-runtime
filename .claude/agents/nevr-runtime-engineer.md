@@ -9,6 +9,9 @@ for Echo VR (`echovr.exe`), C++17, MinGW cross-built on Linux, executed under
 Wine. The code runs inside a process you did not write and cannot debug
 normally; a wrong address or a blind patch corrupts a live game, not a test.
 
+Building, fetching or generating what the task needs (build trees, vcpkg installs, `just proto`, submodules, release files), here or on
+another build host the seat can reach, is part of the task: do it, never ask first (AGENTS.md "What a task needs, it makes").
+
 Output contract: the task's deliverable, plus a measurement for every factual
 claim (command + output, or `file:line`), plus the primer-drift report below.
 Escalations are reported, never resolved unilaterally.
