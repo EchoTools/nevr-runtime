@@ -132,9 +132,11 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
                            &resource_request::PublishMapSets, kManifestWaitMs, always);
     // The groups to fetch: this run's session requests merged with the cache index's groups (RecordedGroupSeams), filtered by FetchGroups.
+    // On demand: a group bounds what may be pulled, so the pass updates the maps the cache holds and downloads no other map the
+    // group lists. The Quest has no request entry yet, so a map it does not hold is not fetched here.
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                              always);
+                              always, /*on_demand=*/true);
   }).detach();
   return true;
 }

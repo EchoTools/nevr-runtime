@@ -46,6 +46,7 @@ set_source_files_properties("${_maps_channel_monocypher}/monocypher.c" "${_maps_
 nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD TIMEOUT 120 INCS sdk/include src third_party/monocypher/src
   SRC src/core/tests/map_channel_test.cpp src/core/map_channel.cpp src/core/map_run.cpp src/core/map_local_precedence.cpp src/core/map_manifest.cpp
       src/core/map_index.cpp src/core/minisign_verify.cpp src/core/map_derive.cpp src/core/map_set_tables.cpp
+      src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp
       src/cdn/cdn_validate.cpp src/cdn/cdn_limits.cpp src/core/device_memory.cpp src/quest/data/sha256.cpp
       src/core/script_image_rules.cpp src/core/script_image_rules_elf.cpp src/core/config_alias.cpp
       third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)

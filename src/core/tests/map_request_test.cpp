@@ -337,7 +337,7 @@ TEST_F(MapRequestTest, AMapTheManifestDoesNotListIsRefusedAndNothingIsFetched) {
   EXPECT_EQ(IndexGets("arena_c"), 0u);
   const Record* answer = env.FindRecord("map_request", "id", "ghost");
   ASSERT_NE(answer, nullptr);
-  EXPECT_NE(answer->Get("consequence").find("does not offer this map"), std::string::npos);
+  EXPECT_NE(answer->Get("consequence").find("not in your lobby group's map list"), std::string::npos);
   EXPECT_EQ(Join("ghost", kOtherServerPin).action, sp::ClientAction::kNone);  // not listed: the pin has nothing to decide
 }
 
@@ -359,6 +359,25 @@ TEST_F(MapRequestTest, AnOnDemandPassUpdatesTheHeldMapAndFetchesNoOtherMapOfTheG
   EXPECT_NE(pass[0].outcome, FetchOutcome::kFailed);
   EXPECT_EQ(IndexGets("arena_c"), 1u);  // the held map's new version (IndexSha names the listed one)
   EXPECT_EQ(IndexGets("beta"), 0u);     // listed, never asked for: not downloaded
+}
+
+// Owner: a group is the scope of maps a player may pull, not a list it must download. A lobby session success names the group
+// and downloads none of its maps; only the map the session then asks for is fetched.
+TEST_F(MapRequestTest, ASessionSuccessDownloadsNoMapOfItsGroup) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  BootClient();
+  ASSERT_TRUE(requests->RequestGroup(kGroup, &reason)) << reason;
+  Serve();
+  EXPECT_NE(fetched.outcome, FetchOutcome::kFailed);
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 0u);
+
+  ASSERT_TRUE(requests->RequestMap("beta", &reason)) << reason;
+  Serve();
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 1u);
 }
 
 TEST_F(MapRequestTest, AServerRequestTakesTheWholeGroup) {

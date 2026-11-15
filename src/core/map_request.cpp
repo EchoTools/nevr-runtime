@@ -33,7 +33,10 @@ std::string RequestConsequence(const FetchReport& report, bool named_map, bool i
     if (!named_map) return "the maps you hold of this group are the current versions";
     return "your copy is the current version: a server running another version cannot be joined until it updates";
   }
-  if (reason == "not_listed") return "the channel does not offer this map now, and an old version is never fetched: it cannot be played";
+  if (reason == "not_listed") {
+    return "this map is not in your lobby group's map list: a player pulls only the maps its group offers, and an old version is "
+           "never fetched, so it cannot be played";
+  }
   if (reason == "cancelled" || reason == "stopped") return "the game is closing: nothing more is fetched";
   if (reason == "no_session_group") return "no lobby group is known for this session, so the map cannot be asked for";
   if (reason == "bad_group" || reason == "bad_id") return "the session named an id that is not valid: nothing is fetched";
