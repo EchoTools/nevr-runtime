@@ -253,6 +253,7 @@ std::vector<PluginManifestEntry> SamplePluginReport() {
 nevr_quest_login::BuildInfo MakeBuild() {
   nevr_quest_login::BuildInfo build;
   build.project_version = "1.2.3";
+  build.host_version = "6.18.0";  // the shim's version: nevr_identity.host_version, distinct from the project version
   build.git_commit = "abc123";
   build.git_describe = "v1.2.3-4-gabc123";
   build.build_type = "Release";
@@ -337,6 +338,7 @@ void TestComposedProfileMatchesPcvrBuilder() {
   pc.hmd_serial_number = "1WMHH000000000";
   pc.headset_type = "Quest 2";
   pc.project_version = "1.2.3";
+  pc.host_version = "6.18.0";
   pc.git_commit = "abc123";
   pc.git_describe = "v1.2.3-4-gabc123";
   pc.build_type = "Release";
@@ -348,6 +350,9 @@ void TestComposedProfileMatchesPcvrBuilder() {
   QCHECK(At(expected, "accountid") == kNevrAccount);
   QCHECK(At(expected, "access_token") == "NEVR-TOKEN-SECRET");
   QCHECK(At(expected, "password") == "");
+  // The shim's version, carried in the identity object beside the project version (the login profile parses with it).
+  QCHECK(expected.at("nevr_identity").at("host_version") == "6.18.0");
+  QCHECK(expected.at("nevr_identity").at("version") == "1.2.3");
   for (const nevr_quest_login::Field& f : c.fields) {
     if (f.path == "password") QCHECK(f.text.empty());
   }

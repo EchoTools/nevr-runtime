@@ -48,6 +48,12 @@ sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept;
 // The callback of step 2 (null: none). It is read when android_main returns, so it may be set before or after Install.
 void SetBeforeExit(BeforeExitFn fn) noexcept;
 
+// Runs at android_main's entry, after the app is kept and before the game's android_main runs (null: none). The
+// integration registers the update root's check (quest/shim/update_root.h, H5). The host tests leave it unset, so they
+// pass the game's argument through unread.
+using AtEntryFn = void (*)(const void* app) noexcept;
+void SetAtEntry(AtEntryFn fn) noexcept;
+
 // Arms the handler and installs the thunk in libr15.so. One line {"event":"process_end_install",...} says what
 // was installed. True when the slot holds the thunk. It is InstallAt on the pinned libr15 slot, ending with EndProcess.
 bool Install() noexcept;

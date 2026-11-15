@@ -1,7 +1,7 @@
 #pragma once
 // The app-internal files folder of the process, as a pure rule: no I/O, no Android headers. The package name comes from the
-// process's command line and the Android user from its uid. The token cache (quest/auth/file_store.cpp) uses this one
-// formula, so it exists once.
+// process's command line and the Android user from its uid. Both the token cache (quest/auth/file_store.cpp) and the update
+// root (quest/shim/update_root.cpp) use this one formula, so it exists once.
 
 #include <cstddef>
 #include <string>

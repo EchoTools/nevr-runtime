@@ -75,11 +75,24 @@ bool InstallAt(const sentinel::GotTarget& target, const char* label) noexcept {
   return ok;
 }
 
-std::string LabelFor(const char* version) {
-  return nevr_menu_version_label::FitLabel(std::string("nEVR ") + version);
+// A version without its "+<commit>" build metadata, as the slot shows it (FitLabel drops the same suffix).
+static std::string WithoutBuildMetadata(const char* version) {
+  const std::string text(version);
+  const std::string::size_type plus = text.find('+');
+  return plus == std::string::npos ? text : text.substr(0, plus);
 }
 
-std::string Label() { return LabelFor(nevr_build::kVersion); }
+std::string LabelFor(const char* runtime, const char* app) {
+  const std::string whole =
+      std::string("nEVR ") + WithoutBuildMetadata(runtime) + " (app " + WithoutBuildMetadata(app) + ")";
+  if (whole.size() <= nevr_menu_version_label::kMaxLabelChars) return whole;
+  // Too long for the slot: the runtime alone, which is the part a player checks first.
+  return nevr_menu_version_label::FitLabel(std::string("nEVR ") + runtime);
+}
+
+// The runtime and the app are this build's: the sentinel runs the runtime it was built with. The update path (its loader
+// maps a staged runtime) passes the loaded runtime's version here once it lands.
+std::string Label() { return LabelFor(nevr_build::kVersion, nevr_build::kVersion); }
 
 std::size_t InstallMenuVersionLabelHook() noexcept {
   const std::string fitted = Label();

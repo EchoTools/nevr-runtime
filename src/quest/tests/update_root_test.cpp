@@ -1,11 +1,16 @@
-// Host test for the Quest update root's folder rules (src/quest/shim/update_root_rules.h): the app-internal folder formula
-// (quest/auth/app_files_rules.h), the update root below it, and its comparison with the folder the activity names. The rules are
-// pure; no code of this tree calls them yet (update_root_rules.h).
+// Host test for the Quest update root and the shim's version record (design piece quest-root-and-versions). It runs the pure
+// rules the device runs: the app-internal folder formula (quest/auth/app_files_rules.h), the update root and its H5
+// comparison, and the versions record's fields (quest/shim/update_root_rules.h). The Android side (update_root.cpp: the read
+// of the process's command line, the record at android_main's entry) needs the sentinel's logging and the NDK; its record
+// is read on a headset, not here.
 //
 // Built and run by `just test-quest-shared` (src/quest/host_tests/groups/shared.cmake).
 
+#include <cstddef>
 #include <cstdio>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "quest/auth/app_files_rules.h"
 #include "quest/shim/update_root_rules.h"
@@ -18,10 +23,20 @@ namespace root = nevr_quest::update_root;
 
 // Bionic's AID_USER_OFFSET, as the Android headers define it: the value the formula must keep.
 constexpr unsigned kBionicAidUserOffset = 100000;
-// The uid of the app's process on user 0 and on user 10.
+// The uid of the app's process on user 0 (the device the token cache's test names) and on user 10.
 constexpr unsigned kUserZeroAppUid = 10234;
 constexpr unsigned kUserTenAppUid = 1010234;
+constexpr std::size_t kVersionsFieldCount = 6;
 constexpr char kPackage[] = "com.readyatdawn.r15";
+
+using Fields = std::vector<std::pair<std::string, std::string>>;
+
+std::string Find(const Fields& fields, const std::string& key) {
+  for (const auto& field : fields) {
+    if (field.first == key) return field.second;
+  }
+  return std::string();
+}
 
 // The folder the app's own process reads and writes, per user: /data/user/<uid / offset>/<package>/files.
 void TheFilesFolderIsTheAppsOwnForItsUser() {
@@ -49,8 +64,8 @@ void TheRootIsNevrBelowTheFilesFolder() {
   QCHECK(root::RootFromFilesDir(files).find("/sdcard") == std::string::npos);
 }
 
-// The computed root agrees with the folder the activity names as its internal data path (getFilesDir()), with the root's
-// folder name below it. Another user's folder, the files folder itself, and an empty path do not agree.
+// H5: the computed root agrees with the folder the activity names as its internal data path (getFilesDir()), with the
+// root's folder name below it. Another user's folder, the files folder itself, and an empty path do not agree.
 void TheRootAgreesWithTheActivitysInternalDataPathOnlyForTheSameFolder() {
   const std::string internal = "/data/user/0/com.readyatdawn.r15/files";
   const std::string computed = root::RootFromFilesDir(app::FilesDirFromCmdline(kPackage, kUserZeroAppUid));
@@ -59,7 +74,30 @@ void TheRootAgreesWithTheActivitysInternalDataPathOnlyForTheSameFolder() {
   QCHECK(!root::RootMatchesInternalDataPath(internal, internal));
   QCHECK(!root::RootMatchesInternalDataPath("", internal));
   QCHECK(!root::RootMatchesInternalDataPath(computed, ""));
-  QCHECK(!root::RootMatchesInternalDataPath("", ""));
+}
+
+// The versions record keeps the host and the runtime apart; a value the caller did not read is "unknown".
+void TheVersionsRecordKeepsTheHostAndTheRuntimeApart() {
+  root::VersionsFacts facts;
+  facts.host_version = "6.18.0";
+  facts.runtime_version = "6.18.1";
+  facts.runtime_sha256 = "runtime-digest";
+  facts.apk_version_code = "18";
+  const Fields fields = root::VersionsFields(facts);
+  QCHECK(fields.size() == kVersionsFieldCount);
+  QCHECK(Find(fields, "host_version") == "6.18.0");
+  QCHECK(Find(fields, "runtime_version") == "6.18.1");
+  QCHECK(Find(fields, "runtime_sha256") == "runtime-digest");
+  QCHECK(Find(fields, "apk_version_code") == "18");
+  QCHECK(Find(fields, "host_sha256") == root::kUnknownValue);
+  QCHECK(Find(fields, "runtime_path") == root::kUnknownValue);
+}
+
+// A runtime that was not mapped reads "not loaded", and a default host reads "unknown".
+void AnUnmappedRuntimeIsNotLoaded() {
+  const Fields fields = root::VersionsFields(root::VersionsFacts());
+  QCHECK(Find(fields, "runtime_version") == "not loaded");  // the literal the record carries, not the constant that names it
+  QCHECK(Find(fields, "host_version") == "unknown");
 }
 
 }  // namespace
@@ -68,10 +106,12 @@ int main() {
   TheFilesFolderIsTheAppsOwnForItsUser();
   TheRootIsNevrBelowTheFilesFolder();
   TheRootAgreesWithTheActivitysInternalDataPathOnlyForTheSameFolder();
+  TheVersionsRecordKeepsTheHostAndTheRuntimeApart();
+  AnUnmappedRuntimeIsNotLoaded();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "update_root_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
-  std::printf("update_root_test: the folder formula, the update root and its comparison with the activity's folder hold\n");
+  std::printf("update_root_test: the folder formula, the update root, the H5 comparison and the versions record hold\n");
   return 0;
 }

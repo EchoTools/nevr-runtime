@@ -80,6 +80,8 @@ const char* IdentityStatusName(IdentityStatus status);
 // Facts about this build that the profile reports (nevr_identity).
 struct BuildInfo {
   std::string project_version;
+  // The NEVR-BUILD version of the shim this login runs in (nevr_identity.host_version). Empty: the profile's default.
+  std::string host_version;
   std::string git_commit;
   std::string git_describe;
   std::string build_type;

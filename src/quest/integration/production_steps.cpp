@@ -275,6 +275,8 @@ void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
 nevr_quest_login::BuildInfo ThisBuild() {
   nevr_quest_login::BuildInfo build;
   build.project_version = NEVR_QUEST_PROJECT_VERSION;
+  // The login runs in the shim, which is this build: its host version is the build's own (nevr_identity.host_version).
+  build.host_version = NEVR_QUEST_PROJECT_VERSION;
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;

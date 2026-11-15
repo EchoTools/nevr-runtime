@@ -5,7 +5,7 @@
 
 // The runtime version on the Quest main menu (#747), the twin of the PC hook (src/runtime/patch/menu_version_label.cpp).
 // The stock versions panel sets its lobby_version text item through CCanvasUICS::SetText; this redirects that call and
-// draws "nEVR <project version>" in place of the lobby build time. The decisions are the PC rules header
+// draws "nEVR <runtime> (app <apk>)" in place of the lobby build time. The decisions are the PC rules header
 // (src/runtime/patch/menu_version_label_rules.h), reused unchanged.
 //
 // The redirect is a GOT hook on libr15's own slot for SetText (pinned_targets.h, LibR15CanvasSetText: JUMP_SLOT 0x36ff908).
@@ -17,9 +17,10 @@
 // are in menu_version_label_hook.h, which only -fno-exceptions code may include (callback_thunk.h).
 namespace quest_social::menu_version {
 
-// What is drawn for a project version: "nEVR <version>" fitted to the lobby_version slot, as on PC
-// (nevr_build_identity::MenuVersionLabel and nevr_menu_version_label::FitLabel). Label() is the running build's.
-std::string LabelFor(const char* version);
+// What is drawn: "nEVR <runtime> (app <apk>)" fitted to the lobby_version slot (nevr_menu_version_label::FitLabel's rules:
+// build metadata dropped, width kMaxLabelChars). When the whole does not fit, the runtime alone. Label() is this build's
+// runtime and app.
+std::string LabelFor(const char* runtime, const char* app);
 std::string Label();
 
 // Installs the hook into libr15's SetText slot. Returns 1 when the slot holds the thunk, 0 when the install is refused (the

@@ -81,6 +81,7 @@ add_library(ovrplatformloader SHARED
   obb_skip_hook.cpp
   path_rewrite_hook.cpp
   process_end_hook.cpp
+  ../shim/update_root.cpp
   crash_first_hook.cpp
   permission_request.cpp
   permission_wait_hook.cpp

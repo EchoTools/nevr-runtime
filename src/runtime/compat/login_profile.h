@@ -24,6 +24,9 @@ struct LoginProfileInputs {
   uint64_t memory_total_mb = 0;
   uint64_t memory_used_mb = 0;
   std::string project_version;
+  // nevr_identity.host_version: the NEVR-BUILD version of the host that loaded this runtime (PC: BugSplat64.dll;
+  // Quest: the shim). "unknown" when the caller could not read it.
+  std::string host_version = "unknown";
   std::string git_commit;
   std::string git_describe;
   std::string build_type;

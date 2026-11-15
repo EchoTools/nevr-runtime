@@ -34,6 +34,7 @@
 #include "menu_cards_hook.h"
 #include "quest/invite/wizard_metric_hook.h"
 #include "quest/invite/join_game_quest.h"
+#include "quest/shim/update_root.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
@@ -143,7 +144,11 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 // The process ends when the game's android_main returns (#621). A refused install is logged by GotHook and leaves
 // the game's call intact.
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
-bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
+bool InstallProcessEndHook() noexcept {
+  // H5: android_main's entry logs the update root against the activity's internal data path (update_root.h).
+  nevr_quest::process_end::SetAtEntry(&nevr_quest::update_root::LogRootAtAndroidMain);
+  return nevr_quest::process_end::Install();
+}
 
 // Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it,
 // and the dlopen hook (live on every launch from here) hooks the same two slots of libpnsrad, libpnsradmatchmaking and

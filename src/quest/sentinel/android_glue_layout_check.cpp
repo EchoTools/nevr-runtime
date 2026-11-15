@@ -14,5 +14,7 @@ static_assert(offsetof(android_app, destroyRequested) == sentinel::glue::kAppDes
 static_assert(offsetof(ANativeActivity, vm) == sentinel::glue::kActivityVm, "ANativeActivity::vm");
 static_assert(offsetof(ANativeActivity, env) == sentinel::glue::kActivityEnv, "ANativeActivity::env");
 static_assert(offsetof(ANativeActivity, clazz) == sentinel::glue::kActivityClazz, "ANativeActivity::clazz");
+static_assert(offsetof(ANativeActivity, internalDataPath) == sentinel::glue::kActivityInternalDataPath,
+              "ANativeActivity::internalDataPath");
 // The slot the game's android_main calls on the VM at 0x1078830 (offset 0x28) is DetachCurrentThread by name.
 static_assert(offsetof(JNIInvokeInterface, DetachCurrentThread) == 0x28, "JNIInvokeInterface::DetachCurrentThread");

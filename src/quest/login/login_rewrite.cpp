@@ -101,6 +101,7 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   inputs.hmd_serial_number = serial.value;
   if (!game.headset_type.empty()) inputs.headset_type = game.headset_type;
   inputs.project_version = build.project_version;
+  if (!build.host_version.empty()) inputs.host_version = build.host_version;
   inputs.git_commit = build.git_commit;
   inputs.git_describe = build.git_describe;
   inputs.build_type = build.build_type;

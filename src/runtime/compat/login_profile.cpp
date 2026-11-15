@@ -34,6 +34,9 @@ std::string BuildLoginProfileJson(const LoginProfileInputs& inputs) {
 
   auto& identity = profile["nevr_identity"];
   identity["version"] = inputs.project_version;
+  // The host that loaded this build (the version its NEVR-BUILD literal carries). Apart from `version`: after a
+  // self-update the runtime and the host are different releases.
+  identity["host_version"] = inputs.host_version;
   identity["commit"] = inputs.git_commit;
   identity["build"] = inputs.git_describe;
   identity["build_type"] = inputs.build_type;

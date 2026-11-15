@@ -21,6 +21,7 @@ sentinel::GotHook g_hook;
 std::atomic<BeforeExitFn> g_beforeExit{nullptr};
 std::atomic<EnderFn> g_ender{&EndProcess};
 std::atomic<AfterFn> g_after{nullptr};
+std::atomic<AtEntryFn> g_atEntry{nullptr};
 std::atomic<unsigned> g_budgetMs{kFlushBudgetMs};
 std::atomic<unsigned long long> g_returned{0};
 std::atomic<bool> g_ending{false};
@@ -107,6 +108,8 @@ void AfterReturn() noexcept { RunAfterReturn(0, nullptr); }
 // android_main. The handler touches the game only through `original` and reaches the rest through pointers.
 void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app) noexcept {
   g_app.store(app, std::memory_order_release);
+  const AtEntryFn atEntry = g_atEntry.load(std::memory_order_acquire);
+  if (atEntry != nullptr) atEntry(app);
   original(app);
   g_returned.fetch_add(1, std::memory_order_relaxed);
   const AfterFn after = g_after.load(std::memory_order_acquire);
@@ -124,6 +127,8 @@ bool Ending() noexcept { return g_ending.load(std::memory_order_acquire); }
 sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept { return g_app.load(std::memory_order_acquire); }
 
 void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memory_order_release); }
+
+void SetAtEntry(AtEntryFn fn) noexcept { g_atEntry.store(fn, std::memory_order_release); }
 
 void EndProcess() noexcept { _exit(0); }
 

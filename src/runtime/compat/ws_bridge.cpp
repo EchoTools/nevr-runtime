@@ -41,6 +41,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/ext/module_loader.h"
 #include "abi/echovr_functions.h"
+#include "runtime/host/file_digest.h"
 #include "core/globals.h"
 #include "core/system_info.h"
 #include "core/build_identity.h"   // N112: NEVR version identity
@@ -1108,6 +1109,41 @@ static bool GameIsNoVr() {
   return flags && nevr_hmd_serial::LoginIsNoVr(g_isServer != FALSE, *flags);
 }
 
+// The NEVR-BUILD version of the BugSplat64.dll host this runtime was loaded by, read from the host's own file with the
+// reader the versions record uses (nevr_host::BuildVersion). Not the runtime's version: after a self-update the two differ.
+// When it cannot be read the login carries the profile's "unknown", and one Warning names the step that failed and its
+// Win32 error.
+static std::string HostVersionUnknown(const char* step, DWORD error) {
+  Log(EchoVR::LogLevel::Warning, "[NEVR.WS] host version unknown step=%s error=%lu", step,
+      static_cast<unsigned long>(error));
+  return std::string();
+}
+
+static std::string HostFileVersion() {
+  constexpr wchar_t kHostModuleFile[] = L"BugSplat64.dll";
+  const HMODULE host = GetModuleHandleW(kHostModuleFile);
+  if (host == nullptr) return HostVersionUnknown("module", GetLastError());
+  wchar_t path[MAX_PATH] = {};
+  if (GetModuleFileNameW(host, path, MAX_PATH) == 0) return HostVersionUnknown("path", GetLastError());
+  const HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return HostVersionUnknown("open", GetLastError());
+  std::vector<unsigned char> bytes;
+  const bool read = nevr_host::ReadWholeFile(file, &bytes);
+  const DWORD readError = GetLastError();
+  CloseHandle(file);
+  if (!read) return HostVersionUnknown("read", readError);
+  const std::string version = nevr_host::BuildVersion(bytes);
+  if (version.empty()) return HostVersionUnknown("literal", ERROR_SUCCESS);
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] host version read version=%s", version.c_str());
+  return version;
+}
+
+static std::string HostVersionForLogin() {
+  static const std::string version = HostFileVersion();
+  return version;
+}
+
 // What the login chose and from which flag word, for the run's log: the xpid in `login injected` shows the result,
 // this shows the input. Only logged where a login is injected.
 static void LogLoginPlatform(uint64_t platformCode) {
@@ -1185,6 +1221,10 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   profileInputs.memory_total_mb = host.memory_total_mb;
   profileInputs.memory_used_mb = host.memory_used_mb;
   profileInputs.project_version = buildId.project_version;
+  // nevr_identity.host_version: the host's version; the profile's "unknown" stands when it cannot be read.
+  if (const std::string hostVersion = HostVersionForLogin(); !hostVersion.empty()) {
+    profileInputs.host_version = hostVersion;
+  }
   profileInputs.git_commit = buildId.git_commit;
   profileInputs.git_describe = buildId.git_describe;
   profileInputs.build_type = buildId.build_type;

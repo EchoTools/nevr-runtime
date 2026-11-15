@@ -21,6 +21,7 @@ inline constexpr std::size_t kAppDestroyRequested = 0x64;   // android_app::dest
 inline constexpr std::size_t kActivityVm = 0x8;             // ANativeActivity::vm (JavaVM*)
 inline constexpr std::size_t kActivityEnv = 0x10;           // ANativeActivity::env (JNIEnv*)
 inline constexpr std::size_t kActivityClazz = 0x18;         // ANativeActivity::clazz (jobject)
+inline constexpr std::size_t kActivityInternalDataPath = 0x20;  // ANativeActivity::internalDataPath (const char*)
 
 // The pointer stored `offset` bytes into `base`; null when `base` is null.
 inline void* ReadPointer(const void* base, std::size_t offset) noexcept {

@@ -84,7 +84,8 @@ nevr_ht_test(sentinel_host_test GROUP shared HOST FIXTURE_REQUIRED sentinel_file
       src/core/crash_report.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/core/owned_remove_posix.cpp
       src/runtime/lifecycle/service_redirect.cpp)
 
-# The Quest update root's pure rules (quest/auth/app_files_rules.h, quest/shim/update_root_rules.h) and no other source.
+# The Quest update root and the shim's version record: the pure rules (quest/auth/app_files_rules.h, quest/shim/update_root_rules.h)
+# and no other source. The Android side (quest/shim/update_root.cpp) is compiled into the sentinel and checked on a headset.
 nevr_ht_test(update_root_test GROUP shared HOST
   SRC src/quest/tests/update_root_test.cpp)
 

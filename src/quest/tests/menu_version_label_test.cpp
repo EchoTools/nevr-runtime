@@ -25,7 +25,7 @@ namespace mv = quest_social::menu_version;
 constexpr std::uint64_t kLobbyVersion = nevr_menu_version_label::kLobbyVersionItem;
 constexpr std::uint64_t kPublisherLock = nevr_menu_version_label::kPublisherLockItem;
 constexpr std::uint64_t kOtherItem = 0x1234567812345678ULL;  // any item that is neither
-constexpr const char* kLabel = "nEVR 5.17.0";
+constexpr const char* kLabel = "nEVR 5.17.0 (app 5.17.0)";
 
 mv::Thunk::Fn Entry() { return reinterpret_cast<mv::Thunk::Fn>(mv::Thunk::EntryAddress()); }
 
@@ -171,14 +171,18 @@ void AnEmptyLabelLeavesTheCallAlone() {
   QCHECK(mv::Replaced() == 0);
 }
 
-// The label is "nEVR <version>" as on PC; a development version loses its "+<commit>" build metadata, and a version too long
-// for the slot is cut to its width (the PC rules, nevr_menu_version_label::FitLabel).
-void TheLabelIsTheProjectVersion() {
-  QCHECK(mv::Label() == "nEVR 5.17.0");  // the build's version: the host test's stand-in header says 5.17.0
-  QCHECK(mv::LabelFor("5.17.0") == "nEVR 5.17.0");
-  QCHECK(mv::LabelFor("5.17.1-dev.3+abcdef012345") == "nEVR 5.17.1-dev.3");
-  QCHECK(mv::LabelFor("5.17.1-dev.1234567890123456789") == "nEVR 5.17.1-dev.12345678");  // 24 characters
-  QCHECK(mv::LabelFor("5.17.0").size() <= nevr_menu_version_label::kMaxLabelChars);
+// The label is "nEVR <runtime> (app <apk>)" when the whole fits the slot, with each version's "+<commit>" build metadata
+// dropped. When it does not fit, the runtime alone; a runtime too long for the slot is cut to its width (the PC rules,
+// nevr_menu_version_label::FitLabel).
+void TheLabelIsTheRuntimeAndTheApp() {
+  // The build's runtime and app: the host test's stand-in header says 5.17.0 for both.
+  QCHECK(mv::Label() == "nEVR 5.17.0 (app 5.17.0)");
+  QCHECK(mv::LabelFor("5.17.0", "5.17.0") == "nEVR 5.17.0 (app 5.17.0)");  // 24 characters
+  QCHECK(mv::LabelFor("6.18.1", "6.18.0") == "nEVR 6.18.1 (app 6.18.0)");  // an updated runtime, the APK's own version
+  QCHECK(mv::LabelFor("5.17.1-dev.3+abcdef012345", "5.17.0") == "nEVR 5.17.1-dev.3");  // too long: the runtime alone
+  QCHECK(mv::LabelFor("5.17.0", "5.17.1-dev.3+abcdef012345") == "nEVR 5.17.0");        // the app part does not fit
+  QCHECK(mv::LabelFor("5.17.1-dev.1234567890123456789", "5.17.0") == "nEVR 5.17.1-dev.12345678");  // 24 characters
+  QCHECK(mv::LabelFor("5.17.0", "5.17.0").size() <= nevr_menu_version_label::kMaxLabelChars);
 }
 
 // The first drawn label writes one line naming the item and the label; the calls after it write none (the page sets the item
@@ -193,7 +197,7 @@ void TheFirstDrawnLabelIsLoggedOnce() {
   Entry()(&g_canvasObject, 1, kLobbyVersion, "d");
   QCHECK(Lines("label_drawn") == 1);
   QCHECK(Lines("\"item\":\"lobby_version\"") == 1);
-  QCHECK(Lines("\"label\":\"nEVR 5.17.0\"") == 1);
+  QCHECK(Lines("\"label\":\"nEVR 5.17.0 (app 5.17.0)\"") == 1);
   QCHECK(g_lines.size() == 1);
 }
 
@@ -220,7 +224,7 @@ int main() {
   ThePublisherLockItemIsDrawnAsTheServiceName();
   EveryReplacementDrawsItsTextAndIsCounted();
   AnEmptyLabelLeavesTheCallAlone();
-  TheLabelIsTheProjectVersion();
+  TheLabelIsTheRuntimeAndTheApp();
   TheFirstDrawnLabelIsLoggedOnce();
   TheInstallIsRefusedWhenLibr15IsNotLoaded();
   if (quest_test::Failures() != 0) {

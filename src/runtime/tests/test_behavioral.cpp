@@ -6881,6 +6881,9 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
+  // The host's version, or "unknown" when no host module is loaded (this test process is not the host).
+  ASSERT_TRUE(json["nevr_identity"].contains("host_version"));
+  EXPECT_TRUE(json["nevr_identity"]["host_version"].is_string());
   EXPECT_EQ(json.at("nevr_social"), nevr_social_party::kSocialLevel) << "the social level the server gates new messages on";
   // Outside the game there is no headset serial to read: "unknown", which alt detection ignores (#83).
   EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
@@ -6921,6 +6924,7 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   inputs.memory_total_mb = 8192;
   inputs.memory_used_mb = 3072;
   inputs.project_version = "1.2.3";
+  inputs.host_version = "6.18.0";
   inputs.git_commit = "abcdef0";
   inputs.git_describe = "v1.2.3-4-gabcdef0";
   inputs.build_type = "RelWithDebInfo";
@@ -6929,6 +6933,7 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
 
   const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("accountid"), 90210);
+  EXPECT_EQ(profile.at("nevr_identity").at("host_version"), "6.18.0") << "the host's version rides in the identity object";
   EXPECT_EQ(profile.at("displayname"), inputs.display_name);
   EXPECT_EQ(profile.at("access_token"), inputs.access_token);
   EXPECT_EQ(profile.at("password"), inputs.password);
