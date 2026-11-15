@@ -817,9 +817,9 @@ jobs:
         version=${BASH_REMATCH[1]}
         so=build/android-arm64/sentinel/libovrplatformloader.so
         test -s "$so"
-        # The library carries this exact version and this commit. It has no identity literal: kVersion, the short
-        # kCommit and the full commit of the build record are separate NUL-bounded strings, so each is matched
-        # whole. A bare substring passes X.Y.Z-dev.N for X.Y.Z.
+        # The library (the shim) carries this exact version and this commit's short hash. It has no identity literal:
+        # kVersion and the short kCommit are separate NUL-bounded strings, so each is matched whole. A bare substring
+        # passes X.Y.Z-dev.N for X.Y.Z. The full commit is the runtime's, checked whole below (quest-runtime).
         python3 tools/package_release.py quest-library --lib "$so" --version "$version" --commit "$GITHUB_SHA"
         # The name has one source, shared with the published guard and the draft attach.
         source tools/release_asset_names.sh

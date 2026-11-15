@@ -32,6 +32,13 @@ COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
 DEV_VERSION_CODE = 50_001_003  # 5*10^7 + 0*10^5 + 1*10^3 + 3 (tools/quest_apk_version.py)
 RELEASE = "5.0.0"
+# The short hash the Quest build compiles into kCommit (git's --short: 9 digits in this repository).
+SHORT_COMMIT = COMMIT[:9]
+# A commit that is not COMMIT, and a dev version of another build, for the runtime an APK carries.
+OTHER_COMMIT = "d" * 40
+OTHER_DEV = "5.0.1-dev.4+3a35e0b"
+# A 40-hex string the real shim carries that is no commit (a pinned build id; libovrplatformloader.so at a dev build).
+SHIM_BUILD_ID = "8c4fddc079eae65909530132a56c48da48b2708c"
 VALUES = {
     "NEVR_SOCKET_URI": "wss://host.example/nevr",
     "NEVR_HTTP_URI": "https://host.example",
@@ -101,14 +108,18 @@ class PackageFixture(unittest.TestCase):
         self.write_apk(self.version)
         self.out = self.tmp / "out"
 
-    def write_apk(self, version, version_code=DEV_VERSION_CODE, manifest=None, strings=None):
-        # The sentinel as the build writes it: the defaults, the version, the short commit and the full commit, each
-        # NUL-bounded (quest_library_problems matches each whole).
+    def write_apk(self, version, version_code=DEV_VERSION_CODE, manifest=None, strings=None, runtime=b"",
+                  with_runtime=True):
+        # The shim as the build writes it: the defaults, the version and the short commit, each NUL-bounded
+        # (quest_library_problems matches each whole); no full commit. The runtime it maps carries the full commit in
+        # its NEVR-BUILD literal (quest_runtime_problems).
         if strings is None:
-            strings = [*VALUES.values(), version, COMMIT[:8], COMMIT]
+            strings = [*VALUES.values(), version, SHORT_COMMIT]
         sentinel = b"\x7fELF" + b"".join(s.encode() + b"\0" for s in strings)
         with zipfile.ZipFile(self.apk, "w") as z:
             z.writestr("lib/arm64-v8a/libovrplatformloader.so", sentinel)
+            if with_runtime:
+                z.writestr("lib/arm64-v8a/libnevr-runtime.so", runtime or b"\x7fELF\0" + identity(version) + b"\0")
             z.writestr("AndroidManifest.xml", manifest if manifest is not None else axml_fixtures.build_manifest(version_code))
 
     def run_tool(self, **overrides):
@@ -253,27 +264,49 @@ class LocalDevPackageTest(PackageFixture):
     def test_a_local_gate_refuses_a_quest_library_whose_version_is_only_inside_another_string(self):
         """#863: a bare substring match passes this library; the release job's whole-string check refuses it."""
         inside = f"runtime-{self.version}-build"
-        self.write_apk(self.version, strings=[*VALUES.values(), inside, COMMIT[:8], COMMIT])
+        self.write_apk(self.version, strings=[*VALUES.values(), inside, SHORT_COMMIT])
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"quest: quest library: no string equal to the version '{self.version}'", result.stderr)
         self.assertFalse(self.out.exists())
 
     def test_a_local_gate_refuses_a_quest_library_whose_commit_is_only_inside_another_string(self):
-        self.write_apk(self.version, strings=[*VALUES.values(), self.version, COMMIT[:8], f"x{COMMIT}"])
+        self.write_apk(self.version, strings=[*VALUES.values(), self.version, f"x{SHORT_COMMIT}"])
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(f"quest: quest library: no string equal to the commit {COMMIT}", result.stderr)
+        self.assertIn("quest: quest library: no string of 7 to 39 hex digits that is a prefix of the commit", result.stderr)
+
+    def test_a_local_gate_refuses_an_apk_whose_runtime_is_missing_or_names_another_build(self):
+        """The full commit is the runtime's (libnevr-runtime.so's NEVR-BUILD literal), so the APK's runtime is checked whole."""
+        for runtime, with_runtime, expected in (
+                (b"", False, "quest: the APK has no lib/arm64-v8a/libnevr-runtime.so"),
+                (b"\x7fELF\0" + identity(self.version, OTHER_COMMIT) + b"\0", True, "quest runtime: commit dddd"),
+                (b"\x7fELF\0" + identity(OTHER_DEV) + b"\0", True, f"quest runtime: version '{OTHER_DEV}'"),
+                (b"\x7fELF\0" + COMMIT.encode() + b"\0", True, "quest runtime: expected exactly one 'NEVR-BUILD")):
+            with self.subTest(expected=expected):
+                self.write_apk(self.version, runtime=runtime, with_runtime=with_runtime)
+                result = self.run_tool()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(self.out.exists())
 
     def test_a_tester_apk_check_refuses_a_library_whose_version_is_only_inside_another_string(self):
         inside = f"runtime-{self.version}-build"
-        self.write_apk(self.version, strings=[*VALUES.values(), inside, COMMIT[:8], COMMIT])
+        self.write_apk(self.version, strings=[*VALUES.values(), inside, SHORT_COMMIT])
         with self.assertRaisesRegex(package_release.GateFailure, re.escape(f"no string equal to the version '{self.version}'")):
             package_release.check_apk_version(self.apk, self.version, COMMIT)
 
     def test_a_tester_apk_check_refuses_a_library_whose_commit_is_only_inside_another_string(self):
-        self.write_apk(self.version, strings=[*VALUES.values(), self.version, COMMIT[:8], f"x{COMMIT}"])
-        with self.assertRaisesRegex(package_release.GateFailure, re.escape(f"no string equal to the commit {COMMIT}")):
+        self.write_apk(self.version, strings=[*VALUES.values(), self.version, f"x{SHORT_COMMIT}"])
+        with self.assertRaisesRegex(package_release.GateFailure, "no string of 7 to 39 hex digits that is a prefix of the commit"):
+            package_release.check_apk_version(self.apk, self.version, COMMIT)
+
+    def test_a_tester_apk_check_refuses_an_apk_whose_runtime_is_missing_or_names_another_commit(self):
+        self.write_apk(self.version, with_runtime=False)
+        with self.assertRaisesRegex(package_release.GateFailure, re.escape("signed.apk: the APK has no lib/arm64-v8a/libnevr-runtime.so")):
+            package_release.check_apk_version(self.apk, self.version, COMMIT)
+        self.write_apk(self.version, runtime=b"\x7fELF\0" + identity(self.version, OTHER_COMMIT) + b"\0")
+        with self.assertRaisesRegex(package_release.GateFailure, "quest runtime: commit d+ is not the checked-out commit"):
             package_release.check_apk_version(self.apk, self.version, COMMIT)
 
     def test_the_seal_refuses_a_foreign_versionCode_on_its_own(self):
@@ -1140,6 +1173,14 @@ class ReleaseStagesTest(PackageFixture):
     def quest_check(self, library, version=RELEASE, commit=COMMIT):
         return self.run_stage("quest-library", "--lib", str(library), "--version", version, "--commit", commit)
 
+    def test_quest_library_check_accepts_the_shim_as_the_build_writes_it_without_the_full_commit(self):
+        """The shim carries kVersion and the short kCommit and no full commit: the build record that held it is compiled
+        into the runtime library (ThisBuild, src/quest/integration/production_steps.cpp), which quest-runtime checks."""
+        library = self.quest_library(b"token_auth_state", RELEASE.encode(), SHORT_COMMIT.encode(), SHIM_BUILD_ID.encode())
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"quest library: version {RELEASE} commit {COMMIT[:8]}", result.stdout)
+
     def test_quest_library_check_accepts_the_exact_version_and_the_commit_prefix(self):
         library = self.quest_library(b"token_auth_state", RELEASE.encode(), COMMIT[:8].encode(), COMMIT.encode(), b"port")
         result = self.quest_check(library)
@@ -1171,11 +1212,10 @@ class ReleaseStagesTest(PackageFixture):
                         (version, COMMIT[:6].encode(), full),
                         (version, COMMIT[:7].encode() + b"0", full),  # the same first 7 digits, a different 8th
                         (version, short.upper(), full.upper()),
-                        (version, full),  # the full commit alone is not kCommit
-                        (version, short)):  # kCommit alone, without the build record's commit
+                        (version, full)):  # the full commit alone is not kCommit
             result = self.quest_check(self.quest_library(*strings))
             self.assertEqual(result.returncode, 1, strings)
-            self.assertRegex(result.stderr, "no string (of 7 to 39 hex digits that is a prefix of|equal to) the commit")
+            self.assertIn("no string of 7 to 39 hex digits that is a prefix of the commit", result.stderr)
 
     def test_quest_library_check_refuses_a_version_argument_that_is_not_x_y_z_and_a_commit_that_is_not_40_hex(self):
         library = self.quest_library(RELEASE.encode(), COMMIT[:8].encode())

@@ -23,9 +23,9 @@ file depends on that flag, so promoting a release changes no byte: this tool has
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
-      CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
-      kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
-      record are separate NUL-bounded strings, so each is matched whole.
+      CI: assert the Quest library (the shim) carries exactly this version and a 7-to-39-digit prefix of this
+      commit. It has no identity literal: kVersion and the short kCommit (cmake/nevr_build_info.h.in) are separate
+      NUL-bounded strings, so each is matched whole. The full commit is the runtime's (quest-runtime).
   package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is <next>-dev.N+sha, never a release),
@@ -62,6 +62,8 @@ import work_root  # noqa: E402
 PACKAGE_DIR = REPO / "tools" / "package-release"
 BODY_TEMPLATE = PACKAGE_DIR / "RELEASE-BODY.template.md"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
+# The runtime the shim maps at start (src/quest/shim/runtime_load.h), staged beside it by the repack.
+RUNTIME_IN_APK = "lib/arm64-v8a/libnevr-runtime.so"
 # The two DLLs of the package: the host the game loads, and the runtime the host loads at the rendezvous.
 HOST_DLL = "BugSplat64.dll"
 RUNTIME_DLL = "nevr-runtime.dll"
@@ -291,19 +293,23 @@ def gate(args, work: Path) -> dict:
     if version is not None:
         if info["kVersion"] != version:
             problems.append(f"quest: build info version '{info['kVersion']}' is not the DLL's '{version}'")
-        # The same whole-string check the release job runs (quest_library_problems), not a substring test.
-        problems += [f"quest: {p}" for p in quest_library_problems(sentinel.read_bytes(), version, args.commit)]
+        # The same whole-string checks the release job runs (quest_library_problems, quest_runtime_problems), not a substring test.
+        with zipfile.ZipFile(args.apk) as apk:
+            problems += [f"quest: {p}" for p in quest_apk_problems(apk, version, args.commit)]
     if problems:
         raise GateFailure("\n".join(problems))
     return info
 
 
 def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
-    """The Quest library has no identity literal. It carries kVersion, the short kCommit (cmake/nevr_build_info.h.in)
-    and the sentinel's full build-record commit as separate NUL-bounded strings. A bare substring match passes
-    `5.5.0-dev.4` for `5.5.0` and any string that contains the version, so each is matched whole: a string equal to
-    the version, a string of 7 to 39 hex digits that is a prefix of the commit, and a string equal to the commit.
-    A second NUL-bounded string equal to the version (a dependency's version) would still satisfy the first."""
+    """The Quest library is the shim (libovrplatformloader.so): it has no identity literal and carries kVersion and the
+    short kCommit (cmake/nevr_build_info.h.in) as separate NUL-bounded strings. The full commit is not in it: the
+    constructor sequence, with the build record of the login (`ThisBuild`, src/quest/integration/production_steps.cpp),
+    runs in the runtime library (`StartRuntime`, src/quest/sentinel/entry.cpp), so the full commit is checked there,
+    whole, by quest_runtime_problems. A bare substring match passes `5.5.0-dev.4` for `5.5.0` and any string that
+    contains the version, so each is matched whole: a string equal to the version, and a string of 7 to 39 hex digits
+    that is a prefix of the commit. A second NUL-bounded string equal to the version (a dependency's version) would
+    still satisfy the first."""
     problems = []
     if b"\x00" + version.encode() + b"\x00" not in blob:
         problems.append(f"quest library: no string equal to the version '{version}'")
@@ -311,8 +317,20 @@ def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
     if not any(len(found) < 40 and commit.startswith(found) for found in hex_strings):
         problems.append(f"quest library: no string of 7 to 39 hex digits that is a prefix of the commit {commit[:8]} "
                         f"(found {len(hex_strings)} hex string(s) of 7 to 40 digits)")
-    if commit not in hex_strings:
-        problems.append(f"quest library: no string equal to the commit {commit}")
+    return problems
+
+
+def quest_apk_problems(apk: zipfile.ZipFile, version: str, commit: str) -> list:
+    """An APK's two nEVR libraries: the shim (quest_library_problems) and the runtime it maps, which carries the full
+    commit in its NEVR-BUILD literal (quest_runtime_problems). Either one missing is a refusal."""
+    problems = []
+    for member, checker in ((SENTINEL_IN_APK, quest_library_problems), (RUNTIME_IN_APK, quest_runtime_problems)):
+        try:
+            blob = apk.read(member)
+        except KeyError:
+            problems.append(f"the APK has no {member}")
+            continue
+        problems += checker(blob, version, commit)
     return problems
 
 
@@ -344,12 +362,8 @@ def stamp_check(dll: Path, version, commit: str = "") -> str:
 
 def check_apk_version(apk: Path, version: str, commit: str) -> None:
     """A tester APK (local package only) must carry the package's own version and commit."""
-    try:
-        with zipfile.ZipFile(apk) as z:
-            blob = z.read(SENTINEL_IN_APK)
-    except KeyError:
-        raise GateFailure(f"{apk.name} has no {SENTINEL_IN_APK}")
-    problems = [f"{apk.name}: {p}" for p in quest_library_problems(blob, version, commit)]
+    with zipfile.ZipFile(apk) as z:
+        problems = [f"{apk.name}: {p}" for p in quest_apk_problems(z, version, commit)]
     problems += apk_version_code_problems(apk, version)
     if problems:
         raise GateFailure("\n".join(problems))
